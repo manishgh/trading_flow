@@ -120,6 +120,8 @@ public sealed class SimpleYamlReader
                     RequireInt(runMap, "providers.yahoo.request_timeout_seconds"),
                     RequireInt(runMap, "providers.yahoo.max_retries"),
                     RequireInt(runMap, "providers.yahoo.throttle_ms")),
+                new AlpacaProviderConfig(
+                    OptionalString(runMap, "providers.alpaca.data_feed", "sip")),
                 new TradingViewProviderConfig(false)),
             new PortfolioConfig(
                 RequireDecimal(runMap, "portfolio.starting_capital"),

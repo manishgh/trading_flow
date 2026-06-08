@@ -43,6 +43,8 @@ providers:
     request_timeout_seconds: 30
     max_retries: 3
     throttle_ms: 250
+  alpaca:
+    data_feed: sip
   etoro:
     enabled: false
     rest_base_url: https://public-api.etoro.com/api/v1
@@ -102,7 +104,7 @@ validation:
   bias_risk:
     universe_source: static_config
     universe_as_of_date:
-    price_adjustment_policy: yahoo_chart_quote
+    price_adjustment_policy: alpaca_sip
 
 execution:
   router: paper

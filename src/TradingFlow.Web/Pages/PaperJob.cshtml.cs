@@ -32,6 +32,7 @@ public sealed class PaperJobModel : PageModel
     public TradingFlow.Domain.Logging.ProfilerSummary? LatencyProfile { get; private set; }
     public List<DecisionAuditRecord> RecentAudits { get; private set; } = new();
     public string LocalTimeZoneLabel => UiDisplayFormatter.LocalTradingTimeZoneLabel;
+    public string MarketDataFeedLabel { get; private set; } = "Market data feed: unknown";
 
     public async Task OnGetAsync(Guid id)
     {
@@ -46,6 +47,7 @@ public sealed class PaperJobModel : PageModel
             {
                 var config = catalog.GetConfig(Job.ConfigPath);
                 Strategy = config.Strategies.FirstOrDefault()?.Definition;
+                MarketDataFeedLabel = FormatMarketDataFeedLabel(config.Config);
             }
             catch { /* Ignore if config missing */ }
 
@@ -89,6 +91,7 @@ public sealed class PaperJobModel : PageModel
             status = job.Status,
             errorMessage = job.ErrorMessage,
             startedAt = job.StartedAt is null ? "Queued" : FormatLocal(job.StartedAt.Value),
+            marketDataFeed = ResolveMarketDataFeedLabel(job),
             events = job.Events.Reverse().Take(100).ToArray(),
             metrics = LoadChartData(job)
                 .OrderBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
@@ -198,6 +201,26 @@ public sealed class PaperJobModel : PageModel
         }
 
         return points;
+    }
+
+    private string ResolveMarketDataFeedLabel(BacktestJobSnapshot job)
+    {
+        try
+        {
+            var config = catalog.GetConfig(job.ConfigPath);
+            return FormatMarketDataFeedLabel(config.Config);
+        }
+        catch
+        {
+            return "Market data feed: unknown";
+        }
+    }
+
+    private static string FormatMarketDataFeedLabel(TradingFlow.Domain.Backtesting.BacktestRunConfig config)
+    {
+        return config.Provider.Equals("alpaca", StringComparison.OrdinalIgnoreCase)
+            ? $"Market data feed: Alpaca {config.Providers.Alpaca.DataFeed.ToUpperInvariant()}"
+            : $"Market data feed: {config.Provider.ToUpperInvariant()}";
     }
 }
 

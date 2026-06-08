@@ -80,7 +80,11 @@ public sealed record ExecutionConfig(
 
 public sealed record ProviderConfig(
     YahooProviderConfig Yahoo,
+    AlpacaProviderConfig Alpaca,
     TradingViewProviderConfig TradingView);
+
+public sealed record AlpacaProviderConfig(
+    string DataFeed);
 
 public sealed record YahooProviderConfig(
     string BaseUrl,

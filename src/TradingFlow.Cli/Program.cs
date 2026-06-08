@@ -66,7 +66,7 @@ async Task SimulateTradingViewAsync(string[] args)
 {
     var configPath = args.Length > 1
         ? args[1]
-        : Path.Combine("configs", "paper", "local-yahoo-paper.yaml");
+        : Path.Combine("configs", "paper", "alpaca-paper.yaml");
     var backtestResultPath = args.Length > 2
         ? args[2]
         : Path.Combine("data", "backtest", "results", "portfolio", "semiconductors-research.json");
@@ -249,7 +249,8 @@ TradingFlow.Engine.Abstractions.ICatalystProvider? CreateNewsProvider(TradingFlo
             TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
             {
                 KeyId = Environment.GetEnvironmentVariable("ALPACA_KEY_ID") ?? "",
-                SecretKey = Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY") ?? ""
+                SecretKey = Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY") ?? "",
+                MarketDataFeed = run.Providers.Alpaca.DataFeed
             }),
         "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(
             new TradingFlow.Finviz.FinvizClient(

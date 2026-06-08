@@ -389,6 +389,8 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"    request_timeout_seconds: {baseConfig.Providers.Yahoo.RequestTimeoutSeconds}");
         yaml.AppendLine($"    max_retries: {baseConfig.Providers.Yahoo.MaxRetries}");
         yaml.AppendLine($"    throttle_ms: {baseConfig.Providers.Yahoo.ThrottleMs}");
+        yaml.AppendLine("  alpaca:");
+        yaml.AppendLine($"    data_feed: {baseConfig.Providers.Alpaca.DataFeed}");
     }
 
     private static void AppendValidation(StringBuilder yaml, TradingFlow.Domain.Backtesting.BacktestRunConfig baseConfig)

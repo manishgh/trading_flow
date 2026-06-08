@@ -294,6 +294,7 @@ public class LiveRunnerIntegrationTests
                 new BiasRiskConfig("test", null, "none")),
             Providers: new ProviderConfig(
                 new YahooProviderConfig("", new YahooHeaderConfig("", "", ""), 30, 0, 0),
+                new AlpacaProviderConfig("sip"),
                 new TradingViewProviderConfig(false)),
             Portfolio: new PortfolioConfig(100000m, 1m, 20m, 5, 0m, 0m, 1, true),
             SignalSource: new SignalSourceConfig("internal_candles", false, "", 300, 0),

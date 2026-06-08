@@ -820,7 +820,8 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader)
                 TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
                 {
                     KeyId = Environment.GetEnvironmentVariable("ALPACA_KEY_ID") ?? "",
-                    SecretKey = Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY") ?? ""
+                    SecretKey = Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY") ?? "",
+                    MarketDataFeed = run.Providers.Alpaca.DataFeed
                 }),
             "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(
                 new TradingFlow.Finviz.FinvizClient(

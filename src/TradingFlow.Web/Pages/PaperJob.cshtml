@@ -12,6 +12,7 @@
 
             const statusEl = document.getElementById('jobStatus');
             const startedAtEl = document.getElementById('startedAt');
+            const marketDataFeedEl = document.getElementById('marketDataFeed');
             const eventsEl = document.getElementById('recentEvents');
             const auditsBody = document.getElementById('recentAuditsBody');
             const metricsBody = document.getElementById('liveMetricsBody');
@@ -48,6 +49,10 @@
 
                 if (startedAtEl) {
                     startedAtEl.textContent = data.startedAt;
+                }
+
+                if (marketDataFeedEl) {
+                    marketDataFeedEl.textContent = data.marketDataFeed;
                 }
 
                 if (eventsEl) {
@@ -178,7 +183,7 @@ else
 
         <section class="panel">
             <h2>Live Stock Metrics</h2>
-            <div class="muted">Most recent values calculated by the engine for the latest bar.</div>
+            <div class="muted">Most recent values calculated by the engine for the latest bar. <span id="marketDataFeed">@Model.MarketDataFeedLabel</span>.</div>
             <p id="liveMetricsEmpty" class="muted" style="display: @(Model.ChartDataList.Count == 0 ? "block" : "none");">No data generated yet. Waiting for market data...</p>
             <table id="liveMetricsTable" class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse; display: @(Model.ChartDataList.Count == 0 ? "none" : "table");">
                 <thead>

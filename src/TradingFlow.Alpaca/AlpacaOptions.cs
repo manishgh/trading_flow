@@ -8,7 +8,8 @@ public sealed record AlpacaOptions(
     string SecretKey,
     string TimeInForce = "gtc",
     string EntryOrderType = "limit",
-    bool ExtendedHours = false)
+    bool ExtendedHours = false,
+    string MarketDataFeed = "sip")
 {
     public static AlpacaOptions CreateDefault()
     {
@@ -18,7 +19,8 @@ public sealed record AlpacaOptions(
             string.Empty, // To be configured
             "gtc",
             "limit",
-            false
+            false,
+            "sip"
         );
     }
 }
