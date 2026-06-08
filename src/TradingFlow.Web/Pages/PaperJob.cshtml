@@ -14,6 +14,11 @@
             const startedAtEl = document.getElementById('startedAt');
             const eventsEl = document.getElementById('recentEvents');
             const auditsBody = document.getElementById('recentAuditsBody');
+            const metricsBody = document.getElementById('liveMetricsBody');
+            const metricsTable = document.getElementById('liveMetricsTable');
+            const metricsEmpty = document.getElementById('liveMetricsEmpty');
+            const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+            const numberFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
             function escapeHtml(value) {
                 return String(value ?? '')
@@ -49,6 +54,21 @@
                     eventsEl.innerHTML = data.events.map(eventText => `<div>${escapeHtml(eventText)}</div>`).join('');
                 }
 
+                if (metricsBody && metricsTable && metricsEmpty) {
+                    const metrics = data.metrics ?? [];
+                    metricsEmpty.style.display = metrics.length === 0 ? 'block' : 'none';
+                    metricsTable.style.display = metrics.length === 0 ? 'none' : 'table';
+                    metricsBody.innerHTML = metrics.map(point => `<tr>
+                        <td>${escapeHtml(point.time)}</td>
+                        <td><strong>${escapeHtml(point.ticker)}</strong></td>
+                        <td>${formatCurrency(point.close)}</td>
+                        <td>${formatDecimal(point.rsi)}</td>
+                        <td>${formatWholeNumber(point.volume)}</td>
+                        <td>${formatWholeNumber(point.averageVolume)}</td>
+                        <td>${formatCurrency(point.vwap)}</td>
+                    </tr>`).join('');
+                }
+
                 if (auditsBody) {
                     auditsBody.innerHTML = data.audits.map(audit => {
                         const color = audit.accepted ? '#4caf50' : '#f44336';
@@ -67,7 +87,20 @@
                 }
             }
 
+            function formatCurrency(value) {
+                return value === null || value === undefined ? 'N/A' : currencyFormatter.format(Number(value));
+            }
+
+            function formatDecimal(value) {
+                return value === null || value === undefined ? 'N/A' : Number(value).toFixed(2);
+            }
+
+            function formatWholeNumber(value) {
+                return value === null || value === undefined ? 'N/A' : numberFormatter.format(Number(value));
+            }
+
             window.tradingFlowPaperJobRefresh = window.setInterval(refreshSnapshot, 5000);
+            refreshSnapshot();
         })();
     </script>
 }
@@ -146,41 +179,34 @@ else
         <section class="panel">
             <h2>Live Stock Metrics</h2>
             <div class="muted">Most recent values calculated by the engine for the latest bar.</div>
-            
-            @if (Model.ChartDataList.Count == 0)
-            {
-                <p class="muted">No data generated yet. Waiting for market data...</p>
-            }
-            else
-            {
-                <table class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
-                    <thead>
-                        <tr style="border-bottom: 1px solid #444; text-align: left;">
-                            <th>Local Time</th>
-                            <th>Ticker</th>
-                            <th>Close Price</th>
-                            <th>RSI (14)</th>
-                            <th>Volume</th>
-                            <th>Avg Volume</th>
-                            <th>VWAP</th>
+            <p id="liveMetricsEmpty" class="muted" style="display: @(Model.ChartDataList.Count == 0 ? "block" : "none");">No data generated yet. Waiting for market data...</p>
+            <table id="liveMetricsTable" class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse; display: @(Model.ChartDataList.Count == 0 ? "none" : "table");">
+                <thead>
+                    <tr style="border-bottom: 1px solid #444; text-align: left;">
+                        <th>Local Time</th>
+                        <th>Ticker</th>
+                        <th>Close Price</th>
+                        <th>RSI (14)</th>
+                        <th>Volume</th>
+                        <th>Avg Volume</th>
+                        <th>VWAP</th>
+                    </tr>
+                </thead>
+                <tbody id="liveMetricsBody">
+                    @foreach (var point in Model.ChartDataList.OrderBy(x => x.Ticker))
+                    {
+                        <tr>
+                            <td>@Model.FormatLocalTime(point.Timestamp)</td>
+                            <td><strong>@point.Ticker</strong></td>
+                            <td>@point.Close.ToString("C2")</td>
+                            <td>@(point.Rsi?.ToString("F2") ?? "N/A")</td>
+                            <td>@point.Volume.ToString("N0")</td>
+                            <td>@point.AverageVolume.ToString("N0")</td>
+                            <td>@(point.Vwap?.ToString("C2") ?? "N/A")</td>
                         </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var point in Model.ChartDataList.OrderBy(x => x.Ticker))
-                        {
-                            <tr>
-                                <td>@Model.FormatLocalTime(point.Timestamp)</td>
-                                <td><strong>@point.Ticker</strong></td>
-                                <td>@point.Close.ToString("C2")</td>
-                                <td>@(point.Rsi?.ToString("F2") ?? "N/A")</td>
-                                <td>@point.Volume.ToString("N0")</td>
-                                <td>@point.AverageVolume.ToString("N0")</td>
-                                <td>@(point.Vwap?.ToString("C2") ?? "N/A")</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            }
+                    }
+                </tbody>
+            </table>
             
             <h3 style="margin-top: 2rem;">Recent Strategy Evaluations</h3>
             @if (Model.RecentAudits == null || Model.RecentAudits.Count == 0)

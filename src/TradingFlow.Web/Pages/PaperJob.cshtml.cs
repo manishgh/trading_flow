@@ -42,38 +42,14 @@ public sealed class PaperJobModel : PageModel
         
         if (Job != null)
         {
-            string? resultsRoot = null;
             try
             {
                 var config = catalog.GetConfig(Job.ConfigPath);
                 Strategy = config.Strategies.FirstOrDefault()?.Definition;
-                resultsRoot = config.Config.ResultsRoot;
             }
             catch { /* Ignore if config missing */ }
 
-            var resultsDir = string.IsNullOrEmpty(resultsRoot)
-                ? Path.Combine(Environment.CurrentDirectory, "data", "paper", "results", "live", Job.RunName)
-                : Path.Combine(Environment.CurrentDirectory, resultsRoot, "live", Job.RunName);
-
-            if (Directory.Exists(resultsDir))
-            {
-                foreach (var tickerDir in Directory.GetDirectories(resultsDir))
-                {
-                    foreach (var file in Directory.GetFiles(tickerDir, "*_chart.json"))
-                    {
-                        try
-                        {
-                            var json = System.IO.File.ReadAllText(file);
-                            var data = JsonSerializer.Deserialize<ChartDataPoint>(json);
-                            if (data != null)
-                            {
-                                ChartDataList.Add(data);
-                            }
-                        }
-                        catch { /* skip bad json */ }
-                    }
-                }
-            }
+            ChartDataList = LoadChartData(Job);
 
             try
             {
@@ -114,6 +90,19 @@ public sealed class PaperJobModel : PageModel
             errorMessage = job.ErrorMessage,
             startedAt = job.StartedAt is null ? "Queued" : FormatLocal(job.StartedAt.Value),
             events = job.Events.Reverse().Take(100).ToArray(),
+            metrics = LoadChartData(job)
+                .OrderBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
+                .Select(point => new
+                {
+                    time = FormatLocalTime(point.Timestamp),
+                    ticker = point.Ticker,
+                    close = point.Close,
+                    rsi = point.Rsi,
+                    volume = point.Volume,
+                    averageVolume = point.AverageVolume,
+                    vwap = point.Vwap
+                })
+                .ToArray(),
             audits = audits.Select(a => new
             {
                 time = FormatLocalTime(a.Timestamp),
@@ -163,6 +152,52 @@ public sealed class PaperJobModel : PageModel
     {
         var allAudits = await auditRepo.GetAuditsByRunNameAsync(runName, default);
         return allAudits.OrderByDescending(a => a.Timestamp).Take(50).ToList();
+    }
+
+    private List<ChartDataPoint> LoadChartData(BacktestJobSnapshot job)
+    {
+        string? resultsRoot = null;
+        try
+        {
+            var config = catalog.GetConfig(job.ConfigPath);
+            resultsRoot = config.Config.ResultsRoot;
+        }
+        catch
+        {
+            // Keep the page responsive if the generated config was deleted.
+        }
+
+        var resultsDir = string.IsNullOrEmpty(resultsRoot)
+            ? Path.Combine(Environment.CurrentDirectory, "data", "paper", "results", "live", job.RunName)
+            : Path.Combine(Environment.CurrentDirectory, resultsRoot, "live", job.RunName);
+
+        if (!Directory.Exists(resultsDir))
+        {
+            return new List<ChartDataPoint>();
+        }
+
+        var points = new List<ChartDataPoint>();
+        foreach (var tickerDir in Directory.GetDirectories(resultsDir))
+        {
+            foreach (var file in Directory.GetFiles(tickerDir, "*_chart.json"))
+            {
+                try
+                {
+                    var json = System.IO.File.ReadAllText(file);
+                    var data = JsonSerializer.Deserialize<ChartDataPoint>(json);
+                    if (data != null)
+                    {
+                        points.Add(data);
+                    }
+                }
+                catch
+                {
+                    // Skip partial writes while the live runner is replacing the chart file.
+                }
+            }
+        }
+
+        return points;
     }
 }
 
