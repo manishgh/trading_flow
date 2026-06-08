@@ -60,6 +60,8 @@ src/TradingFlow.Web/paperjob_debug.txt
 .env.*
 *.secret.json
 secrets.json
+**/appsettings.local.json
+**/appsettings.Local.json
 appsettings.*.local.json
 deploy/aks/secret.yaml
 

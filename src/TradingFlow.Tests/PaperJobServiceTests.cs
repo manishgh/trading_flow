@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -37,7 +38,8 @@ public class PaperJobServiceTests
     public async Task StartJob_SavesJobToRepository()
     {
         // Arrange
-        var service = new PaperJobService(new SimpleYamlReader(), _scopeFactoryMock.Object);
+        var credentials = new AlpacaCredentialProvider(new ConfigurationBuilder().Build());
+        var service = new PaperJobService(new SimpleYamlReader(), _scopeFactoryMock.Object, credentials);
         var runName = "TestRun";
         var configPath = "dummy.yaml";
         

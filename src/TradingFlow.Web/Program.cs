@@ -7,6 +7,7 @@ CultureInfo.DefaultThreadCurrentCulture = cultureInfo;
 CultureInfo.DefaultThreadCurrentUICulture = cultureInfo;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
 Environment.SetEnvironmentVariable(
     "TRADINGFLOW_RESULT_OWNER",
     Environment.GetEnvironmentVariable("TRADINGFLOW_RESULT_OWNER") ?? "web");
@@ -19,6 +20,7 @@ builder.Services.AddSingleton<RunConfigWriter>();
 builder.Services.AddSingleton<TradingFlow.Backtesting.BacktestRunner>();
 builder.Services.AddSingleton<BacktestJobService>();
 builder.Services.AddSingleton<OptimizationJobService>();
+builder.Services.AddSingleton<AlpacaCredentialProvider>();
 builder.Services.AddSingleton<PaperEnvironmentService>();
 builder.Services.AddSingleton<PaperJobService>();
 

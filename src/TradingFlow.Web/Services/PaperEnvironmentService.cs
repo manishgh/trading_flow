@@ -8,10 +8,12 @@ namespace TradingFlow.Web.Services;
 public sealed class PaperEnvironmentService
 {
     private readonly ConfigCatalogService catalog;
+    private readonly AlpacaCredentialProvider alpacaCredentials;
 
-    public PaperEnvironmentService(ConfigCatalogService catalog)
+    public PaperEnvironmentService(ConfigCatalogService catalog, AlpacaCredentialProvider alpacaCredentials)
     {
         this.catalog = catalog;
+        this.alpacaCredentials = alpacaCredentials;
     }
 
     public async Task<PaperEnvironmentSnapshot> InspectAsync(string configPath, CancellationToken cancellationToken)
@@ -28,24 +30,24 @@ public sealed class PaperEnvironmentService
             etoroCheck = await RunEtoroReadOnlyCheckAsync(cancellationToken);
         }
 
-        var alpacaKeyIdPresent = !String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ALPACA_KEY_ID"));
-        var alpacaSecretKeyPresent = !String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY"));
+        var alpacaKeyIdPresent = !String.IsNullOrWhiteSpace(alpacaCredentials.KeyId);
+        var alpacaSecretKeyPresent = !String.IsNullOrWhiteSpace(alpacaCredentials.SecretKey);
         IReadOnlyDictionary<string, object?>? alpacaCheck = null;
 
         if (targetBroker == "alpaca" && alpacaKeyIdPresent && alpacaSecretKeyPresent)
         {
-            alpacaCheck = await RunAlpacaReadOnlyCheckAsync(cancellationToken);
+            alpacaCheck = await RunAlpacaReadOnlyCheckAsync(alpacaCredentials, cancellationToken);
         }
 
         return new PaperEnvironmentSnapshot(config, etoroApiKeyPresent, etoroUserKeyPresent, etoroCheck, alpacaKeyIdPresent, alpacaSecretKeyPresent, alpacaCheck);
     }
 
-    private static async Task<IReadOnlyDictionary<string, object?>> RunAlpacaReadOnlyCheckAsync(CancellationToken cancellationToken)
+    private static async Task<IReadOnlyDictionary<string, object?>> RunAlpacaReadOnlyCheckAsync(AlpacaCredentialProvider credentials, CancellationToken cancellationToken)
     {
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         using var client = new HttpClient { BaseAddress = new Uri("https://paper-api.alpaca.markets") };
-        client.DefaultRequestHeaders.Add("APCA-API-KEY-ID", Environment.GetEnvironmentVariable("ALPACA_KEY_ID"));
-        client.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY"));
+        client.DefaultRequestHeaders.Add("APCA-API-KEY-ID", credentials.KeyId);
+        client.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", credentials.SecretKey);
 
         result["account"] = await CaptureAsync(async () =>
         {

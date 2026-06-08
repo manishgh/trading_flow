@@ -207,7 +207,7 @@
             </table>
             @if (Model.PaperSnapshot.AlpacaReadOnlyCheck is null)
             {
-                <p class="warn">Set ALPACA_KEY_ID and ALPACA_SECRET_KEY in the process environment to run Alpaca checks.</p>
+                <p class="warn">Set Alpaca credentials in appsettings.local.json or ALPACA_KEY_ID / ALPACA_SECRET_KEY to run Alpaca checks.</p>
             }
             else
             {

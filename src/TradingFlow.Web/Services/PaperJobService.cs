@@ -14,18 +14,21 @@ public sealed class PaperJobService
     private readonly TradingFlow.Domain.Locking.ITickerLockService? _lockService;
     private readonly TradingFlow.Domain.Orders.IOrderStateRepository? _orderRepo;
     private readonly TradingFlow.Domain.Audit.IDecisionAuditRepository? _auditRepo;
+    private readonly AlpacaCredentialProvider alpacaCredentials;
 
     private readonly IServiceScopeFactory _scopeFactory;
 
     public PaperJobService(
         SimpleYamlReader yamlReader,
         IServiceScopeFactory scopeFactory,
+        AlpacaCredentialProvider alpacaCredentials,
         TradingFlow.Domain.Locking.ITickerLockService? lockService = null,
         TradingFlow.Domain.Orders.IOrderStateRepository? orderRepo = null,
         TradingFlow.Domain.Audit.IDecisionAuditRepository? auditRepo = null)
     {
         this.yamlReader = yamlReader;
         _scopeFactory = scopeFactory;
+        this.alpacaCredentials = alpacaCredentials;
         _lockService = lockService;
         _orderRepo = orderRepo;
         _auditRepo = auditRepo;
@@ -309,8 +312,8 @@ public sealed class PaperJobService
                 new HttpClient(), 
                 TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
                 {
-                    KeyId = Environment.GetEnvironmentVariable("ALPACA_KEY_ID") ?? "",
-                    SecretKey = Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY") ?? "",
+                    KeyId = alpacaCredentials.KeyId,
+                    SecretKey = alpacaCredentials.SecretKey,
                     MarketDataFeed = run.Providers.Alpaca.DataFeed
                 }),
             "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(
@@ -331,8 +334,8 @@ public sealed class PaperJobService
                 new HttpClient(),
                 TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
                 {
-                    KeyId = Environment.GetEnvironmentVariable("ALPACA_KEY_ID") ?? "",
-                    SecretKey = Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY") ?? "",
+                    KeyId = alpacaCredentials.KeyId,
+                    SecretKey = alpacaCredentials.SecretKey,
                     TimeInForce = "day".Equals(run.Execution.OrderExpiration, StringComparison.OrdinalIgnoreCase) ? "day" : "gtc",
                     EntryOrderType = run.Execution.EntryOrderType ?? "limit",
                     ExtendedHours = run.Execution.ExtendedHours
@@ -361,8 +364,9 @@ public sealed class PaperJobService
                 new HttpClient(),
                 TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
                 {
-                    KeyId = Environment.GetEnvironmentVariable("ALPACA_KEY_ID") ?? "",
-                    SecretKey = Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY") ?? ""
+                    KeyId = alpacaCredentials.KeyId,
+                    SecretKey = alpacaCredentials.SecretKey,
+                    MarketDataFeed = run.Providers.Alpaca.DataFeed
                 }),
             "finviz" => new TradingFlow.Finviz.FinvizMarketDataProvider(
                 new TradingFlow.Finviz.FinvizClient(
