@@ -184,7 +184,7 @@ public sealed class PaperModel : PageModel
     {
         var form = Request.Form;
         var runName = form["RunName"].ToString();
-        var baseConfigPath = form["SelectedConfigPath"].ToString();
+        var baseConfigPath = form["BaseConfigPath"].ToString();
         var strategyPath = form["SelectedStrategyPath"].ToString();
         var orderExpiration = form["OrderExpiration"].ToString();
         var entryOrderType = form["EntryOrderType"].ToString();
@@ -193,7 +193,7 @@ public sealed class PaperModel : PageModel
         var tickersCsv = form["TickersCsv"].ToString();
         
         if (String.IsNullOrWhiteSpace(runName))
-            runName = "live_" + DateTimeOffset.UtcNow.ToString("yyyyMMdd_HHmmss");
+            runName = "paper_" + DateTimeOffset.UtcNow.ToString("yyyyMMdd_HHmmss");
 
         var existingConfig = catalog.GetConfig(baseConfigPath);
         var tickers = string.IsNullOrWhiteSpace(tickersCsv) 
@@ -254,7 +254,12 @@ public sealed class PaperModel : PageModel
             var config = catalog.GetConfig(configPath);
             return new JsonResult(new {
                 success = true,
-                tickers = String.Join(", ", config.Config.Tickers)
+                tickers = String.Join(", ", config.Config.Tickers),
+                orderExpiration = config.Config.Execution.OrderExpiration,
+                entryOrderType = config.Config.Execution.EntryOrderType,
+                extendedHours = config.Config.Execution.ExtendedHours,
+                screenerFilter = config.Config.Screener?.Filters?.FirstOrDefault() ?? "",
+                broker = config.Config.Execution.Broker
             });
         }
         catch

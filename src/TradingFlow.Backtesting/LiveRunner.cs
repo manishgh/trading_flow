@@ -4,6 +4,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Indicators;
+using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Sessions;
 using TradingFlow.Engine.Strategies;
 using TradingFlow.Data.Catalysts;
@@ -25,6 +26,7 @@ public sealed class LiveRunner(
     private readonly SignalGenerator _signalGenerator = new();
     private readonly BasicStrategyEvaluator _evaluator = new();
     private readonly StrategySessionClock _sessionClock = new();
+    private readonly BarResampler _barResampler = new();
     private readonly ExecutionAuditor _auditor = new();
     private readonly IBrokerClient? _brokerClient = brokerClient;
     private readonly TradingFlow.Domain.Locking.ITickerLockService? _lockService = lockService;
@@ -240,12 +242,23 @@ public sealed class LiveRunner(
 
             try
             {
-                var tasks = mergedTickers.Select(ticker => 
-                {
-                    progress?.Report($"Fetching data and processing pipeline for {ticker}");
-                    return ProcessTickerLiveAsync(run, strategies, ticker, start, end, catalystStreamer, activeTickers, cancellationToken, progress);
-                });
-                await Task.WhenAll(tasks);
+                var processed = 0;
+                var total = mergedTickers.Count;
+                var activeTickerSnapshot = activeTickers.ToArray();
+                await Parallel.ForEachAsync(
+                    mergedTickers,
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = ResolveWorkerCount(run.Engine.WorkerCount),
+                        CancellationToken = cancellationToken
+                    },
+                    async (ticker, token) =>
+                    {
+                        progress?.Report($"Fetching data and processing pipeline for {ticker}");
+                        await ProcessTickerLiveAsync(run, strategies, ticker, start, end, catalystStreamer, activeTickerSnapshot, token, progress);
+                        var finished = Interlocked.Increment(ref processed);
+                        progress?.Report($"Processed {finished}/{total} ticker pipeline(s).");
+                    });
             }
             catch (Exception ex)
             {
@@ -266,22 +279,28 @@ public sealed class LiveRunner(
         DateTimeOffset start,
         DateTimeOffset end,
         CatalystStreamer catalystStreamer,
-        List<string> activeTickers,
+        IReadOnlyCollection<string> activeTickers,
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
     {
+        var podId = Environment.MachineName;
+        var lockAcquired = false;
+
         // 0. Acquire Distributed Lock
         if (_lockService != null)
         {
-            var podId = Environment.MachineName; // Simple pod identifier
             var acquired = await _lockService.TryAcquireLockAsync(ticker, podId, TimeSpan.FromMinutes(3), cancellationToken);
             if (!acquired)
             {
                 logger.LogDebug("Ticker {Ticker} is locked by another pod. Skipping...", ticker);
                 return;
             }
+
+            lockAcquired = true;
         }
 
+        try
+        {
         // 0.5 Recover state from DB if necessary
         if (_orderRepo != null)
         {
@@ -294,19 +313,20 @@ public sealed class LiveRunner(
             }
         }
 
-        // 1. Fetch data
-        var allTimeframes = new HashSet<string>(run.Intervals, StringComparer.OrdinalIgnoreCase);
-        foreach (var st in strategies)
+        // 1. Fetch configured feeds, then derive missing strategy timeframes to keep paper/live aligned with backtests.
+        var requiredTimeframes = ResolveRequiredTimeframes(run, strategies);
+        var requestedIntervals = run.Intervals
+            .Where(x => !String.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (requestedIntervals.Length == 0)
         {
-            allTimeframes.Add(st.Timeframe);
-            allTimeframes.Add(st.Execution.Timeframe);
-            if (st.Confluence.Enabled)
-                allTimeframes.Add(st.Confluence.Timeframe);
+            requestedIntervals = requiredTimeframes;
         }
-        var requiredIntervals = allTimeframes.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
 
         var barsByTimeframe = new Dictionary<string, List<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
-        await foreach (var bar in provider.GetBarsAsync(new[] { ticker }, requiredIntervals, start, end, cancellationToken))
+        await foreach (var bar in provider.GetBarsAsync(new[] { ticker }, requestedIntervals, start, end, cancellationToken))
         {
             if (!barsByTimeframe.ContainsKey(bar.Timeframe))
             {
@@ -314,6 +334,8 @@ public sealed class LiveRunner(
             }
             barsByTimeframe[bar.Timeframe].Add(bar);
         }
+
+        AddDerivedTimeframes(run, requiredTimeframes, barsByTimeframe);
 
         // 2. Compute Indicators
         var snapshotsByTimeframe = new Dictionary<string, IReadOnlyList<IndicatorSnapshot>>(StringComparer.OrdinalIgnoreCase);
@@ -497,5 +519,72 @@ public sealed class LiveRunner(
                 progress?.Report($"Evaluated {strategy.StrategyName} for {ticker}: No signal generated.");
             }
         }
+        }
+        finally
+        {
+            if (lockAcquired && _lockService != null)
+            {
+                try
+                {
+                    await _lockService.ReleaseLockAsync(ticker, podId, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to release ticker lock for {Ticker}. It will expire by TTL.", ticker);
+                }
+            }
+        }
+    }
+
+    private void AddDerivedTimeframes(
+        BacktestRunConfig run,
+        IReadOnlyCollection<string> requiredTimeframes,
+        IDictionary<string, List<OhlcvBar>> barsByTimeframe)
+    {
+        var missing = requiredTimeframes
+            .Where(timeframe => !barsByTimeframe.ContainsKey(timeframe))
+            .ToArray();
+
+        if (missing.Length == 0)
+        {
+            return;
+        }
+
+        if (!barsByTimeframe.TryGetValue(run.DerivedTimeframes.Source, out var sourceBars))
+        {
+            throw new InvalidOperationException(
+                $"Cannot derive required paper/live timeframes [{String.Join(", ", missing)}] because source timeframe {run.DerivedTimeframes.Source} was not loaded.");
+        }
+
+        foreach (var target in missing)
+        {
+            barsByTimeframe[target] = _barResampler.Resample(sourceBars, target).ToList();
+        }
+    }
+
+    private static string[] ResolveRequiredTimeframes(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
+    {
+        var required = new HashSet<string>(run.Intervals.Where(x => !String.IsNullOrWhiteSpace(x)), StringComparer.OrdinalIgnoreCase);
+        foreach (var strategy in strategies)
+        {
+            required.Add(strategy.Timeframe);
+            required.Add(strategy.Execution.Timeframe);
+            if (strategy.Confluence.Enabled)
+            {
+                required.Add(strategy.Confluence.Timeframe);
+            }
+        }
+
+        return required.ToArray();
+    }
+
+    private static int ResolveWorkerCount(int configuredWorkerCount)
+    {
+        if (configuredWorkerCount > 0)
+        {
+            return configuredWorkerCount;
+        }
+
+        return Math.Max(1, Environment.ProcessorCount - 1);
     }
 }

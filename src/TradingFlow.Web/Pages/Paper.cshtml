@@ -96,10 +96,8 @@
     <!-- RIGHT COLUMN: Live Runner -->
     <div>
         <div class="panel highlight-border">
-            <h2>Live Paper Runner</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Run the selected strategy on the selected environment live.</div>
-            
-            <input type="hidden" name="SelectedConfigPath" value="@Model.ConfigPath" />
+            <h2>Paper Runner</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Run the selected strategy on the currently selected paper environment.</div>
 
             <label for="OrderExpirationDropdown">Order Expiration Strategy</label>
             <select id="OrderExpirationDropdown" name="OrderExpiration" style="margin-bottom: 1rem;">
@@ -122,23 +120,23 @@
             </div>
 
             <label for="RunName">Run Name</label>
-            <input name="RunName" id="RunName" value="live_run_1" />
+            <input name="RunName" id="RunName" value="paper_run_1" />
 
             <div class="actions" style="margin-top: 1rem;">
-                <button type="submit" asp-page-handler="RunLive" class="button" style="background: #28a745;">Start Live Paper Trading</button>
+                <button type="submit" asp-page-handler="RunLive" class="button" style="background: #28a745;">Start Paper Trading</button>
             </div>
         </div>
         </form>
 
         <section class="panel" style="margin-top: 1rem;">
             <div class="section-title">
-                <h2>Live Jobs</h2>
+                <h2>Paper Jobs</h2>
                 <a class="button secondary" asp-page="/Paper" asp-route-configPath="@Model.ConfigPath" asp-route-strategyPath="@Model.SelectedStrategyPath">Refresh</a>
             </div>
             
             @if (Model.LiveJobs.Count == 0)
             {
-                <div class="muted">No live jobs running.</div>
+                <div class="muted">No paper jobs running.</div>
             }
             else
             {
@@ -179,8 +177,8 @@
     {
         <p class="muted">Run validation to check demo keys and read-only paper dependencies for your selected broker. No orders are placed.</p>
         <form method="post" asp-page-handler="">
-            <input type="hidden" name="configPath" value="@Model.ConfigPath" />
-            <input type="hidden" name="strategyPath" value="@Model.SelectedStrategyPath" />
+            <input type="hidden" id="EnvironmentCheckConfigPath" name="BaseConfigPath" value="@Model.ConfigPath" />
+            <input type="hidden" id="EnvironmentCheckStrategyPath" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
             <button type="submit">Validate Environment</button>
         </form>
     }
@@ -232,6 +230,11 @@
 @section Scripts {
     <script>
         function loadStrategyDetails(strategyPath) {
+            const environmentStrategy = document.getElementById('EnvironmentCheckStrategyPath');
+            if (environmentStrategy) {
+                environmentStrategy.value = strategyPath;
+            }
+
             fetch('?handler=StrategyDetails&strategyPath=' + encodeURIComponent(strategyPath))
                 .then(response => response.json())
                 .then(data => {
@@ -246,11 +249,20 @@
         }
 
         function loadConfigDetails(configPath) {
+            const environmentConfig = document.getElementById('EnvironmentCheckConfigPath');
+            if (environmentConfig) {
+                environmentConfig.value = configPath;
+            }
+
             fetch('?handler=ConfigDetails&configPath=' + encodeURIComponent(configPath))
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
                         document.getElementById('TickersCsv').value = data.tickers;
+                        document.getElementById('OrderExpirationDropdown').value = data.orderExpiration || 'gtc';
+                        document.getElementById('EntryOrderTypeDropdown').value = data.entryOrderType || 'limit';
+                        document.getElementById('ExtendedHoursCheckbox').checked = Boolean(data.extendedHours);
+                        document.getElementById('ScreenerFilter').value = data.screenerFilter || '';
                     }
                 });
         }
