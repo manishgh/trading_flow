@@ -8,9 +8,9 @@
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
         <div>
             <h1 style="margin: 0; color: #fff;">Audit Analyzer: @Model.RunName</h1>
-            <p class="muted">Decision tree audit for strategy signal evaluations.</p>
+            <p class="muted">Decision tree audit for strategy signal evaluations. Times shown in @Model.LocalTimeZoneLabel.</p>
         </div>
-        <a href="/" class="btn" style="background: #333;">Back to Dashboard</a>
+        <a href="@Model.BackUrl" class="button secondary" style="background: #1f6feb; color: #fff; border-color: #2f81f7;">Back</a>
     </div>
 
     @if (Model.Records.Count == 0)
@@ -22,11 +22,47 @@
     }
     else
     {
+        <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+            <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem;">
+                <div class="muted">Evaluations</div>
+                <div style="font-size: 1.8rem; font-weight: 700;">@Model.Records.Count</div>
+            </div>
+            <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem;">
+                <div class="muted">Accepted</div>
+                <div style="font-size: 1.8rem; font-weight: 700; color: #4caf50;">@Model.AcceptedCount</div>
+            </div>
+            <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem;">
+                <div class="muted">Rejected</div>
+                <div style="font-size: 1.8rem; font-weight: 700; color: #f44336;">@Model.RejectedCount</div>
+            </div>
+            <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem;">
+                <div class="muted">Coverage</div>
+                <div style="font-size: 1.1rem; font-weight: 700;">@Model.TickerCount tickers / @Model.StrategyCount strategies</div>
+            </div>
+        </div>
+
+        @if (Model.TopRejectionReasons.Count > 0)
+        {
+            <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+                <h2 style="margin-top: 0;">Top Rejection Reasons</h2>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem;">
+                    @foreach (var reason in Model.TopRejectionReasons)
+                    {
+                        <div style="background: #252525; border-radius: 6px; padding: 0.75rem; border-left: 4px solid #f44336;">
+                            <div style="font-weight: 700;">@reason.DisplayReason</div>
+                            <div class="muted">@reason.Count rejected (@reason.PercentOfRejected.ToString("0.0")%)</div>
+                            <code style="font-size: 0.8rem;">@reason.ExampleReason</code>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
         <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem; overflow-x: auto;">
             <table class="table" style="width: 100%; border-collapse: collapse;">
                 <thead>
                     <tr style="border-bottom: 1px solid #444; text-align: left;">
-                        <th>Time</th>
+                        <th>Local Time</th>
                         <th>Ticker</th>
                         <th>Strategy</th>
                         <th>Decision</th>
@@ -38,13 +74,19 @@
                 @foreach (var record in Model.Records)
                 {
                     <tr style="border-bottom: 1px solid #333; vertical-align: top;">
-                        <td style="white-space: nowrap; padding-top: 10px;">@record.Timestamp.ToString("HH:mm:ss.fff")</td>
+                        <td style="white-space: nowrap; padding-top: 10px;">@Model.FormatLocal(record.Timestamp, includeMilliseconds: true)</td>
                         <td style="font-weight: bold; padding-top: 10px;">@record.Ticker</td>
                         <td style="padding-top: 10px;">@record.StrategyName</td>
                         <td style="padding-top: 10px; font-weight: bold; color: @(record.Decision == "Accepted" ? "#4caf50" : "#f44336")">
                             @record.Decision
                         </td>
-                        <td style="padding-top: 10px;">@(record.RejectionReason ?? "-")</td>
+                        <td style="padding-top: 10px;">
+                            <div>@Model.FormatRejectionReason(record.RejectionReason)</div>
+                            @if (!String.IsNullOrWhiteSpace(record.RejectionReason))
+                            {
+                                <code style="font-size: 0.8rem;">@record.RejectionReason</code>
+                            }
+                        </td>
                         <td style="padding-top: 10px; max-width: 500px;">
                             <details>
                                 <summary style="cursor: pointer; color: #4fc3f7;">View Signal Evaluation</summary>

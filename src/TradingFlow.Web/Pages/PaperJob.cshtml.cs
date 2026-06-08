@@ -5,6 +5,7 @@ using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Domain.Audit;
 
 namespace TradingFlow.Web.Pages;
 
@@ -29,7 +30,8 @@ public sealed class PaperJobModel : PageModel
     public System.Collections.Generic.IReadOnlyList<OrderDisplayViewModel> OpenOrders { get; private set; } = Array.Empty<OrderDisplayViewModel>();
     public System.Collections.Generic.IReadOnlyList<TradingFlow.Domain.Orders.BrokerPosition> OpenPositions { get; private set; } = Array.Empty<TradingFlow.Domain.Orders.BrokerPosition>();
     public TradingFlow.Domain.Logging.ProfilerSummary? LatencyProfile { get; private set; }
-    public List<TradingFlow.Domain.Audit.DecisionAuditRecord> RecentAudits { get; private set; } = new();
+    public List<DecisionAuditRecord> RecentAudits { get; private set; } = new();
+    public string LocalTimeZoneLabel => UiDisplayFormatter.LocalTradingTimeZoneLabel;
 
     public async Task OnGetAsync(Guid id)
     {
@@ -53,8 +55,6 @@ public sealed class PaperJobModel : PageModel
                 ? Path.Combine(Environment.CurrentDirectory, "data", "paper", "results", "live", Job.RunName)
                 : Path.Combine(Environment.CurrentDirectory, resultsRoot, "live", Job.RunName);
 
-            System.IO.File.WriteAllText("paperjob_debug.txt", $"ResultsRoot: {resultsRoot}\nResultsDir: {resultsDir}\nExists: {Directory.Exists(resultsDir)}");
-
             if (Directory.Exists(resultsDir))
             {
                 foreach (var tickerDir in Directory.GetDirectories(resultsDir))
@@ -77,8 +77,7 @@ public sealed class PaperJobModel : PageModel
 
             try
             {
-                var allAudits = await auditRepo.GetAuditsByRunNameAsync(Job.RunName, default);
-                RecentAudits = allAudits.OrderByDescending(a => a.Timestamp).Take(50).ToList();
+                RecentAudits = await LoadRecentAuditsAsync(Job.RunName);
             }
             catch { /* Ignore audit db errors */ }
         }
@@ -88,8 +87,44 @@ public sealed class PaperJobModel : PageModel
             var currentPx = ChartDataList.FirstOrDefault(c => c.Ticker == o.Ticker)?.Close;
             return new OrderDisplayViewModel(o, currentPx);
         }).ToList();
+    }
 
+    public async Task<IActionResult> OnGetSnapshotAsync(Guid id)
+    {
+        var job = jobs.Get(id);
+        if (job is null)
+        {
+            return new JsonResult(new { success = false });
         }
+
+        List<DecisionAuditRecord> audits;
+        try
+        {
+            audits = await LoadRecentAuditsAsync(job.RunName);
+        }
+        catch
+        {
+            audits = new List<DecisionAuditRecord>();
+        }
+
+        return new JsonResult(new
+        {
+            success = true,
+            status = job.Status,
+            errorMessage = job.ErrorMessage,
+            startedAt = job.StartedAt is null ? "Queued" : FormatLocal(job.StartedAt.Value),
+            events = job.Events.Reverse().Take(100).ToArray(),
+            audits = audits.Select(a => new
+            {
+                time = FormatLocalTime(a.Timestamp),
+                ticker = a.Ticker,
+                decision = a.Decision,
+                reason = FormatRejectionReason(a.RejectionReason),
+                rawReason = a.RejectionReason ?? "",
+                accepted = a.Decision.Equals("Accepted", StringComparison.OrdinalIgnoreCase)
+            }).ToArray()
+        });
+    }
 
     public IActionResult OnPostCancelRun(Guid id)
     {
@@ -107,6 +142,27 @@ public sealed class PaperJobModel : PageModel
     {
         await jobs.ClosePositionAsync(id, ticker);
         return RedirectToPage(new { id });
+    }
+
+    public string FormatLocal(DateTimeOffset timestamp)
+    {
+        return UiDisplayFormatter.FormatLocal(timestamp);
+    }
+
+    public string FormatLocalTime(DateTimeOffset timestamp)
+    {
+        return UiDisplayFormatter.FormatLocalTime(timestamp);
+    }
+
+    public string FormatRejectionReason(string? reason)
+    {
+        return UiDisplayFormatter.FormatRejectionReason(reason);
+    }
+
+    private async Task<List<DecisionAuditRecord>> LoadRecentAuditsAsync(string runName)
+    {
+        var allAudits = await auditRepo.GetAuditsByRunNameAsync(runName, default);
+        return allAudits.OrderByDescending(a => a.Timestamp).Take(50).ToList();
     }
 }
 

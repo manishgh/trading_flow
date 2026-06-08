@@ -4,6 +4,74 @@
     ViewData["Title"] = "Paper Job";
 }
 
+@section Scripts {
+    <script>
+        (function () {
+            const jobId = window.tradingFlowJobId;
+            if (!jobId) return;
+
+            const statusEl = document.getElementById('jobStatus');
+            const startedAtEl = document.getElementById('startedAt');
+            const eventsEl = document.getElementById('recentEvents');
+            const auditsBody = document.getElementById('recentAuditsBody');
+
+            function escapeHtml(value) {
+                return String(value ?? '')
+                    .replaceAll('&', '&amp;')
+                    .replaceAll('<', '&lt;')
+                    .replaceAll('>', '&gt;')
+                    .replaceAll('"', '&quot;')
+                    .replaceAll("'", '&#039;');
+            }
+
+            async function refreshSnapshot() {
+                let data;
+                try {
+                    const response = await fetch(`?handler=Snapshot&id=${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+                    if (!response.ok) return;
+                    data = await response.json();
+                } catch {
+                    return;
+                }
+
+                if (!data.success) return;
+
+                if (statusEl) {
+                    statusEl.textContent = data.status;
+                    statusEl.className = `status ${data.status}`;
+                }
+
+                if (startedAtEl) {
+                    startedAtEl.textContent = data.startedAt;
+                }
+
+                if (eventsEl) {
+                    eventsEl.innerHTML = data.events.map(eventText => `<div>${escapeHtml(eventText)}</div>`).join('');
+                }
+
+                if (auditsBody) {
+                    auditsBody.innerHTML = data.audits.map(audit => {
+                        const color = audit.accepted ? '#4caf50' : '#f44336';
+                        const raw = audit.rawReason ? `<br /><code>${escapeHtml(audit.rawReason)}</code>` : '';
+                        return `<tr style="border-bottom: 1px solid #333;">
+                            <td style="white-space: nowrap;">${escapeHtml(audit.time)}</td>
+                            <td style="font-weight: bold;">${escapeHtml(audit.ticker)}</td>
+                            <td style="color: ${color}; font-weight: bold;">${escapeHtml(audit.decision)}</td>
+                            <td style="color: #aaa; font-size: 0.9em;">${escapeHtml(audit.reason)}${raw}</td>
+                        </tr>`;
+                    }).join('');
+                }
+
+                if (data.status !== 'queued' && data.status !== 'running') {
+                    window.clearInterval(window.tradingFlowPaperJobRefresh);
+                }
+            }
+
+            window.tradingFlowPaperJobRefresh = window.setInterval(refreshSnapshot, 5000);
+        })();
+    </script>
+}
+
 <div class="section-title">
     <div>
         <h1>Paper Run: @Model.Job?.RunName</h1>
@@ -17,7 +85,7 @@
             </form>
         }
         <form method="post" asp-page-handler="CancelOrders" asp-route-id="@Model.Job?.JobId" style="margin: 0;">
-            <button type="submit" class="button secondary">Cancel All Alpaca Orders</button>
+            <button type="submit" class="button secondary">Cancel All Broker Orders</button>
         </form>
         <a class="button secondary" asp-page="/Paper">Back to Lab</a>
     </div>
@@ -31,7 +99,7 @@ else
 {
     <div class="grid two">
         <section class="panel">
-            <h2>Status: <span class="status @Model.Job.Status">@Model.Job.Status</span></h2>
+            <h2>Status: <span id="jobStatus" class="status @Model.Job.Status">@Model.Job.Status</span></h2>
             @if (!string.IsNullOrEmpty(Model.Job.ErrorMessage))
             {
                 <div class="alert alert-danger" style="background: #f8d7da; color: #721c24; padding: 1rem; border-radius: 4px; margin-bottom: 1rem;">
@@ -39,9 +107,9 @@ else
                 </div>
             }
             <p><strong>Config:</strong> @Model.Job.ConfigPath</p>
-            <p><strong>Started:</strong> @(Model.Job.StartedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Queued")</p>
+            <p><strong>Started:</strong> <span id="startedAt">@(Model.Job.StartedAt is null ? "Queued" : Model.FormatLocal(Model.Job.StartedAt.Value))</span> <span class="muted">@Model.LocalTimeZoneLabel</span></p>
             <div style="margin-top: 1rem; margin-bottom: 1rem;">
-                <a asp-page="/Audit" asp-route-runName="@Model.Job.RunName" class="button" style="background: #007acc; color: white;">🔍 Open Audit Analyzer</a>
+                <a asp-page="/Audit" asp-route-runName="@Model.Job.RunName" asp-route-returnUrl="@($"/PaperJob/{Model.Job.JobId}")" class="button" style="background: #007acc; color: white;">Open Audit Analyzer</a>
             </div>
             @if (Model.Strategy != null)
             {
@@ -60,7 +128,7 @@ else
             }
 
             <h3 style="margin-top: 1rem;">Recent Events</h3>
-            <div class="log-viewer" style="height: 300px; overflow-y: auto; background: #1e1e1e; color: #fff; padding: 1rem; border-radius: 4px; font-family: monospace;">
+            <div id="recentEvents" class="log-viewer" style="height: 300px; overflow-y: auto; background: #1e1e1e; color: #fff; padding: 1rem; border-radius: 4px; font-family: monospace;">
                 @foreach (var ev in Model.Job.Events.Reverse())
                 {
                     <div>@ev</div>
@@ -70,7 +138,7 @@ else
             @if (Model.Job.Status is "queued" or "running")
             {
                 <script>
-                    setTimeout(() => window.location.reload(), 5000);
+                    window.tradingFlowJobId = '@Model.Job.JobId';
                 </script>
             }
         </section>
@@ -88,7 +156,7 @@ else
                 <table class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
                     <thead>
                         <tr style="border-bottom: 1px solid #444; text-align: left;">
-                            <th>Time</th>
+                            <th>Local Time</th>
                             <th>Ticker</th>
                             <th>Close Price</th>
                             <th>RSI (14)</th>
@@ -101,7 +169,7 @@ else
                         @foreach (var point in Model.ChartDataList.OrderBy(x => x.Ticker))
                         {
                             <tr>
-                                <td>@TimeZoneInfo.ConvertTimeBySystemTimeZoneId(point.Timestamp, "Central Europe Standard Time").ToString("HH:mm:ss")</td>
+                                <td>@Model.FormatLocalTime(point.Timestamp)</td>
                                 <td><strong>@point.Ticker</strong></td>
                                 <td>@point.Close.ToString("C2")</td>
                                 <td>@(point.Rsi?.ToString("F2") ?? "N/A")</td>
@@ -125,21 +193,27 @@ else
                     <table class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
                         <thead style="position: sticky; top: 0; background: #1e1e1e; z-index: 1;">
                             <tr style="border-bottom: 1px solid #444; text-align: left;">
-                                <th>Time</th>
+                                <th>Local Time</th>
                                 <th>Ticker</th>
                                 <th>Decision</th>
                                 <th>Rejection Reason</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="recentAuditsBody">
                         @foreach (var audit in Model.RecentAudits)
                         {
                             var color = audit.Decision == "Accepted" ? "#4caf50" : (audit.Decision == "Rejected" ? "#f44336" : "#aaa");
                             <tr style="border-bottom: 1px solid #333;">
-                                <td style="white-space: nowrap;">@TimeZoneInfo.ConvertTimeBySystemTimeZoneId(audit.Timestamp, "Central Europe Standard Time").ToString("HH:mm:ss")</td>
+                                <td style="white-space: nowrap;">@Model.FormatLocalTime(audit.Timestamp)</td>
                                 <td style="font-weight: bold;">@audit.Ticker</td>
                                 <td style="color: @color; font-weight: bold;">@audit.Decision</td>
-                                <td style="color: #aaa; font-size: 0.9em;">@(audit.RejectionReason ?? "-")</td>
+                                <td style="color: #aaa; font-size: 0.9em;">
+                                    @Model.FormatRejectionReason(audit.RejectionReason)
+                                    @if (!String.IsNullOrWhiteSpace(audit.RejectionReason))
+                                    {
+                                        <br /><code>@audit.RejectionReason</code>
+                                    }
+                                </td>
                             </tr>
                         }
                         </tbody>

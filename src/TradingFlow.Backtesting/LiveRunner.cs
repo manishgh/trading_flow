@@ -254,10 +254,26 @@ public sealed class LiveRunner(
                     },
                     async (ticker, token) =>
                     {
-                        progress?.Report($"Fetching data and processing pipeline for {ticker}");
-                        await ProcessTickerLiveAsync(run, strategies, ticker, start, end, catalystStreamer, activeTickerSnapshot, token, progress);
-                        var finished = Interlocked.Increment(ref processed);
-                        progress?.Report($"Processed {finished}/{total} ticker pipeline(s).");
+                        try
+                        {
+                            progress?.Report($"Fetching data and processing pipeline for {ticker}");
+                            await ProcessTickerLiveAsync(run, strategies, ticker, start, end, catalystStreamer, activeTickerSnapshot, token, progress);
+                        }
+                        catch (OperationCanceledException) when (token.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Ticker pipeline failed for {Ticker}; continuing with other tickers.", ticker);
+                            progress?.Report($"Ticker {ticker} failed: {ex.Message}");
+                            await SaveTickerPipelineFailureAuditsAsync(run, strategies, ticker, ex.Message, token);
+                        }
+                        finally
+                        {
+                            var finished = Interlocked.Increment(ref processed);
+                            progress?.Report($"Processed {finished}/{total} ticker pipeline(s).");
+                        }
                     });
             }
             catch (Exception ex)
@@ -559,6 +575,40 @@ public sealed class LiveRunner(
         foreach (var target in missing)
         {
             barsByTimeframe[target] = _barResampler.Resample(sourceBars, target).ToList();
+        }
+    }
+
+    private async Task SaveTickerPipelineFailureAuditsAsync(
+        BacktestRunConfig run,
+        IReadOnlyCollection<StrategyDefinition> strategies,
+        string ticker,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        if (_auditRepo is null)
+        {
+            return;
+        }
+
+        var signalJson = JsonSerializer.Serialize(new
+        {
+            ticker,
+            error = reason,
+            timestamp = DateTimeOffset.UtcNow
+        });
+
+        foreach (var strategy in strategies)
+        {
+            await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
+            {
+                RunName = run.RunName,
+                Ticker = ticker,
+                StrategyName = strategy.StrategyName,
+                Timestamp = DateTimeOffset.UtcNow,
+                Decision = "Rejected",
+                RejectionReason = $"ticker_pipeline_failed ({reason})",
+                SignalJson = signalJson
+            }, cancellationToken);
         }
     }
 

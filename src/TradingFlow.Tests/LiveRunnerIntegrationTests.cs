@@ -65,6 +65,70 @@ public class LiveRunnerIntegrationTests
     }
 
     [Fact]
+    public async Task RunAsync_ContinuesOtherTickerPipelines_WhenOneTickerHasNoSourceBars()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var provider = new Mock<IMarketDataProvider>();
+            provider
+                .Setup(x => x.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                {
+                    var ticker = tickers.Single();
+                    return ticker.Equals("SIVEF", StringComparison.OrdinalIgnoreCase)
+                        ? YieldBars(Array.Empty<OhlcvBar>(), token)
+                        : YieldBars(CreateFiveMinuteBars(ticker), token);
+                });
+
+            var auditRepo = new Mock<IDecisionAuditRepository>();
+            auditRepo
+                .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var runner = CreateRunner(provider.Object, lockService: null, auditRepo);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var progress = new Progress<string>(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                }
+            });
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["AAPL", "SIVEF"], ["5m"], workerCount: 2, derivedSource: "5m"),
+                [CreateStrategy(signalTimeframe: "15m", executionTimeframe: "5m")],
+                cts,
+                progress);
+
+            Assert.True(
+                File.Exists(Path.Combine(resultsRoot, "live", "LiveRunnerTest", "AAPL", "AAPL_chart.json")),
+                "AAPL should still produce live metrics even when SIVEF has no source bars.");
+
+            auditRepo.Verify(
+                x => x.SaveAuditAsync(
+                    It.Is<DecisionAuditRecord>(record =>
+                        record.Ticker == "SIVEF" &&
+                        record.Decision == "Rejected" &&
+                        record.RejectionReason != null &&
+                        record.RejectionReason.StartsWith("ticker_pipeline_failed", StringComparison.Ordinal)),
+                    It.IsAny<CancellationToken>()),
+                Times.AtLeastOnce);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_ReleasesTickerLock_AfterTickerPipelineCompletes()
     {
         var resultsRoot = CreateTempDirectory();
@@ -162,13 +226,16 @@ public class LiveRunnerIntegrationTests
         }
     }
 
-    private static LiveRunner CreateRunner(IMarketDataProvider provider, ITickerLockService? lockService)
+    private static LiveRunner CreateRunner(
+        IMarketDataProvider provider,
+        ITickerLockService? lockService,
+        Mock<IDecisionAuditRepository>? auditRepoMock = null)
     {
         var orderRepo = new Mock<IOrderStateRepository>();
         orderRepo
             .Setup(x => x.GetActiveOrdersByTickerAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<PersistedOrder>());
-        var auditRepo = new Mock<IDecisionAuditRepository>();
+        var auditRepo = auditRepoMock ?? new Mock<IDecisionAuditRepository>();
         auditRepo
             .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);

@@ -193,9 +193,20 @@ public sealed class RunConfigWriter
         var newYaml = new StringBuilder();
         var inTickers = false;
         var inStrategies = false;
+        var skipScreenerBlock = false;
 
         foreach (var line in lines)
         {
+            if (skipScreenerBlock)
+            {
+                if (line.StartsWith("  ", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                skipScreenerBlock = false;
+            }
+
             if (line.StartsWith("  order_expiration:"))
             {
                 continue; // Skip existing order_expiration to avoid duplicates, we write it below
@@ -264,23 +275,27 @@ public sealed class RunConfigWriter
             // Remove existing screener block if any, because we will rewrite it at the end
             if (line.StartsWith("screener:"))
             {
+                skipScreenerBlock = true;
                 continue;
             }
-            if (line.StartsWith("  provider: finviz") && newYaml.ToString().Contains("screener:")) continue;
-            if (line.StartsWith("  enabled:") && newYaml.ToString().Contains("screener:")) continue;
-            if (line.StartsWith("  filters:") && newYaml.ToString().Contains("screener:")) continue;
 
             newYaml.AppendLine(line);
         }
 
+        newYaml.AppendLine();
+        newYaml.AppendLine("screener:");
         if (!string.IsNullOrWhiteSpace(screenerFilter) && screenerFilter != "[]")
         {
-            newYaml.AppendLine();
-            newYaml.AppendLine("screener:");
             newYaml.AppendLine("  enabled: true");
             newYaml.AppendLine("  provider: finviz");
             newYaml.AppendLine("  filters:");
             newYaml.AppendLine($"    - \"{screenerFilter}\"");
+        }
+        else
+        {
+            newYaml.AppendLine("  enabled: false");
+            newYaml.AppendLine("  provider: finviz");
+            newYaml.AppendLine("  filters: []");
         }
 
         File.WriteAllText(outputPath, newYaml.ToString());
