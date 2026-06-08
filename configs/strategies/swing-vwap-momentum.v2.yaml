@@ -1,0 +1,38 @@
+strategy_id: financial-data.swing-vwap-momentum.v2
+strategy_name: Swing VWAP Momentum
+source: C:\project\financial_data\strategies\intraday_vwap.yaml
+version: 2
+timeframe: 15m
+direction: long
+entry_rules:
+  min_volume_spike: 1.0
+  min_entry_rsi: 30.0
+  max_entry_rsi: 75.0
+  trend_filter: vwap
+  macd_filter: not_bearish
+  require_price_above_bb_middle: true
+  require_macd_histogram_positive: true
+confluence:
+  enabled: true
+  timeframe: 15m
+  ema_period: 50
+  macd_filter: not_bearish
+exit_rules:
+  stop_atr_multiple: 3.5
+  target_r_multiple: 3.5
+  max_hold_hours: 48.0
+  enable_atr_trailing_stop: true
+  trailing_stop_atr_multiple: 3.5
+  trailing_activation_r: 2.0
+  exit_on_close_below_ema20: true
+  exit_on_close_below_vwap: true
+  exit_on_macd_histogram_negative: true
+  min_hold_bars_before_technical_exit: 4
+execution:
+  timeframe: 15m
+  slippage_bps: 8.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 30
+  close_buffer_minutes: 60
+  friday_close_buffer_minutes: 120

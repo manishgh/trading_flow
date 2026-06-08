@@ -1,0 +1,69 @@
+# Build output
+bin/
+obj/
+out/
+publish/
+TestResults/
+artifacts/
+
+# Visual Studio / Rider / VS Code local state
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# .NET generated files
+*.dll
+*.exe
+*.pdb
+*.cache
+*.nupkg
+*.snupkg
+project.lock.json
+project.assets.json
+*.nuget.props
+*.nuget.targets
+
+# Local ASP.NET launch profiles may contain API keys.
+**/Properties/launchSettings.json
+
+# Runtime databases, logs, and generated trading data.
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+data/
+
+# Generated run configs and result files.
+configs/backtest/temp/
+configs/backtest/ui-runs/
+configs/optimization/ui-runs/
+configs/paper/temp/
+configs/paper/ui-runs/
+configs/live/temp/
+configs/live/ui-runs/
+
+# Local scratch files created during development/debugging.
+ClassLibrary1/
+check_db.csx
+src/TradingFlow.Web/check.csx
+src/TradingFlow.Web/paperjob_debug.txt
+
+# Local secrets and environment files.
+.env
+.env.*
+*.secret.json
+secrets.json
+appsettings.*.local.json
+deploy/aks/secret.yaml
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

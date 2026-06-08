@@ -1,0 +1,75 @@
+//@version=5
+indicator("Swing Trend Pullback v1 - TradingFlow", overlay=true, max_labels_count=500)
+
+strategyId = "research.swing-trend-pullback.v1"
+strategyName = "Swing Trend Pullback"
+strategyVersion = 1
+signalTimeframe = "60"
+executionTimeframe = "5m"
+
+sigClose = request.security(syminfo.tickerid, signalTimeframe, close, lookahead=barmerge.lookahead_off)
+sigLow = request.security(syminfo.tickerid, signalTimeframe, low, lookahead=barmerge.lookahead_off)
+sigVolume = request.security(syminfo.tickerid, signalTimeframe, volume, lookahead=barmerge.lookahead_off)
+sigAtr = request.security(syminfo.tickerid, signalTimeframe, ta.atr(14), lookahead=barmerge.lookahead_off)
+sigRsi = request.security(syminfo.tickerid, signalTimeframe, ta.rsi(close, 14), lookahead=barmerge.lookahead_off)
+sigEma20 = request.security(syminfo.tickerid, signalTimeframe, ta.ema(close, 20), lookahead=barmerge.lookahead_off)
+sigEma50 = request.security(syminfo.tickerid, signalTimeframe, ta.ema(close, 50), lookahead=barmerge.lookahead_off)
+sigRelVol = request.security(syminfo.tickerid, signalTimeframe, volume / math.max(ta.sma(volume, 20), 1), lookahead=barmerge.lookahead_off)
+
+newSignalBar = ta.change(time(signalTimeframe)) != 0
+emaPullback = sigLow <= sigEma20 and sigClose > sigEma20
+entrySignal = barstate.isconfirmed and newSignalBar and emaPullback and sigRelVol >= 1.2 and sigRsi >= 45 and sigRsi <= 70 and sigClose > sigEma20 and sigClose > sigEma50 and sigEma20 > sigEma50
+
+var bool inTrade = false
+var float stopLoss = na
+var float takeProfit = na
+var int entryTime = na
+maxHoldMs = 259200000
+
+jsonPayload(string action, string reason, float px) =>
+    "{" +
+    "\"schema_version\":\"1.0\"," +
+    "\"source\":\"tradingview\"," +
+    "\"event_id\":\"" + strategyId + ":" + syminfo.ticker + ":" + str.tostring(time) + ":" + action + "\"," +
+    "\"strategy_id\":\"" + strategyId + "\"," +
+    "\"strategy_name\":\"" + strategyName + "\"," +
+    "\"strategy_version\":" + str.tostring(strategyVersion) + "," +
+    "\"ticker\":\"" + syminfo.ticker + "\"," +
+    "\"action\":\"" + action + "\"," +
+    "\"side\":\"long\"," +
+    "\"signal_timeframe\":\"1h\"," +
+    "\"execution_timeframe\":\"" + executionTimeframe + "\"," +
+    "\"bar_time_epoch_ms\":" + str.tostring(time) + "," +
+    "\"price\":" + str.tostring(px, format.mintick) + "," +
+    "\"stop_loss\":" + str.tostring(stopLoss, format.mintick) + "," +
+    "\"take_profit\":" + str.tostring(takeProfit, format.mintick) + "," +
+    "\"exit_reason\":\"" + reason + "\"," +
+    "\"signal_values\":{\"atr\":" + str.tostring(sigAtr, format.mintick) + ",\"rsi\":" + str.tostring(sigRsi, "#.##") + ",\"relative_volume\":" + str.tostring(sigRelVol, "#.####") + ",\"ema20\":" + str.tostring(sigEma20, format.mintick) + ",\"ema50\":" + str.tostring(sigEma50, format.mintick) + "}" +
+    "}"
+
+if entrySignal and not inTrade and sigAtr > 0
+    stopLoss := close - (2.5 * sigAtr)
+    takeProfit := close + ((close - stopLoss) * 3.0)
+    entryTime := time
+    inTrade := true
+    alert(jsonPayload("entry", "", close), alert.freq_once_per_bar_close)
+
+exitReason = ""
+exitPrice = close
+if inTrade and low <= stopLoss
+    exitReason := "stop_loss"
+    exitPrice := stopLoss
+else if inTrade and high >= takeProfit
+    exitReason := "take_profit"
+    exitPrice := takeProfit
+else if inTrade and time - entryTime >= maxHoldMs
+    exitReason := "max_hold"
+    exitPrice := close
+
+if inTrade and exitReason != ""
+    alert(jsonPayload("exit", exitReason, exitPrice), alert.freq_once_per_bar_close)
+    inTrade := false
+
+plot(sigEma20, "1H EMA 20", color=color.teal)
+plot(sigEma50, "1H EMA 50", color=color.blue)
+plotshape(entrySignal and not inTrade[1], title="Entry", style=shape.triangleup, color=color.lime, location=location.belowbar, size=size.tiny)

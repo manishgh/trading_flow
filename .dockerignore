@@ -1,0 +1,14 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.git/
+data/backtest/raw/
+data/backtest/normalized/
+data/paper/raw/
+data/paper/normalized/
+data/live/raw/
+data/live/normalized/
+sidecars/news-sentiment-go/*.exe
+*.user
+*.suo
+*.log

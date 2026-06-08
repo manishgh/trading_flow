@@ -1,0 +1,164 @@
+@page "{id:guid}"
+@model TradingFlow.Web.Pages.JobModel
+@using System.Globalization
+@{
+    ViewData["Title"] = "Backtest Job";
+    if (Model.Job is not null && (Model.Job.Status == "queued" || Model.Job.Status == "running"))
+    {
+        <meta http-equiv="refresh" content="5" />
+    }
+}
+
+@if (Model.Job is null)
+{
+    <section class="panel">
+        <h1>Job not found</h1>
+        <p class="muted">The requested job is no longer in memory.</p>
+    </section>
+}
+else
+{
+    <div class="section-title">
+        <div>
+            <h1>@Model.Job.RunName</h1>
+            <div class="muted">@Model.Job.ConfigPath</div>
+        </div>
+        <span class="status">@Model.Job.Status</span>
+    </div>
+
+    <section class="panel" style="margin-bottom:16px">
+        @{
+            var started = Model.Job.StartedAt ?? Model.Job.CreatedAt;
+            var finished = Model.Job.FinishedAt ?? DateTimeOffset.UtcNow;
+            var elapsed = finished - started;
+            var progressPct = Model.Job.TotalTickerCount == 0
+                ? 0
+                : (decimal)Model.Job.CompletedTickerCount / Model.Job.TotalTickerCount * 100m;
+        }
+        <div class="section-title">
+            <div>
+                <h2>Run State</h2>
+                <div class="muted">@Model.Job.CurrentStage · elapsed @elapsed.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture)</div>
+            </div>
+            <strong>@Model.Job.CompletedTickerCount / @Model.Job.TotalTickerCount tickers</strong>
+        </div>
+        <div class="progress-track">
+            <div class="progress-bar" style="width:@progressPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
+        </div>
+        @if (Model.Job.Events.Count > 0)
+        {
+            <ul class="event-log">
+                @foreach (var item in Model.Job.Events.Reverse().Take(12))
+                {
+                    <li>@item</li>
+                }
+            </ul>
+        }
+    </section>
+
+    @if (Model.Job.ErrorMessage is not null)
+    {
+        <section class="panel"><strong class="bad">@Model.Job.ErrorMessage</strong></section>
+    }
+
+    @if (Model.Job.Result is { } result)
+    {
+        <div class="grid three">
+            <section class="panel metric">
+                <span class="muted">Winner</span>
+                <strong>@(result.Winner?.StrategyName ?? "-")</strong>
+                <span>@(result.Winner is null ? "-" : $"{result.Winner.TotalReturnPct:0.##}% return")</span>
+            </section>
+            <section class="panel metric">
+                <span class="muted">Ending capital</span>
+                <strong>$@result.EndingCapital.ToString("N0", CultureInfo.InvariantCulture)</strong>
+                <span class="@(result.NetProfit >= 0 ? "good" : "bad")">$@result.NetProfit.ToString("N0", CultureInfo.InvariantCulture) net</span>
+            </section>
+            <section class="panel metric">
+                <span class="muted">Trades</span>
+                <strong>@result.AcceptedTradeCount</strong>
+                <span>@result.WinningTradeCount wins / @result.LosingTradeCount losses</span>
+            </section>
+        </div>
+
+        <section class="panel" style="margin-top:16px">
+            <h2>Ticker Results</h2>
+            <table>
+                <thead><tr><th>Ticker</th><th>Status</th><th>Bars</th><th>Candidates</th><th>Error</th></tr></thead>
+                <tbody>
+                @foreach (var ticker in result.TickerResults.OrderBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase))
+                {
+                    <tr>
+                        <td>@ticker.Ticker</td>
+                        <td class="@(ticker.Succeeded ? "good" : "bad")">@(ticker.Succeeded ? "completed" : "failed")</td>
+                        <td>@ticker.ProcessedBarCount</td>
+                        <td>@ticker.CandidateOrderCount</td>
+                        <td>@(ticker.ErrorMessage ?? "-")</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </section>
+
+        <section class="panel" style="margin-top:16px">
+            <h2>Strategy Results</h2>
+            <table>
+                <thead><tr><th>Strategy</th><th>Return</th><th>Net</th><th>Drawdown</th><th>Trades</th><th>Win Rate</th></tr></thead>
+                <tbody>
+                @foreach (var strategy in result.StrategyResults.OrderByDescending(x => x.NetProfit))
+                {
+                    var winRate = strategy.AcceptedTradeCount == 0 ? 0 : (decimal)strategy.WinningTradeCount / strategy.AcceptedTradeCount * 100m;
+                    <tr>
+                        <td>@strategy.StrategyName</td>
+                        <td class="@(strategy.NetProfit >= 0 ? "good" : "bad")">@strategy.TotalReturnPct.ToString("0.##")%</td>
+                        <td>$@strategy.NetProfit.ToString("N0", CultureInfo.InvariantCulture)</td>
+                        <td>@strategy.MaxDrawdownPct.ToString("0.##")%</td>
+                        <td>@strategy.AcceptedTradeCount</td>
+                        <td>@winRate.ToString("0.#")%</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </section>
+
+        <section class="panel" style="margin-top:16px">
+            <h2>Analyzer</h2>
+            <table>
+                <thead><tr><th>Strategy</th><th>Evaluated</th><th>Candidates</th><th>Accepted</th><th>Top Rejections</th><th>Suggestions</th></tr></thead>
+                <tbody>
+                @foreach (var diagnostic in result.Diagnostics)
+                {
+                    <tr>
+                        <td>@diagnostic.StrategyName</td>
+                        <td>@diagnostic.EvaluatedBarCount</td>
+                        <td>@diagnostic.CandidateTradeCount</td>
+                        <td>@diagnostic.AcceptedTradeCount</td>
+                        <td>@String.Join(", ", diagnostic.RejectionCounts.Take(3).Select(x => $"{x.Key}: {x.Value}"))</td>
+                        <td>@String.Join(" ", diagnostic.Suggestions)</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </section>
+
+        <section class="panel" style="margin-top:16px">
+            <h2>Recent Trades</h2>
+            <table>
+                <thead><tr><th>Ticker</th><th>Strategy</th><th>Entry</th><th>Exit</th><th>Reason</th><th>Net</th></tr></thead>
+                <tbody>
+                @foreach (var trade in result.CompletedTrades.OrderByDescending(x => x.ExitTimestamp).Take(80))
+                {
+                    <tr>
+                        <td>@trade.Ticker</td>
+                        <td>@trade.StrategyName</td>
+                        <td>@trade.EntryTimestamp.LocalDateTime<br />@trade.EntryPrice</td>
+                        <td>@trade.ExitTimestamp.LocalDateTime<br />@trade.ExitPrice</td>
+                        <td>@trade.ExitReason</td>
+                        <td class="@(trade.NetProfit >= 0 ? "good" : "bad")">$@trade.NetProfit.ToString("N0", CultureInfo.InvariantCulture)</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </section>
+    }
+}

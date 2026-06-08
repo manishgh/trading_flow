@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trading-flow-news
+  namespace: trading-flow
+  labels:
+    app: trading-flow-news
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trading-flow-news
+  template:
+    metadata:
+      labels:
+        app: trading-flow-news
+    spec:
+      containers:
+        - name: news
+          image: REPLACE_ACR_LOGIN_SERVER/tradingflow-news:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+          envFrom:
+            - configMapRef:
+                name: trading-flow-config
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trading-flow-news
+  namespace: trading-flow
+spec:
+  type: ClusterIP
+  selector:
+    app: trading-flow-news
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

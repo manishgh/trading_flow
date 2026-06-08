@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TradingFlow.Alpaca/TradingFlow.Alpaca.csproj" />
+    <Project Path="src/TradingFlow.Backtesting/TradingFlow.Backtesting.csproj" />
+    <Project Path="src/TradingFlow.Cli/TradingFlow.Cli.csproj" />
+    <Project Path="src/TradingFlow.Data/TradingFlow.Data.csproj" />
+    <Project Path="src/TradingFlow.Domain/TradingFlow.Domain.csproj" />
+    <Project Path="src/TradingFlow.Engine/TradingFlow.Engine.csproj" />
+    <Project Path="src/TradingFlow.Etoro/TradingFlow.Etoro.csproj" />
+    <Project Path="src/TradingFlow.Finviz/TradingFlow.Finviz.csproj" />
+    <Project Path="src/TradingFlow.Tests/TradingFlow.Tests.csproj" />
+    <Project Path="src/TradingFlow.Web/TradingFlow.Web.csproj" />
+  </Folder>
+</Solution>

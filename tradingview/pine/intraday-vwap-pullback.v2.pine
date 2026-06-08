@@ -1,0 +1,76 @@
+//@version=5
+indicator("Intraday VWAP Pullback v2 - TradingFlow", overlay=true, max_labels_count=500)
+
+strategyId = "research.intraday-vwap-pullback.v2"
+strategyName = "Intraday VWAP Pullback"
+strategyVersion = 2
+signalTimeframe = "5m"
+executionTimeframe = "5m"
+
+atr = ta.atr(14)
+rsi = ta.rsi(close, 14)
+vwapValue = ta.vwap(hlc3)
+ema20 = ta.ema(close, 20)
+[macdLine, signalLine, macdHist] = ta.macd(close, 12, 26, 9)
+relativeVolume = volume / math.max(ta.sma(volume, 20), 1)
+vwapExtensionAtr = atr > 0 ? math.max(close - vwapValue, 0) / atr : na
+
+isVwapPullback = low <= vwapValue and close > vwapValue and close[1] >= vwapValue[1]
+macdNotBearish = macdLine >= signalLine
+entrySignal = barstate.isconfirmed and isVwapPullback and relativeVolume >= 1.5 and rsi >= 45 and rsi <= 72 and close > vwapValue and close > ema20 and macdHist > 0 and macdNotBearish and vwapExtensionAtr <= 1.25
+
+var bool inTrade = false
+var float entryPrice = na
+var float stopLoss = na
+var float takeProfit = na
+var int entryTime = na
+maxHoldMs = 23400000
+
+jsonPayload(string action, string reason, float px) =>
+    "{" +
+    "\"schema_version\":\"1.0\"," +
+    "\"source\":\"tradingview\"," +
+    "\"event_id\":\"" + strategyId + ":" + syminfo.ticker + ":" + str.tostring(time) + ":" + action + "\"," +
+    "\"strategy_id\":\"" + strategyId + "\"," +
+    "\"strategy_name\":\"" + strategyName + "\"," +
+    "\"strategy_version\":" + str.tostring(strategyVersion) + "," +
+    "\"ticker\":\"" + syminfo.ticker + "\"," +
+    "\"action\":\"" + action + "\"," +
+    "\"side\":\"long\"," +
+    "\"signal_timeframe\":\"" + signalTimeframe + "\"," +
+    "\"execution_timeframe\":\"" + executionTimeframe + "\"," +
+    "\"bar_time_epoch_ms\":" + str.tostring(time) + "," +
+    "\"price\":" + str.tostring(px, format.mintick) + "," +
+    "\"stop_loss\":" + str.tostring(stopLoss, format.mintick) + "," +
+    "\"take_profit\":" + str.tostring(takeProfit, format.mintick) + "," +
+    "\"exit_reason\":\"" + reason + "\"," +
+    "\"signal_values\":{\"atr\":" + str.tostring(atr, format.mintick) + ",\"rsi\":" + str.tostring(rsi, "#.##") + ",\"relative_volume\":" + str.tostring(relativeVolume, "#.####") + ",\"vwap\":" + str.tostring(vwapValue, format.mintick) + ",\"macd_histogram\":" + str.tostring(macdHist, "#.####") + "}" +
+    "}"
+
+if entrySignal and not inTrade and atr > 0
+    entryPrice := close
+    stopLoss := close - (1.75 * atr)
+    takeProfit := close + ((close - stopLoss) * 2.2)
+    entryTime := time
+    inTrade := true
+    alert(jsonPayload("entry", "", close), alert.freq_once_per_bar_close)
+
+exitReason = ""
+exitPrice = close
+if inTrade and low <= stopLoss
+    exitReason := "stop_loss"
+    exitPrice := stopLoss
+else if inTrade and high >= takeProfit
+    exitReason := "take_profit"
+    exitPrice := takeProfit
+else if inTrade and time - entryTime >= maxHoldMs
+    exitReason := "max_hold"
+    exitPrice := close
+
+if inTrade and exitReason != ""
+    alert(jsonPayload("exit", exitReason, exitPrice), alert.freq_once_per_bar_close)
+    inTrade := false
+
+plot(vwapValue, "VWAP", color=color.orange)
+plot(ema20, "EMA 20", color=color.teal)
+plotshape(entrySignal and not inTrade[1], title="Entry", style=shape.triangleup, color=color.lime, location=location.belowbar, size=size.tiny)

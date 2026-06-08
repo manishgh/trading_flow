@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TradingFlow.Domain\TradingFlow.Domain.csproj" />
+    <ProjectReference Include="..\TradingFlow.Engine\TradingFlow.Engine.csproj" />
+    <ProjectReference Include="..\TradingFlow.Backtesting\TradingFlow.Backtesting.csproj" />
+  </ItemGroup>
+</Project>

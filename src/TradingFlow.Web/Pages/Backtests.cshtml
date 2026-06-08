@@ -1,0 +1,252 @@
+@page "/Backtests"
+@model TradingFlow.Web.Pages.BacktestsModel
+@{
+    ViewData["Title"] = "Quant Workstation";
+    var selectedConfig = Model.Configs.FirstOrDefault(c => c.Path == Model.SelectedConfigPath);
+    var selectedStrategy = Model.Strategies.FirstOrDefault(s => s.Path == Model.SelectedStrategyPath);
+    var tickersCsv = selectedConfig != null ? String.Join(", ", selectedConfig.Config.Tickers) : "";
+}
+
+<div class="section-title">
+    <div>
+        <h1>Quant Workstation</h1>
+        <div class="muted">Design strategies, configure stock universes, and launch optimizations.</div>
+    </div>
+</div>
+
+<div class="grid two">
+    <!-- LEFT COLUMN: Environment & Strategy Editor -->
+    <div>
+        <form method="post" asp-page-handler="SaveConfig" class="panel">
+            <h2>Environment & Stocks</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Select a base config or a temporary run, edit stocks, and save to create a new temporary universe.</div>
+            
+            <input type="hidden" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
+            
+            <label for="BaseConfigPath">Backtest Environment</label>
+            <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem;">
+                <select name="BaseConfigPath" id="BaseConfigPath" onchange="window.location='?configPath=' + encodeURIComponent(this.value) + '&strategyPath=' + encodeURIComponent(document.querySelector('input[name=\'SelectedStrategyPath\']').value) + '&tickersCsv=' + encodeURIComponent(document.getElementById('TickersCsv').value)" style="flex-grow: 1;">
+                    @foreach (var config in Model.Configs)
+                    {
+                        var isBase = config.FileName.Equals("semiconductors-research.yaml", StringComparison.OrdinalIgnoreCase);
+                        var label = isBase ? config.FileName : $"[CUSTOM] {config.FileName}";
+                        <option value="@config.Path" selected="@(config.Path == Model.SelectedConfigPath)">@label</option>
+                    }
+                </select>
+                @if (selectedConfig != null && !selectedConfig.FileName.Equals("semiconductors-research.yaml", StringComparison.OrdinalIgnoreCase))
+                {
+                    <button type="submit" asp-page-handler="DeleteConfig" name="DeleteConfigPath" value="@selectedConfig.Path" class="button secondary" style="background: #fee; color: #c00; border-color: #fcc;" onclick="return confirm('Delete this custom config?');">Delete</button>
+                }
+            </div>
+
+            <label for="TickersCsv">Tickers (CSV)</label>
+            <textarea name="TickersCsv" id="TickersCsv" rows="3">@Model.TickersCsv</textarea>
+            
+            <div class="actions" style="margin-top: 1rem;">
+                <button type="submit">Save Custom List</button>
+            </div>
+        </form>
+
+        <form method="post" asp-page-handler="SaveStrategy" class="panel" style="margin-top: 1rem;">
+            <h2>Strategy Designer</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Select a strategy to permanently update its parameters.</div>
+
+            <input type="hidden" name="SelectedConfigPath" id="SelectedConfigPath_Hidden" value="@Model.SelectedConfigPath" />
+            <input type="hidden" name="SaveStrategyPath" value="@Model.SelectedStrategyPath" />
+
+            <label for="SelectedStrategyDropdown">Strategy</label>
+            <select id="SelectedStrategyDropdown" onchange="window.location='?configPath=' + encodeURIComponent(document.getElementById('SelectedConfigPath_Hidden').value) + '&strategyPath=' + encodeURIComponent(this.value) + '&tickersCsv=' + encodeURIComponent(document.getElementById('TickersCsv').value)" style="margin-bottom: 1rem;">
+                @foreach (var strategy in Model.Strategies)
+                {
+                    <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.Definition.StrategyName v@strategy.Definition.Version</option>
+                }
+            </select>
+
+            @if (selectedStrategy != null)
+            {
+                var entry = selectedStrategy.Definition.EntryRules;
+                var confluence = selectedStrategy.Definition.Confluence;
+                var exit = selectedStrategy.Definition.ExitRules;
+                var execution = selectedStrategy.Definition.Execution;
+
+                <div class="grid three">
+                    <div>
+                        <label>Volume spike</label>
+                        <input name="MinVolumeSpike" type="number" step="0.1" value="@entry.MinVolumeSpike" />
+                    </div>
+                    <div>
+                        <label>Min RSI</label>
+                        <input name="MinEntryRsi" type="number" step="0.1" value="@entry.MinEntryRsi" />
+                    </div>
+                    <div>
+                        <label>Max RSI</label>
+                        <input name="MaxEntryRsi" type="number" step="0.1" value="@entry.MaxEntryRsi" />
+                    </div>
+                </div>
+                <div class="grid three">
+                    <div>
+                        <label>VWAP ext ATR</label>
+                        <input name="MaxVwapExtensionAtr" type="number" step="0.1" value="@entry.MaxVwapExtensionAtr" />
+                    </div>
+                    <div>
+                        <label>Confluence</label>
+                        <label class="check inline-check">
+                            <input name="ConfluenceEnabled" type="checkbox" checked="@confluence.Enabled" /> Enabled
+                        </label>
+                    </div>
+                    <div>
+                        <label>Confluence TF</label>
+                        <input name="ConfluenceTimeframe" value="@confluence.Timeframe" />
+                    </div>
+                </div>
+                <div class="grid three">
+                    <div>
+                        <label>Confluence EMA</label>
+                        <input name="ConfluenceEmaPeriod" type="number" min="1" value="@confluence.EmaPeriod" />
+                    </div>
+                    <div>
+                        <label>Stop ATR</label>
+                        <input name="StopAtrMultiple" type="number" step="0.1" value="@exit.StopAtrMultiple" />
+                    </div>
+                    <div>
+                        <label>Target R</label>
+                        <input name="TargetRMultiple" type="number" step="0.1" value="@exit.TargetRMultiple" />
+                    </div>
+                </div>
+                <div class="grid three">
+                    <div>
+                        <label>Max hold hours</label>
+                        <input name="MaxHoldHours" type="number" step="1" value="@exit.MaxHoldHours" />
+                    </div>
+                    <div>
+                        <label>Trailing stop</label>
+                        <label class="check inline-check">
+                            <input name="EnableAtrTrailingStop" type="checkbox" checked="@exit.EnableAtrTrailingStop" /> Enabled
+                        </label>
+                    </div>
+                    <div>
+                        <label>Trail ATR</label>
+                        <input name="TrailingStopAtrMultiple" type="number" step="0.1" value="@exit.TrailingStopAtrMultiple" />
+                    </div>
+                </div>
+                <div class="grid three">
+                    <div>
+                        <label>Trail activation R</label>
+                        <input name="TrailingActivationR" type="number" step="0.1" value="@exit.TrailingActivationR" />
+                    </div>
+                    <div>
+                        <label>Min tech exit bars</label>
+                        <input name="MinHoldBarsBeforeTechnicalExit" type="number" min="0" value="@exit.MinHoldBarsBeforeTechnicalExit" />
+                    </div>
+                    <div>
+                        <label>Execution TF</label>
+                        <input name="ExecutionTimeframe" value="@execution.Timeframe" />
+                    </div>
+                </div>
+                <div class="grid three">
+                    <div>
+                        <label>Slippage bps</label>
+                        <input name="SlippageBps" type="number" step="0.1" value="@execution.SlippageBps" />
+                    </div>
+                </div>
+            }
+
+            <div class="actions" style="margin-top: 1rem;">
+                <button type="submit" class="button" style="background: #0056b3;" onclick="return confirm('Overwrite strategy YAML permanently?');">Save Strategy</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- RIGHT COLUMN: Optimization Runner & Jobs -->
+    <div>
+        <form method="post" asp-page-handler="Optimize" class="panel highlight-border">
+            <h2>Optimization Runner</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Run grid search over parameter ranges for the selected strategy and environment.</div>
+            
+            <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
+            <input type="hidden" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
+
+            <div class="grid two">
+                <div>
+                    <label for="RunName">Run Name</label>
+                    <input name="RunName" id="RunName" value="opt-run" />
+                </div>
+                <div>
+                    <label for="Metric">Target Metric</label>
+                    <select name="Metric" id="Metric">
+                        <option value="TotalReturnPct">Total Return %</option>
+                        <option value="NetProfit">Net Profit</option>
+                        <option value="MaxDrawdownPct">Max Drawdown %</option>
+                        <option value="WinRate">Win Rate %</option>
+                    </select>
+                </div>
+            </div>
+
+            <div>
+                <label for="TargetRMultipleCsv">Target R Multiple (CSV)</label>
+                <input type="text" name="TargetRMultipleCsv" id="TargetRMultipleCsv" placeholder="e.g. 2.0, 3.0" value="1.5, 2.0, 3.0" />
+            </div>
+            <div>
+                <label for="StopAtrMultipleCsv">Stop ATR Multiple (CSV)</label>
+                <input type="text" name="StopAtrMultipleCsv" id="StopAtrMultipleCsv" placeholder="e.g. 1.5, 2.0" value="1.5, 2.0, 2.5" />
+            </div>
+            <div>
+                <label for="MinVolumeSpikeCsv">Min Volume Spike (CSV)</label>
+                <input type="text" name="MinVolumeSpikeCsv" id="MinVolumeSpikeCsv" placeholder="e.g. 1.5, 2.0, 3.0" value="1.5, 2.0, 2.5, 3.0" />
+            </div>
+
+            <div class="actions" style="margin-top: 1rem;">
+                <button type="submit" class="button" style="background: #28a745;">Launch Optimizer</button>
+            </div>
+        </form>
+
+        <section class="panel" style="margin-top: 1rem;">
+            <div class="section-title">
+                <h2>Optimization Jobs</h2>
+                <a class="button secondary" asp-page="/Index" asp-route-configPath="@Model.SelectedConfigPath" asp-route-strategyPath="@Model.SelectedStrategyPath">Refresh</a>
+            </div>
+            
+            @if (Model.OptimizationJobs.Count == 0)
+            {
+                <div class="muted">No optimization jobs.</div>
+            }
+            else
+            {
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Run Name</th>
+                            <th>Status</th>
+                            <th>Started</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var job in Model.OptimizationJobs)
+                        {
+                            <tr>
+                                <td>@job.RunName</td>
+                                <td><span class="status @job.Status">@job.Status</span></td>
+                                <td>@(job.StartedAt?.ToString("HH:mm") ?? "-")</td>
+                                <td><a asp-page="/OptimizationJob" asp-route-id="@job.JobId">View</a></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+        
+        <section class="panel" style="margin-top: 1rem;">
+            <div class="section-title">
+                <h2>Recent Backtests</h2>
+            </div>
+            <partial name="_JobsTable" model="Model.BacktestJobs" />
+        </section>
+    </div>
+</div>
+
+<style>
+    .highlight-border {
+        border: 2px solid #0056b3;
+    }
+</style>

@@ -1,0 +1,258 @@
+@page "/Paper"
+@model TradingFlow.Web.Pages.PaperModel
+@{
+    ViewData["Title"] = "Paper Trading Lab";
+    var selectedConfig = Model.Configs.FirstOrDefault(c => c.Path == Model.ConfigPath);
+    var selectedStrategy = Model.Strategies.FirstOrDefault(s => s.Path == Model.SelectedStrategyPath);
+    var tickersCsv = selectedConfig != null ? String.Join(", ", selectedConfig.Config.Tickers) : "";
+}
+
+<div class="section-title">
+    <div>
+        <h1>Paper Trading Lab</h1>
+        <div class="muted">Test strategies live against real-time market data in paper mode.</div>
+    </div>
+</div>
+
+<form method="post">
+<div class="grid two">
+    <!-- LEFT COLUMN: Environment & Strategy -->
+    <div>
+        <div class="panel">
+            <h2>Environment & Stocks</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Select a paper config, edit stocks, and save to create a temporary run config.</div>
+            
+            <label for="BaseConfigPath">Paper Environment</label>
+            <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem;">
+            <select name="BaseConfigPath" id="BaseConfigPath" onchange="loadConfigDetails(this.value)" style="flex-grow: 1;">
+                    @foreach (var config in Model.Configs)
+                    {
+                        var isBase = config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase);
+                        var label = isBase ? config.FileName : $"[CUSTOM] {config.FileName}";
+                        <option value="@config.Path" selected="@(config.Path == Model.ConfigPath)">@label</option>
+                    }
+                </select>
+                @if (selectedConfig != null && !selectedConfig.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
+                {
+                    <button type="submit" asp-page-handler="DeleteConfig" name="DeleteConfigPath" value="@selectedConfig.Path" class="button secondary" style="background: #fee; color: #c00; border-color: #fcc;" onclick="return confirm('Delete this custom config?');">Delete</button>
+                }
+            </div>
+
+            <label for="TickersCsv">Tickers (CSV)</label>
+            <textarea name="TickersCsv" id="TickersCsv" rows="3">@Model.TickersCsv</textarea>
+            
+            <label for="ScreenerFilter">Finviz Screener Filter (optional)</label>
+            <div class="muted" style="margin-bottom: 0.5rem; font-size: 0.85em;">Example: <code>v=111&f=sec_technology,ta_sma20_pa</code></div>
+            <input type="text" name="ScreenerFilter" id="ScreenerFilter" value="@Model.ScreenerFilter" placeholder="e.g. v=111&f=sec_technology" />
+            
+            <div class="actions" style="margin-top: 1rem;">
+                <button type="submit" asp-page-handler="SaveConfig">Save Custom List</button>
+            </div>
+        </div>
+
+        <div class="panel" style="margin-top: 1.5rem;">
+            <h2>Strategy Configuration</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Select a strategy and optionally edit its parameters directly in YAML format.</div>
+            
+            <label for="SelectedStrategyDropdown">Strategy Config</label>
+            <select name="SelectedStrategyPath" id="SelectedStrategyDropdown" onchange="loadStrategyDetails(this.value)">
+                @foreach (var strategy in Model.Strategies)
+                {
+                    <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.FileName</option>
+                }
+            </select>
+            
+            <div style="background: #2a2a2a; border-left: 4px solid #007acc; padding: 1rem; margin-top: 1rem; border-radius: 4px; margin-bottom: 1rem;">
+                <h3 style="margin-top: 0; color: #66b3ff;">Quick Edit</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem;">
+                    <div>
+                        <label style="color: #ddd;">Timeframe</label>
+                        <input type="text" name="QuickEditTimeframe" value="@Model.QuickEditTimeframe" />
+                    </div>
+                    <div>
+                        <label style="color: #ddd;">Setup Type</label>
+                        <input type="text" name="QuickEditSetupType" value="@Model.QuickEditSetupType" />
+                    </div>
+                    <div>
+                        <label style="color: #ddd;">Stop ATR Multiple</label>
+                        <input type="text" name="QuickEditStopAtr" value="@Model.QuickEditStopAtr" />
+                    </div>
+                    <div>
+                        <label style="color: #ddd;">Target R Multiple</label>
+                        <input type="text" name="QuickEditTargetR" value="@Model.QuickEditTargetR" />
+                    </div>
+                </div>
+            </div>
+
+            <label for="StrategyYaml">Raw Strategy YAML</label>
+            <textarea name="StrategyYaml" id="StrategyYaml" rows="12" style="font-family: monospace; font-size: 0.9em;">@Model.StrategyYaml</textarea>
+            
+            <div class="actions" style="margin-top: 1rem;">
+                <button type="submit" asp-page-handler="SaveStrategy" class="button secondary">Save Strategy</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT COLUMN: Live Runner -->
+    <div>
+        <div class="panel highlight-border">
+            <h2>Live Paper Runner</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Run the selected strategy on the selected environment live.</div>
+            
+            <input type="hidden" name="SelectedConfigPath" value="@Model.ConfigPath" />
+
+            <label for="OrderExpirationDropdown">Order Expiration Strategy</label>
+            <select id="OrderExpirationDropdown" name="OrderExpiration" style="margin-bottom: 1rem;">
+                <option value="gtc" selected="@(Model.OrderExpiration == "gtc")">Good 'Til Canceled (GTC)</option>
+                <option value="day" selected="@(Model.OrderExpiration == "day")">Day Orders (Cancel at Market Close)</option>
+                <option value="active_cancel" selected="@(Model.OrderExpiration == "active_cancel")">Active Cancellation (GTC + 30-min Auto-Cancel)</option>
+            </select>
+
+            <label for="EntryOrderTypeDropdown">Entry Order Type</label>
+            <select id="EntryOrderTypeDropdown" name="EntryOrderType" style="margin-bottom: 1rem;">
+                <option value="limit" selected="@(Model.EntryOrderType == "limit")">Limit Order (Waits for pullback/discount)</option>
+                <option value="market" selected="@(Model.EntryOrderType == "market")">Market Order (Enters immediately at current price)</option>
+            </select>
+
+            <div style="margin-bottom: 1rem;">
+                <label>
+                    <input type="checkbox" id="ExtendedHoursCheckbox" name="ExtendedHours" value="true" checked="@Model.ExtendedHours" />
+                    Enable Extended Hours (Pre/Post-Market)
+                </label>
+            </div>
+
+            <label for="RunName">Run Name</label>
+            <input name="RunName" id="RunName" value="live_run_1" />
+
+            <div class="actions" style="margin-top: 1rem;">
+                <button type="submit" asp-page-handler="RunLive" class="button" style="background: #28a745;">Start Live Paper Trading</button>
+            </div>
+        </div>
+        </form>
+
+        <section class="panel" style="margin-top: 1rem;">
+            <div class="section-title">
+                <h2>Live Jobs</h2>
+                <a class="button secondary" asp-page="/Paper" asp-route-configPath="@Model.ConfigPath" asp-route-strategyPath="@Model.SelectedStrategyPath">Refresh</a>
+            </div>
+            
+            @if (Model.LiveJobs.Count == 0)
+            {
+                <div class="muted">No live jobs running.</div>
+            }
+            else
+            {
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Run Name</th>
+                            <th>Status</th>
+                            <th>Started</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var job in Model.LiveJobs)
+                        {
+                            <tr>
+                                <td>@job.RunName</td>
+                                <td><span class="status @job.Status">@job.Status</span></td>
+                                <td>@(job.StartedAt?.ToString("HH:mm") ?? "-")</td>
+                                <td><a asp-page="/PaperJob" asp-route-id="@job.JobId">View</a></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+    </div>
+</div>
+
+<section class="panel" style="margin-top:16px">
+    <div class="section-title">
+        <h2>Environment Check</h2>
+        @if (Model.PaperSnapshot is not null)
+        {
+            <span class="status">Checked</span>
+        }
+    </div>
+    @if (Model.PaperSnapshot is null)
+    {
+        <p class="muted">Run validation to check demo keys and read-only paper dependencies for your selected broker. No orders are placed.</p>
+        <form method="post" asp-page-handler="">
+            <input type="hidden" name="configPath" value="@Model.ConfigPath" />
+            <input type="hidden" name="strategyPath" value="@Model.SelectedStrategyPath" />
+            <button type="submit">Validate Environment</button>
+        </form>
+    }
+    else
+    {
+        @if (Model.Selected.Config.Execution.Broker.Equals("etoro", StringComparison.OrdinalIgnoreCase))
+        {
+            <table>
+                <tr><th>ETORO_DEMO_API_KEY</th><td>@(Model.PaperSnapshot.EtoroApiKeyPresent ? "present" : "missing")</td></tr>
+                <tr><th>ETORO_DEMO_USER_KEY</th><td>@(Model.PaperSnapshot.EtoroUserKeyPresent ? "present" : "missing")</td></tr>
+            </table>
+            @if (Model.PaperSnapshot.EtoroReadOnlyCheck is null)
+            {
+                <p class="warn">Set demo keys in the process environment to run eToro checks.</p>
+            }
+            else
+            {
+                <pre>@Model.EtoroCheckJson</pre>
+            }
+        }
+        else if (Model.Selected.Config.Execution.Broker.Equals("alpaca", StringComparison.OrdinalIgnoreCase))
+        {
+            <table>
+                <tr><th>ALPACA_KEY_ID</th><td>@(Model.PaperSnapshot.AlpacaKeyIdPresent ? "present" : "missing")</td></tr>
+                <tr><th>ALPACA_SECRET_KEY</th><td>@(Model.PaperSnapshot.AlpacaSecretKeyPresent ? "present" : "missing")</td></tr>
+            </table>
+            @if (Model.PaperSnapshot.AlpacaReadOnlyCheck is null)
+            {
+                <p class="warn">Set ALPACA_KEY_ID and ALPACA_SECRET_KEY in the process environment to run Alpaca checks.</p>
+            }
+            else
+            {
+                <pre>@Model.AlpacaCheckJson</pre>
+            }
+        }
+        else
+        {
+            <p class="warn">Unknown broker specified in the configuration: @Model.Selected.Config.Execution.Broker</p>
+        }
+    }
+</section>
+
+<style>
+    .highlight-border {
+        border: 2px solid #28a745;
+    }
+</style>
+
+@section Scripts {
+    <script>
+        function loadStrategyDetails(strategyPath) {
+            fetch('?handler=StrategyDetails&strategyPath=' + encodeURIComponent(strategyPath))
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        document.getElementById('StrategyYaml').value = data.yaml;
+                        document.querySelector('input[name="QuickEditTimeframe"]').value = data.timeframe;
+                        document.querySelector('input[name="QuickEditSetupType"]').value = data.setupType;
+                        document.querySelector('input[name="QuickEditStopAtr"]').value = data.stopAtr;
+                        document.querySelector('input[name="QuickEditTargetR"]').value = data.targetR;
+                    }
+                });
+        }
+
+        function loadConfigDetails(configPath) {
+            fetch('?handler=ConfigDetails&configPath=' + encodeURIComponent(configPath))
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        document.getElementById('TickersCsv').value = data.tickers;
+                    }
+                });
+        }
+    </script>
+}

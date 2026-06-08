@@ -1,0 +1,62 @@
+@page "{runName}"
+@model TradingFlow.Web.Pages.AuditModel
+@{
+    ViewData["Title"] = "Decision Tree Audit - " + Model.RunName;
+}
+
+<div class="container" style="max-width: 1400px; margin: 0 auto; padding: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+        <div>
+            <h1 style="margin: 0; color: #fff;">Audit Analyzer: @Model.RunName</h1>
+            <p class="muted">Decision tree audit for strategy signal evaluations.</p>
+        </div>
+        <a href="/" class="btn" style="background: #333;">Back to Dashboard</a>
+    </div>
+
+    @if (Model.Records.Count == 0)
+    {
+        <div style="background: #1e1e1e; padding: 2rem; border-radius: 8px; text-align: center;">
+            <h3 style="color: #888;">No audit records found</h3>
+            <p class="muted">Ensure the LiveRunner has completed evaluating tickers for this run.</p>
+        </div>
+    }
+    else
+    {
+        <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem; overflow-x: auto;">
+            <table class="table" style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="border-bottom: 1px solid #444; text-align: left;">
+                        <th>Time</th>
+                        <th>Ticker</th>
+                        <th>Strategy</th>
+                        <th>Decision</th>
+                        <th>Reason</th>
+                        <th>Decision Tree Matrix</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var record in Model.Records)
+                {
+                    <tr style="border-bottom: 1px solid #333; vertical-align: top;">
+                        <td style="white-space: nowrap; padding-top: 10px;">@record.Timestamp.ToString("HH:mm:ss.fff")</td>
+                        <td style="font-weight: bold; padding-top: 10px;">@record.Ticker</td>
+                        <td style="padding-top: 10px;">@record.StrategyName</td>
+                        <td style="padding-top: 10px; font-weight: bold; color: @(record.Decision == "Accepted" ? "#4caf50" : "#f44336")">
+                            @record.Decision
+                        </td>
+                        <td style="padding-top: 10px;">@(record.RejectionReason ?? "-")</td>
+                        <td style="padding-top: 10px; max-width: 500px;">
+                            <details>
+                                <summary style="cursor: pointer; color: #4fc3f7;">View Signal Evaluation</summary>
+                                <pre style="background: #111; padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-top: 5px; overflow-x: auto;">
+@Model.FormatJson(record.SignalJson)
+                                </pre>
+                            </details>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>

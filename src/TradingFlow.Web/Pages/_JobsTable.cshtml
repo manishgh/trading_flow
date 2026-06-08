@@ -1,0 +1,37 @@
+@model IReadOnlyList<TradingFlow.Web.Models.BacktestJobSnapshot>
+
+@if (Model.Count == 0)
+{
+    <p class="muted">No backtest jobs yet.</p>
+}
+else
+{
+    <table>
+        <thead>
+            <tr>
+                <th>Run</th>
+                <th>Status</th>
+                <th>State</th>
+                <th>Winner</th>
+                <th>Return</th>
+                <th>Trades</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var job in Model)
+        {
+            var winner = job.Result?.Winner;
+            <tr>
+                <td>@job.RunName<br /><span class="muted">@job.CreatedAt.LocalDateTime</span></td>
+                <td><span class="status">@job.Status</span></td>
+                <td>@job.CurrentStage<br /><span class="muted">@job.CompletedTickerCount / @job.TotalTickerCount tickers</span></td>
+                <td>@(winner?.StrategyName ?? "-")</td>
+                <td class="@(job.Result?.NetProfit >= 0 ? "good" : "bad")">@(job.Result is null ? "-" : $"{job.Result.TotalReturnPct:0.##}%")</td>
+                <td>@(job.Result?.AcceptedTradeCount.ToString() ?? "-")</td>
+                <td><a asp-page="/Job" asp-route-id="@job.JobId">View</a></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}

@@ -1,0 +1,81 @@
+@page "{id:guid}"
+@model TradingFlow.Web.Pages.OptimizationJobModel
+@{
+    ViewData["Title"] = $"Opt Job - {Model.Job.RunName}";
+    var isDone = Model.Job.Status is "completed" or "failed";
+}
+
+@if (!isDone)
+{
+    <meta http-equiv="refresh" content="2">
+}
+
+<div class="section-title">
+    <div>
+        <h1>@Model.Job.RunName</h1>
+        <div class="muted">@Model.Job.OptimizationConfigPath</div>
+    </div>
+    <div class="actions">
+        <a class="button secondary" asp-page="/Optimize">Back to Lab</a>
+    </div>
+</div>
+
+<div class="grid two">
+    <section class="panel">
+        <div class="section-title">
+            <h2>Live Status</h2>
+            <span class="status @Model.Job.Status">@Model.Job.Status</span>
+        </div>
+        <table>
+            <tr><th>Stage</th><td>@Model.Job.CurrentStage</td></tr>
+            <tr><th>Started</th><td>@(Model.Job.StartedAt?.ToString("HH:mm:ss") ?? "-")</td></tr>
+            <tr><th>Finished</th><td>@(Model.Job.FinishedAt?.ToString("HH:mm:ss") ?? "-")</td></tr>
+        </table>
+        @if (!String.IsNullOrWhiteSpace(Model.Job.ErrorMessage))
+        {
+            <div class="error-box">@Model.Job.ErrorMessage</div>
+        }
+        
+        <h3>Progress Log</h3>
+        <pre class="log-viewer">@String.Join(Environment.NewLine, Model.Job.Events)</pre>
+    </section>
+
+    @if (Model.Job.Result is not null)
+    {
+        <section class="panel">
+            <h2>Top Permutations</h2>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Parameters</th>
+                        <th>@Model.Job.Result.Metric</th>
+                        <th>Trades</th>
+                        <th>Win %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var run in Model.Job.Result.TopRuns)
+                    {
+                        var totalTrades = run.WinningTradeCount + run.LosingTradeCount;
+                        var winRate = totalTrades == 0 ? 0 : Math.Round((decimal)run.WinningTradeCount / totalTrades * 100, 1);
+                        <tr>
+                            <td>#@run.Rank</td>
+                            <td>
+                                @foreach (var p in run.ParameterValues)
+                                {
+                                    <span style="font-size: 0.8rem; background: #eee; padding: 2px 4px; border-radius: 4px; margin-right: 4px; display: inline-block; margin-bottom: 4px;">
+                                        @p.Key.Split('.').Last(): <b>@p.Value</b>
+                                    </span>
+                                }
+                            </td>
+                            <td><b>@run.MetricValue.ToString("0.00")</b></td>
+                            <td>@totalTrades</td>
+                            <td>@winRate%</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    }
+</div>

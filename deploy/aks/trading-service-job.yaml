@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trading-flow-backtest
+  namespace: trading-flow
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: trading-flow-service
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: trading-service
+          image: REPLACE_ACR_LOGIN_SERVER/tradingflow-service:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: trading-flow-config
+            - secretRef:
+                name: trading-flow-demo-secrets
+          env:
+            - name: TRADINGFLOW_RUN_CONFIGS
+              value: configs/backtest/semiconductors-research.yaml
+            - name: TRADINGFLOW_RESULT_OWNER
+              value: worker
+            - name: TRADINGFLOW_MAX_PARALLEL_RUNS
+              value: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: trading-flow-data

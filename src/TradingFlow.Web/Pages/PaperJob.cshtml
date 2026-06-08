@@ -1,0 +1,292 @@
+@page "{id:guid}"
+@model TradingFlow.Web.Pages.PaperJobModel
+@{
+    ViewData["Title"] = "Paper Job";
+}
+
+<div class="section-title">
+    <div>
+        <h1>Paper Run: @Model.Job?.RunName</h1>
+        <div class="muted">Live execution metrics and signals</div>
+    </div>
+    <div style="display: flex; gap: 1rem; align-items: center;">
+        @if (Model.Job?.Status is "queued" or "running")
+        {
+            <form method="post" asp-page-handler="CancelRun" asp-route-id="@Model.Job.JobId" style="margin: 0;">
+                <button type="submit" class="button secondary">Cancel Runner</button>
+            </form>
+        }
+        <form method="post" asp-page-handler="CancelOrders" asp-route-id="@Model.Job?.JobId" style="margin: 0;">
+            <button type="submit" class="button secondary">Cancel All Alpaca Orders</button>
+        </form>
+        <a class="button secondary" asp-page="/Paper">Back to Lab</a>
+    </div>
+</div>
+
+@if (Model.Job is null)
+{
+    <p class="warn">Job not found.</p>
+}
+else
+{
+    <div class="grid two">
+        <section class="panel">
+            <h2>Status: <span class="status @Model.Job.Status">@Model.Job.Status</span></h2>
+            @if (!string.IsNullOrEmpty(Model.Job.ErrorMessage))
+            {
+                <div class="alert alert-danger" style="background: #f8d7da; color: #721c24; padding: 1rem; border-radius: 4px; margin-bottom: 1rem;">
+                    <strong>Error:</strong> @Model.Job.ErrorMessage
+                </div>
+            }
+            <p><strong>Config:</strong> @Model.Job.ConfigPath</p>
+            <p><strong>Started:</strong> @(Model.Job.StartedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Queued")</p>
+            <div style="margin-top: 1rem; margin-bottom: 1rem;">
+                <a asp-page="/Audit" asp-route-runName="@Model.Job.RunName" class="button" style="background: #007acc; color: white;">🔍 Open Audit Analyzer</a>
+            </div>
+            @if (Model.Strategy != null)
+            {
+                <div style="background: #2a2a2a; border-left: 4px solid #007acc; padding: 1rem; margin-top: 1rem; border-radius: 4px;">
+                    <h3 style="margin-top: 0; color: #66b3ff;">@Model.Strategy.StrategyName v@(Model.Strategy.Version)</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem;">
+                        <div><strong>Timeframe:</strong> @Model.Strategy.Timeframe</div>
+                        <div><strong>Direction:</strong> @Model.Strategy.Direction</div>
+                        @if (Model.Strategy.ExitRules != null)
+                        {
+                            <div><strong>ATR Stop:</strong> @Model.Strategy.ExitRules.StopAtrMultiple x</div>
+                            <div><strong>Target R:</strong> @Model.Strategy.ExitRules.TargetRMultiple x</div>
+                        }
+                    </div>
+                </div>
+            }
+
+            <h3 style="margin-top: 1rem;">Recent Events</h3>
+            <div class="log-viewer" style="height: 300px; overflow-y: auto; background: #1e1e1e; color: #fff; padding: 1rem; border-radius: 4px; font-family: monospace;">
+                @foreach (var ev in Model.Job.Events.Reverse())
+                {
+                    <div>@ev</div>
+                }
+            </div>
+            
+            @if (Model.Job.Status is "queued" or "running")
+            {
+                <script>
+                    setTimeout(() => window.location.reload(), 5000);
+                </script>
+            }
+        </section>
+
+        <section class="panel">
+            <h2>Live Stock Metrics</h2>
+            <div class="muted">Most recent values calculated by the engine for the latest bar.</div>
+            
+            @if (Model.ChartDataList.Count == 0)
+            {
+                <p class="muted">No data generated yet. Waiting for market data...</p>
+            }
+            else
+            {
+                <table class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid #444; text-align: left;">
+                            <th>Time</th>
+                            <th>Ticker</th>
+                            <th>Close Price</th>
+                            <th>RSI (14)</th>
+                            <th>Volume</th>
+                            <th>Avg Volume</th>
+                            <th>VWAP</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var point in Model.ChartDataList.OrderBy(x => x.Ticker))
+                        {
+                            <tr>
+                                <td>@TimeZoneInfo.ConvertTimeBySystemTimeZoneId(point.Timestamp, "Central Europe Standard Time").ToString("HH:mm:ss")</td>
+                                <td><strong>@point.Ticker</strong></td>
+                                <td>@point.Close.ToString("C2")</td>
+                                <td>@(point.Rsi?.ToString("F2") ?? "N/A")</td>
+                                <td>@point.Volume.ToString("N0")</td>
+                                <td>@point.AverageVolume.ToString("N0")</td>
+                                <td>@(point.Vwap?.ToString("C2") ?? "N/A")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            
+            <h3 style="margin-top: 2rem;">Recent Strategy Evaluations</h3>
+            @if (Model.RecentAudits == null || Model.RecentAudits.Count == 0)
+            {
+                <p class="muted">No recent strategy evaluations.</p>
+            }
+            else
+            {
+                <div style="max-height: 300px; overflow-y: auto;">
+                    <table class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
+                        <thead style="position: sticky; top: 0; background: #1e1e1e; z-index: 1;">
+                            <tr style="border-bottom: 1px solid #444; text-align: left;">
+                                <th>Time</th>
+                                <th>Ticker</th>
+                                <th>Decision</th>
+                                <th>Rejection Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var audit in Model.RecentAudits)
+                        {
+                            var color = audit.Decision == "Accepted" ? "#4caf50" : (audit.Decision == "Rejected" ? "#f44336" : "#aaa");
+                            <tr style="border-bottom: 1px solid #333;">
+                                <td style="white-space: nowrap;">@TimeZoneInfo.ConvertTimeBySystemTimeZoneId(audit.Timestamp, "Central Europe Standard Time").ToString("HH:mm:ss")</td>
+                                <td style="font-weight: bold;">@audit.Ticker</td>
+                                <td style="color: @color; font-weight: bold;">@audit.Decision</td>
+                                <td style="color: #aaa; font-size: 0.9em;">@(audit.RejectionReason ?? "-")</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            <h3 style="margin-top: 2rem;">Live Broker Orders</h3>
+            @if (Model.OpenOrders == null || Model.OpenOrders.Count == 0)
+            {
+                <p class="muted">No open orders found.</p>
+            }
+            else
+            {
+                <table class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid #444; text-align: left;">
+                            <th>Ticker</th>
+                            <th>Side</th>
+                            <th>Type</th>
+                            <th>Qty</th>
+                            <th>Limit Px</th>
+                            <th>Current Px</th>
+                            <th>Distance</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var display in Model.OpenOrders)
+                    {
+                        var order = display.Order;
+                        <tr style="border-bottom: 1px solid #333;">
+                            <td style="font-weight: bold;">@order.Ticker</td>
+                            <td style="color: @(order.Side == "buy" ? "#4caf50" : "#f44336")">@order.Side.ToUpper()</td>
+                            <td>@(string.IsNullOrEmpty(order.OrderType) ? "-" : order.OrderType.ToUpper())</td>
+                            <td>@order.Qty</td>
+                            <td>@(order.LimitPrice?.ToString("C2") ?? "-")</td>
+                            <td>@(display.CurrentPrice?.ToString("C2") ?? "-")</td>
+                            <td style="color: @(display.DistancePct < 0 ? "#4caf50" : "#aaa")">
+                                @(display.DistancePct?.ToString("0.00") + "%" ?? "-")
+                            </td>
+                            <td>@order.Status</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            }
+
+            <h3 style="margin-top: 2rem;">Live Portfolio (Positions)</h3>
+            @if (Model.OpenPositions == null || Model.OpenPositions.Count == 0)
+            {
+                <p class="muted">No open positions found.</p>
+            }
+            else
+            {
+                <table class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid #444; text-align: left;">
+                            <th>Ticker</th>
+                            <th>Side</th>
+                            <th>Qty</th>
+                            <th>Entry Px</th>
+                            <th>Current Px</th>
+                            <th>Unrealized P/L</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var pos in Model.OpenPositions)
+                    {
+                        var isProfit = pos.UnrealizedPl > 0;
+                        var color = isProfit ? "#4caf50" : (pos.UnrealizedPl < 0 ? "#f44336" : "#aaa");
+                        <tr style="border-bottom: 1px solid #333;">
+                            <td style="font-weight: bold;">@pos.Ticker</td>
+                            <td>@pos.Side.ToUpper()</td>
+                            <td>@pos.Qty</td>
+                            <td>@pos.EntryPrice.ToString("C2")</td>
+                            <td>@pos.CurrentPrice.ToString("C2")</td>
+                            <td style="color: @color; font-weight: bold;">
+                                @(pos.UnrealizedPl > 0 ? "+" : "")@pos.UnrealizedPl.ToString("C2")
+                            </td>
+                            <td>
+                                <form method="post" asp-page-handler="ClosePosition" asp-route-id="@Model.Job?.JobId" asp-route-ticker="@pos.Ticker" style="margin: 0;">
+                                    <button type="submit" class="button secondary" style="background: #3a1a1a; color: #ff6666; border-color: #662222;" onclick="return confirm('Market sell your entire position in @pos.Ticker?');">Close Position</button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            }
+
+            <h3 style="margin-top: 2rem;">@Model.LatencyProfile?.Name Latency & Performance Profiler</h3>
+            @if (Model.LatencyProfile == null || Model.LatencyProfile.TotalRequests == 0)
+            {
+                <p class="muted">No API requests recorded yet.</p>
+            }
+            else
+            {
+                <div class="muted" style="margin-bottom: 1rem;">Started at: @Model.LatencyProfile.AppStartTime.ToString("yyyy-MM-dd HH:mm:ss")</div>
+                <div style="background: #222; padding: 1rem; border-radius: 4px; margin-top: 1rem;">
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem; text-align: center;">
+                        <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
+                            <div class="muted" style="font-size: 0.8rem;">Total Requests</div>
+                            <div style="font-size: 1.5rem; font-weight: bold; color: #4caf50;">@Model.LatencyProfile.TotalRequests</div>
+                        </div>
+                        <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
+                            <div class="muted" style="font-size: 0.8rem;">Avg Duration</div>
+                            <div style="font-size: 1.5rem; font-weight: bold; color: #00bcd4;">@Model.LatencyProfile.AvgDurationMs.ToString("F1") ms</div>
+                        </div>
+                        <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
+                            <div class="muted" style="font-size: 0.8rem;">Max Duration</div>
+                            <div style="font-size: 1.5rem; font-weight: bold; color: #ff9800;">@Model.LatencyProfile.MaxDurationMs.ToString("F1") ms</div>
+                        </div>
+                        <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
+                            <div class="muted" style="font-size: 0.8rem;">Success Rate</div>
+                            <div style="font-size: 1.5rem; font-weight: bold; color: @(Model.LatencyProfile.SuccessRate >= 99.0 ? "#4caf50" : "#ff5722");">@Model.LatencyProfile.SuccessRate.ToString("F1")%</div>
+                        </div>
+                    </div>
+
+                    <table class="table" style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid #444; text-align: left;">
+                                <th>Endpoint Route</th>
+                                <th>Count</th>
+                                <th>Avg Latency</th>
+                                <th>Min</th>
+                                <th>Max</th>
+                                <th>Success %</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var endpoint in Model.LatencyProfile.Endpoints)
+                        {
+                            <tr style="border-bottom: 1px solid #333;">
+                                <td style="font-family: monospace; color: #66b3ff;">@endpoint.Route</td>
+                                <td>@endpoint.Count</td>
+                                <td>@endpoint.AvgDurationMs.ToString("F1") ms</td>
+                                <td>@endpoint.MinDurationMs.ToString("F1") ms</td>
+                                <td>@endpoint.MaxDurationMs.ToString("F1") ms</td>
+                                <td style="color: @(endpoint.SuccessRate >= 99.0 ? "#4caf50" : "#ff5722")">@endpoint.SuccessRate.ToString("F1")%</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    </div>
+}

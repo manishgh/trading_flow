@@ -1,0 +1,44 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+
+namespace TradingFlow.Engine.Execution;
+
+public enum ExecutionState
+{
+    SignalGenerated,
+    BracketOrderSubmitted,
+    OrderFilled,
+    TrailingStopAdjusted,
+    PositionClosed,
+    OrderRejected
+}
+
+public sealed record ExecutionEvent(
+    string Ticker,
+    string StrategyName,
+    DateTimeOffset Timestamp,
+    ExecutionState State,
+    string Message
+);
+
+public sealed class ExecutionAuditor
+{
+    private readonly ConcurrentBag<ExecutionEvent> _events = new();
+
+    public void LogEvent(
+        string ticker,
+        string strategyName,
+        DateTimeOffset timestamp,
+        ExecutionState state,
+        string message)
+    {
+        var ev = new ExecutionEvent(ticker, strategyName, timestamp, state, message);
+        _events.Add(ev);
+        
+        // In a live system, this would write to a database, Serilog, or ElasticSearch
+        Console.WriteLine($"[AUDIT] {timestamp:O} | {ticker} | {state} | {message}");
+    }
+
+    public IReadOnlyCollection<ExecutionEvent> GetEvents() => _events.ToArray();
+}

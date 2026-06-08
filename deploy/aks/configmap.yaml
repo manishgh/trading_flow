@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trading-flow-config
+  namespace: trading-flow
+data:
+  ASPNETCORE_URLS: "http://+:8080"
+  NEWS_ENABLED: "true"
+  NEWS_WORKER_COUNT: "4"
+  NEWS_CHANNEL_BUFFER: "1024"
+  NEWS_VETO_TTL_MINUTES: "360"
+  NEWS_NEGATIVE_VETO_THRESHOLD: "-0.6"
+  NEWS_PROVIDER: "manual_webhook"
+  NEWS_PROVIDER_SENTIMENT_FIELD: "sentiment_score"
+  NEWS_SIDECAR_ENDPOINT: "http://trading-flow-news:8080"

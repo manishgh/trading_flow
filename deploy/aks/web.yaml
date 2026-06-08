@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trading-flow-web
+  namespace: trading-flow
+  labels:
+    app: trading-flow-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trading-flow-web
+  template:
+    metadata:
+      labels:
+        app: trading-flow-web
+    spec:
+      containers:
+        - name: web
+          image: REPLACE_ACR_LOGIN_SERVER/tradingflow-web:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: trading-flow-config
+            - secretRef:
+                name: trading-flow-demo-secrets
+          env:
+            - name: TRADINGFLOW_RESULT_OWNER
+              value: web
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: ui-runs
+              mountPath: /app/configs/backtest/ui-runs
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: trading-flow-data
+        - name: ui-runs
+          persistentVolumeClaim:
+            claimName: trading-flow-ui-runs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trading-flow-web
+  namespace: trading-flow
+spec:
+  type: ClusterIP
+  selector:
+    app: trading-flow-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

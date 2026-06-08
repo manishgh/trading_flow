@@ -1,0 +1,43 @@
+strategy_id: research.intraday-vwap-pullback.v2
+strategy_name: Intraday VWAP Pullback
+source: research_playbook.vwap_pullback
+version: 2
+timeframe: 5m
+direction: long
+entry_rules:
+  setup_type: vwap_pullback
+  min_volume_spike: 1.5
+  min_entry_rsi: 45.0
+  max_entry_rsi: 72.0
+  trend_filter: vwap
+  macd_filter: not_bearish
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: true
+  require_price_above_vwap: true
+  require_price_above_ema20: true
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  max_vwap_extension_atr: 1.25
+  opening_range_minutes: 15
+  recent_high_lookback_bars: 20
+  volatility_contraction_lookback_bars: 10
+confluence:
+  enabled: false
+  timeframe: 1h
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.75
+  target_r_multiple: 2.2
+  max_hold_hours: 6.5
+  enable_atr_trailing_stop: true
+  trailing_stop_atr_multiple: 1.5
+  trailing_activation_r: 1.0
+execution:
+  timeframe: 5m
+  slippage_bps: 8.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 30
+  close_buffer_minutes: 60
+  friday_close_buffer_minutes: 120

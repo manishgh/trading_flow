@@ -1,0 +1,139 @@
+run_name: local-alpaca-paper
+mode: paper
+
+engine:
+  pipeline: tpl
+  worker_count: 0
+  bounded_capacity: 1000
+  indicator_warmup_bars: 150
+  fail_fast: true
+
+time_window:
+  type: rolling
+  lookback_days: 30
+  start:
+  end:
+
+tickers:
+  - MU
+  - NVDA
+  - AMD
+
+market_data:
+  provider: alpaca
+  download_timeframes:
+    - 5m
+    - 15m
+    - 1h
+  derive_from: 5m
+  raw_root: data/paper/raw
+  normalized_root: data/paper/normalized
+  results_root: data/paper/results
+  cache_policy: refresh
+
+providers:
+  yahoo:
+    api:
+      base_url: https://query1.finance.yahoo.com
+      chart_path: /v8/finance/chart/{ticker}
+    headers:
+      user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+      accept: application/json,text/plain,*/*
+      accept_language: en-US,en;q=0.9
+    request_timeout_seconds: 30
+    max_retries: 3
+    throttle_ms: 250
+  etoro:
+    enabled: false
+    rest_base_url: https://public-api.etoro.com/api/v1
+    websocket_url: wss://ws.etoro.com/ws
+    environment: demo
+    default_leverage: 1
+    order_sizing: units
+    demo:
+      api_key_env: ETORO_DEMO_API_KEY
+      user_key_env: ETORO_DEMO_USER_KEY
+      allow_trading: true
+    live:
+      api_key_env: ETORO_LIVE_API_KEY
+      user_key_env: ETORO_LIVE_USER_KEY
+      allow_trading: false
+    rate_limits:
+      read_per_minute: 60
+      write_per_minute: 20
+    retry:
+      max_retries: 5
+      base_backoff_ms: 500
+      max_backoff_seconds: 30
+      jitter: true
+
+portfolio:
+  starting_capital: 100000
+  risk_per_trade_pct: 1.0
+  max_position_value_pct: 20.0
+  max_concurrent_positions: 5
+  fixed_buy_fee: 1.0
+  fixed_sell_fee: 1.0
+  prevent_overlapping_ticker_positions: true
+
+signal_source:
+  type: tradingview_webhook
+  require_signature: true
+  secret_env: TRADINGVIEW_WEBHOOK_SECRET
+  dedupe_window_seconds: 300
+  reject_stale_after_seconds: 60
+
+validation:
+  out_of_sample:
+    enabled: false
+    percent: 30.0
+  walk_forward:
+    enabled: false
+    window_days: 10
+    step_days: 5
+  benchmark:
+    enabled: false
+    ticker: SPY
+  data_quality:
+    enabled: true
+    max_duplicate_bars: 0
+    max_invalid_ohlc_bars: 0
+    max_zero_volume_pct: 10.0
+  bias_risk:
+    universe_source: static_config
+    universe_as_of_date:
+    price_adjustment_policy: yahoo_chart_quote
+
+execution:
+  router: paper
+  broker: alpaca
+  dry_run: false
+  allow_live_orders: true
+  order_type: bracket
+  order_expiration: gtc
+  entry_order_type: limit
+  extended_hours: false
+
+screener:
+  enabled: false
+  provider: finviz
+  filters: []
+
+news:
+  enabled: true
+  provider:
+    name: alpaca
+    sentiment_field: sentiment_score
+  pipeline:
+    worker_count: 2
+    channel_buffer: 256
+  veto:
+    ttl_minutes: 90
+    negative_threshold: -0.6
+
+strategies:
+  - ../strategies/intraday-vwap-pullback.v2.yaml
+  - ../strategies/opening-range-breakout.v2.yaml
+  - ../strategies/swing-trend-pullback.v1.yaml
+  - ../strategies/swing-vwap-momentum.v2.yaml
+  - ../strategies/minervini-trend-breakout.v2.yaml
