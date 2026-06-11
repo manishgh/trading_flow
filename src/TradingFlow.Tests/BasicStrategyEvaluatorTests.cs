@@ -1,4 +1,5 @@
 using System;
+using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Strategies;
 using Xunit;
@@ -61,9 +62,12 @@ public class BasicStrategyEvaluatorTests
             IsAboveVwap: true,
             IsVwapPullback: false,
             IsVwapReclaim: false,
+            IsVwapRejection: false,
             IsEma20Pullback: false,
             IsOpeningRangeBreakout: false,
+            IsOpeningRangeBreakdown: false,
             IsRecentHighBreakout: false,
+            IsRecentLowBreakdown: false,
             IsVolatilityContraction: false,
             IsPriceAboveEma20: true,
             IsPriceAboveEma50: true,
@@ -110,4 +114,705 @@ public class BasicStrategyEvaluatorTests
         Assert.NotNull(rejection);
         Assert.Equal("rsi_outside_range (Actual: 30.00, Required: 40.00-70.00)", rejection);
     }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenLogPriceSlopeTooLow_ReturnsFormattedString()
+    {
+        var strategy = CreateBaseStrategy() with
+        {
+            EntryRules = CreateBaseStrategy().EntryRules with
+            {
+                SetupType = "log_breakout",
+                MinVolumeSpike = 0.5m,
+                RequireLogPriceRising = true,
+                LogPriceLookbackBars = 12,
+                MinLogPriceSlope = 0.001m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsRecentHighBreakout = true,
+            PriceLogSlope = 0.0002m,
+            PriceLogR2 = 0.65m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("log_price_slope_below_minimum (Actual: 0.000200, Required: 0.001000, LookbackBars: 12)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenLogBreakoutAndTrendPass_ReturnsNull()
+    {
+        var strategy = CreateBaseStrategy() with
+        {
+            EntryRules = CreateBaseStrategy().EntryRules with
+            {
+                SetupType = "log_breakout",
+                MinVolumeSpike = 0.5m,
+                RequireLogPriceRising = true,
+                RequireLogVolumeRising = true,
+                LogPriceLookbackBars = 12,
+                LogVolumeLookbackBars = 12,
+                MinLogPriceSlope = 0.0005m,
+                MinLogVolumeSlope = 0.01m,
+                MinLogPriceR2 = 0.20m,
+                MinLogVolumeR2 = 0.10m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsRecentHighBreakout = true,
+            PriceLogSlope = 0.001m,
+            PriceLogR2 = 0.72m,
+            VolumeLogSlope = 0.04m,
+            VolumeLogR2 = 0.52m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenVolatileVwapReclaimOpeningDrivePasses_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "volatile_vwap_reclaim",
+                MinVolumeSpike = 0.5m,
+                TrendFilter = "vwap",
+                RequirePriceAboveVwap = true,
+                RequireLogPriceRising = true,
+                RequireLogVolumeRising = true,
+                MinLogPriceSlope = 0.0001m,
+                MinLogVolumeSlope = 0.001m,
+                RejectFallingPriceRisingVolume = true
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsOpeningDriveContinuation = true,
+            IsAboveSessionOpen = true,
+            PriceLogSlope = 0.001m,
+            VolumeLogSlope = 0.01m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenFallingPriceHasRisingVolume_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                RejectFallingPriceRisingVolume = true,
+                RedVolumeMaxPriceSlope = -0.0001m,
+                RedVolumeMinVolumeSlope = 0.003m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            PriceLogSlope = -0.0005m,
+            VolumeLogSlope = 0.01m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("falling_price_rising_volume (PriceLogSlope: -0.000500, VolumeLogSlope: 0.010000)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenCloseLocationTooWeak_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                MinCloseLocationValue = 0.60m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            CloseLocationValue = 0.37m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("close_location_below_minimum (Actual: 0.37, Required: 0.60)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenWeakCloseHasHighRelativeVolume_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                RejectWeakCloseOnHighRelativeVolume = true,
+                WeakCloseMaxLocationValue = 0.40m,
+                WeakCloseMinRelativeVolume = 1.0m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            CloseLocationValue = 0.37m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 1.2m);
+
+        Assert.Equal("weak_close_on_high_relative_volume (CloseLocation: 0.37, RelativeVolume: 1.20)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenDayGainTooLow_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                MinDayGainPct = 4.0m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            DayGainPct = 1.25m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("day_gain_below_minimum (Actual: 1.25, Required: 4.00)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenSessionRangeAlreadyDamaged_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                MaxPreEntrySessionRangePct = 6.0m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            PreEntrySessionRangePct = 8.25m,
+            EntryPullbackFromSessionHighPct = 1.0m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("pre_entry_session_range_too_wide (Actual: 8.25, RequiredMax: 6.00)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenEntryTooFarBelowSessionHigh_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                MaxEntryPullbackFromSessionHighPct = 2.0m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            PreEntrySessionRangePct = 4.0m,
+            EntryPullbackFromSessionHighPct = 3.15m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("entry_too_far_below_session_high (Actual: 3.15, RequiredMax: 2.00)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenGapAndGoMomentumPasses_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "gap_and_go_momentum",
+                MinVolumeSpike = 0.5m,
+                TrendFilter = "vwap",
+                RequirePriceAboveVwap = true,
+                RequireLogPriceRising = true,
+                RequireLogVolumeRising = true,
+                MinLogPriceSlope = 0.0001m,
+                MinLogVolumeSlope = 0.001m,
+                MinDayGainPct = 4.0m,
+                MinSessionGainPct = 1.0m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsRecentHighBreakout = true,
+            IsAboveSessionOpen = true,
+            PriceLogSlope = 0.001m,
+            VolumeLogSlope = 0.01m,
+            DayGainPct = 8.5m,
+            SessionGainPct = 2.2m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenGapAndGoHasNoBreakout_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "gap_and_go_momentum",
+                MinVolumeSpike = 0.5m,
+                TrendFilter = "vwap",
+                RequirePriceAboveVwap = true,
+                RequireLogPriceRising = true,
+                RequireLogVolumeRising = true,
+                MinLogPriceSlope = 0.0001m,
+                MinLogVolumeSlope = 0.001m,
+                MinDayGainPct = 4.0m,
+                MinSessionGainPct = 1.0m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsOpeningDriveContinuation = true,
+            IsAboveSessionOpen = true,
+            PriceLogSlope = 0.001m,
+            VolumeLogSlope = 0.01m,
+            DayGainPct = 8.5m,
+            SessionGainPct = 2.2m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("setup_gap_and_go_momentum_not_triggered", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenRossBullFlagBreakoutPasses_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "ross_gap_go_bull_flag",
+                MinVolumeSpike = 2.0m,
+                TrendFilter = "vwap",
+                MacdFilter = "not_bearish",
+                RequirePriceAboveVwap = true,
+                RequirePriceAboveEma20 = true,
+                MinCloseLocationValue = 0.60m,
+                MinDayGainPct = 4.0m,
+                MinSessionGainPct = 1.0m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsAboveSessionOpen = true,
+            IsBullFlagBreakout = true,
+            IsAboveVwap = true,
+            IsPriceAboveEma20 = true,
+            IsMacdNotBearish = true,
+            CloseLocationValue = 0.72m,
+            DayGainPct = 8.5m,
+            SessionGainPct = 2.2m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.3m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenRossPatternMissing_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "ross_gap_go_bull_flag",
+                MinVolumeSpike = 2.0m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsAboveSessionOpen = true
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.3m);
+
+        Assert.Equal("setup_ross_gap_go_bull_flag_not_triggered", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenRossOpeningExhaustion_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "ross_gap_go_bull_flag",
+                MinVolumeSpike = 2.0m,
+                EnablePremarketFilter = true,
+                RejectOpeningExhaustion = true,
+                OpeningExhaustionMinutes = 20,
+                OpeningExhaustionMaxDayGainPct = 18.0m,
+                OpeningExhaustionMaxSessionRangePct = 10.0m,
+                OpeningExhaustionMinPullbackFromHighPct = 0.50m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsAboveSessionOpen = true,
+            IsRecentHighBreakout = true,
+            MinutesAfterRegularOpen = 5,
+            DayGainPct = 29.6m,
+            PreEntrySessionRangePct = 9.7m,
+            EntryPullbackFromSessionHighPct = 0.06m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 5.57m);
+
+        Assert.Equal("opening_exhaustion_risk (MinutesAfterOpen: 5, DayGain: 29.60, SessionRange: 9.70, PullbackFromHigh: 0.06)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenRossPremarketVwapExtensionTooHigh_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "ross_gap_go_bull_flag",
+                MinVolumeSpike = 2.0m,
+                EnablePremarketFilter = true,
+                MaxPremarketVwapExtensionPct = 12.0m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsAboveSessionOpen = true,
+            IsBullFlagBreakout = true,
+            PremarketVwapExtensionPct = 18.2m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.3m);
+
+        Assert.Equal("premarket_vwap_extension_too_high (Actual: 18.20, RequiredMax: 12.00)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenFreshNegativeNewsBelowVetoThreshold_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                VetoNewsSentimentBelow = -0.50m,
+                MaxNewsAgeHours = 24m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-09T15:00:00Z");
+        var signal = CreateBaseSignal() with
+        {
+            Timestamp = timestamp,
+            Catalyst = new CatalystEvent(
+                "AAPL",
+                timestamp.AddHours(-1),
+                CatalystType.NewsReport,
+                "Company cuts guidance after weak demand",
+                -0.82m,
+                "alpaca",
+                "news-1")
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("negative_news_sentiment (Actual: -0.82, VetoBelow: -0.50, Headline: Company cuts guidance after weak demand)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenNegativeNewsIsStale_DoesNotVeto()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                VetoNewsSentimentBelow = -0.50m,
+                MaxNewsAgeHours = 2m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-09T15:00:00Z");
+        var signal = CreateBaseSignal() with
+        {
+            Timestamp = timestamp,
+            Catalyst = new CatalystEvent(
+                "AAPL",
+                timestamp.AddHours(-6),
+                CatalystType.NewsReport,
+                "Old negative article",
+                -0.82m)
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenPositiveNewsRequiredButMissing_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                RequirePositiveNews = true,
+                MinNewsSentiment = 0.25m,
+                MaxNewsAgeHours = 12m
+            }
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, CreateBaseSignal(), relativeVolume: 0.8m);
+
+        Assert.Equal("positive_news_required (MaxAgeHours: 12.0)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenPositiveNewsRequiredAndPresent_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                RequirePositiveNews = true,
+                MinNewsSentiment = 0.25m,
+                MaxNewsAgeHours = 12m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-09T15:00:00Z");
+        var signal = CreateBaseSignal() with
+        {
+            Timestamp = timestamp,
+            Catalyst = new CatalystEvent(
+                "AAPL",
+                timestamp.AddHours(-1),
+                CatalystType.NewsReport,
+                "Company wins new datacenter contract",
+                0.78m)
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenCatalystTechnicalEntryHasNoTechnicalTrigger_ReturnsSetupRejection()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "catalyst_vwap_breakout",
+                MinVolumeSpike = 0.5m,
+                RequirePositiveNews = true,
+                MinNewsSentiment = 0.25m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-09T15:00:00Z");
+        var signal = CreateBaseSignal() with
+        {
+            Timestamp = timestamp,
+            IsAboveSessionOpen = true,
+            IsVwapReclaim = false,
+            IsVwapPullback = false,
+            IsOpeningRangeBreakout = false,
+            IsRecentHighBreakout = false,
+            IsOpeningDriveContinuation = false,
+            Catalyst = new CatalystEvent("AAPL", timestamp.AddMinutes(-30), CatalystType.NewsReport, "Good news", 0.75m),
+            CatalystAgeHours = 0.5m,
+            CatalystPriceMovePct = 3.0m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("setup_catalyst_vwap_breakout_not_triggered", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenCatalystEntryAlreadyTooExtended_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "catalyst_vwap_breakout",
+                MinVolumeSpike = 0.5m,
+                RequirePositiveNews = true,
+                MinNewsSentiment = 0.25m,
+                MaxCatalystPriceMovePct = 12.0m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-09T15:00:00Z");
+        var signal = CreateBaseSignal() with
+        {
+            Timestamp = timestamp,
+            IsAboveSessionOpen = true,
+            IsVwapReclaim = true,
+            Catalyst = new CatalystEvent("AAPL", timestamp.AddMinutes(-30), CatalystType.NewsReport, "Good news", 0.75m),
+            CatalystAgeHours = 0.5m,
+            CatalystPriceMovePct = 18.4m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("catalyst_entry_too_extended (Actual: 18.40, RequiredMax: 12.00)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenCatalystTechnicalEntryPasses_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "vwap_pullback",
+                MinVolumeSpike = 0.5m,
+                TrendFilter = "vwap",
+                MacdFilter = "not_bearish",
+                RequirePriceAboveVwap = true,
+                RequirePositiveNews = true,
+                MinNewsSentiment = 0.25m,
+                MinCatalystPriceMovePct = 0.5m,
+                MaxCatalystPriceMovePct = 12.0m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-09T15:00:00Z");
+        var signal = CreateBaseSignal() with
+        {
+            Timestamp = timestamp,
+            IsAboveSessionOpen = true,
+            IsVwapReclaim = true,
+            IsAboveVwap = true,
+            IsMacdNotBearish = true,
+            Catalyst = new CatalystEvent("AAPL", timestamp.AddMinutes(-30), CatalystType.NewsReport, "Good news", 0.75m),
+            CatalystAgeHours = 0.5m,
+            CatalystPriceMovePct = 4.2m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetShortEntryRejection_WhenCatalystVwapBreakdownPasses_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            Direction = "long_short",
+            EntryRules = baseStrategy.EntryRules with
+            {
+                EnableShort = true,
+                ShortSetupType = "catalyst_vwap_breakdown",
+                MinVolumeSpike = 0.5m,
+                RequirePriceBelowVwapForShort = true,
+                RequireMacdBearishForShort = true,
+                MaxShortEntryRsi = 55m,
+                MaxShortCloseLocationValue = 0.45m,
+                MaxShortNewsSentiment = 0.10m,
+                MinShortCatalystDropPct = 1.0m,
+                MaxNewsAgeHours = 12m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-09T15:00:00Z");
+        var signal = CreateBaseSignal(rsi: 42m) with
+        {
+            Timestamp = timestamp,
+            IsAboveVwap = false,
+            IsVwapRejection = true,
+            IsBelowSessionOpen = true,
+            IsMacdNotBearish = false,
+            CloseLocationValue = 0.25m,
+            Catalyst = new CatalystEvent("AAPL", timestamp.AddMinutes(-40), CatalystType.NewsReport, "Company announces weak demand", -0.40m),
+            CatalystAgeHours = 0.67m,
+            CatalystPriceMovePct = -2.3m
+        };
+
+        var rejection = _evaluator.GetShortEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetShortEntryRejection_WhenMacdNotBearish_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            Direction = "long_short",
+            EntryRules = baseStrategy.EntryRules with
+            {
+                EnableShort = true,
+                ShortSetupType = "vwap_rejection",
+                MinVolumeSpike = 0.5m,
+                RequirePriceBelowVwapForShort = true,
+                RequireMacdBearishForShort = true
+            }
+        };
+        var signal = CreateBaseSignal(rsi: 42m) with
+        {
+            IsAboveVwap = false,
+            IsVwapRejection = true,
+            IsMacdNotBearish = true
+        };
+
+        var rejection = _evaluator.GetShortEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("short_macd_not_bearish", rejection);
+    }
+
 }

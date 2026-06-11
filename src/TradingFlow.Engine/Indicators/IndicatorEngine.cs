@@ -7,7 +7,9 @@ public sealed class IndicatorEngine
     private const int RsiPeriod = 14;
     private const int AtrPeriod = 14;
     private const int BollingerPeriod = 20;
-    private const int RelativeVolumePeriod = 50;
+    private const int RelativeVolumeLookbackSessions = 20;
+    private const int RelativeVolumeMinimumComparableBars = 5;
+    private static readonly TimeZoneInfo ExchangeTimeZone = ResolveExchangeTimeZone();
 
     public IReadOnlyList<IndicatorSnapshot> Compute(IReadOnlyList<OhlcvBar> inputBars)
     {
@@ -19,6 +21,9 @@ public sealed class IndicatorEngine
 
         var closes = bars.Select(x => x.Close).ToArray();
         var volumes = bars.Select(x => x.Volume).ToArray();
+        var sma10 = ComputeSma(closes, 10);
+        var sma20 = ComputeSma(closes, 20);
+        var sma50 = ComputeSma(closes, 50);
         var ema20 = ComputeEma(closes, 20);
         var ema50 = ComputeEma(closes, 50);
         var ema200 = ComputeEma(closes, 200);
@@ -29,7 +34,7 @@ public sealed class IndicatorEngine
         var rsi = ComputeRsi(closes);
         var atr = ComputeAtr(bars);
         var bollinger = ComputeBollinger(closes);
-        var relativeVolume = ComputeRelativeVolume(volumes);
+        var relativeVolume = ComputeRelativeVolume(bars);
         var vwap = ComputeVwap(bars);
 
         var snapshots = new List<IndicatorSnapshot>(bars.Length);
@@ -53,10 +58,39 @@ public sealed class IndicatorEngine
                 relativeVolume[i],
                 macdLine[i],
                 macdSignal[i],
-                macdLine[i] is null || macdSignal[i] is null ? null : macdLine[i] - macdSignal[i]));
+                macdLine[i] is null || macdSignal[i] is null ? null : macdLine[i] - macdSignal[i],
+                Sma10: sma10[i],
+                Sma20: sma20[i],
+                Sma50: sma50[i]));
         }
 
         return snapshots;
+    }
+
+    private static decimal?[] ComputeSma(IReadOnlyList<decimal> values, int period)
+    {
+        var output = new decimal?[values.Count];
+        if (values.Count < period)
+        {
+            return output;
+        }
+
+        var runningSum = 0m;
+        for (var i = 0; i < values.Count; i++)
+        {
+            runningSum += values[i];
+            if (i >= period)
+            {
+                runningSum -= values[i - period];
+            }
+
+            if (i >= period - 1)
+            {
+                output[i] = runningSum / period;
+            }
+        }
+
+        return output;
     }
 
     private static decimal?[] ComputeEma(IReadOnlyList<decimal> values, int period)
@@ -223,13 +257,30 @@ public sealed class IndicatorEngine
         return (middle, upper, lower);
     }
 
-    private static decimal?[] ComputeRelativeVolume(IReadOnlyList<decimal> volumes)
+    private static decimal?[] ComputeRelativeVolume(IReadOnlyList<OhlcvBar> bars)
     {
-        var output = new decimal?[volumes.Count];
-        for (var i = RelativeVolumePeriod; i < volumes.Count; i++)
+        var output = new decimal?[bars.Count];
+        var volumesBySlot = new Dictionary<TimeSpan, List<decimal>>();
+
+        for (var i = 0; i < bars.Count; i++)
         {
-            var average = volumes.Skip(i - RelativeVolumePeriod).Take(RelativeVolumePeriod).Average();
-            output[i] = average <= 0 ? null : volumes[i] / average;
+            var slot = TimeZoneInfo.ConvertTime(bars[i].Timestamp, ExchangeTimeZone).TimeOfDay;
+            if (!volumesBySlot.TryGetValue(slot, out var comparableVolumes))
+            {
+                comparableVolumes = new List<decimal>();
+                volumesBySlot[slot] = comparableVolumes;
+            }
+
+            if (comparableVolumes.Count >= RelativeVolumeMinimumComparableBars)
+            {
+                var lookback = comparableVolumes
+                    .Skip(Math.Max(0, comparableVolumes.Count - RelativeVolumeLookbackSessions))
+                    .ToArray();
+                var average = lookback.Average();
+                output[i] = average <= 0 ? null : bars[i].Volume / average;
+            }
+
+            comparableVolumes.Add(bars[i].Volume);
         }
 
         return output;
@@ -244,7 +295,7 @@ public sealed class IndicatorEngine
 
         for (var i = 0; i < bars.Count; i++)
         {
-            var barDate = DateOnly.FromDateTime(bars[i].Timestamp.UtcDateTime);
+            var barDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(bars[i].Timestamp, ExchangeTimeZone).DateTime);
             if (activeDate != barDate)
             {
                 activeDate = barDate;
@@ -259,5 +310,17 @@ public sealed class IndicatorEngine
         }
 
         return output;
+    }
+
+    private static TimeZoneInfo ResolveExchangeTimeZone()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        }
     }
 }

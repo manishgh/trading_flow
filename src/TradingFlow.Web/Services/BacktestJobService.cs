@@ -91,7 +91,7 @@ public sealed class BacktestJobService
             CompletedTickerCount = completedTickerCount;
             TotalTickerCount = totalTickerCount;
             var tickerText = String.IsNullOrWhiteSpace(ticker) ? String.Empty : $" [{ticker}]";
-            Events.Enqueue($"{DateTimeOffset.UtcNow:HH:mm:ss} {stage}{tickerText}: {message}");
+            Events.Enqueue($"{UiDisplayFormatter.FormatLocalTime(DateTimeOffset.UtcNow)} {stage}{tickerText}: {message}");
             while (Events.Count > 80 && Events.TryDequeue(out _))
             {
             }

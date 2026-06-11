@@ -28,6 +28,7 @@ public sealed class BacktestsModel : PageModel
     public IReadOnlyList<StrategyOption> Strategies { get; private set; } = [];
     public IReadOnlyList<OptimizationJobSnapshot> OptimizationJobs { get; private set; } = [];
     public IReadOnlyList<BacktestJobSnapshot> BacktestJobs { get; private set; } = [];
+    public IReadOnlyList<ResearchSnapshot> ResearchSnapshots { get; private set; } = [];
 
     public void OnGet(string? configPath, string? strategyPath, string? tickersCsv)
     {
@@ -105,15 +106,112 @@ public sealed class BacktestsModel : PageModel
         return RedirectToPage("/OptimizationJob", new { id = job.JobId });
     }
 
+    public IActionResult OnPostRunBacktest()
+    {
+        var form = Request.Form;
+        var baseConfigPath = form["SelectedConfigPath"].ToString();
+        var strategyPaths = form["StrategyPaths"]
+            .Select(x => x?.Trim())
+            .Where(x => !String.IsNullOrWhiteSpace(x))
+            .Cast<string>()
+            .ToArray();
+        var tickers = form["TickersCsv"].ToString()
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(x => x.ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (String.IsNullOrWhiteSpace(baseConfigPath) || strategyPaths.Length == 0 || tickers.Length == 0)
+        {
+            return RedirectToPage(new { configPath = baseConfigPath, strategyPath = form["SelectedStrategyPath"].ToString(), tickersCsv = form["TickersCsv"].ToString() });
+        }
+
+        var request = new BacktestRunRequest(
+            baseConfigPath,
+            form["RunName"].ToString(),
+            ParseInt(form["LookbackDays"].ToString(), 180),
+            tickers,
+            strategyPaths,
+            ParseDecimal(form["StartingCapital"].ToString(), 10000m),
+            ParseDecimal(form["RiskPerTradePct"].ToString(), 2m),
+            ParseDecimal(form["MaxPositionValuePct"].ToString(), 25m),
+            ParseInt(form["MaxConcurrentPositions"].ToString(), 4),
+            form["CachePolicy"].ToString(),
+            []);
+
+        var configPath = configWriter.WriteBacktestConfig(request);
+        var job = backtestJobs.Start(request.RunName, configPath);
+        return RedirectToPage("/Job", new { id = job.JobId });
+    }
+
     private void LoadData(string? configPath, string? strategyPath)
     {
         Configs = catalog.GetBacktestConfigs();
         Strategies = catalog.GetStrategies();
         OptimizationJobs = optJobs.List().Take(5).ToArray();
         BacktestJobs = backtestJobs.List().Take(5).ToArray();
+        ResearchSnapshots = LoadResearchSnapshots();
 
         SelectedConfigPath = configPath ?? (Configs.FirstOrDefault()?.Path ?? String.Empty);
         SelectedStrategyPath = strategyPath ?? (Strategies.FirstOrDefault()?.Path ?? String.Empty);
+    }
+
+    private static IReadOnlyList<ResearchSnapshot> LoadResearchSnapshots()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var root = Path.Combine(repoRoot, "data", "research", "backtests");
+        if (!Directory.Exists(root)) return [];
+
+        return Directory.EnumerateFiles(root, "leaderboard.csv", SearchOption.AllDirectories)
+            .Select(path =>
+            {
+                var directory = Path.GetDirectoryName(path)!;
+                var runId = Path.GetFileName(directory);
+                var best = System.IO.File.ReadLines(path)
+                    .Skip(1)
+                    .Select(ParseLeaderboardLine)
+                    .Where(x => x is not null)
+                    .Cast<ResearchStrategyRow>()
+                    .OrderByDescending(x => x.TotalReturnPct)
+                    .FirstOrDefault();
+                return best is null
+                    ? null
+                    : new ResearchSnapshot(runId, directory, best.StrategyName, best.TotalReturnPct, best.MaxDrawdownPct, best.AcceptedTradeCount);
+            })
+            .Where(x => x is not null)
+            .Cast<ResearchSnapshot>()
+            .OrderByDescending(x => x.RunId)
+            .Take(5)
+            .ToArray();
+    }
+
+    private static ResearchStrategyRow? ParseLeaderboardLine(string line)
+    {
+        var columns = line.Split(',');
+        if (columns.Length < 5) return null;
+
+        return Decimal.TryParse(columns[1].Trim('"'), out var totalReturn) &&
+            Decimal.TryParse(columns[3].Trim('"'), out var maxDrawdown) &&
+            Int32.TryParse(columns[4].Trim('"'), out var trades)
+            ? new ResearchStrategyRow(columns[0].Trim('"'), totalReturn, maxDrawdown, trades)
+            : null;
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(Environment.CurrentDirectory);
+        while (directory != null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, "configs")) &&
+                System.IO.File.Exists(Path.Combine(directory.FullName, "TradingFlow.sln")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return Environment.CurrentDirectory;
     }
 
     private static decimal ParseDecimal(string value, decimal fallback)
@@ -154,4 +252,18 @@ public sealed class BacktestsModel : PageModel
             form["ExecutionTimeframe"].ToString(),
             ParseDecimal(form["SlippageBps"].ToString(), 0m));
     }
+
+    public sealed record ResearchSnapshot(
+        string RunId,
+        string Directory,
+        string BestStrategyName,
+        decimal TotalReturnPct,
+        decimal MaxDrawdownPct,
+        int AcceptedTradeCount);
+
+    private sealed record ResearchStrategyRow(
+        string StrategyName,
+        decimal TotalReturnPct,
+        decimal MaxDrawdownPct,
+        int AcceptedTradeCount);
 }

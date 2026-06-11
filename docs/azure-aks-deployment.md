@@ -100,12 +100,11 @@ TRADINGVIEW_WEBHOOK_SECRET
 Live:
 
 ```text
-ETORO_LIVE_API_KEY
-ETORO_LIVE_USER_KEY
-TRADINGVIEW_WEBHOOK_SECRET
+ALPACA_LIVE_KEY_ID
+ALPACA_LIVE_SECRET_KEY
 ```
 
-Do not mount demo and live eToro secrets into the same pod. The C# eToro credential provider rejects mixed secret mounts at startup/request time to prevent accidental live/demo leakage.
+Do not mount paper and live Alpaca secrets into the same pod. Paper and live workloads should use separate Kubernetes secrets or Key Vault references.
 
 Replace placeholder images:
 
@@ -173,7 +172,7 @@ kubectl logs job/trading-flow-backtest -n trading-flow
 The job uses the dedicated `TradingFlow.Worker` host. Set these environment variables in `deploy/aks/trading-service-job.yaml`:
 
 ```text
-TRADINGFLOW_RUN_CONFIGS=configs/backtest/semiconductors-research.yaml
+TRADINGFLOW_RUN_CONFIGS=configs/backtest/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml
 TRADINGFLOW_RESULT_OWNER=worker
 TRADINGFLOW_MAX_PARALLEL_RUNS=1
 ```
@@ -212,15 +211,15 @@ Paper validation:
 
 - Open `/Paper`
 - Run `Validate Paper Environment`
-- Confirm eToro `/me`, rates, portfolio, and PnL return OK
+- Confirm Alpaca account and positions checks return OK
 
 ## 8. Production Safety
 
-- Keep live eToro secrets empty until explicitly approved.
-- Mount either `trading-flow-demo-secrets` or `trading-flow-live-secrets`, never both.
+- Keep live Alpaca secrets empty until explicitly approved.
+- Mount either paper secrets or live secrets, never both.
 - Keep live trading config `allow_trading: false` until paper is stable.
-- Do not enable automatic retry for eToro trading writes. Read calls use retry/backoff; write calls are single-attempt unless explicitly marked safe.
-- eToro uses separate Polly bulkheads for read/write concurrency plus per-minute throttling to absorb `429` pressure without letting one flow starve the other.
+- Do not enable automatic retry for broker writes unless idempotency proves the first write did not reach the broker.
+- Keep separate Polly bulkheads for market data reads and broker writes so one flow cannot starve the other.
 - Web UI and worker results use separate owners (`web`, `worker`) under `data/backtest/results/{owner}/portfolio`.
 - Generated UI run configs are persisted on `pvc/trading-flow-ui-runs`; market data and result JSON are persisted on `pvc/trading-flow-data`.
 - Use namespace separation for `dev`, `paper`, and `live`.

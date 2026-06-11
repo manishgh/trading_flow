@@ -3,6 +3,7 @@ namespace TradingFlow.Domain.Backtesting;
 public sealed record BacktestCandidateTrade(
     string Ticker,
     string StrategyName,
+    string Direction,
     DateTimeOffset EntryTimestamp,
     decimal EntryPrice,
     decimal StopLossPrice,
@@ -15,6 +16,7 @@ public sealed record BacktestCandidateTrade(
 public sealed record BacktestTrade(
     string Ticker,
     string StrategyName,
+    string Direction,
     DateTimeOffset EntryTimestamp,
     DateTimeOffset ExitTimestamp,
     int ShareQuantity,

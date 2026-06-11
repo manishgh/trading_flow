@@ -10,7 +10,7 @@
 <div class="section-title">
     <div>
         <h1>Quant Workstation</h1>
-        <div class="muted">Design strategies, configure stock universes, and launch optimizations.</div>
+        <div class="muted">Build backtest runs, compare promoted strategies, and keep research evidence small.</div>
     </div>
 </div>
 
@@ -18,8 +18,8 @@
     <!-- LEFT COLUMN: Environment & Strategy Editor -->
     <div>
         <form method="post" asp-page-handler="SaveConfig" class="panel">
-            <h2>Environment & Stocks</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Select a base config or a temporary run, edit stocks, and save to create a new temporary universe.</div>
+            <h2>Universe</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Select a base config, inspect its tickers, and optionally save a custom ticker list.</div>
             
             <input type="hidden" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
             
@@ -28,12 +28,12 @@
                 <select name="BaseConfigPath" id="BaseConfigPath" onchange="window.location='?configPath=' + encodeURIComponent(this.value) + '&strategyPath=' + encodeURIComponent(document.querySelector('input[name=\'SelectedStrategyPath\']').value) + '&tickersCsv=' + encodeURIComponent(document.getElementById('TickersCsv').value)" style="flex-grow: 1;">
                     @foreach (var config in Model.Configs)
                     {
-                        var isBase = config.FileName.Equals("semiconductors-research.yaml", StringComparison.OrdinalIgnoreCase);
+                        var isBase = config.FileName.Equals("finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml", StringComparison.OrdinalIgnoreCase);
                         var label = isBase ? config.FileName : $"[CUSTOM] {config.FileName}";
                         <option value="@config.Path" selected="@(config.Path == Model.SelectedConfigPath)">@label</option>
                     }
                 </select>
-                @if (selectedConfig != null && !selectedConfig.FileName.Equals("semiconductors-research.yaml", StringComparison.OrdinalIgnoreCase))
+                @if (selectedConfig != null && !selectedConfig.FileName.Equals("finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml", StringComparison.OrdinalIgnoreCase))
                 {
                     <button type="submit" asp-page-handler="DeleteConfig" name="DeleteConfigPath" value="@selectedConfig.Path" class="button secondary" style="background: #fee; color: #c00; border-color: #fcc;" onclick="return confirm('Delete this custom config?');">Delete</button>
                 }
@@ -47,9 +47,30 @@
             </div>
         </form>
 
-        <form method="post" asp-page-handler="SaveStrategy" class="panel" style="margin-top: 1rem;">
-            <h2>Strategy Designer</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Select a strategy to permanently update its parameters.</div>
+        <section class="panel" style="margin-top: 1rem;">
+            <h2>Strategy Catalog</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Promoted configs remain separate; paper/live should run the same strategy files proven here.</div>
+            <div class="strategy-card-grid">
+                @foreach (var strategy in Model.Strategies)
+                {
+                    var definition = strategy.Definition;
+                    <article class="strategy-card">
+                        <div class="strategy-card-title">@definition.StrategyName</div>
+                        <div class="muted">@definition.Direction.ToUpperInvariant() · @definition.Timeframe · @definition.EntryRules.SetupType</div>
+                        <dl class="mini-metrics">
+                            <div><dt>Stop</dt><dd>@definition.ExitRules.StopAtrMultiple ATR</dd></div>
+                            <div><dt>Target</dt><dd>@definition.ExitRules.TargetRMultiple R</dd></div>
+                            <div><dt>Trail</dt><dd>@(definition.ExitRules.EnableAtrTrailingStop ? $"{definition.ExitRules.TrailingStopAtrMultiple} ATR" : "off")</dd></div>
+                        </dl>
+                    </article>
+                }
+            </div>
+        </section>
+
+        <details class="panel" style="margin-top: 1rem;">
+            <summary><strong>Advanced Strategy Editor</strong></summary>
+            <form method="post" asp-page-handler="SaveStrategy" style="margin-top: 1rem;">
+            <div class="muted" style="margin-bottom: 1rem;">Permanent YAML edits are intentionally behind this expander.</div>
 
             <input type="hidden" name="SelectedConfigPath" id="SelectedConfigPath_Hidden" value="@Model.SelectedConfigPath" />
             <input type="hidden" name="SaveStrategyPath" value="@Model.SelectedStrategyPath" />
@@ -151,15 +172,118 @@
                 </div>
             }
 
-            <div class="actions" style="margin-top: 1rem;">
-                <button type="submit" class="button" style="background: #0056b3;" onclick="return confirm('Overwrite strategy YAML permanently?');">Save Strategy</button>
-            </div>
-        </form>
+                <div class="actions" style="margin-top: 1rem;">
+                    <button type="submit" class="button" style="background: #0056b3;" onclick="return confirm('Overwrite strategy YAML permanently?');">Save Strategy</button>
+                </div>
+            </form>
+        </details>
     </div>
 
     <!-- RIGHT COLUMN: Optimization Runner & Jobs -->
     <div>
-        <form method="post" asp-page-handler="Optimize" class="panel highlight-border">
+        <form method="post" asp-page-handler="RunBacktest" class="panel highlight-border">
+            <h2>Backtest Runner</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Run selected promoted strategies against the selected universe. Generated configs use summary retention by default.</div>
+
+            <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
+            <input type="hidden" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
+            <input type="hidden" name="TickersCsv" value="@Model.TickersCsv" />
+
+            <div class="grid two">
+                <div>
+                    <label for="BacktestRunName">Run Name</label>
+                    <input name="RunName" id="BacktestRunName" value="backtest-lab" />
+                </div>
+                <div>
+                    <label for="LookbackDays">Lookback Days</label>
+                    <input name="LookbackDays" id="LookbackDays" type="number" min="5" max="1825" value="180" />
+                </div>
+            </div>
+            <div class="grid two">
+                <div>
+                    <label for="StartingCapital">Starting Capital</label>
+                    <input name="StartingCapital" id="StartingCapital" type="number" step="100" value="10000" />
+                </div>
+                <div>
+                    <label for="RiskPerTradePct">Risk Per Trade %</label>
+                    <input name="RiskPerTradePct" id="RiskPerTradePct" type="number" step="0.1" value="2.0" />
+                </div>
+            </div>
+            <div class="grid two">
+                <div>
+                    <label for="MaxPositionValuePct">Max Position %</label>
+                    <input name="MaxPositionValuePct" id="MaxPositionValuePct" type="number" step="1" value="25" />
+                </div>
+                <div>
+                    <label for="MaxConcurrentPositions">Max Positions</label>
+                    <input name="MaxConcurrentPositions" id="MaxConcurrentPositions" type="number" min="1" value="4" />
+                </div>
+            </div>
+            <label for="CachePolicy">Market Data</label>
+            <select name="CachePolicy" id="CachePolicy">
+                <option value="use_cache">Use cached candles</option>
+                <option value="refresh">Refresh provider data</option>
+            </select>
+
+            <div class="strategy-checks">
+                <label>Strategies</label>
+                @{
+                    var configuredStrategyPaths = selectedConfig?.Strategies.Select(s => s.Path).ToHashSet(StringComparer.OrdinalIgnoreCase) ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                }
+                @foreach (var strategy in Model.Strategies)
+                {
+                    var isChecked = configuredStrategyPaths.Contains(strategy.Path) || strategy.Path == Model.SelectedStrategyPath;
+                    <label class="check">
+                        <input type="checkbox" name="StrategyPaths" value="@strategy.Path" checked="@isChecked" />
+                        @strategy.Definition.StrategyName
+                    </label>
+                }
+            </div>
+
+            <div class="actions" style="margin-top: 1rem;">
+                <button type="submit" class="button" style="background: #28a745;">Run Backtest</button>
+            </div>
+        </form>
+
+        <section class="panel" style="margin-top: 1rem;">
+            <div class="section-title">
+                <h2>Research Snapshots</h2>
+            </div>
+            @if (Model.ResearchSnapshots.Count == 0)
+            {
+                <div class="muted">No curated research snapshots yet.</div>
+            }
+            else
+            {
+                <table class="data-table compact-table">
+                    <thead>
+                        <tr>
+                            <th>Run</th>
+                            <th>Best Strategy</th>
+                            <th>Return</th>
+                            <th>DD</th>
+                            <th>Trades</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var snapshot in Model.ResearchSnapshots)
+                        {
+                            <tr>
+                                <td>@snapshot.RunId</td>
+                                <td>@snapshot.BestStrategyName</td>
+                                <td>@snapshot.TotalReturnPct.ToString("0.00")%</td>
+                                <td>@snapshot.MaxDrawdownPct.ToString("0.00")%</td>
+                                <td>@snapshot.AcceptedTradeCount</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+
+        <details class="panel" style="margin-top: 1rem;">
+            <summary><strong>Optimization Runner</strong></summary>
+            <form method="post" asp-page-handler="Optimize" style="margin-top: 1rem;">
             <h2>Optimization Runner</h2>
             <div class="muted" style="margin-bottom: 1rem;">Run grid search over parameter ranges for the selected strategy and environment.</div>
             
@@ -175,6 +299,7 @@
                     <label for="Metric">Target Metric</label>
                     <select name="Metric" id="Metric">
                         <option value="TotalReturnPct">Total Return %</option>
+                        <option value="AverageDailyReturnPct">Avg Daily Return %</option>
                         <option value="NetProfit">Net Profit</option>
                         <option value="MaxDrawdownPct">Max Drawdown %</option>
                         <option value="WinRate">Win Rate %</option>
@@ -198,12 +323,13 @@
             <div class="actions" style="margin-top: 1rem;">
                 <button type="submit" class="button" style="background: #28a745;">Launch Optimizer</button>
             </div>
-        </form>
+            </form>
+        </details>
 
         <section class="panel" style="margin-top: 1rem;">
             <div class="section-title">
                 <h2>Optimization Jobs</h2>
-                <a class="button secondary" asp-page="/Index" asp-route-configPath="@Model.SelectedConfigPath" asp-route-strategyPath="@Model.SelectedStrategyPath">Refresh</a>
+                <a class="button secondary" asp-page="/Backtests" asp-route-configPath="@Model.SelectedConfigPath" asp-route-strategyPath="@Model.SelectedStrategyPath">Refresh</a>
             </div>
             
             @if (Model.OptimizationJobs.Count == 0)
@@ -248,5 +374,53 @@
 <style>
     .highlight-border {
         border: 2px solid #0056b3;
+    }
+
+    .strategy-card-grid {
+        display: grid;
+        gap: 0.75rem;
+    }
+
+    .strategy-card {
+        border: 1px solid #d9e2ef;
+        border-radius: 8px;
+        padding: 0.85rem;
+        background: #fff;
+    }
+
+    .strategy-card-title {
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+    }
+
+    .mini-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.5rem;
+        margin: 0.75rem 0 0;
+    }
+
+    .mini-metrics dt {
+        color: #64748b;
+        font-size: 0.75rem;
+    }
+
+    .mini-metrics dd {
+        margin: 0;
+        font-weight: 700;
+    }
+
+    .strategy-checks {
+        margin-top: 1rem;
+    }
+
+    .strategy-checks .check {
+        display: block;
+        margin-top: 0.5rem;
+    }
+
+    .compact-table td,
+    .compact-table th {
+        font-size: 0.85rem;
     }
 </style>

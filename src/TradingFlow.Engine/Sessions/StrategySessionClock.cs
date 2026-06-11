@@ -53,6 +53,11 @@ public sealed class StrategySessionClock
             return false;
         }
 
+        if (IsDailyOrHigher(timeframe))
+        {
+            return true;
+        }
+
         var timeOfDay = exchangeTime.TimeOfDay;
         if (timeOfDay < OpenTime || timeOfDay > CloseTime)
         {
@@ -69,15 +74,53 @@ public sealed class StrategySessionClock
             ? sessionRules.FridayCloseBufferMinutes
             : sessionRules.CloseBufferMinutes;
 
-        // If Friday rules are defined, we restrict trades severely
-        if (exchangeTime.DayOfWeek == DayOfWeek.Friday && sessionRules.FridayCloseBufferMinutes > 0)
-        {
-            // Usually we stop Friday entries around 2 PM (120 min before close)
-            restrictionMinutes = Math.Max(restrictionMinutes, 120);
-        }
-
         var cutOffTime = CloseTime.Subtract(TimeSpan.FromMinutes(restrictionMinutes));
         return timeOfDay < cutOffTime;
+    }
+
+    public bool ShouldFlattenBeforeSessionClose(DateTimeOffset timestamp, string timeframe, SessionRules sessionRules)
+    {
+        if (sessionRules.IsContinuousMarket || IsDailyOrHigher(timeframe))
+        {
+            return false;
+        }
+
+        var exchangeTime = ConvertToExchangeTime(timestamp, sessionRules.ExchangeTimezone).DateTime;
+        if (exchangeTime.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+        {
+            return false;
+        }
+
+        var timeOfDay = exchangeTime.TimeOfDay;
+        if (timeOfDay < OpenTime || timeOfDay > CloseTime)
+        {
+            return false;
+        }
+
+        var finalExitTime = CloseTime.Subtract(ParseTimeframe(timeframe));
+        return timeOfDay >= finalExitTime;
+    }
+
+    private static bool IsDailyOrHigher(string timeframe)
+    {
+        return timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static TimeSpan ParseTimeframe(string timeframe)
+    {
+        if (timeframe.EndsWith("m", StringComparison.OrdinalIgnoreCase) &&
+            Int32.TryParse(timeframe[..^1], out var minutes))
+        {
+            return TimeSpan.FromMinutes(minutes);
+        }
+
+        if (timeframe.EndsWith("h", StringComparison.OrdinalIgnoreCase) &&
+            Int32.TryParse(timeframe[..^1], out var hours))
+        {
+            return TimeSpan.FromHours(hours);
+        }
+
+        return TimeSpan.Zero;
     }
 
     private static DateTimeOffset ConvertToExchangeTime(DateTimeOffset timestamp, string timezoneId)

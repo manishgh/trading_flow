@@ -50,7 +50,16 @@ public sealed class SqliteOrderStateRepository : IOrderStateRepository
     public async Task<IReadOnlyList<PersistedOrder>> GetActiveOrdersByTickerAsync(string ticker, CancellationToken cancellationToken)
     {
         using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
-        var openStatuses = new List<string> { "open", "new", "accepted", "partially_filled", "pending_exit_setup" };
+        var openStatuses = new List<string>
+        {
+            "open",
+            "new",
+            "accepted",
+            "partially_filled",
+            "pending_exit_setup",
+            "exit_submitted",
+            "technical_exit_submitted"
+        };
         
         var orders = await context.Orders
             .Where(x => x.Ticker == ticker)

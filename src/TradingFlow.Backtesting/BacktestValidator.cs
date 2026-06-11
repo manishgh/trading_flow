@@ -183,7 +183,7 @@ public sealed class BacktestValidator
         var warnings = new List<string>();
         var staticUniverse = config.Validation.BiasRisk.UniverseSource.Equals("static_config", StringComparison.OrdinalIgnoreCase);
         var missingAsOfDate = config.Validation.BiasRisk.UniverseAsOfDate is null;
-        var rawQuotePolicy = config.Validation.BiasRisk.PriceAdjustmentPolicy.Equals("yahoo_chart_quote", StringComparison.OrdinalIgnoreCase);
+        var rawIntradayPolicy = config.Validation.BiasRisk.PriceAdjustmentPolicy.Contains("raw", StringComparison.OrdinalIgnoreCase);
 
         if (staticUniverse)
         {
@@ -195,9 +195,9 @@ public sealed class BacktestValidator
             warnings.Add("Universe as-of date is not configured.");
         }
 
-        if (rawQuotePolicy)
+        if (rawIntradayPolicy)
         {
-            warnings.Add("Price adjustment policy is yahoo_chart_quote; intraday bars may not fully reflect split/dividend adjusted research semantics.");
+            warnings.Add("Price adjustment policy uses raw intraday bars; validate split/dividend handling before comparing long historical windows.");
         }
 
         return new BiasRiskValidation(
@@ -205,7 +205,7 @@ public sealed class BacktestValidator
             config.Validation.BiasRisk.UniverseAsOfDate,
             config.Validation.BiasRisk.PriceAdjustmentPolicy,
             staticUniverse || missingAsOfDate,
-            rawQuotePolicy,
+            rawIntradayPolicy,
             warnings);
     }
 

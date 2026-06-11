@@ -4,15 +4,19 @@ using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Optimization;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Backtesting.Optimization;
 
-public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunner runner)
+public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunner runner, IArtifactWriter? artifactWriter = null)
 {
+    private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
+
     public async Task<OptimizationResult> OptimizeAsync(
         string optimizationConfigPath,
         CancellationToken cancellationToken,
-        IProgress<BacktestProgress>? progress = null)
+        IProgress<BacktestProgress>? progress = null,
+        IProgress<OptimizationProgress>? optimizationProgress = null)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var config = yamlReader.ReadOptimizationConfig(optimizationConfigPath);
@@ -21,42 +25,90 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         
         var permutations = GeneratePermutations(config.Parameters);
         var runs = new List<OptimizationRun>();
+        progress?.Report(BacktestProgress.StageOnly(
+            "optimization_prepare_market",
+            $"Preparing candles and indicators once for {permutations.Count} optimization permutation(s)."));
+        var preparedMarket = await runner.PrepareMarketAsync(
+            backtestConfig,
+            [baseStrategy],
+            cancellationToken,
+            progress is null
+                ? null
+                : new Progress<BacktestProgress>(update =>
+                    progress.Report(update with
+                    {
+                        Stage = $"optimization_{update.Stage}",
+                        Message = $"Reusable market state: {update.Message}"
+                    })));
+        progress?.Report(BacktestProgress.StageOnly(
+            "optimization_prepare_market",
+            "Reusable candle and indicator state is ready. Evaluating parameter combinations."));
         
         for (var i = 0; i < permutations.Count; i++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var p = permutations[i];
-            progress?.Report(BacktestProgress.StageOnly("optimization_run", $"Running permutation {i + 1} of {permutations.Count}..."));
+            var permutationNumber = i + 1;
+            var permutationLabel = $"Permutation {permutationNumber} of {permutations.Count}";
             
             var testStrategy = ApplyParameters(baseStrategy, p);
             // Give it a unique ID to distinguish
             testStrategy = testStrategy with { StrategyId = $"{baseStrategy.StrategyId}-opt-{i}" };
+            var parameterText = FormatParameters(p);
+            progress?.Report(BacktestProgress.StageOnly("optimization_run", $"Running {permutationLabel.ToLowerInvariant()}: {testStrategy.StrategyName} [{parameterText}]."));
+            optimizationProgress?.Report(new OptimizationProgress(
+                "started",
+                permutationNumber,
+                permutations.Count,
+                testStrategy.StrategyName,
+                p,
+                null,
+                RankRuns(runs, config.TopNResults),
+                $"Running {testStrategy.StrategyName} with {parameterText}."));
             
             var runPath = Path.Combine(backtestConfig.ResultsRoot, "optimization", config.RunName, $"run_{i}.json");
+            var permutationProgress = progress is null
+                ? null
+                : new Progress<BacktestProgress>(update =>
+                    progress.Report(update with
+                    {
+                        Stage = $"optimization_{update.Stage}",
+                        Message = $"{permutationLabel}: {update.Message}"
+                    }));
             
-            var result = await runner.RunAsync(
+            var result = await runner.RunPreparedAsync(
                 backtestConfig,
                 new[] { testStrategy },
                 DateTimeOffset.UtcNow,
                 runPath,
-                cancellationToken);
-                
-            runs.Add(new OptimizationRun(
+                preparedMarket,
+                cancellationToken,
+                permutationProgress);
+
+            var optimizationRun = new OptimizationRun(
                 0,
                 p,
                 ExtractMetric(result, testStrategy.StrategyId, config.Metric),
                 result.Winner?.TotalReturnPct ?? 0,
+                result.Winner?.AverageDailyReturnPct ?? 0,
                 result.Winner?.NetProfit ?? 0,
                 result.Winner?.MaxDrawdownPct ?? 0,
                 result.StrategyResults.FirstOrDefault()?.WinningTradeCount ?? 0,
                 result.StrategyResults.FirstOrDefault()?.LosingTradeCount ?? 0,
-                result));
+                result);
+            runs.Add(optimizationRun);
+            optimizationProgress?.Report(new OptimizationProgress(
+                "completed",
+                permutationNumber,
+                permutations.Count,
+                testStrategy.StrategyName,
+                p,
+                optimizationRun,
+                RankRuns(runs, config.TopNResults),
+                $"Completed {permutationLabel}: return {optimizationRun.TotalReturnPct:0.00}%, daily avg {optimizationRun.AverageDailyReturnPct:0.0000}%, net {optimizationRun.NetProfit:0.00}, drawdown {optimizationRun.MaxDrawdownPct:0.00}%."));
         }
         
-        var topRuns = runs
-            .OrderByDescending(r => r.MetricValue)
-            .Take(config.TopNResults)
-            .Select((r, i) => r with { Rank = i + 1 })
-            .ToArray();
+        var topRuns = RankRuns(runs, config.TopNResults);
             
         var optimizationResult = new OptimizationResult(
             config.RunName,
@@ -69,10 +121,32 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
             
         var resultPath = Path.Combine(backtestConfig.ResultsRoot, "optimization", $"{config.RunName}_summary.json");
         Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
-        await File.WriteAllTextAsync(resultPath, JsonSerializer.Serialize(optimizationResult, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await _artifactWriter.WriteTextAsync(
+            resultPath,
+            JsonSerializer.Serialize(optimizationResult, new JsonSerializerOptions { WriteIndented = true }),
+            cancellationToken);
         
         progress?.Report(BacktestProgress.StageOnly("optimization_complete", $"Optimization complete. Wrote {resultPath}."));
         return optimizationResult;
+    }
+
+    private static OptimizationRun[] RankRuns(IEnumerable<OptimizationRun> runs, int topN)
+    {
+        return runs
+            .OrderByDescending(r => r.MetricValue)
+            .Take(topN)
+            .Select((r, i) => r with { Rank = i + 1 })
+            .ToArray();
+    }
+
+    private static string FormatParameters(IReadOnlyDictionary<string, object> parameters)
+    {
+        if (parameters.Count == 0)
+        {
+            return "default parameters";
+        }
+
+        return String.Join(", ", parameters.Select(p => $"{p.Key.Split('.').Last()}={p.Value}"));
     }
     
     private decimal ExtractMetric(BacktestResult result, string strategyId, string metricName)
@@ -83,9 +157,10 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         return metricName.ToLowerInvariant() switch
         {
             "totalreturnpct" => strategy.TotalReturnPct,
+            "averagedailyreturnpct" => strategy.AverageDailyReturnPct,
             "netprofit" => strategy.NetProfit,
             "maxdrawdownpct" => -strategy.MaxDrawdownPct, // negative so higher is better
-            "winrate" => strategy.CandidateTradeCount == 0 ? 0 : ((decimal)strategy.WinningTradeCount / strategy.AcceptedTradeCount) * 100,
+            "winrate" => strategy.AcceptedTradeCount == 0 ? 0 : ((decimal)strategy.WinningTradeCount / strategy.AcceptedTradeCount) * 100,
             _ => strategy.TotalReturnPct
         };
     }

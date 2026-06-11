@@ -20,5 +20,10 @@ public sealed record CatalystEvent(
     DateTimeOffset Timestamp,
     CatalystType Type,
     string Headline,
-    decimal SentimentScore // -1.0 (Very Bearish) to 1.0 (Very Bullish)
+    decimal SentimentScore, // -1.0 (Very Bearish) to 1.0 (Very Bullish)
+    string? Provider = null,
+    string? ExternalId = null,
+    string? Summary = null,
+    string? Source = null,
+    string? Url = null
 );

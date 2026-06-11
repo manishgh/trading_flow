@@ -2,12 +2,149 @@
 @model TradingFlow.Web.Pages.OptimizationJobModel
 @{
     ViewData["Title"] = $"Opt Job - {Model.Job.RunName}";
-    var isDone = Model.Job.Status is "completed" or "failed";
+    var isDone = Model.Job.Status is "completed" or "failed" or "cancelled";
 }
 
-@if (!isDone)
-{
-    <meta http-equiv="refresh" content="2">
+@section Scripts {
+    <script>
+        (function () {
+            const jobId = window.tradingFlowOptimizationJobId;
+            if (!jobId) return;
+
+            const statusEl = document.getElementById('optimizationStatus');
+            const stageEl = document.getElementById('optimizationStage');
+            const startedEl = document.getElementById('optimizationStarted');
+            const finishedEl = document.getElementById('optimizationFinished');
+            const errorEl = document.getElementById('optimizationError');
+            const eventsEl = document.getElementById('optimizationEvents');
+            const currentRunPanel = document.getElementById('currentRunPanel');
+            const currentRunTitle = document.getElementById('currentRunTitle');
+            const currentRunParameters = document.getElementById('currentRunParameters');
+            const resultPanel = document.getElementById('topPermutationsPanel');
+            const resultMetric = document.getElementById('topPermutationsMetric');
+            const resultBody = document.getElementById('topPermutationsBody');
+            const cancelButton = document.getElementById('cancelOptimizationButton');
+
+            function escapeHtml(value) {
+                return String(value ?? '')
+                    .replaceAll('&', '&amp;')
+                    .replaceAll('<', '&lt;')
+                    .replaceAll('>', '&gt;')
+                    .replaceAll('"', '&quot;')
+                    .replaceAll("'", '&#039;');
+            }
+
+            function formatDecimal(value) {
+                return Number(value ?? 0).toFixed(2);
+            }
+
+            function formatDaily(value) {
+                return Number(value ?? 0).toFixed(4);
+            }
+
+            function renderParameters(parameters) {
+                return Object.entries(parameters ?? {}).map(([key, value]) => {
+                    const shortName = key.split('.').at(-1);
+                    return `<span class="pill">${escapeHtml(shortName)}: <b>${escapeHtml(value)}</b></span>`;
+                }).join('');
+            }
+
+            function renderRunRow(run) {
+                const wins = Number(run.winningTradeCount ?? 0);
+                const losses = Number(run.losingTradeCount ?? 0);
+                const trades = wins + losses;
+                const winRate = trades === 0 ? 0 : (wins / trades) * 100;
+                return `<tr>
+                    <td>${escapeHtml(run.permutation)} / ${escapeHtml(run.totalPermutations)}</td>
+                    <td>${escapeHtml(run.strategyName)}</td>
+                    <td>${renderParameters(run.parameterValues)}</td>
+                    <td><b>${formatDecimal(run.totalReturnPct)}%</b></td>
+                    <td>${formatDaily(run.averageDailyReturnPct)}%</td>
+                    <td>${formatDecimal(run.netProfit)}</td>
+                    <td>${formatDecimal(run.maxDrawdownPct)}%</td>
+                    <td>${trades}</td>
+                    <td>${formatDecimal(winRate)}%</td>
+                </tr>`;
+            }
+
+            async function refreshSnapshot() {
+                let data;
+                try {
+                    const response = await fetch(`?handler=Snapshot&id=${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+                    if (!response.ok) return;
+                    data = await response.json();
+                } catch {
+                    return;
+                }
+
+                if (!data.success) return;
+
+                if (statusEl) {
+                    statusEl.textContent = data.status;
+                    statusEl.className = `status ${data.status}`;
+                }
+
+                if (stageEl) stageEl.textContent = data.currentStage;
+                if (startedEl) startedEl.textContent = data.startedAt;
+                if (finishedEl) finishedEl.textContent = data.finishedAt;
+
+                if (errorEl) {
+                    errorEl.style.display = data.errorMessage ? 'block' : 'none';
+                    errorEl.textContent = data.errorMessage ?? '';
+                }
+
+                if (eventsEl) {
+                    eventsEl.innerHTML = (data.events ?? []).map(eventText => `<div>${escapeHtml(eventText)}</div>`).join('');
+                    eventsEl.scrollTop = eventsEl.scrollHeight;
+                }
+
+                if (currentRunPanel && currentRunTitle && currentRunParameters) {
+                    if (data.currentRun) {
+                        currentRunPanel.style.display = 'block';
+                        currentRunTitle.textContent = `${data.currentRun.strategyName} (${data.currentRun.permutation}/${data.currentRun.totalPermutations})`;
+                        currentRunParameters.innerHTML = renderParameters(data.currentRun.parameterValues);
+                    } else {
+                        currentRunPanel.style.display = 'none';
+                    }
+                }
+
+                if (resultPanel && resultBody) {
+                    const completedRuns = data.completedRuns ?? [];
+                    if (completedRuns.length > 0) {
+                        resultPanel.style.display = 'block';
+                        resultBody.innerHTML = completedRuns.map(renderRunRow).join('');
+                    }
+                }
+
+                if (data.result && resultPanel && resultMetric && resultBody) {
+                    resultPanel.style.display = 'block';
+                    resultMetric.textContent = data.result.metric;
+                    resultBody.innerHTML = (data.result.topRuns ?? []).map(run => `<tr>
+                        <td>#${escapeHtml(run.rank)}</td>
+                        <td>${escapeHtml(run.strategyName ?? '')}</td>
+                        <td>${renderParameters(run.parameterValues)}</td>
+                        <td><b>${formatDecimal(run.totalReturnPct)}%</b></td>
+                        <td>${formatDaily(run.averageDailyReturnPct)}%</td>
+                        <td>${formatDecimal(run.netProfit)}</td>
+                        <td>${formatDecimal(run.maxDrawdownPct)}%</td>
+                        <td>${escapeHtml(run.totalTrades)}</td>
+                        <td>${formatDecimal(run.winRate)}%</td>
+                    </tr>`).join('');
+                }
+
+                if (cancelButton && data.status !== 'queued' && data.status !== 'running') {
+                    cancelButton.disabled = true;
+                }
+
+                if (data.status !== 'queued' && data.status !== 'running' && data.status !== 'cancelling') {
+                    window.clearInterval(window.tradingFlowOptimizationJobRefresh);
+                }
+            }
+
+            window.tradingFlowOptimizationJobRefresh = window.setInterval(refreshSnapshot, 2000);
+            refreshSnapshot();
+        })();
+    </script>
 }
 
 <div class="section-title">
@@ -16,7 +153,13 @@
         <div class="muted">@Model.Job.OptimizationConfigPath</div>
     </div>
     <div class="actions">
-        <a class="button secondary" asp-page="/Optimize">Back to Lab</a>
+        @if (Model.Job.Status is "queued" or "running" or "cancelling")
+        {
+            <form method="post" asp-page-handler="Cancel" asp-route-id="@Model.Job.JobId" style="margin: 0;">
+                <button id="cancelOptimizationButton" type="submit" class="button secondary">Cancel Run</button>
+            </form>
+        }
+        <a class="button secondary" asp-page="/Backtests">Back to Lab</a>
     </div>
 </div>
 
@@ -24,58 +167,110 @@
     <section class="panel">
         <div class="section-title">
             <h2>Live Status</h2>
-            <span class="status @Model.Job.Status">@Model.Job.Status</span>
+            <span id="optimizationStatus" class="status @Model.Job.Status">@Model.Job.Status</span>
         </div>
         <table>
-            <tr><th>Stage</th><td>@Model.Job.CurrentStage</td></tr>
-            <tr><th>Started</th><td>@(Model.Job.StartedAt?.ToString("HH:mm:ss") ?? "-")</td></tr>
-            <tr><th>Finished</th><td>@(Model.Job.FinishedAt?.ToString("HH:mm:ss") ?? "-")</td></tr>
+            <tr><th>Stage</th><td id="optimizationStage">@Model.Job.CurrentStage</td></tr>
+            <tr><th>Started</th><td id="optimizationStarted">@Model.FormatLocal(Model.Job.StartedAt)</td></tr>
+            <tr><th>Finished</th><td id="optimizationFinished">@Model.FormatLocal(Model.Job.FinishedAt)</td></tr>
         </table>
-        @if (!String.IsNullOrWhiteSpace(Model.Job.ErrorMessage))
-        {
-            <div class="error-box">@Model.Job.ErrorMessage</div>
-        }
+        <div id="optimizationError" class="error-box" style="display: @(String.IsNullOrWhiteSpace(Model.Job.ErrorMessage) ? "none" : "block")">@Model.Job.ErrorMessage</div>
+
+        <div id="currentRunPanel" class="panel" style="margin-top: 1rem; display: @(Model.Job.CurrentRun is null ? "none" : "block")">
+            <h3>Running Combination</h3>
+            <div id="currentRunTitle" style="font-weight: 700;">
+                @(Model.Job.CurrentRun is null ? "" : $"{Model.Job.CurrentRun.StrategyName} ({Model.Job.CurrentRun.Permutation}/{Model.Job.CurrentRun.TotalPermutations})")
+            </div>
+            <div id="currentRunParameters" style="margin-top: 0.5rem;">
+                @foreach (var p in Model.Job.CurrentRun?.ParameterValues ?? new Dictionary<string, object>())
+                {
+                    <span class="pill">@p.Key.Split('.').Last(): <b>@p.Value</b></span>
+                }
+            </div>
+        </div>
         
         <h3>Progress Log</h3>
-        <pre class="log-viewer">@String.Join(Environment.NewLine, Model.Job.Events)</pre>
+        <div id="optimizationEvents" class="log-viewer" style="height: 240px; overflow-y: auto;">
+            @foreach (var ev in Model.Job.Events)
+            {
+                <div>@ev</div>
+            }
+        </div>
     </section>
 
-    @if (Model.Job.Result is not null)
-    {
-        <section class="panel">
-            <h2>Top Permutations</h2>
+    <section id="topPermutationsPanel" class="panel" style="display: @(Model.Job.Result is null && Model.Job.CompletedRuns.Count == 0 ? "none" : "block")">
+            <h2>Completed Combinations</h2>
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th>Rank</th>
+                        <th>Run</th>
+                        <th>Strategy</th>
                         <th>Parameters</th>
-                        <th>@Model.Job.Result.Metric</th>
+                        <th id="topPermutationsMetric">Return %</th>
+                        <th>Daily Avg</th>
+                        <th>Net</th>
+                        <th>Drawdown</th>
                         <th>Trades</th>
                         <th>Win %</th>
                     </tr>
                 </thead>
-                <tbody>
-                    @foreach (var run in Model.Job.Result.TopRuns)
+                <tbody id="topPermutationsBody">
+                    @if (Model.Job.Result is not null)
                     {
-                        var totalTrades = run.WinningTradeCount + run.LosingTradeCount;
-                        var winRate = totalTrades == 0 ? 0 : Math.Round((decimal)run.WinningTradeCount / totalTrades * 100, 1);
-                        <tr>
-                            <td>#@run.Rank</td>
-                            <td>
-                                @foreach (var p in run.ParameterValues)
-                                {
-                                    <span style="font-size: 0.8rem; background: #eee; padding: 2px 4px; border-radius: 4px; margin-right: 4px; display: inline-block; margin-bottom: 4px;">
-                                        @p.Key.Split('.').Last(): <b>@p.Value</b>
-                                    </span>
-                                }
-                            </td>
-                            <td><b>@run.MetricValue.ToString("0.00")</b></td>
-                            <td>@totalTrades</td>
-                            <td>@winRate%</td>
-                        </tr>
+                        foreach (var run in Model.Job.Result.TopRuns)
+                        {
+                            var totalTrades = run.WinningTradeCount + run.LosingTradeCount;
+                            var winRate = totalTrades == 0 ? 0 : Math.Round((decimal)run.WinningTradeCount / totalTrades * 100, 1);
+                            <tr>
+                                <td>#@run.Rank</td>
+                                <td>@run.BacktestResult.Winner?.StrategyName</td>
+                                <td>
+                                    @foreach (var p in run.ParameterValues)
+                                    {
+                                        <span class="pill">@p.Key.Split('.').Last(): <b>@p.Value</b></span>
+                                    }
+                                </td>
+                                <td><b>@run.TotalReturnPct.ToString("0.00")%</b></td>
+                                <td>@run.AverageDailyReturnPct.ToString("0.####")%</td>
+                                <td>@run.NetProfit.ToString("0.00")</td>
+                                <td>@run.MaxDrawdownPct.ToString("0.00")%</td>
+                                <td>@totalTrades</td>
+                                <td>@winRate%</td>
+                            </tr>
+                        }
+                    }
+                    else
+                    {
+                        foreach (var run in Model.Job.CompletedRuns)
+                        {
+                            var totalTrades = (run.WinningTradeCount ?? 0) + (run.LosingTradeCount ?? 0);
+                            var winRate = totalTrades == 0 ? 0 : Math.Round((decimal)(run.WinningTradeCount ?? 0) / totalTrades * 100, 1);
+                            <tr>
+                                <td>@run.Permutation / @run.TotalPermutations</td>
+                                <td>@run.StrategyName</td>
+                                <td>
+                                    @foreach (var p in run.ParameterValues)
+                                    {
+                                        <span class="pill">@p.Key.Split('.').Last(): <b>@p.Value</b></span>
+                                    }
+                                </td>
+                                <td><b>@run.TotalReturnPct?.ToString("0.00")%</b></td>
+                                <td>@run.AverageDailyReturnPct?.ToString("0.####")%</td>
+                                <td>@run.NetProfit?.ToString("0.00")</td>
+                                <td>@run.MaxDrawdownPct?.ToString("0.00")%</td>
+                                <td>@totalTrades</td>
+                                <td>@winRate%</td>
+                            </tr>
+                        }
                     }
                 </tbody>
             </table>
-        </section>
-    }
+    </section>
 </div>
+
+@if (!isDone)
+{
+    <script>
+        window.tradingFlowOptimizationJobId = '@Model.Job.JobId';
+    </script>
+}

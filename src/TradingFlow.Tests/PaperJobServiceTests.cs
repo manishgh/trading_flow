@@ -39,7 +39,11 @@ public class PaperJobServiceTests
     {
         // Arrange
         var credentials = new AlpacaCredentialProvider(new ConfigurationBuilder().Build());
-        var service = new PaperJobService(new SimpleYamlReader(), _scopeFactoryMock.Object, credentials);
+        var service = new PaperJobService(
+            new SimpleYamlReader(),
+            _scopeFactoryMock.Object,
+            credentials,
+            new ProjectPaths(Directory.GetCurrentDirectory()));
         var runName = "TestRun";
         var configPath = "dummy.yaml";
         

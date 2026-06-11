@@ -1,0 +1,100 @@
+﻿[
+    {
+        "StrategyId":  "research.swing-reversal-reclaim-bull-quality-no-news.v1",
+        "StrategyName":  "Swing Reversal Reclaim Bull Quality No News V1",
+        "EvaluatedBarCount":  598,
+        "CandidateTradeCount":  10,
+        "AcceptedTradeCount":  10,
+        "WinRatePct":  60.0,
+        "AverageWin":  281.8738,
+        "AverageLoss":  123.9817,
+        "RealizedRewardRiskRatio":  2.2735,
+        "DailyPnl":  {
+                         "TradingDayCount":  122,
+                         "ActiveTradeDayCount":  10,
+                         "WinningDayCount":  6,
+                         "LosingDayCount":  4,
+                         "NetProfit":  1195.3160,
+                         "AverageNetProfitPerTradingDay":  9.7977,
+                         "AverageNetProfitPerActiveTradeDay":  119.5316,
+                         "BestDayNetProfit":  771.4179,
+                         "BestDay":  "2026-04-10",
+                         "WorstDayNetProfit":  -201.6395,
+                         "WorstDay":  "2026-03-30"
+                     },
+        "DirectionPnl":  [
+                             {
+                                 "Direction":  "long",
+                                 "TradeCount":  10,
+                                 "WinningTradeCount":  6,
+                                 "LosingTradeCount":  4,
+                                 "NetProfit":  1195.3160,
+                                 "AverageNetProfit":  119.5316,
+                                 "BestTradeNetProfit":  771.4179,
+                                 "WorstTradeNetProfit":  -201.6395
+                             }
+                         ],
+        "ExitReasonCounts":  {
+                                 "technical_exit_sma10_cross_below_sma20":  5,
+                                 "stop_loss":  2,
+                                 "take_profit":  1,
+                                 "trailing_stop":  1,
+                                 "end_of_data":  1
+                             },
+        "RejectionCounts":  {
+                                "setup_swing_reclaim_not_triggered":  533,
+                                "rsi_outside_range":  51,
+                                "close_location_below_minimum":  4
+                            },
+        "Suggestions":  [
+                            "No obvious single blocker. Review ticker universe, sample length, and walk-forward stability."
+                        ]
+    },
+    {
+        "StrategyId":  "research.swing-overbought-rollover-short-no-news.v5",
+        "StrategyName":  "Swing Overbought Rollover Short No News V5",
+        "EvaluatedBarCount":  668,
+        "CandidateTradeCount":  2,
+        "AcceptedTradeCount":  2,
+        "WinRatePct":  100,
+        "AverageWin":  183.2449,
+        "AverageLoss":  0,
+        "RealizedRewardRiskRatio":  999,
+        "DailyPnl":  {
+                         "TradingDayCount":  122,
+                         "ActiveTradeDayCount":  1,
+                         "WinningDayCount":  1,
+                         "LosingDayCount":  0,
+                         "NetProfit":  366.4898,
+                         "AverageNetProfitPerTradingDay":  3.0040,
+                         "AverageNetProfitPerActiveTradeDay":  366.4898,
+                         "BestDayNetProfit":  366.4898,
+                         "BestDay":  "2026-06-10",
+                         "WorstDayNetProfit":  366.4898,
+                         "WorstDay":  "2026-06-10"
+                     },
+        "DirectionPnl":  [
+                             {
+                                 "Direction":  "short",
+                                 "TradeCount":  2,
+                                 "WinningTradeCount":  2,
+                                 "LosingTradeCount":  0,
+                                 "NetProfit":  366.4898,
+                                 "AverageNetProfit":  183.2449,
+                                 "BestTradeNetProfit":  331.3144,
+                                 "WorstTradeNetProfit":  35.1754
+                             }
+                         ],
+        "ExitReasonCounts":  {
+                                 "end_of_data":  2
+                             },
+        "RejectionCounts":  {
+                                "short_rsi_below_range":  380,
+                                "setup_swing_rollover_not_triggered":  283,
+                                "short_close_location_too_high":  3
+                            },
+        "Suggestions":  [
+                            "Positive return with controlled drawdown. Candidate for broader ticker/window validation before promotion."
+                        ]
+    }
+]

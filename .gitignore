@@ -21,6 +21,8 @@ artifacts/
 *.exe
 *.pdb
 *.cache
+*.pyc
+__pycache__/
 *.nupkg
 *.snupkg
 project.lock.json
@@ -38,7 +40,21 @@ project.assets.json
 *.sqlite
 *.sqlite3
 *.log
-data/
+data/*
+!data/research/
+data/research/*
+!data/research/backtests/
+!data/research/backtests/**/
+!data/research/backtests/**/manifest.json
+!data/research/backtests/**/leaderboard.csv
+!data/research/backtests/**/strategy_metrics.csv
+!data/research/backtests/**/ticker_metrics.csv
+!data/research/backtests/**/trades.csv
+!data/research/backtests/**/diagnostics.json
+!data/research/backtests/**/opportunity_analysis_*.json
+!data/research/backtests/**/run_config.yaml
+!data/research/backtests/**/strategy_*.yaml
+!data/research/backtests/**/notes.md
 
 # Generated run configs and result files.
 configs/backtest/temp/
@@ -60,6 +76,7 @@ src/TradingFlow.Web/paperjob_debug.txt
 .env.*
 *.secret.json
 secrets.json
+**/.venv/
 **/appsettings.local.json
 **/appsettings.Local.json
 appsettings.*.local.json

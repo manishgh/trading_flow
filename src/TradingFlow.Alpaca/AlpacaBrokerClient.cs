@@ -141,8 +141,11 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
                 side = "sell",
                 type = "limit",
                 time_in_force = "gtc",
-                limit_price = takeProfitPrice.ToString("0.00"),
                 order_class = "oco",
+                take_profit = new
+                {
+                    limit_price = takeProfitPrice.ToString("0.00")
+                },
                 stop_loss = new
                 {
                     stop_price = stopLossPrice.ToString("0.00")

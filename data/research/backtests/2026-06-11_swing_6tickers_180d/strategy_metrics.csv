@@ -1,0 +1,3 @@
+"StrategyName","TotalReturnPct","AverageDailyReturnPct","MaxDrawdownPct","AcceptedTradeCount","WinningTradeCount","LosingTradeCount","WinRatePct","PredictabilityScore","Promotion"
+"Swing Reversal Reclaim Bull Quality No News V1","11.9532","0.0980","3.8461","10","6","4","60.0","1.4799","promoted_primary_long"
+"Swing Overbought Rollover Short No News V5","3.6649","0.0300","0","2","2","0","100","0.7330","promoted_candidate_short_small_sample"

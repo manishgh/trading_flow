@@ -99,10 +99,12 @@ public sealed class PaperJobModel : PageModel
                 {
                     time = FormatLocalTime(point.Timestamp),
                     ticker = point.Ticker,
+                    timeframe = point.Timeframe,
                     close = point.Close,
                     rsi = point.Rsi,
                     volume = point.Volume,
                     averageVolume = point.AverageVolume,
+                    relativeVolume = point.RelativeVolume,
                     vwap = point.Vwap
                 })
                 .ToArray(),
@@ -114,7 +116,8 @@ public sealed class PaperJobModel : PageModel
                 reason = FormatRejectionReason(a.RejectionReason),
                 rawReason = a.RejectionReason ?? "",
                 accepted = a.Decision.Equals("Accepted", StringComparison.OrdinalIgnoreCase)
-            }).ToArray()
+            }).ToArray(),
+            profiler = FormatProfiler(TradingFlow.Domain.Logging.ApiProfiler.GetSummary("Alpaca"))
         });
     }
 
@@ -160,19 +163,28 @@ public sealed class PaperJobModel : PageModel
     private List<ChartDataPoint> LoadChartData(BacktestJobSnapshot job)
     {
         string? resultsRoot = null;
+        var allowedTickers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var strategyTimeframes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         try
         {
             var config = catalog.GetConfig(job.ConfigPath);
-            resultsRoot = config.Config.ResultsRoot;
+            resultsRoot = paths.ResolveRepositoryPath(config.Config.ResultsRoot);
+            foreach (var ticker in config.Config.Tickers)
+            {
+                allowedTickers.Add(ticker);
+            }
+
+            foreach (var strategy in config.Strategies.Select(x => x.Definition))
+            {
+                strategyTimeframes[strategy.StrategyName] = strategy.Timeframe;
+            }
         }
         catch
         {
             // Keep the page responsive if the generated config was deleted.
         }
 
-        var resultsDir = string.IsNullOrEmpty(resultsRoot)
-            ? Path.Combine(Environment.CurrentDirectory, "data", "paper", "results", "live", job.RunName)
-            : Path.Combine(Environment.CurrentDirectory, resultsRoot, "live", job.RunName);
+        var resultsDir = Path.Combine(resultsRoot ?? paths.ResolveRepositoryPath(Path.Combine("data", "paper", "results")), "live", job.RunName);
 
         if (!Directory.Exists(resultsDir))
         {
@@ -188,8 +200,14 @@ public sealed class PaperJobModel : PageModel
                 {
                     var json = System.IO.File.ReadAllText(file);
                     var data = JsonSerializer.Deserialize<ChartDataPoint>(json);
-                    if (data != null)
+                    if (data != null && (allowedTickers.Count == 0 || allowedTickers.Contains(data.Ticker)))
                     {
+                        if (String.IsNullOrWhiteSpace(data.Timeframe) &&
+                            strategyTimeframes.TryGetValue(data.StrategyName, out var timeframe))
+                        {
+                            data.Timeframe = timeframe;
+                        }
+
                         points.Add(data);
                     }
                 }
@@ -222,6 +240,29 @@ public sealed class PaperJobModel : PageModel
             ? $"Market data feed: Alpaca {config.Providers.Alpaca.DataFeed.ToUpperInvariant()}"
             : $"Market data feed: {config.Provider.ToUpperInvariant()}";
     }
+
+    private object FormatProfiler(TradingFlow.Domain.Logging.ProfilerSummary profile)
+    {
+        return new
+        {
+            name = profile.Name,
+            appStartTime = FormatLocal(profile.AppStartTime),
+            totalRequests = profile.TotalRequests,
+            avgDurationMs = profile.AvgDurationMs,
+            minDurationMs = profile.MinDurationMs,
+            maxDurationMs = profile.MaxDurationMs,
+            successRate = profile.SuccessRate,
+            endpoints = profile.Endpoints.Select(endpoint => new
+            {
+                route = endpoint.Route,
+                count = endpoint.Count,
+                avgDurationMs = endpoint.AvgDurationMs,
+                minDurationMs = endpoint.MinDurationMs,
+                maxDurationMs = endpoint.MaxDurationMs,
+                successRate = endpoint.SuccessRate
+            }).ToArray()
+        };
+    }
 }
 
 public class ChartDataPoint
@@ -229,6 +270,7 @@ public class ChartDataPoint
     public DateTimeOffset Timestamp { get; set; }
     public string Ticker { get; set; } = String.Empty;
     public string StrategyName { get; set; } = String.Empty;
+    public string Timeframe { get; set; } = String.Empty;
     public decimal Close { get; set; }
     public decimal Atr { get; set; }
     public decimal RelativeVolume { get; set; }
@@ -258,4 +300,5 @@ public class OrderDisplayViewModel
             return (CurrentPrice - Order.LimitPrice) / CurrentPrice * 100m;
         }
     }
+
 }

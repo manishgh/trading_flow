@@ -34,7 +34,111 @@ public sealed class SimpleYamlReader
                 OptionalDecimal(map, "entry_rules.max_vwap_extension_atr"),
                 OptionalInt(map, "entry_rules.opening_range_minutes", 15),
                 OptionalInt(map, "entry_rules.recent_high_lookback_bars", 20),
-                OptionalInt(map, "entry_rules.volatility_contraction_lookback_bars", 10)),
+                OptionalInt(map, "entry_rules.volatility_contraction_lookback_bars", 10),
+                OptionalBool(map, "entry_rules.require_log_price_rising", false),
+                OptionalBool(map, "entry_rules.require_log_volume_rising", false),
+                OptionalInt(map, "entry_rules.log_price_lookback_bars", 12),
+                OptionalInt(map, "entry_rules.log_volume_lookback_bars", 12),
+                OptionalDecimal(map, "entry_rules.min_log_price_slope") ?? 0m,
+                OptionalDecimal(map, "entry_rules.min_log_volume_slope") ?? 0m,
+                OptionalDecimal(map, "entry_rules.min_log_price_r2"),
+                OptionalDecimal(map, "entry_rules.min_log_volume_r2"),
+                OptionalBool(map, "entry_rules.reject_falling_price_rising_volume", false),
+                OptionalDecimal(map, "entry_rules.red_volume_max_price_slope") ?? -0.0001m,
+                OptionalDecimal(map, "entry_rules.red_volume_min_volume_slope") ?? 0.003m,
+                OptionalInt(map, "entry_rules.vwap_hold_bars", 2),
+                OptionalInt(map, "entry_rules.max_entries_per_ticker_per_day", 0),
+                OptionalDecimal(map, "entry_rules.min_close_location_value"),
+                OptionalBool(map, "entry_rules.reject_weak_close_on_high_relative_volume", false),
+                OptionalDecimal(map, "entry_rules.weak_close_max_location_value") ?? 0.40m,
+                OptionalDecimal(map, "entry_rules.weak_close_min_relative_volume") ?? 1.0m,
+                OptionalDecimal(map, "entry_rules.min_day_gain_pct"),
+                OptionalDecimal(map, "entry_rules.min_session_gain_pct"),
+                OptionalDecimal(map, "entry_rules.max_pre_entry_session_range_pct"),
+                OptionalDecimal(map, "entry_rules.max_entry_pullback_from_session_high_pct"),
+                OptionalBool(map, "entry_rules.require_positive_news", false),
+                OptionalDecimal(map, "entry_rules.min_news_sentiment"),
+                OptionalDecimal(map, "entry_rules.veto_news_sentiment_below"),
+                OptionalDecimal(map, "entry_rules.max_news_age_hours") ?? 72m,
+                OptionalDecimal(map, "entry_rules.min_catalyst_price_move_pct"),
+                OptionalDecimal(map, "entry_rules.max_catalyst_price_move_pct"),
+                OptionalBool(map, "entry_rules.enable_short", false),
+                OptionalString(map, "entry_rules.short_setup_type", "catalyst_vwap_breakdown"),
+                OptionalDecimal(map, "entry_rules.max_short_news_sentiment"),
+                OptionalDecimal(map, "entry_rules.min_short_catalyst_drop_pct"),
+                OptionalDecimal(map, "entry_rules.max_short_entry_rsi"),
+                OptionalDecimal(map, "entry_rules.min_short_entry_rsi"),
+                OptionalDecimal(map, "entry_rules.max_short_close_location_value"),
+                OptionalBool(map, "entry_rules.require_price_below_vwap_for_short", true),
+                OptionalBool(map, "entry_rules.require_macd_bearish_for_short", true),
+                OptionalDecimal(map, "entry_rules.min_bull_flag_pole_move_pct"),
+                OptionalInt(map, "entry_rules.bull_flag_pole_max_bars", 10),
+                OptionalInt(map, "entry_rules.bull_flag_pullback_min_bars", 2),
+                OptionalInt(map, "entry_rules.bull_flag_pullback_max_bars", 5),
+                OptionalDecimal(map, "entry_rules.bull_flag_max_depth_pct_of_pole") ?? 50m,
+                OptionalDecimal(map, "entry_rules.bull_flag_pullback_volume_ratio_max") ?? 0.70m,
+                OptionalDecimal(map, "entry_rules.bull_flag_breakout_volume_ratio_min") ?? 1.50m,
+                OptionalBool(map, "entry_rules.enable_premarket_filter", false),
+                OptionalBool(map, "entry_rules.require_premarket_high_break", false),
+                OptionalDecimal(map, "entry_rules.premarket_high_break_buffer_pct") ?? 0.25m,
+                OptionalDecimal(map, "entry_rules.max_premarket_vwap_extension_pct"),
+                OptionalDecimal(map, "entry_rules.max_premarket_run_pct"),
+                OptionalDecimal(map, "entry_rules.max_opening_range_pct"),
+                OptionalBool(map, "entry_rules.reject_opening_exhaustion", false),
+                OptionalInt(map, "entry_rules.opening_exhaustion_minutes", 20),
+                OptionalDecimal(map, "entry_rules.opening_exhaustion_max_day_gain_pct"),
+                OptionalDecimal(map, "entry_rules.opening_exhaustion_max_session_range_pct"),
+                OptionalDecimal(map, "entry_rules.opening_exhaustion_min_pullback_from_high_pct") ?? 0.50m,
+                OptionalInt(map, "entry_rules.min_consecutive_closes_above_vwap", 0),
+                OptionalBool(map, "entry_rules.enable_entry_bar_confirmation", false),
+                OptionalDecimal(map, "entry_rules.min_entry_bar_close_location_value") ?? 0.55m,
+                OptionalBool(map, "entry_rules.reject_entry_bar_close_location_below_minimum", false),
+                OptionalBool(map, "entry_rules.reject_entry_bar_breaks_signal_midpoint", false),
+                OptionalDecimal(map, "entry_rules.max_vwap_extension_pct_for_direct_entry"),
+                OptionalDecimal(map, "entry_rules.extended_vwap_min_entry_bar_close_location_value"),
+                OptionalDecimal(map, "entry_rules.max_bollinger_position_for_direct_entry"),
+                OptionalDecimal(map, "entry_rules.extended_bollinger_min_entry_bar_close_location_value"),
+                OptionalBool(map, "entry_rules.require_price_above_sma10", false),
+                OptionalBool(map, "entry_rules.require_price_above_sma20", false),
+                OptionalBool(map, "entry_rules.require_price_above_sma50", false),
+                OptionalBool(map, "entry_rules.require_sma10_above_sma20", false),
+                OptionalBool(map, "entry_rules.require_sma20_above_sma50", false),
+                OptionalString(map, "entry_rules.anchored_vwap_mode", "none"),
+                OptionalInt(map, "entry_rules.anchored_vwap_lookback_bars", 20),
+                OptionalBool(map, "entry_rules.require_price_above_anchored_vwap", false),
+                OptionalBool(map, "entry_rules.require_price_below_anchored_vwap_for_short", false),
+                OptionalDecimal(map, "entry_rules.max_anchored_vwap_extension_atr"),
+                OptionalString(map, "entry_rules.short_anchored_vwap_mode", "none"),
+                OptionalInt(map, "entry_rules.short_anchored_vwap_lookback_bars", 20),
+                OptionalBool(map, "entry_rules.require_price_below_short_anchored_vwap", false),
+                OptionalDecimal(map, "entry_rules.max_short_anchored_vwap_extension_atr"),
+                OptionalInt(map, "entry_rules.step_prior_move_lookback_bars", 60),
+                OptionalInt(map, "entry_rules.step_consolidation_min_bars", 10),
+                OptionalInt(map, "entry_rules.step_consolidation_max_bars", 40),
+                OptionalDecimal(map, "entry_rules.min_step_prior_move_pct") ?? 30m,
+                OptionalDecimal(map, "entry_rules.min_step_prior_decline_pct") ?? 20m,
+                OptionalDecimal(map, "entry_rules.max_step_base_depth_pct") ?? 35m,
+                OptionalDecimal(map, "entry_rules.max_step_base_volume_ratio"),
+                OptionalDecimal(map, "entry_rules.min_step_breakout_volume_ratio"),
+                OptionalBool(map, "entry_rules.require_step_higher_lows", false),
+                OptionalBool(map, "entry_rules.require_step_lower_highs_for_short", false),
+                OptionalBool(map, "entry_rules.require_step_bollinger_contraction", false),
+                OptionalDecimal(map, "entry_rules.step_bollinger_width_ratio_max") ?? 0.85m,
+                OptionalInt(map, "entry_rules.reclaim_lookback_bars", 20),
+                OptionalDecimal(map, "entry_rules.min_reclaim_pullback_depth_pct") ?? 8m,
+                OptionalDecimal(map, "entry_rules.max_reclaim_pullback_depth_pct") ?? 35m,
+                OptionalBool(map, "entry_rules.require_reclaim_low_above_sma50", true),
+                OptionalBool(map, "entry_rules.require_reclaim_close_above_sma10", true),
+                OptionalBool(map, "entry_rules.require_reclaim_close_above_sma20", true),
+                OptionalInt(map, "entry_rules.rollover_lookback_bars", 20),
+                OptionalDecimal(map, "entry_rules.min_rollover_advance_pct") ?? 12m,
+                OptionalDecimal(map, "entry_rules.min_rollover_drop_from_high_pct") ?? 3m,
+                OptionalDecimal(map, "entry_rules.max_rollover_drop_from_high_pct") ?? 25m,
+                OptionalBool(map, "entry_rules.require_rollover_close_below_sma10", true),
+                OptionalBool(map, "entry_rules.require_rollover_close_below_sma20", true),
+                OptionalBool(map, "entry_rules.require_rollover_close_below_sma50", false),
+                OptionalInt(map, "entry_rules.rollover_consecutive_lower_close_bars", 1),
+                OptionalBool(map, "entry_rules.require_rollover_close_below_prior_low", false)),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -50,7 +154,22 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "exit_rules.exit_on_close_below_ema20", false),
                 OptionalBool(map, "exit_rules.exit_on_close_below_vwap", false),
                 OptionalBool(map, "exit_rules.exit_on_macd_histogram_negative", false),
-                OptionalInt(map, "exit_rules.min_hold_bars_before_technical_exit", 1)),
+                OptionalInt(map, "exit_rules.min_hold_bars_before_technical_exit", 1),
+                OptionalBool(map, "exit_rules.exit_on_log_price_fade", false),
+                OptionalInt(map, "exit_rules.exit_log_price_lookback_bars", 6),
+                OptionalInt(map, "exit_rules.exit_log_volume_lookback_bars", 6),
+                OptionalDecimal(map, "exit_rules.max_exit_log_price_slope") ?? -0.0001m,
+                OptionalDecimal(map, "exit_rules.min_exit_log_volume_slope") ?? 0.003m,
+                OptionalBool(map, "exit_rules.require_rising_volume_for_log_fade_exit", false),
+                OptionalBool(map, "exit_rules.require_below_vwap_for_log_fade_exit", false),
+                OptionalBool(map, "exit_rules.enable_confirmed_vwap_exit", false),
+                OptionalInt(map, "exit_rules.confirmed_vwap_exit_bars", 2),
+                OptionalDecimal(map, "exit_rules.confirmed_vwap_exit_atr_buffer") ?? 0m,
+                OptionalDecimal(map, "exit_rules.disable_confirmed_vwap_exit_after_r"),
+                OptionalBool(map, "exit_rules.exit_on_sma10_near_sma20", false),
+                OptionalDecimal(map, "exit_rules.sma10_near_sma20_pct") ?? 0.25m,
+                OptionalBool(map, "exit_rules.exit_on_sma10_cross_below_sma20", false),
+                OptionalBool(map, "exit_rules.exit_short_on_sma10_cross_above_sma20", false)),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
                 RequireDecimal(map, "execution.slippage_bps")),
@@ -67,6 +186,7 @@ public sealed class SimpleYamlReader
         var runMap = ReadKeyValueMap(path);
         var runDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) ??
             throw new DirectoryNotFoundException($"Could not resolve directory for {path}.");
+        var repositoryRoot = FindRepositoryRoot(runDirectory) ?? Environment.CurrentDirectory;
 
         return new BacktestRunConfig(
             RequireString(runMap, "run_name"),
@@ -76,18 +196,20 @@ public sealed class SimpleYamlReader
                 RequireInt(runMap, "engine.worker_count"),
                 RequireInt(runMap, "engine.bounded_capacity"),
                 RequireInt(runMap, "engine.indicator_warmup_bars"),
+                OptionalInt(runMap, "engine.ticker_timeout_seconds", 120),
                 RequireBool(runMap, "engine.fail_fast")),
             new TimeWindowConfig(
                 RequireString(runMap, "time_window.type"),
                 RequireInt(runMap, "time_window.lookback_days"),
                 OptionalDateTimeOffset(runMap, "time_window.start"),
-                OptionalDateTimeOffset(runMap, "time_window.end")),
+                OptionalDateTimeOffset(runMap, "time_window.end"),
+                OptionalInt(runMap, "time_window.warmup_lookback_days", 0)),
             RequireList(runMap, "tickers"),
             RequireString(runMap, "market_data.provider"),
             RequireList(runMap, "market_data.download_timeframes"),
-            RequireString(runMap, "market_data.raw_root"),
-            RequireString(runMap, "market_data.normalized_root"),
-            RequireString(runMap, "market_data.results_root"),
+            ResolveRepositoryPath(repositoryRoot, RequireString(runMap, "market_data.raw_root")),
+            ResolveRepositoryPath(repositoryRoot, RequireString(runMap, "market_data.normalized_root")),
+            ResolveRepositoryPath(repositoryRoot, RequireString(runMap, "market_data.results_root")),
             RequireString(runMap, "market_data.cache_policy"),
             new DerivedTimeframeConfig(RequireString(runMap, "market_data.derive_from")),
             new ValidationConfig(
@@ -111,18 +233,8 @@ public sealed class SimpleYamlReader
                     OptionalDateOnly(runMap, "validation.bias_risk.universe_as_of_date"),
                     RequireString(runMap, "validation.bias_risk.price_adjustment_policy"))),
             new ProviderConfig(
-                new YahooProviderConfig(
-                    RequireString(runMap, "providers.yahoo.api.base_url"),
-                    new YahooHeaderConfig(
-                        RequireString(runMap, "providers.yahoo.headers.user_agent"),
-                        RequireString(runMap, "providers.yahoo.headers.accept"),
-                        RequireString(runMap, "providers.yahoo.headers.accept_language")),
-                    RequireInt(runMap, "providers.yahoo.request_timeout_seconds"),
-                    RequireInt(runMap, "providers.yahoo.max_retries"),
-                    RequireInt(runMap, "providers.yahoo.throttle_ms")),
                 new AlpacaProviderConfig(
-                    OptionalString(runMap, "providers.alpaca.data_feed", "sip")),
-                new TradingViewProviderConfig(false)),
+                    OptionalString(runMap, "providers.alpaca.data_feed", "sip"))),
             new PortfolioConfig(
                 RequireDecimal(runMap, "portfolio.starting_capital"),
                 RequireDecimal(runMap, "portfolio.risk_per_trade_pct"),
@@ -151,11 +263,15 @@ public sealed class SimpleYamlReader
                 OptionalBool(runMap, "news.enabled", false),
                 OptionalString(runMap, "news.provider.name", "none"),
                 OptionalInt(runMap, "news.veto.ttl_minutes", 60),
-                OptionalDecimal(runMap, "news.veto.negative_threshold") ?? -0.5m),
+                OptionalDecimal(runMap, "news.veto.negative_threshold") ?? -0.5m,
+                OptionalInt(runMap, "news.max_articles_per_ticker", 120),
+                OptionalInt(runMap, "news.sentiment_timeout_seconds", 3)),
             new ScreenerConfig(
                 OptionalBool(runMap, "screener.enabled", false),
                 OptionalString(runMap, "screener.provider", "finviz"),
                 OptionalList(runMap, "screener.filters")),
+            new ArtifactRetentionConfig(
+                OptionalString(runMap, "artifacts.retention_mode", "summary")),
             RequireList(runMap, "strategies")
                 .Select(strategyPath => ResolveConfigPath(runDirectory, strategyPath))
                 .ToArray());
@@ -369,5 +485,29 @@ public sealed class SimpleYamlReader
         return Path.IsPathRooted(path)
             ? Path.GetFullPath(path)
             : Path.GetFullPath(Path.Combine(baseDirectory, path));
+    }
+
+    private static string ResolveRepositoryPath(string repositoryRoot, string path)
+    {
+        return Path.IsPathRooted(path)
+            ? Path.GetFullPath(path)
+            : Path.GetFullPath(Path.Combine(repositoryRoot, path));
+    }
+
+    private static string? FindRepositoryRoot(string startDirectory)
+    {
+        var directory = new DirectoryInfo(startDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "TradingFlow.sln")) ||
+                Directory.Exists(Path.Combine(directory.FullName, "configs")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
     }
 }

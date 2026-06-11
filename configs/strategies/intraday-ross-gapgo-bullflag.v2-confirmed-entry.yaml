@@ -1,0 +1,99 @@
+strategy_id: research.intraday-ross-gapgo-bullflag.v2-confirmed-entry
+strategy_name: Intraday Ross Gap-Go Bull Flag V2 Confirmed Entry
+source: warrior_public_research_translation_with_entry_confirmation
+version: 2
+timeframe: 5m
+direction: long
+entry_rules:
+  setup_type: ross_gap_go_bull_flag
+  min_volume_spike: 2.00
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: vwap
+  macd_filter: not_bearish
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: true
+  require_price_above_ema20: true
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  max_vwap_extension_atr: 3.0
+  opening_range_minutes: 5
+  recent_high_lookback_bars: 8
+  volatility_contraction_lookback_bars: 6
+  require_log_price_rising: false
+  require_log_volume_rising: false
+  log_price_lookback_bars: 6
+  log_volume_lookback_bars: 6
+  min_log_price_slope: 0.0
+  min_log_volume_slope: 0.0
+  reject_falling_price_rising_volume: true
+  red_volume_max_price_slope: -0.0001
+  red_volume_min_volume_slope: 0.003
+  vwap_hold_bars: 2
+  max_entries_per_ticker_per_day: 1
+  min_close_location_value: 0.60
+  reject_weak_close_on_high_relative_volume: true
+  weak_close_max_location_value: 0.45
+  weak_close_min_relative_volume: 1.0
+  min_day_gain_pct: 4.0
+  min_session_gain_pct: 1.0
+  max_pre_entry_session_range_pct: 14.0
+  max_entry_pullback_from_session_high_pct: 4.0
+  require_positive_news: false
+  min_news_sentiment: 0.25
+  veto_news_sentiment_below: -0.55
+  max_news_age_hours: 18
+  min_bull_flag_pole_move_pct: 5.0
+  bull_flag_pole_max_bars: 10
+  bull_flag_pullback_min_bars: 2
+  bull_flag_pullback_max_bars: 5
+  bull_flag_max_depth_pct_of_pole: 50.0
+  bull_flag_pullback_volume_ratio_max: 0.70
+  bull_flag_breakout_volume_ratio_min: 1.50
+  enable_entry_bar_confirmation: true
+  min_entry_bar_close_location_value: 0.55
+  reject_entry_bar_close_location_below_minimum: true
+  reject_entry_bar_breaks_signal_midpoint: true
+  max_vwap_extension_pct_for_direct_entry: 4.0
+  extended_vwap_min_entry_bar_close_location_value: 0.70
+  max_bollinger_position_for_direct_entry: 1.05
+  extended_bollinger_min_entry_bar_close_location_value: 0.70
+confluence:
+  enabled: false
+  timeframe: 15m
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 3.0
+  target_r_multiple: 3.5
+  max_hold_hours: 6.5
+  enable_atr_trailing_stop: true
+  trailing_stop_atr_multiple: 3.0
+  trailing_activation_r: 2.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 2
+  enable_confirmed_vwap_exit: true
+  confirmed_vwap_exit_bars: 2
+  confirmed_vwap_exit_atr_buffer: 0.15
+  disable_confirmed_vwap_exit_after_r: 1.0
+  exit_on_log_price_fade: false
+  exit_log_price_lookback_bars: 6
+  exit_log_volume_lookback_bars: 6
+  max_exit_log_price_slope: -0.0001
+  min_exit_log_volume_slope: 0.003
+  require_rising_volume_for_log_fade_exit: false
+  require_below_vwap_for_log_fade_exit: false
+  exit_on_sma10_near_sma20: true
+  sma10_near_sma20_pct: 0.20
+  exit_on_sma10_cross_below_sma20: false
+execution:
+  timeframe: 5m
+  slippage_bps: 10.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 1
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

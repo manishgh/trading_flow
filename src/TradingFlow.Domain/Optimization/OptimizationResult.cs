@@ -16,8 +16,19 @@ public sealed record OptimizationRun(
     IReadOnlyDictionary<string, object> ParameterValues,
     decimal MetricValue,
     decimal TotalReturnPct,
+    decimal AverageDailyReturnPct,
     decimal NetProfit,
     decimal MaxDrawdownPct,
     int WinningTradeCount,
     int LosingTradeCount,
     BacktestResult BacktestResult);
+
+public sealed record OptimizationProgress(
+    string Kind,
+    int CurrentPermutation,
+    int TotalPermutations,
+    string StrategyName,
+    IReadOnlyDictionary<string, object> ParameterValues,
+    OptimizationRun? CompletedRun,
+    IReadOnlyList<OptimizationRun> CurrentTopRuns,
+    string Message);

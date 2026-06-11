@@ -118,9 +118,7 @@ az deployment group create `
   -p prefix=$prefix `
   -p webImage=$webImage `
   -p tradingServiceImage=$serviceImage `
-  -p newsImage=$newsImage `
-  -p etoroDemoApiKey=$demoApiKey `
-  -p etoroDemoUserKey=$demoUserKey
+  -p newsImage=$newsImage
 ```
 
 Get the UI URL:
@@ -134,7 +132,7 @@ az containerapp show -g $rg -n "$prefix-web" --query properties.configuration.in
 The job defaults to:
 
 ```text
-configs/backtest/semiconductors-research.yaml
+configs/backtest/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml
 ```
 
 Start it:
@@ -222,9 +220,8 @@ az containerapp job logs show -g $rg -n "$prefix-trading-job"
 ## Deployment Safety
 
 - Keep `live.allow_trading: false` in config until explicitly approved.
-- Do not reuse demo user keys for live.
-- Do not auto-retry eToro trading writes without checking order/portfolio/private WebSocket state.
-- Keep TradingView webhook validation and dedupe enabled for paper/live.
+- Keep paper and live Alpaca credentials in separate Key Vault secrets.
+- Do not auto-retry broker writes unless the order idempotency path can prove no duplicate order will be submitted.
 - Use Container App revisions for rollbacks.
 
 ## Known Follow-Ups

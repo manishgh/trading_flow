@@ -51,6 +51,7 @@ nav a:hover { background: #eef3f6; color: var(--ink); }
 }
 .grid.two { grid-template-columns: minmax(360px, 460px) minmax(0, 1fr); }
 .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -216,6 +217,6 @@ pre {
   text-decoration: none;
 }
 @media (max-width: 920px) {
-  .grid.two, .grid.three { grid-template-columns: 1fr; }
+  .grid.two, .grid.three, .grid.four { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; height: auto; gap: 10px; padding: 12px 16px; flex-direction: column; }
 }

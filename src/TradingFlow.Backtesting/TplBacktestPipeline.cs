@@ -7,9 +7,13 @@ public sealed class TplBacktestPipeline
     public async Task<IReadOnlyList<T>> RunByTickerAsync<T>(
         BacktestRunConfig config,
         Func<string, CancellationToken, Task<T>> processTickerAsync,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, Exception, T>? createFailureResult = null)
     {
         var maxDegreeOfParallelism = ResolveWorkerCount(config.Engine.WorkerCount);
+        var tickerTimeout = TimeSpan.FromSeconds(config.Engine.TickerTimeoutSeconds <= 0
+            ? 120
+            : config.Engine.TickerTimeoutSeconds);
         var results = new List<T>();
         var resultsLock = new object();
 
@@ -24,14 +28,27 @@ public sealed class TplBacktestPipeline
             {
                 try
                 {
-                    var result = await processTickerAsync(ticker, token);
+                    using var tickerCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    tickerCancellation.CancelAfter(tickerTimeout);
+                    var result = await processTickerAsync(ticker, tickerCancellation.Token);
                     lock (resultsLock)
                     {
                         results.Add(result);
                     }
                 }
-                catch (Exception) when (!config.Engine.FailFast)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
+                    throw;
+                }
+                catch (Exception exception) when (!config.Engine.FailFast)
+                {
+                    if (createFailureResult is not null)
+                    {
+                        lock (resultsLock)
+                        {
+                            results.Add(createFailureResult(ticker, exception));
+                        }
+                    }
                 }
             });
 

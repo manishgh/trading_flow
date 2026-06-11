@@ -20,19 +20,22 @@ public sealed record BacktestRunConfig(
     ExecutionConfig Execution,
     NewsConfig News,
     ScreenerConfig Screener,
+    ArtifactRetentionConfig Artifacts,
     IReadOnlyList<string> Strategies);
 
 public sealed record TimeWindowConfig(
     string Type,
     int LookbackDays,
     DateTimeOffset? Start,
-    DateTimeOffset? End);
+    DateTimeOffset? End,
+    int WarmupLookbackDays = 0);
 
 public sealed record EngineConfig(
     string Pipeline,
     int WorkerCount,
     int BoundedCapacity,
     int IndicatorWarmupBars,
+    int TickerTimeoutSeconds,
     bool FailFast);
 
 public sealed record DerivedTimeframeConfig(string Source);
@@ -79,26 +82,10 @@ public sealed record ExecutionConfig(
     bool ExtendedHours = false);
 
 public sealed record ProviderConfig(
-    YahooProviderConfig Yahoo,
-    AlpacaProviderConfig Alpaca,
-    TradingViewProviderConfig TradingView);
+    AlpacaProviderConfig Alpaca);
 
 public sealed record AlpacaProviderConfig(
     string DataFeed);
-
-public sealed record YahooProviderConfig(
-    string BaseUrl,
-    YahooHeaderConfig Headers,
-    int RequestTimeoutSeconds,
-    int MaxRetries,
-    int ThrottleMs);
-
-public sealed record YahooHeaderConfig(
-    string UserAgent,
-    string Accept,
-    string AcceptLanguage);
-
-public sealed record TradingViewProviderConfig(bool Enabled);
 
 public sealed record PortfolioConfig(
     decimal StartingCapital,
@@ -121,12 +108,17 @@ public sealed record NewsConfig(
     bool Enabled,
     string ProviderName,
     int VetoTtlMinutes,
-    decimal VetoNegativeThreshold);
+    decimal VetoNegativeThreshold,
+    int MaxArticlesPerTicker = 120,
+    int SentimentTimeoutSeconds = 3);
 
 public sealed record ScreenerConfig(
     bool Enabled,
     string Provider,
     IReadOnlyList<string> Filters);
+
+public sealed record ArtifactRetentionConfig(
+    string RetentionMode);
 
 public sealed record ScreenerEntry(
     string Name,

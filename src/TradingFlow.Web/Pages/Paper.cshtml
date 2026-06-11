@@ -120,7 +120,7 @@
             </div>
 
             <label for="RunName">Run Name</label>
-            <input name="RunName" id="RunName" value="paper_run_1" />
+            <input name="RunName" id="RunName" value="@Model.SuggestedRunName" />
 
             <div class="actions" style="margin-top: 1rem;">
                 <button type="submit" asp-page-handler="RunLive" class="button" style="background: #28a745;">Start Paper Trading</button>
@@ -154,7 +154,7 @@
                             <tr>
                                 <td>@job.RunName</td>
                                 <td><span class="status @job.Status">@job.Status</span></td>
-                                <td>@(job.StartedAt?.ToString("HH:mm") ?? "-")</td>
+                                <td>@(job.StartedAt is null ? "-" : Model.FormatLocalTime(job.StartedAt.Value))</td>
                                 <td><a asp-page="/PaperJob" asp-route-id="@job.JobId">View</a></td>
                             </tr>
                         }
@@ -184,22 +184,7 @@
     }
     else
     {
-        @if (Model.Selected.Config.Execution.Broker.Equals("etoro", StringComparison.OrdinalIgnoreCase))
-        {
-            <table>
-                <tr><th>ETORO_DEMO_API_KEY</th><td>@(Model.PaperSnapshot.EtoroApiKeyPresent ? "present" : "missing")</td></tr>
-                <tr><th>ETORO_DEMO_USER_KEY</th><td>@(Model.PaperSnapshot.EtoroUserKeyPresent ? "present" : "missing")</td></tr>
-            </table>
-            @if (Model.PaperSnapshot.EtoroReadOnlyCheck is null)
-            {
-                <p class="warn">Set demo keys in the process environment to run eToro checks.</p>
-            }
-            else
-            {
-                <pre>@Model.EtoroCheckJson</pre>
-            }
-        }
-        else if (Model.Selected.Config.Execution.Broker.Equals("alpaca", StringComparison.OrdinalIgnoreCase))
+        @if (Model.Selected.Config.Execution.Broker.Equals("alpaca", StringComparison.OrdinalIgnoreCase))
         {
             <table>
                 <tr><th>ALPACA_KEY_ID</th><td>@(Model.PaperSnapshot.AlpacaKeyIdPresent ? "present" : "missing")</td></tr>

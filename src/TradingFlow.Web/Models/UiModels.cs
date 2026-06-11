@@ -63,9 +63,6 @@ public sealed record BacktestJobSnapshot(
 
 public sealed record PaperEnvironmentSnapshot(
     RunConfigSummary Config,
-    bool EtoroApiKeyPresent,
-    bool EtoroUserKeyPresent,
-    IReadOnlyDictionary<string, object?>? EtoroReadOnlyCheck,
     bool AlpacaKeyIdPresent,
     bool AlpacaSecretKeyPresent,
     IReadOnlyDictionary<string, object?>? AlpacaReadOnlyCheck);
@@ -90,4 +87,20 @@ public sealed record OptimizationJobSnapshot(
     string? ErrorMessage,
     string CurrentStage,
     IReadOnlyList<string> Events,
+    OptimizationRunSnapshot? CurrentRun,
+    IReadOnlyList<OptimizationRunSnapshot> CompletedRuns,
     TradingFlow.Domain.Optimization.OptimizationResult? Result);
+
+public sealed record OptimizationRunSnapshot(
+    int Permutation,
+    int TotalPermutations,
+    string StrategyName,
+    IReadOnlyDictionary<string, object> ParameterValues,
+    decimal? MetricValue,
+    decimal? TotalReturnPct,
+    decimal? AverageDailyReturnPct,
+    decimal? NetProfit,
+    decimal? MaxDrawdownPct,
+    int? WinningTradeCount,
+    int? LosingTradeCount,
+    string Status);

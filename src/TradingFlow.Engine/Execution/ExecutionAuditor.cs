@@ -35,9 +35,6 @@ public sealed class ExecutionAuditor
     {
         var ev = new ExecutionEvent(ticker, strategyName, timestamp, state, message);
         _events.Add(ev);
-        
-        // In a live system, this would write to a database, Serilog, or ElasticSearch
-        Console.WriteLine($"[AUDIT] {timestamp:O} | {ticker} | {state} | {message}");
     }
 
     public IReadOnlyCollection<ExecutionEvent> GetEvents() => _events.ToArray();

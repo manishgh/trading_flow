@@ -4,7 +4,65 @@
     ViewData["Title"] = "Decision Tree Audit - " + Model.RunName;
 }
 
-<div class="container" style="max-width: 1400px; margin: 0 auto; padding: 20px;">
+<style>
+    .audit-page {
+        color: #f8fafc;
+    }
+
+    .audit-page .muted {
+        color: #aebcd0;
+    }
+
+    .audit-page .audit-panel,
+    .audit-page .audit-card {
+        background: #1e1e1e;
+        color: #f8fafc;
+    }
+
+    .audit-page .audit-card-value,
+    .audit-page h1,
+    .audit-page h2,
+    .audit-page h3,
+    .audit-page th,
+    .audit-page td {
+        color: #f8fafc;
+    }
+
+    .audit-page .audit-reason-card {
+        background: #252525;
+        color: #f8fafc;
+        border-left: 4px solid #f44336;
+    }
+
+    .audit-page code {
+        display: inline-block;
+        color: #dbeafe;
+        background: #111827;
+        border: 1px solid #273449;
+        border-radius: 4px;
+        padding: 2px 5px;
+        margin-top: 4px;
+        line-height: 1.4;
+        white-space: normal;
+    }
+
+    .audit-page pre {
+        color: #e5e7eb;
+        background: #0f172a;
+        border: 1px solid #263244;
+    }
+
+    .audit-page details summary {
+        color: #67d9ff;
+        font-weight: 600;
+    }
+
+    .audit-page .audit-table-row {
+        border-bottom: 1px solid #4b5563;
+    }
+</style>
+
+<div class="container audit-page" style="max-width: 1400px; margin: 0 auto; padding: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
         <div>
             <h1 style="margin: 0; color: #fff;">Audit Analyzer: @Model.RunName</h1>
@@ -15,40 +73,40 @@
 
     @if (Model.Records.Count == 0)
     {
-        <div style="background: #1e1e1e; padding: 2rem; border-radius: 8px; text-align: center;">
-            <h3 style="color: #888;">No audit records found</h3>
+        <div class="audit-panel" style="padding: 2rem; border-radius: 8px; text-align: center;">
+            <h3>No audit records found</h3>
             <p class="muted">Ensure the LiveRunner has completed evaluating tickers for this run.</p>
         </div>
     }
     else
     {
         <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1rem;">
-            <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem;">
+            <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
                 <div class="muted">Evaluations</div>
-                <div style="font-size: 1.8rem; font-weight: 700;">@Model.Records.Count</div>
+                <div class="audit-card-value" style="font-size: 1.8rem; font-weight: 700;">@Model.Records.Count</div>
             </div>
-            <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem;">
+            <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
                 <div class="muted">Accepted</div>
                 <div style="font-size: 1.8rem; font-weight: 700; color: #4caf50;">@Model.AcceptedCount</div>
             </div>
-            <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem;">
+            <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
                 <div class="muted">Rejected</div>
                 <div style="font-size: 1.8rem; font-weight: 700; color: #f44336;">@Model.RejectedCount</div>
             </div>
-            <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem;">
+            <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
                 <div class="muted">Coverage</div>
-                <div style="font-size: 1.1rem; font-weight: 700;">@Model.TickerCount tickers / @Model.StrategyCount strategies</div>
+                <div class="audit-card-value" style="font-size: 1.1rem; font-weight: 700;">@Model.TickerCount tickers / @Model.StrategyCount strategies</div>
             </div>
         </div>
 
         @if (Model.TopRejectionReasons.Count > 0)
         {
-            <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+            <div class="audit-panel" style="border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
                 <h2 style="margin-top: 0;">Top Rejection Reasons</h2>
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem;">
                     @foreach (var reason in Model.TopRejectionReasons)
                     {
-                        <div style="background: #252525; border-radius: 6px; padding: 0.75rem; border-left: 4px solid #f44336;">
+                        <div class="audit-reason-card" style="border-radius: 6px; padding: 0.75rem;">
                             <div style="font-weight: 700;">@reason.DisplayReason</div>
                             <div class="muted">@reason.Count rejected (@reason.PercentOfRejected.ToString("0.0")%)</div>
                             <code style="font-size: 0.8rem;">@reason.ExampleReason</code>
@@ -58,7 +116,7 @@
             </div>
         }
 
-        <div style="background: #1e1e1e; border-radius: 8px; padding: 1rem; overflow-x: auto;">
+        <div class="audit-panel" style="border-radius: 8px; padding: 1rem; overflow-x: auto;">
             <table class="table" style="width: 100%; border-collapse: collapse;">
                 <thead>
                     <tr style="border-bottom: 1px solid #444; text-align: left;">
@@ -73,7 +131,7 @@
                 <tbody>
                 @foreach (var record in Model.Records)
                 {
-                    <tr style="border-bottom: 1px solid #333; vertical-align: top;">
+                    <tr class="audit-table-row" style="vertical-align: top;">
                         <td style="white-space: nowrap; padding-top: 10px;">@Model.FormatLocal(record.Timestamp, includeMilliseconds: true)</td>
                         <td style="font-weight: bold; padding-top: 10px;">@record.Ticker</td>
                         <td style="padding-top: 10px;">@record.StrategyName</td>
@@ -89,8 +147,8 @@
                         </td>
                         <td style="padding-top: 10px; max-width: 500px;">
                             <details>
-                                <summary style="cursor: pointer; color: #4fc3f7;">View Signal Evaluation</summary>
-                                <pre style="background: #111; padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-top: 5px; overflow-x: auto;">
+                                <summary style="cursor: pointer;">View Signal Evaluation</summary>
+                                <pre style="padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-top: 5px; overflow-x: auto;">
 @Model.FormatJson(record.SignalJson)
                                 </pre>
                             </details>

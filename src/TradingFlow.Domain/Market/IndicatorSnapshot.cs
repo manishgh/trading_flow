@@ -19,5 +19,8 @@ public sealed record IndicatorSnapshot(
     decimal? MacdLine,
     decimal? MacdSignal,
     decimal? MacdHistogram,
-    CatalystEvent? Catalyst = null);
+    CatalystEvent? Catalyst = null,
+    decimal? Sma10 = null,
+    decimal? Sma20 = null,
+    decimal? Sma50 = null);
 

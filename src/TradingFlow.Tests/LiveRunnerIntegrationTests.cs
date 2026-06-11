@@ -57,6 +57,10 @@ public class LiveRunnerIntegrationTests
             Assert.True(
                 File.Exists(Path.Combine(resultsRoot, "live", "LiveRunnerTest", "AAPL", "AAPL_chart.json")),
                 "The 15m strategy chart should be generated from derived 5m bars.");
+
+            var chartJson = await File.ReadAllTextAsync(Path.Combine(resultsRoot, "live", "LiveRunnerTest", "AAPL", "AAPL_chart.json"));
+            using var chart = System.Text.Json.JsonDocument.Parse(chartJson);
+            Assert.Equal("15m", chart.RootElement.GetProperty("Timeframe").GetString());
         }
         finally
         {
@@ -80,10 +84,11 @@ public class LiveRunnerIntegrationTests
                     It.IsAny<CancellationToken>()))
                 .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
                 {
-                    var ticker = tickers.Single();
-                    return ticker.Equals("SIVEF", StringComparison.OrdinalIgnoreCase)
-                        ? YieldBars(Array.Empty<OhlcvBar>(), token)
-                        : YieldBars(CreateFiveMinuteBars(ticker), token);
+                    var bars = tickers
+                        .Where(ticker => !ticker.Equals("SIVEF", StringComparison.OrdinalIgnoreCase))
+                        .SelectMany(CreateFiveMinuteBars)
+                        .ToArray();
+                    return YieldBars(bars, token);
                 });
 
             var auditRepo = new Mock<IDecisionAuditRepository>();
@@ -121,6 +126,114 @@ public class LiveRunnerIntegrationTests
                         record.RejectionReason.StartsWith("ticker_pipeline_failed", StringComparison.Ordinal)),
                     It.IsAny<CancellationToken>()),
                 Times.AtLeastOnce);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_AuditsRejectedSignal_WhenConfluenceGateFails()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var provider = new Mock<IMarketDataProvider>();
+            provider
+                .Setup(x => x.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                    YieldBars(CreateFallingFiveMinuteBars(tickers.Single()), token));
+
+            var auditRepo = new Mock<IDecisionAuditRepository>();
+            auditRepo
+                .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var runner = CreateRunner(provider.Object, lockService: null, auditRepo);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var progress = new Progress<string>(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                }
+            });
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 2, derivedSource: "5m"),
+                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m", confluenceEnabled: true, confluenceTimeframe: "5m", confluenceEmaPeriod: 20)],
+                cts,
+                progress);
+
+            auditRepo.Verify(
+                x => x.SaveAuditAsync(
+                    It.Is<DecisionAuditRecord>(record =>
+                        record.Ticker == "AAPL" &&
+                        record.Decision == "Rejected" &&
+                        record.RejectionReason != null &&
+                        record.RejectionReason.StartsWith("confluence_price_below_ema20", StringComparison.Ordinal)),
+                    It.IsAny<CancellationToken>()),
+                Times.AtLeastOnce);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_BatchedCandlePipeline_WritesMetricsAndAuditsEndToEnd()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var provider = new Mock<IMarketDataProvider>();
+            provider
+                .Setup(x => x.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                    YieldBars(tickers.SelectMany(CreateFallingFiveMinuteBars), token));
+
+            var audits = new List<DecisionAuditRecord>();
+            var auditRepo = new Mock<IDecisionAuditRepository>();
+            auditRepo
+                .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
+                .Callback<DecisionAuditRecord, CancellationToken>((record, _) => audits.Add(record))
+                .Returns(Task.CompletedTask);
+
+            var runner = CreateRunner(provider.Object, lockService: null, auditRepo);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var progress = new Progress<string>(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                }
+            });
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["AAPL", "MSFT"], ["5m"], workerCount: 2, derivedSource: "5m"),
+                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m", confluenceEnabled: true, confluenceTimeframe: "5m", confluenceEmaPeriod: 20)],
+                cts,
+                progress);
+
+            Assert.True(File.Exists(Path.Combine(resultsRoot, "live", "LiveRunnerTest", "AAPL", "AAPL_chart.json")));
+            Assert.True(File.Exists(Path.Combine(resultsRoot, "live", "LiveRunnerTest", "MSFT", "MSFT_chart.json")));
+            Assert.NotEmpty(audits);
+            Assert.Contains(audits, audit => audit.Decision == "Rejected");
+            Assert.All(audits, audit => Assert.Contains(audit.Ticker, new[] { "AAPL", "MSFT" }));
         }
         finally
         {
@@ -178,13 +291,13 @@ public class LiveRunnerIntegrationTests
     }
 
     [Fact]
-    public async Task RunAsync_UsesConfiguredWorkerCount_WhenProcessingTickers()
+    public async Task RunAsync_UsesSingleBatchedProviderRead_BeforeTickerWorkers()
     {
         var resultsRoot = CreateTempDirectory();
         try
         {
-            var activeProviders = 0;
-            var maxActiveProviders = 0;
+            var providerCallCount = 0;
+            IReadOnlyCollection<string>? requestedTickers = null;
             var provider = new Mock<IMarketDataProvider>();
             provider
                 .Setup(x => x.GetBarsAsync(
@@ -194,12 +307,11 @@ public class LiveRunnerIntegrationTests
                     It.IsAny<DateTimeOffset>(),
                     It.IsAny<CancellationToken>()))
                 .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
-                    YieldTrackedBars(tickers.Single(), token, () =>
-                    {
-                        var active = Interlocked.Increment(ref activeProviders);
-                        maxActiveProviders = Math.Max(maxActiveProviders, active);
-                    },
-                    () => Interlocked.Decrement(ref activeProviders)));
+                {
+                    Interlocked.Increment(ref providerCallCount);
+                    requestedTickers = tickers.ToArray();
+                    return YieldBars(tickers.SelectMany(CreateFiveMinuteBars), token);
+                });
 
             var runner = CreateRunner(provider.Object, lockService: null);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -218,7 +330,184 @@ public class LiveRunnerIntegrationTests
                 cts,
                 progress);
 
-            Assert.Equal(1, maxActiveProviders);
+            Assert.Equal(1, providerCallCount);
+            Assert.NotNull(requestedTickers);
+            Assert.Equal(["AAPL", "MSFT", "NVDA"], requestedTickers.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray());
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_SubmitsTechnicalExitClose_ForActiveStrategyPosition()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var provider = new Mock<IMarketDataProvider>();
+            provider
+                .Setup(x => x.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                    YieldBars(tickers.SelectMany(CreateFallingFiveMinuteBars), token));
+
+            var broker = new Mock<IBrokerClient>();
+            broker
+                .Setup(x => x.GetOpenOrdersAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([
+                    new ActiveBrokerOrder("sell-leg-1", "MXL", "sell", "new", "limit", 120m, null, 100m, DateTimeOffset.UtcNow.AddHours(-2))
+                ]);
+            broker
+                .Setup(x => x.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([
+                    new BrokerPosition("MXL", "long", 100m, 108m, 103m, -500m)
+                ]);
+            broker
+                .Setup(x => x.CancelOrderAsync("sell-leg-1", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(true);
+            broker
+                .Setup(x => x.ClosePositionAsync("MXL", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(true);
+
+            var orderRepo = new Mock<IOrderStateRepository>();
+            orderRepo
+                .Setup(x => x.GetActiveOrdersByTickerAsync("MXL", It.IsAny<CancellationToken>()))
+                .ReturnsAsync([
+                    new PersistedOrder
+                    {
+                        OrderId = "entry-1",
+                        Ticker = "MXL",
+                        StrategyName = "Test Strategy",
+                        Broker = "alpaca",
+                        Status = "exit_submitted",
+                        EntryPrice = 108m,
+                        StopLossPrice = 98m,
+                        TakeProfitPrice = 128m,
+                        ShareQuantity = 100,
+                        CreatedAt = DateTimeOffset.UtcNow.AddDays(-6),
+                        UpdatedAt = DateTimeOffset.UtcNow.AddDays(-6)
+                    }
+                ]);
+            orderRepo
+                .Setup(x => x.GetOrderAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((PersistedOrder?)null);
+            orderRepo
+                .Setup(x => x.UpdateOrderStatusAsync("entry-1", "technical_exit_submitted", It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var audits = new List<DecisionAuditRecord>();
+            var auditRepo = new Mock<IDecisionAuditRepository>();
+            auditRepo
+                .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
+                .Callback<DecisionAuditRecord, CancellationToken>((record, _) => audits.Add(record))
+                .Returns(Task.CompletedTask);
+
+            var runner = CreateRunner(
+                provider.Object,
+                lockService: null,
+                auditRepo,
+                broker.Object,
+                orderRepo.Object);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var progress = new Progress<string>(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                }
+            });
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["MXL"], ["5m"], workerCount: 2, derivedSource: "5m", dryRun: false, allowLiveOrders: true),
+                [CreateStrategy(
+                    signalTimeframe: "5m",
+                    executionTimeframe: "5m",
+                    exitOnCloseBelowEma20: true,
+                    minHoldBarsBeforeTechnicalExit: 4)],
+                cts,
+                progress);
+
+            broker.Verify(x => x.CancelOrderAsync("sell-leg-1", It.IsAny<CancellationToken>()), Times.Once);
+            broker.Verify(x => x.ClosePositionAsync("MXL", It.IsAny<CancellationToken>()), Times.Once);
+            orderRepo.Verify(x => x.UpdateOrderStatusAsync("entry-1", "technical_exit_submitted", It.IsAny<CancellationToken>()), Times.Once);
+            Assert.Contains(audits, audit =>
+                audit.Ticker == "MXL" &&
+                audit.Decision == "ExitSubmitted" &&
+                audit.RejectionReason == "technical_exit_below_ema20");
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_CountsPositionWithSellExitLeg_AsSingleActiveExposure()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var provider = new Mock<IMarketDataProvider>();
+            provider
+                .Setup(x => x.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                    YieldBars(tickers.SelectMany(CreateFiveMinuteBars), token));
+
+            var broker = new Mock<IBrokerClient>();
+            broker
+                .Setup(x => x.GetOpenOrdersAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([
+                    new ActiveBrokerOrder("sell-exit-leg", "AMD", "sell", "new", "limit", 10m, null, 120m, DateTimeOffset.UtcNow.AddMinutes(-10))
+                ]);
+            broker
+                .Setup(x => x.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([
+                    new BrokerPosition("AMD", "long", 10m, 100m, 101m, 10m)
+                ]);
+
+            var audits = new List<DecisionAuditRecord>();
+            var auditRepo = new Mock<IDecisionAuditRepository>();
+            auditRepo
+                .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
+                .Callback<DecisionAuditRecord, CancellationToken>((record, _) => audits.Add(record))
+                .Returns(Task.CompletedTask);
+
+            var runner = CreateRunner(provider.Object, lockService: null, auditRepo, broker.Object);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var progress = new Progress<string>(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                }
+            });
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["AMD"], ["5m"], workerCount: 2, derivedSource: "5m"),
+                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                cts,
+                progress);
+
+            Assert.Contains(audits, audit =>
+                audit.Ticker == "AMD" &&
+                audit.Decision == "Skipped" &&
+                audit.RejectionReason == "max_open_trades_per_ticker_reached (Actual: 1, Allowed: 1)");
+            Assert.DoesNotContain(audits, audit =>
+                audit.Ticker == "AMD" &&
+                audit.RejectionReason?.Contains("Actual: 2", StringComparison.OrdinalIgnoreCase) == true);
         }
         finally
         {
@@ -229,23 +518,28 @@ public class LiveRunnerIntegrationTests
     private static LiveRunner CreateRunner(
         IMarketDataProvider provider,
         ITickerLockService? lockService,
-        Mock<IDecisionAuditRepository>? auditRepoMock = null)
+        Mock<IDecisionAuditRepository>? auditRepoMock = null,
+        IBrokerClient? brokerClient = null,
+        IOrderStateRepository? orderStateRepository = null)
     {
-        var orderRepo = new Mock<IOrderStateRepository>();
-        orderRepo
+        var defaultOrderRepo = new Mock<IOrderStateRepository>();
+        defaultOrderRepo
             .Setup(x => x.GetActiveOrdersByTickerAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<PersistedOrder>());
         var auditRepo = auditRepoMock ?? new Mock<IDecisionAuditRepository>();
-        auditRepo
-            .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
+        if (auditRepoMock is null)
+        {
+            auditRepo
+                .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+        }
 
         return new LiveRunner(
             provider,
             catalystProvider: null,
-            brokerClient: null,
+            brokerClient,
             lockService,
-            orderRepo.Object,
+            orderStateRepository ?? defaultOrderRepo.Object,
             auditRepo.Object,
             NullLogger<LiveRunner>.Instance);
     }
@@ -271,12 +565,14 @@ public class LiveRunnerIntegrationTests
         IReadOnlyList<string> tickers,
         IReadOnlyList<string> intervals,
         int workerCount,
-        string derivedSource)
+        string derivedSource,
+        bool dryRun = true,
+        bool allowLiveOrders = false)
     {
         return new BacktestRunConfig(
             RunName: "LiveRunnerTest",
             Mode: "paper",
-            Engine: new EngineConfig("tpl", workerCount, 100, 50, false),
+            Engine: new EngineConfig("tpl", workerCount, 100, 50, 120, false),
             TimeWindow: new TimeWindowConfig("rolling", 10, null, null),
             Tickers: tickers,
             Provider: "test",
@@ -293,18 +589,27 @@ public class LiveRunnerIntegrationTests
                 new DataQualityConfig(false, 0, 0, 0),
                 new BiasRiskConfig("test", null, "none")),
             Providers: new ProviderConfig(
-                new YahooProviderConfig("", new YahooHeaderConfig("", "", ""), 30, 0, 0),
-                new AlpacaProviderConfig("sip"),
-                new TradingViewProviderConfig(false)),
+                new AlpacaProviderConfig("sip")),
             Portfolio: new PortfolioConfig(100000m, 1m, 20m, 5, 0m, 0m, 1, true),
             SignalSource: new SignalSourceConfig("internal_candles", false, "", 300, 0),
-            Execution: new ExecutionConfig("simulated", "none", true, false, "market", "day", "market"),
+            Execution: new ExecutionConfig("simulated", "none", dryRun, allowLiveOrders, "market", "day", "market", ExtendedHours: true),
             News: new NewsConfig(false, "none", 0, 0),
             Screener: new ScreenerConfig(false, "none", []),
+            Artifacts: new ArtifactRetentionConfig("summary"),
             Strategies: []);
     }
 
-    private static StrategyDefinition CreateStrategy(string signalTimeframe, string executionTimeframe)
+    private static StrategyDefinition CreateStrategy(
+        string signalTimeframe,
+        string executionTimeframe,
+        bool confluenceEnabled = false,
+        string confluenceTimeframe = "1h",
+        int confluenceEmaPeriod = 20,
+        string confluenceMacdFilter = "none",
+        bool exitOnCloseBelowEma20 = false,
+        bool exitOnCloseBelowVwap = false,
+        bool exitOnMacdHistogramNegative = false,
+        int minHoldBarsBeforeTechnicalExit = 0)
     {
         return new StrategyDefinition(
             StrategyId: "test_strat",
@@ -330,30 +635,70 @@ public class LiveRunnerIntegrationTests
                 OpeningRangeMinutes: 0,
                 RecentHighLookbackBars: 20,
                 VolatilityContractionLookbackBars: 10),
-            Confluence: new ConfluenceRules(false, "1h", 20, "none"),
-            ExitRules: new ExitRules(1.0m, 2.0m, 24m, false, 0m, 0m, false, false, false, 0),
+            Confluence: new ConfluenceRules(confluenceEnabled, confluenceTimeframe, confluenceEmaPeriod, confluenceMacdFilter),
+            ExitRules: new ExitRules(
+                1.0m,
+                2.0m,
+                24m,
+                false,
+                0m,
+                0m,
+                exitOnCloseBelowEma20,
+                exitOnCloseBelowVwap,
+                exitOnMacdHistogramNegative,
+                minHoldBarsBeforeTechnicalExit),
             Execution: new ExecutionRules(executionTimeframe, 1.0m),
             Session: new SessionRules("America/New_York", 0, 0, 0));
     }
 
     private static IReadOnlyList<OhlcvBar> CreateFiveMinuteBars(string ticker)
     {
-        var start = DateTimeOffset.UtcNow.AddHours(-8);
-        return Enumerable.Range(0, 96)
-            .Select(i =>
+        var start = DateTimeOffset.UtcNow.AddDays(-7).AddHours(-8);
+        var bars = new List<OhlcvBar>();
+        for (var day = 0; day < 7; day++)
+        {
+            for (var i = 0; i < 96; i++)
             {
-                var close = 100m + i * 0.1m;
-                return new OhlcvBar(
+                var sequence = (day * 96) + i;
+                var close = 100m + sequence * 0.01m;
+                bars.Add(new OhlcvBar(
                     ticker,
-                    start.AddMinutes(i * 5),
+                    start.AddDays(day).AddMinutes(i * 5),
                     "5m",
                     close - 0.05m,
                     close + 0.25m,
                     close - 0.25m,
                     close,
-                    100000m + i);
-            })
-            .ToArray();
+                    100000m + i));
+            }
+        }
+
+        return bars;
+    }
+
+    private static IReadOnlyList<OhlcvBar> CreateFallingFiveMinuteBars(string ticker)
+    {
+        var start = DateTimeOffset.UtcNow.AddDays(-7).AddHours(-8);
+        var bars = new List<OhlcvBar>();
+        for (var day = 0; day < 7; day++)
+        {
+            for (var i = 0; i < 96; i++)
+            {
+                var sequence = (day * 96) + i;
+                var close = 110m - sequence * 0.01m;
+                bars.Add(new OhlcvBar(
+                    ticker,
+                    start.AddDays(day).AddMinutes(i * 5),
+                    "5m",
+                    close + 0.05m,
+                    close + 0.25m,
+                    close - 0.25m,
+                    close,
+                    100000m + i));
+            }
+        }
+
+        return bars;
     }
 
     private static async IAsyncEnumerable<OhlcvBar> YieldBars(
@@ -365,28 +710,6 @@ public class LiveRunnerIntegrationTests
             cancellationToken.ThrowIfCancellationRequested();
             yield return bar;
             await Task.Yield();
-        }
-    }
-
-    private static async IAsyncEnumerable<OhlcvBar> YieldTrackedBars(
-        string ticker,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken,
-        Action onStart,
-        Action onStop)
-    {
-        onStart();
-        try
-        {
-            await Task.Delay(50, cancellationToken);
-            foreach (var bar in CreateFiveMinuteBars(ticker))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return bar;
-            }
-        }
-        finally
-        {
-            onStop();
         }
     }
 

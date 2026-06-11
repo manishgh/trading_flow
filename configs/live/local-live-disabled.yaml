@@ -25,6 +25,7 @@ market_data:
     - 5m
     - 15m
     - 1h
+    - 1d
   derive_from: 5m
   raw_root: data/live/raw
   normalized_root: data/live/normalized
@@ -32,42 +33,8 @@ market_data:
   cache_policy: refresh
 
 providers:
-  yahoo:
-    api:
-      base_url: https://query1.finance.yahoo.com
-      chart_path: /v8/finance/chart/{ticker}
-    headers:
-      user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-      accept: application/json,text/plain,*/*
-      accept_language: en-US,en;q=0.9
-    request_timeout_seconds: 30
-    max_retries: 3
-    throttle_ms: 250
   alpaca:
     data_feed: sip
-  etoro:
-    enabled: false
-    rest_base_url: https://public-api.etoro.com/api/v1
-    websocket_url: wss://ws.etoro.com/ws
-    environment: live
-    default_leverage: 1
-    order_sizing: units
-    demo:
-      api_key_env: ETORO_DEMO_API_KEY
-      user_key_env: ETORO_DEMO_USER_KEY
-      allow_trading: false
-    live:
-      api_key_env: ETORO_LIVE_API_KEY
-      user_key_env: ETORO_LIVE_USER_KEY
-      allow_trading: false
-    rate_limits:
-      read_per_minute: 60
-      write_per_minute: 20
-    retry:
-      max_retries: 5
-      base_backoff_ms: 500
-      max_backoff_seconds: 30
-      jitter: true
 
 portfolio:
   starting_capital: 100000
@@ -79,11 +46,11 @@ portfolio:
   prevent_overlapping_ticker_positions: true
 
 signal_source:
-  type: tradingview_webhook
-  require_signature: true
-  secret_env: TRADINGVIEW_WEBHOOK_SECRET
+  type: internal_candles
+  require_signature: false
+  secret_env:
   dedupe_window_seconds: 300
-  reject_stale_after_seconds: 30
+  reject_stale_after_seconds: 0
 
 validation:
   out_of_sample:
@@ -112,6 +79,9 @@ execution:
   dry_run: true
   allow_live_orders: false
   order_type: bracket
+  order_expiration: gtc
+  entry_order_type: limit
+  extended_hours: true
 
 news:
   enabled: true
@@ -126,9 +96,8 @@ news:
     ttl_minutes: 90
     negative_threshold: -0.6
 
+artifacts:
+  retention_mode: summary
+
 strategies:
-  - ../strategies/intraday-vwap-pullback.v2.yaml
-  - ../strategies/opening-range-breakout.v2.yaml
-  - ../strategies/swing-trend-pullback.v1.yaml
-  - ../strategies/swing-vwap-momentum.v2.yaml
-  - ../strategies/minervini-trend-breakout.v2.yaml
+  - ../strategies/intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml

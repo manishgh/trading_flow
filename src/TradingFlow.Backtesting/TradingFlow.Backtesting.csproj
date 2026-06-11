@@ -10,9 +10,11 @@
     <ProjectReference Include="..\TradingFlow.Data\TradingFlow.Data.csproj" />
     <ProjectReference Include="..\TradingFlow.Alpaca\TradingFlow.Alpaca.csproj" />
     <ProjectReference Include="..\TradingFlow.Finviz\TradingFlow.Finviz.csproj" />
-    <ProjectReference Include="..\TradingFlow.Etoro\TradingFlow.Etoro.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.8" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="TradingFlow.Tests" />
   </ItemGroup>
 </Project>

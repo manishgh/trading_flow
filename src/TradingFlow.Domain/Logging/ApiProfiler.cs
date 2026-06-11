@@ -10,7 +10,7 @@ public static class ApiProfiler
 {
     private static readonly ConcurrentDictionary<string, ConcurrentQueue<RequestMetric>> _metricsByService = new(StringComparer.OrdinalIgnoreCase);
     public static readonly DateTimeOffset AppStartTime = DateTimeOffset.UtcNow;
-    private static readonly string _logFileName = $"api_profile_{AppStartTime:yyyyMMdd_HHmmss}.jsonl";
+    private static Action<RequestMetric>? _metricSink;
 
     public sealed record RequestMetric(
         string Service,
@@ -32,21 +32,12 @@ public static class ApiProfiler
             queue.TryDequeue(out _);
         }
 
-        var status = isSuccess ? "SUCCESS" : "FAILED";
-        Console.WriteLine($"[METRIC] {DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ss.fffZ} | SERVICE={service} | METHOD={method} | ENDPOINT={endpoint} | DURATION_MS={durationMs:F2} | STATUS={status} | ERROR={errorMessage ?? "none"}");
+        _metricSink?.Invoke(metric);
+    }
 
-        var logLine = System.Text.Json.JsonSerializer.Serialize(new
-        {
-            timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
-            service = service,
-            method = method,
-            endpoint = endpoint,
-            duration_ms = Math.Round(durationMs, 2),
-            is_success = isSuccess,
-            error = errorMessage
-        });
-
-        SafeLogger.LogToFile(_logFileName, logLine);
+    public static void ConfigureMetricSink(Action<RequestMetric>? metricSink)
+    {
+        _metricSink = metricSink;
     }
 
     public static async Task<T> ProfileAsync<T>(string service, string endpoint, string method, Func<Task<T>> apiCall)

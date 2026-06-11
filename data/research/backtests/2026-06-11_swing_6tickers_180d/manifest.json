@@ -1,0 +1,37 @@
+﻿{
+    "run_id":  "2026-06-11_swing_6tickers_180d",
+    "run_name":  "swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d",
+    "generated_at_utc":  "2026-06-11T13:04:03.7988749Z",
+    "universe":  [
+                     "CRDO",
+                     "MSFT",
+                     "APP",
+                     "INTC",
+                     "MU",
+                     "NVDA"
+                 ],
+    "lookback_days":  180,
+    "warmup_lookback_days":  60,
+    "data_source":  "Alpaca SIP cached daily candles",
+    "starting_capital":  10000,
+    "selection_policy":  "Promote strategies by total return, drawdown control, win/loss behavior, trade count, and explainable diagnostics; keep long and short separate until portfolio conflict rules are stronger.",
+    "promoted_strategies":  [
+                                {
+                                    "strategy_name":  "Swing Reversal Reclaim Bull Quality No News V1",
+                                    "role":  "primary_swing_long",
+                                    "reason":  "Highest return with controlled drawdown and 10 trades.",
+                                    "caution":  "Still misses some early visible moves."
+                                },
+                                {
+                                    "strategy_name":  "Swing Overbought Rollover Short No News V5",
+                                    "role":  "candidate_swing_short",
+                                    "reason":  "Positive result, zero drawdown in this window, and captured APP rollover without earlier noisy short losses.",
+                                    "caution":  "Only 2 trades; keep as candidate until broader validation."
+                                }
+                            ],
+    "source_result":  "data/backtest/results/shared/portfolio/swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d-0001.json",
+    "retained_analysis":  [
+                              "opportunity_analysis_long_quality.json",
+                              "opportunity_analysis_short_rollover_v5.json"
+                          ]
+}

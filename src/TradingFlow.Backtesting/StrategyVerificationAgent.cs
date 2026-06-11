@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Storage;
 using Microsoft.Extensions.Logging;
 
 namespace TradingFlow.Backtesting;
@@ -15,10 +16,12 @@ public sealed class StrategyVerificationAgent
 {
     private readonly SimpleYamlReader _yamlReader = new();
     private readonly ILogger _logger;
+    private readonly IArtifactWriter _artifactWriter;
 
-    public StrategyVerificationAgent(ILogger logger)
+    public StrategyVerificationAgent(ILogger logger, IArtifactWriter? artifactWriter = null)
     {
         _logger = logger;
+        _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
     }
 
     public void StartVerification(BacktestRunConfig liveRunConfig, string selectedStrategyPath, CancellationToken cancellationToken, IProgress<string>? progress = null)
@@ -93,7 +96,7 @@ public sealed class StrategyVerificationAgent
                     var verificationConfig = new BacktestRunConfig(
                         $"verify-{strategyDef.StrategyId}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}",
                         "backtest",
-                        new EngineConfig("tpl", 0, 1000, 150, false),
+                        new EngineConfig("tpl", 0, 1000, 150, 120, false),
                         new TimeWindowConfig("rolling", 10, null, null), 
                         liveRunConfig.Tickers,
                         liveRunConfig.Provider,
@@ -108,7 +111,7 @@ public sealed class StrategyVerificationAgent
                             new WalkForwardConfig(false, 0, 0),
                             new BenchmarkConfig(false, ""),
                             new DataQualityConfig(false, 0, 0, 0m),
-                            new BiasRiskConfig("static_config", null, "yahoo_chart_quote")
+                            new BiasRiskConfig("static_config", null, "alpaca_sip")
                         ),
                         liveRunConfig.Providers,
                         liveRunConfig.Portfolio,
@@ -116,6 +119,7 @@ public sealed class StrategyVerificationAgent
                         new ExecutionConfig("simulated", "none", true, false, "bracket", "gtc", "limit"),
                         new NewsConfig(false, "none", 0, 0m),
                         liveRunConfig.Screener,
+                        new ArtifactRetentionConfig("summary"),
                         new[] { file }
                     );
 
@@ -141,7 +145,7 @@ public sealed class StrategyVerificationAgent
                 }
             }
 
-            await File.WriteAllTextAsync(reportPath, reportContent.ToString(), cancellationToken);
+            await _artifactWriter.WriteTextAsync(reportPath, reportContent.ToString(), cancellationToken);
             _logger.LogInformation("Verification Agent report written to {ReportPath}", reportPath);
             progress?.Report($"Verification Agent: Done! Report saved to strategy_verification_report.md");
         }

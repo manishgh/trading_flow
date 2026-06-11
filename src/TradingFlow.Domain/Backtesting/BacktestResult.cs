@@ -11,6 +11,8 @@ public sealed record BacktestResult(
     decimal EndingCapital,
     decimal NetProfit,
     decimal TotalReturnPct,
+    decimal AverageDailyReturnPct,
+    int TradingDayCount,
     decimal MaxDrawdownPct,
     WinnerStrategySummary? Winner,
     int ProcessedBarCount,
@@ -32,6 +34,7 @@ public sealed record WinnerStrategySummary(
     decimal EndingCapital,
     decimal NetProfit,
     decimal TotalReturnPct,
+    decimal AverageDailyReturnPct,
     decimal MaxDrawdownPct,
     int AcceptedTradeCount,
     int RejectedTradeCount);
@@ -44,6 +47,8 @@ public sealed record StrategyBacktestResult(
     decimal EndingCapital,
     decimal NetProfit,
     decimal TotalReturnPct,
+    decimal AverageDailyReturnPct,
+    int TradingDayCount,
     decimal MaxDrawdownPct,
     int CandidateTradeCount,
     int AcceptedTradeCount,
@@ -80,6 +85,31 @@ public sealed record StrategyDiagnosticReport(
     decimal AverageWin,
     decimal AverageLoss,
     decimal RealizedRewardRiskRatio,
+    DailyPnlSummary DailyPnl,
+    IReadOnlyList<DirectionPnlSummary> DirectionPnl,
     IReadOnlyDictionary<string, int> ExitReasonCounts,
     IReadOnlyDictionary<string, int> RejectionCounts,
     IReadOnlyList<string> Suggestions);
+
+public sealed record DailyPnlSummary(
+    int TradingDayCount,
+    int ActiveTradeDayCount,
+    int WinningDayCount,
+    int LosingDayCount,
+    decimal NetProfit,
+    decimal AverageNetProfitPerTradingDay,
+    decimal AverageNetProfitPerActiveTradeDay,
+    decimal BestDayNetProfit,
+    DateOnly? BestDay,
+    decimal WorstDayNetProfit,
+    DateOnly? WorstDay);
+
+public sealed record DirectionPnlSummary(
+    string Direction,
+    int TradeCount,
+    int WinningTradeCount,
+    int LosingTradeCount,
+    decimal NetProfit,
+    decimal AverageNetProfit,
+    decimal BestTradeNetProfit,
+    decimal WorstTradeNetProfit);

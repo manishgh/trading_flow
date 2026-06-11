@@ -1,0 +1,101 @@
+strategy_id: research.swing-reversal-reclaim-bull-quality-no-news.v1
+strategy_name: Swing Reversal Reclaim Bull Quality No News V1
+source: swing_reversal_reclaim_quality_config_only_without_required_news
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: swing_reclaim
+  min_volume_spike: 0.00
+  min_entry_rsi: 35.0
+  max_entry_rsi: 90.0
+  trend_filter: none
+  macd_filter: not_bearish
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma10: true
+  require_price_above_sma20: true
+  require_price_above_sma50: false
+  require_sma10_above_sma20: false
+  require_sma20_above_sma50: false
+  anchored_vwap_mode: lookback_low
+  anchored_vwap_lookback_bars: 20
+  require_price_above_anchored_vwap: false
+  require_price_below_anchored_vwap_for_short: false
+  max_anchored_vwap_extension_atr: 4.0
+  max_vwap_extension_atr: 999.0
+  opening_range_minutes: 60
+  recent_high_lookback_bars: 20
+  volatility_contraction_lookback_bars: 10
+  reclaim_lookback_bars: 20
+  min_reclaim_pullback_depth_pct: 6.0
+  max_reclaim_pullback_depth_pct: 45.0
+  require_reclaim_low_above_sma50: false
+  require_reclaim_close_above_sma10: true
+  require_reclaim_close_above_sma20: true
+  require_log_price_rising: false
+  require_log_volume_rising: false
+  log_price_lookback_bars: 12
+  log_volume_lookback_bars: 12
+  min_log_price_slope: 0.0
+  min_log_volume_slope: 0.0
+  reject_falling_price_rising_volume: false
+  red_volume_max_price_slope: -0.0001
+  red_volume_min_volume_slope: 0.003
+  vwap_hold_bars: 2
+  max_entries_per_ticker_per_day: 1
+  min_close_location_value: 0.55
+  reject_weak_close_on_high_relative_volume: false
+  weak_close_max_location_value: 0.35
+  weak_close_min_relative_volume: 1.2
+  require_positive_news: false
+  min_news_sentiment: 0.10
+  veto_news_sentiment_below: -0.40
+  max_news_age_hours: 168
+  enable_short: false
+  short_setup_type: step_breakdown
+  require_price_below_vwap_for_short: false
+  require_macd_bearish_for_short: true
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 50
+  macd_filter: not_bearish
+exit_rules:
+  stop_atr_multiple: 1.50
+  target_r_multiple: 4.00
+  max_hold_hours: 720.0
+  enable_atr_trailing_stop: true
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 3.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  enable_confirmed_vwap_exit: false
+  confirmed_vwap_exit_bars: 2
+  confirmed_vwap_exit_atr_buffer: 0.0
+  exit_on_log_price_fade: false
+  exit_log_price_lookback_bars: 6
+  exit_log_volume_lookback_bars: 6
+  max_exit_log_price_slope: -0.0001
+  min_exit_log_volume_slope: 0.003
+  require_rising_volume_for_log_fade_exit: false
+  require_below_vwap_for_log_fade_exit: false
+  exit_on_sma10_near_sma20: false
+  sma10_near_sma20_pct: 0.25
+  exit_on_sma10_cross_below_sma20: true
+  exit_short_on_sma10_cross_above_sma20: false
+execution:
+  timeframe: 1d
+  slippage_bps: 15.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 0
+  friday_close_buffer_minutes: 0
+  is_continuous_market: false

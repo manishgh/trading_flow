@@ -45,64 +45,95 @@ public sealed class AlpacaMarketDataProvider : IMarketDataProvider
             else if (timeframe == "1m") timeframe = "1Min";
             else if (timeframe == "15m") timeframe = "15Min";
 
-            foreach (var ticker in tickers)
+            foreach (var tickerBatch in tickers
+                .Select(x => x.Trim().ToUpperInvariant())
+                .Where(x => x.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Chunk(100))
             {
                 var startStr = start.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
                 var endStr = end.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
-                var url = $"/v2/stocks/bars?symbols={ticker.ToUpperInvariant()}&timeframe={timeframe}&start={startStr}&end={endStr}&feed={_marketDataFeed}";
-                
-                int retryCount = 0;
-                HttpResponseMessage? response = null;
-                while (retryCount < 3)
+                var symbols = String.Join(",", tickerBatch.Select(Uri.EscapeDataString));
+                string? nextPageToken = null;
+
+                do
                 {
-                    try
+                    var url = $"/v2/stocks/bars?symbols={symbols}&timeframe={timeframe}&start={startStr}&end={endStr}&feed={_marketDataFeed}&limit=10000";
+                    if (!String.IsNullOrWhiteSpace(nextPageToken))
                     {
-                        response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Alpaca", url, "GET", 
-                            () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
-                        
-                        if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                        url += $"&page_token={Uri.EscapeDataString(nextPageToken)}";
+                    }
+
+                    using var response = await SendWithRetriesAsync(url, cancellationToken);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var error = await response.Content.ReadAsStringAsync(cancellationToken);
+                        throw new Exception($"Alpaca API Error ({(int?)response.StatusCode}): {error}");
+                    }
+
+                    var content = await response.Content.ReadAsStringAsync(cancellationToken);
+                    using var doc = JsonDocument.Parse(content);
+                    
+                    if (doc.RootElement.TryGetProperty("bars", out var barsElement))
+                    {
+                        foreach (var tickerProperty in barsElement.EnumerateObject())
                         {
-                            var retryAfter = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(5);
-                            await Task.Delay(retryAfter, cancellationToken);
-                            retryCount++;
-                            continue;
+                            var ticker = tickerProperty.Name;
+                            foreach (var bar in tickerProperty.Value.EnumerateArray())
+                            {
+                                yield return new OhlcvBar(
+                                    ticker,
+                                    bar.GetProperty("t").GetDateTimeOffset(),
+                                    originalTimeframe,
+                                    bar.GetProperty("o").GetDecimal(),
+                                    bar.GetProperty("h").GetDecimal(),
+                                    bar.GetProperty("l").GetDecimal(),
+                                    bar.GetProperty("c").GetDecimal(),
+                                    bar.GetProperty("v").GetDecimal()
+                                );
+                            }
                         }
-                        break;
                     }
-                    catch (Polly.Bulkhead.BulkheadRejectedException)
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
-                        retryCount++;
-                    }
-                }
 
-                if (response == null || !response.IsSuccessStatusCode)
-                {
-                    var error = response != null ? await response.Content.ReadAsStringAsync(cancellationToken) : "Unknown error";
-                    throw new Exception($"Alpaca API Error ({(int?)response?.StatusCode}): {error}");
+                    nextPageToken = doc.RootElement.TryGetProperty("next_page_token", out var tokenElement) &&
+                                    tokenElement.ValueKind == JsonValueKind.String
+                        ? tokenElement.GetString()
+                        : null;
                 }
-
-                var content = await response.Content.ReadAsStringAsync(cancellationToken);
-                using var doc = JsonDocument.Parse(content);
-                
-                if (doc.RootElement.TryGetProperty("bars", out var barsElement) && barsElement.TryGetProperty(ticker.ToUpperInvariant(), out var tickerBars))
-                {
-                    foreach (var bar in tickerBars.EnumerateArray())
-                    {
-                        yield return new OhlcvBar(
-                            ticker,
-                            bar.GetProperty("t").GetDateTimeOffset(),
-                            originalTimeframe,
-                            bar.GetProperty("o").GetDecimal(),
-                            bar.GetProperty("h").GetDecimal(),
-                            bar.GetProperty("l").GetDecimal(),
-                            bar.GetProperty("c").GetDecimal(),
-                            bar.GetProperty("v").GetDecimal()
-                        );
-                    }
-                }
+                while (!String.IsNullOrWhiteSpace(nextPageToken));
             }
         }
+    }
+
+    private async Task<HttpResponseMessage> SendWithRetriesAsync(string url, CancellationToken cancellationToken)
+    {
+        int retryCount = 0;
+        while (retryCount < 3)
+        {
+            try
+            {
+                var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Alpaca", url, "GET",
+                    () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
+                
+                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    var retryAfter = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(5);
+                    response.Dispose();
+                    await Task.Delay(retryAfter, cancellationToken);
+                    retryCount++;
+                    continue;
+                }
+
+                return response;
+            }
+            catch (Polly.Bulkhead.BulkheadRejectedException)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+                retryCount++;
+            }
+        }
+
+        throw new HttpRequestException($"Alpaca API request failed after retries: {url}");
     }
 
     private static string NormalizeFeed(string feed)

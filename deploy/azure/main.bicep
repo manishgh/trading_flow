@@ -15,14 +15,6 @@ param tradingServiceImage string
 @description('Container image for the Go news sentiment service.')
 param newsImage string
 
-@secure()
-@description('Optional eToro demo API key. Prefer setting through Key Vault in production.')
-param etoroDemoApiKey string = ''
-
-@secure()
-@description('Optional eToro demo user key. Prefer setting through Key Vault in production.')
-param etoroDemoUserKey string = ''
-
 @description('Minimum web replicas.')
 param webMinReplicas int = 1
 
@@ -148,10 +140,6 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
   properties: {
     managedEnvironmentId: acaEnv.id
     configuration: {
-      secrets: [
-        { name: 'etoro-demo-api-key', value: etoroDemoApiKey }
-        { name: 'etoro-demo-user-key', value: etoroDemoUserKey }
-      ]
       ingress: {
         external: true
         targetPort: 8080
@@ -165,8 +153,6 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
           image: webImage
           env: [
             { name: 'ASPNETCORE_URLS', value: 'http://+:8080' }
-            { name: 'ETORO_DEMO_API_KEY', secretRef: 'etoro-demo-api-key' }
-            { name: 'ETORO_DEMO_USER_KEY', secretRef: 'etoro-demo-user-key' }
           ]
           volumeMounts: [
             { volumeName: 'data', mountPath: '/app/data' }
@@ -199,10 +185,6 @@ resource tradingJob 'Microsoft.App/jobs@2024-03-01' = {
       triggerType: 'Manual'
       replicaTimeout: 3600
       replicaRetryLimit: 1
-      secrets: [
-        { name: 'etoro-demo-api-key', value: etoroDemoApiKey }
-        { name: 'etoro-demo-user-key', value: etoroDemoUserKey }
-      ]
     }
     template: {
       containers: [
@@ -211,10 +193,6 @@ resource tradingJob 'Microsoft.App/jobs@2024-03-01' = {
           image: tradingServiceImage
           args: [
             'configs/backtest/semiconductors-research.yaml'
-          ]
-          env: [
-            { name: 'ETORO_DEMO_API_KEY', secretRef: 'etoro-demo-api-key' }
-            { name: 'ETORO_DEMO_USER_KEY', secretRef: 'etoro-demo-user-key' }
           ]
           volumeMounts: [
             { volumeName: 'data', mountPath: '/app/data' }

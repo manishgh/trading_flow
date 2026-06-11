@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.Extensions.Logging;
+using TradingFlow.Engine.Storage;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 
@@ -12,13 +14,23 @@ public sealed class PaperModel : PageModel
     private readonly PaperEnvironmentService paperEnvironment;
     private readonly RunConfigWriter configWriter;
     private readonly PaperJobService paperJobs;
+    private readonly IArtifactWriter artifactWriter;
+    private readonly ILogger<PaperModel> logger;
 
-    public PaperModel(ConfigCatalogService catalog, PaperEnvironmentService paperEnvironment, RunConfigWriter configWriter, PaperJobService paperJobs)
+    public PaperModel(
+        ConfigCatalogService catalog,
+        PaperEnvironmentService paperEnvironment,
+        RunConfigWriter configWriter,
+        PaperJobService paperJobs,
+        IArtifactWriter artifactWriter,
+        ILogger<PaperModel> logger)
     {
         this.catalog = catalog;
         this.paperEnvironment = paperEnvironment;
         this.configWriter = configWriter;
         this.paperJobs = paperJobs;
+        this.artifactWriter = artifactWriter;
+        this.logger = logger;
     }
 
     [BindProperty] public string ConfigPath { get; set; } = String.Empty;
@@ -26,7 +38,7 @@ public sealed class PaperModel : PageModel
     [BindProperty(SupportsGet = true)] public string? TickersCsv { get; set; }
     [BindProperty(SupportsGet = true)] public string OrderExpiration { get; set; } = "gtc";
     [BindProperty(SupportsGet = true)] public string EntryOrderType { get; set; } = "limit";
-    [BindProperty(SupportsGet = true)] public bool ExtendedHours { get; set; } = false;
+    [BindProperty(SupportsGet = true)] public bool ExtendedHours { get; set; } = true;
     [BindProperty(SupportsGet = true)] public string? ScreenerFilter { get; set; }
     [BindProperty] public string? StrategyYaml { get; set; }
     
@@ -40,11 +52,12 @@ public sealed class PaperModel : PageModel
     public IReadOnlyList<BacktestJobSnapshot> LiveJobs { get; private set; } = [];
     public RunConfigSummary Selected { get; private set; } = null!;
     public PaperEnvironmentSnapshot? PaperSnapshot { get; private set; }
-    public string EtoroCheckJson { get; private set; } = String.Empty;
     public string AlpacaCheckJson { get; private set; } = String.Empty;
+    public string SuggestedRunName { get; private set; } = String.Empty;
 
     public void OnGet(string? configPath, string? strategyPath)
     {
+        SuggestedRunName = $"paper_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}";
         if (!string.IsNullOrEmpty(configPath)) ConfigPath = configPath;
         if (!string.IsNullOrEmpty(strategyPath)) SelectedStrategyPath = strategyPath;
 
@@ -62,18 +75,29 @@ public sealed class PaperModel : PageModel
             OrderExpiration = selectedConfig?.Config.Execution.OrderExpiration ?? "gtc";
         }
 
+        var selectedExecutionConfig = Configs.FirstOrDefault(c => c.Path == ConfigPath);
         if (string.IsNullOrEmpty(EntryOrderType))
         {
-            var selectedConfig = Configs.FirstOrDefault(c => c.Path == ConfigPath);
-            EntryOrderType = selectedConfig?.Config.Execution.EntryOrderType ?? "limit";
-            ExtendedHours = selectedConfig?.Config.Execution.ExtendedHours ?? false;
-            ScreenerFilter = selectedConfig?.Config.Screener?.Filters?.FirstOrDefault() ?? "";
+            EntryOrderType = selectedExecutionConfig?.Config.Execution.EntryOrderType ?? "limit";
         }
+
+        ExtendedHours = selectedExecutionConfig?.Config.Execution.ExtendedHours ?? true;
+        ScreenerFilter = selectedExecutionConfig?.Config.Screener?.Filters?.FirstOrDefault() ?? "";
         
         var selectedStrategy = Strategies.FirstOrDefault(s => s.Path == SelectedStrategyPath);
         if (selectedStrategy != null && string.IsNullOrEmpty(StrategyYaml))
         {
-            try { StrategyYaml = System.IO.File.ReadAllText(selectedStrategy.Path); } catch {}
+            try
+            {
+                StrategyYaml = System.IO.File.ReadAllText(selectedStrategy.Path);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Failed to read selected strategy YAML from {StrategyPath}.",
+                    selectedStrategy.Path);
+            }
         }
         
         if (!string.IsNullOrEmpty(StrategyYaml))
@@ -92,6 +116,11 @@ public sealed class PaperModel : PageModel
         }
     }
 
+    public string FormatLocalTime(DateTimeOffset timestamp)
+    {
+        return UiDisplayFormatter.FormatLocalTime(timestamp);
+    }
+
     public async Task OnPostAsync(CancellationToken cancellationToken)
     {
         var formConfigPath = Request.Form["BaseConfigPath"].ToString();
@@ -101,7 +130,6 @@ public sealed class PaperModel : PageModel
 
         PaperSnapshot = await paperEnvironment.InspectAsync(ConfigPath, cancellationToken);
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
-        EtoroCheckJson = JsonSerializer.Serialize(PaperSnapshot.EtoroReadOnlyCheck, jsonOptions);
         AlpacaCheckJson = JsonSerializer.Serialize(PaperSnapshot.AlpacaReadOnlyCheck, jsonOptions);
     }
 
@@ -148,9 +176,12 @@ public sealed class PaperModel : PageModel
         {
             try
             {
-                System.IO.File.WriteAllText(strategyPath, strategyYaml);
+                artifactWriter.WriteText(strategyPath, strategyYaml);
             }
-            catch {}
+            catch (Exception exception)
+            {
+                ModelState.AddModelError(String.Empty, $"Could not save strategy: {exception.Message}");
+            }
         }
         return RedirectToPage(new { 
             configPath = form["BaseConfigPath"].ToString(), 
@@ -209,7 +240,7 @@ public sealed class PaperModel : PageModel
     {
         Configs = catalog.GetPaperConfigs();
         Strategies = catalog.GetStrategies();
-        LiveJobs = paperJobs.List().Take(5).ToArray();
+        LiveJobs = paperJobs.List().Take(10).ToArray();
         
         if (Configs.Count == 0)
         {
@@ -220,7 +251,9 @@ public sealed class PaperModel : PageModel
             ? Configs.First()
             : catalog.GetConfig(configPath);
         ConfigPath = Selected.Path;
-        SelectedStrategyPath = strategyPath ?? (Strategies.FirstOrDefault()?.Path ?? String.Empty);
+        SelectedStrategyPath = String.IsNullOrWhiteSpace(strategyPath)
+            ? Strategies.FirstOrDefault()?.Path ?? String.Empty
+            : strategyPath;
     }
 
     public IActionResult OnGetStrategyDetails(string strategyPath)

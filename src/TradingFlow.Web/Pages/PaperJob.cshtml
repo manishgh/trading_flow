@@ -15,9 +15,13 @@
             const marketDataFeedEl = document.getElementById('marketDataFeed');
             const eventsEl = document.getElementById('recentEvents');
             const auditsBody = document.getElementById('recentAuditsBody');
+            const auditsTable = document.getElementById('recentAuditsTable');
+            const auditsEmpty = document.getElementById('recentAuditsEmpty');
             const metricsBody = document.getElementById('liveMetricsBody');
             const metricsTable = document.getElementById('liveMetricsTable');
             const metricsEmpty = document.getElementById('liveMetricsEmpty');
+            const profilerTitle = document.getElementById('profilerTitle');
+            const profilerBody = document.getElementById('profilerBody');
             const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
             const numberFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
@@ -66,17 +70,24 @@
                     metricsBody.innerHTML = metrics.map(point => `<tr>
                         <td>${escapeHtml(point.time)}</td>
                         <td><strong>${escapeHtml(point.ticker)}</strong></td>
+                        <td>${escapeHtml(point.timeframe)}</td>
                         <td>${formatCurrency(point.close)}</td>
                         <td>${formatDecimal(point.rsi)}</td>
                         <td>${formatWholeNumber(point.volume)}</td>
                         <td>${formatWholeNumber(point.averageVolume)}</td>
+                        <td>${formatDecimal(point.relativeVolume)}</td>
                         <td>${formatCurrency(point.vwap)}</td>
                     </tr>`).join('');
                 }
 
-                if (auditsBody) {
-                    auditsBody.innerHTML = data.audits.map(audit => {
-                        const color = audit.accepted ? '#4caf50' : '#f44336';
+                if (auditsBody && auditsTable && auditsEmpty) {
+                    const audits = data.audits ?? [];
+                    auditsEmpty.style.display = audits.length === 0 ? 'block' : 'none';
+                    auditsTable.style.display = audits.length === 0 ? 'none' : 'table';
+                    auditsBody.innerHTML = audits.map(audit => {
+                        const color = audit.decision === 'Accepted'
+                            ? '#4caf50'
+                            : (audit.decision === 'Rejected' ? '#f44336' : '#aaa');
                         const raw = audit.rawReason ? `<br /><code>${escapeHtml(audit.rawReason)}</code>` : '';
                         return `<tr style="border-bottom: 1px solid #333;">
                             <td style="white-space: nowrap;">${escapeHtml(audit.time)}</td>
@@ -85,6 +96,10 @@
                             <td style="color: #aaa; font-size: 0.9em;">${escapeHtml(audit.reason)}${raw}</td>
                         </tr>`;
                     }).join('');
+                }
+
+                if (profilerTitle && profilerBody) {
+                    updateProfiler(data.profiler);
                 }
 
                 if (data.status !== 'queued' && data.status !== 'running') {
@@ -102,6 +117,62 @@
 
             function formatWholeNumber(value) {
                 return value === null || value === undefined ? 'N/A' : numberFormatter.format(Number(value));
+            }
+
+            function updateProfiler(profile) {
+                if (!profile || Number(profile.totalRequests ?? 0) === 0) {
+                    profilerTitle.textContent = 'Alpaca API Profiler Latency & Performance Profiler';
+                    profilerBody.innerHTML = '<p class="muted">No API requests recorded yet.</p>';
+                    return;
+                }
+
+                profilerTitle.textContent = `${escapeHtml(profile.name)} Latency & Performance Profiler`;
+                const endpointRows = (profile.endpoints ?? []).map(endpoint => `<tr style="border-bottom: 1px solid #333;">
+                    <td style="font-family: monospace; color: #66b3ff;">${escapeHtml(endpoint.route)}</td>
+                    <td>${formatWholeNumber(endpoint.count)}</td>
+                    <td>${formatDecimal(endpoint.avgDurationMs)} ms</td>
+                    <td>${formatDecimal(endpoint.minDurationMs)} ms</td>
+                    <td>${formatDecimal(endpoint.maxDurationMs)} ms</td>
+                    <td style="color: ${Number(endpoint.successRate) >= 99 ? '#4caf50' : '#ff5722'}">${formatDecimal(endpoint.successRate)}%</td>
+                </tr>`).join('');
+
+                profilerBody.innerHTML = `
+                    <div class="muted" style="margin-bottom: 1rem;">Started at: ${escapeHtml(profile.appStartTime)}</div>
+                    <div style="background: #222; padding: 1rem; border-radius: 4px; margin-top: 1rem;">
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem; text-align: center;">
+                            <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
+                                <div class="muted" style="font-size: 0.8rem;">Total Requests</div>
+                                <div style="font-size: 1.5rem; font-weight: bold; color: #4caf50;">${formatWholeNumber(profile.totalRequests)}</div>
+                            </div>
+                            <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
+                                <div class="muted" style="font-size: 0.8rem;">Avg Duration</div>
+                                <div style="font-size: 1.5rem; font-weight: bold; color: #00bcd4;">${formatDecimal(profile.avgDurationMs)} ms</div>
+                            </div>
+                            <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
+                                <div class="muted" style="font-size: 0.8rem;">Max Duration</div>
+                                <div style="font-size: 1.5rem; font-weight: bold; color: #ff9800;">${formatDecimal(profile.maxDurationMs)} ms</div>
+                            </div>
+                            <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
+                                <div class="muted" style="font-size: 0.8rem;">Success Rate</div>
+                                <div style="font-size: 1.5rem; font-weight: bold; color: ${Number(profile.successRate) >= 99 ? '#4caf50' : '#ff5722'};">${formatDecimal(profile.successRate)}%</div>
+                            </div>
+                        </div>
+                        <div style="max-height: 260px; overflow-y: auto;">
+                            <table class="table" style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                                <thead style="position: sticky; top: 0; background: #222; z-index: 1;">
+                                    <tr style="border-bottom: 1px solid #444; text-align: left;">
+                                        <th>Endpoint Route</th>
+                                        <th>Count</th>
+                                        <th>Avg Latency</th>
+                                        <th>Min</th>
+                                        <th>Max</th>
+                                        <th>Success %</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${endpointRows}</tbody>
+                            </table>
+                        </div>
+                    </div>`;
             }
 
             window.tradingFlowPaperJobRefresh = window.setInterval(refreshSnapshot, 5000);
@@ -190,10 +261,12 @@ else
                     <tr style="border-bottom: 1px solid #444; text-align: left;">
                         <th>Local Time</th>
                         <th>Ticker</th>
+                        <th>Candle</th>
                         <th>Close Price</th>
                         <th>RSI (14)</th>
                         <th>Volume</th>
-                        <th>Avg Volume</th>
+                        <th>Slot Avg Vol</th>
+                        <th>RVOL</th>
                         <th>VWAP</th>
                     </tr>
                 </thead>
@@ -203,10 +276,12 @@ else
                         <tr>
                             <td>@Model.FormatLocalTime(point.Timestamp)</td>
                             <td><strong>@point.Ticker</strong></td>
+                            <td>@point.Timeframe</td>
                             <td>@point.Close.ToString("C2")</td>
                             <td>@(point.Rsi?.ToString("F2") ?? "N/A")</td>
                             <td>@point.Volume.ToString("N0")</td>
                             <td>@point.AverageVolume.ToString("N0")</td>
+                            <td>@point.RelativeVolume.ToString("F2")</td>
                             <td>@(point.Vwap?.ToString("C2") ?? "N/A")</td>
                         </tr>
                     }
@@ -214,43 +289,37 @@ else
             </table>
             
             <h3 style="margin-top: 2rem;">Recent Strategy Evaluations</h3>
-            @if (Model.RecentAudits == null || Model.RecentAudits.Count == 0)
-            {
-                <p class="muted">No recent strategy evaluations.</p>
-            }
-            else
-            {
-                <div style="max-height: 300px; overflow-y: auto;">
-                    <table class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
-                        <thead style="position: sticky; top: 0; background: #1e1e1e; z-index: 1;">
-                            <tr style="border-bottom: 1px solid #444; text-align: left;">
-                                <th>Local Time</th>
-                                <th>Ticker</th>
-                                <th>Decision</th>
-                                <th>Rejection Reason</th>
-                            </tr>
-                        </thead>
-                        <tbody id="recentAuditsBody">
-                        @foreach (var audit in Model.RecentAudits)
-                        {
-                            var color = audit.Decision == "Accepted" ? "#4caf50" : (audit.Decision == "Rejected" ? "#f44336" : "#aaa");
-                            <tr style="border-bottom: 1px solid #333;">
-                                <td style="white-space: nowrap;">@Model.FormatLocalTime(audit.Timestamp)</td>
-                                <td style="font-weight: bold;">@audit.Ticker</td>
-                                <td style="color: @color; font-weight: bold;">@audit.Decision</td>
-                                <td style="color: #aaa; font-size: 0.9em;">
-                                    @Model.FormatRejectionReason(audit.RejectionReason)
-                                    @if (!String.IsNullOrWhiteSpace(audit.RejectionReason))
-                                    {
-                                        <br /><code>@audit.RejectionReason</code>
-                                    }
-                                </td>
-                            </tr>
-                        }
-                        </tbody>
-                    </table>
-                </div>
-            }
+            <p id="recentAuditsEmpty" class="muted" style="display: @(Model.RecentAudits == null || Model.RecentAudits.Count == 0 ? "block" : "none")">No recent strategy evaluations.</p>
+            <div style="max-height: 300px; overflow-y: auto;">
+                <table id="recentAuditsTable" class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse; display: @(Model.RecentAudits == null || Model.RecentAudits.Count == 0 ? "none" : "table")">
+                    <thead style="position: sticky; top: 0; background: #1e1e1e; z-index: 1;">
+                        <tr style="border-bottom: 1px solid #444; text-align: left;">
+                            <th>Local Time</th>
+                            <th>Ticker</th>
+                            <th>Decision</th>
+                            <th>Rejection Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recentAuditsBody">
+                    @foreach (var audit in Model.RecentAudits ?? Enumerable.Empty<TradingFlow.Domain.Audit.DecisionAuditRecord>())
+                    {
+                        var color = audit.Decision == "Accepted" ? "#4caf50" : (audit.Decision == "Rejected" ? "#f44336" : "#aaa");
+                        <tr style="border-bottom: 1px solid #333;">
+                            <td style="white-space: nowrap;">@Model.FormatLocalTime(audit.Timestamp)</td>
+                            <td style="font-weight: bold;">@audit.Ticker</td>
+                            <td style="color: @color; font-weight: bold;">@audit.Decision</td>
+                            <td style="color: #aaa; font-size: 0.9em;">
+                                @Model.FormatRejectionReason(audit.RejectionReason)
+                                @if (!String.IsNullOrWhiteSpace(audit.RejectionReason))
+                                {
+                                    <br /><code>@audit.RejectionReason</code>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
 
             <h3 style="margin-top: 2rem;">Live Broker Orders</h3>
             @if (Model.OpenOrders == null || Model.OpenOrders.Count == 0)
@@ -337,7 +406,8 @@ else
                 </table>
             }
 
-            <h3 style="margin-top: 2rem;">@Model.LatencyProfile?.Name Latency & Performance Profiler</h3>
+            <h3 id="profilerTitle" style="margin-top: 2rem;">@(Model.LatencyProfile?.Name ?? "Alpaca API Profiler") Latency & Performance Profiler</h3>
+            <div id="profilerBody">
             @if (Model.LatencyProfile == null || Model.LatencyProfile.TotalRequests == 0)
             {
                 <p class="muted">No API requests recorded yet.</p>
@@ -365,33 +435,36 @@ else
                         </div>
                     </div>
 
-                    <table class="table" style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
-                        <thead>
-                            <tr style="border-bottom: 1px solid #444; text-align: left;">
-                                <th>Endpoint Route</th>
-                                <th>Count</th>
-                                <th>Avg Latency</th>
-                                <th>Min</th>
-                                <th>Max</th>
-                                <th>Success %</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        @foreach (var endpoint in Model.LatencyProfile.Endpoints)
-                        {
-                            <tr style="border-bottom: 1px solid #333;">
-                                <td style="font-family: monospace; color: #66b3ff;">@endpoint.Route</td>
-                                <td>@endpoint.Count</td>
-                                <td>@endpoint.AvgDurationMs.ToString("F1") ms</td>
-                                <td>@endpoint.MinDurationMs.ToString("F1") ms</td>
-                                <td>@endpoint.MaxDurationMs.ToString("F1") ms</td>
-                                <td style="color: @(endpoint.SuccessRate >= 99.0 ? "#4caf50" : "#ff5722")">@endpoint.SuccessRate.ToString("F1")%</td>
-                            </tr>
-                        }
-                        </tbody>
-                    </table>
+                    <div style="max-height: 260px; overflow-y: auto;">
+                        <table class="table" style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                            <thead style="position: sticky; top: 0; background: #222; z-index: 1;">
+                                <tr style="border-bottom: 1px solid #444; text-align: left;">
+                                    <th>Endpoint Route</th>
+                                    <th>Count</th>
+                                    <th>Avg Latency</th>
+                                    <th>Min</th>
+                                    <th>Max</th>
+                                    <th>Success %</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            @foreach (var endpoint in Model.LatencyProfile.Endpoints)
+                            {
+                                <tr style="border-bottom: 1px solid #333;">
+                                    <td style="font-family: monospace; color: #66b3ff;">@endpoint.Route</td>
+                                    <td>@endpoint.Count</td>
+                                    <td>@endpoint.AvgDurationMs.ToString("F1") ms</td>
+                                    <td>@endpoint.MinDurationMs.ToString("F1") ms</td>
+                                    <td>@endpoint.MaxDurationMs.ToString("F1") ms</td>
+                                    <td style="color: @(endpoint.SuccessRate >= 99.0 ? "#4caf50" : "#ff5722")">@endpoint.SuccessRate.ToString("F1")%</td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             }
+            </div>
         </section>
     </div>
 }

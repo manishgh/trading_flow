@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using TradingFlow.Backtesting;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Storage;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Web.Models;
 
@@ -15,6 +18,11 @@ public sealed class PaperJobService
     private readonly TradingFlow.Domain.Orders.IOrderStateRepository? _orderRepo;
     private readonly TradingFlow.Domain.Audit.IDecisionAuditRepository? _auditRepo;
     private readonly AlpacaCredentialProvider alpacaCredentials;
+    private readonly ProjectPaths paths;
+    private readonly ILogger<PaperJobService> logger;
+    private readonly ILogger<LiveRunner> liveRunnerLogger;
+    private readonly ILogger<TradingFlow.Alpaca.AlpacaNewsProvider> alpacaNewsLogger;
+    private readonly IArtifactWriter artifactWriter;
 
     private readonly IServiceScopeFactory _scopeFactory;
 
@@ -22,6 +30,11 @@ public sealed class PaperJobService
         SimpleYamlReader yamlReader,
         IServiceScopeFactory scopeFactory,
         AlpacaCredentialProvider alpacaCredentials,
+        ProjectPaths paths,
+        ILogger<PaperJobService>? logger = null,
+        ILogger<LiveRunner>? liveRunnerLogger = null,
+        ILogger<TradingFlow.Alpaca.AlpacaNewsProvider>? alpacaNewsLogger = null,
+        IArtifactWriter? artifactWriter = null,
         TradingFlow.Domain.Locking.ITickerLockService? lockService = null,
         TradingFlow.Domain.Orders.IOrderStateRepository? orderRepo = null,
         TradingFlow.Domain.Audit.IDecisionAuditRepository? auditRepo = null)
@@ -29,6 +42,11 @@ public sealed class PaperJobService
         this.yamlReader = yamlReader;
         _scopeFactory = scopeFactory;
         this.alpacaCredentials = alpacaCredentials;
+        this.paths = paths;
+        this.logger = logger ?? NullLogger<PaperJobService>.Instance;
+        this.liveRunnerLogger = liveRunnerLogger ?? NullLogger<LiveRunner>.Instance;
+        this.alpacaNewsLogger = alpacaNewsLogger ?? NullLogger<TradingFlow.Alpaca.AlpacaNewsProvider>.Instance;
+        this.artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
         _lockService = lockService;
         _orderRepo = orderRepo;
         _auditRepo = auditRepo;
@@ -42,6 +60,11 @@ public sealed class PaperJobService
         
         foreach (var pJob in allJobs)
         {
+            if (!File.Exists(pJob.ConfigPath))
+            {
+                continue;
+            }
+
             var job = new MutablePaperJob(pJob.Id, pJob.RunName, pJob.ConfigPath, pJob.CreatedAt)
             {
                 Status = pJob.Status,
@@ -79,7 +102,14 @@ public sealed class PaperJobService
                     CreatedAt = job.CreatedAt
                 }, default);
             }
-            catch { }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Failed to persist paper job {JobId} for run {RunName} before execution.",
+                    job.JobId,
+                    job.RunName);
+            }
             await RunAsync(job);
         });
 
@@ -107,7 +137,14 @@ public sealed class PaperJobService
                     using var scope = _scopeFactory.CreateScope();
                     var jobRepo = scope.ServiceProvider.GetRequiredService<TradingFlow.Domain.Jobs.IJobRepository>();
                     await jobRepo.UpdateJobStatusAsync(job.JobId, "cancelled", null, default);
-                } catch { }
+                }
+                catch (Exception exception)
+                {
+                    logger.LogWarning(
+                        exception,
+                        "Failed to persist cancelled status for paper job {JobId}.",
+                        job.JobId);
+                }
             });
         }
     }
@@ -160,8 +197,12 @@ public sealed class PaperJobService
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             return await brokerClient.GetOpenOrdersAsync(cts.Token);
         }
-        catch
+        catch (Exception exception)
         {
+            logger.LogWarning(
+                exception,
+                "Failed to load open broker orders for paper job {JobId}.",
+                jobId);
             return Array.Empty<TradingFlow.Domain.Orders.ActiveBrokerOrder>();
         }
         finally
@@ -183,8 +224,12 @@ public sealed class PaperJobService
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             return await brokerClient.GetOpenPositionsAsync(cts.Token);
         }
-        catch
+        catch (Exception exception)
         {
+            logger.LogWarning(
+                exception,
+                "Failed to load open broker positions for paper job {JobId}.",
+                jobId);
             return Array.Empty<TradingFlow.Domain.Orders.BrokerPosition>();
         }
         finally
@@ -244,7 +289,14 @@ public sealed class PaperJobService
                 var jobRepo = scope.ServiceProvider.GetRequiredService<TradingFlow.Domain.Jobs.IJobRepository>();
                 await jobRepo.UpdateJobStatusAsync(job.JobId, status, error, default);
             }
-            catch { }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Failed to update persisted status {Status} for paper job {JobId}.",
+                    status,
+                    job.JobId);
+            }
         }
 
         job.Status = "running";
@@ -256,8 +308,9 @@ public sealed class PaperJobService
         _cancellationTokens[job.JobId] = cts;
         try
         {
-            var runConfig = yamlReader.ReadBacktestRun(job.ConfigPath);
+            var runConfig = ResolveRunPaths(yamlReader.ReadBacktestRun(job.ConfigPath));
             var strategies = runConfig.Strategies.Select(yamlReader.ReadStrategy).ToArray();
+            ClearLiveChartSnapshots(runConfig);
             
             var provider = CreateProvider(runConfig);
             var newsProvider = CreateNewsProvider(runConfig);
@@ -270,7 +323,8 @@ public sealed class PaperJobService
                 _lockService,
                 _orderRepo,
                 _auditRepo,
-                Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRunner>.Instance);
+                liveRunnerLogger,
+                artifactWriter);
             
             var progress = new Progress<string>(msg =>
             {
@@ -291,7 +345,11 @@ public sealed class PaperJobService
         }
         catch (Exception exception)
         {
-            Console.WriteLine($"JOB FAILED: {exception}");
+            logger.LogError(
+                exception,
+                "Paper job {JobId} for run {RunName} failed.",
+                job.JobId,
+                job.RunName);
             job.ErrorMessage = exception.Message;
             job.Status = "failed";
             await UpdateStatusAsync("failed", exception.Message);
@@ -315,7 +373,9 @@ public sealed class PaperJobService
                     KeyId = alpacaCredentials.KeyId,
                     SecretKey = alpacaCredentials.SecretKey,
                     MarketDataFeed = run.Providers.Alpaca.DataFeed
-                }),
+                },
+                alpacaNewsLogger,
+                CreateSentimentAnalyzer()),
             "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(
                 new TradingFlow.Finviz.FinvizClient(
                     new HttpClient(),
@@ -324,6 +384,17 @@ public sealed class PaperJobService
             "none" => null,
             _ => throw new NotSupportedException($"Unsupported news provider: {run.News.ProviderName}")
         };
+    }
+
+    private static TradingFlow.Engine.Abstractions.ISentimentAnalyzer CreateSentimentAnalyzer()
+    {
+        var endpoint = Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL");
+        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
+        {
+            return new TradingFlow.Alpaca.FinbertHttpSentimentAnalyzer(new HttpClient(), uri);
+        }
+
+        return new TradingFlow.Alpaca.VaderSentimentAnalyzer();
     }
 
     private TradingFlow.Engine.Execution.IBrokerClient? CreateBrokerClient(BacktestRunConfig run)
@@ -347,19 +418,9 @@ public sealed class PaperJobService
 
     private TradingFlow.Engine.Abstractions.IMarketDataProvider CreateProvider(BacktestRunConfig run)
     {
-        var etoroOptions = TradingFlow.Etoro.Configuration.EtoroOptions.CreateDefault(TradingFlow.Etoro.Configuration.EtoroEnvironment.Demo) with
-        {
-            Demo = new TradingFlow.Etoro.Configuration.EtoroCredentialProfile("ETORO_DEMO_API_KEY", "ETORO_DEMO_USER_KEY", false)
-        };
-        var etoroCreds = new TradingFlow.Etoro.Authentication.EtoroCredentialsProvider(etoroOptions);
-        var etoroRateLimiter = new TradingFlow.Etoro.Http.EtoroRateLimiter(etoroOptions.RateLimits);
-
         return run.Provider.ToLowerInvariant() switch
         {
             "csv" => new TradingFlow.Data.Csv.CsvMarketDataProvider(run.NormalizedRoot),
-            "yahoo" => new TradingFlow.Data.Yahoo.YahooFinanceProvider(
-                TradingFlow.Data.Yahoo.YahooFinanceProvider.CreateBrowserLikeClient(run.Providers.Yahoo),
-                run.Providers.Yahoo, run.RawRoot, run.NormalizedRoot, run.CachePolicy),
             "alpaca" => new TradingFlow.Alpaca.AlpacaMarketDataProvider(
                 new HttpClient(),
                 TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
@@ -373,11 +434,41 @@ public sealed class PaperJobService
                     new HttpClient(),
                     TradingFlow.Finviz.FinvizOptions.CreateDefault() with { AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? "" }
                 )),
-            "etoro" => new TradingFlow.Etoro.MarketData.EtoroMarketDataProvider(
-                new TradingFlow.Etoro.Http.EtoroApiClient(new HttpClient(), etoroOptions, etoroCreds, etoroRateLimiter),
-                new TradingFlow.Etoro.MarketData.EtoroInstrumentResolver(new TradingFlow.Etoro.Http.EtoroApiClient(new HttpClient(), etoroOptions, etoroCreds, etoroRateLimiter))
-            ),
             _ => throw new NotSupportedException($"Unsupported market data provider: {run.Provider}")
+        };
+    }
+
+    private void ClearLiveChartSnapshots(BacktestRunConfig run)
+    {
+        var resultsDir = Path.Combine(run.ResultsRoot, "live", run.RunName);
+        if (!Directory.Exists(resultsDir))
+        {
+            return;
+        }
+
+        foreach (var file in Directory.GetFiles(resultsDir, "*_chart.json", SearchOption.AllDirectories))
+        {
+            try
+            {
+                File.Delete(file);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Failed to delete stale chart snapshot {ChartSnapshotPath}; the next writer may replace it.",
+                    file);
+            }
+        }
+    }
+
+    private BacktestRunConfig ResolveRunPaths(BacktestRunConfig run)
+    {
+        return run with
+        {
+            RawRoot = paths.ResolveRepositoryPath(run.RawRoot),
+            NormalizedRoot = paths.ResolveRepositoryPath(run.NormalizedRoot),
+            ResultsRoot = paths.ResolveRepositoryPath(run.ResultsRoot)
         };
     }
 
@@ -404,7 +495,7 @@ public sealed class PaperJobService
         {
             CurrentStage = stage; CompletedTickerCount = completedTickerCount; TotalTickerCount = totalTickerCount;
             var tickerText = String.IsNullOrWhiteSpace(ticker) ? String.Empty : $" [{ticker}]";
-            Events.Enqueue($"{DateTimeOffset.UtcNow:HH:mm:ss} {stage}{tickerText}: {message}");
+            Events.Enqueue($"{UiDisplayFormatter.FormatLocalTime(DateTimeOffset.UtcNow)} {stage}{tickerText}: {message}");
             while (Events.Count > 80 && Events.TryDequeue(out _)) { }
         }
 
