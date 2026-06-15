@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Sessions;
 
 namespace TradingFlow.Engine.Strategies;
@@ -47,6 +48,7 @@ public sealed class SignalGenerator
             previous.CurrentPrice >= previous.Ema20.Value &&
             bar.Low <= snapshot.Ema20.Value &&
             snapshot.CurrentPrice >= snapshot.Ema20.Value;
+        var isPriceAboveEma10 = snapshot.Ema10 is not null && snapshot.CurrentPrice > snapshot.Ema10.Value;
         var isPriceAboveEma20 = snapshot.Ema20 is not null && snapshot.CurrentPrice > snapshot.Ema20.Value;
         var isPriceAboveEma50 = snapshot.Ema50 is not null && snapshot.CurrentPrice > snapshot.Ema50.Value;
         var isEma20AboveEma50 = snapshot.Ema20 is not null &&
@@ -61,7 +63,19 @@ public sealed class SignalGenerator
         var isSma20AboveSma50 = snapshot.Sma20 is not null &&
             snapshot.Sma50 is not null &&
             snapshot.Sma20.Value > snapshot.Sma50.Value;
-        var anchoredVwap = ComputeAnchoredVwap(strategy.EntryRules.AnchoredVwapMode, strategy.EntryRules.AnchoredVwapLookbackBars, bars, index);
+        var isEma10AboveEma20 = snapshot.Ema10 is not null &&
+            snapshot.Ema20 is not null &&
+            snapshot.Ema10.Value > snapshot.Ema20.Value;
+        var isPriceAboveSma150 = snapshot.Sma150 is not null && snapshot.CurrentPrice > snapshot.Sma150.Value;
+        var isPriceAboveSma200 = snapshot.Sma200 is not null && snapshot.CurrentPrice > snapshot.Sma200.Value;
+        var isSma50AboveSma150 = snapshot.Sma50 is not null &&
+            snapshot.Sma150 is not null &&
+            snapshot.Sma50.Value > snapshot.Sma150.Value;
+        var isSma150AboveSma200 = snapshot.Sma150 is not null &&
+            snapshot.Sma200 is not null &&
+            snapshot.Sma150.Value > snapshot.Sma200.Value;
+        var isPriceAboveEma5 = snapshot.Ema5 is not null && snapshot.CurrentPrice > snapshot.Ema5.Value;
+        var anchoredVwap = ComputePrimaryAnchoredVwap(strategy, bars, index);
         var isAboveAnchoredVwap = anchoredVwap is not null && snapshot.CurrentPrice > anchoredVwap.Value;
         var isBelowAnchoredVwap = anchoredVwap is not null && snapshot.CurrentPrice < anchoredVwap.Value;
         var anchoredVwapExtensionAtr = anchoredVwap is null || snapshot.Atr.Value <= 0m
@@ -89,16 +103,37 @@ public sealed class SignalGenerator
             addOne: true);
         var previousRegularClose = GetPreviousRegularClose(strategy, bars, snapshots, index);
         var sessionOpen = GetSessionOpen(strategy, bars, snapshots, index);
+        decimal? dayGainPct = previousRegularClose is null ? null : ((snapshot.CurrentPrice / previousRegularClose.Value) - 1m) * 100m;
+        decimal? gapUpPct = previousRegularClose is null ? null : ((bar.Open / previousRegularClose.Value) - 1m) * 100m;
+        decimal? sessionGainPct = sessionOpen is null ? null : ((snapshot.CurrentPrice / sessionOpen.Value) - 1m) * 100m;
         var sessionContext = GetSessionContext(strategy, bars, snapshots, index);
         var catalystContext = GetCatalystContext(snapshot.Catalyst, bars, snapshots, index);
-        var bullFlag = GetBullFlagContext(strategy, bars, index);
-        var stepContext = GetStepBreakoutContext(strategy, bars, snapshots, index);
-        var reclaimContext = GetSwingReclaimContext(strategy, bars, snapshots, index);
-        var rolloverContext = GetSwingRolloverContext(strategy, bars, snapshots, index);
+        var bullFlag = UsesLongSetup(strategy, "ross_gap_go_bull_flag")
+            ? GetBullFlagContext(strategy, bars, index)
+            : (false, null, null, null, null);
+        var stepContext = UsesLongSetup(strategy, "step_breakout") || UsesShortSetup(strategy, "step_breakdown")
+            ? GetStepBreakoutContext(strategy, bars, snapshots, index)
+            : (false, false, null, null, null, null, null, null);
+        var reclaimContext = UsesLongSetup(strategy, "swing_reclaim")
+            ? GetSwingReclaimContext(strategy, bars, snapshots, index)
+            : (false, null, null, null);
+        var rolloverContext = UsesShortSetup(strategy, "swing_rollover")
+            ? GetSwingRolloverContext(strategy, bars, snapshots, index)
+            : (false, null, null, null);
         var premarketContext = GetPremarketContext(strategy, bars, snapshots, index);
         var minutesAfterRegularOpen = GetMinutesAfterRegularOpen(strategy, snapshots[index].Timestamp);
         var consecutiveClosesAboveVwap = CountConsecutiveClosesAboveVwap(snapshots, index);
         var bollingerContext = GetBollingerContext(snapshot);
+        var trapContext = GetVwapReclaimTrapContext(strategy, bars, snapshots, index);
+        var avwapBounceContext = GetAnchoredVwapBounceContext(strategy, bars, index, anchoredVwap);
+        var vcpContext = GetVcpContext(strategy, bars, snapshots, index);
+        var volumeSmaTrend = GetVolumeSmaTrend(
+            strategy,
+            bars,
+            index);
+        var isEpisodicPivotGap = strategy.EntryRules.MinGapUpPct is { } minGap &&
+            gapUpPct is not null &&
+            gapUpPct.Value >= minGap;
 
         return new TradeSignal(
             snapshot.Ticker,
@@ -133,8 +168,8 @@ public sealed class SignalGenerator
             IsAboveSessionOpen(strategy, bars, snapshots, index),
             IsBelowSessionOpen(strategy, bars, snapshots, index),
             ComputeCloseLocationValue(bar),
-            previousRegularClose is null ? null : ((snapshot.CurrentPrice / previousRegularClose.Value) - 1m) * 100m,
-            sessionOpen is null ? null : ((snapshot.CurrentPrice / sessionOpen.Value) - 1m) * 100m,
+            dayGainPct,
+            sessionGainPct,
             sessionContext.RangePct,
             sessionContext.PullbackFromHighPct,
             snapshot.Catalyst,
@@ -185,7 +220,117 @@ public sealed class SignalGenerator
             rolloverContext.IsRollover,
             rolloverContext.AdvancePct,
             rolloverContext.DropFromHighPct,
-            rolloverContext.RecentHigh);
+            rolloverContext.RecentHigh,
+            isPriceAboveEma10,
+            isEma10AboveEma20,
+            trapContext.IsTrap,
+            trapContext.PriorFlushBars,
+            trapContext.BarsSinceFlush,
+            trapContext.ReclaimVolumeRatio,
+            avwapBounceContext.IsBounce,
+            avwapBounceContext.ProximityPct,
+            avwapBounceContext.IsPullbackVolumeDryup,
+            avwapBounceContext.BounceVolumeRatio,
+            isEpisodicPivotGap,
+            gapUpPct,
+            vcpContext.IsBreakout,
+            vcpContext.PriceVsLowPct,
+            vcpContext.PriceVsHighPct,
+            vcpContext.Contractions,
+            vcpContext.IsVolatilityHalving,
+            vcpContext.IsVolumeDryUp,
+            vcpContext.BreakoutVolumeRatio,
+            isPriceAboveSma150,
+            isPriceAboveSma200,
+            isSma50AboveSma150,
+            isSma150AboveSma200,
+            isPriceAboveEma5,
+            snapshot.SessionRelativeVolume,
+            snapshot.SlotRelativeVolume,
+            volumeSmaTrend.IsRising,
+            volumeSmaTrend.CurrentSma,
+            volumeSmaTrend.PreviousSma,
+            volumeSmaTrend.RisePct);
+    }
+
+    private static (bool IsRising, decimal? CurrentSma, decimal? PreviousSma, decimal? RisePct) GetVolumeSmaTrend(
+        StrategyDefinition strategy,
+        IReadOnlyList<OhlcvBar> bars,
+        int index)
+    {
+        var period = Math.Max(1, strategy.EntryRules.VolumeSmaPeriod);
+        var lookbackBars = Math.Max(1, strategy.EntryRules.VolumeSmaRisingLookbackBars);
+        if (index - lookbackBars - period + 1 < 0)
+        {
+            return (false, null, null, null);
+        }
+
+        decimal? previousSma = null;
+        for (var offset = lookbackBars; offset >= 0; offset--)
+        {
+            var sma = AverageVolumeEndingAt(bars, index - offset, period);
+            if (sma is null)
+            {
+                return (false, null, null, null);
+            }
+
+            if (previousSma is not null && sma.Value <= previousSma.Value)
+            {
+                return (false, AverageVolumeEndingAt(bars, index, period), AverageVolumeEndingAt(bars, index - lookbackBars, period), null);
+            }
+
+            previousSma = sma;
+        }
+
+        var current = AverageVolumeEndingAt(bars, index, period);
+        var prior = AverageVolumeEndingAt(bars, index - lookbackBars, period);
+        var risePct = current is not null && prior is > 0m
+            ? ((current.Value / prior.Value) - 1m) * 100m
+            : (decimal?)null;
+
+        return (true, current, prior, risePct);
+    }
+
+    private static decimal? AverageVolumeEndingAt(IReadOnlyList<OhlcvBar> bars, int endIndex, int period)
+    {
+        if (endIndex < period - 1 || endIndex >= bars.Count)
+        {
+            return null;
+        }
+
+        decimal sum = 0m;
+        for (var i = endIndex - period + 1; i <= endIndex; i++)
+        {
+            sum += bars[i].Volume;
+        }
+
+        return sum / period;
+    }
+
+    private static bool UsesLongSetup(StrategyDefinition strategy, string setupType)
+    {
+        return strategy.EntryRules.SetupType.Equals(setupType, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool UsesShortSetup(StrategyDefinition strategy, string setupType)
+    {
+        return strategy.EntryRules.EnableShort &&
+            strategy.EntryRules.ShortSetupType.Equals(setupType, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static decimal? ComputePrimaryAnchoredVwap(
+        StrategyDefinition strategy,
+        IReadOnlyList<OhlcvBar> bars,
+        int index)
+    {
+        if (!strategy.EntryRules.AnchoredVwapMode.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            return ComputeAnchoredVwap(strategy.EntryRules.AnchoredVwapMode, strategy.EntryRules.AnchoredVwapLookbackBars, bars, index);
+        }
+
+        return String.IsNullOrWhiteSpace(strategy.EntryRules.AnchorType)
+            ? null
+            : ComputeAnchoredVwapFromAnchorType(strategy.EntryRules.AnchorType!, strategy.EntryRules.AnchoredVwapLookbackBars, bars, index);
     }
 
     private static decimal? ComputeAnchoredVwap(
@@ -220,6 +365,63 @@ public sealed class SignalGenerator
         return cumulativeVolume <= 0m ? null : cumulativePriceVolume / cumulativeVolume;
     }
 
+    private static decimal? ComputeAnchoredVwapFromAnchorType(
+        string anchorType,
+        int lookbackBars,
+        IReadOnlyList<OhlcvBar> bars,
+        int index)
+    {
+        var lookback = Math.Max(2, lookbackBars);
+        var start = Math.Max(0, index - lookback + 1);
+        var anchorIndex = anchorType.ToLowerInvariant() switch
+        {
+            "recent_gap_or_high_volume_node" => FindRecentGapOrHighVolumeAnchor(bars, start, index),
+            "high_volume_node" => Enumerable.Range(start, index - start + 1).MaxBy(i => bars[i].Volume),
+            "recent_gap" => FindRecentGapAnchor(bars, start, index),
+            _ => throw new NotSupportedException($"Unsupported anchor_type: {anchorType}.")
+        };
+
+        decimal cumulativePriceVolume = 0m;
+        decimal cumulativeVolume = 0m;
+        for (var i = anchorIndex; i <= index; i++)
+        {
+            var typicalPrice = (bars[i].High + bars[i].Low + bars[i].Close) / 3m;
+            cumulativePriceVolume += typicalPrice * bars[i].Volume;
+            cumulativeVolume += bars[i].Volume;
+        }
+
+        return cumulativeVolume <= 0m ? null : cumulativePriceVolume / cumulativeVolume;
+    }
+
+    private static int FindRecentGapOrHighVolumeAnchor(IReadOnlyList<OhlcvBar> bars, int start, int index)
+    {
+        var gapAnchor = FindRecentGapAnchor(bars, start, index);
+        var volumeAnchor = Enumerable.Range(start, index - start + 1).MaxBy(i => bars[i].Volume);
+        return Math.Max(gapAnchor, volumeAnchor);
+    }
+
+    private static int FindRecentGapAnchor(IReadOnlyList<OhlcvBar> bars, int start, int index)
+    {
+        var bestIndex = start;
+        var bestGap = 0m;
+        for (var i = Math.Max(start + 1, 1); i <= index; i++)
+        {
+            if (bars[i - 1].Close <= 0m)
+            {
+                continue;
+            }
+
+            var gapPct = Math.Abs((bars[i].Open / bars[i - 1].Close) - 1m) * 100m;
+            if (gapPct >= bestGap)
+            {
+                bestGap = gapPct;
+                bestIndex = i;
+            }
+        }
+
+        return bestIndex;
+    }
+
     private static (decimal? Position, decimal? WidthPct) GetBollingerContext(IndicatorSnapshot snapshot)
     {
         if (snapshot.BollingerLower is null ||
@@ -237,6 +439,176 @@ public sealed class SignalGenerator
             : (width / snapshot.BollingerMiddle.Value) * 100m;
 
         return (position, widthPct);
+    }
+
+    private static (
+        bool IsTrap,
+        int? PriorFlushBars,
+        int? BarsSinceFlush,
+        decimal? ReclaimVolumeRatio) GetVwapReclaimTrapContext(
+            StrategyDefinition strategy,
+            IReadOnlyList<OhlcvBar> bars,
+            IReadOnlyList<IndicatorSnapshot> snapshots,
+            int index)
+    {
+        var maxBarsSinceFlush = Math.Max(1, strategy.EntryRules.VwapReclaimMaxBarsSinceFlush ?? 12);
+        var start = Math.Max(0, index - maxBarsSinceFlush);
+        var flushIndex = -1;
+        var consecutiveBelow = 0;
+        var bestConsecutiveBelow = 0;
+        for (var i = start; i < index; i++)
+        {
+            if (snapshots[i].Vwap is not null && snapshots[i].CurrentPrice < snapshots[i].Vwap!.Value)
+            {
+                consecutiveBelow++;
+                bestConsecutiveBelow = Math.Max(bestConsecutiveBelow, consecutiveBelow);
+                flushIndex = i;
+            }
+            else
+            {
+                consecutiveBelow = 0;
+            }
+        }
+
+        if (flushIndex < 0)
+        {
+            return (false, bestConsecutiveBelow, null, null);
+        }
+
+        var barsSinceFlush = index - flushIndex;
+        var lookbackStart = Math.Max(0, index - 20);
+        var priorVolumes = bars.Skip(lookbackStart).Take(index - lookbackStart).Select(x => x.Volume).Where(x => x > 0m).ToArray();
+        var averageVolume = priorVolumes.Length == 0 ? 0m : priorVolumes.Average();
+        var reclaimVolumeRatio = averageVolume <= 0m ? (decimal?)null : bars[index].Volume / averageVolume;
+        var requiredFlushBars = strategy.EntryRules.RequirePriorFlushBelowVwapBars ?? 1;
+        var requiredVolumeRatio = strategy.EntryRules.MinReclaimVolumeRatio ?? 0m;
+        var isTrap = snapshots[index].Vwap is not null &&
+            snapshots[index].CurrentPrice > snapshots[index].Vwap!.Value &&
+            bestConsecutiveBelow >= requiredFlushBars &&
+            barsSinceFlush <= maxBarsSinceFlush &&
+            (reclaimVolumeRatio is null || reclaimVolumeRatio.Value >= requiredVolumeRatio);
+
+        return (isTrap, bestConsecutiveBelow, barsSinceFlush, reclaimVolumeRatio);
+    }
+
+    private static (
+        bool IsBounce,
+        decimal? ProximityPct,
+        bool IsPullbackVolumeDryup,
+        decimal? BounceVolumeRatio) GetAnchoredVwapBounceContext(
+            StrategyDefinition strategy,
+            IReadOnlyList<OhlcvBar> bars,
+            int index,
+            decimal? anchoredVwap)
+    {
+        if (anchoredVwap is null || anchoredVwap.Value <= 0m)
+        {
+            return (false, null, false, null);
+        }
+
+        var bar = bars[index];
+        var proximityPct = Math.Abs((bar.Close / anchoredVwap.Value) - 1m) * 100m;
+        var maxProximityPct = strategy.EntryRules.AvwapProximityPct ?? 1.5m;
+        var touchedAnchor = bar.Low <= anchoredVwap.Value * (1m + (maxProximityPct / 100m));
+        var closedAboveAnchor = bar.Close >= anchoredVwap.Value;
+        var lookbackStart = Math.Max(0, index - 20);
+        var priorVolumes = bars.Skip(lookbackStart).Take(index - lookbackStart).Select(x => x.Volume).Where(x => x > 0m).ToArray();
+        var averagePriorVolume = priorVolumes.Length == 0 ? 0m : priorVolumes.Average();
+        var bounceVolumeRatio = averagePriorVolume <= 0m ? (decimal?)null : bar.Volume / averagePriorVolume;
+        var pullbackStart = Math.Max(0, index - 3);
+        var pullbackVolumes = bars.Skip(pullbackStart).Take(index - pullbackStart).Select(x => x.Volume).Where(x => x > 0m).ToArray();
+        var isPullbackDryup = averagePriorVolume > 0m &&
+            pullbackVolumes.Length > 0 &&
+            pullbackVolumes.Average() <= averagePriorVolume * 0.80m;
+        var minBounceVolumeRatio = strategy.EntryRules.MinBounceVolumeRatio ?? 0m;
+        var isBounce = touchedAnchor &&
+            closedAboveAnchor &&
+            proximityPct <= maxProximityPct &&
+            (!strategy.EntryRules.RequirePullbackVolumeDryup || isPullbackDryup) &&
+            (bounceVolumeRatio is null || bounceVolumeRatio.Value >= minBounceVolumeRatio);
+
+        return (isBounce, proximityPct, isPullbackDryup, bounceVolumeRatio);
+    }
+
+    private static (
+        bool IsBreakout,
+        decimal? PriceVsLowPct,
+        decimal? PriceVsHighPct,
+        int? Contractions,
+        bool IsVolatilityHalving,
+        bool IsVolumeDryUp,
+        decimal? BreakoutVolumeRatio) GetVcpContext(
+            StrategyDefinition strategy,
+            IReadOnlyList<OhlcvBar> bars,
+            IReadOnlyList<IndicatorSnapshot> snapshots,
+            int index)
+    {
+        var lookback = Math.Max(10, strategy.EntryRules.VolatilityContractionLookbackBars);
+        if (index < lookback)
+        {
+            return (false, null, null, null, false, false, null);
+        }
+
+        var window = bars.Skip(index - lookback).Take(lookback).ToArray();
+        var high = window.Max(x => x.High);
+        var low = window.Min(x => x.Low);
+        var price = bars[index].Close;
+        var priceVsLowPct = low <= 0m ? (decimal?)null : ((price / low) - 1m) * 100m;
+        var priceVsHighPct = high <= 0m ? (decimal?)null : ((price / high) - 1m) * 100m;
+        var firstHalf = window.Take(window.Length / 2).ToArray();
+        var secondHalf = window.Skip(window.Length / 2).ToArray();
+        var firstRange = firstHalf.Max(x => x.High) - firstHalf.Min(x => x.Low);
+        var secondRange = secondHalf.Max(x => x.High) - secondHalf.Min(x => x.Low);
+        var isVolatilityHalving = firstRange > 0m && secondRange <= firstRange / 2m;
+        var averageFirstVolume = firstHalf.Where(x => x.Volume > 0m).Select(x => x.Volume).DefaultIfEmpty(0m).Average();
+        var averageSecondVolume = secondHalf.Where(x => x.Volume > 0m).Select(x => x.Volume).DefaultIfEmpty(0m).Average();
+        var isVolumeDryUp = averageFirstVolume > 0m && averageSecondVolume <= averageFirstVolume * 0.70m;
+        var breakoutBaseVolume = secondHalf.Where(x => x.Volume > 0m).Select(x => x.Volume).DefaultIfEmpty(0m).Average();
+        var breakoutVolumeRatio = breakoutBaseVolume <= 0m ? (decimal?)null : bars[index].Volume / breakoutBaseVolume;
+        var contractions = CountRangeContractions(window);
+        var minContractions = strategy.EntryRules.MinContractions ?? 0;
+        var maxContractions = strategy.EntryRules.MaxContractions ?? int.MaxValue;
+        var minBreakoutVolumeRatio = strategy.EntryRules.MinBreakoutVolumeRatio ?? 0m;
+        var isBreakout = bars[index].Close >= high &&
+            contractions >= minContractions &&
+            contractions <= maxContractions &&
+            (!strategy.EntryRules.RequireVolatilityHalvingLeftToRight || isVolatilityHalving) &&
+            (!strategy.EntryRules.RequireVolumeDryUpPreBreakout || isVolumeDryUp) &&
+            (breakoutVolumeRatio is null || breakoutVolumeRatio.Value >= minBreakoutVolumeRatio);
+
+        return (isBreakout, priceVsLowPct, priceVsHighPct, contractions, isVolatilityHalving, isVolumeDryUp, breakoutVolumeRatio);
+    }
+
+    private static int CountRangeContractions(IReadOnlyList<OhlcvBar> bars)
+    {
+        if (bars.Count < 4)
+        {
+            return 0;
+        }
+
+        var bucketSize = Math.Max(2, bars.Count / 4);
+        var ranges = new List<decimal>();
+        for (var i = 0; i < bars.Count; i += bucketSize)
+        {
+            var bucket = bars.Skip(i).Take(bucketSize).ToArray();
+            if (bucket.Length == 0)
+            {
+                continue;
+            }
+
+            ranges.Add(bucket.Max(x => x.High) - bucket.Min(x => x.Low));
+        }
+
+        var contractions = 0;
+        for (var i = 1; i < ranges.Count; i++)
+        {
+            if (ranges[i] < ranges[i - 1])
+            {
+                contractions++;
+            }
+        }
+
+        return contractions;
     }
 
     private static (
@@ -902,6 +1274,11 @@ public sealed class SignalGenerator
         IReadOnlyList<IndicatorSnapshot> snapshots,
         int index)
     {
+        if (strategy.EntryRules.OpeningRangeMinutes <= 0)
+        {
+            return false;
+        }
+
         var currentExchangeTime = ConvertToExchangeTime(snapshots[index].Timestamp, strategy.Session.ExchangeTimezone);
         var sessionOpen = currentExchangeTime.Date.Add(new TimeSpan(9, 30, 0));
         var openingRangeEnd = sessionOpen.AddMinutes(strategy.EntryRules.OpeningRangeMinutes);
@@ -933,6 +1310,11 @@ public sealed class SignalGenerator
         IReadOnlyList<IndicatorSnapshot> snapshots,
         int index)
     {
+        if (strategy.EntryRules.OpeningRangeMinutes <= 0)
+        {
+            return false;
+        }
+
         var currentExchangeTime = ConvertToExchangeTime(snapshots[index].Timestamp, strategy.Session.ExchangeTimezone);
         var sessionOpen = currentExchangeTime.Date.Add(new TimeSpan(9, 30, 0));
         var openingWindowEnd = sessionOpen.AddMinutes(strategy.EntryRules.OpeningRangeMinutes);
@@ -980,6 +1362,11 @@ public sealed class SignalGenerator
         IReadOnlyList<IndicatorSnapshot> snapshots,
         int index)
     {
+        if (strategy.EntryRules.OpeningRangeMinutes <= 0)
+        {
+            return false;
+        }
+
         var currentExchangeTime = ConvertToExchangeTime(snapshots[index].Timestamp, strategy.Session.ExchangeTimezone);
         var sessionOpen = currentExchangeTime.Date.Add(new TimeSpan(9, 30, 0));
         var openingRangeEnd = sessionOpen.AddMinutes(strategy.EntryRules.OpeningRangeMinutes);
@@ -1051,7 +1438,7 @@ public sealed class SignalGenerator
         int index)
     {
         var lookback = strategy.EntryRules.RecentHighLookbackBars;
-        if (index <= lookback)
+        if (lookback <= 0 || index <= lookback)
         {
             return false;
         }
@@ -1069,7 +1456,7 @@ public sealed class SignalGenerator
         int index)
     {
         var lookback = strategy.EntryRules.RecentHighLookbackBars;
-        if (index <= lookback)
+        if (lookback <= 0 || index <= lookback)
         {
             return false;
         }
@@ -1088,7 +1475,8 @@ public sealed class SignalGenerator
         int index)
     {
         var lookback = strategy.EntryRules.VolatilityContractionLookbackBars;
-        if (index <= lookback ||
+        if (lookback <= 0 ||
+            index <= lookback ||
             snapshots[index].Atr is null ||
             snapshots[index - lookback].Atr is null)
         {
@@ -1144,7 +1532,7 @@ public sealed class SignalGenerator
             return $"confluence_missing_timeframe (Required: {strategy.Confluence.Timeframe})";
         }
 
-        var confluence = confluenceSnapshots.LastOrDefault(x => x.Timestamp.Add(ParseTimeframe(x.Timeframe)) <= timestamp);
+        var confluence = confluenceSnapshots.LastOrDefault(x => x.Timestamp.Add(TimeframeParser.Parse(x.Timeframe)) <= timestamp);
         if (confluence is null)
         {
             return $"confluence_no_closed_bar (Required: {strategy.Confluence.Timeframe}, SignalTime: {timestamp:O})";
@@ -1197,26 +1585,4 @@ public sealed class SignalGenerator
         return null;
     }
 
-    private static TimeSpan ParseTimeframe(string timeframe)
-    {
-        if (timeframe.EndsWith("m", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var minutes))
-        {
-            return TimeSpan.FromMinutes(minutes);
-        }
-
-        if (timeframe.EndsWith("h", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var hours))
-        {
-            return TimeSpan.FromHours(hours);
-        }
-
-        if (timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var days))
-        {
-            return TimeSpan.FromDays(days);
-        }
-
-        throw new NotSupportedException($"Unsupported timeframe: {timeframe}");
-    }
 }

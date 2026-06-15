@@ -8,6 +8,7 @@ using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Execution;
+using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
 using TradingFlow.Engine.Sessions;
 using TradingFlow.Engine.Storage;
@@ -24,12 +25,12 @@ public sealed record PreparedBacktestMarket(
     DateTimeOffset WindowStart,
     DateTimeOffset WindowEnd);
 
-public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter? artifactWriter = null)
+public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter? artifactWriter = null, ICandleStore? candleStore = null)
 {
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
     private readonly BasicStrategyEvaluator _strategyEvaluator = new();
     private readonly StrategySessionClock _sessionClock = new();
-    private readonly CandlePipelineEngine _candlePipeline = new();
+    private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
     private readonly BacktestValidator _validator = new();
     private readonly SignalGenerator _signalGenerator = new();
     private readonly TradingFlow.Engine.Execution.ExecutionAuditor _auditor = new();
@@ -44,7 +45,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         var run = yamlReader.ReadBacktestRun(configPath);
         progress?.Report(BacktestProgress.StageOnly("loading_strategies", $"Loading {run.Strategies.Count} strategy config(s)."));
         var strategies = run.Strategies.Select(yamlReader.ReadStrategy).ToArray();
-        
+
         return await RunAsync(run, strategies, startedAt, GetResultPath(run), cancellationToken, progress);
     }
 
@@ -92,7 +93,8 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
                 run.Engine.BoundedCapacity,
                 run.Engine.WorkerCount,
                 run.Execution.ExtendedHours,
-                ResolveExchangeTimezone(strategies)),
+                ResolveExchangeTimezone(strategies),
+                CreateCandleStoreContext(run)),
             provider,
             cancellationToken,
             new Progress<string>(message => progress?.Report(new BacktestProgress(
@@ -134,56 +136,112 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         var completedTickerCount = 0;
         var totalTickerCount = run.Tickers.Count;
         progress?.Report(new BacktestProgress(
-            "running_tickers",
-            $"Running {totalTickerCount} ticker pipeline(s) with {strategies.Length} strategy config(s).",
+            "preparing_ticker_contexts",
+            $"Preparing {totalTickerCount} ticker context(s) with catalysts and indicators.",
             null,
             completedTickerCount,
             totalTickerCount));
 
-        var pipeline = new TplBacktestPipeline();
-        var batches = await pipeline.RunByTickerAsync<TickerBacktestBatch>(
+        var tickerContexts = await BuildPreparedTickerContextsAsync(
             run,
-            async (ticker, token) =>
+            preparedMarket.MarketState,
+            catalystStreamer,
+            preparedMarket.DataStart,
+            preparedMarket.WindowStart,
+            preparedMarket.WindowEnd,
+            cancellationToken,
+            progress);
+
+        foreach (var strategy in strategies)
+        {
+            progress?.Report(BacktestProgress.StrategyGroup(strategy.StrategyName, totalTickerCount));
+        }
+
+        var workItems = run.Tickers
+            .SelectMany(ticker => strategies.Select(strategy => new StrategyTickerWorkItem(ticker, strategy)))
+            .ToArray();
+        var completedWorkItemCount = 0;
+        var totalWorkItemCount = workItems.Length;
+        progress?.Report(new BacktestProgress(
+            "running_strategy_matrix",
+            $"Running {totalWorkItemCount} strategy/ticker evaluation work item(s).",
+            null,
+            completedWorkItemCount,
+            totalWorkItemCount));
+
+        var strategyTickerBatches = new System.Collections.Concurrent.ConcurrentBag<StrategyTickerBacktestBatch>();
+        var strategyWorkItemTimeout = ResolveStrategyWorkItemTimeout(run.Engine.TickerTimeoutSeconds);
+        await Parallel.ForEachAsync(
+            workItems,
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = ResolveEvaluationWorkerCount(run.Engine.WorkerCount, totalWorkItemCount),
+                CancellationToken = cancellationToken
+            },
+            async (workItem, token) =>
             {
                 progress?.Report(new BacktestProgress(
-                    "running_ticker",
-                    $"Processing {ticker}.",
-                    ticker,
-                    Volatile.Read(ref completedTickerCount),
-                    totalTickerCount));
-                var batch = await ProcessPreparedTickerAsync(
-                    run,
-                    preparedMarket.MarketState,
-                    catalystStreamer,
-                    strategies,
-                    ticker,
-                    preparedMarket.DataStart,
-                    preparedMarket.WindowStart,
-                    preparedMarket.WindowEnd,
-                    token);
-                var completed = Interlocked.Increment(ref completedTickerCount);
+                    "running_strategy_ticker",
+                    $"Evaluating {workItem.Strategy.StrategyName} on {workItem.Ticker}.",
+                    workItem.Ticker,
+                    Volatile.Read(ref completedWorkItemCount),
+                    totalWorkItemCount,
+                    workItem.Strategy.StrategyName));
+
+                using var workItemCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+                workItemCancellation.CancelAfter(strategyWorkItemTimeout);
+                try
+                {
+                    strategyTickerBatches.Add(ProcessPreparedStrategyTicker(
+                        run,
+                        tickerContexts,
+                        workItem.Strategy,
+                        workItem.Ticker,
+                        preparedMarket.WindowStart,
+                        preparedMarket.WindowEnd,
+                        workItemCancellation.Token));
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    strategyTickerBatches.Add(StrategyTickerBacktestBatch.Failed(
+                        workItem.Ticker,
+                        workItem.Strategy,
+                        $"strategy_ticker_timeout_after_{(int)strategyWorkItemTimeout.TotalSeconds}s"));
+                }
+
+                var completed = Interlocked.Increment(ref completedWorkItemCount);
                 progress?.Report(new BacktestProgress(
-                    "running_tickers",
-                    $"Finished {ticker}.",
-                    ticker,
+                    "finished_strategy_ticker",
+                    $"Finished {workItem.Strategy.StrategyName} on {workItem.Ticker}.",
+                    workItem.Ticker,
                     completed,
-                    totalTickerCount));
-                return batch;
-            },
-            cancellationToken,
-            (ticker, exception) => new TickerBacktestBatch(
-                TickerBacktestResult.Failed(ticker, exception),
-                Array.Empty<BacktestCandidateTrade>(),
-                Array.Empty<StrategyCandidateDiagnostics>(),
-                Array.Empty<OhlcvBar>()));
+                    totalWorkItemCount,
+                    workItem.Strategy.StrategyName));
+
+                await Task.CompletedTask;
+            });
 
         progress?.Report(BacktestProgress.StageOnly("building_results", "Building portfolio, strategy, and analyzer results."));
-        var tickerResults = batches
-            .Select(x => x.Result)
-            .OrderBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
+        var batches = strategyTickerBatches.ToArray();
+        var tickerResults = run.Tickers
+            .Select(ticker =>
+            {
+                if (!tickerContexts.TryGetValue(ticker, out var context) || context.ErrorMessage is not null)
+                {
+                    return TickerBacktestResult.Failed(
+                        ticker,
+                        new InvalidOperationException(context?.ErrorMessage ?? $"No prepared market state was produced for ticker {ticker}."));
+                }
+
+                var candidateCount = batches
+                    .Where(batch => batch.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase))
+                    .Sum(batch => batch.CandidateTrades.Count);
+                return TickerBacktestResult.Completed(ticker, context.TotalPreparedBarCount, candidateCount);
+            })
             .ToArray();
-        var allBars = batches
-            .SelectMany(x => x.ProcessedBars)
+        var allBars = tickerContexts.Values
+            .Where(context => context.ErrorMessage is null)
+            .SelectMany(context => context.ProcessedBars)
             .ToArray();
         var candidates = batches
             .SelectMany(x => x.CandidateTrades)
@@ -194,7 +252,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         var diagnostics = BuildDiagnostics(
             strategies,
             strategyResults,
-            batches.SelectMany(x => x.Diagnostics).ToArray());
+            batches.Select(x => x.Diagnostics).ToArray());
         var completedTrades = strategyResults.SelectMany(x => x.CompletedTrades).ToArray();
         var bestStrategy = strategyResults
             .OrderByDescending(x => x.NetProfit)
@@ -303,6 +361,14 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
             ?? "America/New_York";
     }
 
+    private static CandleStoreContext CreateCandleStoreContext(BacktestRunConfig run)
+    {
+        return new CandleStoreContext(
+            String.IsNullOrWhiteSpace(run.Mode) ? "backtest" : run.Mode,
+            run.RunName,
+            run.Provider);
+    }
+
     private static (DateTimeOffset DataStart, DateTimeOffset EvaluationStart, DateTimeOffset End) ResolveWindow(TimeWindowConfig timeWindow)
     {
         if (timeWindow.Type.Equals("fixed", StringComparison.OrdinalIgnoreCase))
@@ -331,6 +397,185 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         }
 
         throw new NotSupportedException($"Unsupported time_window.type: {timeWindow.Type}");
+    }
+
+    private async Task<IReadOnlyDictionary<string, PreparedTickerEvaluationContext>> BuildPreparedTickerContextsAsync(
+        BacktestRunConfig run,
+        CandlePipelineResult marketState,
+        CatalystStreamer catalystStreamer,
+        DateTimeOffset dataStart,
+        DateTimeOffset windowStart,
+        DateTimeOffset windowEnd,
+        CancellationToken cancellationToken,
+        IProgress<BacktestProgress>? progress)
+    {
+        var contexts = new System.Collections.Concurrent.ConcurrentDictionary<string, PreparedTickerEvaluationContext>(StringComparer.OrdinalIgnoreCase);
+        var completedTickerCount = 0;
+        await Parallel.ForEachAsync(
+            run.Tickers,
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = ResolveEvaluationWorkerCount(run.Engine.WorkerCount, run.Tickers.Count),
+                CancellationToken = cancellationToken
+            },
+            async (ticker, token) =>
+            {
+                progress?.Report(new BacktestProgress(
+                    "preparing_ticker_context",
+                    $"Preparing reusable context for {ticker}.",
+                    ticker,
+                    Volatile.Read(ref completedTickerCount),
+                    run.Tickers.Count));
+
+                contexts[ticker] = await BuildPreparedTickerContextAsync(
+                    run,
+                    marketState,
+                    catalystStreamer,
+                    ticker,
+                    dataStart,
+                    windowStart,
+                    windowEnd,
+                    token);
+
+                var completed = Interlocked.Increment(ref completedTickerCount);
+                progress?.Report(new BacktestProgress(
+                    "prepared_ticker_context",
+                    $"Prepared reusable context for {ticker}.",
+                    ticker,
+                    completed,
+                    run.Tickers.Count));
+            });
+
+        return contexts;
+    }
+
+    private async Task<PreparedTickerEvaluationContext> BuildPreparedTickerContextAsync(
+        BacktestRunConfig run,
+        CandlePipelineResult marketState,
+        CatalystStreamer catalystStreamer,
+        string ticker,
+        DateTimeOffset dataStart,
+        DateTimeOffset windowStart,
+        DateTimeOffset windowEnd,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (!marketState.TickerStates.TryGetValue(ticker, out var tickerState))
+            {
+                var failure = marketState.Failures.TryGetValue(ticker, out var reason)
+                    ? reason
+                    : $"No prepared market state was produced for ticker {ticker}.";
+                return PreparedTickerEvaluationContext.Failed(ticker, failure);
+            }
+
+            var snapshotsByTimeframe = tickerState.SnapshotsByTimeframe
+                .ToDictionary(x => x.Key, x => x.Value.ToList(), StringComparer.OrdinalIgnoreCase);
+            var catalysts = (await catalystStreamer.LoadTickerCatalystsAsync(ticker, dataStart, windowEnd, cancellationToken))
+                .OrderBy(catalyst => catalyst.Timestamp)
+                .ToArray();
+
+            foreach (var timeframe in snapshotsByTimeframe.Keys)
+            {
+                CatalystSnapshotAttacher.AttachToSnapshots(snapshotsByTimeframe[timeframe], catalysts, cancellationToken);
+            }
+
+            return new PreparedTickerEvaluationContext(
+                ticker,
+                tickerState.BarsByTimeframe,
+                snapshotsByTimeframe.ToDictionary(
+                    x => x.Key,
+                    x => (IReadOnlyList<IndicatorSnapshot>)x.Value,
+                    StringComparer.OrdinalIgnoreCase),
+                tickerState.AllBars
+                    .Where(bar => bar.Timestamp >= windowStart && bar.Timestamp <= windowEnd)
+                    .ToArray(),
+                tickerState.BarsByTimeframe.Values.Sum(x => x.Count),
+                null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (!run.Engine.FailFast)
+        {
+            return PreparedTickerEvaluationContext.Failed(ticker, exception.Message);
+        }
+    }
+
+    private StrategyTickerBacktestBatch ProcessPreparedStrategyTicker(
+        BacktestRunConfig run,
+        IReadOnlyDictionary<string, PreparedTickerEvaluationContext> tickerContexts,
+        StrategyDefinition strategy,
+        string ticker,
+        DateTimeOffset windowStart,
+        DateTimeOffset windowEnd,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!tickerContexts.TryGetValue(ticker, out var context) || context.ErrorMessage is not null)
+            {
+                var reason = context?.ErrorMessage ?? $"No prepared market state was produced for ticker {ticker}.";
+                return StrategyTickerBacktestBatch.Failed(ticker, strategy, reason);
+            }
+
+            if (!context.BarsByTimeframe.TryGetValue(strategy.Timeframe, out var strategyBars) ||
+                !context.SnapshotsByTimeframe.TryGetValue(strategy.Timeframe, out var strategySnapshots))
+            {
+                return new StrategyTickerBacktestBatch(
+                    ticker,
+                    strategy.StrategyId,
+                    strategy.StrategyName,
+                    true,
+                    null,
+                    Array.Empty<BacktestCandidateTrade>(),
+                    StrategyCandidateDiagnostics.MissingTimeframe(strategy, "missing_signal_timeframe"));
+            }
+
+            if (!context.BarsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionBars) ||
+                !context.SnapshotsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots))
+            {
+                return new StrategyTickerBacktestBatch(
+                    ticker,
+                    strategy.StrategyId,
+                    strategy.StrategyName,
+                    true,
+                    null,
+                    Array.Empty<BacktestCandidateTrade>(),
+                    StrategyCandidateDiagnostics.MissingTimeframe(strategy, "missing_execution_timeframe"));
+            }
+
+            var evaluation = CreateStrategyCandidates(
+                run,
+                strategy,
+                strategyBars,
+                strategySnapshots,
+                executionBars,
+                executionSnapshots,
+                context.SnapshotsByTimeframe,
+                windowStart,
+                windowEnd,
+                cancellationToken);
+
+            return new StrategyTickerBacktestBatch(
+                ticker,
+                strategy.StrategyId,
+                strategy.StrategyName,
+                true,
+                null,
+                evaluation.Candidates,
+                evaluation.Diagnostics);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (!run.Engine.FailFast)
+        {
+            return StrategyTickerBacktestBatch.Failed(ticker, strategy, exception.Message);
+        }
     }
 
     private async Task<TickerBacktestBatch> ProcessPreparedTickerAsync(
@@ -366,9 +611,9 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
                 .ToArray();
             foreach (var timeframe in snapshotsByTimeframe.Keys)
             {
-                AttachCatalystsToSnapshots(snapshotsByTimeframe[timeframe], catalysts, cancellationToken);
+                CatalystSnapshotAttacher.AttachToSnapshots(snapshotsByTimeframe[timeframe], catalysts, cancellationToken);
             }
-            
+
             // convert back to IReadOnlyList
             var readonlySnapshots = snapshotsByTimeframe.ToDictionary(
                 x => x.Key,
@@ -424,63 +669,32 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         }
     }
 
-    private static void AttachCatalystsToSnapshots(
-        IList<IndicatorSnapshot> snapshots,
-        IReadOnlyList<CatalystEvent> catalysts,
-        CancellationToken cancellationToken)
-    {
-        if (snapshots.Count == 0 || catalysts.Count == 0)
-        {
-            return;
-        }
-
-        var catalystIndex = 0;
-        CatalystEvent? latestCatalyst = null;
-        for (var snapshotIndex = 0; snapshotIndex < snapshots.Count; snapshotIndex++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var snapshot = snapshots[snapshotIndex];
-            while (catalystIndex < catalysts.Count &&
-                   catalysts[catalystIndex].Timestamp <= snapshot.Timestamp)
-            {
-                latestCatalyst = catalysts[catalystIndex];
-                catalystIndex++;
-            }
-
-            if (latestCatalyst is not null &&
-                latestCatalyst.Timestamp >= snapshot.Timestamp.AddDays(-3))
-            {
-                snapshots[snapshotIndex] = snapshot with { Catalyst = latestCatalyst };
-            }
-        }
-    }
-
-    private static TimeSpan ParseTimeframe(string timeframe)
-    {
-        if (timeframe.EndsWith("m", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var minutes))
-        {
-            return TimeSpan.FromMinutes(minutes);
-        }
-
-        if (timeframe.EndsWith("h", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var hours))
-        {
-            return TimeSpan.FromHours(hours);
-        }
-
-        if (timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var days))
-        {
-            return TimeSpan.FromDays(days);
-        }
-
-        throw new NotSupportedException($"Unsupported timeframe: {timeframe}");
-    }
+    private static TimeSpan ParseTimeframe(string timeframe) => TimeframeParser.Parse(timeframe);
 
     private static bool IsDailyOrHigher(string timeframe)
     {
-        return timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase);
+        return TimeframeParser.IsDailyOrHigher(timeframe);
+    }
+
+    private static int ResolveEvaluationWorkerCount(int configuredWorkerCount, int workItemCount)
+    {
+        if (workItemCount <= 0)
+        {
+            return 1;
+        }
+
+        if (configuredWorkerCount > 0)
+        {
+            return Math.Min(configuredWorkerCount, workItemCount);
+        }
+
+        return Math.Min(32, workItemCount);
+    }
+
+    private static TimeSpan ResolveStrategyWorkItemTimeout(int tickerTimeoutSeconds)
+    {
+        var configured = tickerTimeoutSeconds <= 0 ? 120 : tickerTimeoutSeconds;
+        return TimeSpan.FromSeconds(Math.Max(configured, 30));
     }
 
     private static int FindFirstBarIndexAtOrAfter(IReadOnlyList<OhlcvBar> bars, DateTimeOffset timestamp)
@@ -535,7 +749,8 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
             }
 
             diagnostics.EvaluatedBarCount++;
-            if (snapshot.RelativeVolume is null)
+            var entryRelativeVolume = ResolveEntryRelativeVolume(strategy, snapshot);
+            if (entryRelativeVolume is null)
             {
                 diagnostics.IncrementRejection("missing_indicator_warmup_or_null");
                 continue;
@@ -566,10 +781,10 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
                 continue;
             }
 
-            if (snapshot.RelativeVolume.Value < strategy.EntryRules.MinVolumeSpike)
+            var volumeRejection = GetVolumeConfirmationRejection(strategy, snapshot, entryRelativeVolume.Value);
+            if (volumeRejection is not null)
             {
-                diagnostics.IncrementRejection(
-                    $"relative_volume_below_minimum (Actual: {snapshot.RelativeVolume.Value:F2}, Required: {strategy.EntryRules.MinVolumeSpike:F2})");
+                diagnostics.IncrementRejection(volumeRejection);
                 continue;
             }
 
@@ -581,10 +796,10 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
             }
 
             var longRejection = AllowsLong(strategy)
-                ? _strategyEvaluator.GetLongEntryRejection(strategy, signal, snapshot.RelativeVolume.Value)
+                ? _strategyEvaluator.GetLongEntryRejection(strategy, signal, entryRelativeVolume.Value)
                 : "direction_not_long";
             var shortRejection = AllowsShort(strategy)
-                ? _strategyEvaluator.GetShortEntryRejection(strategy, signal, snapshot.RelativeVolume.Value)
+                ? _strategyEvaluator.GetShortEntryRejection(strategy, signal, entryRelativeVolume.Value)
                 : "direction_not_short";
             if (longRejection is not null && shortRejection is not null)
             {
@@ -762,11 +977,11 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         {
             return CreateShortCandidate(run, strategy, signal, entryIndex, bars, snapshots, auditor, relativeVolume, cancellationToken);
         }
-        
+
         // Approximate trade amount based on portfolio config
         var approximateTradeAmount = run.Portfolio.StartingCapital / run.Portfolio.MaxConcurrentPositions;
         var entryPrice = TradingFlow.Engine.Risk.DynamicSlippageModel.ApplyLongSlippage(entryBar.Open, relativeVolume, strategy.Execution.SlippageBps, approximateTradeAmount);
-        
+
         var stopDistance = strategy.ExitRules.StopAtrMultiple * signal.CurrentAtr;
         if (stopDistance <= 0)
         {
@@ -833,7 +1048,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
                 return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedTakeProfit, "take_profit", stopDistance), i);
             }
 
-            if (ShouldExitLongOnConfirmedVwapFailure(strategy, snapshots, i, entryIndex, entryPrice, stopDistance, Math.Max(highestHighSinceEntry, bar.High), barsHeld))
+            if (technicalEngine.ShouldExitLongOnConfirmedVwapFailure(strategy, snapshots, i, entryIndex, entryPrice, stopDistance, Math.Max(highestHighSinceEntry, bar.High), barsHeld))
             {
                 var exitBar = i + 1 < bars.Count ? bars[i + 1] : bar;
                 var exitSnapshot = i + 1 < snapshots.Count ? snapshots[i + 1] : snapshots[i];
@@ -1235,7 +1450,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
                     .OrderBy(x => x.EntryTimestamp)
                     .ThenBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
-                var trades = BuildPortfolioTrades(portfolio, strategyCandidates);
+                var trades = BuildPortfolioTrades(portfolio, strategy, strategyCandidates);
                 var netProfit = trades.Sum(x => x.NetProfit);
                 var endingCapital = portfolio.StartingCapital + netProfit;
                 var totalReturnPct = portfolio.StartingCapital == 0 ? 0 : (netProfit / portfolio.StartingCapital) * 100m;
@@ -1279,6 +1494,13 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
                     .SelectMany(x => x.RejectionCounts)
                     .GroupBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(x => x.Key, x => x.Sum(y => y.Value), StringComparer.OrdinalIgnoreCase);
+                var rejectionExamples = diagnostics
+                    .SelectMany(x => x.RejectionExamples)
+                    .GroupBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        x => x.Key,
+                        x => (IReadOnlyList<string>)x.SelectMany(y => y.Value).Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToArray(),
+                        StringComparer.OrdinalIgnoreCase);
                 var evaluatedBarCount = diagnostics.Sum(x => x.EvaluatedBarCount);
                 var exitReasonCounts = result.CompletedTrades
                     .GroupBy(x => x.ExitReason, StringComparer.OrdinalIgnoreCase)
@@ -1312,6 +1534,9 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
                     rejectionCounts
                         .OrderByDescending(x => x.Value)
                         .ThenBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase),
+                    rejectionExamples
+                        .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
                         .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase),
                     BuildDiagnosticSuggestions(result, rejectionCounts, exitReasonCounts, realizedRewardRiskRatio, winRatePct));
             })
@@ -1445,6 +1670,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
 
     private static IReadOnlyList<BacktestTrade> BuildPortfolioTrades(
         PortfolioConfig portfolio,
+        StrategyDefinition strategy,
         IReadOnlyList<BacktestCandidateTrade> candidates)
     {
         var accepted = new List<BacktestTrade>();
@@ -1466,6 +1692,11 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
             }
 
             if (activePositions.Length >= portfolio.MaxConcurrentPositions)
+            {
+                continue;
+            }
+
+            if (ShouldBlockForPerTickerDailyLossGuard(strategy, portfolio, candidate, accepted))
             {
                 continue;
             }
@@ -1508,6 +1739,133 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         }
 
         return accepted;
+    }
+
+    private static bool ShouldBlockForPerTickerDailyLossGuard(
+        StrategyDefinition strategy,
+        PortfolioConfig portfolio,
+        BacktestCandidateTrade candidate,
+        IReadOnlyList<BacktestTrade> acceptedTrades)
+    {
+        var rules = strategy.EntryRules;
+        if (!rules.EnablePerTickerDailyLossGuard)
+        {
+            return false;
+        }
+
+        var exchangeDate = ToExchangeDate(candidate.EntryTimestamp, strategy.Session.ExchangeTimezone);
+        var closedTickerTradesToday = acceptedTrades
+            .Where(trade =>
+                trade.ExitTimestamp <= candidate.EntryTimestamp &&
+                trade.Ticker.Equals(candidate.Ticker, StringComparison.OrdinalIgnoreCase) &&
+                ToExchangeDate(trade.ExitTimestamp, strategy.Session.ExchangeTimezone) == exchangeDate)
+            .ToArray();
+
+        if (closedTickerTradesToday.Length == 0)
+        {
+            return false;
+        }
+
+        if (rules.MaxPerTickerDailyFailedTrades > 0 &&
+            closedTickerTradesToday.Count(trade => trade.NetProfit <= 0m) >= rules.MaxPerTickerDailyFailedTrades)
+        {
+            return true;
+        }
+
+        var netTickerProfitToday = closedTickerTradesToday.Sum(trade => trade.NetProfit);
+        if (rules.MaxPerTickerDailyLossPctOfAccount is { } maxLossPct &&
+            maxLossPct > 0m &&
+            netTickerProfitToday <= -(portfolio.StartingCapital * (maxLossPct / 100m)))
+        {
+            return true;
+        }
+
+        var realizedR = closedTickerTradesToday.Sum(CalculateRealizedR);
+        return rules.MaxPerTickerDailyLossR is { } maxLossR &&
+            maxLossR > 0m &&
+            realizedR <= -maxLossR;
+    }
+
+    private static decimal CalculateRealizedR(BacktestTrade trade)
+    {
+        var riskPerShare = Math.Abs(trade.EntryPrice - trade.StopLossPrice);
+        var riskDollars = riskPerShare * trade.ShareQuantity;
+        return riskDollars <= 0m ? 0m : trade.NetProfit / riskDollars;
+    }
+
+    private static decimal? ResolveEntryRelativeVolume(StrategyDefinition strategy, IndicatorSnapshot snapshot)
+    {
+        return strategy.EntryRules.MinVolumeSpikeSource.ToLowerInvariant() switch
+        {
+            "session_vs_average_day" or "session" or "finviz_style" => snapshot.SessionRelativeVolume,
+            "slot_bar" or "bar_same_time" => snapshot.SlotRelativeVolume,
+            _ => snapshot.RelativeVolume
+        };
+    }
+
+    private static string? GetVolumeConfirmationRejection(
+        StrategyDefinition strategy,
+        IndicatorSnapshot snapshot,
+        decimal actualRelativeVolume)
+    {
+        var mode = strategy.EntryRules.VolumeConfirmationMode;
+        if (mode.Equals("none", StringComparison.OrdinalIgnoreCase) ||
+            mode.Equals("soft_confirmation", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (mode.Equals("liquidity_floor", StringComparison.OrdinalIgnoreCase))
+        {
+            var floor = strategy.EntryRules.MinVolumeLiquidityFloor ?? 0m;
+            return floor > 0m && actualRelativeVolume < floor
+                ? FormatRelativeVolumeRejection(
+                    "volume_liquidity_floor_below_minimum",
+                    snapshot,
+                    floor,
+                    actualRelativeVolume,
+                    strategy.EntryRules.MinVolumeSpikeSource,
+                    mode)
+                : null;
+        }
+
+        return actualRelativeVolume < strategy.EntryRules.MinVolumeSpike
+            ? FormatRelativeVolumeRejection(
+                "relative_volume_below_minimum",
+                snapshot,
+                strategy.EntryRules.MinVolumeSpike,
+                actualRelativeVolume,
+                strategy.EntryRules.MinVolumeSpikeSource,
+                mode)
+            : null;
+    }
+
+    private static string FormatRelativeVolumeRejection(
+        string reason,
+        IndicatorSnapshot snapshot,
+        decimal requiredRelativeVolume,
+        decimal actualRelativeVolume,
+        string volumeSource,
+        string volumeMode)
+    {
+        return
+            $"{reason} (Actual: {actualRelativeVolume:F2}, Required: {requiredRelativeVolume:F2}, Source: {volumeSource}, Mode: {volumeMode}, " +
+            $"Ticker: {snapshot.Ticker}, BarTime: {snapshot.Timestamp:O}, Timeframe: {snapshot.Timeframe}, " +
+            $"BarVolume: {FormatWhole(snapshot.CurrentVolume)}, CumulativeAvgVolume: {FormatNullableWhole(snapshot.CumulativeAverageVolume)}, " +
+            $"SlotAvgVolume: {FormatNullableWhole(snapshot.SlotAverageVolume)}, AverageSessionVolume: {FormatNullableWhole(snapshot.AverageSessionVolume)}, " +
+            $"SampleSessions: {snapshot.RelativeVolumeSampleCount})";
+    }
+
+    private static string FormatWhole(decimal value)
+    {
+        return value.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatNullableWhole(decimal? value)
+    {
+        return value is null
+            ? "n/a"
+            : value.Value.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static decimal CalculateMaxDrawdown(decimal startingCapital, IReadOnlyList<BacktestTrade> completedTrades)
@@ -1587,11 +1945,11 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
     private static ICatalystProvider? CreateNewsProvider(BacktestRunConfig run)
     {
         if (!run.News.Enabled) return null;
-        
+
         ICatalystProvider? provider = run.News.ProviderName.ToLowerInvariant() switch
         {
             "alpaca" => new TradingFlow.Alpaca.AlpacaNewsProvider(
-                new HttpClient(), 
+                new HttpClient(),
                 ResolveAlpacaOptions(run),
                 sentimentAnalyzer: CreateSentimentAnalyzer(run.News.SentimentTimeoutSeconds),
                 maxArticlesPerTicker: run.News.MaxArticlesPerTicker),
@@ -1859,6 +2217,53 @@ internal sealed record TickerBacktestBatch(
     IReadOnlyList<StrategyCandidateDiagnostics> Diagnostics,
     IReadOnlyList<OhlcvBar> ProcessedBars);
 
+internal sealed record PreparedTickerEvaluationContext(
+    string Ticker,
+    IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> BarsByTimeframe,
+    IReadOnlyDictionary<string, IReadOnlyList<IndicatorSnapshot>> SnapshotsByTimeframe,
+    IReadOnlyList<OhlcvBar> ProcessedBars,
+    int TotalPreparedBarCount,
+    string? ErrorMessage)
+{
+    public static PreparedTickerEvaluationContext Failed(string ticker, string errorMessage)
+    {
+        return new PreparedTickerEvaluationContext(
+            ticker,
+            new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, IReadOnlyList<IndicatorSnapshot>>(StringComparer.OrdinalIgnoreCase),
+            Array.Empty<OhlcvBar>(),
+            0,
+            errorMessage);
+    }
+}
+
+internal sealed record StrategyTickerWorkItem(
+    string Ticker,
+    StrategyDefinition Strategy);
+
+internal sealed record StrategyTickerBacktestBatch(
+    string Ticker,
+    string StrategyId,
+    string StrategyName,
+    bool Succeeded,
+    string? ErrorMessage,
+    IReadOnlyList<BacktestCandidateTrade> CandidateTrades,
+    StrategyCandidateDiagnostics Diagnostics)
+{
+    public static StrategyTickerBacktestBatch Failed(string ticker, StrategyDefinition strategy, string errorMessage)
+    {
+        var diagnostics = StrategyCandidateDiagnostics.MissingTimeframe(strategy, $"strategy_ticker_failed ({errorMessage})");
+        return new StrategyTickerBacktestBatch(
+            ticker,
+            strategy.StrategyId,
+            strategy.StrategyName,
+            false,
+            errorMessage,
+            Array.Empty<BacktestCandidateTrade>(),
+            diagnostics);
+    }
+}
+
 internal sealed record StrategyCandidateEvaluation(
     IReadOnlyList<BacktestCandidateTrade> Candidates,
     StrategyCandidateDiagnostics Diagnostics);
@@ -1877,6 +2282,8 @@ internal sealed class StrategyCandidateDiagnostics(
 
     public Dictionary<string, int> RejectionCounts { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+    public Dictionary<string, List<string>> RejectionExamples { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     public static StrategyCandidateDiagnostics MissingTimeframe(StrategyDefinition strategy, string reason)
     {
         var diagnostics = new StrategyCandidateDiagnostics(strategy.StrategyId, strategy.StrategyName);
@@ -1888,6 +2295,19 @@ internal sealed class StrategyCandidateDiagnostics(
     {
         var normalizedReason = NormalizeReason(reason);
         RejectionCounts[normalizedReason] = RejectionCounts.TryGetValue(normalizedReason, out var count) ? count + 1 : 1;
+        if (!reason.Equals(normalizedReason, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!RejectionExamples.TryGetValue(normalizedReason, out var examples))
+            {
+                examples = new List<string>();
+                RejectionExamples[normalizedReason] = examples;
+            }
+
+            if (examples.Count < 5 && !examples.Contains(reason, StringComparer.OrdinalIgnoreCase))
+            {
+                examples.Add(reason);
+            }
+        }
     }
 
     private static string NormalizeReason(string reason)

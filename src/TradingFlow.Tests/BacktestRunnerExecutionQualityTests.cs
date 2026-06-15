@@ -1,4 +1,5 @@
 using TradingFlow.Backtesting;
+using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
@@ -60,11 +61,6 @@ public class BacktestRunnerExecutionQualityTests
     [Fact]
     public void AttachCatalystsToSnapshots_UsesLatestFreshCatalyst()
     {
-        var attachMethod = typeof(BacktestRunner).GetMethod(
-            "AttachCatalystsToSnapshots",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        Assert.NotNull(attachMethod);
-
         var snapshots = new List<IndicatorSnapshot>
         {
             Snapshot("2026-06-01T10:00:00Z"),
@@ -78,7 +74,7 @@ public class BacktestRunnerExecutionQualityTests
             Catalyst("2026-06-05T09:00:00Z", "second")
         };
 
-        attachMethod.Invoke(null, [snapshots, catalysts, CancellationToken.None]);
+        CatalystSnapshotAttacher.AttachToSnapshots(snapshots, catalysts, CancellationToken.None);
 
         Assert.Equal("first", snapshots[0].Catalyst?.Headline);
         Assert.Equal("first", snapshots[1].Catalyst?.Headline);
@@ -134,6 +130,62 @@ public class BacktestRunnerExecutionQualityTests
 
         Assert.Null(plan.Item1);
         Assert.Equal(1, plan.Item2);
+    }
+
+    [Fact]
+    public void StrategyWorkItemTimeout_HonorsConfiguredResearchTimeout()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "ResolveStrategyWorkItemTimeout",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var timeout = (TimeSpan)method.Invoke(null, [1800])!;
+
+        Assert.Equal(TimeSpan.FromMinutes(30), timeout);
+    }
+
+    [Fact]
+    public void BuildPortfolioTrades_WhenTickerDailyLossGuardTrips_SkipsLaterSameTickerCandidateOnly()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "BuildPortfolioTrades",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var baseStrategy = ConfirmedEntryStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                EnablePerTickerDailyLossGuard = true,
+                MaxPerTickerDailyFailedTrades = 1,
+                MaxPerTickerDailyLossR = 1.0m,
+                MaxPerTickerDailyLossPctOfAccount = 1.0m
+            }
+        };
+        var portfolio = new PortfolioConfig(
+            StartingCapital: 10_000m,
+            RiskPerTradePct: 1.0m,
+            MaxPositionValuePct: 100m,
+            MaxConcurrentPositions: 5,
+            FixedBuyFee: 1m,
+            FixedSellFee: 1m,
+            MaxOpenTradesPerTicker: 1,
+            PreventOverlappingTickerPositions: true);
+        var candidates = new[]
+        {
+            Candidate("LOSS", "2026-06-01T13:31:00Z", "2026-06-01T13:32:00Z", 10m, 9m, 9m, "stop_loss"),
+            Candidate("LOSS", "2026-06-01T13:35:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit"),
+            Candidate("OKAY", "2026-06-01T13:36:00Z", "2026-06-01T13:41:00Z", 10m, 9m, 12m, "take_profit")
+        };
+
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(null, [portfolio, strategy, candidates])!;
+
+        Assert.Equal(2, trades.Count);
+        Assert.Single(trades, trade => trade.Ticker == "LOSS");
+        Assert.Single(trades, trade => trade.Ticker == "OKAY");
+        Assert.DoesNotContain(trades, trade => trade.Ticker == "LOSS" && trade.NetProfit > 0);
     }
 
     private static IndicatorSnapshot Snapshot(string timestamp)
@@ -210,6 +262,29 @@ public class BacktestRunnerExecutionQualityTests
             low,
             close,
             100_000m);
+    }
+
+    private static BacktestCandidateTrade Candidate(
+        string ticker,
+        string entryTimestamp,
+        string exitTimestamp,
+        decimal entry,
+        decimal stop,
+        decimal exit,
+        string exitReason)
+    {
+        return new BacktestCandidateTrade(
+            ticker,
+            "Confirmed Entry Test",
+            "long",
+            DateTimeOffset.Parse(entryTimestamp, System.Globalization.CultureInfo.InvariantCulture),
+            entry,
+            stop,
+            12m,
+            DateTimeOffset.Parse(exitTimestamp, System.Globalization.CultureInfo.InvariantCulture),
+            exit,
+            exitReason,
+            Math.Abs(entry - stop));
     }
 
     private static CatalystEvent Catalyst(string timestamp, string headline)

@@ -4,6 +4,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
 using TradingFlow.Engine.Strategies;
 using TradingFlow.Engine.Storage;
@@ -14,18 +15,19 @@ using TradingFlow.Engine.Execution;
 namespace TradingFlow.Backtesting;
 
 public sealed class LiveRunner(
-    IMarketDataProvider provider, 
-    ICatalystProvider? catalystProvider, 
+    IMarketDataProvider provider,
+    ICatalystProvider? catalystProvider,
     IBrokerClient? brokerClient,
     TradingFlow.Domain.Locking.ITickerLockService? lockService,
     TradingFlow.Domain.Orders.IOrderStateRepository? orderRepo,
     TradingFlow.Domain.Audit.IDecisionAuditRepository? auditRepo,
     ILogger<LiveRunner> logger,
-    IArtifactWriter? artifactWriter = null)
+    IArtifactWriter? artifactWriter = null,
+    ICandleStore? candleStore = null)
 {
     private readonly SignalGenerator _signalGenerator = new();
     private readonly BasicStrategyEvaluator _evaluator = new();
-    private readonly CandlePipelineEngine _candlePipeline = new();
+    private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
     private readonly TechnicalExecutionEngine _technicalExecutionEngine = new();
     private readonly ExecutionAuditor _auditor = new();
     private readonly IBrokerClient? _brokerClient = brokerClient;
@@ -46,7 +48,7 @@ public sealed class LiveRunner(
         logger.LogInformation("Loaded {Count} strategies for live execution.", strategies.Length);
         foreach (var st in strategies)
         {
-            logger.LogInformation("Strategy active: {StrategyName} (Execution TF: {ExecutionTF}, Indicator TF: {IndicatorTF})", 
+            logger.LogInformation("Strategy active: {StrategyName} (Execution TF: {ExecutionTF}, Indicator TF: {IndicatorTF})",
                 st.StrategyName, st.Execution.Timeframe, st.Timeframe);
             progress?.Report($"Strategy active: {st.StrategyName}");
         }
@@ -56,24 +58,33 @@ public sealed class LiveRunner(
         var pollingInterval = TimeSpan.FromMinutes(1);
 
         var mergedTickers = new HashSet<string>(run.Tickers ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+        var screenerRelativeVolumeByTicker = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
 
         if (run.Screener != null && run.Screener.Enabled && run.Screener.Filters != null)
         {
             logger.LogInformation("Fetching dynamic tickers from screeners...");
             progress?.Report("Fetching dynamic tickers from screeners...");
-            
+
             try
             {
                 using var httpClient = new System.Net.Http.HttpClient();
                 using var finvizClient = new TradingFlow.Finviz.FinvizClient(httpClient, new TradingFlow.Finviz.FinvizOptions(
-                    new Uri("https://finviz.com", UriKind.Absolute), 
+                    new Uri("https://finviz.com", UriKind.Absolute),
                     Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? ""));
-                
+
                 foreach (var filter in run.Screener.Filters)
                 {
-                    var source = new TradingFlow.Finviz.FinvizScreenerTickerSource(finvizClient, filter);
-                    var screenTickers = await source.GetTickersAsync(cancellationToken);
-                    foreach (var t in screenTickers) mergedTickers.Add(t);
+                    var screenerRows = await finvizClient.GetScreenerRowsAsync(filter, cancellationToken);
+                    var minimumRelativeVolume = ParseFinvizRelativeVolumeFilter(filter);
+                    foreach (var row in screenerRows)
+                    {
+                        mergedTickers.Add(row.Ticker);
+                        var effectiveRelativeVolume = row.RelativeVolume ?? minimumRelativeVolume;
+                        if (effectiveRelativeVolume is { } value)
+                        {
+                            screenerRelativeVolumeByTicker[row.Ticker] = value;
+                        }
+                    }
                 }
                 progress?.Report($"Merged screener tickers. Total tickers to process: {mergedTickers.Count}");
             }
@@ -84,7 +95,7 @@ public sealed class LiveRunner(
                 {
                     throw new Exception($"Screener failed and no static tickers provided: {ex.Message}", ex);
                 }
-                
+
                 logger.LogWarning("Screener failed but static tickers exist. Proceeding with static tickers only.");
                 progress?.Report($"Screener failed: {ex.Message}. Proceeding with {mergedTickers.Count} static tickers.");
             }
@@ -101,7 +112,7 @@ public sealed class LiveRunner(
             progress?.Report($"LiveRunner iteration starting at {FormatLocalTime(DateTimeOffset.UtcNow)}");
 
             var end = DateTimeOffset.UtcNow;
-            
+
             var maxLookbackDays = run.TimeWindow.WarmupLookbackDays > 0
                 ? run.TimeWindow.WarmupLookbackDays
                 : Math.Max(run.TimeWindow.LookbackDays, 5);
@@ -133,7 +144,7 @@ public sealed class LiveRunner(
                 {
                     var openOrders = await _brokerClient.GetOpenOrdersAsync(cancellationToken);
                     openOrdersSnapshot = openOrders;
-                    
+
                     // State Reconciliation: Adopt any open orders from the broker that are not in our database
                     if (_orderRepo != null)
                     {
@@ -155,11 +166,13 @@ public sealed class LiveRunner(
 
                                 logger.LogInformation("State reconciliation: Adopting orphan broker order {OrderId} for {Ticker}.", order.OrderId, order.Ticker);
                                 progress?.Report($"State reconciliation: Adopting orphan broker order {order.OrderId} for {order.Ticker}.");
-                                
+
                                 var newOrder = new TradingFlow.Domain.Orders.PersistedOrder
                                 {
                                     OrderId = order.OrderId,
                                     Ticker = order.Ticker,
+                                    RunName = run.RunName,
+                                    ClientOrderId = order.ClientOrderId,
                                     StrategyName = "AdoptedFromBroker",
                                     Broker = run.Execution?.Broker ?? "unknown",
                                     Status = order.Status,
@@ -172,7 +185,7 @@ public sealed class LiveRunner(
                             }
                         }
                     }
-                    
+
                     // Active Cancellation logic for unfilled entry orders if configured
                     if (run.Execution != null && "active_cancel".Equals(run.Execution.OrderExpiration, StringComparison.OrdinalIgnoreCase))
                     {
@@ -227,7 +240,7 @@ public sealed class LiveRunner(
                                     {
                                         logger.LogInformation("Entry order {OrderId} filled for {Ticker}. Submitting exit OCO order...", dbOrder.OrderId, dbOrder.Ticker);
                                         progress?.Report($"Entry filled for {dbOrder.Ticker}. Submitting OCO exit bracket...");
-                                        
+
                                         try
                                         {
                                             var exitIds = await _brokerClient.SubmitExitOrdersAsync(dbOrder.Ticker, dbOrder.ShareQuantity, dbOrder.StopLossPrice, dbOrder.TakeProfitPrice, cancellationToken);
@@ -298,7 +311,8 @@ public sealed class LiveRunner(
                         run.Engine.BoundedCapacity,
                         run.Engine.WorkerCount,
                         run.Execution?.ExtendedHours ?? true,
-                        ResolveExchangeTimezone(strategies)),
+                        ResolveExchangeTimezone(strategies),
+                        CreateCandleStoreContext(run)),
                     provider,
                     cancellationToken,
                     new Progress<string>(message => progress?.Report(message)));
@@ -332,6 +346,7 @@ public sealed class LiveRunner(
                                 activeTickerSnapshot,
                                 openOrdersSnapshot,
                                 openPositionsSnapshot,
+                                screenerRelativeVolumeByTicker,
                                 token,
                                 progress);
                         }
@@ -373,6 +388,7 @@ public sealed class LiveRunner(
         IReadOnlyCollection<string> activeTickers,
         IReadOnlyCollection<ActiveBrokerOrder> openOrders,
         IReadOnlyCollection<BrokerPosition> openPositions,
+        IReadOnlyDictionary<string, decimal> screenerRelativeVolumeByTicker,
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
     {
@@ -412,7 +428,29 @@ public sealed class LiveRunner(
                 x => x.Value.OrderBy(bar => bar.Timestamp).ToList(),
                 StringComparer.OrdinalIgnoreCase);
         var snapshotsByTimeframe = marketState.SnapshotsByTimeframe
-            .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(x => x.Key, x => x.Value.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        if (run.News.Enabled)
+        {
+            var allBars = barsByTimeframe.Values.SelectMany(x => x).ToArray();
+            if (allBars.Length > 0)
+            {
+                var catalysts = await catalystStreamer.LoadTickerCatalystsAsync(
+                    ticker,
+                    allBars.Min(x => x.Timestamp),
+                    allBars.Max(x => x.Timestamp),
+                    cancellationToken);
+                foreach (var timeframe in snapshotsByTimeframe.Keys)
+                {
+                    CatalystSnapshotAttacher.AttachToSnapshots(snapshotsByTimeframe[timeframe], catalysts, cancellationToken);
+                }
+            }
+        }
+
+        var readonlySnapshotsByTimeframe = snapshotsByTimeframe.ToDictionary(
+            x => x.Key,
+            x => (IReadOnlyList<IndicatorSnapshot>)x.Value,
+            StringComparer.OrdinalIgnoreCase);
 
         var resultsDir = Path.Combine(run.ResultsRoot, "live", run.RunName, ticker);
         Directory.CreateDirectory(resultsDir);
@@ -420,14 +458,20 @@ public sealed class LiveRunner(
         // 3. Process Strategies & Write Chart Data
         foreach (var strategy in strategies)
         {
-            if (!snapshotsByTimeframe.TryGetValue(strategy.Timeframe, out var snapshots) || snapshots.Count == 0)
+            if (!readonlySnapshotsByTimeframe.TryGetValue(strategy.Timeframe, out var snapshots) || snapshots.Count == 0)
                 continue;
-            
+
             if (!barsByTimeframe.TryGetValue(strategy.Timeframe, out var barsList))
                 continue;
 
             var lastSnapshot = snapshots[^1];
             var lastBar = barsList[^1];
+            var isFinvizRelativeVolume = screenerRelativeVolumeByTicker.TryGetValue(ticker, out var screenerRelativeVolume);
+            var configuredRelativeVolume = ResolveEntryRelativeVolume(strategy, lastSnapshot);
+            var relativeVolumeSource = isFinvizRelativeVolume ? "finviz_screener" : strategy.EntryRules.MinVolumeSpikeSource;
+            var effectiveRelativeVolume = isFinvizRelativeVolume
+                ? screenerRelativeVolume
+                : configuredRelativeVolume ?? 0m;
 
             var chartData = new
             {
@@ -437,7 +481,15 @@ public sealed class LiveRunner(
                 Timeframe = lastSnapshot.Timeframe,
                 Close = lastSnapshot.CurrentPrice,
                 Atr = lastSnapshot.Atr ?? 0m,
-                RelativeVolume = lastSnapshot.RelativeVolume ?? 0m,
+                RelativeVolume = effectiveRelativeVolume,
+                SlotRelativeVolume = lastSnapshot.SlotRelativeVolume ?? 0m,
+                SessionRelativeVolume = lastSnapshot.SessionRelativeVolume ?? 0m,
+                CalculatedRelativeVolume = lastSnapshot.RelativeVolume ?? 0m,
+                RelativeVolumeSource = relativeVolumeSource,
+                SlotAverageVolume = lastSnapshot.SlotAverageVolume ?? 0m,
+                CumulativeAverageVolume = lastSnapshot.CumulativeAverageVolume ?? 0m,
+                AverageSessionVolume = lastSnapshot.AverageSessionVolume ?? 0m,
+                RelativeVolumeSampleCount = lastSnapshot.RelativeVolumeSampleCount,
                 Volume = lastSnapshot.CurrentVolume,
                 Rsi = lastSnapshot.Rsi,
                 Vwap = lastSnapshot.Vwap
@@ -450,7 +502,7 @@ public sealed class LiveRunner(
                 strategy,
                 ticker,
                 barsByTimeframe,
-                snapshotsByTimeframe,
+                readonlySnapshotsByTimeframe,
                 openOrders,
                 openPositions,
                 cancellationToken,
@@ -459,7 +511,7 @@ public sealed class LiveRunner(
             {
                 continue;
             }
-            
+
             // Check for existing position/order limits
             var activeCount = activeTickers.Count(t => t.Equals(ticker, StringComparison.OrdinalIgnoreCase));
             if (run.Portfolio.MaxOpenTradesPerTicker > 0 && activeCount >= run.Portfolio.MaxOpenTradesPerTicker)
@@ -493,11 +545,21 @@ public sealed class LiveRunner(
             var signal = _signalGenerator.CreateTradeSignal(strategy, barsList, snapshots, snapshots.Count - 1);
             if (signal != null)
             {
-                var signalJson = JsonSerializer.Serialize(signal);
+                var signalJson = BuildSignalAuditJson(
+                    signal,
+                    effectiveRelativeVolume,
+                    relativeVolumeSource,
+                    lastSnapshot.RelativeVolume,
+                    lastSnapshot.SlotRelativeVolume,
+                    lastSnapshot.SessionRelativeVolume,
+                    lastSnapshot.SlotAverageVolume,
+                    lastSnapshot.CumulativeAverageVolume,
+                    lastSnapshot.AverageSessionVolume,
+                    lastSnapshot.RelativeVolumeSampleCount);
                 var decisionTimestamp = DateTimeOffset.UtcNow;
 
                 var signalAvailableTimestamp = lastSnapshot.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
-                var confluenceRejection = _signalGenerator.GetConfluenceRejection(strategy, signalAvailableTimestamp, snapshotsByTimeframe);
+                var confluenceRejection = _signalGenerator.GetConfluenceRejection(strategy, signalAvailableTimestamp, readonlySnapshotsByTimeframe);
                 if (confluenceRejection is not null)
                 {
                     if (_auditRepo != null)
@@ -516,7 +578,7 @@ public sealed class LiveRunner(
                     continue;
                 }
 
-                var relativeVolume = lastSnapshot.RelativeVolume ?? 0m;
+                var relativeVolume = effectiveRelativeVolume;
                 var rejectionReason = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume);
 
                 if (rejectionReason != null)
@@ -555,7 +617,7 @@ public sealed class LiveRunner(
                             vetoMsg);
                         progress?.Report(vetoMsg);
                         _auditor.LogEvent(ticker, strategy.StrategyName, lastSnapshot.Timestamp, ExecutionState.OrderRejected, vetoMsg);
-                        
+
                         if (_auditRepo != null)
                         {
                             await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
@@ -573,13 +635,43 @@ public sealed class LiveRunner(
                     }
                 }
 
-                var msg = $"LIVE SIGNAL: {strategy.StrategyName} {ticker} {signalDirection} at {signal.CurrentPrice}";
+                var orderSignal = ResolveExecutionOrderSignal(strategy, signal, readonlySnapshotsByTimeframe);
+                if (orderSignal is null)
+                {
+                    var reason = $"execution_timeframe_missing (ExecutionTimeframe: {strategy.Execution.Timeframe})";
+                    logger.LogWarning(
+                        "Skipping {Ticker} {StrategyName}; execution timeframe {ExecutionTimeframe} has no usable snapshot.",
+                        ticker,
+                        strategy.StrategyName,
+                        strategy.Execution.Timeframe);
+                    progress?.Report($"Skipped {ticker}: {reason}");
+
+                    if (_auditRepo != null)
+                    {
+                        await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
+                        {
+                            RunName = run.RunName,
+                            Ticker = ticker,
+                            StrategyName = strategy.StrategyName,
+                            Timestamp = decisionTimestamp,
+                            Decision = "Rejected",
+                            RejectionReason = reason,
+                            SignalJson = signalJson
+                        }, cancellationToken);
+                    }
+
+                    continue;
+                }
+
+                var msg = $"LIVE SIGNAL: {strategy.StrategyName} {ticker} {signalDirection} at {signal.CurrentPrice} (execution {strategy.Execution.Timeframe}: {orderSignal.CurrentPrice})";
                 logger.LogInformation(
-                    "Live signal generated for {Ticker} {StrategyName} {Direction} at {Price}.",
+                    "Live signal generated for {Ticker} {StrategyName} {Direction} at {SignalPrice}; execution price {ExecutionPrice} from {ExecutionTimeframe}.",
                     ticker,
                     strategy.StrategyName,
                     signalDirection,
-                    signal.CurrentPrice);
+                    signal.CurrentPrice,
+                    orderSignal.CurrentPrice,
+                    strategy.Execution.Timeframe);
                 progress?.Report(msg);
                 _auditor.LogEvent(ticker, strategy.StrategyName, lastSnapshot.Timestamp, ExecutionState.SignalGenerated, msg);
 
@@ -603,15 +695,19 @@ public sealed class LiveRunner(
                     progress?.Report($"Calculating position size for {ticker}...");
                     var riskEngine = new TradingFlow.Engine.Risk.RiskEngine();
                     var order = riskEngine.CreateLongBracketOrder(
-                        strategy, 
-                        signal, 
-                        run.Portfolio.StartingCapital, 
+                        strategy,
+                        orderSignal,
+                        run.Portfolio.StartingCapital,
                         run.Portfolio.RiskPerTradePct);
-                    
+
                     if (order != null)
                     {
+                        order = order with
+                        {
+                            ClientOrderId = TradingFlow.Domain.Orders.ClientOrderIdFactory.Create(run.RunName, ticker)
+                        };
                         var shares = order.ShareQuantity;
-                        
+
                         try
                         {
                             progress?.Report($"Submitting Bracket Order: {shares} shares of {ticker}...");
@@ -632,6 +728,8 @@ public sealed class LiveRunner(
                                 {
                                     OrderId = orderId,
                                     Ticker = ticker,
+                                    RunName = run.RunName,
+                                    ClientOrderId = order.ClientOrderId,
                                     StrategyName = strategy.StrategyName,
                                     Broker = run.Execution.Broker,
                                     Status = run.Execution.ExtendedHours ? "pending_exit_setup" : "new",
@@ -683,7 +781,11 @@ public sealed class LiveRunner(
                             timeframe = lastSnapshot.Timeframe,
                             close = lastSnapshot.CurrentPrice,
                             volume = lastSnapshot.CurrentVolume,
-                            relativeVolume = lastSnapshot.RelativeVolume
+                            relativeVolume = effectiveRelativeVolume,
+                            relativeVolumeSource,
+                            calculatedRelativeVolume = lastSnapshot.RelativeVolume,
+                            slotRelativeVolume = lastSnapshot.SlotRelativeVolume,
+                            sessionRelativeVolume = lastSnapshot.SessionRelativeVolume
                         })
                     }, cancellationToken);
                 }
@@ -704,6 +806,47 @@ public sealed class LiveRunner(
                 }
             }
         }
+    }
+
+    private static TradeSignal? ResolveExecutionOrderSignal(
+        StrategyDefinition strategy,
+        TradeSignal signal,
+        IReadOnlyDictionary<string, IReadOnlyList<IndicatorSnapshot>> snapshotsByTimeframe)
+    {
+        if (strategy.Execution.Timeframe.Equals(strategy.Timeframe, StringComparison.OrdinalIgnoreCase))
+        {
+            return signal;
+        }
+
+        if (!snapshotsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots) ||
+            executionSnapshots.Count == 0)
+        {
+            return null;
+        }
+
+        var orderedSnapshots = executionSnapshots
+            .OrderBy(snapshot => snapshot.Timestamp)
+            .ToArray();
+        var signalCloseTimestamp = signal.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
+        var executionSnapshot = orderedSnapshots.FirstOrDefault(snapshot => snapshot.Timestamp >= signalCloseTimestamp)
+            ?? orderedSnapshots.LastOrDefault(snapshot => snapshot.Timestamp >= signal.Timestamp);
+
+        if (executionSnapshot is null)
+        {
+            return null;
+        }
+
+        return signal with
+        {
+            Timestamp = executionSnapshot.Timestamp,
+            Timeframe = executionSnapshot.Timeframe,
+            CurrentPrice = executionSnapshot.CurrentPrice,
+            CurrentVolume = executionSnapshot.CurrentVolume,
+            CurrentRsi = executionSnapshot.Rsi ?? signal.CurrentRsi,
+            CurrentAtr = signal.CurrentAtr > 0m
+                ? signal.CurrentAtr
+                : executionSnapshot.Atr ?? signal.CurrentAtr
+        };
     }
 
     private async Task<bool> TrySubmitTechnicalExitAsync(
@@ -822,6 +965,22 @@ public sealed class LiveRunner(
                 strategy.ExitRules.ExitLogVolumeLookbackBars,
                 x => x.Volume,
                 addOne: true);
+            if (_technicalExecutionEngine.ShouldExitLongOnConfirmedVwapFailure(
+                strategy,
+                executionSnapshots,
+                index,
+                entryIndex,
+                entryPrice,
+                stopDistance,
+                Math.Max(highestHighSinceEntry, executionBars[index].High),
+                index - entryIndex))
+            {
+                exitReason = "confirmed_vwap_failure";
+                exitPrice = executionBars[index].Close;
+                exitSignalTimestamp = executionBars[index].Timestamp;
+                break;
+            }
+
             var (candidateExitPrice, candidateExitReason) = _technicalExecutionEngine.EvaluateBarForExit(
                 strategy,
                 executionBars[index],
@@ -1009,27 +1168,16 @@ public sealed class LiveRunner(
         return bars.Count;
     }
 
-    private static TimeSpan ParseTimeframe(string timeframe)
+    private static TimeSpan ParseTimeframe(string timeframe) => TimeframeParser.Parse(timeframe);
+
+    private static decimal? ResolveEntryRelativeVolume(StrategyDefinition strategy, IndicatorSnapshot snapshot)
     {
-        if (timeframe.EndsWith("m", StringComparison.OrdinalIgnoreCase) &&
-            int.TryParse(timeframe[..^1], out var minutes))
+        return strategy.EntryRules.MinVolumeSpikeSource.ToLowerInvariant() switch
         {
-            return TimeSpan.FromMinutes(minutes);
-        }
-
-        if (timeframe.EndsWith("h", StringComparison.OrdinalIgnoreCase) &&
-            int.TryParse(timeframe[..^1], out var hours))
-        {
-            return TimeSpan.FromHours(hours);
-        }
-
-        if (timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase) &&
-            int.TryParse(timeframe[..^1], out var days))
-        {
-            return TimeSpan.FromDays(days);
-        }
-
-        throw new InvalidOperationException($"Unsupported timeframe '{timeframe}'.");
+            "session_vs_average_day" or "session" or "finviz_style" => snapshot.SessionRelativeVolume,
+            "slot_bar" or "bar_same_time" => snapshot.SlotRelativeVolume,
+            _ => snapshot.RelativeVolume
+        };
     }
 
     private static string FormatLocalTime(DateTimeOffset timestamp)
@@ -1045,12 +1193,47 @@ public sealed class LiveRunner(
         }
     }
 
+    private static string BuildSignalAuditJson(
+        TradeSignal signal,
+        decimal relativeVolumeUsed,
+        string relativeVolumeSource,
+        decimal? calculatedRelativeVolume,
+        decimal? slotRelativeVolume,
+        decimal? sessionRelativeVolume,
+        decimal? slotAverageVolume,
+        decimal? cumulativeAverageVolume,
+        decimal? averageSessionVolume,
+        int relativeVolumeSampleCount)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            signal,
+            relativeVolumeUsed,
+            relativeVolumeSource,
+            calculatedRelativeVolume,
+            slotRelativeVolume,
+            sessionRelativeVolume,
+            slotAverageVolume,
+            cumulativeAverageVolume,
+            averageSessionVolume,
+            relativeVolumeSampleCount
+        });
+    }
+
     private static string ResolveExchangeTimezone(IReadOnlyCollection<StrategyDefinition> strategies)
     {
         return strategies
             .Select(strategy => strategy.Session.ExchangeTimezone)
             .FirstOrDefault(timezone => !String.IsNullOrWhiteSpace(timezone))
             ?? "America/New_York";
+    }
+
+    private static CandleStoreContext CreateCandleStoreContext(BacktestRunConfig run)
+    {
+        return new CandleStoreContext(
+            String.IsNullOrWhiteSpace(run.Mode) ? "paper" : run.Mode,
+            run.RunName,
+            run.Provider);
     }
 
     private static bool IsEntryExposureOrder(ActiveBrokerOrder order)
@@ -1110,5 +1293,29 @@ public sealed class LiveRunner(
         }
 
         return Math.Max(1, Environment.ProcessorCount - 1);
+    }
+
+    private static decimal? ParseFinvizRelativeVolumeFilter(string filter)
+    {
+        if (String.IsNullOrWhiteSpace(filter))
+        {
+            return null;
+        }
+
+        var query = Uri.UnescapeDataString(filter);
+        var match = System.Text.RegularExpressions.Regex.Match(
+            query,
+            @"sh_relvol_o(?<value>\d+(?:\.\d+)?)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+            TimeSpan.FromMilliseconds(250));
+
+        return match.Success &&
+            Decimal.TryParse(
+                match.Groups["value"].Value,
+                System.Globalization.NumberStyles.Number,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var value)
+            ? value
+            : null;
     }
 }

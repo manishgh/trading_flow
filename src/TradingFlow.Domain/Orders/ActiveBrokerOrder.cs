@@ -11,4 +11,5 @@ public sealed record ActiveBrokerOrder(
     decimal? LimitPrice,
     decimal? StopPrice,
     decimal? Qty,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string ClientOrderId = "");

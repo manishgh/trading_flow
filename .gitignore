@@ -5,6 +5,7 @@ out/
 publish/
 TestResults/
 artifacts/
+.tmp/
 
 # Visual Studio / Rider / VS Code local state
 .vs/
@@ -41,6 +42,7 @@ project.assets.json
 *.sqlite3
 *.log
 data/*
+src/TradingFlow.WarmupService/data/
 !data/research/
 data/research/*
 !data/research/backtests/
@@ -81,6 +83,7 @@ secrets.json
 **/appsettings.Local.json
 appsettings.*.local.json
 deploy/aks/secret.yaml
+deploy/aks/rendered/
 
 # OS files
 .DS_Store

@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trading-flow-common
+data:
+  ASPNETCORE_URLS: "http://+:8080"
+  DOTNET_ENVIRONMENT: "Production"
+  ASPNETCORE_ENVIRONMENT: "Production"
+  TRADINGFLOW_DATA_ROOT: "/app/data"
+  TRADINGFLOW_CACHE_ROOT: "/app/cache"
+  TRADINGFLOW_CANDLE_STORE: "local-file"
+  TRADINGFLOW_CANDLE_HOT_CACHE: "pod-local-emptydir"
+  TRADINGFLOW_CANDLE_ARCHIVE_MODE: "tradingflow-owned"
+  TRADINGFLOW_CANDLE_ARCHIVE_CONTAINER: "tradingflow-candles"
+  TRADINGFLOW_CANDLE_ARCHIVE_PREFIX: "tradingflow/ohlcv"
+  TRADINGFLOW_CANDLE_ARCHIVE_FORMAT: "jsonl"
+  TRADINGFLOW_RESULT_RETENTION_MODE: "summary"
+  TRADINGFLOW_LOG_FORMAT: "json"
+  NEWS_ENABLED: "true"
+  NEWS_PROVIDER: "alpaca"
+  NEWS_VETO_TTL_MINUTES: "360"
+  NEWS_NEGATIVE_VETO_THRESHOLD: "-0.60"
+  FINBERT_SENTIMENT_URL: "http://127.0.0.1:8088/analyze"
+  TRADINGFLOW_MARKET_DATA_PROVIDER: "alpaca"
+  TRADINGFLOW_MARKET_DATA_FEED: "sip"
+  WarmupService__BaseUrl: "http://trading-flow-warmup-service"
+  Warmup__DataRoot: "/app/data/warmup"
+  Warmup__CacheRoot: "/app/cache/warmup"
+  Warmup__ArchiveRoot: "/app/data/warmup/archive"
+  Warmup__ProviderName: "alpaca"
+  Warmup__MarketDataFeed: "sip"
+  Warmup__DefaultWarmupDays: "60"
+  Warmup__DefaultNewsLookbackDays: "14"
+  Warmup__DefaultTimeframes__0: "1m"
+  Warmup__DefaultTimeframes__1: "5m"
+  Warmup__DefaultTimeframes__2: "15m"
+  Warmup__DefaultTimeframes__3: "1h"
+  Warmup__DefaultTimeframes__4: "1d"
+  Warmup__IncludeNewsByDefault: "true"
+  Warmup__MaxParallelTickers: "4"
+  Warmup__NightlyRunLocalTime: "20:30"
+  Warmup__MarketTimeZone: "America/New_York"
+  Warmup__RunNightlyScheduler: "true"
+  Warmup__BlobPrefix: "warmup"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trading-flow-paper-shards
+data:
+  shard-0: "POET,RGTI,NVTS"
+  shard-1: "MXL,MU,MSFT"
+  shard-2: "NVDA,INTC,APP"
+  shard-3: "CRDO,RDW,OUST,SPCE"

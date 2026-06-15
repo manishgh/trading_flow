@@ -4,7 +4,7 @@
 
 ```text
 configs/
-  backtest/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml
+  backtest/poet-mxl-rgti-mu-msft-intraday-v6-lite-90d.yaml
   paper/alpaca-paper.yaml
   live/local-live-disabled.yaml
   strategies/*.yaml
@@ -14,40 +14,42 @@ Backtest, paper, and live configs have the same structure. Mode changes the data
 
 ## Run Config
 
-Example: `configs/backtest/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml`
+Example: `configs/backtest/poet-mxl-rgti-mu-msft-intraday-v6-lite-90d.yaml`
 
 ```yaml
-run_name: finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry
+run_name: poet-mxl-rgti-mu-msft-intraday-v6-lite-90d
 mode: backtest
 
 engine:
   pipeline: tpl
   worker_count: 0
-  bounded_capacity: 1000
-  indicator_warmup_bars: 50
+  bounded_capacity: 2000
+  indicator_warmup_bars: 200
   fail_fast: false
 
 time_window:
-  type: rolling
-  lookback_days: 180
-  warmup_lookback_days: 60
+  type: fixed
+  lookback_days: 0
+  warmup_lookback_days: 90
 
 market_data:
-  provider: alpaca
+  provider: csv
   download_timeframes:
+    - 1m
     - 5m
-  derive_from: 5m
-  raw_root: data/backtest/raw
-  normalized_root: data/backtest/normalized
-  results_root: data/backtest/results
-  cache_policy: refresh
+  derive_from: 1m
+  raw_root: C:/project/trading_flow/data/backtest/raw
+  normalized_root: C:/project/trading_flow/data/backtest/normalized/20260313-20260613
+  results_root: C:/project/trading_flow/data/backtest/results
+  cache_policy: bypass
 
 providers:
   alpaca:
     data_feed: sip
 
 strategies:
-  - ../strategies/intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml
+  - ../strategies/intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml
+  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml
 ```
 
 ## Providers
@@ -158,24 +160,29 @@ portfolio:
 
 ## Strategy Families
 
-Supported `entry_rules.setup_type` values:
+Supported `entry_rules.setup_type` values in the retained strategy set:
 
-- `vwap_pullback`
-- `opening_range_breakout`
-- `trend_pullback`
-- `momentum`
-- `ross_gap_go_bull_flag`
+- `indicator_stack`
+- `swing_reclaim`
+- `swing_rollover`
+- `avwap_pullback_bounce`
+- `episodic_pivot_gap`
+- `volatility_contraction_pattern`
+- `vwap_reclaim_trap`
 
 Current active strategy files:
 
-- `intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml`
-- `intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml`
-- `intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml`
-- `intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml`
+- `intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml`
+- `intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml`
+- `swing-reversal-reclaim-bull-quality-no-news.v1.yaml`
+- `swing-overbought-rollover-short-no-news.v5.yaml`
+- `brian_shannon_mta_avwap_strategies.yaml`
+- `kristjan_qullamaggie_stream_methodology.yaml`
+- `lance_breitstein_intraday_tactics.yaml`
+- `mark_minervini_trade_like_a_stock_market_wizard.yaml`
+- `minervini-trend-template-vcp.v2.yaml`
 
-The active day-trading strategy uses RSI for selection, review, and audit context, not as an entry or exit veto. Its configured RSI range is `0-100`, so momentum runners are not rejected merely because RSI is high.
-
-Confirmed-entry variants can enable `entry_rules.enable_entry_bar_confirmation`. Backtests then use the first execution candle after the signal as confirmation and fill on the following candle, avoiding same-candle confirmation look-ahead. The optional VWAP/Bollinger extension settings make overextended entries require a stronger confirmation close-location value.
+The promoted day-trading pair uses RSI for audit context and broad filtering only. Entry is driven by the indicator stack: price above VWAP, price above EMA10/EMA20, EMA10 above EMA20, MACD not bearish, and volume participation checks. V6 Lite adds the stronger dual-RVOL gate; V3 keeps the simpler baseline with structural exits.
 
 
 ## Current Pipeline

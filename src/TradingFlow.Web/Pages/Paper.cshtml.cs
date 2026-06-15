@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Engine.Storage;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 
@@ -39,11 +40,13 @@ public sealed class PaperModel : PageModel
     [BindProperty(SupportsGet = true)] public string OrderExpiration { get; set; } = "gtc";
     [BindProperty(SupportsGet = true)] public string EntryOrderType { get; set; } = "limit";
     [BindProperty(SupportsGet = true)] public bool ExtendedHours { get; set; } = true;
+    [BindProperty(SupportsGet = true)] public bool NewsEnabled { get; set; } = true;
     [BindProperty(SupportsGet = true)] public string? ScreenerFilter { get; set; }
     [BindProperty] public string? StrategyYaml { get; set; }
-    
+
     [BindProperty] public string? QuickEditTimeframe { get; set; }
     [BindProperty] public string? QuickEditSetupType { get; set; }
+    [BindProperty] public string? QuickEditMinVolumeSpike { get; set; }
     [BindProperty] public string? QuickEditStopAtr { get; set; }
     [BindProperty] public string? QuickEditTargetR { get; set; }
 
@@ -54,6 +57,7 @@ public sealed class PaperModel : PageModel
     public PaperEnvironmentSnapshot? PaperSnapshot { get; private set; }
     public string AlpacaCheckJson { get; private set; } = String.Empty;
     public string SuggestedRunName { get; private set; } = String.Empty;
+    public bool SelectedStrategyUsesNews { get; private set; }
 
     public void OnGet(string? configPath, string? strategyPath)
     {
@@ -62,7 +66,7 @@ public sealed class PaperModel : PageModel
         if (!string.IsNullOrEmpty(strategyPath)) SelectedStrategyPath = strategyPath;
 
         Load(ConfigPath, SelectedStrategyPath);
-        
+
         if (string.IsNullOrEmpty(TickersCsv))
         {
             var selectedConfig = Selected;
@@ -83,8 +87,10 @@ public sealed class PaperModel : PageModel
 
         ExtendedHours = selectedExecutionConfig?.Config.Execution.ExtendedHours ?? true;
         ScreenerFilter = selectedExecutionConfig?.Config.Screener?.Filters?.FirstOrDefault() ?? "";
-        
+
         var selectedStrategy = Strategies.FirstOrDefault(s => s.Path == SelectedStrategyPath);
+        SelectedStrategyUsesNews = selectedStrategy is not null && StrategyUsesNews(selectedStrategy.Definition);
+        NewsEnabled = (selectedExecutionConfig?.Config.News.Enabled ?? true) && SelectedStrategyUsesNews;
         if (selectedStrategy != null && string.IsNullOrEmpty(StrategyYaml))
         {
             try
@@ -99,7 +105,7 @@ public sealed class PaperModel : PageModel
                     selectedStrategy.Path);
             }
         }
-        
+
         if (!string.IsNullOrEmpty(StrategyYaml))
         {
             var tfMatch = System.Text.RegularExpressions.Regex.Match(StrategyYaml, @"timeframe:\s*(\w+)");
@@ -107,6 +113,9 @@ public sealed class PaperModel : PageModel
 
             var setupMatch = System.Text.RegularExpressions.Regex.Match(StrategyYaml, @"setup_type:\s*(\w+)");
             if (setupMatch.Success) QuickEditSetupType = setupMatch.Groups[1].Value;
+
+            var volumeMatch = System.Text.RegularExpressions.Regex.Match(StrategyYaml, @"min_volume_spike:\s*([\d\.]+)");
+            if (volumeMatch.Success) QuickEditMinVolumeSpike = volumeMatch.Groups[1].Value;
 
             var stopMatch = System.Text.RegularExpressions.Regex.Match(StrategyYaml, @"stop_atr_multiple:\s*([\d\.]+)");
             if (stopMatch.Success) QuickEditStopAtr = stopMatch.Groups[1].Value;
@@ -143,12 +152,13 @@ public sealed class PaperModel : PageModel
         var orderExpiration = form["OrderExpiration"].ToString();
         var entryOrderType = form["EntryOrderType"].ToString();
         var extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase);
+        var newsEnabled = EffectiveNewsEnabled(strategyPath, form.TryGetValue("NewsEnabled", out var ne) && ne.ToString().Contains("true", StringComparison.OrdinalIgnoreCase));
         var screenerFilter = form["ScreenerFilter"].ToString();
 
         if (tickers.Length > 0 && !String.IsNullOrWhiteSpace(baseConfigPath))
         {
-            var newPath = configWriter.SaveTempConfig(baseConfigPath, tickers, strategyPath, orderExpiration, entryOrderType, extendedHours, screenerFilter);
-            return RedirectToPage(new { configPath = newPath, strategyPath, orderExpiration, entryOrderType, extendedHours, screenerFilter });
+            var newPath = configWriter.SaveTempConfig(baseConfigPath, tickers, strategyPath, orderExpiration, entryOrderType, extendedHours, screenerFilter, newsEnabled: newsEnabled);
+            return RedirectToPage(new { configPath = newPath, strategyPath, orderExpiration, entryOrderType, extendedHours, newsEnabled, screenerFilter });
         }
 
         return RedirectToPage();
@@ -161,14 +171,22 @@ public sealed class PaperModel : PageModel
         var strategyYaml = form["StrategyYaml"].ToString();
 
         if (!string.IsNullOrWhiteSpace(form["QuickEditTimeframe"]))
-            strategyYaml = System.Text.RegularExpressions.Regex.Replace(strategyYaml, @"timeframe:\s*\w+", $"timeframe: {form["QuickEditTimeframe"]}");
-            
+            strategyYaml = System.Text.RegularExpressions.Regex.Replace(
+                strategyYaml,
+                @"(?m)^timeframe:\s*\w+",
+                $"timeframe: {form["QuickEditTimeframe"]}",
+                System.Text.RegularExpressions.RegexOptions.None,
+                TimeSpan.FromSeconds(1));
+
         if (!string.IsNullOrWhiteSpace(form["QuickEditSetupType"]))
             strategyYaml = System.Text.RegularExpressions.Regex.Replace(strategyYaml, @"setup_type:\s*\w+", $"setup_type: {form["QuickEditSetupType"]}");
-            
+
+        if (!string.IsNullOrWhiteSpace(form["QuickEditMinVolumeSpike"]))
+            strategyYaml = System.Text.RegularExpressions.Regex.Replace(strategyYaml, @"min_volume_spike:\s*[\d\.]+", $"min_volume_spike: {form["QuickEditMinVolumeSpike"]}");
+
         if (!string.IsNullOrWhiteSpace(form["QuickEditStopAtr"]))
             strategyYaml = System.Text.RegularExpressions.Regex.Replace(strategyYaml, @"stop_atr_multiple:\s*[\d\.]+", $"stop_atr_multiple: {form["QuickEditStopAtr"]}");
-            
+
         if (!string.IsNullOrWhiteSpace(form["QuickEditTargetR"]))
             strategyYaml = System.Text.RegularExpressions.Regex.Replace(strategyYaml, @"target_r_multiple:\s*[\d\.]+", $"target_r_multiple: {form["QuickEditTargetR"]}");
 
@@ -183,13 +201,14 @@ public sealed class PaperModel : PageModel
                 ModelState.AddModelError(String.Empty, $"Could not save strategy: {exception.Message}");
             }
         }
-        return RedirectToPage(new { 
-            configPath = form["BaseConfigPath"].ToString(), 
-            strategyPath, 
+        return RedirectToPage(new {
+            configPath = form["BaseConfigPath"].ToString(),
+            strategyPath,
             tickersCsv = form["TickersCsv"].ToString(),
-            orderExpiration = form["OrderExpiration"].ToString(), 
+            orderExpiration = form["OrderExpiration"].ToString(),
             entryOrderType = form["EntryOrderType"].ToString(),
             extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
+            newsEnabled = form.TryGetValue("NewsEnabled", out var ne) && ne.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
             screenerFilter = form["ScreenerFilter"].ToString()
         });
     }
@@ -202,11 +221,12 @@ public sealed class PaperModel : PageModel
         {
             configWriter.DeleteTempConfig(configPath);
         }
-        return RedirectToPage(new { 
+        return RedirectToPage(new {
             strategyPath = form["SelectedStrategyPath"].ToString(),
-            orderExpiration = form["OrderExpiration"].ToString(), 
+            orderExpiration = form["OrderExpiration"].ToString(),
             entryOrderType = form["EntryOrderType"].ToString(),
             extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
+            newsEnabled = form.TryGetValue("NewsEnabled", out var ne) && ne.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
             screenerFilter = form["ScreenerFilter"].ToString()
         });
     }
@@ -220,18 +240,19 @@ public sealed class PaperModel : PageModel
         var orderExpiration = form["OrderExpiration"].ToString();
         var entryOrderType = form["EntryOrderType"].ToString();
         var extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase);
+        var newsEnabled = EffectiveNewsEnabled(strategyPath, form.TryGetValue("NewsEnabled", out var ne) && ne.ToString().Contains("true", StringComparison.OrdinalIgnoreCase));
         var screenerFilter = form["ScreenerFilter"].ToString();
         var tickersCsv = form["TickersCsv"].ToString();
-        
+
         if (String.IsNullOrWhiteSpace(runName))
             runName = "paper_" + DateTimeOffset.UtcNow.ToString("yyyyMMdd_HHmmss");
 
         var existingConfig = catalog.GetConfig(baseConfigPath);
-        var tickers = string.IsNullOrWhiteSpace(tickersCsv) 
-            ? existingConfig.Config.Tickers 
+        var tickers = string.IsNullOrWhiteSpace(tickersCsv)
+            ? existingConfig.Config.Tickers
             : tickersCsv.Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
 
-        var tempConfigPath = configWriter.SaveTempConfig(baseConfigPath, tickers, strategyPath, orderExpiration, entryOrderType, extendedHours, screenerFilter, runName);
+        var tempConfigPath = configWriter.SaveTempConfig(baseConfigPath, tickers, strategyPath, orderExpiration, entryOrderType, extendedHours, screenerFilter, runName, newsEnabled);
         var job = paperJobs.Start(runName, tempConfigPath);
         return RedirectToPage("/PaperJob", new { id = job.JobId });
     }
@@ -241,18 +262,18 @@ public sealed class PaperModel : PageModel
         Configs = catalog.GetPaperConfigs();
         Strategies = catalog.GetStrategies();
         LiveJobs = paperJobs.List().Take(10).ToArray();
-        
+
         if (Configs.Count == 0)
         {
             throw new InvalidOperationException("No paper configs found.");
         }
 
         Selected = String.IsNullOrWhiteSpace(configPath)
-            ? Configs.First()
+            ? Configs.FirstOrDefault(config => config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase)) ?? Configs.First()
             : catalog.GetConfig(configPath);
         ConfigPath = Selected.Path;
         SelectedStrategyPath = String.IsNullOrWhiteSpace(strategyPath)
-            ? Strategies.FirstOrDefault()?.Path ?? String.Empty
+            ? Selected.Strategies.FirstOrDefault()?.Path ?? Strategies.FirstOrDefault()?.Path ?? String.Empty
             : strategyPath;
     }
 
@@ -264,16 +285,21 @@ public sealed class PaperModel : PageModel
         var yaml = System.IO.File.ReadAllText(strategyPath);
         var tfMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"timeframe:\s*(\w+)");
         var setupMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"setup_type:\s*(\w+)");
+        var volumeMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"min_volume_spike:\s*([\d\.]+)");
         var stopMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"stop_atr_multiple:\s*([\d\.]+)");
         var targetMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"target_r_multiple:\s*([\d\.]+)");
+        var strategy = catalog.GetStrategies().FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase));
+        var usesNews = strategy is not null && StrategyUsesNews(strategy.Definition);
 
         return new JsonResult(new {
             success = true,
             yaml = yaml,
             timeframe = tfMatch.Success ? tfMatch.Groups[1].Value : "",
             setupType = setupMatch.Success ? setupMatch.Groups[1].Value : "",
+            minVolumeSpike = volumeMatch.Success ? volumeMatch.Groups[1].Value : "",
             stopAtr = stopMatch.Success ? stopMatch.Groups[1].Value : "",
-            targetR = targetMatch.Success ? targetMatch.Groups[1].Value : ""
+            targetR = targetMatch.Success ? targetMatch.Groups[1].Value : "",
+            usesNews
         });
     }
 
@@ -291,6 +317,7 @@ public sealed class PaperModel : PageModel
                 orderExpiration = config.Config.Execution.OrderExpiration,
                 entryOrderType = config.Config.Execution.EntryOrderType,
                 extendedHours = config.Config.Execution.ExtendedHours,
+                newsEnabled = config.Config.News.Enabled,
                 screenerFilter = config.Config.Screener?.Filters?.FirstOrDefault() ?? "",
                 broker = config.Config.Execution.Broker
             });
@@ -299,5 +326,28 @@ public sealed class PaperModel : PageModel
         {
             return new JsonResult(new { success = false });
         }
+    }
+
+    private bool EffectiveNewsEnabled(string strategyPath, bool requestedNewsEnabled)
+    {
+        if (!requestedNewsEnabled)
+        {
+            return false;
+        }
+
+        var strategy = Strategies.FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase))
+            ?? catalog.GetStrategies().FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase));
+        return strategy is not null && StrategyUsesNews(strategy.Definition);
+    }
+
+    private static bool StrategyUsesNews(StrategyDefinition strategy)
+    {
+        return strategy.EntryRules.RequirePositiveNews ||
+            strategy.EntryRules.MaxShortNewsSentiment is not null ||
+            strategy.EntryRules.MinShortCatalystDropPct is not null ||
+            strategy.EntryRules.MinCatalystPriceMovePct is not null ||
+            strategy.EntryRules.MaxCatalystPriceMovePct is not null ||
+            strategy.EntryRules.SetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase) ||
+            strategy.EntryRules.ShortSetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase);
     }
 }

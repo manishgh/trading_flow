@@ -22,11 +22,12 @@ tickers:
 market_data:
   provider: alpaca
   download_timeframes:
+    - 1m
     - 5m
     - 15m
     - 1h
     - 1d
-  derive_from: 5m
+  derive_from: 1m
   raw_root: data/live/raw
   normalized_root: data/live/normalized
   results_root: data/live/results
@@ -100,4 +101,4 @@ artifacts:
   retention_mode: summary
 
 strategies:
-  - ../strategies/intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml
+  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml

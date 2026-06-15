@@ -1,0 +1,45 @@
+strategy_id: research.breitstein-intraday-vwap-reclaim
+strategy_name: Breitstein Intraday VWAP Trap Reclaim
+source: lance_breitstein_intraday_tactics
+version: 1
+timeframe: 5m
+direction: long
+entry_rules:
+  setup_type: vwap_reclaim_trap
+  min_volume_spike: 0.0
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  min_session_relative_volume: 2.0
+  opening_range_minutes: 30 # Let morning volatility settle
+
+  # The Trap Architecture
+  require_prior_flush_below_vwap_bars: 3
+  vwap_reclaim_max_bars_since_flush: 12
+  min_reclaim_volume_ratio: 1.50
+  require_price_above_vwap: true
+
+  enable_entry_bar_confirmation: true
+  min_entry_bar_close_location_value: 0.85 # Must close extremely strong
+confluence:
+  enabled: false
+  timeframe: 5m
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  stop_at_flush_low: true
+  stop_atr_multiple: 2.0
+  target_r_multiple: 3.0
+  max_hold_hours: 6.5
+  exit_on_close_below_vwap: true
+execution:
+  timeframe: 1m
+  slippage_bps: 5.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 15
+  friday_close_buffer_minutes: 15

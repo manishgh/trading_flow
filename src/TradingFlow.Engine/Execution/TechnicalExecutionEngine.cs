@@ -51,7 +51,7 @@ public sealed class TechnicalExecutionEngine
         {
             // We usually can't execute at the EXACT bar close easily in real life, but for standard technical exits we signal it here.
             // In a real execution, we'd exit at the next open, but we return the signal now.
-            return (bar.Close, technicalExitReason); 
+            return (bar.Close, technicalExitReason);
         }
 
         // Check Max Hold Timeout
@@ -113,11 +113,20 @@ public sealed class TechnicalExecutionEngine
             return "technical_exit_below_ema20";
         }
 
+        // If confirmed VWAP failure is enabled, a single close below VWAP is only a warning.
+        // The caller should use ShouldExitLongOnConfirmedVwapFailure before evaluating standard exits.
         if (strategy.ExitRules.ExitOnCloseBelowVwap &&
+            !strategy.ExitRules.EnableConfirmedVwapExit &&
             snapshot.Vwap is not null &&
             snapshot.CurrentPrice < snapshot.Vwap.Value)
         {
             return "technical_exit_below_vwap";
+        }
+
+        if (strategy.ExitRules.ExitOnEma10CrossBelowEma20 &&
+            IsEma10CrossedBelowEma20(snapshot, previousSnapshot))
+        {
+            return "technical_exit_ema10_cross_below_ema20";
         }
 
         if (strategy.ExitRules.ExitOnMacdHistogramNegative &&
@@ -179,6 +188,66 @@ public sealed class TechnicalExecutionEngine
             snapshot.Sma20 is { } currentSma20 &&
             previousSma10 <= previousSma20 &&
             currentSma10 > currentSma20;
+    }
+
+    public static bool IsEma10CrossedBelowEma20(IndicatorSnapshot snapshot, IndicatorSnapshot? previousSnapshot)
+    {
+        return previousSnapshot is not null &&
+            previousSnapshot.Ema10 is { } previousEma10 &&
+            previousSnapshot.Ema20 is { } previousEma20 &&
+            snapshot.Ema10 is { } currentEma10 &&
+            snapshot.Ema20 is { } currentEma20 &&
+            previousEma10 >= previousEma20 &&
+            currentEma10 < currentEma20;
+    }
+
+    // A runner can dip below session VWAP and still continue. This treats VWAP loss as actionable
+    // only after consecutive closes below VWAP by a configurable ATR buffer before the trade has proven itself.
+    public bool ShouldExitLongOnConfirmedVwapFailure(
+        StrategyDefinition strategy,
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int index,
+        int entryIndex,
+        decimal entryPrice,
+        decimal stopDistance,
+        decimal highestHighSinceEntry,
+        int barsHeld)
+    {
+        if (!strategy.ExitRules.EnableConfirmedVwapExit ||
+            barsHeld < strategy.ExitRules.MinHoldBarsBeforeTechnicalExit ||
+            stopDistance <= 0)
+        {
+            return false;
+        }
+
+        if (strategy.ExitRules.DisableConfirmedVwapExitAfterR is { } disableAfterR &&
+            ((highestHighSinceEntry - entryPrice) / stopDistance) >= disableAfterR)
+        {
+            return false;
+        }
+
+        var confirmationBars = Math.Max(strategy.ExitRules.ConfirmedVwapExitBars, 1);
+        if (index - confirmationBars + 1 < entryIndex)
+        {
+            return false;
+        }
+
+        for (var i = index - confirmationBars + 1; i <= index; i++)
+        {
+            var snapshot = snapshots[i];
+            if (snapshot.Vwap is null || snapshot.Atr is null)
+            {
+                return false;
+            }
+
+            var failureLevel = snapshot.Vwap.Value - (snapshot.Atr.Value * strategy.ExitRules.ConfirmedVwapExitAtrBuffer);
+            if (snapshot.CurrentPrice >= failureLevel)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public static (decimal Slope, decimal R2)? ComputeLogTrend(

@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: trading-flow-paper
+resources:
+  - namespace.yaml
+  - serviceaccounts.yaml
+  - configmap.yaml
+  - storage.yaml
+  - keyvault-secretproviderclasses.yaml
+  - web.yaml
+  - paper-worker-shards.yaml
+  - warmup-service.yaml
+  - networkpolicy.yaml
+  - pdb.yaml
+images:
+  - name: tradingflow-web
+    newName: tradingflowprod.azurecr.io/tradingflow-web
+    newTag: 2026.06.14
+  - name: tradingflow-worker
+    newName: tradingflowprod.azurecr.io/tradingflow-worker
+    newTag: 2026.06.14
+  - name: tradingflow-finbert
+    newName: tradingflowprod.azurecr.io/tradingflow-finbert
+    newTag: 2026.06.14
+  - name: tradingflow-warmup-service
+    newName: tradingflowprod.azurecr.io/tradingflow-warmup-service
+    newTag: 2026.06.14

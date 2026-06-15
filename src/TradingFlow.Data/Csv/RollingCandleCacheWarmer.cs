@@ -155,14 +155,14 @@ public sealed class RollingCandleCacheWarmer
             await using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
             {
                 await writer.WriteLineAsync(
-                    "ticker,timestamp,timeframe,close,volume,vwap,rsi,atr,ema20,ema50,ema200,bollinger_middle,bollinger_upper,bollinger_lower,relative_volume,macd_line,macd_signal,macd_histogram".AsMemory(),
+                    "ticker,timestamp,timeframe,close,volume,vwap,rsi,atr,ema10,ema20,ema50,ema200,bollinger_middle,bollinger_upper,bollinger_lower,relative_volume,slot_relative_volume,session_relative_volume,slot_average_volume,cumulative_average_volume,average_session_volume,relative_volume_sample_count,macd_line,macd_signal,macd_histogram".AsMemory(),
                     cancellationToken);
                 foreach (var snapshot in snapshots.OrderBy(x => x.Timestamp))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     await writer.WriteLineAsync(
                         FormattableString.Invariant(
-                            $"{snapshot.Ticker},{snapshot.Timestamp:O},{snapshot.Timeframe},{snapshot.CurrentPrice},{snapshot.CurrentVolume},{FormatNullable(snapshot.Vwap)},{FormatNullable(snapshot.Rsi)},{FormatNullable(snapshot.Atr)},{FormatNullable(snapshot.Ema20)},{FormatNullable(snapshot.Ema50)},{FormatNullable(snapshot.Ema200)},{FormatNullable(snapshot.BollingerMiddle)},{FormatNullable(snapshot.BollingerUpper)},{FormatNullable(snapshot.BollingerLower)},{FormatNullable(snapshot.RelativeVolume)},{FormatNullable(snapshot.MacdLine)},{FormatNullable(snapshot.MacdSignal)},{FormatNullable(snapshot.MacdHistogram)}").AsMemory(),
+                            $"{snapshot.Ticker},{snapshot.Timestamp:O},{snapshot.Timeframe},{snapshot.CurrentPrice},{snapshot.CurrentVolume},{FormatNullable(snapshot.Vwap)},{FormatNullable(snapshot.Rsi)},{FormatNullable(snapshot.Atr)},{FormatNullable(snapshot.Ema10)},{FormatNullable(snapshot.Ema20)},{FormatNullable(snapshot.Ema50)},{FormatNullable(snapshot.Ema200)},{FormatNullable(snapshot.BollingerMiddle)},{FormatNullable(snapshot.BollingerUpper)},{FormatNullable(snapshot.BollingerLower)},{FormatNullable(snapshot.RelativeVolume)},{FormatNullable(snapshot.SlotRelativeVolume)},{FormatNullable(snapshot.SessionRelativeVolume)},{FormatNullable(snapshot.SlotAverageVolume)},{FormatNullable(snapshot.CumulativeAverageVolume)},{FormatNullable(snapshot.AverageSessionVolume)},{snapshot.RelativeVolumeSampleCount},{FormatNullable(snapshot.MacdLine)},{FormatNullable(snapshot.MacdSignal)},{FormatNullable(snapshot.MacdHistogram)}").AsMemory(),
                         cancellationToken);
                 }
             }

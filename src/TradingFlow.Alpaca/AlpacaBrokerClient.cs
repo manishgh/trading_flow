@@ -20,7 +20,7 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
     {
         _httpClient = httpClient;
         _options = options;
-        
+
         _httpClient.BaseAddress = _options.BaseUrl;
         _httpClient.DefaultRequestHeaders.Add("APCA-API-KEY-ID", _options.KeyId);
         _httpClient.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", _options.SecretKey);
@@ -46,7 +46,8 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
                     type = "limit",
                     time_in_force = "day",
                     limit_price = order.LimitPrice.ToString("0.00"),
-                    extended_hours = true
+                    extended_hours = true,
+                    client_order_id = order.ClientOrderId
                 };
             }
             else if (entryType == "market")
@@ -58,6 +59,7 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
                     side = "buy",
                     type = "market",
                     time_in_force = _options.TimeInForce,
+                    client_order_id = order.ClientOrderId,
                     order_class = "bracket",
                     take_profit = new
                     {
@@ -79,6 +81,7 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
                     type = "limit",
                     time_in_force = _options.TimeInForce,
                     limit_price = order.LimitPrice.ToString("0.00"),
+                    client_order_id = order.ClientOrderId,
                     order_class = "bracket",
                     take_profit = new
                     {
@@ -96,7 +99,7 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 
             var response = await _httpClient.PostAsync("/v2/orders", content, cancellationToken);
             var responseString = await response.Content.ReadAsStringAsync(cancellationToken);
-            
+
             if (!response.IsSuccessStatusCode)
             {
                 throw new Exception($"Alpaca API Error: {response.StatusCode} - {responseString}");
@@ -165,7 +168,7 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 
             using var doc = JsonDocument.Parse(responseString);
             var id = doc.RootElement.GetProperty("id").GetString() ?? Guid.NewGuid().ToString();
-            
+
             // OCO is submitted as one parent order which creates two legs. We just return the parent ID.
             return new[] { id };
         });
@@ -180,10 +183,10 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
             {
                 return (System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>)Array.Empty<ActiveBrokerOrder>();
             }
-            
+
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
             using var doc = JsonDocument.Parse(json);
-            
+
             var orders = new System.Collections.Generic.List<ActiveBrokerOrder>();
             foreach (var element in doc.RootElement.EnumerateArray())
             {
@@ -192,26 +195,31 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
                 var side = element.GetProperty("side").GetString() ?? "";
                 var status = element.GetProperty("status").GetString() ?? "";
                 var type = element.TryGetProperty("type", out var tp) && tp.ValueKind != JsonValueKind.Null ? tp.GetString() ?? "" : "";
-                
+
                 decimal? limit = null;
                 if (element.TryGetProperty("limit_price", out var lp) && lp.ValueKind != JsonValueKind.Null && decimal.TryParse(lp.GetString(), out var lVal))
                     limit = lVal;
-                    
+
                 decimal? stop = null;
                 if (element.TryGetProperty("stop_price", out var sp) && sp.ValueKind != JsonValueKind.Null && decimal.TryParse(sp.GetString(), out var sVal))
                     stop = sVal;
-                    
+
                 decimal? qty = null;
                 if (element.TryGetProperty("qty", out var qp) && qp.ValueKind != JsonValueKind.Null && decimal.TryParse(qp.GetString(), out var qVal))
                     qty = qVal;
-                    
+
                 DateTimeOffset createdAt = DateTimeOffset.UtcNow;
                 if (element.TryGetProperty("created_at", out var cp) && cp.ValueKind != JsonValueKind.Null)
                     createdAt = cp.GetDateTimeOffset();
 
-                orders.Add(new ActiveBrokerOrder(id, symbol, side, status, type, limit, stop, qty, createdAt));
+                var clientOrderId = element.TryGetProperty("client_order_id", out var clientOrderIdProperty) &&
+                    clientOrderIdProperty.ValueKind != JsonValueKind.Null
+                        ? clientOrderIdProperty.GetString() ?? ""
+                        : "";
+
+                orders.Add(new ActiveBrokerOrder(id, symbol, side, status, type, limit, stop, qty, createdAt, clientOrderId));
             }
-            
+
             return (System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>)orders;
         });
     }
@@ -225,35 +233,35 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
             {
                 return (System.Collections.Generic.IReadOnlyList<BrokerPosition>)Array.Empty<BrokerPosition>();
             }
-            
+
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
             using var doc = JsonDocument.Parse(json);
-            
+
             var positions = new System.Collections.Generic.List<BrokerPosition>();
             foreach (var element in doc.RootElement.EnumerateArray())
             {
                 var symbol = element.GetProperty("symbol").GetString() ?? "";
                 var side = element.GetProperty("side").GetString() ?? "";
-                
+
                 decimal qty = 0;
                 if (element.TryGetProperty("qty", out var qp) && decimal.TryParse(qp.GetString(), out var qVal))
                     qty = qVal;
-                    
+
                 decimal avgEntry = 0;
                 if (element.TryGetProperty("avg_entry_price", out var ap) && decimal.TryParse(ap.GetString(), out var aVal))
                     avgEntry = aVal;
-                    
+
                 decimal currentPrice = 0;
                 if (element.TryGetProperty("current_price", out var cp) && decimal.TryParse(cp.GetString(), out var cVal))
                     currentPrice = cVal;
-                    
+
                 decimal unPl = 0;
                 if (element.TryGetProperty("unrealized_pl", out var up) && decimal.TryParse(up.GetString(), out var uVal))
                     unPl = uVal;
 
                 positions.Add(new BrokerPosition(symbol, side, qty, avgEntry, currentPrice, unPl));
             }
-            
+
             return (System.Collections.Generic.IReadOnlyList<BrokerPosition>)positions;
         });
     }

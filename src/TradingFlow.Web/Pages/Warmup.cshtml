@@ -1,0 +1,148 @@
+@page "/Warmup"
+@model TradingFlow.Web.Pages.WarmupModel
+@{
+    ViewData["Title"] = "Warmup";
+}
+
+<section class="page-header">
+    <div>
+        <h1>Warmup Cache</h1>
+        <p>Prepare tomorrow's candidate stocks with candles, indicators, and news catalysts before paper/live trading needs them.</p>
+    </div>
+    <a class="button secondary" asp-page="/Warmup">Refresh</a>
+</section>
+
+@if (!String.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="status-banner @(Model.HasError ? "error" : "success")">@Model.StatusMessage</div>
+}
+
+<section class="panel">
+    <h2>Add Warmup Stocks</h2>
+    <form method="post" asp-page-handler="Add" class="tf-grid-form">
+        <label>
+            Tickers
+            <textarea name="TickersCsv" rows="2" placeholder="POET, RGTI, NVTS">@Model.TickersCsv</textarea>
+        </label>
+        <label>
+            Reason
+            <input name="Reason" value="@Model.Reason" placeholder="possible trend tomorrow" />
+        </label>
+        <label>
+            Warmup days
+            <input name="WarmupDays" value="@Model.WarmupDays" type="number" min="1" max="365" />
+        </label>
+        <label>
+            News lookback days
+            <input name="NewsLookbackDays" value="@Model.NewsLookbackDays" type="number" min="0" max="90" />
+        </label>
+        <label>
+            Timeframes
+            <input name="TimeframesCsv" value="@Model.TimeframesCsv" placeholder="1m,5m,15m,1h,1d" />
+        </label>
+        <div class="tf-inline-options">
+            <label class="tf-checkbox-row">
+                <input asp-for="IncludeNews" />
+                Include news catalysts
+            </label>
+            <label class="tf-checkbox-row">
+                <input asp-for="RunNow" />
+                Run immediately
+            </label>
+        </div>
+        <button type="submit" class="button">Add To Warmup</button>
+    </form>
+</section>
+
+<section class="panel">
+    <div class="panel-header">
+        <div>
+            <h2>Warmed / Watched Stocks</h2>
+            <p>Warmup service: @Model.ServiceBaseUrl</p>
+        </div>
+        <form method="post" asp-page-handler="RunNow">
+            <button class="button" type="submit">Run All Now</button>
+        </form>
+    </div>
+    <div class="table-scroll">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Status</th>
+                    <th>Last Warmed</th>
+                    <th>Days</th>
+                    <th>News</th>
+                    <th>Timeframes</th>
+                    <th>Reason</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+            @if (Model.Watchlist.Count == 0)
+            {
+                <tr><td colspan="8">No warmup stocks yet.</td></tr>
+            }
+            else
+            {
+                @foreach (var item in Model.Watchlist)
+                {
+                    <tr>
+                        <td><strong>@item.Ticker</strong></td>
+                        <td>@item.LastStatus @(String.IsNullOrWhiteSpace(item.LastError) ? "" : $"({item.LastError})")</td>
+                        <td>@(item.LastWarmedAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                        <td>@item.WarmupDays</td>
+                        <td>@(item.IncludeNews ? $"{item.NewsLookbackDays}d" : "off")</td>
+                        <td>@String.Join(", ", item.Timeframes)</td>
+                        <td>@item.Reason</td>
+                        <td>
+                            <form method="post" asp-page-handler="Remove">
+                                <input type="hidden" name="Ticker" value="@item.Ticker" />
+                                <button class="button secondary" type="submit">Remove</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="panel">
+    <h2>Recent Warmup Runs</h2>
+    <div class="table-scroll">
+        <table>
+            <thead>
+                <tr>
+                    <th>Started</th>
+                    <th>Status</th>
+                    <th>Reason</th>
+                    <th>Tickers</th>
+                    <th>Succeeded</th>
+                    <th>Failed</th>
+                </tr>
+            </thead>
+            <tbody>
+            @if (Model.Runs.Count == 0)
+            {
+                <tr><td colspan="6">No warmup runs yet.</td></tr>
+            }
+            else
+            {
+                @foreach (var run in Model.Runs.Take(20))
+                {
+                    <tr>
+                        <td>@run.StartedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>@run.Status</td>
+                        <td>@run.Reason</td>
+                        <td>@run.RequestedTickerCount</td>
+                        <td>@run.SucceededTickerCount</td>
+                        <td>@run.FailedTickerCount</td>
+                    </tr>
+                }
+            }
+            </tbody>
+        </table>
+    </div>
+</section>

@@ -1,0 +1,46 @@
+strategy_id: research.shannon-swing-avwap-bounce
+strategy_name: Shannon Alphatrends AVWAP Bounce
+source: brian_shannon_mta_avwap_strategies
+version: 1
+timeframe: 65m # 65m perfectly divides the trading day into 6 equal candles
+direction: long
+entry_rules:
+  setup_type: avwap_pullback_bounce
+  min_volume_spike: 0.0
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  anchor_type: recent_gap_or_high_volume_node
+  require_price_above_sma50_daily: true
+  require_price_above_sma200_daily: true
+
+  # The Pullback
+  avwap_proximity_pct: 1.5
+  require_pullback_volume_dryup: true
+
+  # The Confirmation (Guilty until proven innocent)
+  enable_entry_bar_confirmation: true
+  require_price_above_ema5_65m: true
+  min_bounce_volume_ratio: 1.25
+confluence:
+  enabled: false
+  timeframe: 65m
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 2.0
+  stop_below_avwap_pct: 1.0 # Buffer below the anchor
+  target_r_multiple: 3.0
+  max_hold_hours: 360.0
+  exit_on_sma10_cross_below_sma20: true
+execution:
+  timeframe: 5m
+  slippage_bps: 10.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

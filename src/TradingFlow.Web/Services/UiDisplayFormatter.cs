@@ -24,6 +24,13 @@ public static class UiDisplayFormatter
             .ToString("HH:mm:ss", CultureInfo.InvariantCulture);
     }
 
+    public static string FormatLocalDate(DateTimeOffset timestamp)
+    {
+        return TimeZoneInfo
+            .ConvertTime(timestamp, LocalTradingTimeZone)
+            .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    }
+
     public static string FormatRejectionReason(string? reason)
     {
         if (String.IsNullOrWhiteSpace(reason))

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TradingFlow.Mobile.Pages.NotificationsPage"
+             Title="Alerts">
+    <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
+        <ScrollView>
+            <VerticalStackLayout Padding="16" Spacing="14">
+                <Label Text="Notifications" Style="{StaticResource Headline}" FontSize="24" />
+                <Label Text="Run status, failures, and completed results from the backend." Style="{StaticResource SubHeadline}" FontSize="13" />
+                <Border Style="{StaticResource CardBorder}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
+                        <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+                    </Grid>
+                </Border>
+                <Button Text="Refresh Alerts" Clicked="OnRefreshClicked" />
+                <CollectionView x:Name="NotificationsView">
+                    <CollectionView.EmptyView>
+                        <Label Text="No notifications yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,10">
+                                <VerticalStackLayout Spacing="6">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <Label Text="{Binding Title}" FontAttributes="Bold" FontSize="16" />
+                                        <Label Grid.Column="1" Text="{Binding Severity}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                    </Grid>
+                                    <Label Text="{Binding Message}" FontSize="13" />
+                                    <Label Text="{Binding RunName}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                    <Label Text="{Binding Timestamp}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </VerticalStackLayout>
+        </ScrollView>
+    </RefreshView>
+</ContentPage>

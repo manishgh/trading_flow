@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TradingFlow.Mobile.Pages.AutomationPage"
+             Title="Automation">
+    <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
+        <ScrollView>
+            <VerticalStackLayout Padding="16" Spacing="14">
+                <Label Text="Android Automation" Style="{StaticResource Headline}" FontSize="24" />
+                <Label Text="Use another app's notification as the paper-entry trigger. TradingFlow keeps ownership of exits using the selected intraday strategy." Style="{StaticResource SubHeadline}" FontSize="13" />
+                <Border Style="{StaticResource CardBorder}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
+                        <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="10">
+                        <Label Text="Notification Entry" FontAttributes="Bold" FontSize="18" />
+                        <Label x:Name="NotificationAccessLabel" FontSize="13" />
+                        <Button Text="Open Notification Access Settings" Clicked="OnOpenNotificationSettings" />
+                        <Label Text="Open Stock Pulse once and let it send any alert. Select the captured alert below, tap Use Selected App, then save defaults." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Entry x:Name="PackageEntry" Placeholder="Source app package, learned from captured alert" />
+                        <Picker x:Name="ConfigPicker" Title="Paper environment" />
+                        <Picker x:Name="StrategyPicker" Title="Exit strategy" />
+                        <HorizontalStackLayout Spacing="8">
+                            <CheckBox x:Name="AutoForwardCheck" Scale="0.85" />
+                            <Label Text="Auto-forward parsed entry notifications to paper trading" VerticalTextAlignment="Center" FontSize="13" />
+                        </HorizontalStackLayout>
+                        <Button Text="Save Automation Defaults" Clicked="OnSaveDefaults" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="10">
+                        <Label Text="Run Now" FontAttributes="Bold" FontSize="18" />
+                        <Label Text="Start a paper entry immediately for one ticker. Exit remains strategy-managed." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Entry x:Name="ManualTickerEntry" Placeholder="Ticker: POET" />
+                        <Button Text="Run Ticker Now" Clicked="OnRunNow" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Grid ColumnDefinitions="*,Auto">
+                    <Label Text="Automation Sessions" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
+                    <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
+                </Grid>
+
+                <CollectionView x:Name="SessionsView" SelectionMode="Single" SelectionChanged="OnSessionSelected">
+                    <CollectionView.EmptyView>
+                        <Label Text="No automation sessions yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,10">
+                                <VerticalStackLayout Spacing="6">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="16" />
+                                        <Label Grid.Column="1" Text="{Binding Status}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                    </Grid>
+                                    <Label Text="{Binding ProgressText}" FontSize="13" />
+                                    <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+
+                <Border x:Name="DetailCard" Style="{StaticResource CardBorder}" IsVisible="False">
+                    <VerticalStackLayout Spacing="8">
+                        <Label x:Name="DetailTitle" FontAttributes="Bold" FontSize="17" />
+                        <Label x:Name="DetailStatus" FontSize="13" />
+                        <Button Text="Cancel Session" Clicked="OnCancelSession" BackgroundColor="#B42318" />
+                        <Label Text="Recent Events" FontAttributes="Bold" FontSize="14" />
+                        <VerticalStackLayout x:Name="EventsStack" Spacing="4" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Label Text="Captured Alerts" FontAttributes="Bold" FontSize="18" />
+                <HorizontalStackLayout Spacing="10">
+                    <Button Text="Use Selected App" Clicked="OnUseSelectedApp" />
+                    <Button Text="Forward Alert" Clicked="OnForwardAlert" />
+                    <Button Text="Clear Alerts" Clicked="OnClearAlerts" />
+                </HorizontalStackLayout>
+                <CollectionView x:Name="AlertsView" SelectionMode="Single" SelectionChanged="OnAlertSelected">
+                    <CollectionView.EmptyView>
+                        <Label Text="No captured alerts yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,10">
+                                <VerticalStackLayout Spacing="4">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <Label Text="{Binding Title}" FontAttributes="Bold" FontSize="14" LineBreakMode="TailTruncation" />
+                                        <Label Grid.Column="1" Text="{Binding Ticker}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                    </Grid>
+                                    <Label Text="{Binding Message}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                    <Label Text="{Binding PackageName}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                    <Label Text="{Binding ForwardStatus}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </VerticalStackLayout>
+        </ScrollView>
+    </RefreshView>
+</ContentPage>

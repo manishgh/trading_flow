@@ -119,6 +119,52 @@ public sealed class SignalGeneratorStepBreakoutTests
     }
 
     [Fact]
+    public void CreateTradeSignal_WhenRossSetupUsesSwingShapedBars_DoesNotSetSwingFlags()
+    {
+        var bars = BuildSwingReclaimBars();
+        var snapshots = new IndicatorEngine().Compute(bars);
+        var strategy = CreateStrategy(direction: "long", setupType: "ross_gap_go_bull_flag");
+        var index = bars.Count - 1;
+
+        var signal = new SignalGenerator().CreateTradeSignal(strategy, bars, snapshots, index);
+
+        Assert.NotNull(signal);
+        Assert.False(signal!.IsSwingReclaim);
+        Assert.False(signal.IsSwingRollover);
+    }
+
+    [Fact]
+    public void CreateTradeSignal_WhenIndicatorStackDisablesLookbacks_DoesNotThrowOnZeroWindows()
+    {
+        var bars = BuildIntradayIndicatorStackBars();
+        var snapshots = new IndicatorEngine().Compute(bars);
+        var baseStrategy = CreateStrategy(direction: "long", setupType: "indicator_stack");
+        var strategy = baseStrategy with
+        {
+            Timeframe = "5m",
+            EntryRules = baseStrategy.EntryRules with
+            {
+                OpeningRangeMinutes = 0,
+                RecentHighLookbackBars = 0,
+                VolatilityContractionLookbackBars = 0,
+                RequirePriceAboveVwap = true,
+                RequirePriceAboveEma10 = true,
+                RequirePriceAboveEma20 = true,
+                RequireEma10AboveEma20 = true,
+                RequireMacdHistogramPositive = true,
+                MacdFilter = "not_bearish"
+            },
+            Execution = new ExecutionRules("5m", 10m),
+            Session = new SessionRules("America/New_York", 1, 30, 30)
+        };
+
+        var generator = new SignalGenerator();
+        var exception = Record.Exception(() => generator.CreateTradeSignal(strategy, bars, snapshots, bars.Count - 1));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public void CreateTradeSignal_WhenPriorAdvanceRollsBelowSma10AndSma20_SetsSwingRollover()
     {
         var bars = BuildSwingRolloverBars();
@@ -294,6 +340,28 @@ public sealed class SignalGeneratorStepBreakoutTests
         }
 
         bars.Add(CreateBar(start.AddDays(75), 160m, 162m, 154m, 160m, 900_000m));
+        return bars;
+    }
+
+    private static IReadOnlyList<OhlcvBar> BuildIntradayIndicatorStackBars()
+    {
+        var start = new DateTimeOffset(2026, 6, 11, 13, 30, 0, TimeSpan.Zero);
+        var bars = new List<OhlcvBar>();
+
+        for (var i = 0; i < 80; i++)
+        {
+            var close = 10m + (i * 0.08m);
+            bars.Add(new OhlcvBar(
+                "TEST",
+                start.AddMinutes(i * 5),
+                "5m",
+                close - 0.04m,
+                close + 0.12m,
+                close - 0.10m,
+                close,
+                100_000m + (i * 500m)));
+        }
+
         return bars;
     }
 

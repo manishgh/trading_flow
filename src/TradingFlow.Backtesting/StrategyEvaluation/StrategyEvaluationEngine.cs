@@ -3,6 +3,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Indicators;
+using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
 using TradingFlow.Engine.Strategies;
 
@@ -159,28 +160,7 @@ public sealed class StrategyEvaluationEngine
         return timeframes.ToArray();
     }
 
-    private static TimeSpan ParseTimeframe(string timeframe)
-    {
-        if (timeframe.EndsWith("m", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var minutes))
-        {
-            return TimeSpan.FromMinutes(minutes);
-        }
-
-        if (timeframe.EndsWith("h", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var hours))
-        {
-            return TimeSpan.FromHours(hours);
-        }
-
-        if (timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var days))
-        {
-            return TimeSpan.FromDays(days);
-        }
-
-        throw new NotSupportedException($"Unsupported timeframe: {timeframe}");
-    }
+    private static TimeSpan ParseTimeframe(string timeframe) => TimeframeParser.Parse(timeframe);
 
     private static ApiProfilerDto FormatProfiler(TradingFlow.Domain.Logging.ProfilerSummary profile)
     {
@@ -258,7 +238,7 @@ public sealed record StrategyTickerEvaluation(
             snapshot.Rsi,
             snapshot.Atr,
             snapshot.CurrentVolume,
-            snapshot.RelativeVolume is > 0 ? snapshot.CurrentVolume / snapshot.RelativeVolume.Value : null,
+            snapshot.SlotAverageVolume,
             snapshot.RelativeVolume,
             snapshot.Vwap,
             snapshot.Ema20,

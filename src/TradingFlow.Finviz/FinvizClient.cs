@@ -28,8 +28,16 @@ public sealed class FinvizClient : IDisposable
     /// </summary>
     public async Task<IReadOnlyList<string>> GetScreenerTickersAsync(string filterQuery, CancellationToken cancellationToken = default)
     {
-        var url = $"/export?{filterQuery}&auth={_options.AuthToken}";
-        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET", 
+        var rows = await GetScreenerRowsAsync(filterQuery, cancellationToken);
+        return rows.Select(x => x.Ticker).ToArray();
+    }
+
+    public async Task<IReadOnlyList<FinvizScreenerRow>> GetScreenerRowsAsync(string filterQuery, CancellationToken cancellationToken = default)
+    {
+        var normalizedFilterQuery = NormalizeScreenerFilterQuery(filterQuery);
+        var separator = String.IsNullOrWhiteSpace(normalizedFilterQuery) ? "" : "&";
+        var url = $"/export?{normalizedFilterQuery}{separator}auth={_options.AuthToken}";
+        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET",
             () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
         response.EnsureSuccessStatusCode();
 
@@ -37,10 +45,10 @@ public sealed class FinvizClient : IDisposable
         return ParseScreenerCsv(csvContent);
     }
 
-    private static IReadOnlyList<string> ParseScreenerCsv(string csvContent)
+    private static IReadOnlyList<FinvizScreenerRow> ParseScreenerCsv(string csvContent)
     {
-        var tickers = new List<string>();
-        if (string.IsNullOrWhiteSpace(csvContent)) return tickers;
+        var rows = new List<FinvizScreenerRow>();
+        if (string.IsNullOrWhiteSpace(csvContent)) return rows;
         if (csvContent.TrimStart().StartsWith("<", StringComparison.OrdinalIgnoreCase))
         {
             throw new Exception("Finviz API returned HTML instead of CSV. Check Auth Token.");
@@ -56,15 +64,27 @@ public sealed class FinvizClient : IDisposable
 
         try
         {
-            if (!parser.EndOfData) parser.ReadFields(); // Header
+            var header = parser.EndOfData ? Array.Empty<string>() : parser.ReadFields() ?? Array.Empty<string>();
+            var tickerIndex = FindHeaderIndex(header, "ticker");
+            var relativeVolumeIndex = FindHeaderIndex(header, "relvolume", "relativevolume", "relvol", "rvol");
+
             while (!parser.EndOfData)
             {
                 try
                 {
                     var fields = parser.ReadFields();
-                    if (fields is not null && fields.Length >= 2)
+                    if (fields is not null && fields.Length > tickerIndex)
                     {
-                        tickers.Add(fields[1]);
+                        var ticker = fields[tickerIndex].Trim().ToUpperInvariant();
+                        if (ticker.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        var relativeVolume = relativeVolumeIndex >= 0 && fields.Length > relativeVolumeIndex
+                            ? ParseNullableDecimal(fields[relativeVolumeIndex])
+                            : null;
+                        rows.Add(new FinvizScreenerRow(ticker, relativeVolume));
                     }
                 }
                 catch (MalformedLineException)
@@ -78,14 +98,75 @@ public sealed class FinvizClient : IDisposable
             throw new Exception($"Failed to parse Finviz CSV: {ex.Message}", ex);
         }
 
-        return tickers;
+        return rows;
+    }
+
+    private static string NormalizeScreenerFilterQuery(string filterQuery)
+    {
+        if (String.IsNullOrWhiteSpace(filterQuery))
+        {
+            return String.Empty;
+        }
+
+        var trimmed = filterQuery.Trim();
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri))
+        {
+            trimmed = absoluteUri.Query.TrimStart('?');
+        }
+        else if (trimmed.StartsWith("/export?", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("export?", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("/screener.ashx?", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("screener.ashx?", StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed[(trimmed.IndexOf('?', StringComparison.Ordinal) + 1)..];
+        }
+        else
+        {
+            trimmed = trimmed.TrimStart('?');
+        }
+
+        var parts = trimmed
+            .Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(part => !part.StartsWith("auth=", StringComparison.OrdinalIgnoreCase));
+        return String.Join('&', parts);
+    }
+
+    private static int FindHeaderIndex(IReadOnlyList<string> header, params string[] names)
+    {
+        for (var i = 0; i < header.Count; i++)
+        {
+            var normalized = NormalizeHeader(header[i]);
+            if (names.Any(name => normalized.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            {
+                return i;
+            }
+        }
+
+        return names.Contains("ticker", StringComparer.OrdinalIgnoreCase) ? 1 : -1;
+    }
+
+    private static string NormalizeHeader(string value)
+    {
+        return new string(value.Where(Char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+    }
+
+    private static decimal? ParseNullableDecimal(string value)
+    {
+        var normalized = value.Trim().TrimEnd('%').TrimEnd('x', 'X');
+        return Decimal.TryParse(
+            normalized,
+            System.Globalization.NumberStyles.Number,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var parsed)
+                ? parsed
+                : null;
     }
 
     public async Task<string> GetStockDataAsync(string ticker, string period, CancellationToken cancellationToken = default)
     {
         // Example: /stock?t=MSFT&p=d&auth=xxx
         var url = $"/stock?t={ticker.ToUpperInvariant()}&p={period}&auth={_options.AuthToken}";
-        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET", 
+        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET",
             () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStringAsync(cancellationToken);
@@ -96,7 +177,7 @@ public sealed class FinvizClient : IDisposable
         // "v=3" - Stocks feed (no-ETFs)
         // "t=MSFT,AAPL" - Filter out only for specified tickers
         var url = $"/news?t={ticker.ToUpperInvariant()}&v=3&auth={_options.AuthToken}";
-        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET", 
+        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET",
             () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStringAsync(cancellationToken);
@@ -107,7 +188,7 @@ public sealed class FinvizClient : IDisposable
         // "o=-filingDate" - order descending by filing date
         // filter e.g. "annual-quarterly-current"
         var url = $"/stock?t={ticker.ToUpperInvariant()}&f={filter}&o=-filingDate&auth={_options.AuthToken}";
-        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET", 
+        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET",
             () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStringAsync(cancellationToken);

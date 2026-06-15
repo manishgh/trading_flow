@@ -1,0 +1,109 @@
+run_name: local-alpaca-paper-swing
+mode: paper
+
+engine:
+  pipeline: tpl
+  worker_count: 0
+  bounded_capacity: 1000
+  indicator_warmup_bars: 150
+  fail_fast: true
+
+time_window:
+  type: rolling
+  lookback_days: 260
+  warmup_lookback_days: 260
+  start:
+  end:
+
+tickers:
+  - CRDO
+  - MSFT
+  - APP
+  - INTC
+  - MU
+  - NVDA
+
+market_data:
+  provider: alpaca
+  download_timeframes:
+    - 1h
+    - 1d
+  derive_from: 1h
+  raw_root: data/paper/raw
+  normalized_root: data/paper/normalized
+  results_root: data/paper/results
+  cache_policy: refresh
+
+providers:
+  alpaca:
+    data_feed: sip
+
+portfolio:
+  starting_capital: 100000
+  risk_per_trade_pct: 1.0
+  max_position_value_pct: 20.0
+  max_concurrent_positions: 5
+  fixed_buy_fee: 1.0
+  fixed_sell_fee: 1.0
+  prevent_overlapping_ticker_positions: true
+
+signal_source:
+  type: internal_candles
+  require_signature: false
+  secret_env:
+  dedupe_window_seconds: 300
+  reject_stale_after_seconds: 0
+
+validation:
+  out_of_sample:
+    enabled: false
+    percent: 30.0
+  walk_forward:
+    enabled: false
+    window_days: 10
+    step_days: 5
+  benchmark:
+    enabled: false
+    ticker: SPY
+  data_quality:
+    enabled: true
+    max_duplicate_bars: 0
+    max_invalid_ohlc_bars: 0
+    max_zero_volume_pct: 10.0
+  bias_risk:
+    universe_source: static_config
+    universe_as_of_date:
+    price_adjustment_policy: alpaca_sip
+
+execution:
+  router: paper
+  broker: alpaca
+  dry_run: false
+  allow_live_orders: true
+  order_type: bracket
+  order_expiration: gtc
+  entry_order_type: limit
+  extended_hours: true
+
+screener:
+  enabled: false
+  provider: finviz
+  filters: []
+
+news:
+  enabled: true
+  provider:
+    name: alpaca
+    sentiment_field: sentiment_score
+  pipeline:
+    worker_count: 2
+    channel_buffer: 256
+  veto:
+    ttl_minutes: 1440
+    negative_threshold: -0.6
+
+artifacts:
+  retention_mode: summary
+
+strategies:
+  - ../strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml

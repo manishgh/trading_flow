@@ -89,6 +89,7 @@ public sealed record StrategyDiagnosticReport(
     IReadOnlyList<DirectionPnlSummary> DirectionPnl,
     IReadOnlyDictionary<string, int> ExitReasonCounts,
     IReadOnlyDictionary<string, int> RejectionCounts,
+    IReadOnlyDictionary<string, IReadOnlyList<string>> RejectionExamples,
     IReadOnlyList<string> Suggestions);
 
 public sealed record DailyPnlSummary(

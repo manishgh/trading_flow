@@ -1,0 +1,100 @@
+run_name: poet-mxl-rgti-mu-msft-intraday-v8-comparison-90d
+mode: backtest
+
+engine:
+  pipeline: tpl
+  worker_count: 0
+  bounded_capacity: 2000
+  indicator_warmup_bars: 200
+  ticker_timeout_seconds: 3000
+  fail_fast: false
+
+time_window:
+  type: fixed
+  lookback_days: 0
+  warmup_lookback_days: 90
+  start: 2026-03-13T00:00:00Z
+  end: 2026-06-13T00:00:00Z
+
+tickers:
+  - POET
+  - MXL
+  - RGTI
+  - MU
+  - MSFT
+
+market_data:
+  provider: csv
+  download_timeframes:
+    - 1m
+    - 5m
+  derive_from: 1m
+  raw_root: C:/project/trading_flow/data/backtest/raw
+  normalized_root: C:/project/trading_flow/data/backtest/normalized/20260313-20260613
+  results_root: C:/project/trading_flow/data/backtest/results
+  cache_policy: bypass
+
+providers:
+  alpaca:
+    data_feed: sip
+
+portfolio:
+  starting_capital: 10000
+  risk_per_trade_pct: 2.0
+  max_position_value_pct: 25
+  max_concurrent_positions: 4
+  fixed_buy_fee: 1.0
+  fixed_sell_fee: 1.0
+  prevent_overlapping_ticker_positions: true
+
+signal_source:
+  type: internal_candles
+  require_signature: false
+  secret_env:
+  dedupe_window_seconds: 300
+  reject_stale_after_seconds: 0
+
+validation:
+  out_of_sample:
+    enabled: false
+    percent: 0.0
+  walk_forward:
+    enabled: false
+    window_days: 10
+    step_days: 5
+  benchmark:
+    enabled: false
+    ticker: SPY
+  data_quality:
+    enabled: true
+    max_duplicate_bars: 0
+    max_invalid_ohlc_bars: 0
+    max_zero_volume_pct: 15.0
+  bias_risk:
+    universe_source: core_intraday_v8_comparison
+    universe_as_of_date: 2026-06-13
+    price_adjustment_policy: alpaca_sip_cached
+
+execution:
+  router: simulated
+  broker: none
+  dry_run: true
+  allow_live_orders: false
+  order_type: bracket
+  extended_hours: true
+
+news:
+  enabled: false
+  provider:
+    name: alpaca
+  veto:
+    ttl_minutes: 1440
+    negative_threshold: -0.55
+
+artifacts:
+  retention_mode: full
+
+strategies:
+  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml
+  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml
+  - ../strategies/intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml

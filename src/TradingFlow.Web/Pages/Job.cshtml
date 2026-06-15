@@ -40,11 +40,43 @@ else
                 <h2>Run State</h2>
                 <div class="muted">@Model.Job.CurrentStage · elapsed @elapsed.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture)</div>
             </div>
-            <strong>@Model.Job.CompletedTickerCount / @Model.Job.TotalTickerCount tickers</strong>
+            <strong>@Model.Job.CompletedTickerCount / @Model.Job.TotalTickerCount work items</strong>
         </div>
         <div class="progress-track">
             <div class="progress-bar" style="width:@progressPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
         </div>
+        @if (Model.Job.StrategyGroups is { Count: > 0 })
+        {
+            <div class="grid two" style="margin-top:16px">
+                @foreach (var group in Model.Job.StrategyGroups)
+                {
+                    var groupPct = group.TotalTickerCount == 0
+                        ? 0
+                        : (decimal)group.CompletedTickerCount / group.TotalTickerCount * 100m;
+                    <section class="panel" style="box-shadow:none">
+                        <div class="section-title">
+                            <div>
+                                <h3>@group.StrategyName</h3>
+                                <div class="muted">@group.Status@(String.IsNullOrWhiteSpace(group.CurrentTicker) ? "" : $" · current {group.CurrentTicker}")</div>
+                            </div>
+                            <strong>@group.CompletedTickerCount / @group.TotalTickerCount</strong>
+                        </div>
+                        <div class="progress-track">
+                            <div class="progress-bar" style="width:@groupPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
+                        </div>
+                        @if (group.RecentEvents.Count > 0)
+                        {
+                            <ul class="event-log compact">
+                                @foreach (var item in group.RecentEvents.Reverse().Take(4))
+                                {
+                                    <li>@item</li>
+                                }
+                            </ul>
+                        }
+                    </section>
+                }
+            </div>
+        }
         @if (Model.Job.Events.Count > 0)
         {
             <ul class="event-log">

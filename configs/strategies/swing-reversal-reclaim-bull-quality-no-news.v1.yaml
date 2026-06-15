@@ -1,5 +1,5 @@
 strategy_id: research.swing-reversal-reclaim-bull-quality-no-news.v1
-strategy_name: Swing Reversal Reclaim Bull Quality No News V1
+strategy_name: TOP1 Swing Long - Reversal Reclaim Bull Quality
 source: swing_reversal_reclaim_quality_config_only_without_required_news
 version: 1
 timeframe: 1d
@@ -91,7 +91,7 @@ exit_rules:
   exit_on_sma10_cross_below_sma20: true
   exit_short_on_sma10_cross_above_sma20: false
 execution:
-  timeframe: 1d
+  timeframe: 1h
   slippage_bps: 15.0
 session:
   exchange_timezone: America/New_York

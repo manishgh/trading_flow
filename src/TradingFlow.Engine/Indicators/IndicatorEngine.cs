@@ -1,4 +1,5 @@
 using TradingFlow.Domain.Market;
+using Skender.Stock.Indicators;
 
 namespace TradingFlow.Engine.Indicators;
 
@@ -7,7 +8,7 @@ public sealed class IndicatorEngine
     private const int RsiPeriod = 14;
     private const int AtrPeriod = 14;
     private const int BollingerPeriod = 20;
-    private const int RelativeVolumeLookbackSessions = 20;
+    private const int RelativeVolumeLookbackSessions = 63;
     private const int RelativeVolumeMinimumComparableBars = 5;
     private static readonly TimeZoneInfo ExchangeTimeZone = ResolveExchangeTimeZone();
 
@@ -19,22 +20,10 @@ public sealed class IndicatorEngine
             return Array.Empty<IndicatorSnapshot>();
         }
 
-        var closes = bars.Select(x => x.Close).ToArray();
-        var volumes = bars.Select(x => x.Volume).ToArray();
-        var sma10 = ComputeSma(closes, 10);
-        var sma20 = ComputeSma(closes, 20);
-        var sma50 = ComputeSma(closes, 50);
-        var ema20 = ComputeEma(closes, 20);
-        var ema50 = ComputeEma(closes, 50);
-        var ema200 = ComputeEma(closes, 200);
-        var ema12 = ComputeEma(closes, 12);
-        var ema26 = ComputeEma(closes, 26);
-        var macdLine = ComputeMacdLine(ema12, ema26);
-        var macdSignal = ComputeNullableEma(macdLine, 9);
-        var rsi = ComputeRsi(closes);
-        var atr = ComputeAtr(bars);
-        var bollinger = ComputeBollinger(closes);
-        var relativeVolume = ComputeRelativeVolume(bars);
+        var standardIndicators = ComputeStandardIndicators(bars);
+        var cumulativeVolumeBaseline = ComputeCumulativeVolumeBaseline(bars);
+        var slotVolumeBaseline = ComputeSlotVolumeBaseline(bars);
+        var sessionVolumeBaseline = ComputeSessionVolumeBaseline(bars);
         var vwap = ComputeVwap(bars);
 
         var snapshots = new List<IndicatorSnapshot>(bars.Length);
@@ -47,219 +36,134 @@ public sealed class IndicatorEngine
                 bars[i].Close,
                 bars[i].Volume,
                 vwap[i],
-                rsi[i],
-                atr[i],
-                ema20[i],
-                ema50[i],
-                ema200[i],
-                bollinger.Middle[i],
-                bollinger.Upper[i],
-                bollinger.Lower[i],
-                relativeVolume[i],
-                macdLine[i],
-                macdSignal[i],
-                macdLine[i] is null || macdSignal[i] is null ? null : macdLine[i] - macdSignal[i],
-                Sma10: sma10[i],
-                Sma20: sma20[i],
-                Sma50: sma50[i]));
+                standardIndicators.Rsi[i],
+                standardIndicators.Atr[i],
+                standardIndicators.Ema20[i],
+                standardIndicators.Ema50[i],
+                standardIndicators.Ema200[i],
+                standardIndicators.BollingerMiddle[i],
+                standardIndicators.BollingerUpper[i],
+                standardIndicators.BollingerLower[i],
+                cumulativeVolumeBaseline.RelativeVolume[i],
+                standardIndicators.MacdLine[i],
+                standardIndicators.MacdSignal[i],
+                standardIndicators.MacdHistogram[i],
+                Sma10: standardIndicators.Sma10[i],
+                Sma20: standardIndicators.Sma20[i],
+                Sma50: standardIndicators.Sma50[i],
+                SlotRelativeVolume: slotVolumeBaseline.RelativeVolume[i],
+                SessionRelativeVolume: sessionVolumeBaseline.RelativeVolume[i],
+                Ema10: standardIndicators.Ema10[i],
+                SlotAverageVolume: slotVolumeBaseline.AverageVolume[i],
+                CumulativeAverageVolume: cumulativeVolumeBaseline.AverageVolume[i],
+                AverageSessionVolume: sessionVolumeBaseline.AverageVolume[i],
+                RelativeVolumeSampleCount: cumulativeVolumeBaseline.SampleCount[i],
+                Sma150: standardIndicators.Sma150[i],
+                Sma200: standardIndicators.Sma200[i],
+                Ema5: standardIndicators.Ema5[i]));
         }
 
         return snapshots;
     }
 
-    private static decimal?[] ComputeSma(IReadOnlyList<decimal> values, int period)
+    private static StandardIndicatorSeries ComputeStandardIndicators(IReadOnlyList<OhlcvBar> bars)
     {
-        var output = new decimal?[values.Count];
-        if (values.Count < period)
+        var quotes = bars.Select(bar => new Quote
         {
-            return output;
-        }
+            Date = bar.Timestamp.UtcDateTime,
+            Open = bar.Open,
+            High = bar.High,
+            Low = bar.Low,
+            Close = bar.Close,
+            Volume = bar.Volume
+        }).ToArray();
 
-        var runningSum = 0m;
-        for (var i = 0; i < values.Count; i++)
+        var sma10 = quotes.GetSma(10).Select(x => ToDecimal(x.Sma)).ToArray();
+        var sma20 = quotes.GetSma(20).Select(x => ToDecimal(x.Sma)).ToArray();
+        var sma50 = quotes.GetSma(50).Select(x => ToDecimal(x.Sma)).ToArray();
+        var sma150 = quotes.GetSma(150).Select(x => ToDecimal(x.Sma)).ToArray();
+        var sma200 = quotes.GetSma(200).Select(x => ToDecimal(x.Sma)).ToArray();
+        var ema5 = quotes.GetEma(5).Select(x => ToDecimal(x.Ema)).ToArray();
+        var ema10 = quotes.GetEma(10).Select(x => ToDecimal(x.Ema)).ToArray();
+        var ema20 = quotes.GetEma(20).Select(x => ToDecimal(x.Ema)).ToArray();
+        var ema50 = quotes.GetEma(50).Select(x => ToDecimal(x.Ema)).ToArray();
+        var ema200 = quotes.GetEma(200).Select(x => ToDecimal(x.Ema)).ToArray();
+        var rsi = quotes.GetRsi(RsiPeriod).Select(x => ToDecimal(x.Rsi)).ToArray();
+        var atr = quotes.GetAtr(AtrPeriod).Select(x => ToDecimal(x.Atr)).ToArray();
+        var macd = quotes.GetMacd(12, 26, 9).ToArray();
+        var bollinger = quotes.GetBollingerBands(BollingerPeriod, 2).ToArray();
+
+        return new StandardIndicatorSeries(
+            sma10,
+            sma20,
+            sma50,
+            sma150,
+            sma200,
+            ema5,
+            ema10,
+            ema20,
+            ema50,
+            ema200,
+            rsi,
+            atr,
+            macd.Select(x => ToDecimal(x.Macd)).ToArray(),
+            macd.Select(x => ToDecimal(x.Signal)).ToArray(),
+            macd.Select(x => ToDecimal(x.Histogram)).ToArray(),
+            bollinger.Select(x => ToDecimal(x.Sma)).ToArray(),
+            bollinger.Select(x => ToDecimal(x.UpperBand)).ToArray(),
+            bollinger.Select(x => ToDecimal(x.LowerBand)).ToArray());
+    }
+
+    private static VolumeBaselineSeries ComputeCumulativeVolumeBaseline(IReadOnlyList<OhlcvBar> bars)
+    {
+        var relativeVolume = new decimal?[bars.Count];
+        var averageVolume = new decimal?[bars.Count];
+        var sampleCount = new int[bars.Count];
+        var cumulativeVolumesBySlot = new Dictionary<TimeSpan, List<decimal>>();
+        DateOnly? activeDate = null;
+        decimal activeSessionVolume = 0m;
+
+        for (var i = 0; i < bars.Count; i++)
         {
-            runningSum += values[i];
-            if (i >= period)
+            var exchangeTime = TimeZoneInfo.ConvertTime(bars[i].Timestamp, ExchangeTimeZone);
+            var exchangeDate = DateOnly.FromDateTime(exchangeTime.DateTime);
+            if (activeDate is not null && activeDate != exchangeDate)
             {
-                runningSum -= values[i - period];
+                activeSessionVolume = 0m;
             }
 
-            if (i >= period - 1)
+            activeDate = exchangeDate;
+            activeSessionVolume += bars[i].Volume;
+
+            var slot = exchangeTime.TimeOfDay;
+            if (!cumulativeVolumesBySlot.TryGetValue(slot, out var comparableCumulativeVolumes))
             {
-                output[i] = runningSum / period;
+                comparableCumulativeVolumes = new List<decimal>();
+                cumulativeVolumesBySlot[slot] = comparableCumulativeVolumes;
             }
-        }
 
-        return output;
-    }
-
-    private static decimal?[] ComputeEma(IReadOnlyList<decimal> values, int period)
-    {
-        var output = new decimal?[values.Count];
-        if (values.Count < period)
-        {
-            return output;
-        }
-
-        var seed = values.Take(period).Average();
-        output[period - 1] = seed;
-        var multiplier = 2m / (period + 1);
-
-        for (var i = period; i < values.Count; i++)
-        {
-            output[i] = ((values[i] - output[i - 1]!.Value) * multiplier) + output[i - 1]!.Value;
-        }
-
-        return output;
-    }
-
-    private static decimal?[] ComputeMacdLine(IReadOnlyList<decimal?> ema12, IReadOnlyList<decimal?> ema26)
-    {
-        var output = new decimal?[ema12.Count];
-        for (var i = 0; i < output.Length; i++)
-        {
-            output[i] = ema12[i] is null || ema26[i] is null ? null : ema12[i] - ema26[i];
-        }
-
-        return output;
-    }
-
-    private static decimal?[] ComputeNullableEma(IReadOnlyList<decimal?> values, int period)
-    {
-        var output = new decimal?[values.Count];
-        var available = new List<(int Index, decimal Value)>();
-        for (var i = 0; i < values.Count; i++)
-        {
-            if (values[i] is { } value)
+            if (comparableCumulativeVolumes.Count >= RelativeVolumeMinimumComparableBars)
             {
-                available.Add((i, value));
+                var lookback = comparableCumulativeVolumes
+                    .Skip(Math.Max(0, comparableCumulativeVolumes.Count - RelativeVolumeLookbackSessions))
+                    .ToArray();
+                var average = lookback.Average();
+                averageVolume[i] = average;
+                sampleCount[i] = lookback.Length;
+                relativeVolume[i] = average <= 0 ? null : activeSessionVolume / average;
             }
+
+            comparableCumulativeVolumes.Add(activeSessionVolume);
         }
 
-        if (available.Count < period)
-        {
-            return output;
-        }
-
-        var seed = available.Take(period).Average(x => x.Value);
-        var seedIndex = available[period - 1].Index;
-        output[seedIndex] = seed;
-        var previous = seed;
-        var multiplier = 2m / (period + 1);
-
-        foreach (var point in available.Skip(period))
-        {
-            previous = ((point.Value - previous) * multiplier) + previous;
-            output[point.Index] = previous;
-        }
-
-        return output;
+        return new VolumeBaselineSeries(relativeVolume, averageVolume, sampleCount);
     }
 
-    private static decimal?[] ComputeRsi(IReadOnlyList<decimal> closes)
+    private static VolumeBaselineSeries ComputeSlotVolumeBaseline(IReadOnlyList<OhlcvBar> bars)
     {
-        var output = new decimal?[closes.Count];
-        if (closes.Count <= RsiPeriod)
-        {
-            return output;
-        }
-
-        var gain = 0m;
-        var loss = 0m;
-        for (var i = 1; i <= RsiPeriod; i++)
-        {
-            var delta = closes[i] - closes[i - 1];
-            if (delta >= 0)
-            {
-                gain += delta;
-            }
-            else
-            {
-                loss -= delta;
-            }
-        }
-
-        var averageGain = gain / RsiPeriod;
-        var averageLoss = loss / RsiPeriod;
-        output[RsiPeriod] = CalculateRsi(averageGain, averageLoss);
-
-        for (var i = RsiPeriod + 1; i < closes.Count; i++)
-        {
-            var delta = closes[i] - closes[i - 1];
-            var currentGain = Math.Max(delta, 0);
-            var currentLoss = Math.Max(-delta, 0);
-            averageGain = ((averageGain * (RsiPeriod - 1)) + currentGain) / RsiPeriod;
-            averageLoss = ((averageLoss * (RsiPeriod - 1)) + currentLoss) / RsiPeriod;
-            output[i] = CalculateRsi(averageGain, averageLoss);
-        }
-
-        return output;
-    }
-
-    private static decimal CalculateRsi(decimal averageGain, decimal averageLoss)
-    {
-        if (averageLoss == 0)
-        {
-            return 100;
-        }
-
-        var relativeStrength = averageGain / averageLoss;
-        return 100 - (100 / (1 + relativeStrength));
-    }
-
-    private static decimal?[] ComputeAtr(IReadOnlyList<OhlcvBar> bars)
-    {
-        var output = new decimal?[bars.Count];
-        if (bars.Count <= AtrPeriod)
-        {
-            return output;
-        }
-
-        var trueRanges = new decimal[bars.Count];
-        trueRanges[0] = bars[0].High - bars[0].Low;
-        for (var i = 1; i < bars.Count; i++)
-        {
-            var highLow = bars[i].High - bars[i].Low;
-            var highClose = Math.Abs(bars[i].High - bars[i - 1].Close);
-            var lowClose = Math.Abs(bars[i].Low - bars[i - 1].Close);
-            trueRanges[i] = Math.Max(highLow, Math.Max(highClose, lowClose));
-        }
-
-        var atr = trueRanges.Skip(1).Take(AtrPeriod).Average();
-        output[AtrPeriod] = atr;
-
-        for (var i = AtrPeriod + 1; i < bars.Count; i++)
-        {
-            atr = ((atr * (AtrPeriod - 1)) + trueRanges[i]) / AtrPeriod;
-            output[i] = atr;
-        }
-
-        return output;
-    }
-
-    private static (decimal?[] Middle, decimal?[] Upper, decimal?[] Lower) ComputeBollinger(IReadOnlyList<decimal> closes)
-    {
-        var middle = new decimal?[closes.Count];
-        var upper = new decimal?[closes.Count];
-        var lower = new decimal?[closes.Count];
-
-        for (var i = BollingerPeriod - 1; i < closes.Count; i++)
-        {
-            var window = closes.Skip(i - BollingerPeriod + 1).Take(BollingerPeriod).ToArray();
-            var average = window.Average();
-            var variance = window.Select(x => Math.Pow((double)(x - average), 2)).Average();
-            var standardDeviation = (decimal)Math.Sqrt(variance);
-            middle[i] = average;
-            upper[i] = average + (2 * standardDeviation);
-            lower[i] = average - (2 * standardDeviation);
-        }
-
-        return (middle, upper, lower);
-    }
-
-    private static decimal?[] ComputeRelativeVolume(IReadOnlyList<OhlcvBar> bars)
-    {
-        var output = new decimal?[bars.Count];
+        var relativeVolume = new decimal?[bars.Count];
+        var averageVolume = new decimal?[bars.Count];
+        var sampleCount = new int[bars.Count];
         var volumesBySlot = new Dictionary<TimeSpan, List<decimal>>();
 
         for (var i = 0; i < bars.Count; i++)
@@ -277,13 +181,51 @@ public sealed class IndicatorEngine
                     .Skip(Math.Max(0, comparableVolumes.Count - RelativeVolumeLookbackSessions))
                     .ToArray();
                 var average = lookback.Average();
-                output[i] = average <= 0 ? null : bars[i].Volume / average;
+                averageVolume[i] = average;
+                sampleCount[i] = lookback.Length;
+                relativeVolume[i] = average <= 0 ? null : bars[i].Volume / average;
             }
 
             comparableVolumes.Add(bars[i].Volume);
         }
 
-        return output;
+        return new VolumeBaselineSeries(relativeVolume, averageVolume, sampleCount);
+    }
+
+    private static VolumeBaselineSeries ComputeSessionVolumeBaseline(IReadOnlyList<OhlcvBar> bars)
+    {
+        var relativeVolume = new decimal?[bars.Count];
+        var averageVolume = new decimal?[bars.Count];
+        var sampleCount = new int[bars.Count];
+        var completedSessionVolumes = new List<decimal>();
+        DateOnly? activeDate = null;
+        decimal activeSessionVolume = 0m;
+
+        for (var i = 0; i < bars.Count; i++)
+        {
+            var exchangeDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(bars[i].Timestamp, ExchangeTimeZone).DateTime);
+            if (activeDate is not null && activeDate != exchangeDate)
+            {
+                completedSessionVolumes.Add(activeSessionVolume);
+                activeSessionVolume = 0m;
+            }
+
+            activeDate = exchangeDate;
+            activeSessionVolume += bars[i].Volume;
+
+            if (completedSessionVolumes.Count >= RelativeVolumeMinimumComparableBars)
+            {
+                var lookback = completedSessionVolumes
+                    .Skip(Math.Max(0, completedSessionVolumes.Count - RelativeVolumeLookbackSessions))
+                    .ToArray();
+                var averageSessionVolume = lookback.Average();
+                averageVolume[i] = averageSessionVolume;
+                sampleCount[i] = lookback.Length;
+                relativeVolume[i] = averageSessionVolume <= 0 ? null : activeSessionVolume / averageSessionVolume;
+            }
+        }
+
+        return new VolumeBaselineSeries(relativeVolume, averageVolume, sampleCount);
     }
 
     private static decimal?[] ComputeVwap(IReadOnlyList<OhlcvBar> bars)
@@ -312,6 +254,11 @@ public sealed class IndicatorEngine
         return output;
     }
 
+    private static decimal? ToDecimal(double? value)
+    {
+        return value is null ? null : Convert.ToDecimal(value.Value);
+    }
+
     private static TimeZoneInfo ResolveExchangeTimeZone()
     {
         try
@@ -323,4 +270,29 @@ public sealed class IndicatorEngine
             return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
         }
     }
+
+    private sealed record VolumeBaselineSeries(
+        decimal?[] RelativeVolume,
+        decimal?[] AverageVolume,
+        int[] SampleCount);
+
+    private sealed record StandardIndicatorSeries(
+        decimal?[] Sma10,
+        decimal?[] Sma20,
+        decimal?[] Sma50,
+        decimal?[] Sma150,
+        decimal?[] Sma200,
+        decimal?[] Ema5,
+        decimal?[] Ema10,
+        decimal?[] Ema20,
+        decimal?[] Ema50,
+        decimal?[] Ema200,
+        decimal?[] Rsi,
+        decimal?[] Atr,
+        decimal?[] MacdLine,
+        decimal?[] MacdSignal,
+        decimal?[] MacdHistogram,
+        decimal?[] BollingerMiddle,
+        decimal?[] BollingerUpper,
+        decimal?[] BollingerLower);
 }

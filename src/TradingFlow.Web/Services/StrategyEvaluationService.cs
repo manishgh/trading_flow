@@ -44,7 +44,7 @@ public sealed class StrategyEvaluationService
     {
         var configPath = ResolvePath(request.ConfigPath, Path.Combine("configs", "paper", "alpaca-paper.yaml"));
         var runConfig = suppliedRunConfig ?? yamlReader.ReadBacktestRun(configPath);
-        var strategyPath = ResolvePath(request.StrategyPath, Path.Combine("configs", "strategies", "intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml"));
+        var strategyPath = ResolvePath(request.StrategyPath, Path.Combine("configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml"));
         var strategy = yamlReader.ReadStrategy(strategyPath);
 
         return evaluationEngine.EvaluateAsync(request, provider, runConfig, strategy, strategyPath, cancellationToken);

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace TradingFlow.Domain.Logging;
@@ -9,6 +10,7 @@ namespace TradingFlow.Domain.Logging;
 public static class ApiProfiler
 {
     private static readonly ConcurrentDictionary<string, ConcurrentQueue<RequestMetric>> _metricsByService = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly AsyncLocal<string?> _scopeId = new();
     public static readonly DateTimeOffset AppStartTime = DateTimeOffset.UtcNow;
     private static Action<RequestMetric>? _metricSink;
 
@@ -19,12 +21,20 @@ public static class ApiProfiler
         double DurationMs,
         bool IsSuccess,
         string? ErrorMessage,
-        DateTimeOffset Timestamp);
+        DateTimeOffset Timestamp,
+        string? ScopeId);
+
+    public static IDisposable BeginScope(string? scopeId)
+    {
+        var previous = _scopeId.Value;
+        _scopeId.Value = String.IsNullOrWhiteSpace(scopeId) ? null : scopeId;
+        return new ScopeLease(previous);
+    }
 
     public static void RecordRequest(string service, string endpoint, string method, double durationMs, bool isSuccess, string? errorMessage = null)
     {
-        var metric = new RequestMetric(service, endpoint, method, durationMs, isSuccess, errorMessage, DateTimeOffset.UtcNow);
-        
+        var metric = new RequestMetric(service, endpoint, method, durationMs, isSuccess, errorMessage, DateTimeOffset.UtcNow, _scopeId.Value);
+
         var queue = _metricsByService.GetOrAdd(service, _ => new ConcurrentQueue<RequestMetric>());
         queue.Enqueue(metric);
         while (queue.Count > 100)
@@ -85,7 +95,7 @@ public static class ApiProfiler
         }
     }
 
-    public static ProfilerSummary GetSummary(string service)
+    public static ProfilerSummary GetSummary(string service, string? scopeId = null)
     {
         var profilerName = $"{service} API Profiler";
         if (!_metricsByService.TryGetValue(service, out var queue))
@@ -94,6 +104,14 @@ public static class ApiProfiler
         }
 
         var list = queue.ToList();
+        if (!String.IsNullOrWhiteSpace(scopeId))
+        {
+            list = list
+                .Where(metric => String.Equals(metric.ScopeId, scopeId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            profilerName = $"{service} API Profiler ({scopeId})";
+        }
+
         if (list.Count == 0) return new ProfilerSummary(profilerName, AppStartTime, 0, 0, 0, 0, 0, Array.Empty<EndpointSummary>());
 
         var avg = list.Average(x => x.DurationMs);
@@ -113,6 +131,28 @@ public static class ApiProfiler
             .ToArray();
 
         return new ProfilerSummary(profilerName, AppStartTime, list.Count, avg, min, max, successRate, endpointGroups);
+    }
+
+    private sealed class ScopeLease : IDisposable
+    {
+        private readonly string? previous;
+        private bool disposed;
+
+        public ScopeLease(string? previous)
+        {
+            this.previous = previous;
+        }
+
+        public void Dispose()
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            _scopeId.Value = previous;
+            disposed = true;
+        }
     }
 }
 

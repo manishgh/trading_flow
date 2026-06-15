@@ -27,8 +27,9 @@ tickers:
 market_data:
   provider: alpaca
   download_timeframes:
+    - 1h
     - 1d
-  derive_from: 1d
+  derive_from: 1h
   raw_root: data/backtest/raw
   normalized_root: data/backtest/normalized
   results_root: data/backtest/results

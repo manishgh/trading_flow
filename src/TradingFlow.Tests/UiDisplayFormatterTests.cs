@@ -32,4 +32,13 @@ public sealed class UiDisplayFormatterTests
 
         Assert.Contains("14:00:00", formatted);
     }
+
+    [Fact]
+    public void FormatLocalDate_UsesDateOnlyForDailyBars()
+    {
+        var formatted = UiDisplayFormatter.FormatLocalDate(
+            new DateTimeOffset(2026, 6, 11, 4, 0, 0, TimeSpan.Zero));
+
+        Assert.Equal("2026-06-11", formatted);
+    }
 }

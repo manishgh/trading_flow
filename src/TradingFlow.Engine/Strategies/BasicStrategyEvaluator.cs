@@ -22,15 +22,39 @@ public sealed class BasicStrategyEvaluator
         }
 
 
-        if (relativeVolume < strategy.EntryRules.MinVolumeSpike)
+        var volumeRejection = GetVolumeConfirmationRejection(strategy, relativeVolume);
+        if (volumeRejection is not null)
         {
-            return $"relative_volume_below_minimum (Actual: {relativeVolume:F2}, Required: {strategy.EntryRules.MinVolumeSpike:F2})";
+            return volumeRejection;
+        }
+
+        if (strategy.EntryRules.MinSessionRelativeVolume is { } minSessionRelativeVolume &&
+            (signal.SessionRelativeVolume is null || signal.SessionRelativeVolume.Value < minSessionRelativeVolume))
+        {
+            return $"session_relative_volume_below_minimum (Actual: {signal.SessionRelativeVolume?.ToString("F2") ?? "n/a"}, Required: {minSessionRelativeVolume:F2})";
+        }
+
+        if (strategy.EntryRules.RequireVolumeSmaRising && !signal.IsVolumeSmaRising)
+        {
+            return $"volume_sma_not_rising (CurrentSma: {signal.VolumeSma?.ToString("F0") ?? "n/a"}, PreviousSma: {signal.PreviousVolumeSma?.ToString("F0") ?? "n/a"}, LookbackBars: {strategy.EntryRules.VolumeSmaRisingLookbackBars})";
+        }
+
+        if (strategy.EntryRules.MinVolumeSmaRisePct is { } minVolumeSmaRisePct &&
+            (signal.VolumeSmaRisePct is null || signal.VolumeSmaRisePct.Value < minVolumeSmaRisePct))
+        {
+            return $"volume_sma_rise_below_minimum (Actual: {signal.VolumeSmaRisePct?.ToString("F2") ?? "n/a"}, Required: {minVolumeSmaRisePct:F2})";
         }
 
         if (signal.CurrentRsi < strategy.EntryRules.MinEntryRsi ||
             signal.CurrentRsi > strategy.EntryRules.MaxEntryRsi)
         {
             return $"rsi_outside_range (Actual: {signal.CurrentRsi:F2}, Required: {strategy.EntryRules.MinEntryRsi:F2}-{strategy.EntryRules.MaxEntryRsi:F2})";
+        }
+
+        var researchRuleRejection = GetResearchRuleRejection(strategy, signal);
+        if (researchRuleRejection is not null)
+        {
+            return researchRuleRejection;
         }
 
         if (!PassesSetupType(strategy.EntryRules.SetupType, signal))
@@ -109,6 +133,11 @@ public sealed class BasicStrategyEvaluator
             return "price_not_above_vwap";
         }
 
+        if (strategy.EntryRules.RequirePriceAboveEma10 && !signal.IsPriceAboveEma10)
+        {
+            return "price_not_above_ema10";
+        }
+
         if (strategy.EntryRules.RequirePriceAboveEma20 && !signal.IsPriceAboveEma20)
         {
             return "price_not_above_ema20";
@@ -122,6 +151,11 @@ public sealed class BasicStrategyEvaluator
         if (strategy.EntryRules.RequireEma20AboveEma50 && !signal.IsEma20AboveEma50)
         {
             return "ema20_not_above_ema50";
+        }
+
+        if (strategy.EntryRules.RequireEma10AboveEma20 && !signal.IsEma10AboveEma20)
+        {
+            return "ema10_not_above_ema20";
         }
 
         if (strategy.EntryRules.RequirePriceAboveSma10 && !signal.IsPriceAboveSma10)
@@ -260,9 +294,10 @@ public sealed class BasicStrategyEvaluator
         }
 
 
-        if (relativeVolume < strategy.EntryRules.MinVolumeSpike)
+        var volumeRejection = GetVolumeConfirmationRejection(strategy, relativeVolume);
+        if (volumeRejection is not null)
         {
-            return $"relative_volume_below_minimum (Actual: {relativeVolume:F2}, Required: {strategy.EntryRules.MinVolumeSpike:F2})";
+            return volumeRejection;
         }
 
         if (strategy.EntryRules.MinShortEntryRsi is { } minShortRsi &&
@@ -333,6 +368,7 @@ public sealed class BasicStrategyEvaluator
     {
         return setupType.ToLowerInvariant() switch
         {
+            "indicator_stack" => true,
             "momentum" => true,
             "vwap_pullback" => signal.IsVwapPullback || signal.IsVwapReclaim,
             "opening_range_breakout" => signal.IsOpeningRangeBreakout,
@@ -342,6 +378,10 @@ public sealed class BasicStrategyEvaluator
             "log_vcp_breakout" => signal.IsRecentHighBreakout && signal.IsVolatilityContraction,
             "step_breakout" => signal.IsStepBreakout,
             "swing_reclaim" => signal.IsSwingReclaim,
+            "vwap_reclaim_trap" => signal.IsVwapReclaimTrap,
+            "avwap_pullback_bounce" => signal.IsAnchoredVwapBounce,
+            "episodic_pivot_gap" => signal.IsEpisodicPivotGap,
+            "volatility_contraction_pattern" => signal.IsVcpBreakout,
             "volatile_vwap_reclaim" => signal.IsAboveSessionOpen &&
                 (signal.IsVwapReclaim || signal.IsVwapPullback || signal.IsOpeningDriveContinuation),
             "gap_and_go_momentum" => signal.IsAboveSessionOpen &&
@@ -365,6 +405,144 @@ public sealed class BasicStrategyEvaluator
                  signal.IsOpeningDriveContinuation),
             _ => throw new NotSupportedException($"Unsupported setup_type: {setupType}.")
         };
+    }
+
+    private static string? GetResearchRuleRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        var rules = strategy.EntryRules;
+
+        if (rules.MinGapUpPct is { } minGapUp &&
+            (signal.GapUpPct is null || signal.GapUpPct.Value < minGapUp))
+        {
+            return $"gap_up_below_minimum (Actual: {signal.GapUpPct?.ToString("F2") ?? "n/a"}, Required: {minGapUp:F2})";
+        }
+
+        if (rules.RequirePriorFlushBelowVwapBars is { } requiredFlushBars &&
+            (signal.PriorFlushBelowVwapBars is null || signal.PriorFlushBelowVwapBars.Value < requiredFlushBars))
+        {
+            return $"prior_flush_below_vwap_insufficient (Actual: {signal.PriorFlushBelowVwapBars?.ToString() ?? "n/a"}, Required: {requiredFlushBars})";
+        }
+
+        if (rules.VwapReclaimMaxBarsSinceFlush is { } maxBarsSinceFlush &&
+            (signal.BarsSinceVwapFlush is null || signal.BarsSinceVwapFlush.Value > maxBarsSinceFlush))
+        {
+            return $"vwap_reclaim_too_late (ActualBars: {signal.BarsSinceVwapFlush?.ToString() ?? "n/a"}, RequiredMax: {maxBarsSinceFlush})";
+        }
+
+        if (rules.MinReclaimVolumeRatio is { } minReclaimVolumeRatio &&
+            (signal.ReclaimVolumeRatio is null || signal.ReclaimVolumeRatio.Value < minReclaimVolumeRatio))
+        {
+            return $"reclaim_volume_ratio_below_minimum (Actual: {signal.ReclaimVolumeRatio?.ToString("F2") ?? "n/a"}, Required: {minReclaimVolumeRatio:F2})";
+        }
+
+        if (rules.AvwapProximityPct is { } maxAvwapProximity &&
+            (signal.AnchoredVwapProximityPct is null || signal.AnchoredVwapProximityPct.Value > maxAvwapProximity))
+        {
+            return $"avwap_proximity_too_far (Actual: {signal.AnchoredVwapProximityPct?.ToString("F2") ?? "n/a"}, RequiredMax: {maxAvwapProximity:F2})";
+        }
+
+        if (rules.RequirePullbackVolumeDryup && !signal.IsPullbackVolumeDryup)
+        {
+            return "pullback_volume_not_dry";
+        }
+
+        if (rules.MinBounceVolumeRatio is { } minBounceVolumeRatio &&
+            (signal.BounceVolumeRatio is null || signal.BounceVolumeRatio.Value < minBounceVolumeRatio))
+        {
+            return $"bounce_volume_ratio_below_minimum (Actual: {signal.BounceVolumeRatio?.ToString("F2") ?? "n/a"}, Required: {minBounceVolumeRatio:F2})";
+        }
+
+        if (rules.RequirePriceAboveEma5_65m && !signal.IsPriceAboveEma5)
+        {
+            return "price_not_above_ema5";
+        }
+
+        if (rules.RequirePriceAboveSma50Daily && !CanEvaluateDailyRule(signal))
+        {
+            return "daily_sma50_check_unavailable";
+        }
+
+        if (rules.RequirePriceAboveSma50Daily && !signal.IsPriceAboveSma50)
+        {
+            return "price_not_above_daily_sma50";
+        }
+
+        if (rules.RequirePriceAboveSma200Daily && !CanEvaluateDailyRule(signal))
+        {
+            return "daily_sma200_check_unavailable";
+        }
+
+        if (rules.RequirePriceAboveSma200Daily && !signal.IsPriceAboveSma200)
+        {
+            return "price_not_above_daily_sma200";
+        }
+
+        if (rules.RequirePriceAboveSma150 && !signal.IsPriceAboveSma150)
+        {
+            return "price_not_above_sma150";
+        }
+
+        if (rules.RequirePriceAboveSma200 && !signal.IsPriceAboveSma200)
+        {
+            return "price_not_above_sma200";
+        }
+
+        if (rules.RequireSma50AboveSma150 && !signal.IsSma50AboveSma150)
+        {
+            return "sma50_not_above_sma150";
+        }
+
+        if (rules.RequireSma150AboveSma200 && !signal.IsSma150AboveSma200)
+        {
+            return "sma150_not_above_sma200";
+        }
+
+        if (rules.MinPriceVs52WeekLowPct is { } minVsLow &&
+            (signal.PriceVs52WeekLowPct is null || signal.PriceVs52WeekLowPct.Value < minVsLow))
+        {
+            return $"price_vs_52_week_low_below_minimum (Actual: {signal.PriceVs52WeekLowPct?.ToString("F2") ?? "n/a"}, Required: {minVsLow:F2})";
+        }
+
+        if (rules.MaxPriceVs52WeekHighPct is { } maxDistanceFromHigh &&
+            (signal.PriceVs52WeekHighPct is null || signal.PriceVs52WeekHighPct.Value < maxDistanceFromHigh))
+        {
+            return $"price_too_far_below_52_week_high (Actual: {signal.PriceVs52WeekHighPct?.ToString("F2") ?? "n/a"}, RequiredMin: {maxDistanceFromHigh:F2})";
+        }
+
+        if (rules.MinContractions is { } minContractions &&
+            (signal.VolatilityContractions is null || signal.VolatilityContractions.Value < minContractions))
+        {
+            return $"volatility_contractions_below_minimum (Actual: {signal.VolatilityContractions?.ToString() ?? "n/a"}, Required: {minContractions})";
+        }
+
+        if (rules.MaxContractions is { } maxContractions &&
+            (signal.VolatilityContractions is null || signal.VolatilityContractions.Value > maxContractions))
+        {
+            return $"volatility_contractions_above_maximum (Actual: {signal.VolatilityContractions?.ToString() ?? "n/a"}, RequiredMax: {maxContractions})";
+        }
+
+        if (rules.RequireVolatilityHalvingLeftToRight && !signal.IsVolatilityHalving)
+        {
+            return "volatility_not_halving_left_to_right";
+        }
+
+        if (rules.RequireVolumeDryUpPreBreakout && !signal.IsVolumeDryUp)
+        {
+            return "volume_not_dry_before_breakout";
+        }
+
+        if (rules.MinBreakoutVolumeRatio is { } minBreakoutVolumeRatio &&
+            (signal.BreakoutVolumeRatio is null || signal.BreakoutVolumeRatio.Value < minBreakoutVolumeRatio))
+        {
+            return $"breakout_volume_ratio_below_minimum (Actual: {signal.BreakoutVolumeRatio?.ToString("F2") ?? "n/a"}, Required: {minBreakoutVolumeRatio:F2})";
+        }
+
+        return null;
+    }
+
+    private static bool CanEvaluateDailyRule(TradeSignal signal)
+    {
+        return signal.Timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool PassesShortSetupType(string setupType, TradeSignal signal)
@@ -474,6 +652,28 @@ public sealed class BasicStrategyEvaluator
         return strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase) ||
             strategy.Direction.Equals("long_short", StringComparison.OrdinalIgnoreCase) ||
             strategy.Direction.Equals("both", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? GetVolumeConfirmationRejection(StrategyDefinition strategy, decimal relativeVolume)
+    {
+        var mode = strategy.EntryRules.VolumeConfirmationMode;
+        if (mode.Equals("none", StringComparison.OrdinalIgnoreCase) ||
+            mode.Equals("soft_confirmation", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (mode.Equals("liquidity_floor", StringComparison.OrdinalIgnoreCase))
+        {
+            var floor = strategy.EntryRules.MinVolumeLiquidityFloor ?? 0m;
+            return floor > 0m && relativeVolume < floor
+                ? $"volume_liquidity_floor_below_minimum (Actual: {relativeVolume:F2}, Required: {floor:F2})"
+                : null;
+        }
+
+        return relativeVolume < strategy.EntryRules.MinVolumeSpike
+            ? $"relative_volume_below_minimum (Actual: {relativeVolume:F2}, Required: {strategy.EntryRules.MinVolumeSpike:F2})"
+            : null;
     }
 
     private static bool AllowsShort(StrategyDefinition strategy)

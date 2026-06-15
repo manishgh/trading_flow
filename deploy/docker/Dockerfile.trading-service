@@ -2,9 +2,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY . .
-RUN dotnet publish src/TradingFlow.Worker/TradingFlow.Worker.csproj -c Release -o /out/service
+RUN dotnet publish src/TradingFlow.Cli/TradingFlow.Cli.csproj -c Release -o /out/service
 
 FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /out/service .
-ENTRYPOINT ["dotnet", "TradingFlow.Worker.dll"]
+ENTRYPOINT ["dotnet", "TradingFlow.Cli.dll"]

@@ -138,7 +138,43 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "entry_rules.require_rollover_close_below_sma20", true),
                 OptionalBool(map, "entry_rules.require_rollover_close_below_sma50", false),
                 OptionalInt(map, "entry_rules.rollover_consecutive_lower_close_bars", 1),
-                OptionalBool(map, "entry_rules.require_rollover_close_below_prior_low", false)),
+                OptionalBool(map, "entry_rules.require_rollover_close_below_prior_low", false),
+                RequirePriceAboveEma10: OptionalBool(map, "entry_rules.require_price_above_ema10", false),
+                RequireEma10AboveEma20: OptionalBool(map, "entry_rules.require_ema10_above_ema20", false),
+                MinSessionRelativeVolume: OptionalDecimal(map, "entry_rules.min_session_relative_volume"),
+                MinGapUpPct: OptionalDecimal(map, "entry_rules.min_gap_up_pct"),
+                AnchorType: OptionalNullableString(map, "entry_rules.anchor_type"),
+                AvwapProximityPct: OptionalDecimal(map, "entry_rules.avwap_proximity_pct"),
+                RequirePullbackVolumeDryup: OptionalBool(map, "entry_rules.require_pullback_volume_dryup", false),
+                RequirePriceAboveSma50Daily: OptionalBool(map, "entry_rules.require_price_above_sma50_daily", false),
+                RequirePriceAboveSma200Daily: OptionalBool(map, "entry_rules.require_price_above_sma200_daily", false),
+                RequirePriceAboveSma150: OptionalBool(map, "entry_rules.require_price_above_sma150", false),
+                RequirePriceAboveSma200: OptionalBool(map, "entry_rules.require_price_above_sma200", false),
+                RequireSma50AboveSma150: OptionalBool(map, "entry_rules.require_sma50_above_sma150", false),
+                RequireSma150AboveSma200: OptionalBool(map, "entry_rules.require_sma150_above_sma200", false),
+                MinPriceVs52WeekLowPct: OptionalDecimal(map, "entry_rules.min_price_vs_52_week_low_pct"),
+                MaxPriceVs52WeekHighPct: OptionalDecimal(map, "entry_rules.max_price_vs_52_week_high_pct"),
+                MinContractions: OptionalNullableInt(map, "entry_rules.min_contractions"),
+                MaxContractions: OptionalNullableInt(map, "entry_rules.max_contractions"),
+                RequireVolatilityHalvingLeftToRight: OptionalBool(map, "entry_rules.require_volatility_halving_left_to_right", false),
+                RequireVolumeDryUpPreBreakout: OptionalBool(map, "entry_rules.require_volume_dry_up_pre_breakout", false),
+                MinBreakoutVolumeRatio: OptionalDecimal(map, "entry_rules.min_breakout_volume_ratio"),
+                RequirePriceAboveEma5_65m: OptionalBool(map, "entry_rules.require_price_above_ema5_65m", false),
+                MinBounceVolumeRatio: OptionalDecimal(map, "entry_rules.min_bounce_volume_ratio"),
+                RequirePriorFlushBelowVwapBars: OptionalNullableInt(map, "entry_rules.require_prior_flush_below_vwap_bars"),
+                VwapReclaimMaxBarsSinceFlush: OptionalNullableInt(map, "entry_rules.vwap_reclaim_max_bars_since_flush"),
+                MinReclaimVolumeRatio: OptionalDecimal(map, "entry_rules.min_reclaim_volume_ratio"),
+                RequireVolumeSmaRising: OptionalBool(map, "entry_rules.require_volume_sma_rising", false),
+                VolumeSmaPeriod: OptionalInt(map, "entry_rules.volume_sma_period", 5),
+                VolumeSmaRisingLookbackBars: OptionalInt(map, "entry_rules.volume_sma_rising_lookback_bars", 3),
+                MinVolumeSmaRisePct: OptionalDecimal(map, "entry_rules.min_volume_sma_rise_pct"),
+                EnablePerTickerDailyLossGuard: OptionalBool(map, "risk_guards.per_ticker_daily.enabled", false),
+                MaxPerTickerDailyFailedTrades: OptionalInt(map, "risk_guards.per_ticker_daily.max_failed_trades", 0),
+                MaxPerTickerDailyLossR: OptionalDecimal(map, "risk_guards.per_ticker_daily.max_loss_r"),
+                MaxPerTickerDailyLossPctOfAccount: OptionalDecimal(map, "risk_guards.per_ticker_daily.max_loss_pct_of_account"),
+                MinVolumeSpikeSource: OptionalString(map, "entry_rules.min_volume_spike_source", "cumulative_same_time"),
+                VolumeConfirmationMode: OptionalString(map, "entry_rules.volume_confirmation_mode", "hard_gate"),
+                MinVolumeLiquidityFloor: OptionalDecimal(map, "entry_rules.min_volume_liquidity_floor")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -169,7 +205,8 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "exit_rules.exit_on_sma10_near_sma20", false),
                 OptionalDecimal(map, "exit_rules.sma10_near_sma20_pct") ?? 0.25m,
                 OptionalBool(map, "exit_rules.exit_on_sma10_cross_below_sma20", false),
-                OptionalBool(map, "exit_rules.exit_short_on_sma10_cross_above_sma20", false)),
+                OptionalBool(map, "exit_rules.exit_short_on_sma10_cross_above_sma20", false),
+                OptionalBool(map, "exit_rules.exit_on_ema10_cross_below_ema20", false)),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
                 RequireDecimal(map, "execution.slippage_bps")),
@@ -285,14 +322,14 @@ public sealed class SimpleYamlReader
 
         var parameters = new Dictionary<string, IReadOnlyList<object>>();
         var prefix = "parameters.";
-        
+
         foreach (var kvp in map)
         {
             if (kvp.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             {
                 var paramKey = kvp.Key[prefix.Length..];
                 var parsedValues = new List<object>();
-                
+
                 foreach (var val in kvp.Value)
                 {
                     var cleanVal = Unquote(val);
@@ -307,7 +344,7 @@ public sealed class SimpleYamlReader
                     else
                         parsedValues.Add(cleanVal);
                 }
-                
+
                 if (parsedValues.Count > 0)
                 {
                     parameters[paramKey] = parsedValues;
@@ -424,6 +461,13 @@ public sealed class SimpleYamlReader
             : fallback;
     }
 
+    private static int? OptionalNullableInt(IReadOnlyDictionary<string, List<string>> map, string key)
+    {
+        return map.TryGetValue(key, out var values) && values.Count > 0 && !String.IsNullOrWhiteSpace(values[0])
+            ? Int32.Parse(values[0], CultureInfo.InvariantCulture)
+            : null;
+    }
+
     private static decimal RequireDecimal(IReadOnlyDictionary<string, List<string>> map, string key)
     {
         return Decimal.Parse(RequireString(map, key), CultureInfo.InvariantCulture);
@@ -453,6 +497,13 @@ public sealed class SimpleYamlReader
         return map.TryGetValue(key, out var values) && values.Count > 0 && !String.IsNullOrWhiteSpace(values[0])
             ? values[0]
             : fallback;
+    }
+
+    private static string? OptionalNullableString(IReadOnlyDictionary<string, List<string>> map, string key)
+    {
+        return map.TryGetValue(key, out var values) && values.Count > 0 && !String.IsNullOrWhiteSpace(values[0])
+            ? values[0]
+            : null;
     }
 
     private static DateOnly? OptionalDateOnly(IReadOnlyDictionary<string, List<string>> map, string key)

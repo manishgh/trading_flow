@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TradingFlow.Mobile.Pages.BacktestsPage"
+             Title="Backtests">
+    <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
+        <ScrollView>
+            <VerticalStackLayout Padding="16" Spacing="14">
+                <Label Text="Backtesting" Style="{StaticResource Headline}" FontSize="24" />
+                <Label Text="Run compact research tests from your phone and monitor progress." Style="{StaticResource SubHeadline}" FontSize="13" />
+                <Border Style="{StaticResource CardBorder}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
+                        <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="10">
+                        <Label Text="Run Setup" FontAttributes="Bold" FontSize="18" />
+                        <Picker x:Name="ConfigPicker" Title="Backtest config" />
+                        <Picker x:Name="StrategyPicker" Title="Strategy" />
+                        <HorizontalStackLayout Spacing="8">
+                            <CheckBox x:Name="RunAllStrategiesCheck" Scale="0.78" />
+                            <Label Text="Run all listed strategies" VerticalTextAlignment="Center" FontSize="13" />
+                        </HorizontalStackLayout>
+                        <Entry x:Name="TickersEntry" Placeholder="Tickers: MU, NVTS, RGTI" Text="POET, MXL, RGTI, MU, MSFT" Keyboard="Text" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <Entry x:Name="LookbackEntry" Placeholder="Days" Text="60" Keyboard="Numeric" />
+                            <Entry x:Name="CapitalEntry" Grid.Column="1" Placeholder="Capital" Text="10000" Keyboard="Numeric" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <Entry x:Name="RiskEntry" Placeholder="Risk %" Text="1" Keyboard="Numeric" />
+                            <Entry x:Name="MaxPositionEntry" Grid.Column="1" Placeholder="Max pos %" Text="25" Keyboard="Numeric" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <Entry x:Name="MaxConcurrentEntry" Placeholder="Max positions" Text="4" Keyboard="Numeric" />
+                            <Picker x:Name="CachePolicyPicker" Grid.Column="1" Title="Data cache" />
+                        </Grid>
+                        <Button x:Name="RunButton" Text="Run Backtest" Clicked="OnStartBacktest" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Grid ColumnDefinitions="*,Auto">
+                    <Label Text="Recent Backtests" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
+                    <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
+                </Grid>
+
+                <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected">
+                    <CollectionView.EmptyView>
+                        <Label Text="No backtests yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,10">
+                                <VerticalStackLayout Spacing="6">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <Label Text="{Binding RunName}" FontAttributes="Bold" FontSize="16" LineBreakMode="TailTruncation" />
+                                        <Label Grid.Column="1" Text="{Binding Status}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                    </Grid>
+                                    <Label Text="{Binding ProgressText}" FontSize="13" />
+                                    <Label Text="{Binding ResultSummary}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                    <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+
+                <Border x:Name="DetailCard" Style="{StaticResource CardBorder}" IsVisible="False">
+                    <VerticalStackLayout Spacing="8">
+                        <Label x:Name="DetailTitle" FontAttributes="Bold" FontSize="17" />
+                        <Label x:Name="DetailStatus" FontSize="13" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                            <Button Text="Refresh Detail" Clicked="OnRefreshClicked" />
+                            <Button Grid.Column="1" Text="Cancel Backtest" Clicked="OnCancelSelectedJob" BackgroundColor="#B42318" />
+                        </Grid>
+                        <Label x:Name="ResultLabel" FontSize="13" />
+                        <Label Text="Strategy Groups" FontAttributes="Bold" FontSize="14" />
+                        <VerticalStackLayout x:Name="StrategyGroupsStack" Spacing="4" />
+                        <Label Text="Recent Events" FontAttributes="Bold" FontSize="14" />
+                        <VerticalStackLayout x:Name="EventsStack" Spacing="4" />
+                    </VerticalStackLayout>
+                </Border>
+            </VerticalStackLayout>
+        </ScrollView>
+    </RefreshView>
+</ContentPage>

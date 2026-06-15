@@ -60,61 +60,280 @@
     .audit-page .audit-table-row {
         border-bottom: 1px solid #4b5563;
     }
+
+    .audit-page .filter-bar {
+        display: grid;
+        grid-template-columns: minmax(160px, 220px) minmax(220px, 1fr) minmax(160px, 220px);
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+    }
+
+    .audit-page .audit-chip {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 3px 8px;
+        margin: 3px 4px 0 0;
+        font-size: 0.78rem;
+        border: 1px solid #374151;
+        background: #111827;
+        color: #dbeafe;
+    }
+
+    .audit-page .audit-chip.fail {
+        color: #fecaca;
+        border-color: #7f1d1d;
+        background: #2a1111;
+    }
+
+    .audit-page .audit-chip.bool {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 7px;
+    }
+
+    .audit-page .audit-chip.bool input {
+        width: 12px;
+        height: 12px;
+        min-height: 12px;
+        margin: 0;
+        padding: 0;
+        accent-color: #22c55e;
+        flex: 0 0 auto;
+    }
 </style>
+
+@section Scripts {
+    <script>
+        (function () {
+            const snapshotUrl = `${window.location.pathname}?handler=Snapshot`;
+            const refreshedAtEl = document.getElementById('auditRefreshedAt');
+            const emptyEl = document.getElementById('auditEmpty');
+            const evaluationsEl = document.getElementById('auditEvaluations');
+            const acceptedEl = document.getElementById('auditAccepted');
+            const rejectedEl = document.getElementById('auditRejected');
+            const coverageEl = document.getElementById('auditCoverage');
+            const reasonCardsEl = document.getElementById('auditReasonCards');
+            const reasonPanelEl = document.getElementById('auditReasonPanel');
+            const recordsBodyEl = document.getElementById('auditRecordsBody');
+            const decisionFilterEl = document.getElementById('decisionFilter');
+            const reasonFilterEl = document.getElementById('reasonFilter');
+            const tickerFilterEl = document.getElementById('tickerFilter');
+
+            function escapeHtml(value) {
+                return String(value ?? '')
+                    .replaceAll('&', '&amp;')
+                    .replaceAll('<', '&lt;')
+                    .replaceAll('>', '&gt;')
+                    .replaceAll('"', '&quot;')
+                    .replaceAll("'", '&#039;');
+            }
+
+            function decisionColor(decision) {
+                const normalized = String(decision ?? '').toLowerCase();
+                if (normalized === 'accepted' || normalized === 'exitsubmitted') return '#4caf50';
+                if (normalized === 'rejected' || normalized === 'exitrejected') return '#f44336';
+                return '#f59e0b';
+            }
+
+            function renderReasonCards(reasons) {
+                if (!reasonPanelEl || !reasonCardsEl) return;
+                reasonPanelEl.style.display = reasons.length === 0 ? 'none' : 'block';
+                reasonCardsEl.innerHTML = reasons.map(reason => `<button type="button" class="audit-reason-card" data-reason-card="${escapeHtml(reason.reasonKey)}" style="text-align:left; border-radius: 6px; padding: 0.75rem; cursor: pointer;">
+                    <div style="font-weight: 700;">${escapeHtml(reason.displayReason)}</div>
+                    <div class="muted">${escapeHtml(reason.count)} rejected (${Number(reason.percentOfRejected ?? 0).toFixed(1)}%)</div>
+                    <code style="font-size: 0.8rem;">${escapeHtml(reason.exampleReason)}</code>
+                </button>`).join('');
+                reasonCardsEl.querySelectorAll('[data-reason-card]').forEach(card => {
+                    card.addEventListener('click', () => {
+                        reasonFilterEl.value = card.getAttribute('data-reason-card') ?? '';
+                        applyFilters();
+                    });
+                });
+            }
+
+            function updateReasonFilter(reasons) {
+                if (!reasonFilterEl) return;
+                const selected = reasonFilterEl.value;
+                reasonFilterEl.innerHTML = '<option value="">All rejection reasons</option>' +
+                    reasons.map(reason => `<option value="${escapeHtml(reason.reasonKey)}">${escapeHtml(reason.displayReason)} (${escapeHtml(reason.count)})</option>`).join('');
+                if ([...reasonFilterEl.options].some(option => option.value === selected)) {
+                    reasonFilterEl.value = selected;
+                }
+            }
+
+            function renderRecords(records) {
+                if (!recordsBodyEl) return;
+                recordsBodyEl.innerHTML = records.map(record => {
+                    const chips = (record.chips ?? []).map(renderChip).join('');
+                    const rawReason = record.rawReason ? `<code style="font-size: 0.8rem;">${escapeHtml(record.rawReason)}</code>` : '';
+                    return `<tr class="audit-table-row" data-decision="${escapeHtml(String(record.decision ?? '').toLowerCase())}" data-reason="${escapeHtml(record.reasonKey)}" data-ticker="${escapeHtml(record.ticker)}" style="vertical-align: top;">
+                        <td style="white-space: nowrap; padding-top: 10px;">${escapeHtml(record.localTime)}</td>
+                        <td style="font-weight: bold; padding-top: 10px;">${escapeHtml(record.ticker)}</td>
+                        <td style="padding-top: 10px;">${escapeHtml(record.strategy)}</td>
+                        <td style="padding-top: 10px; font-weight: bold; color: ${decisionColor(record.decision)}">${escapeHtml(record.decision)}</td>
+                        <td style="padding-top: 10px;">
+                            <div>${escapeHtml(record.reason)}</div>
+                            ${rawReason}
+                            <div class="muted" style="margin-top: 0.4rem;">${escapeHtml(record.explanation)}</div>
+                            <div>${chips}</div>
+                        </td>
+                        <td style="padding-top: 10px; max-width: 500px;">
+                            <details>
+                                <summary style="cursor: pointer;">View Signal Evaluation</summary>
+                                <pre style="padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-top: 5px; overflow-x: auto;">${escapeHtml(record.signalJson)}</pre>
+                            </details>
+                        </td>
+                    </tr>`;
+                }).join('');
+                applyFilters();
+            }
+
+            function renderChip(chip) {
+                const value = String(chip.value ?? '').toLowerCase();
+                if (value === 'true' || value === 'false') {
+                    const checked = value === 'true' ? 'checked' : '';
+                    return `<span class="audit-chip bool ${chip.passed ? '' : 'fail'}"><input type="checkbox" disabled ${checked} aria-label="${escapeHtml(chip.label)}" /><span>${escapeHtml(chip.label)}</span></span>`;
+                }
+
+                return `<span class="audit-chip ${chip.passed ? '' : 'fail'}">${escapeHtml(chip.label)}: ${escapeHtml(chip.value)}</span>`;
+            }
+
+            function applyFilters() {
+                const decision = decisionFilterEl?.value ?? '';
+                const reason = reasonFilterEl?.value ?? '';
+                const ticker = (tickerFilterEl?.value ?? '').trim().toUpperCase();
+                let visible = 0;
+                recordsBodyEl?.querySelectorAll('tr.audit-table-row').forEach(row => {
+                    const matchesDecision = !decision || row.dataset.decision === decision;
+                    const matchesReason = !reason || row.dataset.reason === reason;
+                    const matchesTicker = !ticker || String(row.dataset.ticker ?? '').toUpperCase().includes(ticker);
+                    const show = matchesDecision && matchesReason && matchesTicker;
+                    row.style.display = show ? '' : 'none';
+                    if (show) visible++;
+                });
+                if (emptyEl) {
+                    emptyEl.style.display = visible === 0 ? 'block' : 'none';
+                }
+            }
+
+            async function refreshAudit() {
+                let data;
+                try {
+                    const response = await fetch(snapshotUrl, { cache: 'no-store' });
+                    if (!response.ok) return;
+                    data = await response.json();
+                } catch {
+                    return;
+                }
+
+                if (!data.success) return;
+                if (refreshedAtEl) refreshedAtEl.textContent = data.refreshedAt;
+                if (evaluationsEl) evaluationsEl.textContent = data.evaluations;
+                if (acceptedEl) acceptedEl.textContent = data.accepted;
+                if (rejectedEl) rejectedEl.textContent = data.rejected;
+                if (coverageEl) coverageEl.textContent = `${data.tickerCount} tickers / ${data.strategyCount} strategies`;
+                const reasons = data.reasons ?? [];
+                updateReasonFilter(reasons);
+                renderReasonCards(reasons);
+                renderRecords(data.records ?? []);
+            }
+
+            decisionFilterEl?.addEventListener('change', applyFilters);
+            reasonFilterEl?.addEventListener('change', applyFilters);
+            tickerFilterEl?.addEventListener('input', applyFilters);
+            document.getElementById('clearAuditFilters')?.addEventListener('click', () => {
+                if (decisionFilterEl) decisionFilterEl.value = '';
+                if (reasonFilterEl) reasonFilterEl.value = '';
+                if (tickerFilterEl) tickerFilterEl.value = '';
+                applyFilters();
+            });
+
+            window.tradingFlowAuditRefresh = window.setInterval(refreshAudit, 5000);
+            applyFilters();
+            refreshAudit();
+        })();
+    </script>
+}
 
 <div class="container audit-page" style="max-width: 1400px; margin: 0 auto; padding: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
         <div>
             <h1 style="margin: 0; color: #fff;">Audit Analyzer: @Model.RunName</h1>
-            <p class="muted">Decision tree audit for strategy signal evaluations. Times shown in @Model.LocalTimeZoneLabel.</p>
+            <p class="muted">Decision tree audit for strategy signal evaluations. Times shown in @Model.LocalTimeZoneLabel. Last refreshed: <span id="auditRefreshedAt">@Model.FormatLocal(DateTimeOffset.UtcNow)</span>.</p>
         </div>
         <a href="@Model.BackUrl" class="button secondary" style="background: #1f6feb; color: #fff; border-color: #2f81f7;">Back</a>
     </div>
 
-    @if (Model.Records.Count == 0)
-    {
-        <div class="audit-panel" style="padding: 2rem; border-radius: 8px; text-align: center;">
-            <h3>No audit records found</h3>
-            <p class="muted">Ensure the LiveRunner has completed evaluating tickers for this run.</p>
-        </div>
-    }
-    else
-    {
+    <div id="auditEmpty" class="audit-panel" style="padding: 1rem; border-radius: 8px; margin-bottom: 1rem; display: @(Model.Records.Count == 0 ? "block" : "none");">
+        <strong>No matching audit records found.</strong>
+        <span class="muted">The run may still be evaluating, or filters may be hiding rows.</span>
+    </div>
+
         <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1rem;">
             <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
                 <div class="muted">Evaluations</div>
-                <div class="audit-card-value" style="font-size: 1.8rem; font-weight: 700;">@Model.Records.Count</div>
+                <div id="auditEvaluations" class="audit-card-value" style="font-size: 1.8rem; font-weight: 700;">@Model.Records.Count</div>
             </div>
             <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
                 <div class="muted">Accepted</div>
-                <div style="font-size: 1.8rem; font-weight: 700; color: #4caf50;">@Model.AcceptedCount</div>
+                <div id="auditAccepted" style="font-size: 1.8rem; font-weight: 700; color: #4caf50;">@Model.AcceptedCount</div>
             </div>
             <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
                 <div class="muted">Rejected</div>
-                <div style="font-size: 1.8rem; font-weight: 700; color: #f44336;">@Model.RejectedCount</div>
+                <div id="auditRejected" style="font-size: 1.8rem; font-weight: 700; color: #f44336;">@Model.RejectedCount</div>
             </div>
             <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
                 <div class="muted">Coverage</div>
-                <div class="audit-card-value" style="font-size: 1.1rem; font-weight: 700;">@Model.TickerCount tickers / @Model.StrategyCount strategies</div>
+                <div id="auditCoverage" class="audit-card-value" style="font-size: 1.1rem; font-weight: 700;">@Model.TickerCount tickers / @Model.StrategyCount strategies</div>
             </div>
         </div>
 
-        @if (Model.TopRejectionReasons.Count > 0)
-        {
-            <div class="audit-panel" style="border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+            <div id="auditReasonPanel" class="audit-panel" style="border-radius: 8px; padding: 1rem; margin-bottom: 1rem; display: @(Model.TopRejectionReasons.Count > 0 ? "block" : "none");">
                 <h2 style="margin-top: 0;">Top Rejection Reasons</h2>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem;">
+                <div id="auditReasonCards" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem;">
                     @foreach (var reason in Model.TopRejectionReasons)
                     {
-                        <div class="audit-reason-card" style="border-radius: 6px; padding: 0.75rem;">
+                        <button type="button" class="audit-reason-card" data-reason-card="@reason.ReasonKey" style="text-align:left; border-radius: 6px; padding: 0.75rem; cursor: pointer;">
                             <div style="font-weight: 700;">@reason.DisplayReason</div>
                             <div class="muted">@reason.Count rejected (@reason.PercentOfRejected.ToString("0.0")%)</div>
                             <code style="font-size: 0.8rem;">@reason.ExampleReason</code>
-                        </div>
+                        </button>
                     }
                 </div>
             </div>
-        }
+
+        <div class="audit-panel" style="border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+            <div class="filter-bar">
+                <div>
+                    <label for="decisionFilter">Decision</label>
+                    <select id="decisionFilter">
+                        <option value="">All decisions</option>
+                        <option value="accepted">Accepted</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="skipped">Skipped</option>
+                        <option value="nosignal">No Signal</option>
+                        <option value="exitsubmitted">Exit Submitted</option>
+                        <option value="exitrejected">Exit Rejected</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="reasonFilter">Rejection Reason</label>
+                    <select id="reasonFilter">
+                        <option value="">All rejection reasons</option>
+                        @foreach (var reason in Model.TopRejectionReasons)
+                        {
+                            <option value="@reason.ReasonKey">@reason.DisplayReason (@reason.Count)</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label for="tickerFilter">Ticker</label>
+                    <input id="tickerFilter" placeholder="e.g. CRDO" />
+                </div>
+            </div>
+            <button id="clearAuditFilters" type="button" class="button secondary">Clear Filters</button>
+        </div>
 
         <div class="audit-panel" style="border-radius: 8px; padding: 1rem; overflow-x: auto;">
             <table class="table" style="width: 100%; border-collapse: collapse;">
@@ -128,28 +347,46 @@
                         <th>Decision Tree Matrix</th>
                     </tr>
                 </thead>
-                <tbody>
-                @foreach (var record in Model.Records)
+                <tbody id="auditRecordsBody">
+                @foreach (var view in Model.RecordViews)
                 {
-                    <tr class="audit-table-row" style="vertical-align: top;">
-                        <td style="white-space: nowrap; padding-top: 10px;">@Model.FormatLocal(record.Timestamp, includeMilliseconds: true)</td>
-                        <td style="font-weight: bold; padding-top: 10px;">@record.Ticker</td>
-                        <td style="padding-top: 10px;">@record.StrategyName</td>
-                        <td style="padding-top: 10px; font-weight: bold; color: @(record.Decision == "Accepted" ? "#4caf50" : "#f44336")">
-                            @record.Decision
+                    <tr class="audit-table-row" data-decision="@view.Decision.ToLowerInvariant()" data-reason="@view.ReasonKey" data-ticker="@view.Ticker" style="vertical-align: top;">
+                        <td style="white-space: nowrap; padding-top: 10px;">@view.LocalTime</td>
+                        <td style="font-weight: bold; padding-top: 10px;">@view.Ticker</td>
+                        <td style="padding-top: 10px;">@view.StrategyName</td>
+                        <td style="padding-top: 10px; font-weight: bold; color: @(view.Decision == "Accepted" || view.Decision == "ExitSubmitted" ? "#4caf50" : (view.Decision == "Rejected" || view.Decision == "ExitRejected" ? "#f44336" : "#f59e0b"))">
+                            @view.Decision
                         </td>
                         <td style="padding-top: 10px;">
-                            <div>@Model.FormatRejectionReason(record.RejectionReason)</div>
-                            @if (!String.IsNullOrWhiteSpace(record.RejectionReason))
+                            <div>@view.DisplayReason</div>
+                            @if (!String.IsNullOrWhiteSpace(view.RawReason))
                             {
-                                <code style="font-size: 0.8rem;">@record.RejectionReason</code>
+                                <code style="font-size: 0.8rem;">@view.RawReason</code>
                             }
+                            <div class="muted" style="margin-top: 0.4rem;">@view.Explanation</div>
+                            <div>
+                                @foreach (var chip in view.Chips)
+                                {
+                                    @if (chip.Value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                                         chip.Value.Equals("false", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <span class="audit-chip bool @(chip.Passed ? "" : "fail")">
+                                            <input type="checkbox" disabled checked="@chip.Value.Equals("true", StringComparison.OrdinalIgnoreCase)" aria-label="@chip.Label" />
+                                            <span>@chip.Label</span>
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="audit-chip @(chip.Passed ? "" : "fail")">@chip.Label: @chip.Value</span>
+                                    }
+                                }
+                            </div>
                         </td>
                         <td style="padding-top: 10px; max-width: 500px;">
                             <details>
                                 <summary style="cursor: pointer;">View Signal Evaluation</summary>
                                 <pre style="padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-top: 5px; overflow-x: auto;">
-@Model.FormatJson(record.SignalJson)
+@view.FormattedSignalJson
                                 </pre>
                             </details>
                         </td>
@@ -158,5 +395,4 @@
                 </tbody>
             </table>
         </div>
-    }
 </div>

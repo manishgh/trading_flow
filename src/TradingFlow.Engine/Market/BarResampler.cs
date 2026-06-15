@@ -6,7 +6,7 @@ public sealed class BarResampler
 {
     public IReadOnlyList<OhlcvBar> Resample(IReadOnlyList<OhlcvBar> sourceBars, string targetTimeframe)
     {
-        var bucketSize = ParseTimeframe(targetTimeframe);
+        var bucketSize = TimeframeParser.Parse(targetTimeframe);
         return sourceBars
             .OrderBy(x => x.Timestamp)
             .GroupBy(x => FloorTimestamp(x.Timestamp, bucketSize))
@@ -27,22 +27,6 @@ public sealed class BarResampler
             })
             .OrderBy(x => x.Timestamp)
             .ToArray();
-    }
-
-    private static TimeSpan ParseTimeframe(string timeframe)
-    {
-        var normalized = timeframe.Trim().ToLowerInvariant();
-        if (normalized.EndsWith('m'))
-        {
-            return TimeSpan.FromMinutes(Int32.Parse(normalized[..^1], System.Globalization.CultureInfo.InvariantCulture));
-        }
-
-        if (normalized.EndsWith('h'))
-        {
-            return TimeSpan.FromHours(Int32.Parse(normalized[..^1], System.Globalization.CultureInfo.InvariantCulture));
-        }
-
-        throw new NotSupportedException($"Unsupported timeframe: {timeframe}");
     }
 
     private static DateTimeOffset FloorTimestamp(DateTimeOffset timestamp, TimeSpan bucketSize)

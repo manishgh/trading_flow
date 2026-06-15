@@ -341,6 +341,87 @@ public class LiveRunnerIntegrationTests
     }
 
     [Fact]
+    public async Task RunAsync_SubmitsOrderUsingExecutionTimeframePrice_WhenSignalTimeframeDiffers()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            const decimal executionClose = 123.45m;
+            var provider = new Mock<IMarketDataProvider>();
+            provider
+                .Setup(x => x.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                {
+                    var ticker = tickers.Single();
+                    var fiveMinuteBars = CreateFiveMinuteBars(ticker);
+                    var oneMinuteBars = CreateOneMinuteBars(
+                        ticker,
+                        fiveMinuteBars[0].Timestamp,
+                        fiveMinuteBars[^1].Timestamp.AddMinutes(5),
+                        executionClose);
+                    return YieldBars(fiveMinuteBars.Concat(oneMinuteBars), token);
+                });
+
+            FinalizedOrder? submittedOrder = null;
+            var broker = new Mock<IBrokerClient>();
+            broker
+                .Setup(x => x.GetOpenOrdersAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([]);
+            broker
+                .Setup(x => x.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([]);
+            broker
+                .Setup(x => x.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()))
+                .Callback<FinalizedOrder, CancellationToken>((order, _) => submittedOrder = order)
+                .ReturnsAsync("order-1");
+
+            var orderRepo = new Mock<IOrderStateRepository>();
+            orderRepo
+                .Setup(x => x.GetActiveOrdersByTickerAsync("AAPL", It.IsAny<CancellationToken>()))
+                .ReturnsAsync([]);
+            orderRepo
+                .Setup(x => x.GetOrderAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((PersistedOrder?)null);
+            orderRepo
+                .Setup(x => x.SaveOrderAsync(It.IsAny<PersistedOrder>(), It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            var runner = CreateRunner(
+                provider.Object,
+                lockService: null,
+                brokerClient: broker.Object,
+                orderStateRepository: orderRepo.Object);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var progress = new Progress<string>(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                }
+            });
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["AAPL"], ["1m", "5m"], workerCount: 2, derivedSource: "1m", dryRun: false, allowLiveOrders: true),
+                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "1m")],
+                cts,
+                progress);
+
+            Assert.NotNull(submittedOrder);
+            Assert.Equal(decimal.Round(executionClose * 1.0001m, 4), submittedOrder.LimitPrice);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_SubmitsTechnicalExitClose_ForActiveStrategyPosition()
     {
         var resultsRoot = CreateTempDirectory();
@@ -671,6 +752,29 @@ public class LiveRunnerIntegrationTests
                     close,
                     100000m + i));
             }
+        }
+
+        return bars;
+    }
+
+    private static IReadOnlyList<OhlcvBar> CreateOneMinuteBars(
+        string ticker,
+        DateTimeOffset start,
+        DateTimeOffset end,
+        decimal close)
+    {
+        var bars = new List<OhlcvBar>();
+        for (var timestamp = start; timestamp <= end; timestamp = timestamp.AddMinutes(1))
+        {
+            bars.Add(new OhlcvBar(
+                ticker,
+                timestamp,
+                "1m",
+                close - 0.05m,
+                close + 0.10m,
+                close - 0.10m,
+                close,
+                250000m));
         }
 
         return bars;

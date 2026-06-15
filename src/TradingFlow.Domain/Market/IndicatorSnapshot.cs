@@ -22,5 +22,14 @@ public sealed record IndicatorSnapshot(
     CatalystEvent? Catalyst = null,
     decimal? Sma10 = null,
     decimal? Sma20 = null,
-    decimal? Sma50 = null);
-
+    decimal? Sma50 = null,
+    decimal? SlotRelativeVolume = null,
+    decimal? SessionRelativeVolume = null,
+    decimal? Ema10 = null,
+    decimal? SlotAverageVolume = null,
+    decimal? CumulativeAverageVolume = null,
+    decimal? AverageSessionVolume = null,
+    int RelativeVolumeSampleCount = 0,
+    decimal? Sma150 = null,
+    decimal? Sma200 = null,
+    decimal? Ema5 = null);

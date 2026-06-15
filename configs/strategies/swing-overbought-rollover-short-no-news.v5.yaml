@@ -1,5 +1,5 @@
 strategy_id: research.swing-overbought-rollover-short-no-news.v5
-strategy_name: Swing Overbought Rollover Short No News V5
+strategy_name: TOP2 Swing Short - Overbought Rollover
 source: swing_research_analyzer_overbought_rollover_followthrough_config_only
 version: 5
 timeframe: 1d
@@ -99,7 +99,7 @@ exit_rules:
   exit_on_sma10_cross_below_sma20: false
   exit_short_on_sma10_cross_above_sma20: true
 execution:
-  timeframe: 1d
+  timeframe: 1h
   slippage_bps: 15.0
 session:
   exchange_timezone: America/New_York

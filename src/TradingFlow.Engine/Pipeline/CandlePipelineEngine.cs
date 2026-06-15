@@ -7,6 +7,11 @@ using TradingFlow.Engine.Market;
 
 namespace TradingFlow.Engine.Pipeline;
 
+/// <summary>
+/// Defines one market-data preparation run. DownloadTimeframes are requested
+/// from the provider; RequiredTimeframes are what strategies need. Missing
+/// required timeframes are derived from DeriveFromTimeframe when possible.
+/// </summary>
 public sealed record CandlePipelineRequest(
     IReadOnlyCollection<string> Tickers,
     IReadOnlyCollection<string> DownloadTimeframes,
@@ -17,7 +22,8 @@ public sealed record CandlePipelineRequest(
     int BoundedCapacity,
     int WorkerCount,
     bool IncludeExtendedHours = true,
-    string ExchangeTimezone = "America/New_York");
+    string ExchangeTimezone = "America/New_York",
+    CandleStoreContext? StoreContext = null);
 
 public sealed record CandleEvent(
     string Ticker,
@@ -73,6 +79,12 @@ internal sealed record IndicatorComputeResult(
     string Timeframe,
     IReadOnlyList<IndicatorSnapshot> Snapshots);
 
+/// <summary>
+/// Shared candle preparation engine for backtest, paper, and live flows.
+/// It uses bounded TPL Dataflow blocks so large multi-ticker reads can run in
+/// parallel while still applying backpressure when normalization/indicator work
+/// falls behind provider reads.
+/// </summary>
 public sealed class CandlePipelineEngine
 {
     private const int NormalizedProgressEventInterval = 25_000;
@@ -80,6 +92,12 @@ public sealed class CandlePipelineEngine
 
     private readonly IndicatorEngine indicatorEngine = new();
     private readonly BarResampler barResampler = new();
+    private readonly ICandleStore candleStore;
+
+    public CandlePipelineEngine(ICandleStore? candleStore = null)
+    {
+        this.candleStore = candleStore ?? NullCandleStore.Instance;
+    }
 
     public async Task<CandlePipelineResult> RunAsync(
         CandlePipelineRequest request,
@@ -102,12 +120,16 @@ public sealed class CandlePipelineEngine
             PropagateCompletion = true
         };
 
+        // Provider reads push into a bounded buffer. This is the first pressure
+        // valve when hundreds of symbols produce many candles at once.
         var readBuffer = new BufferBlock<CandleEvent>(new DataflowBlockOptions
         {
             BoundedCapacity = capacity,
             CancellationToken = cancellationToken
         });
 
+        // Normalize is intentionally separate from grouping. Bad bars should
+        // fail one ticker/timeframe without poisoning the rest of the batch.
         TransformBlock<CandleEvent, NormalizedCandleEvent?>? normalizeBlock = null;
         normalizeBlock = new TransformBlock<CandleEvent, NormalizedCandleEvent?>(
             candle =>
@@ -135,6 +157,8 @@ public sealed class CandlePipelineEngine
                 CancellationToken = cancellationToken
             });
 
+        // Grouped bars are the in-memory market state seed. Later architecture
+        // can replace this batch grouping with per-ticker rolling aggregators.
         var groupBlock = new ActionBlock<NormalizedCandleEvent?>(
             normalized =>
             {
@@ -170,13 +194,43 @@ public sealed class CandlePipelineEngine
             : request.DownloadTimeframes;
 
         progress?.Report($"Reading market data for {request.Tickers.Count} ticker(s), {downloadedTimeframes.Count} timeframe(s).");
+        var seenTickers = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            await foreach (var bar in provider.GetBarsAsync(request.Tickers, downloadedTimeframes, request.Start, request.End, cancellationToken))
+            // Prefer provider batch reads for API efficiency. If the provider
+            // rejects the batch, fallback below isolates the bad ticker instead
+            // of taking down the whole run.
+            await ReadProviderBarsAsync(request.Tickers, recordFailure: false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            progress?.Report($"Batch market data read failed: {exception.Message}. Retrying unresolved ticker(s) one at a time.");
+
+            var fallbackTickers = metrics.ReadCount == 0
+                ? request.Tickers
+                : request.Tickers
+                    .Where(ticker => !seenTickers.ContainsKey(NormalizeTickerForFailure(ticker)))
+                    .ToArray();
+
+            foreach (var ticker in fallbackTickers)
             {
-                metrics.IncrementRead();
-                await readBuffer.SendAsync(new CandleEvent(bar.Ticker, bar.Timeframe, bar), cancellationToken);
-                metrics.ObserveReadBufferDepth(readBuffer.Count);
+                try
+                {
+                    await ReadProviderBarsAsync([ticker], recordFailure: true);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception tickerException)
+                {
+                    failures[NormalizeTickerForFailure(ticker)] = tickerException.Message;
+                    progress?.Report($"Ticker {ticker} market data read failed: {tickerException.Message}");
+                }
             }
         }
         finally
@@ -205,7 +259,11 @@ public sealed class CandlePipelineEngine
             }
         }
 
-        DeriveMissingTimeframes(request, grouped, failures, metrics);
+        // Persist provider bars before deriving so recovery/audit can distinguish
+        // raw feed candles from bars created by our resampler.
+        await PersistCandlesAsync(request, grouped, "provider", cancellationToken);
+        var derivedBars = DeriveMissingTimeframes(request, grouped, failures, metrics);
+        await PersistCandlesAsync(request, derivedBars, "derived", cancellationToken);
 
         var snapshotsByTicker = new ConcurrentDictionary<string, ConcurrentDictionary<string, IReadOnlyList<IndicatorSnapshot>>>(StringComparer.OrdinalIgnoreCase);
         await ComputeIndicatorsAsync(grouped, snapshotsByTicker, workerCount, capacity, metrics, cancellationToken);
@@ -223,6 +281,73 @@ public sealed class CandlePipelineEngine
 
         progress?.Report($"Built candle pipeline state for {states.Count}/{request.Tickers.Count} ticker(s).");
         return new CandlePipelineResult(states, failures, metrics.ToImmutable(failures.Count));
+
+        async Task ReadProviderBarsAsync(IReadOnlyCollection<string> tickers, bool recordFailure)
+        {
+            try
+            {
+                await foreach (var bar in provider.GetBarsAsync(tickers, downloadedTimeframes, request.Start, request.End, cancellationToken))
+                {
+                    var normalizedTicker = NormalizeTickerForFailure(bar.Ticker);
+                    seenTickers.TryAdd(normalizedTicker, 0);
+                    metrics.IncrementRead();
+                    await readBuffer.SendAsync(new CandleEvent(bar.Ticker, bar.Timeframe, bar), cancellationToken);
+                    metrics.ObserveReadBufferDepth(readBuffer.Count);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (recordFailure)
+            {
+                foreach (var ticker in tickers)
+                {
+                    failures[NormalizeTickerForFailure(ticker)] = exception.Message;
+                }
+            }
+        }
+    }
+
+    private async Task PersistCandlesAsync(
+        CandlePipelineRequest request,
+        IReadOnlyDictionary<string, Dictionary<string, IReadOnlyList<OhlcvBar>>> grouped,
+        string source,
+        CancellationToken cancellationToken)
+    {
+        if (request.StoreContext is null)
+        {
+            return;
+        }
+
+        var bars = grouped.Values
+            .SelectMany(timeframes => timeframes.Values)
+            .SelectMany(x => x)
+            .ToArray();
+        if (bars.Length == 0)
+        {
+            return;
+        }
+
+        await candleStore.UpsertBarsAsync(
+            new CandleStoreWriteRequest(request.StoreContext, source, bars),
+            cancellationToken);
+    }
+
+    private async Task PersistCandlesAsync(
+        CandlePipelineRequest request,
+        IReadOnlyCollection<OhlcvBar> bars,
+        string source,
+        CancellationToken cancellationToken)
+    {
+        if (request.StoreContext is null || bars.Count == 0)
+        {
+            return;
+        }
+
+        await candleStore.UpsertBarsAsync(
+            new CandleStoreWriteRequest(request.StoreContext, source, bars),
+            cancellationToken);
     }
 
     private async Task ComputeIndicatorsAsync(
@@ -238,6 +363,8 @@ public sealed class CandlePipelineEngine
             PropagateCompletion = true
         };
 
+        // Indicator work is independent per ticker/timeframe, so this block can
+        // fan out safely. Ordering inside each bar list was established earlier.
         TransformBlock<TickerTimeframeBars, IndicatorComputeResult>? indicatorComputeBlock = null;
         indicatorComputeBlock = new TransformBlock<TickerTimeframeBars, IndicatorComputeResult>(
             item =>
@@ -286,12 +413,13 @@ public sealed class CandlePipelineEngine
         await indicatorMaterializeBlock.Completion;
     }
 
-    private void DeriveMissingTimeframes(
+    private IReadOnlyList<OhlcvBar> DeriveMissingTimeframes(
         CandlePipelineRequest request,
         IDictionary<string, Dictionary<string, IReadOnlyList<OhlcvBar>>> grouped,
         IDictionary<string, string> failures,
         MutablePipelineMetrics metrics)
     {
+        var derivedBars = new List<OhlcvBar>();
         foreach (var (ticker, barsByTimeframe) in grouped)
         {
             var missing = request.RequiredTimeframes
@@ -312,10 +440,22 @@ public sealed class CandlePipelineEngine
 
             foreach (var target in missing)
             {
-                barsByTimeframe[target] = barResampler.Resample(sourceBars, target);
+                if (TimeframeParser.Parse(target) < TimeframeParser.Parse(request.DeriveFromTimeframe))
+                {
+                    failures[ticker] =
+                        $"Cannot derive required timeframe {target} from coarser source timeframe {request.DeriveFromTimeframe}. " +
+                        $"Add {target} to market_data.download_timeframes.";
+                    continue;
+                }
+
+                var resampled = barResampler.Resample(sourceBars, target);
+                barsByTimeframe[target] = resampled;
+                derivedBars.AddRange(resampled);
                 metrics.IncrementDerivedTimeframe();
             }
         }
+
+        return derivedBars;
     }
 
     private static NormalizedCandleEvent Normalize(CandleEvent candle)
@@ -427,6 +567,8 @@ public sealed class CandlePipelineEngine
         public int IncrementSessionFiltered() => Interlocked.Increment(ref sessionFilteredCount);
 
         public int NormalizedCount => Volatile.Read(ref normalizedCount);
+
+        public int ReadCount => Volatile.Read(ref readCount);
 
         public void ObserveReadBufferDepth(int observed) => ObserveMax(ref maxReadBufferDepth, observed);
 

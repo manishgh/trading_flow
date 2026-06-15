@@ -1,0 +1,84 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: trading-flow-azurefile-explicit
+provisioner: file.csi.azure.com
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+parameters:
+  protocol: smb
+  skuName: Standard_ZRS
+  resourceGroup: "__TRADINGFLOW_RESOURCE_GROUP__"
+  storageAccount: "__TRADINGFLOW_STORAGE_ACCOUNT__"
+  storeAccountKey: "false"
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: trading-flow-data-pv
+spec:
+  capacity:
+    storage: 512Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: trading-flow-azurefile-explicit
+  csi:
+    driver: file.csi.azure.com
+    readOnly: false
+    volumeHandle: trading-flow-data
+    volumeAttributes:
+      resourceGroup: "__TRADINGFLOW_RESOURCE_GROUP__"
+      storageAccount: "__TRADINGFLOW_STORAGE_ACCOUNT__"
+      shareName: tradingflow-data
+      protocol: smb
+      storeAccountKey: "false"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trading-flow-data
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: trading-flow-azurefile-explicit
+  volumeName: trading-flow-data-pv
+  resources:
+    requests:
+      storage: 512Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: trading-flow-ui-runs-pv
+spec:
+  capacity:
+    storage: 64Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: trading-flow-azurefile-explicit
+  csi:
+    driver: file.csi.azure.com
+    readOnly: false
+    volumeHandle: trading-flow-ui-runs
+    volumeAttributes:
+      resourceGroup: "__TRADINGFLOW_RESOURCE_GROUP__"
+      storageAccount: "__TRADINGFLOW_STORAGE_ACCOUNT__"
+      shareName: tradingflow-ui-runs
+      protocol: smb
+      storeAccountKey: "false"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trading-flow-ui-runs
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: trading-flow-azurefile-explicit
+  volumeName: trading-flow-ui-runs-pv
+  resources:
+    requests:
+      storage: 64Gi

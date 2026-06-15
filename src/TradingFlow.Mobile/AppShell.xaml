@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Shell
+    x:Class="TradingFlow.Mobile.AppShell"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:pages="clr-namespace:TradingFlow.Mobile.Pages"
+    Title="TradingFlow"
+    Shell.TabBarBackgroundColor="#FFFFFF"
+    Shell.TabBarForegroundColor="#007ACC"
+    Shell.TabBarTitleColor="#007ACC"
+    Shell.TabBarUnselectedColor="#667085">
+
+    <TabBar>
+        <ShellContent
+            Title="Paper"
+            ContentTemplate="{DataTemplate pages:PaperPage}"
+            Route="PaperPage" />
+
+        <ShellContent
+            Title="Backtests"
+            ContentTemplate="{DataTemplate pages:BacktestsPage}"
+            Route="BacktestsPage" />
+
+        <ShellContent
+            Title="Warmup"
+            ContentTemplate="{DataTemplate pages:WarmupPage}"
+            Route="WarmupPage" />
+
+        <ShellContent
+            Title="Alerts"
+            ContentTemplate="{DataTemplate pages:NotificationsPage}"
+            Route="NotificationsPage" />
+
+        <ShellContent
+            Title="Automation"
+            ContentTemplate="{DataTemplate pages:AutomationPage}"
+            Route="AutomationPage" />
+
+        <ShellContent
+            Title="Settings"
+            ContentTemplate="{DataTemplate pages:SettingsPage}"
+            Route="SettingsPage" />
+    </TabBar>
+
+</Shell>

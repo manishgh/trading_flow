@@ -1,0 +1,51 @@
+strategy_id: research.minervini-swing-vcp
+strategy_name: Minervini Trend Template & VCP Breakout
+source: mark_minervini_trade_like_a_stock_market_wizard
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: volatility_contraction_pattern
+  min_volume_spike: 0.0
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  # Minervini's Strict Trend Template
+  require_price_above_sma50: true
+  require_price_above_sma150: true
+  require_price_above_sma200: true
+  require_sma50_above_sma150: true
+  require_sma150_above_sma200: true
+  min_price_vs_52_week_low_pct: 30.0
+  max_price_vs_52_week_high_pct: -25.0
+
+  # VCP Structural Criteria
+  volatility_contraction_lookback_bars: 25
+  max_contractions: 4 # He calls these 'T's (tightenings)
+  min_contractions: 2
+  require_volatility_halving_left_to_right: true
+  require_volume_dry_up_pre_breakout: true
+  min_breakout_volume_ratio: 1.50
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.5
+  max_hard_stop_pct: 8.0
+  target_r_multiple: 3.0
+  max_hold_hours: 2160.0
+  enable_trailing_stop: true
+  exit_on_close_below_sma50: true
+execution:
+  timeframe: 1d
+  slippage_bps: 10.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

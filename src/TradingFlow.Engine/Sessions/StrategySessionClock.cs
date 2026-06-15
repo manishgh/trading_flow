@@ -1,4 +1,5 @@
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Market;
 
 namespace TradingFlow.Engine.Sessions;
 
@@ -41,7 +42,7 @@ public sealed class StrategySessionClock
     public bool ValidateExecutionWindow(DateTimeOffset timestamp, string timeframe, SessionRules sessionRules)
     {
         var exchangeTime = ConvertToExchangeTime(timestamp, sessionRules.ExchangeTimezone).DateTime;
-        
+
         // 1. Continuous Markets (e.g. Crypto) bypass weekend/EOD checks
         if (sessionRules.IsContinuousMarket)
         {
@@ -53,7 +54,7 @@ public sealed class StrategySessionClock
             return false;
         }
 
-        if (IsDailyOrHigher(timeframe))
+        if (TimeframeParser.IsDailyOrHigher(timeframe))
         {
             return true;
         }
@@ -80,7 +81,7 @@ public sealed class StrategySessionClock
 
     public bool ShouldFlattenBeforeSessionClose(DateTimeOffset timestamp, string timeframe, SessionRules sessionRules)
     {
-        if (sessionRules.IsContinuousMarket || IsDailyOrHigher(timeframe))
+        if (sessionRules.IsContinuousMarket || TimeframeParser.IsDailyOrHigher(timeframe))
         {
             return false;
         }
@@ -97,30 +98,8 @@ public sealed class StrategySessionClock
             return false;
         }
 
-        var finalExitTime = CloseTime.Subtract(ParseTimeframe(timeframe));
+        var finalExitTime = CloseTime.Subtract(TimeframeParser.Parse(timeframe));
         return timeOfDay >= finalExitTime;
-    }
-
-    private static bool IsDailyOrHigher(string timeframe)
-    {
-        return timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static TimeSpan ParseTimeframe(string timeframe)
-    {
-        if (timeframe.EndsWith("m", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var minutes))
-        {
-            return TimeSpan.FromMinutes(minutes);
-        }
-
-        if (timeframe.EndsWith("h", StringComparison.OrdinalIgnoreCase) &&
-            Int32.TryParse(timeframe[..^1], out var hours))
-        {
-            return TimeSpan.FromHours(hours);
-        }
-
-        return TimeSpan.Zero;
     }
 
     private static DateTimeOffset ConvertToExchangeTime(DateTimeOffset timestamp, string timezoneId)

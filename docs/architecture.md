@@ -9,7 +9,8 @@ flowchart LR
     F["Finviz Screener"] --> U["Ticker Universe"]
     U --> A
 
-    N --> S["Bar Store"]
+    N --> S["Hot Candle Cache"]
+    Blob["TradingFlow candle archive"] --> S
     S --> TF["Required Timeframe Builder"]
     TF --> I["Indicator Engine"]
     I --> C["Strategy Brain"]
@@ -108,6 +109,17 @@ data/live/raw,     data/live/normalized,     data/live/results
 Backtest data can be refreshed and deleted freely. Paper/live data is operational state and must be preserved unless explicitly cleaned.
 
 Runtime artifacts and research artifacts are intentionally separate. Backtest, paper, and worker jobs default to summary result JSON so UI polling and repeated optimization runs do not accumulate full trade detail. Research configs can opt into `artifacts.retention_mode: full` when the full trade/order archive is needed for deeper analysis.
+
+## Azure Storage Model
+
+AKS uses two storage tiers:
+
+```text
+/app/data   -> durable Azure Files for runtime state, UI configs, summaries, SQLite paper state, and warmup metadata
+/app/cache  -> pod-local emptyDir for high-churn candle/indicator working files
+```
+
+TradingFlow owns its own candle cache and archive. The ML/research project can fetch the same Alpaca candles independently and choose Parquet or feature-store formats without forcing TradingFlow to carry that storage dependency.
 
 ## Distributed State
 

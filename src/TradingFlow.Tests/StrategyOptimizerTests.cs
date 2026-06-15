@@ -8,6 +8,52 @@ namespace TradingFlow.Tests;
 public class StrategyOptimizerTests
 {
     [Fact]
+    public void ApplyParameter_MapsIntradaySelectionFields()
+    {
+        var optimizer = new StrategyOptimizer(new SimpleYamlReader(), new BacktestRunner(new SimpleYamlReader()));
+        var method = typeof(StrategyOptimizer).GetMethod(
+            "ApplyParameter",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.NotNull(method);
+
+        var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(
+            FindRepositoryRoot(),
+            "configs",
+            "strategies",
+            "intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml"));
+
+        strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
+            optimizer,
+            [strategy, "entry_rules.min_session_relative_volume", 0.25m])!;
+        strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
+            optimizer,
+            [strategy, "entry_rules.min_session_gain_pct", 1.5m])!;
+        strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
+            optimizer,
+            [strategy, "entry_rules.max_pre_entry_session_range_pct", 8.0m])!;
+        strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
+            optimizer,
+            [strategy, "entry_rules.max_entry_pullback_from_session_high_pct", 3.0m])!;
+        strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
+            optimizer,
+            [strategy, "entry_rules.volume_sma_period", 4])!;
+        strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
+            optimizer,
+            [strategy, "entry_rules.volume_sma_rising_lookback_bars", 2])!;
+        strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
+            optimizer,
+            [strategy, "entry_rules.min_volume_sma_rise_pct", 15.0m])!;
+
+        Assert.Equal(0.25m, strategy.EntryRules.MinSessionRelativeVolume);
+        Assert.Equal(1.5m, strategy.EntryRules.MinSessionGainPct);
+        Assert.Equal(8.0m, strategy.EntryRules.MaxPreEntrySessionRangePct);
+        Assert.Equal(3.0m, strategy.EntryRules.MaxEntryPullbackFromSessionHighPct);
+        Assert.Equal(4, strategy.EntryRules.VolumeSmaPeriod);
+        Assert.Equal(2, strategy.EntryRules.VolumeSmaRisingLookbackBars);
+        Assert.Equal(15.0m, strategy.EntryRules.MinVolumeSmaRisePct);
+    }
+
+    [Fact]
     public async Task OptimizeAsync_ForwardsInnerBacktestProgress()
     {
         var root = Path.Combine(Path.GetTempPath(), "trading-flow-tests", Guid.NewGuid().ToString("N"));
@@ -179,7 +225,7 @@ parameters:
 
         Assert.Contains(messages, update => update.Stage == "optimization_run");
         Assert.Contains(messages, update => update.Stage == "optimization_market_pipeline");
-        Assert.Contains(messages, update => update.Stage == "optimization_running_tickers");
+        Assert.Contains(messages, update => update.Stage == "optimization_running_strategy_matrix");
         Assert.Contains(messages, update =>
             update.Stage == "optimization_market_pipeline" &&
             update.Message.Contains("Prepared reusable market state", StringComparison.OrdinalIgnoreCase));
@@ -203,6 +249,22 @@ parameters:
     private static string NormalizePath(string path)
     {
         return path.Replace('\\', '/');
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "TradingFlow.sln")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate TradingFlow.sln.");
     }
 
     private static string BuildCsvBars()

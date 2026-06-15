@@ -57,7 +57,8 @@ public class IndicatorEngineTests
 
         var snapshots = engine.Compute(bars);
 
-        Assert.Equal(2m, snapshots[^1].RelativeVolume);
+        Assert.Equal(2m, snapshots[^1].SlotRelativeVolume);
+        Assert.Equal(1000m, snapshots[^1].SlotAverageVolume);
     }
 
     [Fact]
@@ -111,6 +112,8 @@ public class IndicatorEngineTests
 
         Assert.Null(snapshots[8].Sma10);
         Assert.Equal(5.5m, snapshots[9].Sma10);
+        Assert.Null(snapshots[8].Ema10);
+        Assert.Equal(5.5m, snapshots[9].Ema10);
         Assert.Null(snapshots[18].Sma20);
         Assert.Equal(10.5m, snapshots[19].Sma20);
         Assert.Null(snapshots[48].Sma50);
@@ -118,7 +121,7 @@ public class IndicatorEngineTests
     }
 
     [Fact]
-    public void Compute_UsesComparableTimeSlot_ForRelativeVolume()
+    public void Compute_UsesComparableTimeSlot_ForSlotRelativeVolume()
     {
         var engine = new IndicatorEngine();
         var start = new DateTimeOffset(2026, 5, 1, 13, 30, 0, TimeSpan.Zero);
@@ -136,7 +139,55 @@ public class IndicatorEngineTests
 
         var snapshots = engine.Compute(bars);
 
-        Assert.Equal(2m, snapshots[^1].RelativeVolume);
+        Assert.Equal(2m, snapshots[^1].SlotRelativeVolume);
+        Assert.Equal(1000m, snapshots[^1].SlotAverageVolume);
+        Assert.Equal(6, snapshots[^1].RelativeVolumeSampleCount);
+    }
+
+    [Fact]
+    public void Compute_UsesComparableCumulativeSessionVolumeForPrimaryRelativeVolume()
+    {
+        var engine = new IndicatorEngine();
+        var start = new DateTimeOffset(2026, 5, 1, 13, 30, 0, TimeSpan.Zero);
+        var bars = new List<OhlcvBar>();
+
+        for (var day = 0; day < 5; day++)
+        {
+            var sessionDate = start.AddDays(day);
+            bars.Add(CreateBar(sessionDate, 1000m));
+            bars.Add(CreateBar(sessionDate.AddMinutes(5), 3000m));
+        }
+
+        bars.Add(CreateBar(start.AddDays(5), 5000m));
+
+        var snapshots = engine.Compute(bars);
+
+        Assert.Equal(5m, snapshots[^1].RelativeVolume);
+        Assert.Equal(1.25m, snapshots[^1].SessionRelativeVolume);
+        Assert.Equal(1000m, snapshots[^1].CumulativeAverageVolume);
+        Assert.Equal(4000m, snapshots[^1].AverageSessionVolume);
+        Assert.Equal(5, snapshots[^1].RelativeVolumeSampleCount);
+    }
+
+    [Fact]
+    public void Compute_UsesMultiSessionAverageRatherThanYesterdayOnly_ForSlotRelativeVolume()
+    {
+        var engine = new IndicatorEngine();
+        var start = new DateTimeOffset(2026, 5, 4, 13, 30, 0, TimeSpan.Zero);
+        var priorVolumes = new[] { 100m, 100m, 100m, 100m, 100m, 1000m };
+        var bars = new List<OhlcvBar>();
+
+        for (var day = 0; day < priorVolumes.Length; day++)
+        {
+            bars.Add(CreateBar(start.AddDays(day), priorVolumes[day]));
+        }
+
+        bars.Add(CreateBar(start.AddDays(6), 200m));
+
+        var snapshots = engine.Compute(bars);
+
+        Assert.Equal(250m, snapshots[^1].SlotAverageVolume);
+        Assert.Equal(0.8m, snapshots[^1].SlotRelativeVolume);
     }
 
     private static OhlcvBar CreateBar(DateTimeOffset timestamp, decimal volume)

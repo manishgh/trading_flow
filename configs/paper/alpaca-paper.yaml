@@ -10,8 +10,8 @@ engine:
 
 time_window:
   type: rolling
-  lookback_days: 7
-  warmup_lookback_days: 7
+  lookback_days: 10
+  warmup_lookback_days: 90
   start:
   end:
 
@@ -23,11 +23,12 @@ tickers:
 market_data:
   provider: alpaca
   download_timeframes:
+    - 1m
     - 5m
     - 15m
     - 1h
     - 1d
-  derive_from: 5m
+  derive_from: 1m
   raw_root: data/paper/raw
   normalized_root: data/paper/normalized
   results_root: data/paper/results
@@ -105,4 +106,4 @@ artifacts:
   retention_mode: summary
 
 strategies:
-  - ../strategies/intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml
+  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml

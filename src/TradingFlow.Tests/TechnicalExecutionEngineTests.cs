@@ -137,6 +137,65 @@ public sealed class TechnicalExecutionEngineTests
         Assert.Null(reason);
     }
 
+    [Fact]
+    public void GetTechnicalExitReason_WhenConfirmedVwapExitIsEnabled_DoesNotExitOnSingleVwapLoss()
+    {
+        var strategy = CreateStrategy(exitOnCloseBelowVwap: true, enableConfirmedVwapExit: true);
+        var snapshot = CreateSnapshot(currentPrice: 9.95m, vwap: 10m);
+
+        var reason = new TechnicalExecutionEngine().GetTechnicalExitReason(strategy, snapshot, barsHeld: 6);
+
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void ShouldExitLongOnConfirmedVwapFailure_WhenConsecutiveBufferedFailures_ReturnsTrue()
+    {
+        var strategy = CreateStrategy(enableConfirmedVwapExit: true);
+        var snapshots = new[]
+        {
+            CreateSnapshot(currentPrice: 10.20m, vwap: 10.00m) with { Atr = 1.0m },
+            CreateSnapshot(currentPrice: 9.80m, vwap: 10.00m) with { Atr = 1.0m },
+            CreateSnapshot(currentPrice: 9.82m, vwap: 10.00m) with { Atr = 1.0m }
+        };
+
+        var shouldExit = new TechnicalExecutionEngine().ShouldExitLongOnConfirmedVwapFailure(
+            strategy,
+            snapshots,
+            index: 2,
+            entryIndex: 0,
+            entryPrice: 10.0m,
+            stopDistance: 1.0m,
+            highestHighSinceEntry: 10.5m,
+            barsHeld: 6);
+
+        Assert.True(shouldExit);
+    }
+
+    [Fact]
+    public void GetTechnicalExitReason_WhenEma10CrossesBelowEma20_ReturnsStructuralExit()
+    {
+        var strategy = CreateStrategy(exitOnEmaCrossDown: true);
+        var previous = CreateSnapshot(currentPrice: 10.4m, vwap: 9m) with
+        {
+            Ema10 = 10.20m,
+            Ema20 = 10.00m
+        };
+        var current = CreateSnapshot(currentPrice: 9.8m, vwap: 9m) with
+        {
+            Ema10 = 9.95m,
+            Ema20 = 10.00m
+        };
+
+        var reason = new TechnicalExecutionEngine().GetTechnicalExitReason(
+            strategy,
+            current,
+            barsHeld: 6,
+            previousSnapshot: previous);
+
+        Assert.Equal("technical_exit_ema10_cross_below_ema20", reason);
+    }
+
     private static IndicatorSnapshot CreateSnapshot(decimal currentPrice, decimal vwap)
     {
         return new IndicatorSnapshot(
@@ -164,7 +223,10 @@ public sealed class TechnicalExecutionEngineTests
         bool requireBelowVwap = false,
         bool exitOnSmaNear = false,
         decimal smaNearPct = 0.25m,
-        bool exitOnSmaCrossDown = false)
+        bool exitOnSmaCrossDown = false,
+        bool exitOnCloseBelowVwap = false,
+        bool enableConfirmedVwapExit = false,
+        bool exitOnEmaCrossDown = false)
     {
         return new StrategyDefinition(
             "test",
@@ -183,7 +245,7 @@ public sealed class TechnicalExecutionEngineTests
                 TrailingStopAtrMultiple: 2.0m,
                 TrailingActivationR: 1.0m,
                 ExitOnCloseBelowEma20: false,
-                ExitOnCloseBelowVwap: false,
+                ExitOnCloseBelowVwap: exitOnCloseBelowVwap,
                 ExitOnMacdHistogramNegative: true,
                 MinHoldBarsBeforeTechnicalExit: 6,
                 ExitOnLogPriceFade: true,
@@ -193,9 +255,13 @@ public sealed class TechnicalExecutionEngineTests
                 MinExitLogVolumeSlope: 0.003m,
                 RequireRisingVolumeForLogFadeExit: true,
                 RequireBelowVwapForLogFadeExit: requireBelowVwap,
+                EnableConfirmedVwapExit: enableConfirmedVwapExit,
+                ConfirmedVwapExitBars: 2,
+                ConfirmedVwapExitAtrBuffer: 0.10m,
                 ExitOnSma10NearSma20: exitOnSmaNear,
                 Sma10NearSma20Pct: smaNearPct,
-                ExitOnSma10CrossBelowSma20: exitOnSmaCrossDown),
+                ExitOnSma10CrossBelowSma20: exitOnSmaCrossDown,
+                ExitOnEma10CrossBelowEma20: exitOnEmaCrossDown),
             Execution: null!,
             Session: null!);
     }

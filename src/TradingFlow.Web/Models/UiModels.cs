@@ -59,7 +59,16 @@ public sealed record BacktestJobSnapshot(
     int CompletedTickerCount,
     int TotalTickerCount,
     IReadOnlyList<string> Events,
-    BacktestResult? Result);
+    BacktestResult? Result,
+    IReadOnlyList<BacktestStrategyRunGroup>? StrategyGroups = null);
+
+public sealed record BacktestStrategyRunGroup(
+    string StrategyName,
+    string Status,
+    int CompletedTickerCount,
+    int TotalTickerCount,
+    string? CurrentTicker,
+    IReadOnlyList<string> RecentEvents);
 
 public sealed record PaperEnvironmentSnapshot(
     RunConfigSummary Config,

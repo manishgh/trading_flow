@@ -110,6 +110,7 @@ public sealed class BacktestArtifactProjectorTests
             [new DirectionPnlSummary("long", 1, 1, 0, 98m, 98m, 98m, 98m)],
             new Dictionary<string, int> { ["target"] = 1 },
             new Dictionary<string, int> { ["rvol"] = 2 },
+            new Dictionary<string, IReadOnlyList<string>> { ["rvol"] = ["rvol (Actual: 0.5, Required: 2.0)"] },
             ["ok"]);
 
         return new BacktestResult(

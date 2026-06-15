@@ -1,7 +1,12 @@
 namespace TradingFlow.Web.Services;
 
-public sealed record ProjectPaths(string RepositoryRoot)
+public sealed record ProjectPaths(string RepositoryRoot, string DataRoot, string CacheRoot)
 {
+    public ProjectPaths(string repositoryRoot)
+        : this(repositoryRoot, Path.Combine(repositoryRoot, "data"), Path.Combine(repositoryRoot, "data", "cache"))
+    {
+    }
+
     public string ConfigsRoot => Path.Combine(RepositoryRoot, "configs");
     public string BacktestConfigsRoot => Path.Combine(ConfigsRoot, "backtest");
     public string PaperConfigsRoot => Path.Combine(ConfigsRoot, "paper");

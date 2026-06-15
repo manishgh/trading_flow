@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TradingFlow.Mobile.Pages.SettingsPage"
+             Title="Settings">
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="14">
+            <Label Text="Settings" Style="{StaticResource Headline}" FontSize="24" />
+            <Label Text="Point the mobile client to your TradingFlow backend." Style="{StaticResource SubHeadline}" FontSize="13" />
+
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="Backend URL" FontAttributes="Bold" FontSize="18" />
+                    <Entry x:Name="BackendUrlEntry" Placeholder="http://192.168.178.238:53017" Keyboard="Url" />
+                    <Label Text="Real phone: use your PC LAN IP. Android emulator: use 10.0.2.2 only inside the emulator. Remote test: use your ngrok URL." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                        <Button Text="Use Phone URL" Clicked="OnUsePhoneUrl" />
+                        <Button Grid.Column="1" Text="Use Emulator URL" Clicked="OnUseEmulatorUrl" />
+                    </Grid>
+                    <Button Text="Save &amp; Test" Clicked="OnSaveAndTest" />
+                    <Label x:Name="HealthLabel" FontSize="13" />
+                </VerticalStackLayout>
+            </Border>
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

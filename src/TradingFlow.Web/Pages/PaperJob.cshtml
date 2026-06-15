@@ -13,6 +13,7 @@
             const statusEl = document.getElementById('jobStatus');
             const startedAtEl = document.getElementById('startedAt');
             const marketDataFeedEl = document.getElementById('marketDataFeed');
+            const metricsLastRefreshEl = document.getElementById('metricsLastRefresh');
             const eventsEl = document.getElementById('recentEvents');
             const auditsBody = document.getElementById('recentAuditsBody');
             const auditsTable = document.getElementById('recentAuditsTable');
@@ -20,10 +21,17 @@
             const metricsBody = document.getElementById('liveMetricsBody');
             const metricsTable = document.getElementById('liveMetricsTable');
             const metricsEmpty = document.getElementById('liveMetricsEmpty');
+            const ordersBody = document.getElementById('openOrdersBody');
+            const ordersTable = document.getElementById('openOrdersTable');
+            const ordersEmpty = document.getElementById('openOrdersEmpty');
+            const positionsBody = document.getElementById('openPositionsBody');
+            const positionsTable = document.getElementById('openPositionsTable');
+            const positionsEmpty = document.getElementById('openPositionsEmpty');
             const profilerTitle = document.getElementById('profilerTitle');
             const profilerBody = document.getElementById('profilerBody');
             const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
             const numberFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+            const antiforgeryToken = document.querySelector('input[name="__RequestVerificationToken"]')?.value ?? '';
 
             function escapeHtml(value) {
                 return String(value ?? '')
@@ -59,6 +67,10 @@
                     marketDataFeedEl.textContent = data.marketDataFeed;
                 }
 
+                if (metricsLastRefreshEl) {
+                    metricsLastRefreshEl.textContent = data.refreshedAt;
+                }
+
                 if (eventsEl) {
                     eventsEl.innerHTML = data.events.map(eventText => `<div>${escapeHtml(eventText)}</div>`).join('');
                 }
@@ -75,7 +87,10 @@
                         <td>${formatDecimal(point.rsi)}</td>
                         <td>${formatWholeNumber(point.volume)}</td>
                         <td>${formatWholeNumber(point.averageVolume)}</td>
+                        <td>${formatDecimal(point.slotRelativeVolume)}</td>
+                        <td>${formatWholeNumber(point.cumulativeAverageVolume)}</td>
                         <td>${formatDecimal(point.relativeVolume)}</td>
+                        <td>${formatWholeNumber(point.relativeVolumeSampleCount)}</td>
                         <td>${formatCurrency(point.vwap)}</td>
                     </tr>`).join('');
                 }
@@ -96,6 +111,14 @@
                             <td style="color: #aaa; font-size: 0.9em;">${escapeHtml(audit.reason)}${raw}</td>
                         </tr>`;
                     }).join('');
+                }
+
+                if (ordersBody && ordersTable && ordersEmpty) {
+                    updateOpenOrders(data.openOrders ?? []);
+                }
+
+                if (positionsBody && positionsTable && positionsEmpty) {
+                    updateOpenPositions(data.openPositions ?? []);
                 }
 
                 if (profilerTitle && profilerBody) {
@@ -175,6 +198,55 @@
                     </div>`;
             }
 
+            function updateOpenOrders(orders) {
+                ordersEmpty.style.display = orders.length === 0 ? 'block' : 'none';
+                ordersTable.style.display = orders.length === 0 ? 'none' : 'table';
+                ordersBody.innerHTML = orders.map(order => {
+                    const side = String(order.side ?? '').toLowerCase();
+                    const sideColor = side === 'buy' ? '#4caf50' : '#f44336';
+                    const distance = order.distancePct === null || order.distancePct === undefined
+                        ? '-'
+                        : `${Number(order.distancePct).toFixed(2)}%`;
+                    const distanceColor = Number(order.distancePct ?? 0) < 0 ? '#4caf50' : '#aaa';
+                    return `<tr style="border-bottom: 1px solid #333;">
+                        <td style="font-weight: bold;">${escapeHtml(order.ticker)}</td>
+                        <td style="color: ${sideColor}">${escapeHtml(side.toUpperCase())}</td>
+                        <td>${escapeHtml(String(order.orderType || '-').toUpperCase())}</td>
+                        <td>${formatDecimal(order.qty)}</td>
+                        <td>${formatCurrency(order.limitPrice)}</td>
+                        <td>${formatCurrency(order.currentPrice)}</td>
+                        <td style="color: ${distanceColor}">${escapeHtml(distance)}</td>
+                        <td>${escapeHtml(order.status)}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            function updateOpenPositions(positions) {
+                positionsEmpty.style.display = positions.length === 0 ? 'block' : 'none';
+                positionsTable.style.display = positions.length === 0 ? 'none' : 'table';
+                positionsBody.innerHTML = positions.map(position => {
+                    const pl = Number(position.unrealizedPl ?? 0);
+                    const plColor = pl > 0 ? '#4caf50' : (pl < 0 ? '#f44336' : '#aaa');
+                    const plText = `${pl > 0 ? '+' : ''}${formatCurrency(pl)}`;
+                    const ticker = String(position.ticker ?? '');
+                    const closeAction = `?handler=ClosePosition&id=${encodeURIComponent(jobId)}&ticker=${encodeURIComponent(ticker)}`;
+                    return `<tr style="border-bottom: 1px solid #333;">
+                        <td style="font-weight: bold;">${escapeHtml(ticker)}</td>
+                        <td>${escapeHtml(String(position.side || '').toUpperCase())}</td>
+                        <td>${formatDecimal(position.qty)}</td>
+                        <td>${formatCurrency(position.entryPrice)}</td>
+                        <td>${formatCurrency(position.currentPrice)}</td>
+                        <td style="color: ${plColor}; font-weight: bold;">${escapeHtml(plText)}</td>
+                        <td>
+                            <form method="post" action="${closeAction}" style="margin: 0;">
+                                <input name="__RequestVerificationToken" type="hidden" value="${escapeHtml(antiforgeryToken)}" />
+                                <button type="submit" class="button secondary" style="background: #3a1a1a; color: #ff6666; border-color: #662222;" onclick="return confirm('Market sell your entire position in ${escapeHtml(ticker)}?');">Close Position</button>
+                            </form>
+                        </td>
+                    </tr>`;
+                }).join('');
+            }
+
             window.tradingFlowPaperJobRefresh = window.setInterval(refreshSnapshot, 5000);
             refreshSnapshot();
         })();
@@ -243,7 +315,7 @@ else
                     <div>@ev</div>
                 }
             </div>
-            
+
             @if (Model.Job.Status is "queued" or "running")
             {
                 <script>
@@ -254,19 +326,22 @@ else
 
         <section class="panel">
             <h2>Live Stock Metrics</h2>
-            <div class="muted">Most recent values calculated by the engine for the latest bar. <span id="marketDataFeed">@Model.MarketDataFeedLabel</span>.</div>
+            <div class="muted">Most recent values calculated by the engine for the latest bar. <span id="marketDataFeed">@Model.MarketDataFeedLabel</span>. Last refreshed: <span id="metricsLastRefresh">@Model.FormatLocal(DateTimeOffset.UtcNow)</span>.</div>
             <p id="liveMetricsEmpty" class="muted" style="display: @(Model.ChartDataList.Count == 0 ? "block" : "none");">No data generated yet. Waiting for market data...</p>
             <table id="liveMetricsTable" class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse; display: @(Model.ChartDataList.Count == 0 ? "none" : "table");">
                 <thead>
                     <tr style="border-bottom: 1px solid #444; text-align: left;">
-                        <th>Local Time</th>
+                        <th>Bar Time</th>
                         <th>Ticker</th>
                         <th>Candle</th>
                         <th>Close Price</th>
                         <th>RSI (14)</th>
                         <th>Volume</th>
-                        <th>Slot Avg Vol</th>
-                        <th>RVOL</th>
+                        <th title="Average volume for this same ticker, timeframe, and exchange-time candle slot from prior sessions. Diagnostic only.">Slot Avg Vol</th>
+                        <th title="Current candle volume divided by the same slot average. Diagnostic only; not the primary strategy RVOL.">Slot RVOL</th>
+                        <th title="Average cumulative session volume at this same exchange-time candle slot from prior sessions. This is the denominator for strategy RVOL.">Cumul Avg Vol</th>
+                        <th title="Primary strategy RVOL: current session cumulative volume divided by average cumulative session volume at this same exchange-time slot across prior sessions.">RVOL</th>
+                        <th title="Number of prior same-time sessions used for the RVOL baseline.">Samples</th>
                         <th>VWAP</th>
                     </tr>
                 </thead>
@@ -274,20 +349,23 @@ else
                     @foreach (var point in Model.ChartDataList.OrderBy(x => x.Ticker))
                     {
                         <tr>
-                            <td>@Model.FormatLocalTime(point.Timestamp)</td>
+                            <td>@Model.FormatMetricTimestamp(point.Timestamp, point.Timeframe)</td>
                             <td><strong>@point.Ticker</strong></td>
                             <td>@point.Timeframe</td>
                             <td>@point.Close.ToString("C2")</td>
                             <td>@(point.Rsi?.ToString("F2") ?? "N/A")</td>
                             <td>@point.Volume.ToString("N0")</td>
-                            <td>@point.AverageVolume.ToString("N0")</td>
+                            <td>@point.SlotAverageVolume.ToString("N0")</td>
+                            <td>@point.SlotRelativeVolume.ToString("F2")</td>
+                            <td>@point.CumulativeAverageVolume.ToString("N0")</td>
                             <td>@point.RelativeVolume.ToString("F2")</td>
+                            <td>@point.RelativeVolumeSampleCount</td>
                             <td>@(point.Vwap?.ToString("C2") ?? "N/A")</td>
                         </tr>
                     }
                 </tbody>
             </table>
-            
+
             <h3 style="margin-top: 2rem;">Recent Strategy Evaluations</h3>
             <p id="recentAuditsEmpty" class="muted" style="display: @(Model.RecentAudits == null || Model.RecentAudits.Count == 0 ? "block" : "none")">No recent strategy evaluations.</p>
             <div style="max-height: 300px; overflow-y: auto;">
@@ -322,89 +400,77 @@ else
             </div>
 
             <h3 style="margin-top: 2rem;">Live Broker Orders</h3>
-            @if (Model.OpenOrders == null || Model.OpenOrders.Count == 0)
-            {
-                <p class="muted">No open orders found.</p>
-            }
-            else
-            {
-                <table class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
-                    <thead>
-                        <tr style="border-bottom: 1px solid #444; text-align: left;">
-                            <th>Ticker</th>
-                            <th>Side</th>
-                            <th>Type</th>
-                            <th>Qty</th>
-                            <th>Limit Px</th>
-                            <th>Current Px</th>
-                            <th>Distance</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    @foreach (var display in Model.OpenOrders)
-                    {
-                        var order = display.Order;
-                        <tr style="border-bottom: 1px solid #333;">
-                            <td style="font-weight: bold;">@order.Ticker</td>
-                            <td style="color: @(order.Side == "buy" ? "#4caf50" : "#f44336")">@order.Side.ToUpper()</td>
-                            <td>@(string.IsNullOrEmpty(order.OrderType) ? "-" : order.OrderType.ToUpper())</td>
-                            <td>@order.Qty</td>
-                            <td>@(order.LimitPrice?.ToString("C2") ?? "-")</td>
-                            <td>@(display.CurrentPrice?.ToString("C2") ?? "-")</td>
-                            <td style="color: @(display.DistancePct < 0 ? "#4caf50" : "#aaa")">
-                                @(display.DistancePct?.ToString("0.00") + "%" ?? "-")
-                            </td>
-                            <td>@order.Status</td>
-                        </tr>
-                    }
-                    </tbody>
-                </table>
-            }
+            <p id="openOrdersEmpty" class="muted" style="display: @(Model.OpenOrders == null || Model.OpenOrders.Count == 0 ? "block" : "none");">No open orders found.</p>
+            <table id="openOrdersTable" class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse; display: @(Model.OpenOrders == null || Model.OpenOrders.Count == 0 ? "none" : "table");">
+                <thead>
+                    <tr style="border-bottom: 1px solid #444; text-align: left;">
+                        <th>Ticker</th>
+                        <th>Side</th>
+                        <th>Type</th>
+                        <th>Qty</th>
+                        <th>Limit Px</th>
+                        <th>Current Px</th>
+                        <th>Distance</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="openOrdersBody">
+                @foreach (var display in Model.OpenOrders ?? Array.Empty<OrderDisplayViewModel>())
+                {
+                    var order = display.Order;
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="font-weight: bold;">@order.Ticker</td>
+                        <td style="color: @(order.Side == "buy" ? "#4caf50" : "#f44336")">@order.Side.ToUpper()</td>
+                        <td>@(string.IsNullOrEmpty(order.OrderType) ? "-" : order.OrderType.ToUpper())</td>
+                        <td>@order.Qty</td>
+                        <td>@(order.LimitPrice?.ToString("C2") ?? "-")</td>
+                        <td>@(display.CurrentPrice?.ToString("C2") ?? "-")</td>
+                        <td style="color: @(display.DistancePct < 0 ? "#4caf50" : "#aaa")">
+                            @(display.DistancePct?.ToString("0.00") + "%" ?? "-")
+                        </td>
+                        <td>@order.Status</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
 
             <h3 style="margin-top: 2rem;">Live Portfolio (Positions)</h3>
-            @if (Model.OpenPositions == null || Model.OpenPositions.Count == 0)
-            {
-                <p class="muted">No open positions found.</p>
-            }
-            else
-            {
-                <table class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse;">
-                    <thead>
-                        <tr style="border-bottom: 1px solid #444; text-align: left;">
-                            <th>Ticker</th>
-                            <th>Side</th>
-                            <th>Qty</th>
-                            <th>Entry Px</th>
-                            <th>Current Px</th>
-                            <th>Unrealized P/L</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    @foreach (var pos in Model.OpenPositions)
-                    {
-                        var isProfit = pos.UnrealizedPl > 0;
-                        var color = isProfit ? "#4caf50" : (pos.UnrealizedPl < 0 ? "#f44336" : "#aaa");
-                        <tr style="border-bottom: 1px solid #333;">
-                            <td style="font-weight: bold;">@pos.Ticker</td>
-                            <td>@pos.Side.ToUpper()</td>
-                            <td>@pos.Qty</td>
-                            <td>@pos.EntryPrice.ToString("C2")</td>
-                            <td>@pos.CurrentPrice.ToString("C2")</td>
-                            <td style="color: @color; font-weight: bold;">
-                                @(pos.UnrealizedPl > 0 ? "+" : "")@pos.UnrealizedPl.ToString("C2")
-                            </td>
-                            <td>
-                                <form method="post" asp-page-handler="ClosePosition" asp-route-id="@Model.Job?.JobId" asp-route-ticker="@pos.Ticker" style="margin: 0;">
-                                    <button type="submit" class="button secondary" style="background: #3a1a1a; color: #ff6666; border-color: #662222;" onclick="return confirm('Market sell your entire position in @pos.Ticker?');">Close Position</button>
-                                </form>
-                            </td>
-                        </tr>
-                    }
-                    </tbody>
-                </table>
-            }
+            <p id="openPositionsEmpty" class="muted" style="display: @(Model.OpenPositions == null || Model.OpenPositions.Count == 0 ? "block" : "none");">No open positions found.</p>
+            <table id="openPositionsTable" class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse; display: @(Model.OpenPositions == null || Model.OpenPositions.Count == 0 ? "none" : "table");">
+                <thead>
+                    <tr style="border-bottom: 1px solid #444; text-align: left;">
+                        <th>Ticker</th>
+                        <th>Side</th>
+                        <th>Qty</th>
+                        <th>Entry Px</th>
+                        <th>Current Px</th>
+                        <th>Unrealized P/L</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="openPositionsBody">
+                @foreach (var pos in Model.OpenPositions ?? Array.Empty<TradingFlow.Domain.Orders.BrokerPosition>())
+                {
+                    var isProfit = pos.UnrealizedPl > 0;
+                    var color = isProfit ? "#4caf50" : (pos.UnrealizedPl < 0 ? "#f44336" : "#aaa");
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="font-weight: bold;">@pos.Ticker</td>
+                        <td>@pos.Side.ToUpper()</td>
+                        <td>@pos.Qty</td>
+                        <td>@pos.EntryPrice.ToString("C2")</td>
+                        <td>@pos.CurrentPrice.ToString("C2")</td>
+                        <td style="color: @color; font-weight: bold;">
+                            @(pos.UnrealizedPl > 0 ? "+" : "")@pos.UnrealizedPl.ToString("C2")
+                        </td>
+                        <td>
+                            <form method="post" asp-page-handler="ClosePosition" asp-route-id="@Model.Job?.JobId" asp-route-ticker="@pos.Ticker" style="margin: 0;">
+                                <button type="submit" class="button secondary" style="background: #3a1a1a; color: #ff6666; border-color: #662222;" onclick="return confirm('Market sell your entire position in @pos.Ticker?');">Close Position</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
 
             <h3 id="profilerTitle" style="margin-top: 2rem;">@(Model.LatencyProfile?.Name ?? "Alpaca API Profiler") Latency & Performance Profiler</h3>
             <div id="profilerBody">

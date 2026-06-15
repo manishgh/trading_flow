@@ -75,8 +75,80 @@ public class BasicStrategyEvaluatorTests
             VwapExtensionAtr: null,
             IsAboveBollingerMiddle: true,
             IsMacdHistogramPositive: true,
-            IsMacdNotBearish: true
+            IsMacdNotBearish: true,
+            IsPriceAboveEma10: true,
+            IsEma10AboveEma20: true
         );
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenVolumeIsLiquidityFloor_AllowsSoftConfirmationBelowTarget()
+    {
+        var strategy = CreateBaseStrategy() with
+        {
+            EntryRules = CreateBaseStrategy().EntryRules with
+            {
+                MinVolumeSpike = 2.0m,
+                VolumeConfirmationMode = "liquidity_floor",
+                MinVolumeLiquidityFloor = 0.15m
+            }
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, CreateBaseSignal(), relativeVolume: 0.60m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenVolumeIsBelowLiquidityFloor_ReturnsFloorReason()
+    {
+        var strategy = CreateBaseStrategy() with
+        {
+            EntryRules = CreateBaseStrategy().EntryRules with
+            {
+                MinVolumeSpike = 2.0m,
+                VolumeConfirmationMode = "liquidity_floor",
+                MinVolumeLiquidityFloor = 0.15m
+            }
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, CreateBaseSignal(), relativeVolume: 0.10m);
+
+        Assert.Equal("volume_liquidity_floor_below_minimum (Actual: 0.10, Required: 0.15)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenPriceMustBeAboveEma10AndIsNot_ReturnsEma10Reason()
+    {
+        var strategy = CreateBaseStrategy() with
+        {
+            EntryRules = CreateBaseStrategy().EntryRules with
+            {
+                RequirePriceAboveEma10 = true
+            }
+        };
+        var signal = CreateBaseSignal() with { IsPriceAboveEma10 = false };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.0m);
+
+        Assert.Equal("price_not_above_ema10", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenEma10MustBeAboveEma20AndIsNot_ReturnsEmaStackReason()
+    {
+        var strategy = CreateBaseStrategy() with
+        {
+            EntryRules = CreateBaseStrategy().EntryRules with
+            {
+                RequireEma10AboveEma20 = true
+            }
+        };
+        var signal = CreateBaseSignal() with { IsEma10AboveEma20 = false };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.0m);
+
+        Assert.Equal("ema10_not_above_ema20", rejection);
     }
 
     [Fact]
@@ -101,6 +173,93 @@ public class BasicStrategyEvaluatorTests
 
         Assert.NotNull(rejection);
         Assert.Equal("relative_volume_below_minimum (Actual: 1.00, Required: 1.50)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenSessionRelativeVolumeTooLow_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.0m,
+                MinSessionRelativeVolume = 2.0m
+            }
+        };
+        var signal = CreateBaseSignal() with { SessionRelativeVolume = 1.2m };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 3.0m);
+
+        Assert.Equal("session_relative_volume_below_minimum (Actual: 1.20, Required: 2.00)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenSessionRelativeVolumeMeetsMinimum_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.0m,
+                MinSessionRelativeVolume = 2.0m
+            }
+        };
+        var signal = CreateBaseSignal() with { SessionRelativeVolume = 2.1m };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.5m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenVolumeSmaMustRiseAndIsFlat_ReturnsVolumeSmaReason()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.0m,
+                RequireVolumeSmaRising = true,
+                VolumeSmaRisingLookbackBars = 3
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsVolumeSmaRising = false,
+            VolumeSma = 1000m,
+            PreviousVolumeSma = 1000m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.5m);
+
+        Assert.Equal("volume_sma_not_rising (CurrentSma: 1000, PreviousSma: 1000, LookbackBars: 3)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenVolumeSmaRiseBelowMinimum_ReturnsVolumeSmaRiseReason()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.0m,
+                RequireVolumeSmaRising = true,
+                MinVolumeSmaRisePct = 20m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsVolumeSmaRising = true,
+            VolumeSmaRisePct = 12.5m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.5m);
+
+        Assert.Equal("volume_sma_rise_below_minimum (Actual: 12.50, Required: 20.00)", rejection);
     }
 
     [Fact]
@@ -743,6 +902,108 @@ public class BasicStrategyEvaluatorTests
         };
 
         var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenVwapTrapRulesPass_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "vwap_reclaim_trap",
+                MinVolumeSpike = 0.0m,
+                MinSessionRelativeVolume = 1.0m,
+                RequirePriceAboveVwap = true,
+                RequirePriorFlushBelowVwapBars = 3,
+                VwapReclaimMaxBarsSinceFlush = 12,
+                MinReclaimVolumeRatio = 1.50m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsVwapReclaimTrap = true,
+            PriorFlushBelowVwapBars = 3,
+            BarsSinceVwapFlush = 4,
+            ReclaimVolumeRatio = 2.0m,
+            IsAboveVwap = true,
+            SessionRelativeVolume = 1.2m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.0m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenAvwapDailyRuleRunsOnIntradaySignal_ReturnsUnavailableReason()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            Timeframe = "65m",
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "avwap_pullback_bounce",
+                MinVolumeSpike = 0.0m,
+                AvwapProximityPct = 1.5m,
+                RequirePriceAboveSma50Daily = true
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            Timeframe = "65m",
+            IsAnchoredVwapBounce = true,
+            AnchoredVwapProximityPct = 0.5m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.0m);
+
+        Assert.Equal("daily_sma50_check_unavailable", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenVcpRulesPass_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "volatility_contraction_pattern",
+                MinVolumeSpike = 0.0m,
+                RequirePriceAboveSma150 = true,
+                RequirePriceAboveSma200 = true,
+                RequireSma50AboveSma150 = true,
+                RequireSma150AboveSma200 = true,
+                MinPriceVs52WeekLowPct = 30.0m,
+                MaxPriceVs52WeekHighPct = -25.0m,
+                MinContractions = 2,
+                MaxContractions = 4,
+                RequireVolatilityHalvingLeftToRight = true,
+                RequireVolumeDryUpPreBreakout = true,
+                MinBreakoutVolumeRatio = 1.50m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            IsVcpBreakout = true,
+            IsPriceAboveSma150 = true,
+            IsPriceAboveSma200 = true,
+            IsSma50AboveSma150 = true,
+            IsSma150AboveSma200 = true,
+            PriceVs52WeekLowPct = 45.0m,
+            PriceVs52WeekHighPct = -10.0m,
+            VolatilityContractions = 3,
+            IsVolatilityHalving = true,
+            IsVolumeDryUp = true,
+            BreakoutVolumeRatio = 2.0m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.0m);
 
         Assert.Null(rejection);
     }

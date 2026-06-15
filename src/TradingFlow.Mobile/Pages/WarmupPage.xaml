@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TradingFlow.Mobile.Pages.WarmupPage"
+             Title="Warmup">
+    <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
+        <ScrollView>
+            <VerticalStackLayout Padding="16" Spacing="14">
+                <Label Text="Warmup Cache" Style="{StaticResource Headline}" FontSize="24" />
+                <Label Text="Prepare candles, indicators, and news before trading starts." Style="{StaticResource SubHeadline}" FontSize="13" />
+
+                <Border Style="{StaticResource CardBorder}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
+                        <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="10">
+                        <Label Text="Add Stocks" FontAttributes="Bold" FontSize="18" />
+                        <Entry x:Name="TickersEntry" Placeholder="POET, RGTI, NVTS" Keyboard="Text" />
+                        <Entry x:Name="ReasonEntry" Placeholder="Reason" Text="possible trend tomorrow" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <Entry x:Name="WarmupDaysEntry" Placeholder="Warmup days" Text="60" Keyboard="Numeric" />
+                            <Entry x:Name="NewsDaysEntry" Grid.Column="1" Placeholder="News days" Text="14" Keyboard="Numeric" />
+                        </Grid>
+                        <Entry x:Name="TimeframesEntry" Placeholder="Timeframes" Text="1m,5m,15m,1h,1d" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <HorizontalStackLayout Spacing="8">
+                                <CheckBox x:Name="IncludeNewsCheck" IsChecked="True" Scale="0.85" />
+                                <Label Text="News" VerticalTextAlignment="Center" FontSize="13" />
+                            </HorizontalStackLayout>
+                            <HorizontalStackLayout Grid.Column="1" Spacing="8">
+                                <CheckBox x:Name="RunNowCheck" IsChecked="True" Scale="0.85" />
+                                <Label Text="Run now" VerticalTextAlignment="Center" FontSize="13" />
+                            </HorizontalStackLayout>
+                        </Grid>
+                        <Button x:Name="AddButton" Text="Add To Warmup" Clicked="OnAddWarmup" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <Label Text="Warmed Stocks" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
+                    <Button Grid.Column="1" Text="Run All" Clicked="OnRunAll" Padding="12,6" />
+                </Grid>
+
+                <CollectionView x:Name="WatchlistView" SelectionMode="Single" SelectionChanged="OnWatchlistSelected">
+                    <CollectionView.EmptyView>
+                        <Label Text="No warmup stocks yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,10">
+                                <VerticalStackLayout Spacing="5">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="16" />
+                                        <Label Grid.Column="1" Text="{Binding LastStatus}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                    </Grid>
+                                    <Label Text="{Binding DetailText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                    <Label Text="{Binding LastWarmText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                    <Label Text="{Binding Reason}" FontSize="12" LineBreakMode="TailTruncation" />
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+
+                <Border x:Name="SelectedCard" Style="{StaticResource CardBorder}" IsVisible="False">
+                    <VerticalStackLayout Spacing="8">
+                        <Label x:Name="SelectedTitle" FontAttributes="Bold" FontSize="17" />
+                        <Label x:Name="SelectedDetail" FontSize="13" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <Button Text="Run Ticker" Clicked="OnRunSelected" />
+                            <Button Grid.Column="1" Text="Remove" Clicked="OnRemoveSelected" BackgroundColor="#B42318" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </Border>
+
+                <Label Text="Recent Runs" FontAttributes="Bold" FontSize="18" />
+                <CollectionView x:Name="RunsView" HeightRequest="240">
+                    <CollectionView.EmptyView>
+                        <Label Text="No warmup runs yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8">
+                                <VerticalStackLayout Spacing="4">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <Label Text="{Binding Reason}" FontAttributes="Bold" FontSize="13" />
+                                        <Label Grid.Column="1" Text="{Binding StartedText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                    </Grid>
+                                    <Label Text="{Binding SummaryText}" FontSize="12" />
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </VerticalStackLayout>
+        </ScrollView>
+    </RefreshView>
+</ContentPage>

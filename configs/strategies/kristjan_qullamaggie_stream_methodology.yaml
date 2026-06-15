@@ -1,0 +1,54 @@
+strategy_id: research.qullamaggie-swing-episodic-pivot
+strategy_name: Qullamaggie Episodic Pivot Gap
+source: kristjan_qullamaggie_stream_methodology
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: episodic_pivot_gap
+  min_volume_spike: 0.0
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  min_gap_up_pct: 8.0
+  min_session_relative_volume: 3.0
+
+  # The Fundamental Imbalance
+  require_positive_news: true
+  max_news_age_hours: 24
+
+  # He ignores past trends if the news is big enough
+  trend_filter: none
+  require_price_above_ema10: true
+  require_price_above_ema20: true
+
+  min_close_location_value: 0.70 # Gap must hold into the close
+  reject_weak_close_on_high_relative_volume: true
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  stop_at_entry_day_low: true
+  stop_atr_multiple: 2.0
+  target_r_multiple: 3.0
+  max_hold_days: 90
+  max_hold_hours: 2160.0
+  enable_trailing_stop: true
+
+  # Qullamaggie's specific scale-out method
+  scale_out_1_pct_size: 33.3
+  scale_out_1_r_multiple: 3.0
+  exit_on_close_below_ema10_pct: 50.0
+  exit_on_close_below_ema20_pct: 100.0
+execution:
+  timeframe: 5m # Buys intraday morning breakouts
+  slippage_bps: 25.0 # Slippage is brutal on EP days
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

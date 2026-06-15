@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TradingFlow.Mobile.Pages.PaperPage"
+             Title="Paper">
+    <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
+        <ScrollView>
+            <VerticalStackLayout Padding="16" Spacing="14">
+                <Label Text="Paper Trading" Style="{StaticResource Headline}" FontSize="24" />
+                <Label Text="Start, monitor, and cancel paper runs from the same TradingFlow backend." Style="{StaticResource SubHeadline}" FontSize="13" />
+                <Border Style="{StaticResource CardBorder}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
+                        <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="10">
+                        <Label Text="Run Setup" FontAttributes="Bold" FontSize="18" />
+                        <Picker x:Name="ConfigPicker" Title="Paper environment" />
+                        <Picker x:Name="StrategyPicker" Title="Strategy" />
+                        <Entry x:Name="RunNameEntry" Placeholder="Run name, optional" />
+                        <Entry x:Name="TickersEntry" Placeholder="Tickers: RDW, OUST, SPCE" Text="RDW, OUST, SPCE" Keyboard="Text" />
+                        <Entry x:Name="ScreenerEntry" Placeholder="Optional Finviz query or URL" Keyboard="Url" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <HorizontalStackLayout Spacing="8">
+                                <CheckBox x:Name="ExtendedHoursCheck" IsChecked="True" Scale="0.85" />
+                                <Label Text="Extended hours" VerticalTextAlignment="Center" FontSize="13" />
+                            </HorizontalStackLayout>
+                            <HorizontalStackLayout Grid.Column="1" Spacing="8">
+                                <CheckBox x:Name="NewsCheck" IsChecked="False" Scale="0.85" />
+                                <Label Text="News" VerticalTextAlignment="Center" FontSize="13" />
+                            </HorizontalStackLayout>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <Picker x:Name="OrderExpirationPicker" Title="Order expiry" />
+                            <Picker x:Name="EntryOrderTypePicker" Grid.Column="1" Title="Entry order" />
+                        </Grid>
+                        <Button x:Name="RunButton" Text="Start Paper Run" Clicked="OnStartPaperRun" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="10">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <Label Text="News Catalysts" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
+                            <Button Grid.Column="1" Text="Test News" Clicked="OnTestNews" Padding="12,6" />
+                        </Grid>
+                        <Label x:Name="NewsStatusLabel" Text="Use Test News to preview catalysts for the selected paper config and tickers." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <CollectionView x:Name="NewsView" HeightRequest="240">
+                            <CollectionView.EmptyView>
+                                <Label Text="No catalyst news loaded." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                            </CollectionView.EmptyView>
+                            <CollectionView.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8">
+                                        <VerticalStackLayout Spacing="4">
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="13" />
+                                                <Label Grid.Column="1" Text="{Binding SentimentText}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                            </Grid>
+                                            <Label Text="{Binding Headline}" FontSize="12" LineBreakMode="TailTruncation" />
+                                            <Label Text="{Binding Source}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
+                                        </VerticalStackLayout>
+                                    </Border>
+                                </DataTemplate>
+                            </CollectionView.ItemTemplate>
+                        </CollectionView>
+                    </VerticalStackLayout>
+                </Border>
+
+                <Grid ColumnDefinitions="*,Auto">
+                    <Label Text="Live Jobs" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
+                    <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
+                </Grid>
+
+                <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected">
+                    <CollectionView.EmptyView>
+                        <Label Text="No paper jobs yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,10">
+                                <VerticalStackLayout Spacing="6">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <Label Text="{Binding RunName}" FontAttributes="Bold" FontSize="16" LineBreakMode="TailTruncation" />
+                                        <Label Grid.Column="1" Text="{Binding Status}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                    </Grid>
+                                    <Label Text="{Binding ProgressText}" FontSize="13" />
+                                    <Label Text="{Binding ResultSummary}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                    <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+
+                <Border x:Name="DetailCard" Style="{StaticResource CardBorder}" IsVisible="False">
+                    <VerticalStackLayout Spacing="8">
+                        <Label x:Name="DetailTitle" FontAttributes="Bold" FontSize="17" />
+                        <Label x:Name="DetailStatus" FontSize="13" />
+                        <Label x:Name="ResultLabel" FontSize="13" />
+                        <Button Text="Cancel Run" Clicked="OnCancelSelectedJob" BackgroundColor="#B42318" />
+                        <Button Text="Cancel Broker Orders" Clicked="OnCancelBrokerOrders" BackgroundColor="#7A271A" />
+                        <Label Text="Recent Events" FontAttributes="Bold" FontSize="14" />
+                        <VerticalStackLayout x:Name="EventsStack" Spacing="4" />
+                    </VerticalStackLayout>
+                </Border>
+            </VerticalStackLayout>
+        </ScrollView>
+    </RefreshView>
+</ContentPage>

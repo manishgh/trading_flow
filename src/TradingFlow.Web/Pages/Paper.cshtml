@@ -7,6 +7,7 @@
     var tickersCsv = selectedConfig != null ? String.Join(", ", selectedConfig.Config.Tickers) : "";
 }
 
+<div class="paper-page">
 <div class="section-title">
     <div>
         <h1>Paper Trading Lab</h1>
@@ -21,8 +22,8 @@
         <div class="panel">
             <h2>Environment & Stocks</h2>
             <div class="muted" style="margin-bottom: 1rem;">Select a paper config, edit stocks, and save to create a temporary run config.</div>
-            
-            <label for="BaseConfigPath">Paper Environment</label>
+
+            <label for="BaseConfigPath">Paper Environment <span class="tf-help" title="Selects the paper-mode run configuration: broker, market data provider, portfolio, warmup window, and default execution settings.">?</span></label>
             <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem;">
             <select name="BaseConfigPath" id="BaseConfigPath" onchange="loadConfigDetails(this.value)" style="flex-grow: 1;">
                     @foreach (var config in Model.Configs)
@@ -34,61 +35,65 @@
                 </select>
                 @if (selectedConfig != null && !selectedConfig.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
                 {
-                    <button type="submit" asp-page-handler="DeleteConfig" name="DeleteConfigPath" value="@selectedConfig.Path" class="button secondary" style="background: #fee; color: #c00; border-color: #fcc;" onclick="return confirm('Delete this custom config?');">Delete</button>
+                    <button type="submit" asp-page-handler="DeleteConfig" name="DeleteConfigPath" value="@selectedConfig.Path" class="button secondary" style="background: #fee; color: #c00; border-color: #fcc;" title="Deletes this generated custom paper configuration file." onclick="return confirm('Delete this custom config?');">Delete</button>
                 }
             </div>
 
-            <label for="TickersCsv">Tickers (CSV)</label>
+            <label for="TickersCsv">Tickers (CSV) <span class="tf-help" title="Comma-separated symbols to evaluate in this paper run. Each ticker is processed through the same selected strategy and portfolio limits.">?</span></label>
             <textarea name="TickersCsv" id="TickersCsv" rows="3">@Model.TickersCsv</textarea>
-            
-            <label for="ScreenerFilter">Finviz Screener Filter (optional)</label>
+
+            <label for="ScreenerFilter">Finviz Screener Filter (optional) <span class="tf-help" title="Optional Finviz filter query used to build or supplement the ticker list. Leave empty when you want only the custom ticker CSV.">?</span></label>
             <div class="muted" style="margin-bottom: 0.5rem; font-size: 0.85em;">Example: <code>v=111&f=sec_technology,ta_sma20_pa</code></div>
             <input type="text" name="ScreenerFilter" id="ScreenerFilter" value="@Model.ScreenerFilter" placeholder="e.g. v=111&f=sec_technology" />
-            
+
             <div class="actions" style="margin-top: 1rem;">
-                <button type="submit" asp-page-handler="SaveConfig">Save Custom List</button>
+                <button type="submit" asp-page-handler="SaveConfig" title="Creates a generated paper configuration using the current environment, ticker list, execution settings, and selected strategy.">Save Custom List</button>
             </div>
         </div>
 
         <div class="panel" style="margin-top: 1.5rem;">
             <h2>Strategy Configuration</h2>
             <div class="muted" style="margin-bottom: 1rem;">Select a strategy and optionally edit its parameters directly in YAML format.</div>
-            
-            <label for="SelectedStrategyDropdown">Strategy Config</label>
+
+            <label for="SelectedStrategyDropdown">Strategy Config <span class="tf-help" title="The YAML strategy definition used by the shared signal engine. Backtest and paper trading use the same strategy fields.">?</span></label>
             <select name="SelectedStrategyPath" id="SelectedStrategyDropdown" onchange="loadStrategyDetails(this.value)">
                 @foreach (var strategy in Model.Strategies)
                 {
                     <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.FileName</option>
                 }
             </select>
-            
+
             <div style="background: #2a2a2a; border-left: 4px solid #007acc; padding: 1rem; margin-top: 1rem; border-radius: 4px; margin-bottom: 1rem;">
                 <h3 style="margin-top: 0; color: #66b3ff;">Quick Edit</h3>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem;">
                     <div>
-                        <label style="color: #ddd;">Timeframe</label>
+                        <label style="color: #ddd;">Timeframe <span class="tf-help" title="Signal timeframe for the strategy pattern. Example: swing strategies usually evaluate 1d candles; intraday patterns may evaluate 5m while executing on 1m.">?</span></label>
                         <input type="text" name="QuickEditTimeframe" value="@Model.QuickEditTimeframe" />
                     </div>
                     <div>
-                        <label style="color: #ddd;">Setup Type</label>
+                        <label style="color: #ddd;">Setup Type <span class="tf-help" title="Names the signal pattern/gate used by the strategy, such as ross_gap_go_bull_flag or swing_reclaim.">?</span></label>
                         <input type="text" name="QuickEditSetupType" value="@Model.QuickEditSetupType" />
                     </div>
                     <div>
-                        <label style="color: #ddd;">Stop ATR Multiple</label>
+                        <label style="color: #ddd;">Min Volume Spike / RVOL <span class="tf-help" title="Minimum standard relative volume. The engine compares current cumulative session volume against completed prior sessions, closer to Finviz-style attention volume. 1.0 means normal; 2.0 means twice normal.">?</span></label>
+                        <input type="text" name="QuickEditMinVolumeSpike" value="@Model.QuickEditMinVolumeSpike" />
+                    </div>
+                    <div>
+                        <label style="color: #ddd;">Stop ATR Multiple <span class="tf-help" title="Stop distance expressed in ATR. Higher values give trades more room but increase risk per share.">?</span></label>
                         <input type="text" name="QuickEditStopAtr" value="@Model.QuickEditStopAtr" />
                     </div>
                     <div>
-                        <label style="color: #ddd;">Target R Multiple</label>
+                        <label style="color: #ddd;">Target R Multiple <span class="tf-help" title="Profit target measured in R, where 1R equals the initial risk from entry to stop.">?</span></label>
                         <input type="text" name="QuickEditTargetR" value="@Model.QuickEditTargetR" />
                     </div>
                 </div>
             </div>
 
-            <label for="StrategyYaml">Raw Strategy YAML</label>
+            <label for="StrategyYaml">Raw Strategy YAML <span class="tf-help" title="Full strategy source. Quick Edit changes selected common fields, while advanced rules can be edited directly here. Save Strategy persists this file.">?</span></label>
             <textarea name="StrategyYaml" id="StrategyYaml" rows="12" style="font-family: monospace; font-size: 0.9em;">@Model.StrategyYaml</textarea>
-            
+
             <div class="actions" style="margin-top: 1rem;">
-                <button type="submit" asp-page-handler="SaveStrategy" class="button secondary">Save Strategy</button>
+                <button type="submit" asp-page-handler="SaveStrategy" class="button secondary" title="Persists edits to the selected strategy YAML file. Required for changed strategy parameters like RVOL or ATR stop.">Save Strategy</button>
             </div>
         </div>
     </div>
@@ -99,31 +104,41 @@
             <h2>Paper Runner</h2>
             <div class="muted" style="margin-bottom: 1rem;">Run the selected strategy on the currently selected paper environment.</div>
 
-            <label for="OrderExpirationDropdown">Order Expiration Strategy</label>
+            <label for="OrderExpirationDropdown">Order Expiration Strategy <span class="tf-help" title="Controls how long submitted broker orders remain active: GTC, day-only, or active cancellation behavior.">?</span></label>
             <select id="OrderExpirationDropdown" name="OrderExpiration" style="margin-bottom: 1rem;">
                 <option value="gtc" selected="@(Model.OrderExpiration == "gtc")">Good 'Til Canceled (GTC)</option>
                 <option value="day" selected="@(Model.OrderExpiration == "day")">Day Orders (Cancel at Market Close)</option>
                 <option value="active_cancel" selected="@(Model.OrderExpiration == "active_cancel")">Active Cancellation (GTC + 30-min Auto-Cancel)</option>
             </select>
 
-            <label for="EntryOrderTypeDropdown">Entry Order Type</label>
+            <label for="EntryOrderTypeDropdown">Entry Order Type <span class="tf-help" title="Limit waits for a controlled fill price; market enters immediately but may slip. Low-float/intraday strategies usually prefer limit.">?</span></label>
             <select id="EntryOrderTypeDropdown" name="EntryOrderType" style="margin-bottom: 1rem;">
                 <option value="limit" selected="@(Model.EntryOrderType == "limit")">Limit Order (Waits for pullback/discount)</option>
                 <option value="market" selected="@(Model.EntryOrderType == "market")">Market Order (Enters immediately at current price)</option>
             </select>
 
-            <div style="margin-bottom: 1rem;">
-                <label>
+            <div class="paper-toggle">
+                <label title="Allows orders and market data decisions during Alpaca-supported pre-market and post-market sessions.">
                     <input type="checkbox" id="ExtendedHoursCheckbox" name="ExtendedHours" value="true" checked="@Model.ExtendedHours" />
-                    Enable Extended Hours (Pre/Post-Market)
+                    <span>Enable Extended Hours (Pre/Post-Market)</span>
+                    <span class="tf-help" title="When checked, paper orders may be submitted in extended hours if the broker and order type support it.">?</span>
                 </label>
             </div>
 
-            <label for="RunName">Run Name</label>
+            <div class="paper-toggle">
+                <label title="Only available when the selected strategy actually uses news/catalyst fields.">
+                    <input type="checkbox" id="NewsEnabledCheckbox" name="NewsEnabled" value="true" checked="@Model.NewsEnabled" disabled="@(!Model.SelectedStrategyUsesNews)" />
+                    <span>Enable News Catalyst / Veto</span>
+                    <span class="tf-help" title="Enables configured news provider and veto/catalyst checks. No-news strategies keep this off.">?</span>
+                </label>
+                <div id="NewsEnabledHint" class="muted small-help"></div>
+            </div>
+
+            <label for="RunName">Run Name <span class="tf-help" title="Unique name for this paper run. It scopes logs, audits, profiler metrics, results, and run-specific broker order tags.">?</span></label>
             <input name="RunName" id="RunName" value="@Model.SuggestedRunName" />
 
             <div class="actions" style="margin-top: 1rem;">
-                <button type="submit" asp-page-handler="RunLive" class="button" style="background: #28a745;">Start Paper Trading</button>
+                <button type="submit" asp-page-handler="RunLive" class="button" style="background: #28a745;" title="Starts a paper LiveRunner job using the selected strategy and generated run configuration.">Start Paper Trading</button>
             </div>
         </div>
         </form>
@@ -131,9 +146,9 @@
         <section class="panel" style="margin-top: 1rem;">
             <div class="section-title">
                 <h2>Paper Jobs</h2>
-                <a class="button secondary" asp-page="/Paper" asp-route-configPath="@Model.ConfigPath" asp-route-strategyPath="@Model.SelectedStrategyPath">Refresh</a>
+                <a class="button secondary" asp-page="/Paper" asp-route-configPath="@Model.ConfigPath" asp-route-strategyPath="@Model.SelectedStrategyPath" title="Reloads the paper lab and job list without starting a new run.">Refresh</a>
             </div>
-            
+
             @if (Model.LiveJobs.Count == 0)
             {
                 <div class="muted">No paper jobs running.</div>
@@ -167,7 +182,7 @@
 
 <section class="panel" style="margin-top:16px">
     <div class="section-title">
-        <h2>Environment Check</h2>
+        <h2>Environment Check <span class="tf-help" title="Validates paper credentials and read-only broker dependencies without placing orders.">?</span></h2>
         @if (Model.PaperSnapshot is not null)
         {
             <span class="status">Checked</span>
@@ -179,7 +194,7 @@
         <form method="post" asp-page-handler="">
             <input type="hidden" id="EnvironmentCheckConfigPath" name="BaseConfigPath" value="@Model.ConfigPath" />
             <input type="hidden" id="EnvironmentCheckStrategyPath" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
-            <button type="submit">Validate Environment</button>
+            <button type="submit" title="Checks configured paper broker credentials and read-only account dependencies.">Validate Environment</button>
         </form>
     }
     else
@@ -205,15 +220,78 @@
         }
     }
 </section>
+</div>
 
 <style>
     .highlight-border {
         border: 2px solid #28a745;
     }
+
+    .paper-page .tf-help {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        margin-left: 4px;
+        border-radius: 50%;
+        border: 1px solid #7da7d9;
+        color: #66b3ff;
+        font-size: 11px;
+        line-height: 1;
+        cursor: help;
+        vertical-align: middle;
+    }
+
+    .paper-page input[type="checkbox"] {
+        width: 16px !important;
+        height: 16px !important;
+        min-width: 16px;
+        margin: 0;
+        accent-color: #1f6feb;
+    }
+
+    .paper-page .paper-toggle {
+        margin-bottom: 1rem;
+    }
+
+    .paper-page .paper-toggle label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        line-height: 1.3;
+        cursor: pointer;
+    }
+
+    .paper-page .paper-toggle input:disabled + span {
+        opacity: 0.65;
+    }
+
+    .paper-page .small-help {
+        margin-top: 0.25rem;
+        font-size: 0.82rem;
+    }
 </style>
 
 @section Scripts {
     <script>
+        let currentStrategyUsesNews = @Model.SelectedStrategyUsesNews.ToString().ToLowerInvariant();
+        let currentConfigNewsEnabled = @((selectedConfig?.Config.News.Enabled ?? true).ToString().ToLowerInvariant());
+
+        function updateNewsToggle() {
+            const checkbox = document.getElementById('NewsEnabledCheckbox');
+            const hint = document.getElementById('NewsEnabledHint');
+            if (!checkbox) return;
+
+            checkbox.disabled = !currentStrategyUsesNews;
+            checkbox.checked = currentStrategyUsesNews && currentConfigNewsEnabled;
+            if (hint) {
+                hint.textContent = currentStrategyUsesNews
+                    ? 'News is available for this strategy and will be included when enabled.'
+                    : 'Selected strategy has no news/catalyst rules, so news is disabled for the run.';
+            }
+        }
+
         function loadStrategyDetails(strategyPath) {
             const environmentStrategy = document.getElementById('EnvironmentCheckStrategyPath');
             if (environmentStrategy) {
@@ -227,8 +305,11 @@
                         document.getElementById('StrategyYaml').value = data.yaml;
                         document.querySelector('input[name="QuickEditTimeframe"]').value = data.timeframe;
                         document.querySelector('input[name="QuickEditSetupType"]').value = data.setupType;
+                        document.querySelector('input[name="QuickEditMinVolumeSpike"]').value = data.minVolumeSpike;
                         document.querySelector('input[name="QuickEditStopAtr"]').value = data.stopAtr;
                         document.querySelector('input[name="QuickEditTargetR"]').value = data.targetR;
+                        currentStrategyUsesNews = Boolean(data.usesNews);
+                        updateNewsToggle();
                     }
                 });
         }
@@ -247,9 +328,13 @@
                         document.getElementById('OrderExpirationDropdown').value = data.orderExpiration || 'gtc';
                         document.getElementById('EntryOrderTypeDropdown').value = data.entryOrderType || 'limit';
                         document.getElementById('ExtendedHoursCheckbox').checked = Boolean(data.extendedHours);
+                        currentConfigNewsEnabled = Boolean(data.newsEnabled);
+                        updateNewsToggle();
                         document.getElementById('ScreenerFilter').value = data.screenerFilter || '';
                     }
                 });
         }
+
+        updateNewsToggle();
     </script>
 }

@@ -31,10 +31,14 @@ public sealed class TradingFlowDbContext : DbContext
             entity.HasKey(e => e.OrderId);
             entity.Property(e => e.OrderId).HasMaxLength(100);
             entity.Property(e => e.Ticker).HasMaxLength(50).IsRequired();
+            entity.Property(e => e.RunName).HasMaxLength(100).IsRequired();
+            entity.Property(e => e.ClientOrderId).HasMaxLength(100).IsRequired();
             entity.Property(e => e.StrategyName).HasMaxLength(100).IsRequired();
             entity.Property(e => e.Status).HasMaxLength(50).IsRequired();
-            
+
             entity.HasIndex(e => e.Ticker);
+            entity.HasIndex(e => e.RunName);
+            entity.HasIndex(e => e.ClientOrderId);
             entity.HasIndex(e => e.Status);
         });
 
@@ -45,7 +49,7 @@ public sealed class TradingFlowDbContext : DbContext
             entity.Property(e => e.Ticker).HasMaxLength(50).IsRequired();
             entity.Property(e => e.StrategyName).HasMaxLength(100).IsRequired();
             entity.Property(e => e.Decision).HasMaxLength(50).IsRequired();
-            
+
             entity.HasIndex(e => e.RunName);
             entity.HasIndex(e => e.Ticker);
         });
@@ -56,7 +60,7 @@ public sealed class TradingFlowDbContext : DbContext
             entity.Property(e => e.RunName).HasMaxLength(100).IsRequired();
             entity.Property(e => e.ConfigPath).HasMaxLength(500).IsRequired();
             entity.Property(e => e.Status).HasMaxLength(50).IsRequired();
-            
+
             entity.HasIndex(e => e.RunName).IsUnique();
             entity.HasIndex(e => e.Status);
         });

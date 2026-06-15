@@ -39,8 +39,8 @@ public sealed class PaperJobModel : PageModel
         Job = jobs.Get(id);
         var brokerOrders = await jobs.GetOpenOrdersAsync(id);
         OpenPositions = await jobs.GetOpenPositionsAsync(id);
-        LatencyProfile = TradingFlow.Domain.Logging.ApiProfiler.GetSummary("Alpaca");
-        
+        LatencyProfile = TradingFlow.Domain.Logging.ApiProfiler.GetSummary("Alpaca", Job?.RunName);
+
         if (Job != null)
         {
             try
@@ -60,7 +60,7 @@ public sealed class PaperJobModel : PageModel
             catch { /* Ignore audit db errors */ }
         }
 
-        OpenOrders = brokerOrders.Select(o => 
+        OpenOrders = brokerOrders.Select(o =>
         {
             var currentPx = ChartDataList.FirstOrDefault(c => c.Ticker == o.Ticker)?.Close;
             return new OrderDisplayViewModel(o, currentPx);
@@ -74,6 +74,38 @@ public sealed class PaperJobModel : PageModel
         {
             return new JsonResult(new { success = false });
         }
+
+        var chartData = LoadChartData(job);
+        var brokerOrders = await jobs.GetOpenOrdersAsync(id);
+        var openOrders = brokerOrders
+            .Select(order =>
+            {
+                var currentPrice = chartData.FirstOrDefault(point => point.Ticker.Equals(order.Ticker, StringComparison.OrdinalIgnoreCase))?.Close;
+                var display = new OrderDisplayViewModel(order, currentPrice);
+                return new
+                {
+                    ticker = order.Ticker,
+                    side = order.Side,
+                    orderType = order.OrderType,
+                    qty = order.Qty,
+                    limitPrice = order.LimitPrice,
+                    currentPrice,
+                    distancePct = display.DistancePct,
+                    status = order.Status
+                };
+            })
+            .ToArray();
+        var openPositions = (await jobs.GetOpenPositionsAsync(id))
+            .Select(position => new
+            {
+                ticker = position.Ticker,
+                side = position.Side,
+                qty = position.Qty,
+                entryPrice = position.EntryPrice,
+                currentPrice = position.CurrentPrice,
+                unrealizedPl = position.UnrealizedPl
+            })
+            .ToArray();
 
         List<DecisionAuditRecord> audits;
         try
@@ -91,23 +123,30 @@ public sealed class PaperJobModel : PageModel
             status = job.Status,
             errorMessage = job.ErrorMessage,
             startedAt = job.StartedAt is null ? "Queued" : FormatLocal(job.StartedAt.Value),
+            refreshedAt = FormatLocal(DateTimeOffset.UtcNow),
             marketDataFeed = ResolveMarketDataFeedLabel(job),
             events = job.Events.Reverse().Take(100).ToArray(),
-            metrics = LoadChartData(job)
+            metrics = chartData
                 .OrderBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
                 .Select(point => new
                 {
-                    time = FormatLocalTime(point.Timestamp),
+                    time = FormatMetricTimestamp(point.Timestamp, point.Timeframe),
                     ticker = point.Ticker,
                     timeframe = point.Timeframe,
                     close = point.Close,
                     rsi = point.Rsi,
                     volume = point.Volume,
-                    averageVolume = point.AverageVolume,
+                    averageVolume = point.SlotAverageVolume,
+                    cumulativeAverageVolume = point.CumulativeAverageVolume,
                     relativeVolume = point.RelativeVolume,
+                    relativeVolumeSampleCount = point.RelativeVolumeSampleCount,
+                    slotRelativeVolume = point.SlotRelativeVolume,
+                    sessionRelativeVolume = point.SessionRelativeVolume,
                     vwap = point.Vwap
                 })
                 .ToArray(),
+            openOrders,
+            openPositions,
             audits = audits.Select(a => new
             {
                 time = FormatLocalTime(a.Timestamp),
@@ -117,7 +156,7 @@ public sealed class PaperJobModel : PageModel
                 rawReason = a.RejectionReason ?? "",
                 accepted = a.Decision.Equals("Accepted", StringComparison.OrdinalIgnoreCase)
             }).ToArray(),
-            profiler = FormatProfiler(TradingFlow.Domain.Logging.ApiProfiler.GetSummary("Alpaca"))
+            profiler = FormatProfiler(TradingFlow.Domain.Logging.ApiProfiler.GetSummary("Alpaca", job.RunName))
         });
     }
 
@@ -147,6 +186,13 @@ public sealed class PaperJobModel : PageModel
     public string FormatLocalTime(DateTimeOffset timestamp)
     {
         return UiDisplayFormatter.FormatLocalTime(timestamp);
+    }
+
+    public string FormatMetricTimestamp(DateTimeOffset timestamp, string timeframe)
+    {
+        return timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase)
+            ? UiDisplayFormatter.FormatLocalDate(timestamp)
+            : UiDisplayFormatter.FormatLocalTime(timestamp);
     }
 
     public string FormatRejectionReason(string? reason)
@@ -274,11 +320,15 @@ public class ChartDataPoint
     public decimal Close { get; set; }
     public decimal Atr { get; set; }
     public decimal RelativeVolume { get; set; }
+    public decimal SlotRelativeVolume { get; set; }
+    public decimal SessionRelativeVolume { get; set; }
+    public decimal SlotAverageVolume { get; set; }
+    public decimal CumulativeAverageVolume { get; set; }
+    public decimal AverageSessionVolume { get; set; }
+    public int RelativeVolumeSampleCount { get; set; }
     public decimal Volume { get; set; }
     public decimal? Rsi { get; set; }
     public decimal? Vwap { get; set; }
-
-    public decimal AverageVolume => RelativeVolume > 0 ? Volume / RelativeVolume : 0m;
 }
 
 public class OrderDisplayViewModel
@@ -291,7 +341,7 @@ public class OrderDisplayViewModel
 
     public TradingFlow.Domain.Orders.ActiveBrokerOrder Order { get; }
     public decimal? CurrentPrice { get; }
-    
+
     public decimal? DistancePct
     {
         get

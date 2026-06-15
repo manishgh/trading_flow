@@ -31,11 +31,11 @@ Do not commit raw candle caches, runtime paper/live state, temporary job logs, f
 The current retained runtime baseline is:
 
 ```text
-configs/strategies/intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml
-configs/strategies/intraday-ross-gapgo-bullflag.v2-confirmed-entry.json
+configs/strategies/intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml
+configs/strategies/intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml
 configs/strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml
 configs/strategies/swing-overbought-rollover-short-no-news.v5.yaml
-configs/backtest/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml
+configs/backtest/poet-mxl-rgti-mu-msft-intraday-v6-lite-90d.yaml
 configs/backtest/swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d.yaml
 data/research/backtests/2026-06-11_swing_6tickers_180d/
 ```
@@ -57,13 +57,15 @@ Promotion criteria should include:
 
 For now, the retained active strategies are:
 
-- `intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml`: retained intraday research and paper candidate. It uses Ross-style gap-go/bull-flag mechanics with VWAP, relative volume, opening-range/recent-high triggers, next-bar confirmation to avoid look-ahead, and no RSI entry/exit veto.
+- `intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml`: promoted intraday default. It combines the Ross-style VWAP/EMA/MACD stack with dual RVOL gating (`cumulative_same_time` plus session RVOL floor) and the safer structural exit model.
+- `intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml`: retained intraday runner-up. It keeps the simpler Ross indicator stack and exits on confirmed VWAP failure plus EMA10/EMA20 structure.
 - `swing-reversal-reclaim-bull-quality-no-news.v1.yaml`: primary swing long. It had the best balance of return and drawdown in the six-ticker swing run.
 - `swing-overbought-rollover-short-no-news.v5.yaml`: candidate swing short. It is promoted as a separate short-side candidate because it captured the APP rollover and avoided the noisy false shorts from earlier variants, but its two-trade sample is not enough for live promotion by itself.
 
-Latest retained intraday comparison on the 8-ticker, 180-day cached Alpaca SIP window:
+Latest retained intraday comparison on the POET/MXL/RGTI/MU/MSFT 90-day cached window:
 
-- v2 confirmed entry: +6.11%, max drawdown 2.15%, 39 trades.
+- V6 Lite dual RVOL: +11.79%, max drawdown 1.24%, 43 trades.
+- V3 structural exit: +7.78%, max drawdown 3.41%, 56 trades.
 
 Latest retained swing comparison on the CRDO/MSFT/APP/INTC/MU/NVDA, 180-day cached Alpaca SIP window:
 

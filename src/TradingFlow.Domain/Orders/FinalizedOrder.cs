@@ -7,5 +7,5 @@ public sealed record FinalizedOrder(
     decimal LimitPrice,
     decimal StopLossPrice,
     decimal TakeProfitPrice,
-    DateTimeOffset ExecutionTimestamp);
-
+    DateTimeOffset ExecutionTimestamp,
+    string ClientOrderId = "");
