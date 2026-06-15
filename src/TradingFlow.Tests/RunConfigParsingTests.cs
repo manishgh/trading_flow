@@ -445,18 +445,6 @@ public sealed class RunConfigParsingTests
 
     private static string FindRepositoryRoot()
     {
-        var directory = new DirectoryInfo(Environment.CurrentDirectory);
-        while (directory != null)
-        {
-            if (Directory.Exists(Path.Combine(directory.FullName, "configs")) &&
-                File.Exists(Path.Combine(directory.FullName, "TradingFlow.sln")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not find trading_flow repository root.");
+        return TestRepository.FindRoot();
     }
 }

@@ -11,6 +11,7 @@ public partial class PaperPage : ContentPage
     private readonly IDispatcherTimer refreshTimer;
     private MobileCatalogResponse? catalog;
     private BacktestJobSnapshot? selectedJob;
+    private BacktestJobSnapshot? lastRun;
     private bool isLoading;
 
     public PaperPage()
@@ -65,8 +66,11 @@ public partial class PaperPage : ContentPage
             StrategyPicker.SelectedIndex = StrategyPicker.SelectedIndex < 0 && StrategyPicker.Items.Count > 0 ? 0 : StrategyPicker.SelectedIndex;
 
             var latestJobs = await api.GetPaperJobsAsync() ?? Array.Empty<BacktestJobSnapshot>();
+            lastRun = latestJobs.FirstOrDefault();
+            RenderLastRun();
+
             jobs.Clear();
-            foreach (var job in latestJobs.Take(20))
+            foreach (var job in latestJobs.Where(IsActiveJob).Take(12))
             {
                 jobs.Add(job);
             }
@@ -180,6 +184,42 @@ public partial class PaperPage : ContentPage
         RenderSelectedJob();
     }
 
+    private void OnJobDetailsClicked(object? sender, EventArgs e)
+    {
+        if (sender is Button { CommandParameter: BacktestJobSnapshot job })
+        {
+            selectedJob = job;
+            JobsView.SelectedItem = job;
+            RenderSelectedJob();
+        }
+    }
+
+    private void OnOpenLastRunDetails(object? sender, EventArgs e)
+    {
+        if (lastRun is null)
+        {
+            return;
+        }
+
+        selectedJob = lastRun;
+        JobsView.SelectedItem = jobs.FirstOrDefault(job => job.JobId == lastRun.JobId);
+        RenderSelectedJob();
+    }
+
+    private void RenderLastRun()
+    {
+        LastRunCard.IsVisible = lastRun is not null;
+        if (lastRun is null)
+        {
+            LastRunNameLabel.Text = string.Empty;
+            LastRunStatusLabel.Text = string.Empty;
+            return;
+        }
+
+        LastRunNameLabel.Text = lastRun.RunName;
+        LastRunStatusLabel.Text = $"{lastRun.Status} - {lastRun.LatestEvent}";
+    }
+
     private void RenderSelectedJob()
     {
         DetailCard.IsVisible = selectedJob is not null;
@@ -211,6 +251,9 @@ public partial class PaperPage : ContentPage
         }
 
         await api.CancelPaperJobAsync(selectedJob.JobId);
+        selectedJob = null;
+        JobsView.SelectedItem = null;
+        RenderSelectedJob();
         await LoadAsync();
     }
 
@@ -233,5 +276,12 @@ public partial class PaperPage : ContentPage
             .Select(ticker => ticker.ToUpperInvariant())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static bool IsActiveJob(BacktestJobSnapshot job)
+    {
+        return job.Status.Equals("running", StringComparison.OrdinalIgnoreCase) ||
+            job.Status.Equals("starting", StringComparison.OrdinalIgnoreCase) ||
+            job.Status.Equals("queued", StringComparison.OrdinalIgnoreCase);
     }
 }

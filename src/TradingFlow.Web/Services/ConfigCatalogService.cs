@@ -7,11 +7,13 @@ public sealed class ConfigCatalogService
 {
     private readonly ProjectPaths paths;
     private readonly SimpleYamlReader yamlReader;
+    private readonly ILogger<ConfigCatalogService> logger;
 
-    public ConfigCatalogService(ProjectPaths paths, SimpleYamlReader yamlReader)
+    public ConfigCatalogService(ProjectPaths paths, SimpleYamlReader yamlReader, ILogger<ConfigCatalogService>? logger = null)
     {
         this.paths = paths;
         this.yamlReader = yamlReader;
+        this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ConfigCatalogService>.Instance;
     }
 
     public IReadOnlyList<RunConfigSummary> GetBacktestConfigs()
@@ -33,10 +35,8 @@ public sealed class ConfigCatalogService
 
         return Directory.GetFiles(paths.StrategiesRoot, "*.yaml", SearchOption.TopDirectoryOnly)
             .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
-            .Select(path => new StrategyOption(
-                path,
-                Path.GetFileName(path),
-                yamlReader.ReadStrategy(path)))
+            .Select(TryCreateStrategyOption)
+            .OfType<StrategyOption>()
             .ToArray();
     }
 
@@ -45,7 +45,8 @@ public sealed class ConfigCatalogService
         var fullPath = Path.GetFullPath(configPath);
         var config = yamlReader.ReadBacktestRun(fullPath);
         var strategyOptions = config.Strategies
-            .Select(path => new StrategyOption(path, Path.GetFileName(path), yamlReader.ReadStrategy(path)))
+            .Select(TryCreateStrategyOption)
+            .OfType<StrategyOption>()
             .ToArray();
         return new RunConfigSummary(fullPath, Path.GetFileName(fullPath), config, strategyOptions);
     }
@@ -61,7 +62,39 @@ public sealed class ConfigCatalogService
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}archive{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}strategies{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .Select(GetConfig)
+            .Select(TryGetConfig)
+            .OfType<RunConfigSummary>()
             .ToArray();
+    }
+
+    private RunConfigSummary? TryGetConfig(string path)
+    {
+        try
+        {
+            return GetConfig(path);
+        }
+        catch (Exception exception) when (IsCatalogRecoverable(exception))
+        {
+            logger.LogWarning(exception, "Skipping invalid run config {ConfigPath} while building catalog.", path);
+            return null;
+        }
+    }
+
+    private StrategyOption? TryCreateStrategyOption(string path)
+    {
+        try
+        {
+            return new StrategyOption(path, Path.GetFileName(path), yamlReader.ReadStrategy(path));
+        }
+        catch (Exception exception) when (IsCatalogRecoverable(exception))
+        {
+            logger.LogWarning(exception, "Skipping invalid strategy reference {StrategyPath} while building catalog.", path);
+            return null;
+        }
+    }
+
+    private static bool IsCatalogRecoverable(Exception exception)
+    {
+        return exception is IOException or UnauthorizedAccessException or FormatException or InvalidOperationException;
     }
 }

@@ -70,14 +70,25 @@
                     </VerticalStackLayout>
                 </Border>
 
+                <Border x:Name="LastRunCard" Style="{StaticResource CardBorder}" IsVisible="False">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Spacing="3">
+                            <Label Text="Last Run" FontAttributes="Bold" FontSize="14" />
+                            <Label x:Name="LastRunNameLabel" FontSize="13" LineBreakMode="TailTruncation" />
+                            <Label x:Name="LastRunStatusLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="1" Text="Details" Clicked="OnOpenLastRunDetails" Padding="12,6" VerticalOptions="Center" />
+                    </Grid>
+                </Border>
+
                 <Grid ColumnDefinitions="*,Auto">
-                    <Label Text="Live Jobs" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
+                    <Label Text="Active Runs" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
                     <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
                 </Grid>
 
                 <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected">
                     <CollectionView.EmptyView>
-                        <Label Text="No paper jobs yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="No active paper runs. Use Last Run for the most recent completed, failed, or cancelled run." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
                     </CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
@@ -90,6 +101,7 @@
                                     <Label Text="{Binding ProgressText}" FontSize="13" />
                                     <Label Text="{Binding ResultSummary}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
                                     <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                    <Button Text="Details" Clicked="OnJobDetailsClicked" CommandParameter="{Binding .}" Padding="12,6" />
                                 </VerticalStackLayout>
                             </Border>
                         </DataTemplate>

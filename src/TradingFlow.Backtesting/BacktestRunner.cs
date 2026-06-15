@@ -2069,8 +2069,18 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
 
     private static string? FindRepositoryFile(string relativePath)
     {
-        foreach (var startPath in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+        foreach (var startPath in new[]
         {
+            Environment.GetEnvironmentVariable("TRADINGFLOW_REPO_ROOT"),
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory
+        })
+        {
+            if (String.IsNullOrWhiteSpace(startPath))
+            {
+                continue;
+            }
+
             var directory = new DirectoryInfo(startPath);
             while (directory is not null)
             {

@@ -17,16 +17,18 @@
 
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
-                        <Label Text="Notification Entry" FontAttributes="Bold" FontSize="18" />
+                        <Label Text="Stock Pulse Entry" FontAttributes="Bold" FontSize="18" />
                         <Label x:Name="NotificationAccessLabel" FontSize="13" />
-                        <Button Text="Open Notification Access Settings" Clicked="OnOpenNotificationSettings" />
-                        <Label Text="Open Stock Pulse once and let it send any alert. Select the captured alert below, tap Use Selected App, then save defaults." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                        <Entry x:Name="PackageEntry" Placeholder="Source app package, learned from captured alert" />
+                        <Button Text="1. Enable Notification Access" Clicked="OnOpenNotificationSettings" />
+                        <Label Text="2. Let Stock Pulse send one alert. It will appear under Captured Alerts." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="3. Select that alert, tap Use This App, choose paper config + exit strategy, then Save." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="Configured source app package" FontAttributes="Bold" FontSize="12" />
+                        <Entry x:Name="PackageEntry" Placeholder="Tap Use This App from a captured Stock Pulse alert" />
                         <Picker x:Name="ConfigPicker" Title="Paper environment" />
                         <Picker x:Name="StrategyPicker" Title="Exit strategy" />
                         <HorizontalStackLayout Spacing="8">
                             <CheckBox x:Name="AutoForwardCheck" Scale="0.85" />
-                            <Label Text="Auto-forward parsed entry notifications to paper trading" VerticalTextAlignment="Center" FontSize="13" />
+                            <Label Text="Auto-start paper trade when this app sends a parsed entry alert" VerticalTextAlignment="Center" FontSize="13" />
                         </HorizontalStackLayout>
                         <Button Text="Save Automation Defaults" Clicked="OnSaveDefaults" />
                     </VerticalStackLayout>
@@ -77,9 +79,10 @@
                 </Border>
 
                 <Label Text="Captured Alerts" FontAttributes="Bold" FontSize="18" />
+                <Label x:Name="SelectedAlertLabel" Text="Select a Stock Pulse alert below. The app extracts the ticker, then sends paper entry to TradingFlow; exits stay strategy-managed." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
                 <HorizontalStackLayout Spacing="10">
-                    <Button Text="Use Selected App" Clicked="OnUseSelectedApp" />
-                    <Button Text="Forward Alert" Clicked="OnForwardAlert" />
+                    <Button Text="Use This App" Clicked="OnUseSelectedApp" />
+                    <Button Text="Forward Selected" Clicked="OnForwardAlert" />
                     <Button Text="Clear Alerts" Clicked="OnClearAlerts" />
                 </HorizontalStackLayout>
                 <CollectionView x:Name="AlertsView" SelectionMode="Single" SelectionChanged="OnAlertSelected">

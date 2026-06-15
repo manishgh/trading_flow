@@ -33,6 +33,7 @@ public sealed class TradingFlowApiClient
         var current = BaseUrl;
         if (DeviceInfo.DeviceType != DeviceType.Virtual &&
             (current.Contains("10.0.2.2", StringComparison.OrdinalIgnoreCase) ||
+             current.Contains("10.0.0.2", StringComparison.OrdinalIgnoreCase) ||
              current.Contains("localhost", StringComparison.OrdinalIgnoreCase) ||
              current.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase)))
         {

@@ -253,18 +253,7 @@ parameters:
 
     private static string FindRepositoryRoot()
     {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            if (File.Exists(Path.Combine(current.FullName, "TradingFlow.sln")))
-            {
-                return current.FullName;
-            }
-
-            current = current.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate TradingFlow.sln.");
+        return TestRepository.FindRoot();
     }
 
     private static string BuildCsvBars()

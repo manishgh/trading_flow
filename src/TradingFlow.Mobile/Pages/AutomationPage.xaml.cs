@@ -89,6 +89,13 @@ public partial class AutomationPage : ContentPage
         {
             alerts.Add(alert);
         }
+
+        if (selectedAlert is null || alerts.All(alert => alert.AlertId != selectedAlert.AlertId))
+        {
+            SelectedAlertLabel.Text = alerts.Count == 0
+                ? "No alerts captured yet. Enable notification access, then wait for Stock Pulse to send one alert."
+                : "Select a Stock Pulse alert below. The app extracts the ticker, then sends paper entry to TradingFlow; exits stay strategy-managed.";
+        }
     }
 
     private void OnHubUpdated(object? sender, EventArgs e)
@@ -114,7 +121,8 @@ public partial class AutomationPage : ContentPage
         Preferences.Set("TradingFlowAutomationStrategyPath", strategy.Path);
         Preferences.Set("TradingFlowAutomationPackage", PackageEntry.Text?.Trim() ?? string.Empty);
         Preferences.Set("TradingFlowAutomationAutoForward", AutoForwardCheck.IsChecked);
-        await DisplayAlertAsync("Automation", "Automation defaults saved.", "OK");
+        var mode = AutoForwardCheck.IsChecked ? "Auto-forward is ON." : "Auto-forward is OFF. Use Forward Selected to test manually.";
+        await DisplayAlertAsync("Automation", $"Defaults saved. {mode}", "OK");
     }
 
     private async void OnRunNow(object? sender, EventArgs e)
@@ -197,6 +205,9 @@ public partial class AutomationPage : ContentPage
     private void OnAlertSelected(object? sender, SelectionChangedEventArgs e)
     {
         selectedAlert = e.CurrentSelection.FirstOrDefault() as CapturedAutomationAlert;
+        SelectedAlertLabel.Text = selectedAlert is null
+            ? "Select a Stock Pulse alert below. The app extracts the ticker, then sends paper entry to TradingFlow; exits stay strategy-managed."
+            : $"Selected {selectedAlert.Ticker ?? "no ticker"} from {selectedAlert.PackageName}. Use This App saves the package; Forward Selected starts a paper entry once defaults are saved.";
     }
 
     private async void OnUseSelectedApp(object? sender, EventArgs e)
@@ -209,7 +220,8 @@ public partial class AutomationPage : ContentPage
 
         PackageEntry.Text = selectedAlert.PackageName;
         Preferences.Set("TradingFlowAutomationPackage", selectedAlert.PackageName);
-        await DisplayAlertAsync("Automation", $"Only notifications from {selectedAlert.PackageName} will be auto-forwarded after you save defaults.", "OK");
+        SelectedAlertLabel.Text = $"Using {selectedAlert.PackageName}. Save defaults to make this the Stock Pulse source app.";
+        await DisplayAlertAsync("Automation", $"Using {selectedAlert.PackageName}. Select config/strategy and Save Automation Defaults.", "OK");
     }
 
     private async void OnForwardAlert(object? sender, EventArgs e)
@@ -235,5 +247,6 @@ public partial class AutomationPage : ContentPage
         hub.Clear();
         selectedAlert = null;
         AlertsView.SelectedItem = null;
+        SelectedAlertLabel.Text = "No alerts captured yet. Enable notification access, then wait for Stock Pulse to send one alert.";
     }
 }
