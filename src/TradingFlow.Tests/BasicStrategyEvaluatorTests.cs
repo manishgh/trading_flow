@@ -164,6 +164,57 @@ public class BasicStrategyEvaluatorTests
     }
 
     [Fact]
+    public void GetLongEntryRejection_WhenDirectEntryIsTooExtendedFromVwap_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MaxVwapExtensionPctForDirectEntry = 4.0m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            CurrentPrice = 10m,
+            CurrentAtr = 1m,
+            VwapExtensionAtr = 0.75m,
+            CloseLocationValue = 0.90m,
+            IsVwapPullback = false,
+            IsVwapReclaim = false
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.0m);
+
+        Assert.Equal("extended_vwap_direct_entry_not_allowed (VwapExtensionPct: 7.50, RequiredMax: 4.00)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenExtendedEntryHasVwapPullbackStructure_DoesNotRejectAsChase()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MaxVwapExtensionPctForDirectEntry = 4.0m,
+                ExtendedVwapMinEntryBarCloseLocationValue = 0.70m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            CurrentPrice = 10m,
+            CurrentAtr = 1m,
+            VwapExtensionAtr = 0.75m,
+            CloseLocationValue = 0.90m,
+            IsVwapPullback = true
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.0m);
+
+        Assert.Null(rejection);
+    }
+    [Fact]
     public void GetLongEntryRejection_WhenVolumeTooLow_ReturnsFormattedString()
     {
         var strategy = CreateBaseStrategy();

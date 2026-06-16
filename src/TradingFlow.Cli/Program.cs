@@ -2,6 +2,7 @@ using System.Text.Json;
 using TradingFlow.Backtesting;
 using TradingFlow.Backtesting.Optimization;
 using TradingFlow.Backtesting.Research;
+using TradingFlow.Backtesting.StrategyEvaluation;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Storage;
@@ -247,6 +248,75 @@ if (args.Length > 0 && args[0].Equals("analyze-swing", StringComparison.OrdinalI
     await AtomicFileArtifactWriter.Instance.WriteTextAsync(outputPath, json, CancellationToken.None);
     Console.WriteLine(json);
     Console.WriteLine($"ReportPath={Path.GetFullPath(outputPath)}");
+    return;
+}
+
+if (args.Length > 0 && args[0].Equals("evaluate-entry", StringComparison.OrdinalIgnoreCase))
+{
+    var entryConfigPath = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
+        ? args[1]
+        : throw new ArgumentException("Run config path required.");
+    var strategyPath = ParseStringOption(args, "--strategy")
+        ?? throw new ArgumentException("--strategy path is required.");
+    var tickersCsv = ParseStringOption(args, "--tickers");
+    var ticker = ParseStringOption(args, "--ticker");
+    var end = ParseDateOption(args, "--end") ?? DateTimeOffset.UtcNow;
+    var lookbackDays = ParseIntOption(args, "--days") ?? 0;
+
+    var reader = new SimpleYamlReader();
+    var entryRunConfig = reader.ReadBacktestRun(entryConfigPath);
+    var strategy = reader.ReadStrategy(strategyPath);
+    var requestedTickers = !String.IsNullOrWhiteSpace(ticker)
+        ? new[] { ticker.Trim().ToUpperInvariant() }
+        : tickersCsv?
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(x => x.ToUpperInvariant())
+            .ToArray();
+
+    var evaluationEngine = new StrategyEvaluationEngine();
+    var response = await evaluationEngine.EvaluateAsync(
+        new StrategyEvaluationRequest(
+            entryConfigPath,
+            strategyPath,
+            requestedTickers,
+            lookbackDays <= 0 ? Math.Max(entryRunConfig.TimeWindow.LookbackDays, entryRunConfig.TimeWindow.WarmupLookbackDays) : lookbackDays,
+            null,
+            end),
+        CreateProvider(entryRunConfig),
+        entryRunConfig,
+        strategy,
+        strategyPath,
+        CancellationToken.None);
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        response.RunName,
+        response.StrategyId,
+        response.StrategyName,
+        response.StrategyPath,
+        response.Start,
+        response.End,
+        Results = response.Results.Select(result => new
+        {
+            result.Ticker,
+            result.Timeframe,
+            result.Decision,
+            result.Reason,
+            result.Timestamp,
+            result.Close,
+            result.Rsi,
+            result.Atr,
+            result.Volume,
+            result.SlotAverageVolume,
+            result.RelativeVolume,
+            result.Vwap,
+            result.Ema20,
+            result.Ema50,
+            result.MacdHistogram,
+            result.Signal
+        }),
+        response.Profiler
+    }, serializerOptions));
     return;
 }
 
@@ -592,12 +662,7 @@ static TradingFlow.Engine.Abstractions.IMarketDataProvider CreateProvider(Tradin
         "csv" => new TradingFlow.Data.Csv.CsvMarketDataProvider(run.NormalizedRoot),
         "alpaca" => new TradingFlow.Alpaca.AlpacaMarketDataProvider(
             new HttpClient(),
-            TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
-            {
-                KeyId = Environment.GetEnvironmentVariable("ALPACA_KEY_ID") ?? "",
-                SecretKey = Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY") ?? "",
-                MarketDataFeed = run.Providers.Alpaca.DataFeed
-            }),
+            ResolveAlpacaOptions(run)),
         "finviz" => new TradingFlow.Finviz.FinvizMarketDataProvider(
             new TradingFlow.Finviz.FinvizClient(
                 new HttpClient(),

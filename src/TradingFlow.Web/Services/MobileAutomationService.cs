@@ -35,6 +35,7 @@ public sealed class MobileAutomationService
     private readonly ILogger<MobileAutomationService> logger;
     private readonly ICandleStore candleStore;
     private readonly SignalGenerator signalGenerator = new();
+    private readonly BasicStrategyEvaluator strategyEvaluator = new();
     private readonly TechnicalExecutionEngine technicalExecutionEngine = new();
     private readonly RiskEngine riskEngine = new();
 
@@ -635,6 +636,12 @@ public sealed class MobileAutomationService
             throw new InvalidOperationException(confluenceRejection);
         }
 
+        var entryRejection = GetLongEntryGateRejection(strategy, latest, signal);
+        if (entryRejection is not null)
+        {
+            throw new InvalidOperationException(entryRejection);
+        }
+
         var executionSignal = ResolveExecutionOrderSignal(strategy, signal, state.SnapshotsByTimeframe)
             ?? throw new InvalidOperationException($"Execution timeframe {strategy.Execution.Timeframe} is unavailable for {ticker}.");
 
@@ -651,6 +658,30 @@ public sealed class MobileAutomationService
         if (snapshot.BollingerMiddle is null) missing.Add("bollinger_middle");
         if (snapshot.MacdHistogram is null) missing.Add("macd_histogram");
         return missing.Count == 0 ? null : $"signal_missing_indicators ({string.Join(", ", missing)})";
+    }
+
+    internal string? GetLongEntryGateRejection(
+        StrategyDefinition strategy,
+        IndicatorSnapshot snapshot,
+        TradeSignal signal)
+    {
+        var relativeVolume = ResolveEntryRelativeVolume(strategy, snapshot);
+        if (relativeVolume is null)
+        {
+            return $"entry_relative_volume_unavailable (Source: {strategy.EntryRules.MinVolumeSpikeSource})";
+        }
+
+        return strategyEvaluator.GetLongEntryRejection(strategy, signal, relativeVolume.Value);
+    }
+
+    internal static decimal? ResolveEntryRelativeVolume(StrategyDefinition strategy, IndicatorSnapshot snapshot)
+    {
+        return strategy.EntryRules.MinVolumeSpikeSource.ToLowerInvariant() switch
+        {
+            "session_vs_average_day" or "session" or "finviz_style" => snapshot.SessionRelativeVolume,
+            "slot_bar" or "bar_same_time" => snapshot.SlotRelativeVolume,
+            _ => snapshot.RelativeVolume
+        };
     }
 
     private static string[] ResolveRequiredTimeframes(StrategyDefinition strategy)

@@ -27,7 +27,7 @@ public sealed class PaperModelTests
             model.ConfigPath,
             StringComparison.OrdinalIgnoreCase);
         Assert.EndsWith(
-            Path.Combine("configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml"),
+            Path.Combine("configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v9-confirmed-reclaim.yaml"),
             model.SelectedStrategyPath,
             StringComparison.OrdinalIgnoreCase);
     }
@@ -44,10 +44,10 @@ public sealed class PaperModelTests
             strategyPath: null);
 
         Assert.EndsWith(
-            Path.Combine("configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml"),
+            Path.Combine("configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v9-confirmed-reclaim.yaml"),
             model.SelectedStrategyPath,
             StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("setup_type: indicator_stack", model.StrategyYaml, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("setup_type: vwap_pullback", model.StrategyYaml, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

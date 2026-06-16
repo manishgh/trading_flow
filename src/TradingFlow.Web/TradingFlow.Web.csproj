@@ -5,6 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="TradingFlow.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\TradingFlow.Backtesting\TradingFlow.Backtesting.csproj" />
     <ProjectReference Include="..\TradingFlow.Domain\TradingFlow.Domain.csproj" />
     <ProjectReference Include="..\TradingFlow.Engine\TradingFlow.Engine.csproj" />

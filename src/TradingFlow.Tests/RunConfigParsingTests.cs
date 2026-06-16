@@ -11,7 +11,8 @@ public sealed class RunConfigParsingTests
     private const string RetainedStrategyFile = "intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml";
     private const string RunnerUpIntradayStrategyFile = "intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml";
     private const string StructuralExitIntradayStrategyFile = "intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml";
-    private const string PaperIntradayStrategyFile = "intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml";
+    private const string PaperIntradayStrategyFile = "intraday-ross-vwap-ema-cumulative-volume.v9-confirmed-reclaim.yaml";
+    private const string RetainedIntradayStrategyFile = "intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml";
     private const string RetainedBacktestFile = "poet-mxl-rgti-mu-msft-intraday-v8-comparison-90d.yaml";
     private const string RetainedSwingBacktestFile = "swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d.yaml";
     private const string PaperSwingFile = "alpaca-paper-swing.yaml";
@@ -23,7 +24,7 @@ public sealed class RunConfigParsingTests
     private const string MinerviniVcpStrategyFile = "mark_minervini_trade_like_a_stock_market_wizard.yaml";
 
     [Fact]
-    public void AlpacaPaperConfig_UsesRetainedRossStrategyAndSipFeed()
+    public void AlpacaPaperConfig_UsesConfirmedReclaimStrategyAndSipFeed()
     {
         var repoRoot = FindRepositoryRoot();
         var configPath = Path.Combine(repoRoot, "configs", "paper", "alpaca-paper.yaml");
@@ -104,6 +105,32 @@ public sealed class RunConfigParsingTests
         Assert.False(strategy.ExitRules.ExitOnSma10NearSma20);
     }
 
+    [Fact]
+    public void PaperIntradayStrategyConfig_ParsesConfirmedReclaimGuardRules()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var reader = new SimpleYamlReader();
+        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", PaperIntradayStrategyFile));
+
+        Assert.Equal("TOP1 Intraday - Confirmed VWAP Reclaim V9 Guard", strategy.StrategyName);
+        Assert.Equal("vwap_pullback", strategy.EntryRules.SetupType);
+        Assert.Equal("long", strategy.Direction);
+        Assert.Equal("1m", strategy.Timeframe);
+        Assert.Equal("1m", strategy.Execution.Timeframe);
+        Assert.Equal(2.0m, strategy.EntryRules.MinVolumeSpike);
+        Assert.Equal("cumulative_same_time", strategy.EntryRules.MinVolumeSpikeSource);
+        Assert.Equal(0.70m, strategy.EntryRules.MinSessionRelativeVolume);
+        Assert.Equal(2.75m, strategy.EntryRules.MaxVwapExtensionAtr);
+        Assert.Equal(0.35m, strategy.EntryRules.MinCloseLocationValue);
+        Assert.True(strategy.EntryRules.EnableEntryBarConfirmation);
+        Assert.Equal(0.65m, strategy.EntryRules.MinEntryBarCloseLocationValue);
+        Assert.True(strategy.EntryRules.RejectEntryBarCloseLocationBelowMinimum);
+        Assert.True(strategy.EntryRules.RejectEntryBarBreaksSignalMidpoint);
+        Assert.Equal(4.0m, strategy.EntryRules.MaxVwapExtensionPctForDirectEntry);
+        Assert.Equal(0.75m, strategy.EntryRules.ExtendedVwapMinEntryBarCloseLocationValue);
+        Assert.Equal(1.0m, strategy.ExitRules.StopAtrMultiple);
+        Assert.Equal(3.0m, strategy.ExitRules.TargetRMultiple);
+    }
     [Fact]
     public void RunnerUpIntradayStrategyConfig_ParsesStructuralExitRules()
     {
@@ -307,7 +334,7 @@ public sealed class RunConfigParsingTests
         Assert.Equal(3, config.Strategies.Count);
         Assert.Contains("POET", config.Tickers);
         Assert.Contains("MSFT", config.Tickers);
-        Assert.Contains(config.Strategies, path => path.EndsWith(PaperIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(config.Strategies, path => path.EndsWith(RetainedIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
         Assert.Contains(config.Strategies, path => path.EndsWith(RunnerUpIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
         Assert.Contains(config.Strategies, path => path.EndsWith(StructuralExitIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
     }

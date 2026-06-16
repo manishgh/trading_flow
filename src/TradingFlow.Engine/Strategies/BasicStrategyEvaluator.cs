@@ -99,6 +99,12 @@ public sealed class BasicStrategyEvaluator
             return $"weak_close_on_high_relative_volume (CloseLocation: {signal.CloseLocationValue?.ToString("F2") ?? "n/a"}, RelativeVolume: {relativeVolume:F2})";
         }
 
+        var directEntryChaseRejection = GetDirectEntryChaseRejection(strategy, signal);
+        if (directEntryChaseRejection is not null)
+        {
+            return directEntryChaseRejection;
+        }
+
         if (strategy.EntryRules.MinDayGainPct is { } minDayGain &&
             (signal.DayGainPct is null || signal.DayGainPct.Value < minDayGain))
         {
@@ -219,6 +225,54 @@ public sealed class BasicStrategyEvaluator
         return null;
     }
 
+    private static string? GetDirectEntryChaseRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        var rules = strategy.EntryRules;
+        var isStructuredEntry = signal.IsVwapPullback ||
+            signal.IsVwapReclaim ||
+            signal.IsBullFlagBreakout ||
+            signal.IsFlatTopBreakout ||
+            signal.IsVwapReclaimTrap ||
+            signal.IsAnchoredVwapBounce;
+
+        if (rules.MaxVwapExtensionPctForDirectEntry is { } maxVwapExtensionPct &&
+            signal.VwapExtensionAtr is { } vwapExtensionAtr &&
+            signal.CurrentAtr > 0m &&
+            signal.CurrentPrice > 0m)
+        {
+            var vwapExtensionPct = vwapExtensionAtr * signal.CurrentAtr / signal.CurrentPrice * 100m;
+            if (vwapExtensionPct > maxVwapExtensionPct && !isStructuredEntry)
+            {
+                return $"extended_vwap_direct_entry_not_allowed (VwapExtensionPct: {vwapExtensionPct:F2}, RequiredMax: {maxVwapExtensionPct:F2})";
+            }
+
+            if (vwapExtensionPct > maxVwapExtensionPct &&
+                rules.ExtendedVwapMinEntryBarCloseLocationValue is { } minExtendedCloseLocation &&
+                (signal.CloseLocationValue is null || signal.CloseLocationValue.Value < minExtendedCloseLocation))
+            {
+                return $"extended_vwap_close_location_below_minimum (VwapExtensionPct: {vwapExtensionPct:F2}, CloseLocation: {signal.CloseLocationValue?.ToString("F2") ?? "n/a"}, RequiredCloseLocation: {minExtendedCloseLocation:F2})";
+            }
+        }
+
+        if (rules.MaxBollingerPositionForDirectEntry is { } maxBollingerPosition &&
+            signal.BollingerPosition is { } bollingerPosition &&
+            bollingerPosition > maxBollingerPosition &&
+            !isStructuredEntry)
+        {
+            return $"extended_bollinger_direct_entry_not_allowed (BollingerPosition: {bollingerPosition:F2}, RequiredMax: {maxBollingerPosition:F2})";
+        }
+
+        if (rules.MaxBollingerPositionForDirectEntry is { } maxBollingerPositionWithClv &&
+            signal.BollingerPosition is { } bollingerPositionWithClv &&
+            bollingerPositionWithClv > maxBollingerPositionWithClv &&
+            rules.ExtendedBollingerMinEntryBarCloseLocationValue is { } minExtendedBollingerCloseLocation &&
+            (signal.CloseLocationValue is null || signal.CloseLocationValue.Value < minExtendedBollingerCloseLocation))
+        {
+            return $"extended_bollinger_close_location_below_minimum (BollingerPosition: {bollingerPositionWithClv:F2}, CloseLocation: {signal.CloseLocationValue?.ToString("F2") ?? "n/a"}, RequiredCloseLocation: {minExtendedBollingerCloseLocation:F2})";
+        }
+
+        return null;
+    }
     private static string? GetPremarketRejection(StrategyDefinition strategy, TradeSignal signal)
     {
         if (!strategy.EntryRules.EnablePremarketFilter)

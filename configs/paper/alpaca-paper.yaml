@@ -106,4 +106,4 @@ artifacts:
   retention_mode: summary
 
 strategies:
-  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml
+  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v9-confirmed-reclaim.yaml
