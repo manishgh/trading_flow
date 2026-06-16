@@ -8,6 +8,7 @@ public partial class PaperPage : ContentPage
     private readonly TradingFlowApiClient api = AppServices.Api;
     private readonly ObservableCollection<BacktestJobSnapshot> jobs = new();
     private readonly ObservableCollection<MobileNewsItem> newsItems = new();
+    private readonly ObservableCollection<MobileAutomationSessionSnapshot> automationSessions = new();
     private readonly IDispatcherTimer refreshTimer;
     private MobileCatalogResponse? catalog;
     private BacktestJobSnapshot? selectedJob;
@@ -19,6 +20,7 @@ public partial class PaperPage : ContentPage
         InitializeComponent();
         JobsView.ItemsSource = jobs;
         NewsView.ItemsSource = newsItems;
+        AutomationSessionsView.ItemsSource = automationSessions;
         OrderExpirationPicker.ItemsSource = new[] { "day", "gtc" };
         EntryOrderTypePicker.ItemsSource = new[] { "market", "limit" };
         OrderExpirationPicker.SelectedIndex = 0;
@@ -66,6 +68,7 @@ public partial class PaperPage : ContentPage
             StrategyPicker.SelectedIndex = StrategyPicker.SelectedIndex < 0 && StrategyPicker.Items.Count > 0 ? 0 : StrategyPicker.SelectedIndex;
 
             var latestJobs = await api.GetPaperJobsAsync() ?? Array.Empty<BacktestJobSnapshot>();
+            var latestAutomationSessions = await api.GetAutomationSessionsAsync() ?? Array.Empty<MobileAutomationSessionSnapshot>();
             lastRun = latestJobs.FirstOrDefault();
             RenderLastRun();
 
@@ -73,6 +76,12 @@ public partial class PaperPage : ContentPage
             foreach (var job in latestJobs.Where(IsActiveJob).Take(12))
             {
                 jobs.Add(job);
+            }
+
+            automationSessions.Clear();
+            foreach (var session in latestAutomationSessions.Take(12))
+            {
+                automationSessions.Add(session);
             }
 
             selectedJob = selectedJob is null

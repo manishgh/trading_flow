@@ -19,12 +19,21 @@
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
                         <Label Text="Add Stocks" FontAttributes="Bold" FontSize="18" />
+                        <Label Text="Tickers" FontAttributes="Bold" FontSize="12" />
                         <Entry x:Name="TickersEntry" Placeholder="POET, RGTI, NVTS" Keyboard="Text" />
+                        <Label Text="Reason" FontAttributes="Bold" FontSize="12" />
                         <Entry x:Name="ReasonEntry" Placeholder="Reason" Text="possible trend tomorrow" />
                         <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
-                            <Entry x:Name="WarmupDaysEntry" Placeholder="Warmup days" Text="60" Keyboard="Numeric" />
-                            <Entry x:Name="NewsDaysEntry" Grid.Column="1" Placeholder="News days" Text="14" Keyboard="Numeric" />
+                            <VerticalStackLayout Spacing="4">
+                                <Label Text="Warmup days" FontAttributes="Bold" FontSize="12" />
+                                <Entry x:Name="WarmupDaysEntry" Placeholder="Warmup days" Text="60" Keyboard="Numeric" />
+                            </VerticalStackLayout>
+                            <VerticalStackLayout Grid.Column="1" Spacing="4">
+                                <Label Text="News lookback days" FontAttributes="Bold" FontSize="12" />
+                                <Entry x:Name="NewsDaysEntry" Placeholder="News days" Text="14" Keyboard="Numeric" />
+                            </VerticalStackLayout>
                         </Grid>
+                        <Label Text="Timeframes" FontAttributes="Bold" FontSize="12" />
                         <Entry x:Name="TimeframesEntry" Placeholder="Timeframes" Text="1m,5m,15m,1h,1d" />
                         <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                             <HorizontalStackLayout Spacing="8">

@@ -37,6 +37,13 @@ public partial class SettingsPage : ContentPage
         await TestCurrentUrlAsync();
     }
 
+    private async void OnUseNgrokUrl(object? sender, EventArgs e)
+    {
+        AppServices.Api.UseNgrokDefault();
+        BackendUrlEntry.Text = AppServices.Api.BaseUrl;
+        await TestCurrentUrlAsync();
+    }
+
     private async void OnUseEmulatorUrl(object? sender, EventArgs e)
     {
         AppServices.Api.UseAndroidEmulatorDefault();

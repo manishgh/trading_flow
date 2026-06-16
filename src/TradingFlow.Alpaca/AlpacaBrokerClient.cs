@@ -130,7 +130,45 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 
     public async Task<bool> ModifyOrderAsync(string orderId, decimal newStopLoss, decimal newTakeProfit, CancellationToken cancellationToken)
     {
-        throw new NotImplementedException("Modifying bracket child orders via Alpaca requires updating the specific leg.");
+        return await ApiProfiler.ProfileAsync("Alpaca", $"/v2/orders/{orderId}", "PATCH", async () =>
+        {
+            if (String.IsNullOrWhiteSpace(orderId))
+            {
+                throw new ArgumentException("Order id is required when modifying an Alpaca order.", nameof(orderId));
+            }
+
+            var request = new System.Collections.Generic.Dictionary<string, string>();
+            if (newStopLoss > 0m)
+            {
+                request["stop_price"] = newStopLoss.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            if (newTakeProfit > 0m)
+            {
+                request["limit_price"] = newTakeProfit.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            if (request.Count == 0)
+            {
+                return false;
+            }
+
+            var json = JsonSerializer.Serialize(request);
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Patch, $"/v2/orders/{orderId}")
+            {
+                Content = content
+            };
+
+            var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
+            if (response.IsSuccessStatusCode)
+            {
+                return true;
+            }
+
+            var responseString = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new Exception($"Alpaca API Error (ModifyOrderAsync): {response.StatusCode} - {responseString}");
+        });
     }
 
     public async Task<string[]> SubmitExitOrdersAsync(string ticker, int quantity, decimal stopLossPrice, decimal takeProfitPrice, CancellationToken cancellationToken)

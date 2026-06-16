@@ -18,10 +18,15 @@
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
                         <Label Text="Run Setup" FontAttributes="Bold" FontSize="18" />
+                        <Label Text="Paper environment" FontAttributes="Bold" FontSize="12" />
                         <Picker x:Name="ConfigPicker" Title="Paper environment" />
+                        <Label Text="Strategy" FontAttributes="Bold" FontSize="12" />
                         <Picker x:Name="StrategyPicker" Title="Strategy" />
+                        <Label Text="Run name" FontAttributes="Bold" FontSize="12" />
                         <Entry x:Name="RunNameEntry" Placeholder="Run name, optional" />
+                        <Label Text="Tickers" FontAttributes="Bold" FontSize="12" />
                         <Entry x:Name="TickersEntry" Placeholder="Tickers: RDW, OUST, SPCE" Text="RDW, OUST, SPCE" Keyboard="Text" />
+                        <Label Text="Finviz filter" FontAttributes="Bold" FontSize="12" />
                         <Entry x:Name="ScreenerEntry" Placeholder="Optional Finviz query or URL" Keyboard="Url" />
                         <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                             <HorizontalStackLayout Spacing="8">
@@ -33,6 +38,7 @@
                                 <Label Text="News" VerticalTextAlignment="Center" FontSize="13" />
                             </HorizontalStackLayout>
                         </Grid>
+                        <Label Text="Order handling" FontAttributes="Bold" FontSize="12" />
                         <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                             <Picker x:Name="OrderExpirationPicker" Title="Order expiry" />
                             <Picker x:Name="EntryOrderTypePicker" Grid.Column="1" Title="Entry order" />
@@ -47,7 +53,7 @@
                             <Label Text="News Catalysts" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
                             <Button Grid.Column="1" Text="Test News" Clicked="OnTestNews" Padding="12,6" />
                         </Grid>
-                        <Label x:Name="NewsStatusLabel" Text="Use Test News to preview catalysts for the selected paper config and tickers." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label x:Name="NewsStatusLabel" Text="Preview catalysts for selected tickers. Paper runs only use news when the News checkbox is on." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
                         <CollectionView x:Name="NewsView" HeightRequest="240">
                             <CollectionView.EmptyView>
                                 <Label Text="No catalyst news loaded." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
@@ -85,6 +91,32 @@
                     <Label Text="Active Runs" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
                     <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
                 </Grid>
+
+                <Border Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="10">
+                        <Label Text="Alert-Triggered Paper Trades" FontAttributes="Bold" FontSize="18" />
+                        <Label Text="Notification entries from the Android app. Each session has its own run id, events, and strategy-managed exit." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <CollectionView x:Name="AutomationSessionsView" HeightRequest="220">
+                            <CollectionView.EmptyView>
+                                <Label Text="No alert-triggered paper sessions." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                            </CollectionView.EmptyView>
+                            <CollectionView.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8">
+                                        <VerticalStackLayout Spacing="4">
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <Label Text="{Binding DisplayTitle}" FontAttributes="Bold" FontSize="14" LineBreakMode="TailTruncation" />
+                                                <Label Grid.Column="1" Text="{Binding Status}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                            </Grid>
+                                            <Label Text="{Binding RunDetail}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                            <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                        </VerticalStackLayout>
+                                    </Border>
+                                </DataTemplate>
+                            </CollectionView.ItemTemplate>
+                        </CollectionView>
+                    </VerticalStackLayout>
+                </Border>
 
                 <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected">
                     <CollectionView.EmptyView>

@@ -530,6 +530,104 @@ public class LiveRunnerIntegrationTests
     }
 
     [Fact]
+    public async Task RunAsync_RaisesBrokerStop_WhenAtrTrailingStopActivates()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var risingBars = CreateRisingFiveMinuteBars("RGNT");
+            var provider = new Mock<IMarketDataProvider>();
+            provider
+                .Setup(x => x.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> _, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                    YieldBars(risingBars, token));
+
+            var broker = new Mock<IBrokerClient>();
+            broker
+                .Setup(x => x.GetOpenOrdersAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([
+                    new ActiveBrokerOrder("stop-leg-1", "RGNT", "sell", "new", "stop", null, 95m, 100m, risingBars[^20].Timestamp)
+                ]);
+            broker
+                .Setup(x => x.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([
+                    new BrokerPosition("RGNT", "long", 100m, 100m, 118m, 1800m)
+                ]);
+            broker
+                .Setup(x => x.ModifyOrderAsync("stop-leg-1", It.IsAny<decimal>(), 0m, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(true);
+
+            var persistedOrder = new PersistedOrder
+            {
+                OrderId = "entry-1",
+                Ticker = "RGNT",
+                StrategyName = "Test Strategy",
+                Broker = "alpaca",
+                Status = "exit_submitted",
+                EntryPrice = 100m,
+                StopLossPrice = 95m,
+                TakeProfitPrice = 1000m,
+                ShareQuantity = 100,
+                CreatedAt = risingBars[^20].Timestamp,
+                UpdatedAt = risingBars[^20].Timestamp
+            };
+
+            PersistedOrder? savedOrder = null;
+            var orderRepo = new Mock<IOrderStateRepository>();
+            orderRepo
+                .Setup(x => x.GetActiveOrdersByTickerAsync("RGNT", It.IsAny<CancellationToken>()))
+                .ReturnsAsync([persistedOrder]);
+            orderRepo
+                .Setup(x => x.GetOrderAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((PersistedOrder?)null);
+            orderRepo
+                .Setup(x => x.SaveOrderAsync(It.IsAny<PersistedOrder>(), It.IsAny<CancellationToken>()))
+                .Callback<PersistedOrder, CancellationToken>((order, _) => savedOrder = order)
+                .Returns(Task.CompletedTask);
+
+            var runner = CreateRunner(
+                provider.Object,
+                lockService: null,
+                brokerClient: broker.Object,
+                orderStateRepository: orderRepo.Object);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var progress = new Progress<string>(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                }
+            });
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["RGNT"], ["5m"], workerCount: 2, derivedSource: "5m", dryRun: false, allowLiveOrders: true),
+                [CreateStrategy(
+                    signalTimeframe: "5m",
+                    executionTimeframe: "5m",
+                    enableAtrTrailingStop: true,
+                    trailingStopAtrMultiple: 2.0m,
+                    trailingActivationR: 1.0m)],
+                cts,
+                progress);
+
+            broker.Verify(x => x.ModifyOrderAsync("stop-leg-1", It.Is<decimal>(value => value > 95m), 0m, It.IsAny<CancellationToken>()), Times.Once);
+            broker.Verify(x => x.ClosePositionAsync("RGNT", It.IsAny<CancellationToken>()), Times.Never);
+            Assert.NotNull(savedOrder);
+            Assert.True(savedOrder.StopLossPrice > 95m);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_CountsPositionWithSellExitLeg_AsSingleActiveExposure()
     {
         var resultsRoot = CreateTempDirectory();
@@ -690,7 +788,10 @@ public class LiveRunnerIntegrationTests
         bool exitOnCloseBelowEma20 = false,
         bool exitOnCloseBelowVwap = false,
         bool exitOnMacdHistogramNegative = false,
-        int minHoldBarsBeforeTechnicalExit = 0)
+        int minHoldBarsBeforeTechnicalExit = 0,
+        bool enableAtrTrailingStop = false,
+        decimal trailingStopAtrMultiple = 0m,
+        decimal trailingActivationR = 0m)
     {
         return new StrategyDefinition(
             StrategyId: "test_strat",
@@ -721,9 +822,9 @@ public class LiveRunnerIntegrationTests
                 1.0m,
                 2.0m,
                 24m,
-                false,
-                0m,
-                0m,
+                enableAtrTrailingStop,
+                trailingStopAtrMultiple,
+                trailingActivationR,
                 exitOnCloseBelowEma20,
                 exitOnCloseBelowVwap,
                 exitOnMacdHistogramNegative,
@@ -799,6 +900,31 @@ public class LiveRunnerIntegrationTests
                     close - 0.25m,
                     close,
                     100000m + i));
+            }
+        }
+
+        return bars;
+    }
+
+    private static IReadOnlyList<OhlcvBar> CreateRisingFiveMinuteBars(string ticker)
+    {
+        var start = DateTimeOffset.UtcNow.AddDays(-7).AddHours(-8);
+        var bars = new List<OhlcvBar>();
+        for (var day = 0; day < 7; day++)
+        {
+            for (var i = 0; i < 96; i++)
+            {
+                var sequence = (day * 96) + i;
+                var close = 100m + sequence * 0.04m;
+                bars.Add(new OhlcvBar(
+                    ticker,
+                    start.AddDays(day).AddMinutes(i * 5),
+                    "5m",
+                    close - 0.02m,
+                    close + 0.20m,
+                    close - 0.20m,
+                    close,
+                    200000m + i));
             }
         }
 

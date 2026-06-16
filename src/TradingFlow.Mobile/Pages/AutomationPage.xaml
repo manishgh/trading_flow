@@ -7,7 +7,7 @@
         <ScrollView>
             <VerticalStackLayout Padding="16" Spacing="14">
                 <Label Text="Android Automation" Style="{StaticResource Headline}" FontSize="24" />
-                <Label Text="Use another app's notification as the paper-entry trigger. TradingFlow keeps ownership of exits using the selected intraday strategy." Style="{StaticResource SubHeadline}" FontSize="13" />
+                <Label Text="Capture a trusted alert app, parse the ticker, start paper entry, and let TradingFlow manage the exit." Style="{StaticResource SubHeadline}" FontSize="13" />
                 <Border Style="{StaticResource CardBorder}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
@@ -17,15 +17,27 @@
 
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
-                        <Label Text="Stock Pulse Entry" FontAttributes="Bold" FontSize="18" />
+                        <Label Text="External Alert Entry" FontAttributes="Bold" FontSize="18" />
                         <Label x:Name="NotificationAccessLabel" FontSize="13" />
                         <Button Text="1. Enable Notification Access" Clicked="OnOpenNotificationSettings" />
-                        <Label Text="2. Let Stock Pulse send one alert. It will appear under Captured Alerts." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                        <Label Text="3. Select that alert, tap Use This App, choose paper config + exit strategy, then Save." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                        <Label Text="Configured source app package" FontAttributes="Bold" FontSize="12" />
-                        <Entry x:Name="PackageEntry" Placeholder="Tap Use This App from a captured Stock Pulse alert" />
-                        <Picker x:Name="ConfigPicker" Title="Paper environment" />
-                        <Picker x:Name="StrategyPicker" Title="Exit strategy" />
+                        <Label Text="2. Type the app display name, tap Find, then choose the exact installed app." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <Entry x:Name="SourceAppSearchEntry" Placeholder="App name: Stock Pulse" />
+                            <Button Grid.Column="1" Text="Find" Clicked="OnFindSourceApp" Padding="12,6" />
+                        </Grid>
+                        <Picker x:Name="AppMatchPicker" Title="Matching installed apps" />
+                        <Label x:Name="SourceAppStatusLabel" Text="No source app verified yet." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                            <Button Text="Use Matched App" Clicked="OnUseMatchedApp" />
+                            <Button Grid.Column="1" Text="Clear Filter" Clicked="OnClearSourceApp" />
+                        </Grid>
+                        <Label Text="Selected source app" FontAttributes="Bold" FontSize="12" />
+                        <Label x:Name="SourceAppLabel" Text="None selected" FontSize="13" />
+                        <Entry x:Name="PackageEntry" IsReadOnly="True" FontSize="11" Placeholder="Exact Android package is saved after app lookup or captured alert" />
+                        <Label Text="Paper profile" FontAttributes="Bold" FontSize="12" />
+                        <Picker x:Name="ConfigPicker" Title="Mode / broker profile" />
+                        <Label Text="Exit strategy" FontAttributes="Bold" FontSize="12" />
+                        <Picker x:Name="StrategyPicker" Title="Entry playbook + exit strategy" />
                         <HorizontalStackLayout Spacing="8">
                             <CheckBox x:Name="AutoForwardCheck" Scale="0.85" />
                             <Label Text="Auto-start paper trade when this app sends a parsed entry alert" VerticalTextAlignment="Center" FontSize="13" />
@@ -37,7 +49,8 @@
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
                         <Label Text="Run Now" FontAttributes="Bold" FontSize="18" />
-                        <Label Text="Start a paper entry immediately for one ticker. Exit remains strategy-managed." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="Start one ticker immediately using the selected playbook. Exit remains strategy-managed." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="Ticker" FontAttributes="Bold" FontSize="12" />
                         <Entry x:Name="ManualTickerEntry" Placeholder="Ticker: POET" />
                         <Button Text="Run Ticker Now" Clicked="OnRunNow" />
                     </VerticalStackLayout>
@@ -79,12 +92,12 @@
                 </Border>
 
                 <Label Text="Captured Alerts" FontAttributes="Bold" FontSize="18" />
-                <Label x:Name="SelectedAlertLabel" Text="Select a Stock Pulse alert below. The app extracts the ticker, then sends paper entry to TradingFlow; exits stay strategy-managed." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                <HorizontalStackLayout Spacing="10">
-                    <Button Text="Use This App" Clicked="OnUseSelectedApp" />
-                    <Button Text="Forward Selected" Clicked="OnForwardAlert" />
-                    <Button Text="Clear Alerts" Clicked="OnClearAlerts" />
-                </HorizontalStackLayout>
+                <Label x:Name="SelectedAlertLabel" Text="Select an alert below. TradingFlow extracts the ticker; auto-start only listens to the saved source app." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                    <Button Text="Use Alert App" Clicked="OnUseSelectedApp" />
+                    <Button Grid.Column="1" Text="Start Paper" Clicked="OnForwardAlert" />
+                </Grid>
+                <Button Text="Clear Alerts" Clicked="OnClearAlerts" BackgroundColor="#475467" />
                 <CollectionView x:Name="AlertsView" SelectionMode="Single" SelectionChanged="OnAlertSelected">
                     <CollectionView.EmptyView>
                         <Label Text="No captured alerts yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
@@ -94,10 +107,12 @@
                             <Border Style="{StaticResource CardBorder}" Margin="0,0,0,10">
                                 <VerticalStackLayout Spacing="4">
                                     <Grid ColumnDefinitions="*,Auto">
-                                        <Label Text="{Binding Title}" FontAttributes="Bold" FontSize="14" LineBreakMode="TailTruncation" />
-                                        <Label Grid.Column="1" Text="{Binding Ticker}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                        <Label Text="{Binding AppName}" FontAttributes="Bold" FontSize="14" LineBreakMode="TailTruncation" />
+                                        <Label Grid.Column="1" Text="{Binding ParsedTickerText}" FontSize="12" TextColor="{StaticResource AccentColor}" />
                                     </Grid>
+                                    <Label Text="{Binding Title}" FontSize="12" LineBreakMode="TailTruncation" />
                                     <Label Text="{Binding Message}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                    <Label Text="{Binding CaptureSummary}" FontSize="11" TextColor="{StaticResource AccentColor}" />
                                     <Label Text="{Binding PackageName}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
                                     <Label Text="{Binding ForwardStatus}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
                                 </VerticalStackLayout>

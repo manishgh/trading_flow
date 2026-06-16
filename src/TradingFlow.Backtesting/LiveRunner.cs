@@ -1008,6 +1008,16 @@ public sealed class LiveRunner(
 
         if (exitReason is null)
         {
+            await TryRaiseBrokerTrailingStopAsync(
+                strategy,
+                ticker,
+                strategyOrder,
+                openOrders,
+                initialStopLossPrice,
+                currentStopLossPrice,
+                cancellationToken,
+                progress);
+
             return false;
         }
 
@@ -1103,6 +1113,74 @@ public sealed class LiveRunner(
         }
 
         return true;
+    }
+
+    private async Task TryRaiseBrokerTrailingStopAsync(
+        StrategyDefinition strategy,
+        string ticker,
+        PersistedOrder strategyOrder,
+        IReadOnlyCollection<ActiveBrokerOrder> openOrders,
+        decimal initialStopLossPrice,
+        decimal calculatedStopLossPrice,
+        CancellationToken cancellationToken,
+        IProgress<string>? progress)
+    {
+        if (_brokerClient is null ||
+            _orderRepo is null ||
+            !strategy.ExitRules.EnableAtrTrailingStop ||
+            calculatedStopLossPrice <= initialStopLossPrice ||
+            calculatedStopLossPrice <= strategyOrder.StopLossPrice + 0.01m)
+        {
+            return;
+        }
+
+        var stopOrder = openOrders
+            .Where(order =>
+                order.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase) &&
+                order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase) &&
+                order.StopPrice is not null)
+            .OrderByDescending(order => order.CreatedAt)
+            .FirstOrDefault();
+        if (stopOrder is null)
+        {
+            logger.LogWarning(
+                "Trailing stop for {Ticker} {StrategyName} calculated at {StopLossPrice}, but no open broker stop leg was found.",
+                ticker,
+                strategy.StrategyName,
+                calculatedStopLossPrice);
+            progress?.Report($"Trailing stop ready for {ticker} at {calculatedStopLossPrice:0.00}, but no broker stop leg is open.");
+            return;
+        }
+
+        if (stopOrder.StopPrice is { } brokerStopPrice &&
+            calculatedStopLossPrice <= brokerStopPrice + 0.01m)
+        {
+            return;
+        }
+
+        var modified = await _brokerClient.ModifyOrderAsync(stopOrder.OrderId, calculatedStopLossPrice, 0m, cancellationToken);
+        if (!modified)
+        {
+            logger.LogWarning(
+                "Broker did not accept trailing stop update for {Ticker} {StrategyName}. OrderId={OrderId} NewStop={StopLossPrice}",
+                ticker,
+                strategy.StrategyName,
+                stopOrder.OrderId,
+                calculatedStopLossPrice);
+            return;
+        }
+
+        strategyOrder.StopLossPrice = calculatedStopLossPrice;
+        strategyOrder.UpdatedAt = DateTimeOffset.UtcNow;
+        await _orderRepo.SaveOrderAsync(strategyOrder, cancellationToken);
+
+        logger.LogInformation(
+            "Raised trailing stop for {Ticker} {StrategyName}. OrderId={OrderId} NewStop={StopLossPrice}",
+            ticker,
+            strategy.StrategyName,
+            stopOrder.OrderId,
+            calculatedStopLossPrice);
+        progress?.Report($"Raised trailing stop for {ticker} to {calculatedStopLossPrice:0.00}.");
     }
 
     private async Task SaveTickerPipelineFailureAuditsAsync(

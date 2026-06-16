@@ -4,18 +4,34 @@ namespace TradingFlow.Mobile.Services;
 
 public sealed class TradingFlowApiClient
 {
+    public const string NgrokDefaultUrl = "https://1aca-2001-1c00-820b-7600-dcf8-4675-4ee-ee47.ngrok-free.app";
     public const string PhysicalDeviceDefaultUrl = "http://192.168.178.238:53017";
     public const string AndroidEmulatorDefaultUrl = "http://10.0.2.2:53017";
 
-    private readonly HttpClient httpClient = new()
+    private readonly HttpClient httpClient = CreateHttpClient();
+
+    private static HttpClient CreateHttpClient()
     {
-        Timeout = TimeSpan.FromSeconds(20)
-    };
+        var client = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(45)
+        };
+
+        // Free ngrok tunnels may return a browser warning page unless API clients send this header.
+        client.DefaultRequestHeaders.TryAddWithoutValidation("ngrok-skip-browser-warning", "true");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "TradingFlow.Mobile/1.0");
+        return client;
+    }
 
     public string BaseUrl
     {
-        get => Preferences.Get("TradingFlowBackendUrl", PhysicalDeviceDefaultUrl).TrimEnd('/');
+        get => Preferences.Get("TradingFlowBackendUrl", NgrokDefaultUrl).TrimEnd('/');
         set => Preferences.Set("TradingFlowBackendUrl", value.Trim().TrimEnd('/'));
+    }
+
+    public void UseNgrokDefault()
+    {
+        BaseUrl = NgrokDefaultUrl;
     }
 
     public void UsePhysicalDeviceDefault()
@@ -31,14 +47,19 @@ public sealed class TradingFlowApiClient
     public void NormalizeBackendUrlForDevice()
     {
         var current = BaseUrl;
-        if (DeviceInfo.DeviceType != DeviceType.Virtual &&
-            (current.Contains("10.0.2.2", StringComparison.OrdinalIgnoreCase) ||
-             current.Contains("10.0.0.2", StringComparison.OrdinalIgnoreCase) ||
-             current.Contains("localhost", StringComparison.OrdinalIgnoreCase) ||
-             current.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase)))
+        if (IsLocalOrOldDefault(current))
         {
-            BaseUrl = PhysicalDeviceDefaultUrl;
+            BaseUrl = NgrokDefaultUrl;
         }
+    }
+
+    private static bool IsLocalOrOldDefault(string current)
+    {
+        return current.Contains("10.0.2.2", StringComparison.OrdinalIgnoreCase) ||
+            current.Contains("10.0.0.2", StringComparison.OrdinalIgnoreCase) ||
+            current.Contains("localhost", StringComparison.OrdinalIgnoreCase) ||
+            current.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+            current.Contains("192.168.178.238", StringComparison.OrdinalIgnoreCase);
     }
 
     public Task<MobileCatalogResponse?> GetCatalogAsync(CancellationToken cancellationToken = default)
@@ -185,6 +206,17 @@ public sealed class TradingFlowApiClient
         }
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (body.Length > 700)
+        {
+            body = body[..700] + "...";
+        }
+
+        if (body.Contains("ngrok", StringComparison.OrdinalIgnoreCase) &&
+            body.Contains("browser", StringComparison.OrdinalIgnoreCase))
+        {
+            body = "Ngrok returned its browser warning page instead of the TradingFlow API. Re-test Settings -> Backend URL or restart the ngrok tunnel.";
+        }
+
         throw new InvalidOperationException(String.IsNullOrWhiteSpace(body)
             ? $"TradingFlow API returned {(int)response.StatusCode}."
             : body);
@@ -205,7 +237,13 @@ public sealed record MobileRunConfigOption(
     IReadOnlyList<string> Tickers,
     IReadOnlyList<string> Intervals)
 {
-    public override string ToString() => FileName;
+    public override string ToString()
+    {
+        var mode = string.IsNullOrWhiteSpace(Mode) ? "run" : Mode;
+        var provider = string.IsNullOrWhiteSpace(Provider) ? "provider" : Provider;
+        var intervals = Intervals.Count == 0 ? "auto" : string.Join(",", Intervals);
+        return $"{mode} / {provider} / {intervals}";
+    }
 }
 
 public sealed record MobileStrategyOption(
@@ -447,4 +485,8 @@ public sealed record MobileAutomationSessionSnapshot(
 {
     public string ProgressText => $"{Ticker} {Status} - {CurrentStage}";
     public string LatestEvent => Events.LastOrDefault() ?? "No events yet.";
+    public string ShortSessionId => SessionId.ToString("N")[..8];
+    public string DisplayTitle => $"{Ticker} - {Source} #{ShortSessionId}";
+    public string StrategyFileName => Path.GetFileName(StrategyPath);
+    public string RunDetail => $"{RunName} | {Status} | {StrategyFileName}";
 }

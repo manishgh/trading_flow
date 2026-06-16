@@ -22,6 +22,27 @@ public sealed class TradingFlowNotificationListenerService : NotificationListene
 
         var title = extras.GetString(Notification.ExtraTitle) ?? string.Empty;
         var text = extras.GetCharSequence(Notification.ExtraText)?.ToString() ?? string.Empty;
-        _ = AppServices.AutomationHub.PublishAsync(sbn.PackageName ?? string.Empty, title, text);
+        var packageName = sbn.PackageName ?? string.Empty;
+        var appName = ResolveAppName(packageName);
+        _ = AppServices.AutomationHub.PublishAsync(packageName, appName, title, text);
+    }
+
+    private string ResolveAppName(string packageName)
+    {
+        if (string.IsNullOrWhiteSpace(packageName))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var info = PackageManager?.GetApplicationInfo(packageName, 0);
+            var label = info is null ? null : PackageManager?.GetApplicationLabel(info)?.ToString();
+            return string.IsNullOrWhiteSpace(label) ? packageName : label;
+        }
+        catch
+        {
+            return packageName;
+        }
     }
 }

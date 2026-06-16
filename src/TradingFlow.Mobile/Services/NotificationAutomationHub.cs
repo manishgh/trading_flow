@@ -9,19 +9,36 @@ namespace TradingFlow.Mobile.Services;
 /// </summary>
 public sealed class NotificationAutomationHub
 {
-    private static readonly Regex TickerRegex = new(@"(?<![A-Z])\$?([A-Z]{1,5})(?![A-Z])", RegexOptions.Compiled);
+    private static readonly Regex TickerRegex = new(@"(?<![A-Z0-9])\$?([A-Z]{1,5})(?![A-Z0-9])", RegexOptions.Compiled);
     private static readonly HashSet<string> IgnoredTickerWords = new(StringComparer.OrdinalIgnoreCase)
     {
         "ALERT",
+        "AM",
         "BUY",
+        "CALL",
         "CLOSE",
+        "DAY",
         "ENTRY",
         "EXIT",
+        "GAIN",
+        "HIGH",
+        "LOW",
         "LONG",
+        "NEWS",
+        "PM",
+        "PRICE",
+        "PULSE",
+        "PUT",
         "SELL",
         "SHORT",
+        "SIGNAL",
         "STOCK",
-        "TRADE"
+        "TARGET",
+        "TRADE",
+        "TRIGGER",
+        "UP",
+        "USD",
+        "VWAP"
     };
 
     private readonly List<CapturedAutomationAlert> alerts = new();
@@ -88,8 +105,8 @@ public sealed class NotificationAutomationHub
 
         try
         {
-            await apiClient.StartAutomationEntryAsync(request, cancellationToken);
-            UpdateAlertStatus(alertId, "Forwarded");
+            var session = await apiClient.StartAutomationEntryAsync(request, cancellationToken);
+            UpdateAlertStatus(alertId, session is null ? "Forwarded" : $"Forwarded: {session.ShortSessionId}");
             return true;
         }
         catch (Exception exception)
@@ -99,9 +116,14 @@ public sealed class NotificationAutomationHub
         }
     }
 
-    public async Task PublishAsync(string packageName, string? title, string? message, CancellationToken cancellationToken = default)
+    public async Task PublishAsync(string packageName, string? appName, string? title, string? message, CancellationToken cancellationToken = default)
     {
-        var alert = Parse(packageName, title, message);
+        var alert = Parse(packageName, appName, title, message);
+        if (!ShouldCapture(alert))
+        {
+            return;
+        }
+
         lock (gate)
         {
             var duplicate = alerts.FirstOrDefault(x =>
@@ -146,8 +168,8 @@ public sealed class NotificationAutomationHub
 
         try
         {
-            await apiClient.StartAutomationEntryAsync(request, cancellationToken);
-            UpdateAlertStatus(alert.AlertId, "Auto-forwarded");
+            var session = await apiClient.StartAutomationEntryAsync(request, cancellationToken);
+            UpdateAlertStatus(alert.AlertId, session is null ? "Auto-forwarded" : $"Auto-forwarded: {session.ShortSessionId}");
         }
         catch (Exception exception)
         {
@@ -174,7 +196,7 @@ public sealed class NotificationAutomationHub
         Updated?.Invoke(this, EventArgs.Empty);
     }
 
-    private static CapturedAutomationAlert Parse(string packageName, string? title, string? message)
+    private static CapturedAutomationAlert Parse(string packageName, string? appName, string? title, string? message)
     {
         var combined = $"{title} {message}".Trim();
         var ticker = ExtractTicker(combined);
@@ -192,6 +214,7 @@ public sealed class NotificationAutomationHub
             Guid.NewGuid(),
             DateTimeOffset.Now,
             packageName,
+            string.IsNullOrWhiteSpace(appName) ? packageName : appName,
             title ?? string.Empty,
             message ?? string.Empty,
             ticker,
@@ -232,15 +255,36 @@ public sealed class NotificationAutomationHub
 
         return alert.IsEntry && !alert.IsExit && !string.IsNullOrWhiteSpace(alert.Ticker);
     }
+
+    private static bool ShouldCapture(CapturedAutomationAlert alert)
+    {
+        var configuredPackage = Preferences.Get("TradingFlowAutomationPackage", string.Empty).Trim();
+        return string.IsNullOrWhiteSpace(configuredPackage) ||
+            alert.PackageName.Equals(configuredPackage, StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 public sealed record CapturedAutomationAlert(
     Guid AlertId,
     DateTimeOffset Timestamp,
     string PackageName,
+    string AppName,
     string Title,
     string Message,
     string? Ticker,
     bool IsEntry,
     bool IsExit,
-    string ForwardStatus);
+    string ForwardStatus)
+{
+    public string ParsedTickerText => string.IsNullOrWhiteSpace(Ticker)
+        ? "No ticker"
+        : Ticker;
+
+    public string DirectionText => IsExit
+        ? "Exit-like"
+        : IsEntry
+            ? "Entry-like"
+            : "Informational";
+
+    public string CaptureSummary => $"{ParsedTickerText} | {DirectionText} | {Timestamp:HH:mm:ss}";
+}

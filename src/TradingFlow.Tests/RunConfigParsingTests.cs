@@ -260,6 +260,34 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
+    public void MobileAutomationTimeframes_UseFinestExecutionSourceForShannonSwing()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var reader = new SimpleYamlReader();
+        var config = reader.ReadBacktestRun(Path.Combine(repoRoot, "configs", "paper", PaperSwingFile));
+        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", ShannonAvwapStrategyFile));
+        var serviceType = typeof(MobileAutomationService);
+
+        var required = (string[])serviceType
+            .GetMethod("ResolveRequiredTimeframes", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .Invoke(null, new object[] { strategy })!;
+
+        var download = (string[])serviceType
+            .GetMethod("ResolveDownloadTimeframesForAutomation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .Invoke(null, new object[] { config, strategy, required })!;
+
+        var deriveFrom = (string)serviceType
+            .GetMethod("ResolveDeriveFromTimeframe", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .Invoke(null, new object[] { config, required, download })!;
+
+        Assert.Contains("65m", required);
+        Assert.Contains("5m", required);
+        Assert.Contains("5m", download);
+        Assert.Contains("1d", download);
+        Assert.Equal("5m", deriveFrom);
+    }
+
+    [Fact]
     public void RetainedIntradayBacktestConfig_ParsesTopTwoComparisonRun()
     {
         var repoRoot = FindRepositoryRoot();

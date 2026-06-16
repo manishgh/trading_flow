@@ -497,15 +497,8 @@ public sealed class MobileAutomationService
             : Math.Max(runConfig.TimeWindow.LookbackDays, 10);
         var start = end.AddDays(-lookbackDays);
         var requiredTimeframes = ResolveRequiredTimeframes(strategy);
-        var downloadTimeframes = runConfig.Intervals
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        if (downloadTimeframes.Length == 0)
-        {
-            downloadTimeframes = requiredTimeframes;
-        }
+        var downloadTimeframes = ResolveDownloadTimeframesForAutomation(runConfig, strategy, requiredTimeframes);
+        var deriveFromTimeframe = ResolveDeriveFromTimeframe(runConfig, requiredTimeframes, downloadTimeframes);
 
         var pipeline = new CandlePipelineEngine(candleStore);
         var state = await pipeline.RunAsync(
@@ -513,7 +506,7 @@ public sealed class MobileAutomationService
                 [ticker],
                 downloadTimeframes,
                 requiredTimeframes,
-                runConfig.DerivedTimeframes.Source,
+                deriveFromTimeframe,
                 start,
                 end,
                 runConfig.Engine.BoundedCapacity,
@@ -532,6 +525,83 @@ public sealed class MobileAutomationService
         }
 
         return tickerState;
+    }
+
+    private static string[] ResolveDownloadTimeframesForAutomation(
+        BacktestRunConfig runConfig,
+        StrategyDefinition strategy,
+        IReadOnlyCollection<string> requiredTimeframes)
+    {
+        var source = ResolveDeriveFromTimeframe(runConfig, requiredTimeframes, runConfig.Intervals);
+        var sourceDuration = TimeframeParser.Parse(source);
+        var timeframes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            source
+        };
+
+        foreach (var timeframe in runConfig.Intervals.Where(x => !string.IsNullOrWhiteSpace(x)))
+        {
+            var duration = TimeframeParser.Parse(timeframe);
+            if (duration <= sourceDuration || TimeframeParser.IsDailyOrHigher(timeframe))
+            {
+                timeframes.Add(timeframe);
+            }
+        }
+
+        if (RequiresDailyContext(strategy))
+        {
+            timeframes.Add("1d");
+        }
+
+        return timeframes
+            .OrderBy(TimeframeParser.Parse)
+            .ThenBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string ResolveDeriveFromTimeframe(
+        BacktestRunConfig runConfig,
+        IReadOnlyCollection<string> requiredTimeframes,
+        IReadOnlyCollection<string> candidateDownloadTimeframes)
+    {
+        var intradayRequired = requiredTimeframes
+            .Where(timeframe => !TimeframeParser.IsDailyOrHigher(timeframe))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(TimeframeParser.Parse)
+            .ToArray();
+
+        if (intradayRequired.Length == 0)
+        {
+            return runConfig.DerivedTimeframes.Source;
+        }
+
+        var finestRequired = intradayRequired[0];
+        var finestRequiredDuration = TimeframeParser.Parse(finestRequired);
+        var currentSource = string.IsNullOrWhiteSpace(runConfig.DerivedTimeframes.Source)
+            ? finestRequired
+            : runConfig.DerivedTimeframes.Source;
+
+        if (TimeframeParser.Parse(currentSource) <= finestRequiredDuration)
+        {
+            return currentSource;
+        }
+
+        var providerCandidate = candidateDownloadTimeframes
+            .Where(timeframe => !string.IsNullOrWhiteSpace(timeframe))
+            .Where(timeframe => !TimeframeParser.IsDailyOrHigher(timeframe))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(TimeframeParser.Parse)
+            .FirstOrDefault(timeframe => TimeframeParser.Parse(timeframe) <= finestRequiredDuration);
+
+        return providerCandidate ?? finestRequired;
+    }
+
+    private static bool RequiresDailyContext(StrategyDefinition strategy)
+    {
+        return TimeframeParser.IsDailyOrHigher(strategy.Timeframe) ||
+            TimeframeParser.IsDailyOrHigher(strategy.Execution.Timeframe) ||
+            strategy.EntryRules.RequirePriceAboveSma50Daily ||
+            strategy.EntryRules.RequirePriceAboveSma200Daily;
     }
 
     private PreparedEntryExecution PrepareEntryExecution(

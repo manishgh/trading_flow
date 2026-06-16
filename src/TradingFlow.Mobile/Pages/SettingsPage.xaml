@@ -11,10 +11,11 @@
             <Border Style="{StaticResource CardBorder}">
                 <VerticalStackLayout Spacing="10">
                     <Label Text="Backend URL" FontAttributes="Bold" FontSize="18" />
-                    <Entry x:Name="BackendUrlEntry" Placeholder="http://192.168.178.238:53017" Keyboard="Url" />
-                    <Label Text="Real phone: use your PC LAN IP. Android emulator: use 10.0.2.2 only inside the emulator. Remote test: use your ngrok URL." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                    <Entry x:Name="BackendUrlEntry" Placeholder="https://your-ngrok-url.ngrok-free.app" Keyboard="Url" />
+                    <Label Text="Use ngrok for phone testing. If calls time out, restart the tunnel and tap Use Ngrok URL, then Save &amp; Test." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                    <Button Text="Use Ngrok URL" Clicked="OnUseNgrokUrl" />
                     <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                        <Button Text="Use Phone URL" Clicked="OnUsePhoneUrl" />
+                        <Button Text="Use LAN URL" Clicked="OnUsePhoneUrl" />
                         <Button Grid.Column="1" Text="Use Emulator URL" Clicked="OnUseEmulatorUrl" />
                     </Grid>
                     <Button Text="Save &amp; Test" Clicked="OnSaveAndTest" />

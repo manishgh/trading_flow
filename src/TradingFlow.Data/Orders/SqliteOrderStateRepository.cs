@@ -29,6 +29,14 @@ public sealed class SqliteOrderStateRepository : IOrderStateRepository
         else
         {
             existing.Status = order.Status;
+            existing.EntryPrice = order.EntryPrice;
+            existing.StopLossPrice = order.StopLossPrice;
+            existing.TakeProfitPrice = order.TakeProfitPrice;
+            existing.ShareQuantity = order.ShareQuantity;
+            existing.ClientOrderId = order.ClientOrderId;
+            existing.StrategyName = order.StrategyName;
+            existing.Broker = order.Broker;
+            existing.RunName = order.RunName;
             existing.UpdatedAt = order.UpdatedAt;
         }
         
