@@ -60,7 +60,9 @@ public sealed class IndicatorEngine
                 RelativeVolumeSampleCount: cumulativeVolumeBaseline.SampleCount[i],
                 Sma150: standardIndicators.Sma150[i],
                 Sma200: standardIndicators.Sma200[i],
-                Ema5: standardIndicators.Ema5[i]));
+                Ema5: standardIndicators.Ema5[i],
+                Adx: standardIndicators.Adx[i],
+                Obv: standardIndicators.Obv[i]));
         }
 
         return snapshots;
@@ -90,6 +92,8 @@ public sealed class IndicatorEngine
         var ema200 = quotes.GetEma(200).Select(x => ToDecimal(x.Ema)).ToArray();
         var rsi = quotes.GetRsi(RsiPeriod).Select(x => ToDecimal(x.Rsi)).ToArray();
         var atr = quotes.GetAtr(AtrPeriod).Select(x => ToDecimal(x.Atr)).ToArray();
+        var adx = quotes.GetAdx(AtrPeriod).Select(x => ToDecimal(x.Adx)).ToArray();
+        var obv = quotes.GetObv().Select(x => ToDecimal(x.Obv)).ToArray();
         var macd = quotes.GetMacd(12, 26, 9).ToArray();
         var bollinger = quotes.GetBollingerBands(BollingerPeriod, 2).ToArray();
 
@@ -106,6 +110,8 @@ public sealed class IndicatorEngine
             ema200,
             rsi,
             atr,
+            adx,
+            obv,
             macd.Select(x => ToDecimal(x.Macd)).ToArray(),
             macd.Select(x => ToDecimal(x.Signal)).ToArray(),
             macd.Select(x => ToDecimal(x.Histogram)).ToArray(),
@@ -289,6 +295,8 @@ public sealed class IndicatorEngine
         decimal?[] Ema200,
         decimal?[] Rsi,
         decimal?[] Atr,
+        decimal?[] Adx,
+        decimal?[] Obv,
         decimal?[] MacdLine,
         decimal?[] MacdSignal,
         decimal?[] MacdHistogram,

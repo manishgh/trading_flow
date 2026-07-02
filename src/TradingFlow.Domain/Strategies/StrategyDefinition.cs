@@ -169,7 +169,15 @@ public sealed record EntryRules(
     decimal? MaxPerTickerDailyLossPctOfAccount = null,
     string MinVolumeSpikeSource = "cumulative_same_time",
     string VolumeConfirmationMode = "hard_gate",
-    decimal? MinVolumeLiquidityFloor = null);
+    decimal? MinVolumeLiquidityFloor = null,
+    int? MaxCatalystConfirmationBars = null,
+    decimal? GapVariantMinPct = null,
+    decimal? MinAdx = null,
+    bool RequireAdxRising = false,
+    int AdxRisingLookbackBars = 3,
+    bool RequireObvRising = false,
+    int ObvRisingLookbackBars = 3,
+    decimal? MinObvChange = null);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,

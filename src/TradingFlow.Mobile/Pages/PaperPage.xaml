@@ -7,7 +7,6 @@
         <ScrollView>
             <VerticalStackLayout Padding="16" Spacing="14">
                 <Label Text="Paper Trading" Style="{StaticResource Headline}" FontSize="24" />
-                <Label Text="Start, monitor, and cancel paper runs from the same TradingFlow backend." Style="{StaticResource SubHeadline}" FontSize="13" />
                 <Border Style="{StaticResource CardBorder}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
@@ -66,8 +65,8 @@
                                                 <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="13" />
                                                 <Label Grid.Column="1" Text="{Binding SentimentText}" FontSize="12" TextColor="{StaticResource AccentColor}" />
                                             </Grid>
-                                            <Label Text="{Binding Headline}" FontSize="12" LineBreakMode="TailTruncation" />
-                                            <Label Text="{Binding Source}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
+                                            <Label Text="{Binding DisplayHeadline}" FontSize="12" LineBreakMode="TailTruncation" />
+                                            <Label Text="{Binding DisplaySource}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
                                         </VerticalStackLayout>
                                     </Border>
                                 </DataTemplate>
@@ -95,7 +94,7 @@
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
                         <Label Text="Alert-Triggered Paper Trades" FontAttributes="Bold" FontSize="18" />
-                        <Label Text="Notification entries from the Android app. Each session has its own run id, events, and strategy-managed exit." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="Notification entries from the Android app. Each session has its own run id and strategy-managed exit." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
                         <CollectionView x:Name="AutomationSessionsView" HeightRequest="220">
                             <CollectionView.EmptyView>
                                 <Label Text="No alert-triggered paper sessions." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
@@ -118,7 +117,7 @@
                     </VerticalStackLayout>
                 </Border>
 
-                <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected">
+                <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected" HeightRequest="340">
                     <CollectionView.EmptyView>
                         <Label Text="No active paper runs. Use Last Run for the most recent completed, failed, or cancelled run." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
                     </CollectionView.EmptyView>

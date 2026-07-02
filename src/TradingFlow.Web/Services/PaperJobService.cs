@@ -65,6 +65,9 @@ public sealed class PaperJobService
     {
         using var scope = _scopeFactory.CreateScope();
         var jobRepo = scope.ServiceProvider.GetRequiredService<TradingFlow.Domain.Jobs.IJobRepository>();
+        await jobRepo.PruneTerminalJobsOlderThanAsync(
+            DateTimeOffset.UtcNow.Subtract(MobileAutomationSessionStore.RetentionWindow),
+            default);
         var allJobs = await jobRepo.GetAllJobsAsync(default);
 
         foreach (var pJob in allJobs)

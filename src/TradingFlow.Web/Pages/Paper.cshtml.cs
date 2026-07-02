@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 
@@ -16,6 +17,7 @@ public sealed class PaperModel : PageModel
     private readonly RunConfigWriter configWriter;
     private readonly PaperJobService paperJobs;
     private readonly IArtifactWriter artifactWriter;
+    private readonly IWishlistRepository wishlistRepository;
     private readonly ILogger<PaperModel> logger;
 
     public PaperModel(
@@ -24,6 +26,7 @@ public sealed class PaperModel : PageModel
         RunConfigWriter configWriter,
         PaperJobService paperJobs,
         IArtifactWriter artifactWriter,
+        IWishlistRepository wishlistRepository,
         ILogger<PaperModel> logger)
     {
         this.catalog = catalog;
@@ -31,11 +34,13 @@ public sealed class PaperModel : PageModel
         this.configWriter = configWriter;
         this.paperJobs = paperJobs;
         this.artifactWriter = artifactWriter;
+        this.wishlistRepository = wishlistRepository;
         this.logger = logger;
     }
 
     [BindProperty] public string ConfigPath { get; set; } = String.Empty;
     [BindProperty] public string SelectedStrategyPath { get; set; } = String.Empty;
+    [BindProperty(SupportsGet = true)] public Guid? WishlistId { get; set; }
     [BindProperty(SupportsGet = true)] public string? TickersCsv { get; set; }
     [BindProperty(SupportsGet = true)] public string OrderExpiration { get; set; } = "gtc";
     [BindProperty(SupportsGet = true)] public string EntryOrderType { get; set; } = "limit";
@@ -52,25 +57,33 @@ public sealed class PaperModel : PageModel
 
     public IReadOnlyList<RunConfigSummary> Configs { get; private set; } = [];
     public IReadOnlyList<StrategyOption> Strategies { get; private set; } = [];
+    public IReadOnlyList<Wishlist> Wishlists { get; private set; } = [];
     public IReadOnlyList<BacktestJobSnapshot> LiveJobs { get; private set; } = [];
     public RunConfigSummary Selected { get; private set; } = null!;
+    public Wishlist? SelectedWishlist { get; private set; }
     public PaperEnvironmentSnapshot? PaperSnapshot { get; private set; }
     public string AlpacaCheckJson { get; private set; } = String.Empty;
     public string SuggestedRunName { get; private set; } = String.Empty;
     public bool SelectedStrategyUsesNews { get; private set; }
+    public string WishlistTickersCsv => SelectedWishlist is null
+        ? String.Empty
+        : String.Join(", ", SelectedWishlist.Items.Where(item => item.Active).Select(item => item.Ticker).OrderBy(ticker => ticker));
 
-    public void OnGet(string? configPath, string? strategyPath)
+    public async Task OnGetAsync(string? configPath, string? strategyPath, Guid? wishlistId, CancellationToken cancellationToken)
     {
         SuggestedRunName = $"paper_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}";
         if (!string.IsNullOrEmpty(configPath)) ConfigPath = configPath;
         if (!string.IsNullOrEmpty(strategyPath)) SelectedStrategyPath = strategyPath;
+        WishlistId = wishlistId ?? WishlistId;
 
         Load(ConfigPath, SelectedStrategyPath);
+        await LoadWishlistsAsync(WishlistId, cancellationToken);
 
         if (string.IsNullOrEmpty(TickersCsv))
         {
-            var selectedConfig = Selected;
-            TickersCsv = selectedConfig != null ? String.Join(", ", selectedConfig.Config.Tickers) : "";
+            TickersCsv = !String.IsNullOrWhiteSpace(WishlistTickersCsv)
+                ? WishlistTickersCsv
+                : String.Join(", ", Selected.Config.Tickers);
         }
 
         if (string.IsNullOrEmpty(OrderExpiration))
@@ -86,7 +99,7 @@ public sealed class PaperModel : PageModel
         }
 
         ExtendedHours = selectedExecutionConfig?.Config.Execution.ExtendedHours ?? true;
-        ScreenerFilter = selectedExecutionConfig?.Config.Screener?.Filters?.FirstOrDefault() ?? "";
+        ScreenerFilter ??= String.Empty;
 
         var selectedStrategy = Strategies.FirstOrDefault(s => s.Path == SelectedStrategyPath);
         SelectedStrategyUsesNews = selectedStrategy is not null && StrategyUsesNews(selectedStrategy.Definition);
@@ -134,8 +147,10 @@ public sealed class PaperModel : PageModel
     {
         var formConfigPath = Request.Form["BaseConfigPath"].ToString();
         if (!string.IsNullOrEmpty(formConfigPath)) ConfigPath = formConfigPath;
+        if (Guid.TryParse(Request.Form["WishlistId"].ToString(), out var wishlistId)) WishlistId = wishlistId;
 
         Load(ConfigPath, SelectedStrategyPath);
+        await LoadWishlistsAsync(WishlistId, cancellationToken);
 
         PaperSnapshot = await paperEnvironment.InspectAsync(ConfigPath, cancellationToken);
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -231,12 +246,13 @@ public sealed class PaperModel : PageModel
         });
     }
 
-    public IActionResult OnPostRunLive()
+    public async Task<IActionResult> OnPostRunLive(CancellationToken cancellationToken)
     {
         var form = Request.Form;
         var runName = form["RunName"].ToString();
         var baseConfigPath = form["BaseConfigPath"].ToString();
         var strategyPath = form["SelectedStrategyPath"].ToString();
+        var wishlistIdText = form["WishlistId"].ToString();
         var orderExpiration = form["OrderExpiration"].ToString();
         var entryOrderType = form["EntryOrderType"].ToString();
         var extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase);
@@ -247,10 +263,19 @@ public sealed class PaperModel : PageModel
         if (String.IsNullOrWhiteSpace(runName))
             runName = "paper_" + DateTimeOffset.UtcNow.ToString("yyyyMMdd_HHmmss");
 
+        Load(baseConfigPath, strategyPath);
+        await LoadWishlistsAsync(Guid.TryParse(wishlistIdText, out var parsedWishlistId) ? parsedWishlistId : null, cancellationToken);
         var existingConfig = catalog.GetConfig(baseConfigPath);
-        var tickers = string.IsNullOrWhiteSpace(tickersCsv)
-            ? existingConfig.Config.Tickers
-            : tickersCsv.Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+        var wishlistTickers = SelectedWishlist?.Items
+            .Where(item => item.Active)
+            .Select(item => item.Ticker)
+            .Where(ticker => !String.IsNullOrWhiteSpace(ticker))
+            .ToArray() ?? [];
+        var tickers = wishlistTickers.Length > 0
+            ? wishlistTickers
+            : (string.IsNullOrWhiteSpace(tickersCsv)
+                ? existingConfig.Config.Tickers
+                : tickersCsv.Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries));
 
         var tempConfigPath = configWriter.SaveTempConfig(baseConfigPath, tickers, strategyPath, orderExpiration, entryOrderType, extendedHours, screenerFilter, runName, newsEnabled);
         var job = paperJobs.Start(runName, tempConfigPath);
@@ -275,6 +300,15 @@ public sealed class PaperModel : PageModel
         SelectedStrategyPath = String.IsNullOrWhiteSpace(strategyPath)
             ? Selected.Strategies.FirstOrDefault()?.Path ?? Strategies.FirstOrDefault()?.Path ?? String.Empty
             : strategyPath;
+    }
+
+    private async Task LoadWishlistsAsync(Guid? wishlistId, CancellationToken cancellationToken)
+    {
+        Wishlists = await wishlistRepository.ListAsync(cancellationToken);
+        SelectedWishlist = wishlistId.HasValue
+            ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == wishlistId.Value)
+            : Wishlists.FirstOrDefault(wishlist => wishlist.IsDefault) ?? Wishlists.FirstOrDefault();
+        WishlistId = SelectedWishlist?.Id;
     }
 
     public IActionResult OnGetStrategyDetails(string strategyPath)

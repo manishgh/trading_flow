@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TradingFlow.Mobile.Pages.WishlistsPage"
+             Title="Wishlists">
+    <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
+        <ScrollView>
+            <VerticalStackLayout Padding="12" Spacing="10">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <VerticalStackLayout Spacing="0">
+                        <Label Text="Wishlists" Style="{StaticResource Headline}" FontSize="22" />
+                        <Label Text="Observe movers, act fast, inspect only when needed." Style="{StaticResource SubHeadline}" FontSize="12" />
+                    </VerticalStackLayout>
+                    <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+                </Grid>
+
+                <Border Style="{StaticResource CardBorder}" Padding="10">
+                    <VerticalStackLayout Spacing="8">
+                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="12" LineBreakMode="TailTruncation" />
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <Picker x:Name="WishlistPicker" Title="Wishlist" SelectedIndexChanged="OnWishlistChanged" />
+                            <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <Entry x:Name="WishlistNameEntry" Placeholder="New group name" />
+                            <Button Grid.Column="1" Text="Save" Clicked="OnSaveWishlist" Padding="12,6" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}" Padding="10">
+                    <VerticalStackLayout Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <VerticalStackLayout Spacing="1">
+                                <Label Text="Selected Group" FontAttributes="Bold" FontSize="14" />
+                                <Label x:Name="WishlistDetailLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                            </VerticalStackLayout>
+                            <Button x:Name="ObserveButton" Grid.Column="1" Text="Observe" Clicked="OnToggleObserve" Padding="12,6" BackgroundColor="#067647" />
+                        </Grid>
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <Entry x:Name="TickerEntry" Placeholder="Add ticker: POET" Keyboard="Text" TextChanged="OnTickerSearchChanged" />
+                            <Button Grid.Column="1" Text="+" Clicked="OnAddTicker" Padding="12,6" />
+                        </Grid>
+                        <CollectionView x:Name="SuggestionsView" SelectionMode="Single" SelectionChanged="OnSuggestionSelected" HeightRequest="0">
+                            <CollectionView.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,6" Padding="10">
+                                        <Label Text="{Binding .}" FontAttributes="Bold" FontSize="14" />
+                                    </Border>
+                                </DataTemplate>
+                            </CollectionView.ItemTemplate>
+                        </CollectionView>
+                        <Picker x:Name="StrategyPicker" Title="Exit / paper strategy" />
+                        <Picker x:Name="ConfigPicker" Title="Broker profile" IsVisible="False" />
+                        <Button Text="Start Paper Run For Group" Clicked="OnTradeWishlist" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <Label Text="Stocks" FontAttributes="Bold" FontSize="17" VerticalTextAlignment="Center" />
+                    <Label x:Name="StockCountLabel" Grid.Column="1" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" VerticalTextAlignment="Center" />
+                </Grid>
+
+                <CollectionView x:Name="ItemsView" HeightRequest="300">
+                    <CollectionView.EmptyView>
+                        <Label Text="No stocks yet. Add a ticker above or create a group." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="10">
+                                <VerticalStackLayout Spacing="6">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <VerticalStackLayout Spacing="0">
+                                            <Label Text="{Binding DisplayTitle}" FontAttributes="Bold" FontSize="16" />
+                                            <Label Text="{Binding DetailText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="1" />
+                                        </VerticalStackLayout>
+                                        <Label Grid.Column="1" Text="{Binding CurrentPriceText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" VerticalTextAlignment="Center" />
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="8">
+                                        <Button Text="Trade" Clicked="OnTradeTicker" CommandParameter="{Binding .}" Padding="12,6" />
+                                        <Button Grid.Column="1" Text="Sell" Clicked="OnSellTicker" CommandParameter="{Binding .}" Padding="12,6" BackgroundColor="#475467" />
+                                        <Button Grid.Column="2" Text="-" Clicked="OnRemoveTicker" CommandParameter="{Binding .}" Padding="12,6" BackgroundColor="#667085" />
+                                    </Grid>
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <VerticalStackLayout Spacing="0">
+                        <Label Text="Recent Signals" FontAttributes="Bold" FontSize="17" />
+                        <Label Text="Last 20 minutes. Details stay collapsed until tapped." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                    </VerticalStackLayout>
+                    <Button Grid.Column="1" Text="Reload" Clicked="OnRefreshSignals" Padding="12,6" />
+                </Grid>
+
+                <CollectionView x:Name="SignalsView" HeightRequest="340">
+                    <CollectionView.EmptyView>
+                        <Label Text="No recent wishlist signals." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="10">
+                                <VerticalStackLayout Spacing="6">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <VerticalStackLayout Spacing="0">
+                                            <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="16" TextColor="{StaticResource AccentColor}" />
+                                            <Label Text="{Binding HeaderText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                        </VerticalStackLayout>
+                                        <Label Grid.Column="1" Text="{Binding StatusText}" FontSize="12" TextColor="{StaticResource AccentColor}" VerticalTextAlignment="Center" />
+                                    </Grid>
+                                    <Label Text="{Binding CompactReason}" FontSize="12" LineBreakMode="TailTruncation" MaxLines="1" />
+                                    <Label Text="{Binding NewsText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="1" />
+                                    <VerticalStackLayout IsVisible="{Binding IsExpanded}" Spacing="4">
+                                        <Label Text="Technical detail" FontAttributes="Bold" FontSize="12" />
+                                        <Label Text="{Binding Reason}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" MaxLines="6" />
+                                        <Label Text="{Binding SnapshotSummary}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="4" />
+                                    </VerticalStackLayout>
+                                    <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="6">
+                                        <Button Text="Trade" Clicked="OnTradeSignal" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" />
+                                        <Button Grid.Column="1" Text="News" Clicked="OnOpenSignalNews" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" />
+                                        <Button Grid.Column="2" Text="Details" Clicked="OnToggleSignalDetails" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" BackgroundColor="#475467" />
+                                        <Button Grid.Column="3" Text="Done" Clicked="OnAcknowledgeSignal" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" BackgroundColor="#667085" />
+                                    </Grid>
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </VerticalStackLayout>
+        </ScrollView>
+    </RefreshView>
+</ContentPage>

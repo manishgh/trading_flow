@@ -117,4 +117,12 @@ public sealed record TradeSignal(
     bool IsVolumeSmaRising = false,
     decimal? VolumeSma = null,
     decimal? PreviousVolumeSma = null,
-    decimal? VolumeSmaRisePct = null);
+    decimal? VolumeSmaRisePct = null,
+    int? CatalystAgeBars = null,
+    decimal? CurrentAdx = null,
+    decimal? PreviousAdx = null,
+    bool IsAdxRising = false,
+    decimal? CurrentObv = null,
+    decimal? PreviousObv = null,
+    bool IsObvRising = false,
+    decimal? ObvChange = null);

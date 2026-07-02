@@ -11,4 +11,5 @@ public interface IJobRepository
     Task<PersistedJob?> GetJobAsync(Guid id, CancellationToken cancellationToken);
     Task<IReadOnlyList<PersistedJob>> GetAllJobsAsync(CancellationToken cancellationToken);
     Task UpdateJobStatusAsync(Guid id, string status, string? errorMessage, CancellationToken cancellationToken);
+    Task PruneTerminalJobsOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken);
 }

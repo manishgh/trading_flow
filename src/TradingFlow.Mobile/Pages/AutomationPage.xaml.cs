@@ -10,7 +10,6 @@ public partial class AutomationPage : ContentPage
     private readonly INotificationAccessHelper notificationAccess = AppServices.NotificationAccess;
     private readonly ObservableCollection<MobileAutomationSessionSnapshot> sessions = new();
     private readonly ObservableCollection<CapturedAutomationAlert> alerts = new();
-    private readonly ObservableCollection<InstalledNotificationApp> appMatches = new();
     private MobileCatalogResponse? catalog;
     private MobileAutomationSessionSnapshot? selectedSession;
     private CapturedAutomationAlert? selectedAlert;
@@ -20,7 +19,6 @@ public partial class AutomationPage : ContentPage
         InitializeComponent();
         SessionsView.ItemsSource = sessions;
         AlertsView.ItemsSource = alerts;
-        AppMatchPicker.ItemsSource = appMatches;
         hub.Updated += OnHubUpdated;
     }
 
@@ -32,8 +30,16 @@ public partial class AutomationPage : ContentPage
 
     private async Task LoadAsync()
     {
+        BusyIndicator.IsVisible = true;
+        BusyIndicator.IsRunning = true;
         try
         {
+            var healthy = await api.CheckHealthAsync();
+            StatusLabel.Text = healthy
+                ? $"Connected: {api.BaseUrl}"
+                : $"Backend unreachable: {api.BaseUrl}";
+            StatusLabel.TextColor = healthy ? Color.FromArgb("#067647") : Color.FromArgb("#B42318");
+
             catalog ??= await api.GetCatalogAsync();
             ConfigPicker.ItemsSource = catalog?.PaperConfigs.ToList();
             StrategyPicker.ItemsSource = (catalog?.Strategies ?? Array.Empty<MobileStrategyOption>())
@@ -44,12 +50,9 @@ public partial class AutomationPage : ContentPage
             NotificationAccessLabel.Text = notificationAccess.IsNotificationAccessEnabled()
                 ? "Notification access is enabled."
                 : "Notification access is not enabled yet.";
-            PackageEntry.Text = Preferences.Get("TradingFlowAutomationPackage", string.Empty);
-            SourceAppLabel.Text = Preferences.Get("TradingFlowAutomationAppName", string.Empty) is { Length: > 0 } appName
-                ? appName
-                : "None selected";
-            SourceAppStatusLabel.Text = BuildSourceAppStatus();
+            Preferences.Set("TradingFlowAutomationAppName", "Stock Pulse");
             AutoForwardCheck.IsChecked = Preferences.Get("TradingFlowAutomationAutoForward", false);
+            SelectSavedEntryMode();
 
             var latestSessions = await api.GetAutomationSessionsAsync() ?? Array.Empty<MobileAutomationSessionSnapshot>();
             sessions.Clear();
@@ -62,10 +65,14 @@ public partial class AutomationPage : ContentPage
         }
         catch (Exception exception)
         {
+            StatusLabel.Text = $"Automation error: {exception.Message}";
+            StatusLabel.TextColor = Color.FromArgb("#B42318");
             await DisplayAlertAsync("Automation", exception.Message, "OK");
         }
         finally
         {
+            BusyIndicator.IsRunning = false;
+            BusyIndicator.IsVisible = false;
             RefreshRoot.IsRefreshing = false;
         }
     }
@@ -86,6 +93,17 @@ public partial class AutomationPage : ContentPage
             StrategyPicker.SelectedItem = strategies.FirstOrDefault(x => x.Path.Equals(savedStrategy, StringComparison.OrdinalIgnoreCase))
                 ?? strategies.FirstOrDefault();
         }
+    }
+
+    private void SelectSavedEntryMode()
+    {
+        var savedEntryMode = Preferences.Get("TradingFlowAutomationEntryMode", "immediate_paper");
+        ValidateStrategyCheck.IsChecked = savedEntryMode.Equals("validate_strategy", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string ResolveEntryMode()
+    {
+        return ValidateStrategyCheck.IsChecked ? "validate_strategy" : "immediate_paper";
     }
 
     private void ReloadAlerts()
@@ -123,72 +141,20 @@ public partial class AutomationPage : ContentPage
             return;
         }
 
-        if (AutoForwardCheck.IsChecked && string.IsNullOrWhiteSpace(PackageEntry.Text))
-        {
-            await DisplayAlertAsync("Automation", "Find or select a source app before enabling auto-start.", "OK");
-            return;
-        }
-
         Preferences.Set("TradingFlowAutomationConfigPath", config.Path);
         Preferences.Set("TradingFlowAutomationStrategyPath", strategy.Path);
-        Preferences.Set("TradingFlowAutomationPackage", PackageEntry.Text?.Trim() ?? string.Empty);
-        Preferences.Set("TradingFlowAutomationAppName", SourceAppLabel.Text == "None selected" ? string.Empty : SourceAppLabel.Text);
+        Preferences.Set("TradingFlowAutomationPackage", string.Empty);
+        Preferences.Set("TradingFlowAutomationAppName", "Stock Pulse");
         Preferences.Set("TradingFlowAutomationAutoForward", AutoForwardCheck.IsChecked);
-        var mode = AutoForwardCheck.IsChecked ? "Auto-forward is ON." : "Auto-forward is OFF. Use Forward Selected to test manually.";
+        Preferences.Set("TradingFlowAutomationEntryMode", ResolveEntryMode());
+        var mode = AutoForwardCheck.IsChecked ? "Auto-forward is ON for Stock Pulse." : "Auto-forward is OFF. Use Start Selected to test manually.";
         await DisplayAlertAsync("Automation", $"Defaults saved. {mode}", "OK");
     }
 
-    private async void OnFindSourceApp(object? sender, EventArgs e)
+    private void OnAutomationOptionChanged(object? sender, CheckedChangedEventArgs e)
     {
-        var query = SourceAppSearchEntry.Text?.Trim();
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            await DisplayAlertAsync("Automation", "Type the app name first, for example Stock Pulse.", "OK");
-            return;
-        }
-
-        appMatches.Clear();
-        var matches = await notificationAccess.FindInstalledAppsAsync(query);
-        foreach (var match in matches)
-        {
-            appMatches.Add(match);
-        }
-
-        if (appMatches.Count == 0)
-        {
-            SourceAppStatusLabel.Text = $"No installed app matched '{query}'. If Android hides it, wait for one notification and use the captured alert app.";
-            return;
-        }
-
-        AppMatchPicker.SelectedIndex = 0;
-        SourceAppStatusLabel.Text = notificationAccess.IsNotificationAccessEnabled()
-            ? $"Found {appMatches.Count} match(es). Choose one and tap Use Matched App."
-            : $"Found {appMatches.Count} match(es), but notification access is not enabled yet.";
-    }
-
-    private async void OnUseMatchedApp(object? sender, EventArgs e)
-    {
-        if (AppMatchPicker.SelectedItem is not InstalledNotificationApp app)
-        {
-            await DisplayAlertAsync("Automation", "Find and select an installed source app first.", "OK");
-            return;
-        }
-
-        SaveSourceApp(app.AppName, app.PackageName);
-        await DisplayAlertAsync(
-            "Automation",
-            notificationAccess.IsNotificationAccessEnabled()
-                ? $"TradingFlow can capture notifications from {app.AppName}."
-                : $"{app.AppName} is selected. Enable notification access before alerts can be captured.",
-            "OK");
-    }
-
-    private void OnClearSourceApp(object? sender, EventArgs e)
-    {
-        SaveSourceApp(string.Empty, string.Empty);
-        AutoForwardCheck.IsChecked = false;
-        Preferences.Set("TradingFlowAutomationAutoForward", false);
-        SourceAppStatusLabel.Text = "Source app filter cleared. New notifications from any app may appear for discovery.";
+        Preferences.Set("TradingFlowAutomationAutoForward", AutoForwardCheck.IsChecked);
+        Preferences.Set("TradingFlowAutomationEntryMode", ResolveEntryMode());
     }
 
     private async void OnRunNow(object? sender, EventArgs e)
@@ -217,7 +183,8 @@ public partial class AutomationPage : ContentPage
                 "manual_run",
                 null,
                 "Manual run now",
-                $"User started {ticker} from Android app."));
+                $"User started {ticker} from Android app.",
+                ResolveEntryMode()));
 
             if (session is not null)
             {
@@ -274,21 +241,8 @@ public partial class AutomationPage : ContentPage
     {
         selectedAlert = e.CurrentSelection.FirstOrDefault() as CapturedAutomationAlert;
         SelectedAlertLabel.Text = selectedAlert is null
-            ? "Select an alert below. TradingFlow extracts the ticker; auto-start only listens to the saved source app."
+            ? "Select a Stock Pulse alert below. TradingFlow extracts the ticker; auto-start ignores other apps."
             : $"Selected {selectedAlert.ParsedTickerText} from {selectedAlert.AppName}. Start Paper uses the selected strategy.";
-    }
-
-    private async void OnUseSelectedApp(object? sender, EventArgs e)
-    {
-        if (selectedAlert is null)
-        {
-            await DisplayAlertAsync("Automation", "Select a captured alert from Stock Pulse first.", "OK");
-            return;
-        }
-
-        SaveSourceApp(selectedAlert.AppName, selectedAlert.PackageName);
-        SelectedAlertLabel.Text = $"Using {selectedAlert.AppName}. Auto-start will match package {selectedAlert.PackageName}.";
-        await DisplayAlertAsync("Automation", $"Using {selectedAlert.AppName}. Select mode/playbook and Save Automation Defaults.", "OK");
     }
 
     private async void OnForwardAlert(object? sender, EventArgs e)
@@ -321,29 +275,7 @@ public partial class AutomationPage : ContentPage
         hub.Clear();
         selectedAlert = null;
         AlertsView.SelectedItem = null;
-        SelectedAlertLabel.Text = "No alerts captured yet. Enable notification access, then wait for the source app to send one alert.";
+        SelectedAlertLabel.Text = "No alerts captured yet. Enable notification access, then wait for Stock Pulse to send one alert.";
     }
 
-    private void SaveSourceApp(string appName, string packageName)
-    {
-        PackageEntry.Text = packageName;
-        SourceAppLabel.Text = string.IsNullOrWhiteSpace(appName) ? "None selected" : appName;
-        Preferences.Set("TradingFlowAutomationPackage", packageName);
-        Preferences.Set("TradingFlowAutomationAppName", appName);
-        SourceAppStatusLabel.Text = BuildSourceAppStatus();
-    }
-
-    private string BuildSourceAppStatus()
-    {
-        var packageName = Preferences.Get("TradingFlowAutomationPackage", string.Empty);
-        var appName = Preferences.Get("TradingFlowAutomationAppName", string.Empty);
-        if (string.IsNullOrWhiteSpace(packageName))
-        {
-            return "No source app verified yet. Alerts are captured for discovery until you save a filter.";
-        }
-
-        return notificationAccess.IsNotificationAccessEnabled()
-            ? $"Ready: capturing parsed alerts from {appName} only."
-            : $"Selected {appName}, but notification access must be enabled.";
-    }
 }

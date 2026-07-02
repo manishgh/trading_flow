@@ -9,6 +9,8 @@ namespace TradingFlow.Mobile.Services;
 /// </summary>
 public sealed class NotificationAutomationHub
 {
+    private const string FixedSourceAppName = "Stock Pulse";
+    private static readonly TimeSpan AlertRetentionWindow = TimeSpan.FromDays(2);
     private static readonly Regex TickerRegex = new(@"(?<![A-Z0-9])\$?([A-Z]{1,5})(?![A-Z0-9])", RegexOptions.Compiled);
     private static readonly HashSet<string> IgnoredTickerWords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -56,6 +58,7 @@ public sealed class NotificationAutomationHub
     {
         lock (gate)
         {
+            PruneExpiredAlerts();
             return alerts
                 .OrderByDescending(x => x.Timestamp)
                 .ToArray();
@@ -101,7 +104,8 @@ public sealed class NotificationAutomationHub
             "notification",
             alert.PackageName,
             alert.Title,
-            alert.Message);
+            alert.Message,
+            ResolveEntryMode());
 
         try
         {
@@ -126,6 +130,7 @@ public sealed class NotificationAutomationHub
 
         lock (gate)
         {
+            PruneExpiredAlerts();
             var duplicate = alerts.FirstOrDefault(x =>
                 x.PackageName.Equals(alert.PackageName, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(x.Ticker, alert.Ticker, StringComparison.OrdinalIgnoreCase) &&
@@ -164,7 +169,8 @@ public sealed class NotificationAutomationHub
             "notification",
             alert.PackageName,
             alert.Title,
-            alert.Message);
+            alert.Message,
+            ResolveEntryMode());
 
         try
         {
@@ -241,26 +247,43 @@ public sealed class NotificationAutomationHub
 
     private static bool ShouldForward(CapturedAutomationAlert alert)
     {
-        if (!Preferences.Get("TradingFlowAutomationAutoForward", false))
-        {
-            return false;
-        }
-
-        var configuredPackage = Preferences.Get("TradingFlowAutomationPackage", string.Empty).Trim();
-        if (!string.IsNullOrWhiteSpace(configuredPackage) &&
-            !alert.PackageName.Equals(configuredPackage, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return alert.IsEntry && !alert.IsExit && !string.IsNullOrWhiteSpace(alert.Ticker);
+        return Preferences.Get("TradingFlowAutomationAutoForward", false) &&
+            IsStockPulse(alert) &&
+            alert.IsEntry &&
+            !alert.IsExit &&
+            !string.IsNullOrWhiteSpace(alert.Ticker);
     }
 
     private static bool ShouldCapture(CapturedAutomationAlert alert)
     {
-        var configuredPackage = Preferences.Get("TradingFlowAutomationPackage", string.Empty).Trim();
-        return string.IsNullOrWhiteSpace(configuredPackage) ||
-            alert.PackageName.Equals(configuredPackage, StringComparison.OrdinalIgnoreCase);
+        return IsStockPulse(alert);
+    }
+
+    private static bool IsStockPulse(CapturedAutomationAlert alert)
+    {
+        return ContainsStockPulse(alert.AppName) || ContainsStockPulse(alert.PackageName);
+    }
+
+    private static bool ContainsStockPulse(string value)
+    {
+        var normalized = value.Replace(" ", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("_", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("-", string.Empty, StringComparison.OrdinalIgnoreCase);
+        return normalized.Contains(FixedSourceAppName.Replace(" ", string.Empty), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveEntryMode()
+    {
+        var configuredMode = Preferences.Get("TradingFlowAutomationEntryMode", "validate_strategy");
+        return configuredMode.Equals("immediate_paper", StringComparison.OrdinalIgnoreCase)
+            ? "immediate_paper"
+            : "validate_strategy";
+    }
+
+    private void PruneExpiredAlerts()
+    {
+        var cutoff = DateTimeOffset.Now.Subtract(AlertRetentionWindow);
+        alerts.RemoveAll(alert => alert.Timestamp < cutoff);
     }
 }
 

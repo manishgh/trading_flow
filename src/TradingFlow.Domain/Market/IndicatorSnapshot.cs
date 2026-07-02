@@ -32,4 +32,6 @@ public sealed record IndicatorSnapshot(
     int RelativeVolumeSampleCount = 0,
     decimal? Sma150 = null,
     decimal? Sma200 = null,
-    decimal? Ema5 = null);
+    decimal? Ema5 = null,
+    decimal? Adx = null,
+    decimal? Obv = null);

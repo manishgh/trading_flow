@@ -1,4 +1,7 @@
-using TradingFlow.Domain.Strategies;
+﻿using TradingFlow.Domain.Strategies;
+using TradingFlow.Domain.Wishlists;
+using TradingFlow.Domain.Market;
+using TradingFlow.Web.Services.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 
@@ -18,6 +21,143 @@ public static class MobileApiEndpoints
                 catalog.GetStrategies().Select(ToMobileStrategy).ToArray()));
         });
 
+
+        group.MapGet("/wishlists", async (
+            IWishlistRepository wishlists,
+            CancellationToken cancellationToken) =>
+        {
+            var items = await wishlists.ListAsync(cancellationToken);
+            return Results.Ok(items.Select(ToMobileWishlist).ToArray());
+        });
+
+        group.MapGet("/wishlists/{wishlistId:guid}", async (
+            Guid wishlistId,
+            IWishlistRepository wishlists,
+            CancellationToken cancellationToken) =>
+        {
+            var wishlist = await wishlists.GetByIdAsync(wishlistId, cancellationToken);
+            return wishlist is null ? Results.NotFound() : Results.Ok(ToMobileWishlist(wishlist));
+        });
+
+        group.MapPost("/wishlists", async (
+            MobileWishlistSaveRequest request,
+            IWishlistRepository wishlists,
+            CancellationToken cancellationToken) =>
+        {
+            if (String.IsNullOrWhiteSpace(request.Name))
+            {
+                return Results.BadRequest("Wishlist name is required.");
+            }
+
+            var saved = await wishlists.SaveAsync(new Wishlist
+            {
+                Id = request.Id ?? Guid.Empty,
+                Name = request.Name,
+                Description = request.Description,
+                IsDefault = request.IsDefault ?? false,
+                IncludeExtendedHours = request.IncludeExtendedHours ?? true,
+                IsObserved = request.IsObserved ?? false
+            }, cancellationToken);
+            var loaded = await wishlists.GetByIdAsync(saved.Id, cancellationToken) ?? saved;
+            return Results.Ok(ToMobileWishlist(loaded));
+        });
+
+        group.MapPost("/wishlists/{wishlistId:guid}/observe", async (
+            Guid wishlistId,
+            MobileWishlistObserveRequest request,
+            IWishlistRepository wishlists,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                await wishlists.SetObservedAsync(wishlistId, request.IsObserved, cancellationToken);
+                var updated = await wishlists.GetByIdAsync(wishlistId, cancellationToken);
+                return updated is null ? Results.NotFound() : Results.Ok(ToMobileWishlist(updated));
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.BadRequest(exception.Message);
+            }
+        });
+
+        group.MapDelete("/wishlists/{wishlistId:guid}", async (
+            Guid wishlistId,
+            IWishlistRepository wishlists,
+            CancellationToken cancellationToken) =>
+        {
+            await wishlists.DeleteAsync(wishlistId, cancellationToken);
+            return Results.NoContent();
+        });
+
+        group.MapPost("/wishlists/{wishlistId:guid}/items", async (
+            Guid wishlistId,
+            MobileWishlistItemRequest request,
+            IWishlistRepository wishlists,
+            CancellationToken cancellationToken) =>
+        {
+            if (String.IsNullOrWhiteSpace(request.Ticker))
+            {
+                return Results.BadRequest("Ticker is required.");
+            }
+
+            try
+            {
+                var item = await wishlists.AddOrUpdateItemAsync(wishlistId, request.Ticker, request.DisplayName, request.Notes, cancellationToken);
+                return Results.Ok(ToMobileWishlistItem(item));
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.NotFound(ex.Message);
+            }
+        });
+
+        group.MapDelete("/wishlists/{wishlistId:guid}/items/{ticker}", async (
+            Guid wishlistId,
+            string ticker,
+            IWishlistRepository wishlists,
+            CancellationToken cancellationToken) =>
+        {
+            await wishlists.RemoveItemAsync(wishlistId, ticker, cancellationToken);
+            return Results.NoContent();
+        });
+
+
+        group.MapPost("/wishlists/{wishlistId:guid}/monitor/evaluate", async (
+            Guid wishlistId,
+            MobileWishlistMonitorRequest request,
+            WishlistMarketMonitor monitor,
+            CancellationToken cancellationToken) =>
+        {
+            var snapshots = request.Snapshots
+                .Where(snapshot => !String.IsNullOrWhiteSpace(snapshot.Ticker))
+                .Select(ToWishlistMarketSnapshot)
+                .ToDictionary(snapshot => snapshot.Ticker, StringComparer.OrdinalIgnoreCase);
+            var result = await monitor.EvaluateAndPersistAlertsAsync(wishlistId, snapshots, cancellationToken);
+            return Results.Ok(new MobileWishlistMonitorResponse(
+                result.Evaluations.Select(ToMobileWishlistEvaluation).ToArray(),
+                result.PersistedSignals.Select(ToMobileWishlistSignal).ToArray()));
+        });
+        group.MapGet("/wishlists/signals", async (
+            Guid? wishlistId,
+            string? ticker,
+            int? hours,
+            int? limit,
+            IWishlistRepository wishlists,
+            CancellationToken cancellationToken) =>
+        {
+            var since = DateTimeOffset.UtcNow.Subtract(TimeSpan.FromHours(Math.Clamp(hours ?? 24, 1, 168)));
+            var signals = await wishlists.GetSignalsAsync(wishlistId, ticker, since, limit ?? 100, cancellationToken);
+            return Results.Ok(signals.Select(ToMobileWishlistSignal).ToArray());
+        });
+
+        group.MapPost("/wishlists/signals/{signalId:guid}/ack", async (
+            Guid signalId,
+            IWishlistRepository wishlists,
+            CancellationToken cancellationToken) =>
+        {
+            await wishlists.AcknowledgeSignalAsync(signalId, cancellationToken);
+            return Results.Accepted($"/api/mobile/wishlists/signals/{signalId}");
+        });
         group.MapGet("/paper/jobs", (PaperJobService paperJobs) =>
             Results.Ok(paperJobs.List()));
 
@@ -27,19 +167,26 @@ public static class MobileApiEndpoints
             return job is null ? Results.NotFound() : Results.Ok(job);
         });
 
-        group.MapPost("/paper/runs", (
+        group.MapPost("/paper/runs", async (
             MobilePaperRunRequest request,
             RunConfigWriter configWriter,
-            PaperJobService paperJobs) =>
+            PaperJobService paperJobs,
+            WishlistUniverseResolver universeResolver,
+            CancellationToken cancellationToken) =>
         {
-            var tickers = request.Tickers
-                .Select(ticker => ticker.Trim().ToUpperInvariant())
-                .Where(ticker => ticker.Length > 0)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (tickers.Length == 0 && String.IsNullOrWhiteSpace(request.ScreenerFilter))
+            IReadOnlyList<string> tickers;
+            try
             {
-                return Results.BadRequest("Provide at least one ticker or a Finviz screener filter.");
+                tickers = await universeResolver.ResolveAsync(request.Tickers, request.WishlistId, cancellationToken);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.NotFound(ex.Message);
+            }
+
+            if (tickers.Count == 0 && String.IsNullOrWhiteSpace(request.ScreenerFilter))
+            {
+                return Results.BadRequest("Provide at least one ticker, wishlist, or Finviz screener filter.");
             }
 
             var runName = String.IsNullOrWhiteSpace(request.RunName)
@@ -167,10 +314,12 @@ public static class MobileApiEndpoints
             BacktestJobService backtestJobs,
             MobileAutomationService automation) =>
         {
+            var cutoff = DateTimeOffset.UtcNow.Subtract(MobileAutomationSessionStore.RetentionWindow);
             var notifications = paperJobs.List()
                 .Concat(backtestJobs.List())
                 .SelectMany(ToNotifications)
                 .Concat(automation.List().SelectMany(ToNotifications))
+                .Where(item => item.Timestamp >= cutoff)
                 .OrderByDescending(item => item.Timestamp)
                 .Take(80)
                 .ToArray();
@@ -190,6 +339,24 @@ public static class MobileApiEndpoints
                 .ToArray();
             var feed = await newsFeed.GetLatestAsync(configPath, symbols, hours ?? 24, cancellationToken);
             return Results.Ok(feed);
+        });
+
+        group.MapGet("/news/feed", async (
+            string? ticker,
+            int? hours,
+            NewsFeedService newsFeed,
+            CancellationToken cancellationToken) =>
+        {
+            var feed = await newsFeed.GetRollingAsync(hours ?? 4, ticker, cancellationToken);
+            return Results.Ok(feed);
+        });
+
+        group.MapPost("/news/refresh", async (
+            NewsFeedService newsFeed,
+            CancellationToken cancellationToken) =>
+        {
+            await newsFeed.RefreshOnceAsync(cancellationToken);
+            return Results.Accepted("/api/mobile/news/feed");
         });
 
         group.MapGet("/warmup/watchlist", async (
@@ -234,6 +401,132 @@ public static class MobileApiEndpoints
         return endpoints;
     }
 
+
+
+    private static WishlistMarketSnapshot ToWishlistMarketSnapshot(MobileWishlistMonitorSnapshotRequest request)
+    {
+        var ticker = request.Ticker.Trim().ToUpperInvariant();
+        var timestamp = request.Timestamp ?? DateTimeOffset.UtcNow;
+        var current = new IndicatorSnapshot(
+            ticker,
+            timestamp,
+            String.IsNullOrWhiteSpace(request.Timeframe) ? "1m" : request.Timeframe.Trim(),
+            request.CurrentPrice,
+            request.CurrentVolume,
+            request.Vwap,
+            Rsi: null,
+            request.Atr,
+            request.Ema20,
+            Ema50: null,
+            Ema200: null,
+            BollingerMiddle: null,
+            BollingerUpper: null,
+            BollingerLower: null,
+            RelativeVolume: request.SessionRelativeVolume,
+            MacdLine: request.MacdHistogram,
+            MacdSignal: 0m,
+            MacdHistogram: request.MacdHistogram,
+            Catalyst: BuildRequestCatalyst(request, ticker, timestamp),
+            Ema10: request.Ema10,
+            SessionRelativeVolume: request.SessionRelativeVolume);
+        IndicatorSnapshot? previous = null;
+        if (request.PreviousMacdHistogram is not null || request.PreviousVolume is not null)
+        {
+            previous = current with
+            {
+                Timestamp = timestamp.AddMinutes(-1),
+                CurrentVolume = request.PreviousVolume ?? request.CurrentVolume,
+                MacdHistogram = request.PreviousMacdHistogram
+            };
+        }
+
+        return new WishlistMarketSnapshot(ticker, current, previous, request.RecentHigh, request.SessionOpen);
+    }
+
+    private static MobileWishlistMonitorEvaluationResponse ToMobileWishlistEvaluation(WishlistBreakoutEvaluation evaluation)
+    {
+        return new MobileWishlistMonitorEvaluationResponse(
+            evaluation.Ticker,
+            evaluation.ShouldAlert,
+            evaluation.SignalType,
+            evaluation.Severity,
+            evaluation.Price,
+            evaluation.Reason,
+            evaluation.Score,
+            evaluation.SessionGainPct,
+            evaluation.SessionRelativeVolume,
+            evaluation.VwapExtensionAtr,
+            evaluation.NewsHeadline,
+            evaluation.NewsUrl,
+            evaluation.NewsProvider);
+    }
+
+    private static CatalystEvent? BuildRequestCatalyst(
+        MobileWishlistMonitorSnapshotRequest request,
+        string ticker,
+        DateTimeOffset timestamp)
+    {
+        if (String.IsNullOrWhiteSpace(request.NewsHeadline) && String.IsNullOrWhiteSpace(request.NewsUrl))
+        {
+            return null;
+        }
+
+        return new CatalystEvent(
+            ticker,
+            timestamp,
+            CatalystType.NewsReport,
+            String.IsNullOrWhiteSpace(request.NewsHeadline) ? "Matched news catalyst" : request.NewsHeadline.Trim(),
+            request.NewsSentiment ?? 0m,
+            Provider: String.IsNullOrWhiteSpace(request.NewsProvider) ? "news" : request.NewsProvider.Trim(),
+            Url: String.IsNullOrWhiteSpace(request.NewsUrl) ? null : request.NewsUrl.Trim());
+    }
+    private static MobileWishlistResponse ToMobileWishlist(Wishlist wishlist)
+    {
+        return new MobileWishlistResponse(
+            wishlist.Id,
+            wishlist.Name,
+            wishlist.Description,
+            wishlist.IsDefault,
+            wishlist.IncludeExtendedHours,
+            wishlist.IsObserved,
+            wishlist.CreatedAtUtc,
+            wishlist.UpdatedAtUtc,
+            wishlist.Items
+                .OrderByDescending(item => item.Active)
+                .ThenBy(item => item.Ticker)
+                .Select(ToMobileWishlistItem)
+                .ToArray());
+    }
+
+    private static MobileWishlistItemResponse ToMobileWishlistItem(WishlistItem item)
+    {
+        return new MobileWishlistItemResponse(
+            item.Id,
+            item.WishlistId,
+            item.Ticker,
+            item.DisplayName,
+            item.Notes,
+            item.Active,
+            item.AddedAtUtc);
+    }
+
+    private static MobileWishlistSignalResponse ToMobileWishlistSignal(WishlistSignal signal)
+    {
+        return new MobileWishlistSignalResponse(
+            signal.Id,
+            signal.WishlistId,
+            signal.Ticker,
+            signal.SignalType,
+            signal.Severity,
+            signal.DetectedAtUtc,
+            signal.Price,
+            signal.Reason,
+            signal.SnapshotJson,
+            signal.NewsHeadline,
+            signal.NewsUrl,
+            signal.NewsProvider,
+            signal.Acknowledged);
+    }
     private static MobileRunConfigOption ToMobileRunConfig(RunConfigSummary summary)
     {
         return new MobileRunConfigOption(
@@ -345,3 +638,8 @@ public static class MobileApiEndpoints
         }
     }
 }
+
+
+
+
+

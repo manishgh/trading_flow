@@ -1,4 +1,4 @@
-namespace TradingFlow.Web.Models;
+﻿namespace TradingFlow.Web.Models;
 
 public sealed record MobileCatalogResponse(
     IReadOnlyList<MobileRunConfigOption> BacktestConfigs,
@@ -35,7 +35,8 @@ public sealed record MobilePaperRunRequest(
     bool ExtendedHours,
     bool NewsEnabled,
     string OrderExpiration,
-    string EntryOrderType);
+    string EntryOrderType,
+    Guid? WishlistId);
 
 public sealed record MobileBacktestRunRequest(
     string BaseConfigPath,
@@ -81,7 +82,8 @@ public sealed record MobileAutomationStartRequest(
     string Source,
     string? SourcePackage,
     string? SourceTitle,
-    string? SourceMessage);
+    string? SourceMessage,
+    string EntryMode = "validate_strategy");
 
 public sealed record MobileAutomationSessionSnapshot(
     Guid SessionId,
@@ -110,3 +112,97 @@ public sealed record MobileAutomationSessionSnapshot(
     IReadOnlyList<string> Events,
     string? SourceTitle,
     string? SourceMessage);
+
+public sealed record MobileWishlistResponse(
+    Guid Id,
+    string Name,
+    string? Description,
+    bool IsDefault,
+    bool IncludeExtendedHours,
+    bool IsObserved,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc,
+    IReadOnlyList<MobileWishlistItemResponse> Items);
+
+public sealed record MobileWishlistItemResponse(
+    Guid Id,
+    Guid WishlistId,
+    string Ticker,
+    string? DisplayName,
+    string? Notes,
+    bool Active,
+    DateTimeOffset AddedAtUtc);
+
+public sealed record MobileWishlistSignalResponse(
+    Guid Id,
+    Guid WishlistId,
+    string Ticker,
+    string SignalType,
+    string Severity,
+    DateTimeOffset DetectedAtUtc,
+    decimal Price,
+    string Reason,
+    string SnapshotJson,
+    string? NewsHeadline,
+    string? NewsUrl,
+    string? NewsProvider,
+    bool Acknowledged);
+
+public sealed record MobileWishlistSaveRequest(
+    Guid? Id,
+    string Name,
+    string? Description,
+    bool? IsDefault,
+    bool? IncludeExtendedHours,
+    bool? IsObserved);
+
+public sealed record MobileWishlistObserveRequest(bool IsObserved);
+
+public sealed record MobileWishlistItemRequest(
+    string Ticker,
+    string? DisplayName,
+    string? Notes);
+
+
+public sealed record MobileWishlistMonitorSnapshotRequest(
+    string Ticker,
+    DateTimeOffset? Timestamp,
+    string? Timeframe,
+    decimal CurrentPrice,
+    decimal CurrentVolume,
+    decimal? Vwap,
+    decimal? Atr,
+    decimal? Ema10,
+    decimal? Ema20,
+    decimal? MacdHistogram,
+    decimal? PreviousMacdHistogram,
+    decimal? PreviousVolume,
+    decimal? SessionRelativeVolume,
+    decimal? RecentHigh,
+    decimal? SessionOpen,
+    string? NewsHeadline,
+    string? NewsUrl,
+    string? NewsProvider,
+    decimal? NewsSentiment);
+
+public sealed record MobileWishlistMonitorRequest(
+    IReadOnlyList<MobileWishlistMonitorSnapshotRequest> Snapshots);
+
+public sealed record MobileWishlistMonitorResponse(
+    IReadOnlyList<MobileWishlistMonitorEvaluationResponse> Evaluations,
+    IReadOnlyList<MobileWishlistSignalResponse> PersistedSignals);
+
+public sealed record MobileWishlistMonitorEvaluationResponse(
+    string Ticker,
+    bool ShouldAlert,
+    string SignalType,
+    string Severity,
+    decimal Price,
+    string Reason,
+    decimal Score,
+    decimal? SessionGainPct,
+    decimal? SessionRelativeVolume,
+    decimal? VwapExtensionAtr,
+    string? NewsHeadline,
+    string? NewsUrl,
+    string? NewsProvider);

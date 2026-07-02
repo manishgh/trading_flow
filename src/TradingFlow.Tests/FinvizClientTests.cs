@@ -55,6 +55,57 @@ No.,Ticker,Company,Rel Volume
         Assert.Equal("/export?v=111&f=sh_relvol_o2&auth=test-token", handler.LastRequestPathAndQuery);
     }
 
+    [Fact]
+    public void ParseNewsExportCsv_MapsTickerColumnToSeparateEvents()
+    {
+        const string csv = """
+"Title","Source","Date","Url","Category","Ticker"
+"AI deal moves chip names","Reuters",2026-06-28 10:02:53,"https://example.com/news","Stock","NVDA,MU"
+""";
+
+        var items = FinvizClient.ParseNewsExportCsv(csv, "test-news");
+
+        Assert.Equal(["NVDA", "MU"], items.Select(x => x.Ticker).ToArray());
+        Assert.All(items, item =>
+        {
+            Assert.Equal("finviz", item.Provider);
+            Assert.Equal("Reuters", item.Source);
+            Assert.Equal("Stock", item.Summary);
+            Assert.Equal(DateTimeOffset.Parse("2026-06-28T14:02:53Z"), item.Timestamp);
+        });
+    }
+
+    [Fact]
+    public void ParseNewsExportCsv_UsesMarketTickerWhenNoTickerColumnExists()
+    {
+        const string csv = """
+"Title","Source","Date","Url","Category"
+"Macro headline","MarketWatch",2026-06-28 09:42:35,"https://example.com/market","Market"
+""";
+
+        var item = Assert.Single(FinvizClient.ParseNewsExportCsv(csv, "test-market"));
+
+        Assert.Equal("MARKET", item.Ticker);
+        Assert.Equal("Macro headline", item.Headline);
+        Assert.Equal("Market", item.Summary);
+    }
+
+    [Fact]
+    public void ParseNewsExportCsv_UsesFallbackTitleWhenFinvizTitleIsBlank()
+    {
+        const string csv = """
+"Title","Source","Date","Url","Category","Ticker"
+"","Bloomberg",2026-06-28 18:33:58,"https://example.com/blank-title","Market",""
+""";
+
+        var item = Assert.Single(FinvizClient.ParseNewsExportCsv(csv, "test-blank"));
+
+        Assert.Equal("MARKET", item.Ticker);
+        Assert.Equal("Bloomberg update", item.Headline);
+        Assert.Equal("Bloomberg", item.Source);
+        Assert.Equal("Market", item.Summary);
+    }
+
     private sealed class CsvHandler(string csv) : HttpMessageHandler
     {
         public string? LastRequestPathAndQuery { get; private set; }

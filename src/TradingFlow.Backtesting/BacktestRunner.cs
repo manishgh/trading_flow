@@ -982,7 +982,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         var approximateTradeAmount = run.Portfolio.StartingCapital / run.Portfolio.MaxConcurrentPositions;
         var entryPrice = TradingFlow.Engine.Risk.DynamicSlippageModel.ApplyLongSlippage(entryBar.Open, relativeVolume, strategy.Execution.SlippageBps, approximateTradeAmount);
 
-        var stopDistance = strategy.ExitRules.StopAtrMultiple * signal.CurrentAtr;
+        var stopDistance = ResolvePositionRiskStopDistance(strategy, signal.CurrentAtr, entryPrice, run.Portfolio.RiskPerTradePct);
         if (stopDistance <= 0)
         {
             return null;
@@ -1113,7 +1113,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         var entryBar = bars[entryIndex];
         var approximateTradeAmount = run.Portfolio.StartingCapital / run.Portfolio.MaxConcurrentPositions;
         var entryPrice = ApplyShortEntrySlippage(entryBar.Open, relativeVolume, strategy, approximateTradeAmount);
-        var stopDistance = strategy.ExitRules.StopAtrMultiple * signal.CurrentAtr;
+        var stopDistance = ResolvePositionRiskStopDistance(strategy, signal.CurrentAtr, entryPrice, run.Portfolio.RiskPerTradePct);
         if (stopDistance <= 0)
         {
             return null;
@@ -1434,6 +1434,22 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
             Decimal.Round(exitPrice, 4),
             exitReason,
             Decimal.Round(stopDistance, 4));
+    }
+
+    private static decimal ResolvePositionRiskStopDistance(
+        StrategyDefinition strategy,
+        decimal atr,
+        decimal entryPrice,
+        decimal maxLossPctOfPosition)
+    {
+        var atrStopDistance = strategy.ExitRules.StopAtrMultiple * atr;
+        if (entryPrice <= 0m || maxLossPctOfPosition <= 0m)
+        {
+            return atrStopDistance;
+        }
+
+        var positionRiskStopDistance = entryPrice * (maxLossPctOfPosition / 100m);
+        return Math.Min(atrStopDistance, positionRiskStopDistance);
     }
 
     private static IReadOnlyList<StrategyBacktestResult> BuildStrategyResults(

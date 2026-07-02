@@ -36,7 +36,7 @@ public sealed class MobileAutomationService
     private readonly ICandleStore candleStore;
     private readonly SignalGenerator signalGenerator = new();
     private readonly BasicStrategyEvaluator strategyEvaluator = new();
-    private readonly TechnicalExecutionEngine technicalExecutionEngine = new();
+    private readonly PositionGuardianEngine positionGuardianEngine = new();
     private readonly RiskEngine riskEngine = new();
 
     public MobileAutomationService(
@@ -80,6 +80,7 @@ public sealed class MobileAutomationService
 
     public IReadOnlyList<MobileAutomationSessionSnapshot> List()
     {
+        PruneExpiredSessions();
         return sessions.Values
             .OrderByDescending(x => x.CreatedAt)
             .Select(x => x.ToSnapshot())
@@ -128,10 +129,11 @@ public sealed class MobileAutomationService
         }
 
         sessions[session.SessionId] = session;
-        session.Report("queued", $"Queued {request.Source} automation for {normalizedTicker}.");
+        var entryMode = NormalizeEntryMode(request.EntryMode);
+        session.Report("queued", $"Queued {request.Source} automation for {normalizedTicker}. EntryMode={entryMode}.");
         await PersistAsync(cancellationToken);
 
-        _ = Task.Run(() => RunAsync(session, runConfig, strategy, cancellationToken), cancellationToken);
+        _ = Task.Run(() => RunAsync(session, runConfig, strategy, entryMode, cancellationToken), cancellationToken);
         return session.ToSnapshot();
     }
 
@@ -152,6 +154,7 @@ public sealed class MobileAutomationService
         MutableAutomationSession session,
         BacktestRunConfig runConfig,
         StrategyDefinition strategy,
+        string entryMode,
         CancellationToken outerCancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(outerCancellationToken);
@@ -176,13 +179,14 @@ public sealed class MobileAutomationService
             }
 
             var state = await LoadTickerStateAsync(runConfig, strategy, session.Ticker, marketDataProvider, cancellationToken);
-            var execution = PrepareEntryExecution(runConfig, strategy, session.Ticker, state);
+            var execution = PrepareAutomationEntryExecution(runConfig, strategy, session, state, entryMode);
 
-            var order = riskEngine.CreateLongBracketOrder(
+            var order = riskEngine.CreateLongBracketOrderWithPositionRisk(
                 strategy,
                 execution.ExecutionSignal,
                 runConfig.Portfolio.StartingCapital,
-                runConfig.Portfolio.RiskPerTradePct);
+                runConfig.Portfolio.RiskPerTradePct,
+                runConfig.Portfolio.MaxPositionValuePct);
             if (order is null)
             {
                 throw new InvalidOperationException($"Unable to size order for {session.Ticker}; ATR or risk budget is invalid.");
@@ -193,7 +197,7 @@ public sealed class MobileAutomationService
                 ClientOrderId = ClientOrderIdFactory.Create(session.RunName, session.Ticker)
             };
 
-            session.Report("submitting_entry", $"Submitting entry for {session.Ticker} from {session.Source}.");
+            session.Report("submitting_entry", $"Submitting entry for {session.Ticker} from {session.Source}. EntryMode={entryMode}.");
             var orderId = await brokerClient.SubmitOrderAsync(order, cancellationToken);
             session.Status = "running";
             session.EntryOrderId = orderId;
@@ -329,72 +333,18 @@ public sealed class MobileAutomationService
             }
 
             var takeProfit = session.TakeProfitPrice ?? (entryPrice + (stopDistance * strategy.ExitRules.TargetRMultiple));
-            var currentStopLossPrice = stopLoss;
-            var highestHighSinceEntry = entryPrice;
+            var guardianDecision = positionGuardianEngine.EvaluateLong(
+                strategy,
+                executionBars,
+                executionSnapshots,
+                entryTimestamp,
+                entryPrice,
+                stopLoss,
+                takeProfit);
 
-            string? exitReason = null;
-            decimal? exitPrice = null;
-            DateTimeOffset exitSignalTimestamp = DateTimeOffset.UtcNow;
-
-            for (var index = entryIndex; index < executionBars.Count; index++)
+            if (guardianDecision.ShouldExit)
             {
-                var exitPriceLogTrend = TechnicalExecutionEngine.ComputeLogTrend(
-                    executionBars,
-                    index,
-                    strategy.ExitRules.ExitLogPriceLookbackBars,
-                    x => x.Close,
-                    addOne: false);
-                var exitVolumeLogTrend = TechnicalExecutionEngine.ComputeLogTrend(
-                    executionBars,
-                    index,
-                    strategy.ExitRules.ExitLogVolumeLookbackBars,
-                    x => x.Volume,
-                    addOne: true);
-
-                if (technicalExecutionEngine.ShouldExitLongOnConfirmedVwapFailure(
-                        strategy,
-                        executionSnapshots,
-                        index,
-                        entryIndex,
-                        entryPrice,
-                        stopDistance,
-                        Math.Max(highestHighSinceEntry, executionBars[index].High),
-                        index - entryIndex))
-                {
-                    exitReason = "confirmed_vwap_failure";
-                    exitPrice = executionBars[index].Close;
-                    exitSignalTimestamp = executionBars[index].Timestamp;
-                    break;
-                }
-
-                var (candidateExitPrice, candidateExitReason) = technicalExecutionEngine.EvaluateBarForExit(
-                    strategy,
-                    executionBars[index],
-                    executionSnapshots[index],
-                    entryPrice,
-                    stopLoss,
-                    takeProfit,
-                    entryTimestamp,
-                    stopDistance,
-                    index - entryIndex,
-                    ref currentStopLossPrice,
-                    ref highestHighSinceEntry,
-                    exitPriceLogTrend?.Slope,
-                    exitVolumeLogTrend?.Slope,
-                    index > 0 ? executionSnapshots[index - 1] : null);
-
-                if (candidateExitReason is not null)
-                {
-                    exitReason = candidateExitReason;
-                    exitPrice = candidateExitPrice;
-                    exitSignalTimestamp = executionBars[index].Timestamp;
-                    break;
-                }
-            }
-
-            if (exitReason is not null)
-            {
-                session.Report("submitting_exit", $"Exit triggered for {session.Ticker}: {exitReason}.");
+                session.Report("submitting_exit", $"Exit triggered for {session.Ticker}: {guardianDecision.Reason}.");
                 foreach (var order in openOrders.Where(order =>
                              order.Ticker.Equals(session.Ticker, StringComparison.OrdinalIgnoreCase) &&
                              order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase)))
@@ -414,9 +364,9 @@ public sealed class MobileAutomationService
                 {
                     session.Status = "completed";
                     session.FinishedAt = DateTimeOffset.UtcNow;
-                    session.ExitReason = exitReason;
+                    session.ExitReason = guardianDecision.Reason;
                     session.ExitSubmittedAt = DateTimeOffset.UtcNow;
-                    session.Report("completed", $"Closed {session.Ticker} on {exitReason} at ~{exitPrice?.ToString("F2") ?? "market"}.");
+                    session.Report("completed", $"Closed {session.Ticker} on {guardianDecision.Reason} at ~{guardianDecision.ExitPrice?.ToString("F2") ?? "market"}.");
                     await PersistAsync(cancellationToken);
 
                     if (auditRepo is not null)
@@ -428,14 +378,14 @@ public sealed class MobileAutomationService
                             StrategyName = strategy.StrategyName,
                             Timestamp = DateTimeOffset.UtcNow,
                             Decision = "ExitSubmitted",
-                            RejectionReason = exitReason,
+                            RejectionReason = guardianDecision.Reason,
                             SignalJson = JsonSerializer.Serialize(new
                             {
                                 ticker = session.Ticker,
                                 session.RunName,
-                                exitReason,
-                                exitSignalTimestamp,
-                                estimatedExitPrice = exitPrice,
+                                exitReason = guardianDecision.Reason,
+                                exitSignalTimestamp = guardianDecision.ExitSignalTimestamp,
+                                estimatedExitPrice = guardianDecision.ExitPrice,
                                 entryPrice,
                                 currentPrice = position.CurrentPrice,
                                 unrealizedPl = position.UnrealizedPl
@@ -446,10 +396,21 @@ public sealed class MobileAutomationService
                     return;
                 }
             }
+            else
+            {
+                await TryRaiseBrokerTrailingStopAsync(
+                    session,
+                    strategy,
+                    brokerClient,
+                    openOrders,
+                    stopLoss,
+                    guardianDecision.CurrentStopLossPrice,
+                    cancellationToken);
+            }
 
             session.LastObservedPrice = position.CurrentPrice;
             session.UnrealizedPl = position.UnrealizedPl;
-            session.Report("monitoring", $"Holding {session.Ticker}. Last {position.CurrentPrice:F2}, unrealized {position.UnrealizedPl:F2}.");
+            session.Report("monitoring", $"Holding {session.Ticker}. Last {position.CurrentPrice:F2}, unrealized {position.UnrealizedPl:F2}. Guardian={guardianDecision.Reason}.");
             await PersistAsync(cancellationToken);
             await Task.Delay(pollingInterval, cancellationToken);
         }
@@ -480,9 +441,69 @@ public sealed class MobileAutomationService
         await PersistAsync(cancellationToken);
     }
 
+    private async Task TryRaiseBrokerTrailingStopAsync(
+        MutableAutomationSession session,
+        StrategyDefinition strategy,
+        IBrokerClient brokerClient,
+        IReadOnlyCollection<ActiveBrokerOrder> openOrders,
+        decimal initialStopLossPrice,
+        decimal calculatedStopLossPrice,
+        CancellationToken cancellationToken)
+    {
+        if (!strategy.ExitRules.EnableAtrTrailingStop ||
+            calculatedStopLossPrice <= initialStopLossPrice ||
+            calculatedStopLossPrice <= (session.StopLossPrice ?? initialStopLossPrice) + 0.01m)
+        {
+            return;
+        }
+
+        var stopOrder = openOrders
+            .Where(order =>
+                order.Ticker.Equals(session.Ticker, StringComparison.OrdinalIgnoreCase) &&
+                order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase) &&
+                order.StopPrice is not null)
+            .OrderByDescending(order => order.CreatedAt)
+            .FirstOrDefault();
+        if (stopOrder is null)
+        {
+            session.Report("monitoring", $"Guardian calculated a raised stop for {session.Ticker} at {calculatedStopLossPrice:F2}, but no broker stop leg is open.");
+            return;
+        }
+
+        if (stopOrder.StopPrice is { } brokerStopPrice &&
+            calculatedStopLossPrice <= brokerStopPrice + 0.01m)
+        {
+            return;
+        }
+
+        var modified = await brokerClient.ModifyOrderAsync(stopOrder.OrderId, calculatedStopLossPrice, 0m, cancellationToken);
+        if (!modified)
+        {
+            session.Report("monitoring", $"Broker rejected trailing stop raise for {session.Ticker}.");
+            return;
+        }
+
+        session.StopLossPrice = calculatedStopLossPrice;
+        session.Report("monitoring", $"Raised broker trailing stop for {session.Ticker} to {calculatedStopLossPrice:F2}.");
+        await PersistAsync(cancellationToken);
+    }
+
     private Task PersistAsync(CancellationToken cancellationToken = default)
     {
+        PruneExpiredSessions();
         return sessionStore.SaveAsync(sessions.Values.Select(x => x.ToSnapshot()).ToArray(), cancellationToken);
+    }
+
+    private void PruneExpiredSessions()
+    {
+        var cutoff = DateTimeOffset.UtcNow.Subtract(MobileAutomationSessionStore.RetentionWindow);
+        foreach (var item in sessions.ToArray())
+        {
+            if (!MobileAutomationSessionStore.IsRetained(item.Value.ToSnapshot(), cutoff))
+            {
+                sessions.TryRemove(item.Key, out _);
+            }
+        }
     }
 
     private async Task<TickerMarketState> LoadTickerStateAsync(
@@ -646,6 +667,105 @@ public sealed class MobileAutomationService
             ?? throw new InvalidOperationException($"Execution timeframe {strategy.Execution.Timeframe} is unavailable for {ticker}.");
 
         return new PreparedEntryExecution(signal, executionSignal);
+    }
+
+    private PreparedEntryExecution PrepareAutomationEntryExecution(
+        BacktestRunConfig runConfig,
+        StrategyDefinition strategy,
+        MutableAutomationSession session,
+        TickerMarketState state,
+        string entryMode)
+    {
+        if (entryMode.Equals("immediate_paper", StringComparison.OrdinalIgnoreCase))
+        {
+            return PrepareImmediateEntryExecution(strategy, session.Ticker, state);
+        }
+
+        try
+        {
+            return PrepareEntryExecution(runConfig, strategy, session.Ticker, state);
+        }
+        catch (InvalidOperationException exception) when (CanFallbackToStockPulseImmediateEntry(session, exception))
+        {
+            session.Report(
+                "entry_fallback",
+                "Stock Pulse alert had usable price/ATR state but RVOL was unavailable. Entering paper trade and letting guardian manage exits.");
+            return PrepareImmediateEntryExecution(strategy, session.Ticker, state);
+        }
+    }
+
+    private static bool CanFallbackToStockPulseImmediateEntry(MutableAutomationSession session, InvalidOperationException exception)
+    {
+        return session.Source.Equals("notification", StringComparison.OrdinalIgnoreCase) &&
+            exception.Message.Contains("relative_volume", StringComparison.OrdinalIgnoreCase) &&
+            !exception.Message.Contains("atr", StringComparison.OrdinalIgnoreCase) &&
+            !exception.Message.Contains("vwap", StringComparison.OrdinalIgnoreCase) &&
+            !exception.Message.Contains("macd", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private PreparedEntryExecution PrepareImmediateEntryExecution(
+        StrategyDefinition strategy,
+        string ticker,
+        TickerMarketState state)
+    {
+        if (!state.SnapshotsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots) ||
+            executionSnapshots.Count == 0)
+        {
+            throw new InvalidOperationException($"Execution timeframe {strategy.Execution.Timeframe} is unavailable for {ticker}.");
+        }
+
+        var latest = executionSnapshots[^1];
+        if (latest.Atr is null or <= 0m)
+        {
+            throw new InvalidOperationException("signal_missing_indicators (atr)");
+        }
+
+        var signal = new TradeSignal(
+            Ticker: ticker,
+            Timestamp: latest.Timestamp,
+            Timeframe: latest.Timeframe,
+            CurrentPrice: latest.CurrentPrice,
+            CurrentVolume: latest.CurrentVolume,
+            CurrentRsi: latest.Rsi ?? 50m,
+            CurrentAtr: latest.Atr.Value,
+            IsAboveVwap: latest.Vwap is not null && latest.CurrentPrice >= latest.Vwap.Value,
+            IsVwapPullback: false,
+            IsVwapReclaim: false,
+            IsVwapRejection: false,
+            IsEma20Pullback: false,
+            IsOpeningRangeBreakout: false,
+            IsOpeningRangeBreakdown: false,
+            IsRecentHighBreakout: false,
+            IsRecentLowBreakdown: false,
+            IsVolatilityContraction: false,
+            IsPriceAboveEma20: latest.Ema20 is not null && latest.CurrentPrice >= latest.Ema20.Value,
+            IsPriceAboveEma50: latest.Ema50 is not null && latest.CurrentPrice >= latest.Ema50.Value,
+            IsEma20AboveEma50: latest.Ema20 is not null && latest.Ema50 is not null && latest.Ema20.Value >= latest.Ema50.Value,
+            VwapExtensionAtr: latest.Vwap is not null && latest.Atr is > 0m
+                ? (latest.CurrentPrice - latest.Vwap.Value) / latest.Atr.Value
+                : null,
+            IsAboveBollingerMiddle: latest.BollingerMiddle is not null && latest.CurrentPrice >= latest.BollingerMiddle.Value,
+            IsMacdHistogramPositive: latest.MacdHistogram is > 0m,
+            IsMacdNotBearish: latest.MacdHistogram is null or >= 0m,
+            IsPriceAboveEma10: latest.Ema10 is not null && latest.CurrentPrice >= latest.Ema10.Value,
+            IsEma10AboveEma20: latest.Ema10 is not null && latest.Ema20 is not null && latest.Ema10.Value >= latest.Ema20.Value,
+            SessionRelativeVolume: latest.SessionRelativeVolume,
+            SlotRelativeVolume: latest.SlotRelativeVolume,
+            Catalyst: latest.Catalyst);
+
+        return new PreparedEntryExecution(signal, signal);
+    }
+
+    private static string NormalizeEntryMode(string? entryMode)
+    {
+        if (String.IsNullOrWhiteSpace(entryMode))
+        {
+            return "validate_strategy";
+        }
+
+        return entryMode.Trim().Equals("immediate_paper", StringComparison.OrdinalIgnoreCase)
+            ? "immediate_paper"
+            : "validate_strategy";
     }
 
     private static string? GetSignalReadinessRejection(IndicatorSnapshot snapshot)

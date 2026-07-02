@@ -66,6 +66,60 @@ public sealed class MobileAutomationSessionStoreTests
     }
 
     [Fact]
+    public async Task SaveAsync_DropsTerminalSessionsOlderThanTwoDays()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var store = new MobileAutomationSessionStore(
+                new ProjectPaths(root),
+                AtomicFileArtifactWriter.Instance);
+            var oldSessionId = Guid.NewGuid();
+            var recentSessionId = Guid.NewGuid();
+
+            await store.SaveAsync(new[]
+            {
+                CreateSnapshot(oldSessionId, "failed", DateTimeOffset.UtcNow.AddDays(-3)),
+                CreateSnapshot(recentSessionId, "completed", DateTimeOffset.UtcNow.AddHours(-8))
+            });
+
+            var actual = await store.LoadAsync();
+
+            var session = Assert.Single(actual);
+            Assert.Equal(recentSessionId, session.SessionId);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task SaveAsync_KeepsActiveSessionEvenWhenCreatedBeforeRetentionWindow()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var store = new MobileAutomationSessionStore(
+                new ProjectPaths(root),
+                AtomicFileArtifactWriter.Instance);
+            var runningSessionId = Guid.NewGuid();
+
+            await store.SaveAsync(new[]
+            {
+                CreateSnapshot(runningSessionId, "running", DateTimeOffset.UtcNow.AddDays(-3))
+            });
+
+            var session = Assert.Single(await store.LoadAsync());
+            Assert.Equal(runningSessionId, session.SessionId);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public async Task InitializeAsync_MarksRunningSessionsInterrupted()
     {
         var root = CreateTempDirectory();
@@ -134,6 +188,40 @@ public sealed class MobileAutomationSessionStoreTests
         var path = Path.Combine(Path.GetTempPath(), "trading-flow-mobile-automation-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static MobileAutomationSessionSnapshot CreateSnapshot(Guid sessionId, string status, DateTimeOffset createdAt)
+    {
+        var finishedAt = status is "completed" or "failed" or "cancelled" or "interrupted"
+            ? createdAt.AddMinutes(1)
+            : (DateTimeOffset?)null;
+        return new MobileAutomationSessionSnapshot(
+            sessionId,
+            $"mobile_auto_{sessionId:N}",
+            "config.yaml",
+            "strategy.yaml",
+            "POET",
+            "notification",
+            "com.sample.alerts",
+            status,
+            createdAt,
+            createdAt.AddSeconds(5),
+            finishedAt,
+            null,
+            null,
+            status.Equals("failed", StringComparison.OrdinalIgnoreCase) ? "failed" : null,
+            status,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            new[] { status },
+            "Title",
+            "Message");
     }
 
     private static void TryDeleteDirectory(string path)

@@ -131,6 +131,16 @@ public sealed class SignalGenerator
             strategy,
             bars,
             index);
+        var adxTrend = GetNullableIndicatorTrend(
+            snapshots,
+            index,
+            strategy.EntryRules.AdxRisingLookbackBars,
+            snapshot => snapshot.Adx);
+        var obvTrend = GetNullableIndicatorTrend(
+            snapshots,
+            index,
+            strategy.EntryRules.ObvRisingLookbackBars,
+            snapshot => snapshot.Obv);
         var isEpisodicPivotGap = strategy.EntryRules.MinGapUpPct is { } minGap &&
             gapUpPct is not null &&
             gapUpPct.Value >= minGap;
@@ -250,7 +260,41 @@ public sealed class SignalGenerator
             volumeSmaTrend.IsRising,
             volumeSmaTrend.CurrentSma,
             volumeSmaTrend.PreviousSma,
-            volumeSmaTrend.RisePct);
+            volumeSmaTrend.RisePct,
+            catalystContext.AgeBars,
+            snapshot.Adx,
+            adxTrend.Previous,
+            adxTrend.IsRising,
+            snapshot.Obv,
+            obvTrend.Previous,
+            obvTrend.IsRising,
+            obvTrend.Change);
+    }
+
+    private static (bool IsRising, decimal? Previous, decimal? Change) GetNullableIndicatorTrend(
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int index,
+        int lookbackBars,
+        Func<IndicatorSnapshot, decimal?> selector)
+    {
+        var lookback = Math.Max(1, lookbackBars);
+        if (index - lookback < 0)
+        {
+            return (false, null, null);
+        }
+
+        for (var i = index - lookback; i <= index; i++)
+        {
+            if (selector(snapshots[i]) is null)
+            {
+                return (false, null, null);
+            }
+        }
+
+        var previous = selector(snapshots[index - lookback]);
+        var current = selector(snapshots[index]);
+        var change = current - previous;
+        return (change > 0m, previous, change);
     }
 
     private static (bool IsRising, decimal? CurrentSma, decimal? PreviousSma, decimal? RisePct) GetVolumeSmaTrend(
@@ -1088,7 +1132,7 @@ public sealed class SignalGenerator
         return rangePct <= 3.0m && bars[index].Close > high;
     }
 
-    private static (decimal? AgeHours, decimal? PriceMovePct) GetCatalystContext(
+    private static (decimal? AgeHours, decimal? PriceMovePct, int? AgeBars) GetCatalystContext(
         CatalystEvent? catalyst,
         IReadOnlyList<OhlcvBar> bars,
         IReadOnlyList<IndicatorSnapshot> snapshots,
@@ -1096,20 +1140,23 @@ public sealed class SignalGenerator
     {
         if (catalyst is null)
         {
-            return (null, null);
+            return (null, null, null);
         }
 
         var ageHours = (decimal)Math.Abs((snapshots[index].Timestamp - catalyst.Timestamp).TotalHours);
+        var ageBars = bars
+            .Take(index + 1)
+            .Count(bar => bar.Timestamp > catalyst.Timestamp);
         var catalystBar = bars
             .Take(index + 1)
             .LastOrDefault(bar => bar.Timestamp <= catalyst.Timestamp);
         if (catalystBar is null || catalystBar.Close <= 0m)
         {
-            return (ageHours, null);
+            return (ageHours, null, ageBars);
         }
 
         var priceMovePct = ((snapshots[index].CurrentPrice / catalystBar.Close) - 1m) * 100m;
-        return (ageHours, priceMovePct);
+        return (ageHours, priceMovePct, ageBars);
     }
 
     private static (decimal? RangePct, decimal? PullbackFromHighPct) GetSessionContext(

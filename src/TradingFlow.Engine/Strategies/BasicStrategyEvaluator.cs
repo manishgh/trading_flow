@@ -45,6 +45,28 @@ public sealed class BasicStrategyEvaluator
             return $"volume_sma_rise_below_minimum (Actual: {signal.VolumeSmaRisePct?.ToString("F2") ?? "n/a"}, Required: {minVolumeSmaRisePct:F2})";
         }
 
+        if (strategy.EntryRules.MinAdx is { } minAdx &&
+            (signal.CurrentAdx is null || signal.CurrentAdx.Value < minAdx))
+        {
+            return $"adx_below_minimum (Actual: {signal.CurrentAdx?.ToString("F2") ?? "n/a"}, Required: {minAdx:F2})";
+        }
+
+        if (strategy.EntryRules.RequireAdxRising && !signal.IsAdxRising)
+        {
+            return $"adx_not_rising (Current: {signal.CurrentAdx?.ToString("F2") ?? "n/a"}, Previous: {signal.PreviousAdx?.ToString("F2") ?? "n/a"}, LookbackBars: {strategy.EntryRules.AdxRisingLookbackBars})";
+        }
+
+        if (strategy.EntryRules.RequireObvRising && !signal.IsObvRising)
+        {
+            return $"obv_not_rising (Current: {signal.CurrentObv?.ToString("F0") ?? "n/a"}, Previous: {signal.PreviousObv?.ToString("F0") ?? "n/a"}, LookbackBars: {strategy.EntryRules.ObvRisingLookbackBars})";
+        }
+
+        if (strategy.EntryRules.MinObvChange is { } minObvChange &&
+            (signal.ObvChange is null || signal.ObvChange.Value < minObvChange))
+        {
+            return $"obv_change_below_minimum (Actual: {signal.ObvChange?.ToString("F0") ?? "n/a"}, Required: {minObvChange:F0})";
+        }
+
         if (signal.CurrentRsi < strategy.EntryRules.MinEntryRsi ||
             signal.CurrentRsi > strategy.EntryRules.MaxEntryRsi)
         {
@@ -57,7 +79,7 @@ public sealed class BasicStrategyEvaluator
             return researchRuleRejection;
         }
 
-        if (!PassesSetupType(strategy.EntryRules.SetupType, signal))
+        if (!PassesSetupType(strategy, signal))
         {
             return $"setup_{strategy.EntryRules.SetupType}_not_triggered";
         }
@@ -418,8 +440,9 @@ public sealed class BasicStrategyEvaluator
         return null;
     }
 
-    private static bool PassesSetupType(string setupType, TradeSignal signal)
+    private static bool PassesSetupType(StrategyDefinition strategy, TradeSignal signal)
     {
+        var setupType = strategy.EntryRules.SetupType;
         return setupType.ToLowerInvariant() switch
         {
             "indicator_stack" => true,
@@ -457,8 +480,35 @@ public sealed class BasicStrategyEvaluator
                  signal.IsOpeningRangeBreakout ||
                  signal.IsRecentHighBreakout ||
                  signal.IsOpeningDriveContinuation),
+            "catalyst_confirmation_swing" => IsCatalystConfirmationSwing(strategy, signal),
             _ => throw new NotSupportedException($"Unsupported setup_type: {setupType}.")
         };
+    }
+
+    private static bool IsCatalystConfirmationSwing(StrategyDefinition strategy, TradeSignal signal)
+    {
+        var gapThreshold = strategy.EntryRules.GapVariantMinPct ?? 4.0m;
+        var isGapVariant = signal.GapUpPct is { } gapUpPct && gapUpPct >= gapThreshold;
+
+        var hasPrimaryStructure = signal.IsVcpBreakout ||
+            signal.IsSwingReclaim ||
+            signal.IsRecentHighBreakout ||
+            signal.IsVwapReclaim ||
+            signal.IsVwapPullback ||
+            signal.IsEma20Pullback;
+
+        var primaryConfirmation = hasPrimaryStructure &&
+            signal.IsMacdNotBearish &&
+            (signal.IsMacdHistogramPositive || !strategy.EntryRules.RequireMacdHistogramPositive);
+
+        var gapConfirmation = isGapVariant &&
+            (signal.IsRecentHighBreakout ||
+             signal.IsVcpBreakout ||
+             signal.IsVwapReclaim ||
+             signal.IsVwapPullback ||
+             signal.IsAboveSessionOpen);
+
+        return primaryConfirmation || gapConfirmation;
     }
 
     private static string? GetResearchRuleRejection(StrategyDefinition strategy, TradeSignal signal)
@@ -634,6 +684,13 @@ public sealed class BasicStrategyEvaluator
             catalyst.SentimentScore <= vetoThreshold)
         {
             return $"negative_news_sentiment (Actual: {catalyst.SentimentScore:F2}, VetoBelow: {vetoThreshold:F2}, Headline: {catalyst.Headline})";
+        }
+
+        if (catalyst is not null &&
+            strategy.EntryRules.MaxCatalystConfirmationBars is { } maxConfirmationBars &&
+            (signal.CatalystAgeBars is null || signal.CatalystAgeBars.Value > maxConfirmationBars))
+        {
+            return $"catalyst_confirmation_window_expired (ActualBars: {signal.CatalystAgeBars?.ToString() ?? "n/a"}, RequiredMax: {maxConfirmationBars}, Headline: {catalyst.Headline})";
         }
 
         if (!strategy.EntryRules.RequirePositiveNews)

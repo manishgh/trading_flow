@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualBasic.FileIO;
+using TradingFlow.Domain.Market;
 
 namespace TradingFlow.Finviz;
 
@@ -145,6 +146,20 @@ public sealed class FinvizClient : IDisposable
         return names.Contains("ticker", StringComparer.OrdinalIgnoreCase) ? 1 : -1;
     }
 
+    private static int FindHeaderIndexStrict(IReadOnlyList<string> header, params string[] names)
+    {
+        for (var i = 0; i < header.Count; i++)
+        {
+            var normalized = NormalizeHeader(header[i]);
+            if (names.Any(name => normalized.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     private static string NormalizeHeader(string value)
     {
         return new string(value.Where(Char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
@@ -160,6 +175,42 @@ public sealed class FinvizClient : IDisposable
             out var parsed)
                 ? parsed
                 : null;
+    }
+
+    private static DateTimeOffset ParseFinvizTimestamp(string value)
+    {
+        if (!DateTime.TryParse(
+            value,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None,
+            out var parsed))
+        {
+            return DateTimeOffset.UtcNow;
+        }
+
+        var unspecified = DateTime.SpecifyKind(parsed, DateTimeKind.Unspecified);
+        var marketTimeZone = ResolveMarketTimeZone();
+        var utc = TimeZoneInfo.ConvertTimeToUtc(unspecified, marketTimeZone);
+        return new DateTimeOffset(utc, TimeSpan.Zero);
+    }
+
+    private static TimeZoneInfo ResolveMarketTimeZone()
+    {
+        foreach (var id in new[] { "Eastern Standard Time", "America/New_York" })
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(id);
+            }
+            catch (TimeZoneNotFoundException)
+            {
+            }
+            catch (InvalidTimeZoneException)
+            {
+            }
+        }
+
+        return TimeZoneInfo.Utc;
     }
 
     public async Task<string> GetStockDataAsync(string ticker, string period, CancellationToken cancellationToken = default)
@@ -181,6 +232,133 @@ public sealed class FinvizClient : IDisposable
             () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStringAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<CatalystEvent>> GetNewsExportAsync(int view, CancellationToken cancellationToken = default)
+    {
+        var url = $"/export/news?v={view}&auth={_options.AuthToken}";
+        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET",
+            () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
+        response.EnsureSuccessStatusCode();
+
+        var csvContent = await response.Content.ReadAsStringAsync(cancellationToken);
+        return ParseNewsExportCsv(csvContent, $"finviz-export-v{view}");
+    }
+
+    public static IReadOnlyList<CatalystEvent> ParseNewsExportCsv(string csvContent, string externalIdPrefix)
+    {
+        var rows = new List<CatalystEvent>();
+        if (String.IsNullOrWhiteSpace(csvContent))
+        {
+            return rows;
+        }
+
+        if (csvContent.TrimStart().StartsWith("<", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new Exception("Finviz API returned HTML instead of CSV. Check Auth Token.");
+        }
+
+        using var reader = new StringReader(csvContent);
+        using var parser = new TextFieldParser(reader)
+        {
+            TextFieldType = FieldType.Delimited,
+            Delimiters = new[] { "," },
+            HasFieldsEnclosedInQuotes = true
+        };
+
+        var header = parser.EndOfData ? Array.Empty<string>() : parser.ReadFields() ?? Array.Empty<string>();
+        var titleIndex = FindHeaderIndexStrict(header, "title", "headline", "news");
+        var sourceIndex = FindHeaderIndex(header, "source");
+        var dateIndex = FindHeaderIndex(header, "date");
+        var urlIndex = FindHeaderIndex(header, "url");
+        var categoryIndex = FindHeaderIndex(header, "category");
+        var tickerIndex = FindHeaderIndexStrict(header, "ticker", "tickers", "symbol", "symbols");
+
+        while (!parser.EndOfData)
+        {
+            string[]? fields;
+            try
+            {
+                fields = parser.ReadFields();
+            }
+            catch (MalformedLineException)
+            {
+                continue;
+            }
+
+            if (fields is null)
+            {
+                continue;
+            }
+
+            var title = titleIndex >= 0 && fields.Length > titleIndex ? fields[titleIndex].Trim() : String.Empty;
+            var source = sourceIndex >= 0 && fields.Length > sourceIndex ? fields[sourceIndex].Trim() : null;
+            var articleUrl = urlIndex >= 0 && fields.Length > urlIndex ? fields[urlIndex].Trim() : null;
+            var category = categoryIndex >= 0 && fields.Length > categoryIndex ? fields[categoryIndex].Trim() : null;
+            if (String.IsNullOrWhiteSpace(title))
+            {
+                title = BuildFallbackNewsTitle(source, category, articleUrl);
+            }
+
+            var timestamp = dateIndex >= 0 && fields.Length > dateIndex
+                ? ParseFinvizTimestamp(fields[dateIndex])
+                : DateTimeOffset.UtcNow;
+
+            var tickers = tickerIndex >= 0 && fields.Length > tickerIndex
+                ? fields[tickerIndex]
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(x => x.ToUpperInvariant())
+                    .Where(x => x.Length > 0)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+                : Array.Empty<string>();
+
+            if (tickers.Length == 0)
+            {
+                tickers = new[] { "MARKET" };
+            }
+
+            foreach (var ticker in tickers)
+            {
+                rows.Add(new CatalystEvent(
+                    ticker,
+                    timestamp,
+                    CatalystType.NewsReport,
+                    title,
+                    0m,
+                    Provider: "finviz",
+                    ExternalId: $"{externalIdPrefix}:{ticker}:{timestamp.UtcDateTime:O}:{title.GetHashCode(StringComparison.Ordinal)}",
+                    Summary: category,
+                    Source: source,
+                    Url: articleUrl));
+            }
+        }
+
+        return rows
+            .GroupBy(x => $"{x.Ticker}|{x.Url ?? x.Headline}", StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.First())
+            .OrderByDescending(x => x.Timestamp)
+            .ToArray();
+    }
+
+    private static string BuildFallbackNewsTitle(string? source, string? category, string? articleUrl)
+    {
+        if (!String.IsNullOrWhiteSpace(source))
+        {
+            return $"{source.Trim()} update";
+        }
+
+        if (!String.IsNullOrWhiteSpace(category))
+        {
+            return $"{category.Trim()} update";
+        }
+
+        if (Uri.TryCreate(articleUrl, UriKind.Absolute, out var uri) && !String.IsNullOrWhiteSpace(uri.Host))
+        {
+            return $"{uri.Host.Replace("www.", String.Empty, StringComparison.OrdinalIgnoreCase)} update";
+        }
+
+        return "Finviz update";
     }
 
     public async Task<string> GetFilingsAsync(string ticker, string filter, CancellationToken cancellationToken = default)

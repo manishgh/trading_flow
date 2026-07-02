@@ -1,12 +1,17 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Backtesting.StrategyEvaluation;
 using TradingFlow.Data.Candles;
+using TradingFlow.Data.News;
+using TradingFlow.Data.Wishlists;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
+using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Wishlists;
 
 var cultureInfo = new CultureInfo("en-US");
 CultureInfo.DefaultThreadCurrentCulture = cultureInfo;
@@ -47,8 +52,19 @@ builder.Services.AddSingleton<MobileAutomationSessionStore>();
 builder.Services.AddSingleton<PaperEnvironmentService>();
 builder.Services.AddSingleton<PaperJobService>();
 builder.Services.AddSingleton<MobileAutomationService>();
+builder.Services.AddSingleton<SqliteNewsFeedRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Wishlists.IWishlistRepository, SqliteWishlistRepository>();
+builder.Services.AddSingleton<ArticleTextFetcher>();
 builder.Services.AddSingleton<NewsFeedService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<NewsFeedService>());
 builder.Services.AddSingleton<WarmupServiceClient>();
+builder.Services.AddSingleton<WishlistUniverseResolver>();
+builder.Services.AddSingleton<WishlistBreakoutEvaluator>();
+builder.Services.AddSingleton<WishlistMarketMonitor>();
+builder.Services.AddSingleton<WishlistObserverService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<WishlistObserverService>());
+builder.Services.AddSingleton<AlpacaQuoteService>();
+builder.Services.AddSingleton<AlpacaManualOrderService>();
 builder.Services.AddSingleton<StrategyEvaluationService>();
 
 var dbPath = Path.Combine(dataRoot, "tradingflow.db");
@@ -84,6 +100,8 @@ using (var scope = app.Services.CreateScope())
     using var db = dbFactory.CreateDbContext();
     db.Database.EnsureCreated();
     EnsureOrderSchema(db);
+    EnsureNewsSchema(db);
+    EnsureWishlistSchema(db);
 }
 
 app.Services.GetRequiredService<PaperJobService>().InitializeAsync().GetAwaiter().GetResult();
@@ -100,6 +118,121 @@ app.MapRazorPages();
 app.MapTradingFlowMobileApi();
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "TradingFlow.Web" }));
 app.MapGet("/api/profiler/alpaca", () => Results.Ok(TradingFlow.Domain.Logging.ApiProfiler.GetSummary("Alpaca")));
+app.MapGet("/api/wishlists/{wishlistId:guid}/quotes/stream", async (
+    Guid wishlistId,
+    IWishlistRepository wishlists,
+    AlpacaQuoteService quoteService,
+    ConfigCatalogService catalog,
+    HttpContext httpContext,
+    CancellationToken cancellationToken) =>
+{
+    var wishlist = await wishlists.GetByIdAsync(wishlistId, cancellationToken);
+    if (wishlist is null)
+    {
+        httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    var tickers = wishlist.Items
+        .Where(item => item.Active)
+        .Select(item => item.Ticker)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    httpContext.Response.Headers.CacheControl = "no-cache";
+    httpContext.Response.Headers.Connection = "keep-alive";
+    httpContext.Response.Headers["X-Accel-Buffering"] = "no";
+    httpContext.Response.ContentType = "text/event-stream";
+
+    var feed = ResolveDefaultQuoteFeed(catalog);
+    while (!cancellationToken.IsCancellationRequested)
+    {
+        var quotes = await GetLiveQuotesWithExtendedFallbackAsync(quoteService, tickers, feed, cancellationToken);
+        var payload = quotes.Values
+            .OrderBy(quote => quote.Ticker)
+            .Select(quote => new
+            {
+                ticker = quote.Ticker,
+                bidPrice = quote.BidPrice,
+                askPrice = quote.AskPrice,
+                midPrice = quote.MidPrice,
+                bidText = quote.DisplayBid,
+                askText = quote.DisplayAsk,
+                midText = quote.DisplayPrice,
+                buyCaption = quote.BuyCaption,
+                sellCaption = quote.SellCaption,
+                timestamp = quote.Timestamp
+            });
+
+        await httpContext.Response.WriteAsync("event: quotes\n", cancellationToken);
+        await httpContext.Response.WriteAsync($"data: {JsonSerializer.Serialize(payload)}\n\n", cancellationToken);
+        await httpContext.Response.Body.FlushAsync(cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+    }
+});
+app.MapGet("/api/wishlists/{wishlistId:guid}/activity/stream", async (
+    Guid wishlistId,
+    IWishlistRepository wishlists,
+    NewsFeedService newsFeed,
+    HttpContext httpContext,
+    CancellationToken cancellationToken) =>
+{
+    var wishlist = await wishlists.GetByIdAsync(wishlistId, cancellationToken);
+    if (wishlist is null)
+    {
+        httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    var tickerSet = wishlist.Items
+        .Where(item => item.Active)
+        .Select(item => item.Ticker.Trim().ToUpperInvariant())
+        .Where(ticker => ticker.Length > 0)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    httpContext.Response.Headers.CacheControl = "no-cache";
+    httpContext.Response.Headers.Connection = "keep-alive";
+    httpContext.Response.Headers["X-Accel-Buffering"] = "no";
+    httpContext.Response.ContentType = "text/event-stream";
+
+    while (!cancellationToken.IsCancellationRequested)
+    {
+        var signalSince = DateTimeOffset.UtcNow.AddMinutes(-20);
+        var newsSince = DateTimeOffset.UtcNow.AddHours(-4);
+        var signals = (await wishlists.GetSignalsAsync(wishlistId, null, signalSince, 30, cancellationToken))
+            .Select(signal => new
+            {
+                id = signal.Id,
+                ticker = signal.Ticker,
+                signalType = signal.SignalType,
+                reason = signal.Reason,
+                detectedAt = signal.DetectedAtUtc,
+                detectedAtText = signal.DetectedAtUtc.ToLocalTime().ToString("dd/MM HH:mm")
+            });
+        var rollingNews = await newsFeed.GetRollingAsync(4, null, cancellationToken);
+        var news = rollingNews.Items
+            .Where(item => SplitTickerDisplay(item.Ticker).Any(tickerSet.Contains))
+            .Where(item => item.Timestamp >= newsSince)
+            .OrderByDescending(item => item.Timestamp)
+            .Take(80)
+            .Select(item => new
+            {
+                ticker = item.Ticker,
+                headline = item.Headline,
+                summary = item.Summary,
+                provider = item.Provider,
+                source = item.Source,
+                url = item.Url,
+                timestamp = item.Timestamp,
+                timestampText = item.Timestamp.ToLocalTime().ToString("dd/MM HH:mm")
+            });
+
+        await httpContext.Response.WriteAsync("event: activity\n", cancellationToken);
+        await httpContext.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { signals, news })}\n\n", cancellationToken);
+        await httpContext.Response.Body.FlushAsync(cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(20), cancellationToken);
+    }
+});
 app.MapPost("/api/strategies/evaluate", async (
     StrategyEvaluationRequest request,
     StrategyEvaluationService evaluator,
@@ -162,6 +295,55 @@ static string ResolveWebContentRoot(string currentDirectory)
     return currentDirectory;
 }
 
+
+static async Task<IReadOnlyDictionary<string, AlpacaLatestQuote>> GetLiveQuotesWithExtendedFallbackAsync(
+    AlpacaQuoteService quoteService,
+    IReadOnlyCollection<string> tickers,
+    string feed,
+    CancellationToken cancellationToken)
+{
+    var primary = await quoteService.GetLatestQuotesAsync(tickers, feed, cancellationToken);
+    var staleCutoff = DateTimeOffset.UtcNow.AddMinutes(-15);
+    var needsFallback = primary.Values.Any(quote => quote.MidPrice is null || quote.Timestamp is null || quote.Timestamp < staleCutoff);
+    if (!needsFallback || feed.Equals("overnight", StringComparison.OrdinalIgnoreCase))
+    {
+        return primary;
+    }
+
+    var overnight = await quoteService.GetLatestQuotesAsync(tickers, "overnight", cancellationToken);
+    return primary.ToDictionary(
+        pair => pair.Key,
+        pair =>
+        {
+            if (!overnight.TryGetValue(pair.Key, out var fallback))
+            {
+                return pair.Value;
+            }
+
+            var primaryTimestamp = pair.Value.Timestamp ?? DateTimeOffset.MinValue;
+            var fallbackTimestamp = fallback.Timestamp ?? DateTimeOffset.MinValue;
+            return (pair.Value.MidPrice is null && fallback.MidPrice is not null) || fallbackTimestamp > primaryTimestamp
+                ? fallback
+                : pair.Value;
+        },
+        StringComparer.OrdinalIgnoreCase);
+}
+
+static string ResolveDefaultQuoteFeed(ConfigCatalogService catalog)
+{
+    var selected = catalog.GetPaperConfigs()
+        .FirstOrDefault(config => config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
+        ?? catalog.GetPaperConfigs().FirstOrDefault();
+    return selected?.Config.Providers.Alpaca.DataFeed ?? "sip";
+}
+
+static IEnumerable<string> SplitTickerDisplay(string tickerDisplay)
+{
+    return tickerDisplay
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(ticker => ticker.Trim().ToUpperInvariant())
+        .Where(ticker => ticker.Length > 0);
+}
 static void EnsureOrderSchema(TradingFlow.Data.Context.TradingFlowDbContext db)
 {
     var connection = db.Database.GetDbConnection();
@@ -213,3 +395,153 @@ static void EnsureOrderSchema(TradingFlow.Data.Context.TradingFlowDbContext db)
         command.ExecuteNonQuery();
     }
 }
+
+static void EnsureNewsSchema(TradingFlow.Data.Context.TradingFlowDbContext db)
+{
+    var connection = db.Database.GetDbConnection();
+    var shouldClose = connection.State == System.Data.ConnectionState.Closed;
+    if (shouldClose)
+    {
+        connection.Open();
+    }
+
+    try
+    {
+        ExecuteSql("""
+            CREATE TABLE IF NOT EXISTS NewsItems (
+                Id TEXT NOT NULL CONSTRAINT PK_NewsItems PRIMARY KEY,
+                Ticker TEXT NOT NULL,
+                Timestamp TEXT NOT NULL,
+                Headline TEXT NOT NULL,
+                SentimentScore TEXT NOT NULL,
+                Provider TEXT NOT NULL,
+                Source TEXT NULL,
+                Url TEXT NULL,
+                Summary TEXT NULL,
+                IngestedAt TEXT NOT NULL
+            );
+            """);
+        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_NewsItems_Timestamp ON NewsItems (Timestamp);");
+        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_NewsItems_Ticker ON NewsItems (Ticker);");
+        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_NewsItems_Provider ON NewsItems (Provider);");
+    }
+    finally
+    {
+        if (shouldClose)
+        {
+            connection.Close();
+        }
+    }
+
+    void ExecuteSql(string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+}
+static void EnsureWishlistSchema(TradingFlow.Data.Context.TradingFlowDbContext db)
+{
+    var connection = db.Database.GetDbConnection();
+    var shouldClose = connection.State == System.Data.ConnectionState.Closed;
+    if (shouldClose)
+    {
+        connection.Open();
+    }
+
+    try
+    {
+        ExecuteSql("""
+            CREATE TABLE IF NOT EXISTS Wishlists (
+                Id TEXT NOT NULL CONSTRAINT PK_Wishlists PRIMARY KEY,
+                Name TEXT NOT NULL,
+                Description TEXT NULL,
+                IsDefault INTEGER NOT NULL,
+                IncludeExtendedHours INTEGER NOT NULL,
+                IsObserved INTEGER NOT NULL DEFAULT 0,
+                CreatedAtUtc TEXT NOT NULL,
+                UpdatedAtUtc TEXT NOT NULL
+            );
+            """);
+        ExecuteSql("CREATE UNIQUE INDEX IF NOT EXISTS IX_Wishlists_Name ON Wishlists (Name);");
+        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_Wishlists_IsDefault ON Wishlists (IsDefault);");
+        EnsureColumn("Wishlists", "IsObserved", "INTEGER NOT NULL DEFAULT 0");
+        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_Wishlists_IsObserved ON Wishlists (IsObserved);");
+
+        ExecuteSql("""
+            CREATE TABLE IF NOT EXISTS WishlistItems (
+                Id TEXT NOT NULL CONSTRAINT PK_WishlistItems PRIMARY KEY,
+                WishlistId TEXT NOT NULL,
+                Ticker TEXT NOT NULL,
+                DisplayName TEXT NULL,
+                Notes TEXT NULL,
+                Active INTEGER NOT NULL,
+                AddedAtUtc TEXT NOT NULL,
+                CONSTRAINT FK_WishlistItems_Wishlists_WishlistId FOREIGN KEY (WishlistId) REFERENCES Wishlists (Id) ON DELETE CASCADE
+            );
+            """);
+        ExecuteSql("CREATE UNIQUE INDEX IF NOT EXISTS IX_WishlistItems_WishlistId_Ticker ON WishlistItems (WishlistId, Ticker);");
+        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_WishlistItems_Ticker ON WishlistItems (Ticker);");
+
+        ExecuteSql("""
+            CREATE TABLE IF NOT EXISTS WishlistSignals (
+                Id TEXT NOT NULL CONSTRAINT PK_WishlistSignals PRIMARY KEY,
+                WishlistId TEXT NOT NULL,
+                Ticker TEXT NOT NULL,
+                SignalType TEXT NOT NULL,
+                Severity TEXT NOT NULL,
+                DetectedAtUtc TEXT NOT NULL,
+                Price TEXT NOT NULL,
+                Reason TEXT NOT NULL,
+                SnapshotJson TEXT NOT NULL,
+                NewsHeadline TEXT NULL,
+                NewsUrl TEXT NULL,
+                NewsProvider TEXT NULL,
+                Acknowledged INTEGER NOT NULL,
+                CONSTRAINT FK_WishlistSignals_Wishlists_WishlistId FOREIGN KEY (WishlistId) REFERENCES Wishlists (Id) ON DELETE CASCADE
+            );
+            """);
+        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_WishlistSignals_WishlistId ON WishlistSignals (WishlistId);");
+        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_WishlistSignals_Ticker ON WishlistSignals (Ticker);");
+        EnsureColumn("WishlistSignals", "NewsHeadline", "TEXT NULL");
+        EnsureColumn("WishlistSignals", "NewsUrl", "TEXT NULL");
+        EnsureColumn("WishlistSignals", "NewsProvider", "TEXT NULL");
+        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_WishlistSignals_DetectedAtUtc ON WishlistSignals (DetectedAtUtc);");
+    }
+    finally
+    {
+        if (shouldClose)
+        {
+            connection.Close();
+        }
+    }
+
+    void ExecuteSql(string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
+    void EnsureColumn(string tableName, string columnName, string definition)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = $"PRAGMA table_info({tableName});";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                columns.Add(reader.GetString(1));
+            }
+        }
+
+        if (!columns.Contains(columnName))
+        {
+            ExecuteSql($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};");
+        }
+    }
+}
+
+
+

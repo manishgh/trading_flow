@@ -449,6 +449,14 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  max_news_age_hours: {strategy.EntryRules.MaxNewsAgeHours.ToString(CultureInfo.InvariantCulture)}");
         AppendOptionalDecimal(yaml, "  min_catalyst_price_move_pct", strategy.EntryRules.MinCatalystPriceMovePct);
         AppendOptionalDecimal(yaml, "  max_catalyst_price_move_pct", strategy.EntryRules.MaxCatalystPriceMovePct);
+        AppendOptionalInt(yaml, "  max_catalyst_confirmation_bars", strategy.EntryRules.MaxCatalystConfirmationBars);
+        AppendOptionalDecimal(yaml, "  gap_variant_min_pct", strategy.EntryRules.GapVariantMinPct);
+        AppendOptionalDecimal(yaml, "  min_adx", strategy.EntryRules.MinAdx);
+        yaml.AppendLine($"  require_adx_rising: {strategy.EntryRules.RequireAdxRising.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  adx_rising_lookback_bars: {strategy.EntryRules.AdxRisingLookbackBars}");
+        yaml.AppendLine($"  require_obv_rising: {strategy.EntryRules.RequireObvRising.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  obv_rising_lookback_bars: {strategy.EntryRules.ObvRisingLookbackBars}");
+        AppendOptionalDecimal(yaml, "  min_obv_change", strategy.EntryRules.MinObvChange);
         yaml.AppendLine("risk_guards:");
         yaml.AppendLine("  per_ticker_daily:");
         yaml.AppendLine($"    enabled: {strategy.EntryRules.EnablePerTickerDailyLossGuard.ToString().ToLowerInvariant()}");
@@ -499,6 +507,13 @@ public sealed class RunConfigWriter
     }
 
     private static void AppendOptionalDecimal(StringBuilder yaml, string key, decimal? value)
+    {
+        yaml.AppendLine(value.HasValue
+            ? $"{key}: {value.Value.ToString(CultureInfo.InvariantCulture)}"
+            : $"{key}:");
+    }
+
+    private static void AppendOptionalInt(StringBuilder yaml, string key, int? value)
     {
         yaml.AppendLine(value.HasValue
             ? $"{key}: {value.Value.ToString(CultureInfo.InvariantCulture)}"

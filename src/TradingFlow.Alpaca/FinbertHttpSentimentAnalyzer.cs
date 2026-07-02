@@ -34,9 +34,8 @@ public sealed class FinbertHttpSentimentAnalyzer : ISentimentAnalyzer
     {
         try
         {
-            var text = String.IsNullOrWhiteSpace(article.Summary)
-                ? article.Headline
-                : $"{article.Headline}. {article.Summary}";
+            var text = String.Join(". ", new[] { article.Headline, article.Summary, article.Content }
+                .Where(part => !String.IsNullOrWhiteSpace(part)));
 
             using var timeoutCts = new CancellationTokenSource(_requestTimeout);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);

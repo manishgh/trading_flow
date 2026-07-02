@@ -1,0 +1,623 @@
+@page "/Wishlists"
+@using System.Globalization
+@model TradingFlow.Web.Pages.WishlistsModel
+@{
+    ViewData["Title"] = "Wishlists";
+    var selectedId = Model.SelectedWishlist?.Id;
+    var selectedName = Model.SelectedWishlist?.Name ?? "wishlist_breakout";
+}
+
+<style>
+    .wishlist-shell {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        align-items: start;
+    }
+
+    .wishlist-toolbar {
+        align-items: end;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.1fr) auto auto;
+    }
+
+    .add-ticker-strip {
+        align-items: end;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(120px, .7fr) minmax(170px, 1fr) minmax(180px, 1.2fr) auto;
+        margin: 12px 0 16px;
+    }
+
+    .finviz-import-strip {
+        align-items: end;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(260px, 1fr) auto;
+        margin: -4px 0 16px;
+    }
+
+    .watchlist-header {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        margin-bottom: 12px;
+    }
+
+    .watchlist-meta {
+        color: var(--muted);
+        font-size: 0.9rem;
+    }
+
+    .market-table {
+        border-collapse: collapse;
+        width: 100%;
+    }
+
+    .market-table th {
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: .02em;
+        text-align: left;
+        text-transform: uppercase;
+    }
+
+    .market-table th,
+    .market-table td {
+        border-bottom: 1px solid var(--border);
+        padding: 12px 10px;
+        vertical-align: middle;
+    }
+
+    .ticker-cell strong {
+        display: block;
+        font-size: 1.05rem;
+    }
+
+    .quote-pill {
+        background: #f2f5f9;
+        border-radius: 999px;
+        color: #111827;
+        display: inline-block;
+        min-width: 92px;
+        padding: 8px 12px;
+        text-align: right;
+    }
+
+    .quote-pill.empty {
+        color: var(--muted);
+    }
+
+    .qty-input {
+        max-width: 90px;
+    }
+
+    .row-actions {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .row-actions form {
+        margin: 0;
+    }
+
+    .mini-button {
+        min-height: 36px;
+        padding: 8px 12px;
+        white-space: nowrap;
+    }
+
+    .button.buy {
+        background: #0f9f6e;
+    }
+
+    .button.sell {
+        background: #dc2626;
+    }
+
+    .intelligence-rail {
+        display: grid;
+        gap: 12px;
+        max-height: calc(100vh - 150px);
+        overflow: hidden;
+        position: sticky;
+        top: 84px;
+    }
+
+    .rail-scroll {
+        display: grid;
+        gap: 10px;
+        max-height: 38vh;
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+
+    .rail-item {
+        border-bottom: 1px solid var(--border);
+        padding: 10px 0;
+    }
+
+    .rail-item:last-child {
+        border-bottom: 0;
+    }
+
+    .rail-line {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
+    }
+
+    .rail-ticker {
+        color: var(--accent);
+        font-weight: 800;
+    }
+
+    .rail-title {
+        font-weight: 700;
+        margin-top: 4px;
+    }
+
+    .rail-summary {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin-top: 4px;
+    }
+
+    .empty-state {
+        color: var(--muted);
+        padding: 18px 0;
+    }
+
+    @@media (max-width: 1100px) {
+        .wishlist-shell {
+            grid-template-columns: 1fr;
+        }
+
+        .intelligence-rail {
+            max-height: none;
+            position: static;
+        }
+
+        .rail-scroll {
+            max-height: 320px;
+        }
+    }
+
+    @@media (max-width: 760px) {
+        .wishlist-toolbar,
+        .add-ticker-strip,
+        .finviz-import-strip {
+            grid-template-columns: 1fr;
+        }
+
+        .market-table,
+        .market-table thead,
+        .market-table tbody,
+        .market-table th,
+        .market-table td,
+        .market-table tr {
+            display: block;
+        }
+
+        .market-table thead {
+            display: none;
+        }
+
+        .market-table tr {
+            border-bottom: 1px solid var(--border);
+            padding: 10px 0;
+        }
+
+        .market-table td {
+            border: 0;
+            padding: 6px 0;
+        }
+    }
+</style>
+
+<div class="page-header">
+    <div>
+        <h1>Wishlists</h1>
+        <p>Trading watchlists with live bid/ask, paper actions, technical signals, and related news.</p>
+    </div>
+    <div class="actions">
+        <a class="button secondary" asp-page="/Paper" asp-route-wishlistId="@selectedId">Paper Lab</a>
+        <a class="button secondary" asp-page="/Wishlists" asp-route-id="@selectedId">Refresh</a>
+    </div>
+</div>
+
+@if (!String.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="status-banner">@Model.StatusMessage</div>
+}
+@if (!String.IsNullOrWhiteSpace(Model.ErrorMessage))
+{
+    <div class="status-banner error">@Model.ErrorMessage</div>
+}
+
+<section class="panel">
+    <form id="wishlistOpenForm" method="get" class="wishlist-toolbar">
+        <div>
+            <label for="WishlistCombo">Wishlist</label>
+            <input id="WishlistCombo" list="WishlistOptions" value="@selectedName" autocomplete="off" />
+            <input id="WishlistId" type="hidden" name="id" value="@selectedId" />
+            <datalist id="WishlistOptions">
+                @foreach (var wishlist in Model.Wishlists)
+                {
+                    <option value="@wishlist.Name" data-id="@wishlist.Id"></option>
+                }
+            </datalist>
+        </div>
+        <div>
+            <label for="strategyPath">Strategy</label>
+            <select id="strategyPath" name="strategyPath">
+                @foreach (var strategy in Model.Strategies)
+                {
+                    <option value="@strategy.Path" selected="@(Model.SelectedStrategyPath == strategy.Path)">@strategy.Definition.StrategyName (@strategy.FileName)</option>
+                }
+            </select>
+        </div>
+        <button type="submit">Open</button>
+        <button id="CreateWishlistButton" class="secondary" type="button">Add New</button>
+    </form>
+    <form id="createWishlistForm" method="post" asp-page-handler="CreateWishlist">
+        <input id="CreateWishlistName" type="hidden" name="WishlistName" />
+    </form>
+</section>
+
+<div class="wishlist-shell">
+    <div>
+        <section class="panel">
+            <div class="watchlist-header">
+                <div>
+                    <h2>@selectedName</h2>
+                    <div class="watchlist-meta">
+                        @(Model.SelectedWishlist?.Description ?? "Custom wishlist")
+                        @if (Model.SelectedWishlist?.IncludeExtendedHours == true)
+                        {
+                            <span> - Extended hours</span>
+                        }
+                        @if (Model.SelectedWishlist?.IsObserved == true)
+                        {
+                            <span> - Observing</span>
+                        }
+                    </div>
+                </div>
+                @if (Model.SelectedWishlist is not null)
+                {
+                    <form method="post" asp-page-handler="SetObserved">
+                        <input type="hidden" name="WishlistId" value="@Model.SelectedWishlist.Id" />
+                        <input type="hidden" name="IsObserved" value="@(Model.SelectedWishlist.IsObserved ? "false" : "true")" />
+                        <button class="secondary" type="submit">@(Model.SelectedWishlist.IsObserved ? "Pause Observe" : "Observe")</button>
+                    </form>
+                }
+            </div>
+
+            @if (Model.SelectedWishlist is not null)
+            {
+                <form method="post" asp-page-handler="AddTicker" class="add-ticker-strip">
+                    <input type="hidden" name="TargetWishlistId" value="@Model.SelectedWishlist.Id" />
+                    <div>
+                        <label for="TickerTop">Add Ticker</label>
+                        <input id="TickerTop" name="Ticker" placeholder="RGTI" autocomplete="off" />
+                    </div>
+                    <div>
+                        <label for="DisplayNameTop">Name</label>
+                        <input id="DisplayNameTop" name="DisplayName" placeholder="Optional" />
+                    </div>
+                    <div>
+                        <label for="NotesTop">Notes</label>
+                        <input id="NotesTop" name="Notes" placeholder="Catalyst, setup, risk" />
+                    </div>
+                    <div class="actions">
+                        <button type="submit">Add Ticker</button>
+                    </div>
+                </form>
+
+                <form method="post" asp-page-handler="ImportFinviz" class="finviz-import-strip">
+                    <input type="hidden" name="TargetWishlistId" value="@Model.SelectedWishlist.Id" />
+                    <div>
+                        <label for="FinvizFilter">Import Finviz Screener</label>
+                        <input id="FinvizFilter" name="FinvizFilter" placeholder="Paste Finviz Elite URL or query" />
+                        <div class="muted" style="margin-top:4px;">Adds returned tickers into this wishlist. Existing tickers remain active.</div>
+                    </div>
+                    <div class="actions">
+                        <button class="secondary" type="submit">Import</button>
+                    </div>
+                </form>
+            }
+
+            @if (Model.MarketRows.Count == 0)
+            {
+                <div class="empty-state">No active tickers in this wishlist yet.</div>
+            }
+            else
+            {
+                <div class="table-scroll">
+                    <table class="market-table">
+                        <thead>
+                            <tr>
+                                <th>Market</th>
+                                <th>Mid</th>
+                                <th>Sell Bid</th>
+                                <th>Buy Ask</th>
+                                <th>Qty</th>
+                                <th>Paper Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var row in Model.MarketRows)
+                        {
+                            var rowKey = row.Ticker.Replace(".", "_", StringComparison.OrdinalIgnoreCase);
+                            var quantityId = $"qty_{rowKey}";
+                            <tr data-quote-row="@row.Ticker.ToUpperInvariant()">
+                                <td class="ticker-cell">
+                                    <strong>@row.Ticker</strong>
+                                    <span class="muted">@row.DisplayName</span>
+                                    @if (!String.IsNullOrWhiteSpace(row.Item.Notes))
+                                    {
+                                        <div class="muted">@row.Item.Notes</div>
+                                    }
+                                </td>
+                                <td><span class="quote-pill @(row.HasQuote ? "" : "empty")" data-quote-field="mid">@row.Quote.DisplayPrice</span></td>
+                                <td><span class="quote-pill @(row.Quote.BidPrice is null ? "empty" : "")" data-quote-field="bid">@row.Quote.DisplayBid</span></td>
+                                <td><span class="quote-pill @(row.Quote.AskPrice is null ? "empty" : "")" data-quote-field="ask">@row.Quote.DisplayAsk</span></td>
+                                <td><input class="qty-input" id="@quantityId" name="Quantity" type="number" min="0.0001" step="0.0001" value="1" form="buy_@rowKey" aria-label="@row.Ticker buy quantity" /></td>
+                                <td>
+                                    <div class="row-actions">
+                                        <form id="buy_@rowKey" method="post" asp-page-handler="ManualOrder">
+                                            <input type="hidden" name="WishlistId" value="@Model.SelectedWishlist?.Id" />
+                                            <input type="hidden" name="Ticker" value="@row.Ticker" />
+                                            <input type="hidden" name="Side" value="buy" />
+                                            <input type="hidden" name="LimitPrice" value="@row.Quote.AskPrice?.ToString(CultureInfo.InvariantCulture)" data-quote-input="buy" />
+                                            <button class="button buy mini-button" type="submit" disabled="@(row.Quote.AskPrice is null)" data-quote-button="buy">Buy @row.Quote.DisplayAsk</button>
+                                        </form>
+                                        <form method="post" asp-page-handler="ManualOrder">
+                                            <input type="hidden" name="WishlistId" value="@Model.SelectedWishlist?.Id" />
+                                            <input type="hidden" name="Ticker" value="@row.Ticker" />
+                                            <input type="hidden" name="Side" value="sell" />
+                                            <input class="qty-input" name="Quantity" type="number" min="0.0001" step="0.0001" value="1" aria-label="@row.Ticker sell quantity" />
+                                            <input type="hidden" name="LimitPrice" value="@row.Quote.BidPrice?.ToString(CultureInfo.InvariantCulture)" data-quote-input="sell" />
+                                            <button class="button sell mini-button" type="submit" disabled="@(row.Quote.BidPrice is null)" data-quote-button="sell">Sell @row.Quote.DisplayBid</button>
+                                        </form>
+                                        <form method="post" asp-page-handler="RunStrategy">
+                                            <input type="hidden" name="WishlistId" value="@Model.SelectedWishlist?.Id" />
+                                            <input type="hidden" name="Ticker" value="@row.Ticker" />
+                                            <input type="hidden" name="PaperConfigPath" value="@Model.SelectedPaperConfigPath" />
+                                            <input type="hidden" name="StrategyPath" value="@Model.SelectedStrategyPath" />
+                                            <button class="secondary mini-button" type="submit" disabled="@(String.IsNullOrWhiteSpace(Model.SelectedPaperConfigPath) || String.IsNullOrWhiteSpace(Model.SelectedStrategyPath))">Run Strategy</button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    </div>
+
+    <aside class="intelligence-rail">
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2>Technical Signals</h2>
+                    <p>Recent movement alerts for this wishlist.</p>
+                </div>
+            </div>
+            <div id="TechnicalSignalsList" class="rail-scroll">
+                @if (Model.Signals.Count == 0)
+                {
+                    <div class="empty-state">No recent technical signals.</div>
+                }
+                else
+                {
+                    @foreach (var signal in Model.Signals)
+                    {
+                        <div class="rail-item">
+                            <div class="rail-line">
+                                <span class="rail-ticker">@signal.Ticker</span>
+                                <span class="muted">@signal.DetectedAtUtc.ToLocalTime().ToString("dd/MM HH:mm")</span>
+                            </div>
+                            <div class="rail-title">@signal.SignalType</div>
+                            <div class="rail-summary">@signal.Reason</div>
+                            <form method="post" asp-page-handler="AcknowledgeSignal" style="margin-top:8px;">
+                                <input type="hidden" name="SignalId" value="@signal.Id" />
+                                <input type="hidden" name="WishlistId" value="@selectedId" />
+                                <button class="secondary mini-button" type="submit">Ack</button>
+                            </form>
+                        </div>
+                    }
+                }
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2>Related News</h2>
+                    <p>Rolling 4h Finviz + Alpaca news for selected tickers.</p>
+                </div>
+            </div>
+            <div id="RelatedNewsList" class="rail-scroll">
+                @if (Model.RelatedNews.Count == 0)
+                {
+                    <div class="empty-state">No related news in the rolling 4-hour window.</div>
+                }
+                else
+                {
+                    @foreach (var news in Model.RelatedNews)
+                    {
+                        <a class="rail-item" href="@news.Url" target="_blank" rel="noopener noreferrer" style="display:block;text-decoration:none;color:inherit;">
+                            <div class="rail-line">
+                                <span class="rail-ticker">@news.Ticker</span>
+                                <span class="muted">@news.Timestamp.ToLocalTime().ToString("dd/MM HH:mm")</span>
+                            </div>
+                            <div class="rail-title">@news.Headline</div>
+                            @if (!String.IsNullOrWhiteSpace(news.Summary))
+                            {
+                                <div class="rail-summary">@news.Summary</div>
+                            }
+                            <div class="rail-summary">@news.Provider @(!String.IsNullOrWhiteSpace(news.Source) ? $"- {news.Source}" : "")</div>
+                        </a>
+                    }
+                }
+            </div>
+        </section>
+    </aside>
+</div>
+
+@section Scripts {
+    <script>
+        const wishlistCombo = document.getElementById('WishlistCombo');
+        const wishlistId = document.getElementById('WishlistId');
+        const createName = document.getElementById('CreateWishlistName');
+        const createForm = document.getElementById('createWishlistForm');
+        const options = Array.from(document.querySelectorAll('#WishlistOptions option'));
+
+        function syncWishlistId() {
+            const typed = (wishlistCombo.value || '').trim().toLowerCase();
+            const match = options.find(option => (option.value || '').trim().toLowerCase() === typed);
+            wishlistId.value = match ? match.dataset.id : '';
+        }
+
+        wishlistCombo?.addEventListener('input', syncWishlistId);
+        document.getElementById('wishlistOpenForm')?.addEventListener('submit', syncWishlistId);
+        document.getElementById('CreateWishlistButton')?.addEventListener('click', () => {
+            const typed = (wishlistCombo.value || '').trim();
+            if (!typed) {
+                wishlistCombo.focus();
+                return;
+            }
+
+            createName.value = typed;
+            createForm.submit();
+        });
+
+        const selectedWishlistId = '@selectedId';
+        const htmlEncode = (value) => {
+            const div = document.createElement('div');
+            div.textContent = value ?? '';
+            return div.innerHTML;
+        };
+
+        function setQuoteText(row, field, text, hasValue) {
+            const element = row.querySelector(`[data-quote-field="${field}"]`);
+            if (!element) {
+                return;
+            }
+
+            element.textContent = text || '--';
+            element.classList.toggle('empty', !hasValue);
+        }
+
+        function formatLimit(value) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) {
+                return '';
+            }
+
+            return String(value);
+        }
+
+        function applyQuoteUpdate(quote) {
+            const ticker = (quote.ticker || '').toUpperCase();
+            const row = Array.from(document.querySelectorAll('[data-quote-row]'))
+                .find(candidate => (candidate.dataset.quoteRow || '').toUpperCase() === ticker);
+            if (!row) {
+                return;
+            }
+
+            setQuoteText(row, 'mid', quote.midText, quote.midPrice !== null && quote.midPrice !== undefined);
+            setQuoteText(row, 'bid', quote.bidText, quote.bidPrice !== null && quote.bidPrice !== undefined);
+            setQuoteText(row, 'ask', quote.askText, quote.askPrice !== null && quote.askPrice !== undefined);
+
+            const buyInput = row.querySelector('[data-quote-input="buy"]');
+            const sellInput = row.querySelector('[data-quote-input="sell"]');
+            const buyButton = row.querySelector('[data-quote-button="buy"]');
+            const sellButton = row.querySelector('[data-quote-button="sell"]');
+            if (buyInput) buyInput.value = formatLimit(quote.askPrice);
+            if (sellInput) sellInput.value = formatLimit(quote.bidPrice);
+            if (buyButton) {
+                buyButton.textContent = quote.buyCaption || 'Buy';
+                buyButton.disabled = quote.askPrice === null || quote.askPrice === undefined;
+            }
+            if (sellButton) {
+                sellButton.textContent = quote.sellCaption || 'Sell';
+                sellButton.disabled = quote.bidPrice === null || quote.bidPrice === undefined;
+            }
+        }
+
+        function renderSignals(signals) {
+            const container = document.getElementById('TechnicalSignalsList');
+            if (!container) return;
+            if (!signals || signals.length === 0) {
+                container.innerHTML = '<div class="empty-state">No technical signals in the last 20 minutes.</div>';
+                return;
+            }
+
+            container.innerHTML = signals.map(signal => `
+                <div class="rail-item">
+                    <div class="rail-line">
+                        <span class="rail-ticker">${htmlEncode(signal.ticker)}</span>
+                        <span class="muted">${htmlEncode(signal.detectedAtText)}</span>
+                    </div>
+                    <div class="rail-title">${htmlEncode(signal.signalType)}</div>
+                    <div class="rail-summary">${htmlEncode(signal.reason)}</div>
+                </div>`).join('');
+        }
+
+        function renderNews(items) {
+            const container = document.getElementById('RelatedNewsList');
+            if (!container) return;
+            if (!items || items.length === 0) {
+                container.innerHTML = '<div class="empty-state">No related news in the rolling 4-hour window.</div>';
+                return;
+            }
+
+            container.innerHTML = items.map(item => {
+                const source = item.source ? ` - ${htmlEncode(item.source)}` : '';
+                const body = `
+                    <div class="rail-line">
+                        <span class="rail-ticker">${htmlEncode(item.ticker)}</span>
+                        <span class="muted">${htmlEncode(item.timestampText)}</span>
+                    </div>
+                    <div class="rail-title">${htmlEncode(item.headline)}</div>
+                    ${item.summary ? `<div class="rail-summary">${htmlEncode(item.summary)}</div>` : ''}
+                    <div class="rail-summary">${htmlEncode(item.provider)}${source}</div>`;
+                return item.url
+                    ? `<a class="rail-item" href="${htmlEncode(item.url)}" target="_blank" rel="noopener noreferrer" style="display:block;text-decoration:none;color:inherit;">${body}</a>`
+                    : `<div class="rail-item">${body}</div>`;
+            }).join('');
+        }
+
+        if (selectedWishlistId) {
+            const quoteSource = new EventSource(`/api/wishlists/${selectedWishlistId}/quotes/stream`);
+            quoteSource.addEventListener('quotes', event => {
+                try {
+                    JSON.parse(event.data).forEach(applyQuoteUpdate);
+                } catch (error) {
+                    console.warn('Failed to apply quote update.', error);
+                }
+            });
+
+            const activitySource = new EventSource(`/api/wishlists/${selectedWishlistId}/activity/stream`);
+            activitySource.addEventListener('activity', event => {
+                try {
+                    const data = JSON.parse(event.data);
+                    renderSignals(data.signals);
+                    renderNews(data.news);
+                } catch (error) {
+                    console.warn('Failed to apply wishlist activity update.', error);
+                }
+            });
+        }
+
+    </script>
+}

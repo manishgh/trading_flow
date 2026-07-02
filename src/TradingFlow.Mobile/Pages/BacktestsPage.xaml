@@ -7,7 +7,6 @@
         <ScrollView>
             <VerticalStackLayout Padding="16" Spacing="14">
                 <Label Text="Backtesting" Style="{StaticResource Headline}" FontSize="24" />
-                <Label Text="Run compact research tests from your phone and monitor progress." Style="{StaticResource SubHeadline}" FontSize="13" />
                 <Border Style="{StaticResource CardBorder}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
@@ -65,7 +64,7 @@
                     <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
                 </Grid>
 
-                <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected">
+                <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected" HeightRequest="340">
                     <CollectionView.EmptyView>
                         <Label Text="No backtests yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
                     </CollectionView.EmptyView>

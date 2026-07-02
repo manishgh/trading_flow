@@ -4,7 +4,7 @@ namespace TradingFlow.Mobile.Services;
 
 public sealed class TradingFlowApiClient
 {
-    public const string NgrokDefaultUrl = "https://1aca-2001-1c00-820b-7600-dcf8-4675-4ee-ee47.ngrok-free.app";
+    public const string NgrokDefaultUrl = "https://25e3-178-230-112-108.ngrok-free.app";
     public const string PhysicalDeviceDefaultUrl = "http://192.168.178.238:53017";
     public const string AndroidEmulatorDefaultUrl = "http://10.0.2.2:53017";
 
@@ -59,7 +59,9 @@ public sealed class TradingFlowApiClient
             current.Contains("10.0.0.2", StringComparison.OrdinalIgnoreCase) ||
             current.Contains("localhost", StringComparison.OrdinalIgnoreCase) ||
             current.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
-            current.Contains("192.168.178.238", StringComparison.OrdinalIgnoreCase);
+            current.Contains("192.168.178.238", StringComparison.OrdinalIgnoreCase) ||
+            (current.Contains(".ngrok-free.app", StringComparison.OrdinalIgnoreCase) &&
+                !current.Equals(NgrokDefaultUrl, StringComparison.OrdinalIgnoreCase));
     }
 
     public Task<MobileCatalogResponse?> GetCatalogAsync(CancellationToken cancellationToken = default)
@@ -153,6 +155,82 @@ public sealed class TradingFlowApiClient
         return httpClient.GetFromJsonAsync<MobileNewsFeedResponse>(
             $"{BaseUrl}/api/mobile/news/latest?configPath={path}&tickers={tickerCsv}&hours={hours}",
             cancellationToken);
+    }
+
+    public Task<MobileNewsFeedResponse?> GetRollingNewsFeedAsync(
+        string? ticker = null,
+        int hours = 4,
+        CancellationToken cancellationToken = default)
+    {
+        var query = $"hours={hours}";
+        if (!String.IsNullOrWhiteSpace(ticker))
+        {
+            query += $"&ticker={Uri.EscapeDataString(ticker.Trim().ToUpperInvariant())}";
+        }
+
+        return httpClient.GetFromJsonAsync<MobileNewsFeedResponse>(
+            $"{BaseUrl}/api/mobile/news/feed?{query}",
+            cancellationToken);
+    }
+
+    public async Task RefreshRollingNewsFeedAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/news/refresh", null, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<MobileWishlistResponse>?> GetWishlistsAsync(CancellationToken cancellationToken = default)
+    {
+        return httpClient.GetFromJsonAsync<IReadOnlyList<MobileWishlistResponse>>($"{BaseUrl}/api/mobile/wishlists", cancellationToken);
+    }
+
+    public async Task<MobileWishlistResponse?> SaveWishlistAsync(MobileWishlistSaveRequest request, CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/wishlists", request, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<MobileWishlistResponse>(cancellationToken);
+    }
+
+    public async Task<MobileWishlistResponse?> SetWishlistObservedAsync(Guid wishlistId, bool isObserved, CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsJsonAsync(
+            $"{BaseUrl}/api/mobile/wishlists/{wishlistId}/observe",
+            new MobileWishlistObserveRequest(isObserved),
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<MobileWishlistResponse>(cancellationToken);
+    }
+
+    public async Task<MobileWishlistItemResponse?> AddWishlistTickerAsync(Guid wishlistId, MobileWishlistItemRequest request, CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/wishlists/{wishlistId}/items", request, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<MobileWishlistItemResponse>(cancellationToken);
+    }
+
+    public async Task DeleteWishlistTickerAsync(Guid wishlistId, string ticker, CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.DeleteAsync($"{BaseUrl}/api/mobile/wishlists/{wishlistId}/items/{Uri.EscapeDataString(ticker)}", cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<MobileWishlistSignalResponse>?> GetWishlistSignalsAsync(Guid? wishlistId = null, int hours = 48, CancellationToken cancellationToken = default)
+    {
+        var query = $"hours={hours}";
+        if (wishlistId is not null)
+        {
+            query += $"&wishlistId={wishlistId.Value}";
+        }
+
+        return httpClient.GetFromJsonAsync<IReadOnlyList<MobileWishlistSignalResponse>>(
+            $"{BaseUrl}/api/mobile/wishlists/signals?{query}",
+            cancellationToken);
+    }
+
+    public async Task AcknowledgeWishlistSignalAsync(Guid signalId, CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/wishlists/signals/{signalId}/ack", null, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
     }
 
     public Task<IReadOnlyList<WarmupTickerIntent>?> GetWarmupWatchlistAsync(CancellationToken cancellationToken = default)
@@ -270,7 +348,8 @@ public sealed record MobilePaperRunRequest(
     bool ExtendedHours,
     bool NewsEnabled,
     string OrderExpiration,
-    string EntryOrderType);
+    string EntryOrderType,
+    Guid? WishlistId = null);
 
 public sealed record MobileBacktestRunRequest(
     string BaseConfigPath,
@@ -376,7 +455,125 @@ public sealed record MobileNewsItem(
         : SentimentScore <= -0.15m
             ? $"Bearish {SentimentScore:F2}"
             : $"Neutral {SentimentScore:F2}";
+
+    public string DisplayHeadline => FirstUsefulText(Headline, Summary, Source, Provider) ?? "News update";
+
+    public string DisplaySummary => String.Equals(Summary?.Trim(), DisplayHeadline, StringComparison.OrdinalIgnoreCase)
+        ? String.Empty
+        : Summary?.Trim() ?? String.Empty;
+
+    public bool HasSummary => !String.IsNullOrWhiteSpace(DisplaySummary);
+
+    public string DisplayTimestamp => Timestamp.LocalDateTime.ToString("dd/MM HH:mm");
+
+    public string DisplayProvider => String.IsNullOrWhiteSpace(Provider) ? "news" : Provider.Trim();
+
+    public string DisplaySource => String.IsNullOrWhiteSpace(Source) ? DisplayProvider : Source.Trim();
+
+    private static string? FirstUsefulText(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            var text = value?.Trim();
+            if (String.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            if (text.Equals("Market", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("Stock", StringComparison.OrdinalIgnoreCase) ||
+                text.Equals("News", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return text;
+        }
+
+        return null;
+    }
 }
+
+public sealed record MobileWishlistResponse(
+    Guid Id,
+    string Name,
+    string? Description,
+    bool IsDefault,
+    bool IncludeExtendedHours,
+    bool IsObserved,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc,
+    IReadOnlyList<MobileWishlistItemResponse> Items)
+{
+    public override string ToString() => $"{Name} ({ActiveItemCount})";
+
+    public int ActiveItemCount => Items.Count(item => item.Active);
+
+    public string DetailText => $"{ActiveItemCount} active ticker(s) | {(IncludeExtendedHours ? "extended hours" : "regular hours")} | {(IsObserved ? "observing" : "paused")}";
+}
+
+public sealed record MobileWishlistItemResponse(
+    Guid Id,
+    Guid WishlistId,
+    string Ticker,
+    string? DisplayName,
+    string? Notes,
+    bool Active,
+    DateTimeOffset AddedAtUtc)
+{
+    public string DisplayTitle => String.IsNullOrWhiteSpace(DisplayName) ? Ticker : $"{Ticker} - {DisplayName}";
+
+    public string DetailText => String.IsNullOrWhiteSpace(Notes) ? "Ready for paper runs and breakout alerts." : Notes!;
+
+    public string CurrentPriceText => "Last --";
+
+    public string BuyCaption => "Buy";
+
+    public string SellCaption => "Sell";
+}
+
+public sealed record MobileWishlistSignalResponse(
+    Guid Id,
+    Guid WishlistId,
+    string Ticker,
+    string SignalType,
+    string Severity,
+    DateTimeOffset DetectedAtUtc,
+    decimal Price,
+    string Reason,
+    string SnapshotJson,
+    string? NewsHeadline,
+    string? NewsUrl,
+    string? NewsProvider,
+    bool Acknowledged)
+{
+    public string DisplayTime => DetectedAtUtc.LocalDateTime.ToString("dd/MM HH:mm");
+
+    public string PriceText => Price <= 0 ? String.Empty : Price.ToString("C2");
+
+    public string NewsText => String.IsNullOrWhiteSpace(NewsHeadline)
+        ? "No matched news"
+        : NewsHeadline.Trim();
+
+    public bool HasNewsLink => !String.IsNullOrWhiteSpace(NewsUrl);
+
+    public string StatusText => Acknowledged ? "read" : Severity;
+}
+
+public sealed record MobileWishlistSaveRequest(
+    Guid? Id,
+    string Name,
+    string? Description,
+    bool? IsDefault,
+    bool? IncludeExtendedHours,
+    bool? IsObserved);
+
+public sealed record MobileWishlistObserveRequest(bool IsObserved);
+
+public sealed record MobileWishlistItemRequest(
+    string Ticker,
+    string? DisplayName,
+    string? Notes);
 
 public sealed record WarmupWatchRequest(
     IReadOnlyCollection<string> Tickers,
@@ -453,7 +650,8 @@ public sealed record MobileAutomationStartRequest(
     string Source,
     string? SourcePackage,
     string? SourceTitle,
-    string? SourceMessage);
+    string? SourceMessage,
+    string EntryMode = "validate_strategy");
 
 public sealed record MobileAutomationSessionSnapshot(
     Guid SessionId,

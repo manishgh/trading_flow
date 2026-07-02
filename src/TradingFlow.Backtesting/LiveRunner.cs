@@ -694,11 +694,12 @@ public sealed class LiveRunner(
                 {
                     progress?.Report($"Calculating position size for {ticker}...");
                     var riskEngine = new TradingFlow.Engine.Risk.RiskEngine();
-                    var order = riskEngine.CreateLongBracketOrder(
+                    var order = riskEngine.CreateLongBracketOrderWithPositionRisk(
                         strategy,
                         orderSignal,
                         run.Portfolio.StartingCapital,
-                        run.Portfolio.RiskPerTradePct);
+                        run.Portfolio.RiskPerTradePct,
+                        run.Portfolio.MaxPositionValuePct);
 
                     if (order != null)
                     {

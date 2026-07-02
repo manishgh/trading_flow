@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
+using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Pages;
 using TradingFlow.Web.Services;
 using Xunit;
@@ -14,13 +15,13 @@ namespace TradingFlow.Tests;
 public sealed class PaperModelTests
 {
     [Fact]
-    public void OnGet_WithoutExplicitConfigDefaultsToCanonicalIntradayPaperConfig()
+    public async Task OnGet_WithoutExplicitConfigDefaultsToCanonicalIntradayPaperConfig()
     {
         var repoRoot = FindRepositoryRoot();
         var catalog = CreateCatalog(repoRoot);
         var model = CreateModel(repoRoot, catalog);
 
-        model.OnGet(configPath: null, strategyPath: null);
+        await model.OnGetAsync(configPath: null, strategyPath: null, wishlistId: null, CancellationToken.None);
 
         Assert.EndsWith(
             Path.Combine("configs", "paper", "alpaca-paper.yaml"),
@@ -33,15 +34,17 @@ public sealed class PaperModelTests
     }
 
     [Fact]
-    public void OnGet_WithoutExplicitStrategyDefaultsToSelectedPaperConfigStrategy()
+    public async Task OnGet_WithoutExplicitStrategyDefaultsToSelectedPaperConfigStrategy()
     {
         var repoRoot = FindRepositoryRoot();
         var catalog = CreateCatalog(repoRoot);
         var model = CreateModel(repoRoot, catalog);
 
-        model.OnGet(
+        await model.OnGetAsync(
             Path.Combine(repoRoot, "configs", "paper", "alpaca-paper.yaml"),
-            strategyPath: null);
+            strategyPath: null,
+            wishlistId: null,
+            CancellationToken.None);
 
         Assert.EndsWith(
             Path.Combine("configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v9-confirmed-reclaim.yaml"),
@@ -77,12 +80,17 @@ public sealed class PaperModelTests
             scopeFactory.Object,
             credentialProvider,
             paths);
+        var wishlistRepository = new Mock<IWishlistRepository>();
+        wishlistRepository
+            .Setup(repository => repository.ListAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<Wishlist>());
         return new PaperModel(
             catalog,
             new PaperEnvironmentService(catalog, credentialProvider),
             new RunConfigWriter(paths, new SimpleYamlReader(), AtomicFileArtifactWriter.Instance),
             paperJobs,
             AtomicFileArtifactWriter.Instance,
+            wishlistRepository.Object,
             NullLogger<PaperModel>.Instance);
     }
 

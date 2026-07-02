@@ -20,34 +20,42 @@
     <!-- LEFT COLUMN: Environment & Strategy -->
     <div>
         <div class="panel">
-            <h2>Environment & Stocks</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Select a paper config, edit stocks, and save to create a temporary run config.</div>
+            <h2>Wishlist + Finviz</h2>
+            <div class="muted" style="margin-bottom: 1rem;">Paper trading universe is the selected wishlist plus optional Finviz screener results.</div>
+            <input type="hidden" name="BaseConfigPath" id="BaseConfigPath" value="@Model.ConfigPath" />
+            <input type="hidden" name="TickersCsv" id="TickersCsv" value="@Model.WishlistTickersCsv" />
 
-            <label for="BaseConfigPath">Paper Environment <span class="tf-help" title="Selects the paper-mode run configuration: broker, market data provider, portfolio, warmup window, and default execution settings.">?</span></label>
-            <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem;">
-            <select name="BaseConfigPath" id="BaseConfigPath" onchange="loadConfigDetails(this.value)" style="flex-grow: 1;">
-                    @foreach (var config in Model.Configs)
-                    {
-                        var isBase = config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase);
-                        var label = isBase ? config.FileName : $"[CUSTOM] {config.FileName}";
-                        <option value="@config.Path" selected="@(config.Path == Model.ConfigPath)">@label</option>
-                    }
-                </select>
-                @if (selectedConfig != null && !selectedConfig.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
+            <label for="WishlistId">Wishlist <span class="tf-help" title="Named ticker group stored in the database. This replaces the old paper-config ticker list.">?</span></label>
+            <select name="WishlistId" id="WishlistId" onchange="window.location='?wishlistId=' + encodeURIComponent(this.value) + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '')">
+                @foreach (var wishlist in Model.Wishlists)
                 {
-                    <button type="submit" asp-page-handler="DeleteConfig" name="DeleteConfigPath" value="@selectedConfig.Path" class="button secondary" style="background: #fee; color: #c00; border-color: #fcc;" title="Deletes this generated custom paper configuration file." onclick="return confirm('Delete this custom config?');">Delete</button>
+                    <option value="@wishlist.Id" selected="@(Model.SelectedWishlist?.Id == wishlist.Id)">@wishlist.Name</option>
                 }
+            </select>
+
+            <div style="margin-top: 1rem;">
+                <label>Active Tickers</label>
+                <div class="ticker-chip-row">
+                    @if (Model.SelectedWishlist is null || String.IsNullOrWhiteSpace(Model.WishlistTickersCsv))
+                    {
+                        <span class="muted">No active tickers. Add them from Wishlists.</span>
+                    }
+                    else
+                    {
+                        @foreach (var ticker in Model.WishlistTickersCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                        {
+                            <span class="ticker-chip">@ticker</span>
+                        }
+                    }
+                </div>
             </div>
 
-            <label for="TickersCsv">Tickers (CSV) <span class="tf-help" title="Comma-separated symbols to evaluate in this paper run. Each ticker is processed through the same selected strategy and portfolio limits.">?</span></label>
-            <textarea name="TickersCsv" id="TickersCsv" rows="3">@Model.TickersCsv</textarea>
-
-            <label for="ScreenerFilter">Finviz Screener Filter (optional) <span class="tf-help" title="Optional Finviz filter query used to build or supplement the ticker list. Leave empty when you want only the custom ticker CSV.">?</span></label>
-            <div class="muted" style="margin-bottom: 0.5rem; font-size: 0.85em;">Example: <code>v=111&f=sec_technology,ta_sma20_pa</code></div>
-            <input type="text" name="ScreenerFilter" id="ScreenerFilter" value="@Model.ScreenerFilter" placeholder="e.g. v=111&f=sec_technology" />
+            <label for="ScreenerFilter" style="margin-top: 1rem;">Finviz Screener <span class="tf-help" title="Optional Finviz Elite query or URL. Paper run uses wishlist tickers plus symbols returned by this screener.">?</span></label>
+            <input type="text" name="ScreenerFilter" id="ScreenerFilter" value="@Model.ScreenerFilter" placeholder="v=111&f=cap_smallover,sh_relvol_o2,ta_change_u" />
+            <div class="muted" style="margin-top: 0.35rem;">Optional. Use a Finviz query string or URL to add today's screeners to this paper run.</div>
 
             <div class="actions" style="margin-top: 1rem;">
-                <button type="submit" asp-page-handler="SaveConfig" title="Creates a generated paper configuration using the current environment, ticker list, execution settings, and selected strategy.">Save Custom List</button>
+                <a class="button secondary" asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Manage Wishlist</a>
             </div>
         </div>
 
@@ -102,7 +110,7 @@
     <div>
         <div class="panel highlight-border">
             <h2>Paper Runner</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Run the selected strategy on the currently selected paper environment.</div>
+            <div class="muted" style="margin-bottom: 1rem;">Run the selected strategy on the wishlist plus optional Finviz screener universe.</div>
 
             <label for="OrderExpirationDropdown">Order Expiration Strategy <span class="tf-help" title="Controls how long submitted broker orders remain active: GTC, day-only, or active cancellation behavior.">?</span></label>
             <select id="OrderExpirationDropdown" name="OrderExpiration" style="margin-bottom: 1rem;">
@@ -146,7 +154,7 @@
         <section class="panel" style="margin-top: 1rem;">
             <div class="section-title">
                 <h2>Paper Jobs</h2>
-                <a class="button secondary" asp-page="/Paper" asp-route-configPath="@Model.ConfigPath" asp-route-strategyPath="@Model.SelectedStrategyPath" title="Reloads the paper lab and job list without starting a new run.">Refresh</a>
+                <a class="button secondary" asp-page="/Paper" asp-route-wishlistId="@Model.SelectedWishlist?.Id" asp-route-strategyPath="@Model.SelectedStrategyPath" title="Reloads the paper lab and job list without starting a new run.">Refresh</a>
             </div>
 
             @if (Model.LiveJobs.Count == 0)
@@ -270,6 +278,23 @@
     .paper-page .small-help {
         margin-top: 0.25rem;
         font-size: 0.82rem;
+    }
+
+    .paper-page .ticker-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.35rem;
+    }
+
+    .paper-page .ticker-chip {
+        background: #eef6ff;
+        border: 1px solid #b6dcff;
+        border-radius: 999px;
+        color: #075985;
+        display: inline-flex;
+        font-weight: 700;
+        padding: 0.35rem 0.7rem;
     }
 </style>
 

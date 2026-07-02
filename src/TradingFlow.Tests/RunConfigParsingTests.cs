@@ -22,6 +22,8 @@ public sealed class RunConfigParsingTests
     private const string BreitsteinVwapTrapStrategyFile = "lance_breitstein_intraday_tactics.yaml";
     private const string QullamaggieEpisodicPivotStrategyFile = "kristjan_qullamaggie_stream_methodology.yaml";
     private const string MinerviniVcpStrategyFile = "mark_minervini_trade_like_a_stock_market_wizard.yaml";
+    private const string CatalystConfirmationSwingStrategyFile = "swing-catalyst-confirmation-long.v1.yaml";
+    private const string CatalystConfirmationSwingAdxObvStrategyFile = "swing-catalyst-confirmation-long.v2-adx-obv.yaml";
 
     [Fact]
     public void AlpacaPaperConfig_UsesConfirmedReclaimStrategyAndSipFeed()
@@ -222,6 +224,62 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
+    public void CatalystConfirmationSwingStrategyConfig_ParsesCatalystAndGapRules()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var reader = new SimpleYamlReader();
+        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", CatalystConfirmationSwingStrategyFile));
+
+        Assert.Equal("Catalyst Confirmation Swing Long V1", strategy.StrategyName);
+        Assert.Equal("1d", strategy.Timeframe);
+        Assert.Equal("1h", strategy.Execution.Timeframe);
+        Assert.Equal("long", strategy.Direction);
+        Assert.Equal("catalyst_confirmation_swing", strategy.EntryRules.SetupType);
+        Assert.True(strategy.EntryRules.RequirePositiveNews);
+        Assert.Equal(0.10m, strategy.EntryRules.MinNewsSentiment);
+        Assert.Equal(-0.40m, strategy.EntryRules.VetoNewsSentimentBelow);
+        Assert.Equal(72m, strategy.EntryRules.MaxNewsAgeHours);
+        Assert.Equal(3, strategy.EntryRules.MaxCatalystConfirmationBars);
+        Assert.Equal(4.0m, strategy.EntryRules.GapVariantMinPct);
+        Assert.Equal(0.50m, strategy.EntryRules.MinCatalystPriceMovePct);
+        Assert.Equal(12.0m, strategy.EntryRules.MaxCatalystPriceMovePct);
+        Assert.Equal(1.50m, strategy.EntryRules.MinVolumeSpike);
+        Assert.Equal("finviz_style", strategy.EntryRules.MinVolumeSpikeSource);
+        Assert.False(strategy.EntryRules.EnableShort);
+        Assert.True(strategy.EntryRules.RequirePriceAboveSma20);
+        Assert.True(strategy.EntryRules.RequirePriceAboveSma50);
+        Assert.True(strategy.EntryRules.RequireSma20AboveSma50);
+        Assert.False(strategy.EntryRules.RequireMacdHistogramPositive);
+        Assert.True(strategy.ExitRules.EnableAtrTrailingStop);
+        Assert.Equal(1.0m, strategy.ExitRules.TrailingActivationR);
+        Assert.Equal(3.0m, strategy.ExitRules.TargetRMultiple);
+        Assert.True(strategy.ExitRules.ExitOnSma10CrossBelowSma20);
+    }
+
+    [Fact]
+    public void CatalystConfirmationSwingAdxObvStrategyConfig_ParsesAdxObvRules()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var reader = new SimpleYamlReader();
+        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", CatalystConfirmationSwingAdxObvStrategyFile));
+
+        Assert.Equal("Catalyst Confirmation Swing Long V2 - ADX OBV", strategy.StrategyName);
+        Assert.Equal("1d", strategy.Timeframe);
+        Assert.Equal("1h", strategy.Execution.Timeframe);
+        Assert.Equal("long", strategy.Direction);
+        Assert.Equal("catalyst_confirmation_swing", strategy.EntryRules.SetupType);
+        Assert.True(strategy.EntryRules.RequirePositiveNews);
+        Assert.Equal("finviz_style", strategy.EntryRules.MinVolumeSpikeSource);
+        Assert.Equal(20.0m, strategy.EntryRules.MinAdx);
+        Assert.True(strategy.EntryRules.RequireAdxRising);
+        Assert.Equal(3, strategy.EntryRules.AdxRisingLookbackBars);
+        Assert.True(strategy.EntryRules.RequireObvRising);
+        Assert.Equal(3, strategy.EntryRules.ObvRisingLookbackBars);
+        Assert.Equal(0m, strategy.EntryRules.MinObvChange);
+        Assert.False(strategy.EntryRules.EnableShort);
+    }
+
+    [Fact]
     public void ImportedResearchStrategies_ParseWithRuleSpecificFields()
     {
         var repoRoot = FindRepositoryRoot();
@@ -326,7 +384,7 @@ public sealed class RunConfigParsingTests
         Assert.Equal(0, config.TimeWindow.LookbackDays);
         Assert.Equal(90, config.TimeWindow.WarmupLookbackDays);
         Assert.Equal(10000m, config.Portfolio.StartingCapital);
-        Assert.Equal(2.0m, config.Portfolio.RiskPerTradePct);
+        Assert.Equal(1.0m, config.Portfolio.RiskPerTradePct);
         Assert.Equal(25.0m, config.Portfolio.MaxPositionValuePct);
         Assert.Equal(4, config.Portfolio.MaxConcurrentPositions);
         Assert.False(config.News.Enabled);

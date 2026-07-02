@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TradingFlow.Mobile.Pages.NewsPage"
+             Title="News">
+    <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
+            <Grid Padding="16" RowDefinitions="Auto,Auto,*" RowSpacing="12">
+                <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <VerticalStackLayout Spacing="2">
+                        <Label Text="News Feed" Style="{StaticResource Headline}" FontSize="24" />
+                        <Label Text="Finviz Elite + Alpaca rolling 4-hour feed." Style="{StaticResource SubHeadline}" FontSize="13" />
+                    </VerticalStackLayout>
+                    <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+                </Grid>
+
+                <Border Grid.Row="1" Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="10">
+                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" />
+                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                            <Entry x:Name="TickerEntry" Placeholder="Ticker filter" Keyboard="Text" TextChanged="OnTickerChanged" />
+                            <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
+                            <Button Grid.Column="2" Text="Fetch" Clicked="OnFetchClicked" Padding="12,6" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </Border>
+
+                <CollectionView Grid.Row="2"
+                                x:Name="NewsView"
+                                SelectionMode="Single"
+                                SelectionChanged="OnNewsSelected">
+                    <CollectionView.EmptyView>
+                        <Label Text="No rolling news yet. Tap Fetch to pull Finviz and Alpaca now." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8">
+                                <VerticalStackLayout Spacing="6">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                                        <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="13" TextColor="{StaticResource AccentColor}" />
+                                        <Label Grid.Column="1" Text="{Binding DisplayProvider}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                        <Label Grid.Column="2" Text="{Binding SentimentText}" FontSize="12" />
+                                    </Grid>
+                                    <Label Text="{Binding DisplayHeadline}" FontAttributes="Bold" FontSize="15" LineBreakMode="WordWrap" MaxLines="3" />
+                                    <Label Text="{Binding DisplaySummary}" IsVisible="{Binding HasSummary}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" MaxLines="3" />
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <Label Text="{Binding DisplaySource}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                        <Label Grid.Column="1" Text="{Binding DisplayTimestamp}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
+                                    </Grid>
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </Grid>
+    </RefreshView>
+</ContentPage>

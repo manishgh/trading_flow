@@ -17,14 +17,19 @@
             Route="PaperPage" />
 
         <ShellContent
+            Title="Wishlists"
+            ContentTemplate="{DataTemplate pages:WishlistsPage}"
+            Route="WishlistsPage" />
+
+        <ShellContent
             Title="Backtests"
             ContentTemplate="{DataTemplate pages:BacktestsPage}"
             Route="BacktestsPage" />
 
         <ShellContent
-            Title="Warmup"
-            ContentTemplate="{DataTemplate pages:WarmupPage}"
-            Route="WarmupPage" />
+            Title="News"
+            ContentTemplate="{DataTemplate pages:NewsPage}"
+            Route="NewsPage" />
 
         <ShellContent
             Title="Alerts"

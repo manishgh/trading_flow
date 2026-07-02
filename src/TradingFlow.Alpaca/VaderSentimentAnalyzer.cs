@@ -11,9 +11,8 @@ public sealed class VaderSentimentAnalyzer : ISentimentAnalyzer
 
     public Task<SentimentResult> AnalyzeAsync(NewsArticle article, CancellationToken cancellationToken)
     {
-        var text = String.IsNullOrWhiteSpace(article.Summary)
-            ? article.Headline
-            : $"{article.Headline}. {article.Summary}";
+        var text = String.Join(". ", new[] { article.Headline, article.Summary, article.Content }
+            .Where(part => !String.IsNullOrWhiteSpace(part)));
 
         var scores = _analyzer.PolarityScores(text);
         var score = (decimal)scores.Compound;

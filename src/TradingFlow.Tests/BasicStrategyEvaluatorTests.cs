@@ -1060,6 +1060,212 @@ public class BasicStrategyEvaluatorTests
     }
 
     [Fact]
+    public void GetLongEntryRejection_WhenCatalystConfirmationPrimaryPathPasses_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            Timeframe = "1d",
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "catalyst_confirmation_swing",
+                MinVolumeSpike = 1.0m,
+                RequirePositiveNews = true,
+                MinNewsSentiment = 0.10m,
+                MaxNewsAgeHours = 72m,
+                MaxCatalystConfirmationBars = 3,
+                MinCatalystPriceMovePct = 0.50m,
+                GapVariantMinPct = 4.0m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-16T20:00:00Z");
+        var signal = CreateBaseSignal(rsi: 61m) with
+        {
+            Timeframe = "1d",
+            Timestamp = timestamp,
+            IsVcpBreakout = true,
+            IsMacdNotBearish = true,
+            Catalyst = new CatalystEvent("AAPL", timestamp.AddHours(-26), CatalystType.NewsReport, "Company wins large customer", 0.42m),
+            CatalystAgeHours = 26m,
+            CatalystAgeBars = 2,
+            CatalystPriceMovePct = 2.2m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 1.4m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenCatalystGapVariantPasses_AllowsMacdLag()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            Timeframe = "1d",
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "catalyst_confirmation_swing",
+                MinVolumeSpike = 1.0m,
+                RequirePositiveNews = true,
+                MinNewsSentiment = 0.10m,
+                MaxNewsAgeHours = 72m,
+                MaxCatalystConfirmationBars = 3,
+                GapVariantMinPct = 4.0m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-16T20:00:00Z");
+        var signal = CreateBaseSignal(rsi: 61m) with
+        {
+            Timeframe = "1d",
+            Timestamp = timestamp,
+            IsMacdNotBearish = false,
+            IsMacdHistogramPositive = false,
+            GapUpPct = 5.1m,
+            IsAboveSessionOpen = true,
+            Catalyst = new CatalystEvent("AAPL", timestamp.AddHours(-3), CatalystType.NewsReport, "Company raises guidance", 0.35m),
+            CatalystAgeHours = 3m,
+            CatalystAgeBars = 1,
+            CatalystPriceMovePct = 6.0m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 1.4m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenCatalystConfirmationWindowExpired_ReturnsReason()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            Timeframe = "1d",
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "catalyst_confirmation_swing",
+                MinVolumeSpike = 1.0m,
+                RequirePositiveNews = true,
+                MinNewsSentiment = 0.10m,
+                MaxNewsAgeHours = 120m,
+                MaxCatalystConfirmationBars = 3
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-16T20:00:00Z");
+        var signal = CreateBaseSignal(rsi: 61m) with
+        {
+            Timeframe = "1d",
+            Timestamp = timestamp,
+            IsVcpBreakout = true,
+            Catalyst = new CatalystEvent("AAPL", timestamp.AddHours(-96), CatalystType.NewsReport, "Company announces contract", 0.35m),
+            CatalystAgeHours = 96m,
+            CatalystAgeBars = 4,
+            CatalystPriceMovePct = 2.0m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 1.4m);
+
+        Assert.StartsWith("catalyst_confirmation_window_expired", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenCatalystAdxObvConfirmationPasses_ReturnsNull()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            Timeframe = "1d",
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "catalyst_confirmation_swing",
+                MinVolumeSpike = 1.0m,
+                RequirePositiveNews = true,
+                MinNewsSentiment = 0.10m,
+                MaxNewsAgeHours = 72m,
+                MaxCatalystConfirmationBars = 3,
+                MinCatalystPriceMovePct = 0.50m,
+                MinAdx = 20.0m,
+                RequireAdxRising = true,
+                AdxRisingLookbackBars = 3,
+                RequireObvRising = true,
+                ObvRisingLookbackBars = 3,
+                MinObvChange = 0m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-16T20:00:00Z");
+        var signal = CreateBaseSignal(rsi: 61m) with
+        {
+            Timeframe = "1d",
+            Timestamp = timestamp,
+            IsSwingReclaim = true,
+            IsMacdNotBearish = true,
+            Catalyst = new CatalystEvent("AAPL", timestamp.AddHours(-20), CatalystType.NewsReport, "Company announces contract", 0.42m),
+            CatalystAgeHours = 20m,
+            CatalystAgeBars = 2,
+            CatalystPriceMovePct = 2.2m,
+            CurrentAdx = 24.5m,
+            PreviousAdx = 21.0m,
+            IsAdxRising = true,
+            CurrentObv = 1_200_000m,
+            PreviousObv = 950_000m,
+            IsObvRising = true,
+            ObvChange = 250_000m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 1.4m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenAdxBelowMinimum_ReturnsReason()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 1.0m,
+                MinAdx = 20.0m
+            }
+        };
+        var signal = CreateBaseSignal(rsi: 61m) with
+        {
+            CurrentAdx = 17.5m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 1.4m);
+
+        Assert.Equal("adx_below_minimum (Actual: 17.50, Required: 20.00)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenObvNotRising_ReturnsReason()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 1.0m,
+                RequireObvRising = true,
+                ObvRisingLookbackBars = 3
+            }
+        };
+        var signal = CreateBaseSignal(rsi: 61m) with
+        {
+            CurrentObv = 900_000m,
+            PreviousObv = 950_000m,
+            IsObvRising = false,
+            ObvChange = -50_000m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 1.4m);
+
+        Assert.Equal("obv_not_rising (Current: 900000, Previous: 950000, LookbackBars: 3)", rejection);
+    }
+
+    [Fact]
     public void GetShortEntryRejection_WhenCatalystVwapBreakdownPasses_ReturnsNull()
     {
         var baseStrategy = CreateBaseStrategy();
