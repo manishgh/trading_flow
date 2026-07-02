@@ -2,12 +2,12 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="TradingFlow.Mobile.Pages.NotificationsPage"
-             Title="Alerts">
+             Title="System">
     <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
         <ScrollView>
             <VerticalStackLayout Padding="16" Spacing="14">
-                <Label Text="Notifications" Style="{StaticResource Headline}" FontSize="24" />
-                <Label Text="Run status, failures, and completed results from the backend." Style="{StaticResource SubHeadline}" FontSize="13" />
+                <Label Text="System Notifications" Style="{StaticResource Headline}" FontSize="24" />
+                <Label Text="Run status, failures, and completed results from the backend (last 2 days)." Style="{StaticResource SubHeadline}" FontSize="13" />
                 <Border Style="{StaticResource CardBorder}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />

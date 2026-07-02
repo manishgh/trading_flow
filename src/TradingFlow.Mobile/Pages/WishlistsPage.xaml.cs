@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using TradingFlow.Mobile.Services;
@@ -8,13 +8,16 @@ namespace TradingFlow.Mobile.Pages;
 public partial class WishlistsPage : ContentPage
 {
     private readonly TradingFlowApiClient api = AppServices.Api;
-    private readonly ObservableCollection<MobileWishlistItemResponse> items = new();
+    private readonly ObservableCollection<WishlistStockCard> items = new();
     private readonly ObservableCollection<WishlistSignalCard> signals = new();
+    private readonly ObservableCollection<WishlistActivityNews> newsItems = new();
     private readonly ObservableCollection<string> suggestions = new();
     private readonly IDispatcherTimer refreshTimer;
     private MobileCatalogResponse? catalog;
     private IReadOnlyList<MobileWishlistResponse> wishlists = Array.Empty<MobileWishlistResponse>();
     private MobileWishlistResponse? selectedWishlist;
+    private CancellationTokenSource? streamCts;
+    private Guid? streamedWishlistId;
     private bool isLoading;
 
     public WishlistsPage()
@@ -22,6 +25,7 @@ public partial class WishlistsPage : ContentPage
         InitializeComponent();
         ItemsView.ItemsSource = items;
         SignalsView.ItemsSource = signals;
+        NewsView.ItemsSource = newsItems;
         SuggestionsView.ItemsSource = suggestions;
         refreshTimer = Dispatcher.CreateTimer();
         refreshTimer.Interval = TimeSpan.FromSeconds(12);
@@ -38,6 +42,7 @@ public partial class WishlistsPage : ContentPage
     protected override void OnDisappearing()
     {
         refreshTimer.Stop();
+        StopStreams();
         base.OnDisappearing();
     }
 
@@ -73,6 +78,7 @@ public partial class WishlistsPage : ContentPage
             RenderWishlist();
             await LoadSignalsAsync();
             RefreshSuggestions();
+            EnsureStreams();
         }
         catch (Exception exception)
         {
@@ -93,18 +99,41 @@ public partial class WishlistsPage : ContentPage
     {
         var latestSignals = await api.GetWishlistSignalsAsync(selectedWishlist?.Id, 1) ?? Array.Empty<MobileWishlistSignalResponse>();
         var since = DateTimeOffset.Now.AddMinutes(-20);
-        signals.Clear();
-        foreach (var signal in latestSignals.Where(signal => signal.DetectedAtUtc.ToLocalTime() >= since).Take(20))
+        var recent = latestSignals
+            .Where(signal => signal.DetectedAtUtc.ToLocalTime() >= since)
+            .Take(20)
+            .ToArray();
+        MergeSignals(recent);
+    }
+
+    // Reconcile the signal cards in place so expand/collapse state survives refreshes.
+    private void MergeSignals(IReadOnlyList<MobileWishlistSignalResponse> latest)
+    {
+        var desiredIds = latest.Select(signal => signal.Id).ToHashSet();
+        for (var index = signals.Count - 1; index >= 0; index--)
         {
-            signals.Add(new WishlistSignalCard(signal));
+            if (!desiredIds.Contains(signals[index].Id))
+            {
+                signals.RemoveAt(index);
+            }
+        }
+
+        for (var index = 0; index < latest.Count; index++)
+        {
+            var signal = latest[index];
+            var existing = signals.FirstOrDefault(card => card.Id == signal.Id);
+            if (existing is null)
+            {
+                signals.Insert(Math.Min(index, signals.Count), new WishlistSignalCard(signal));
+            }
         }
     }
 
     private void RenderWishlist()
     {
-        items.Clear();
         if (selectedWishlist is null)
         {
+            items.Clear();
             WishlistDetailLabel.Text = "No group";
             StockCountLabel.Text = String.Empty;
             WishlistNameEntry.Text = string.Empty;
@@ -116,10 +145,184 @@ public partial class WishlistsPage : ContentPage
         StockCountLabel.Text = $"{selectedWishlist.ActiveItemCount} active";
         ObserveButton.Text = selectedWishlist.IsObserved ? "Pause" : "Observe";
         ObserveButton.BackgroundColor = selectedWishlist.IsObserved ? Color.FromArgb("#B42318") : Color.FromArgb("#067647");
-        foreach (var item in selectedWishlist.Items.Where(item => item.Active).OrderBy(item => item.Ticker))
+
+        var desired = selectedWishlist.Items
+            .Where(item => item.Active)
+            .OrderBy(item => item.Ticker)
+            .ToArray();
+
+        // Reconcile in place, reusing existing card instances so live quote state is preserved.
+        var desiredTickers = desired.Select(item => item.Ticker).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (var index = items.Count - 1; index >= 0; index--)
         {
-            items.Add(item);
+            if (!desiredTickers.Contains(items[index].Ticker))
+            {
+                items.RemoveAt(index);
+            }
         }
+
+        for (var index = 0; index < desired.Length; index++)
+        {
+            var item = desired[index];
+            var existing = items.FirstOrDefault(card => card.Ticker.Equals(item.Ticker, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+            {
+                items.Insert(Math.Min(index, items.Count), new WishlistStockCard(item));
+            }
+            else
+            {
+                existing.UpdateStatic(item);
+            }
+        }
+    }
+
+    private void EnsureStreams()
+    {
+        if (selectedWishlist is null)
+        {
+            StopStreams();
+            return;
+        }
+
+        if (streamedWishlistId == selectedWishlist.Id && streamCts is { IsCancellationRequested: false })
+        {
+            return;
+        }
+
+        StartStreams(selectedWishlist.Id);
+    }
+
+    private void StartStreams(Guid wishlistId)
+    {
+        StopStreams();
+        var cts = new CancellationTokenSource();
+        streamCts = cts;
+        streamedWishlistId = wishlistId;
+        _ = RunQuoteStreamAsync(wishlistId, cts.Token);
+        _ = RunActivityStreamAsync(wishlistId, cts.Token);
+    }
+
+    private void StopStreams()
+    {
+        if (streamCts is null)
+        {
+            return;
+        }
+
+        try
+        {
+            streamCts.Cancel();
+            streamCts.Dispose();
+        }
+        catch
+        {
+            // Ignore cancellation races on teardown.
+        }
+        finally
+        {
+            streamCts = null;
+            streamedWishlistId = null;
+        }
+    }
+
+    private async Task RunQuoteStreamAsync(Guid wishlistId, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await api.StreamWishlistQuotesAsync(wishlistId, updates =>
+                {
+                    MainThread.BeginInvokeOnMainThread(() => ApplyQuoteUpdates(updates));
+                    return Task.CompletedTask;
+                }, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch
+            {
+                // Stream faulted; fall through to reconnect after a short delay.
+            }
+
+            if (!await DelayForReconnectAsync(cancellationToken))
+            {
+                break;
+            }
+        }
+    }
+
+    private async Task RunActivityStreamAsync(Guid wishlistId, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await api.StreamWishlistActivityAsync(wishlistId, update =>
+                {
+                    MainThread.BeginInvokeOnMainThread(() => ApplyActivityUpdate(update));
+                    return Task.CompletedTask;
+                }, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch
+            {
+                // Stream faulted; fall through to reconnect after a short delay.
+            }
+
+            if (!await DelayForReconnectAsync(cancellationToken))
+            {
+                break;
+            }
+        }
+    }
+
+    private static async Task<bool> DelayForReconnectAsync(CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    private void ApplyQuoteUpdates(IReadOnlyList<WishlistQuoteUpdate> updates)
+    {
+        foreach (var update in updates)
+        {
+            var card = items.FirstOrDefault(item => item.Ticker.Equals(update.Ticker, StringComparison.OrdinalIgnoreCase));
+            card?.ApplyQuote(update);
+        }
+    }
+
+    private void ApplyActivityUpdate(WishlistActivityUpdate update)
+    {
+        newsItems.Clear();
+        foreach (var item in update.News ?? Array.Empty<WishlistActivityNews>())
+        {
+            newsItems.Add(item);
+        }
+
+        NewsStatusLabel.Text = newsItems.Count == 0
+            ? "Rolling 4-hour window for this group's tickers. Live."
+            : $"{newsItems.Count} live item(s) in the rolling 4-hour window.";
+
+        // The activity feed signals its own updates; refresh the rich signal cards so
+        // Trade/News/Details/Done stay actionable while keeping expand state.
+        _ = LoadSignalsAsync();
     }
 
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
@@ -146,9 +349,11 @@ public partial class WishlistsPage : ContentPage
         }
 
         selectedWishlist = wishlist;
+        newsItems.Clear();
         RenderWishlist();
         _ = LoadSignalsAsync();
         RefreshSuggestions();
+        EnsureStreams();
     }
 
     private async void OnSaveWishlist(object? sender, EventArgs e)
@@ -231,14 +436,14 @@ public partial class WishlistsPage : ContentPage
 
     private async void OnRemoveTicker(object? sender, EventArgs e)
     {
-        if (selectedWishlist is null || sender is not Button { CommandParameter: MobileWishlistItemResponse item })
+        if (selectedWishlist is null || sender is not Button { CommandParameter: WishlistStockCard card })
         {
             return;
         }
 
         try
         {
-            await api.DeleteWishlistTickerAsync(selectedWishlist.Id, item.Ticker);
+            await api.DeleteWishlistTickerAsync(selectedWishlist.Id, card.Ticker);
             await LoadAsync();
         }
         catch (Exception exception)
@@ -260,9 +465,9 @@ public partial class WishlistsPage : ContentPage
 
     private async void OnTradeTicker(object? sender, EventArgs e)
     {
-        if (sender is Button { CommandParameter: MobileWishlistItemResponse item })
+        if (sender is Button { CommandParameter: WishlistStockCard card })
         {
-            await StartPaperRunAsync(new[] { item.Ticker }, selectedWishlist?.Id);
+            await StartPaperRunAsync(new[] { card.Ticker }, selectedWishlist?.Id);
         }
     }
 
@@ -333,6 +538,18 @@ public partial class WishlistsPage : ContentPage
         }
 
         await Browser.Default.OpenAsync(signal.NewsUrl, BrowserLaunchMode.SystemPreferred);
+    }
+
+    private async void OnNewsSelected(object? sender, SelectionChangedEventArgs e)
+    {
+        if (e.CurrentSelection.FirstOrDefault() is WishlistActivityNews news)
+        {
+            NewsView.SelectedItem = null;
+            if (news.HasLink)
+            {
+                await Browser.Default.OpenAsync(news.Url!, BrowserLaunchMode.SystemPreferred);
+            }
+        }
     }
 
     private async void OnAcknowledgeSignal(object? sender, EventArgs e)
@@ -437,6 +654,122 @@ public partial class WishlistsPage : ContentPage
     }
 }
 
+// Mutable per-ticker card so live SSE quote updates can refresh price/bid-ask in place
+// without rebuilding the list (which would drop scroll position and card state).
+internal sealed class WishlistStockCard : INotifyPropertyChanged
+{
+    private string displayTitle;
+    private string detailText;
+    private string priceText = "Last --";
+    private string bidAskText = "Streaming quotes...";
+    private string movementText = String.Empty;
+    private bool hasMovement;
+
+    public WishlistStockCard(MobileWishlistItemResponse item)
+    {
+        Ticker = item.Ticker;
+        displayTitle = item.DisplayTitle;
+        detailText = item.DetailText;
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public string Ticker { get; }
+
+    public string DisplayTitle
+    {
+        get => displayTitle;
+        private set => SetField(ref displayTitle, value);
+    }
+
+    public string DetailText
+    {
+        get => detailText;
+        private set => SetField(ref detailText, value);
+    }
+
+    public string PriceText
+    {
+        get => priceText;
+        private set => SetField(ref priceText, value);
+    }
+
+    public string BidAskText
+    {
+        get => bidAskText;
+        private set => SetField(ref bidAskText, value);
+    }
+
+    public string MovementText
+    {
+        get => movementText;
+        private set => SetField(ref movementText, value);
+    }
+
+    public bool HasMovement
+    {
+        get => hasMovement;
+        private set => SetField(ref hasMovement, value);
+    }
+
+    public Color MovementColor => Color.FromArgb("#667085");
+
+    public void UpdateStatic(MobileWishlistItemResponse item)
+    {
+        DisplayTitle = item.DisplayTitle;
+        DetailText = item.DetailText;
+    }
+
+    public void ApplyQuote(WishlistQuoteUpdate update)
+    {
+        PriceText = FirstNonEmpty(update.MidText, Format(update.MidPrice), "Last --");
+
+        var bid = FirstNonEmpty(update.BidText, Format(update.BidPrice), "--");
+        var ask = FirstNonEmpty(update.AskText, Format(update.AskPrice), "--");
+        BidAskText = $"Bid {bid} / Ask {ask}";
+
+        if (update.Timestamp is { } stamp)
+        {
+            MovementText = $"as of {stamp.LocalDateTime:HH:mm}";
+            HasMovement = true;
+        }
+        else
+        {
+            MovementText = String.Empty;
+            HasMovement = false;
+        }
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!String.IsNullOrWhiteSpace(value))
+            {
+                return value!.Trim();
+            }
+        }
+
+        return String.Empty;
+    }
+
+    private static string? Format(decimal? value)
+    {
+        return value is null or <= 0 ? null : value.Value.ToString("C2");
+    }
+
+    private void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+        {
+            return;
+        }
+
+        field = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+}
+
 internal sealed class WishlistSignalCard : INotifyPropertyChanged
 {
     private bool isExpanded;
@@ -517,4 +850,3 @@ internal sealed class WishlistSignalCard : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 }
-

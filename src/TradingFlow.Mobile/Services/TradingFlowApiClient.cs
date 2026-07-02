@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
 
 namespace TradingFlow.Mobile.Services;
 
@@ -8,13 +10,21 @@ public sealed class TradingFlowApiClient
     public const string PhysicalDeviceDefaultUrl = "http://192.168.178.238:53017";
     public const string AndroidEmulatorDefaultUrl = "http://10.0.2.2:53017";
 
-    private readonly HttpClient httpClient = CreateHttpClient();
+    private static readonly JsonSerializerOptions StreamJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
-    private static HttpClient CreateHttpClient()
+    private readonly HttpClient httpClient = CreateHttpClient(TimeSpan.FromSeconds(45));
+    // Server-sent-event streams are long-lived, so they need an unbounded timeout and
+    // rely on the caller's CancellationToken to stop instead of the request timeout.
+    private readonly HttpClient streamClient = CreateHttpClient(Timeout.InfiniteTimeSpan);
+
+    private static HttpClient CreateHttpClient(TimeSpan timeout)
     {
         var client = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(45)
+            Timeout = timeout
         };
 
         // Free ngrok tunnels may return a browser warning page unless API clients send this header.
@@ -231,6 +241,118 @@ public sealed class TradingFlowApiClient
     {
         using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/wishlists/signals/{signalId}/ack", null, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<MobilePaperPositionResponse>?> GetPaperPositionsAsync(Guid jobId, CancellationToken cancellationToken = default)
+    {
+        return httpClient.GetFromJsonAsync<IReadOnlyList<MobilePaperPositionResponse>>(
+            $"{BaseUrl}/api/mobile/paper/jobs/{jobId}/positions",
+            cancellationToken);
+    }
+
+    // Subscribes to the wishlist live-quote SSE stream. onQuotes is invoked once per stream
+    // tick with the latest bid/ask/mid for every active ticker in the wishlist. The task runs
+    // until cancellationToken is cancelled or the stream faults (the caller handles reconnect).
+    public Task StreamWishlistQuotesAsync(
+        Guid wishlistId,
+        Func<IReadOnlyList<WishlistQuoteUpdate>, Task> onQuotes,
+        CancellationToken cancellationToken)
+    {
+        return StreamServerSentEventsAsync(
+            $"{BaseUrl}/api/wishlists/{wishlistId}/quotes/stream",
+            async (eventName, data) =>
+            {
+                if (!eventName.Equals("quotes", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                var updates = JsonSerializer.Deserialize<IReadOnlyList<WishlistQuoteUpdate>>(data, StreamJsonOptions);
+                if (updates is { Count: > 0 })
+                {
+                    await onQuotes(updates);
+                }
+            },
+            cancellationToken);
+    }
+
+    // Subscribes to the wishlist activity SSE stream (last-20-minute signals + rolling-4h news
+    // already scoped to the wishlist's tickers).
+    public Task StreamWishlistActivityAsync(
+        Guid wishlistId,
+        Func<WishlistActivityUpdate, Task> onActivity,
+        CancellationToken cancellationToken)
+    {
+        return StreamServerSentEventsAsync(
+            $"{BaseUrl}/api/wishlists/{wishlistId}/activity/stream",
+            async (eventName, data) =>
+            {
+                if (!eventName.Equals("activity", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                var update = JsonSerializer.Deserialize<WishlistActivityUpdate>(data, StreamJsonOptions);
+                if (update is not null)
+                {
+                    await onActivity(update);
+                }
+            },
+            cancellationToken);
+    }
+
+    private async Task StreamServerSentEventsAsync(
+        string url,
+        Func<string, string, Task> onEvent,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.TryAddWithoutValidation("Accept", "text/event-stream");
+
+        using var response = await streamClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream);
+
+        var eventName = "message";
+        var dataBuilder = new StringBuilder();
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (line is null)
+            {
+                break; // Stream closed by the server.
+            }
+
+            if (line.Length == 0)
+            {
+                // Blank line terminates an event: dispatch what we have buffered.
+                if (dataBuilder.Length > 0)
+                {
+                    await onEvent(eventName, dataBuilder.ToString());
+                }
+
+                eventName = "message";
+                dataBuilder.Clear();
+                continue;
+            }
+
+            if (line.StartsWith("event:", StringComparison.Ordinal))
+            {
+                eventName = line["event:".Length..].Trim();
+            }
+            else if (line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                if (dataBuilder.Length > 0)
+                {
+                    dataBuilder.Append('\n');
+                }
+
+                dataBuilder.Append(line["data:".Length..].TrimStart());
+            }
+            // Other SSE fields (id:, retry:) and comment lines (starting with ':') are ignored.
+        }
     }
 
     public Task<IReadOnlyList<WarmupTickerIntent>?> GetWarmupWatchlistAsync(CancellationToken cancellationToken = default)
@@ -524,12 +646,6 @@ public sealed record MobileWishlistItemResponse(
     public string DisplayTitle => String.IsNullOrWhiteSpace(DisplayName) ? Ticker : $"{Ticker} - {DisplayName}";
 
     public string DetailText => String.IsNullOrWhiteSpace(Notes) ? "Ready for paper runs and breakout alerts." : Notes!;
-
-    public string CurrentPriceText => "Last --";
-
-    public string BuyCaption => "Buy";
-
-    public string SellCaption => "Sell";
 }
 
 public sealed record MobileWishlistSignalResponse(
@@ -569,6 +685,75 @@ public sealed record MobileWishlistSaveRequest(
     bool? IsObserved);
 
 public sealed record MobileWishlistObserveRequest(bool IsObserved);
+
+public sealed record MobilePaperPositionResponse(
+    string Ticker,
+    string Side,
+    decimal Qty,
+    decimal EntryPrice,
+    decimal CurrentPrice,
+    decimal UnrealizedPl)
+{
+    public string HeaderText => $"{Ticker} - {Side} x{Qty:0.####}";
+
+    public string DetailText => $"Entry {EntryPrice:C2} | Last {CurrentPrice:C2}";
+
+    public string PnlText => $"{(UnrealizedPl >= 0 ? "+" : String.Empty)}{UnrealizedPl:C2}";
+
+    public bool IsProfit => UnrealizedPl >= 0;
+}
+
+// Payload of the /api/wishlists/{id}/quotes/stream SSE feed (one per active ticker).
+public sealed record WishlistQuoteUpdate(
+    string Ticker,
+    decimal? BidPrice,
+    decimal? AskPrice,
+    decimal? MidPrice,
+    string? BidText,
+    string? AskText,
+    string? MidText,
+    string? BuyCaption,
+    string? SellCaption,
+    DateTimeOffset? Timestamp);
+
+// Payload of the /api/wishlists/{id}/activity/stream SSE feed.
+public sealed record WishlistActivityUpdate(
+    IReadOnlyList<WishlistActivitySignal>? Signals,
+    IReadOnlyList<WishlistActivityNews>? News);
+
+public sealed record WishlistActivitySignal(
+    Guid Id,
+    string Ticker,
+    string SignalType,
+    string Reason,
+    DateTimeOffset DetectedAt,
+    string DetectedAtText);
+
+public sealed record WishlistActivityNews(
+    string Ticker,
+    string? Headline,
+    string? Summary,
+    string? Provider,
+    string? Source,
+    string? Url,
+    DateTimeOffset Timestamp,
+    string TimestampText)
+{
+    public string DisplayHeadline => String.IsNullOrWhiteSpace(Headline) ? "News update" : Headline!.Trim();
+
+    public string DisplaySummary => String.IsNullOrWhiteSpace(Summary) ||
+        String.Equals(Summary!.Trim(), DisplayHeadline, StringComparison.OrdinalIgnoreCase)
+        ? String.Empty
+        : Summary!.Trim();
+
+    public bool HasSummary => DisplaySummary.Length > 0;
+
+    public string SourceLine => String.IsNullOrWhiteSpace(Source)
+        ? $"{Ticker} | {Provider} | {TimestampText}"
+        : $"{Ticker} | {Provider} - {Source} | {TimestampText}";
+
+    public bool HasLink => !String.IsNullOrWhiteSpace(Url);
+}
 
 public sealed record MobileWishlistItemRequest(
     string Ticker,

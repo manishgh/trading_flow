@@ -9,15 +9,20 @@ public partial class BacktestsPage : ContentPage
     private readonly ObservableCollection<BacktestJobSnapshot> jobs = new();
     private readonly IDispatcherTimer refreshTimer;
     private MobileCatalogResponse? catalog;
+    private IReadOnlyList<MobileWishlistResponse> wishlists = Array.Empty<MobileWishlistResponse>();
     private BacktestJobSnapshot? selectedJob;
     private bool isLoading;
+    private bool suppressPersist;
+    private bool formRestored;
 
     public BacktestsPage()
     {
         InitializeComponent();
+        suppressPersist = true;
         JobsView.ItemsSource = jobs;
         CachePolicyPicker.ItemsSource = new[] { "reuse", "refresh" };
         CachePolicyPicker.SelectedIndex = 0;
+        suppressPersist = false;
         refreshTimer = Dispatcher.CreateTimer();
         refreshTimer.Interval = TimeSpan.FromSeconds(8);
         refreshTimer.Tick += async (_, _) => await LoadAsync(showBusy: false);
@@ -59,6 +64,15 @@ public partial class BacktestsPage : ContentPage
             StrategyPicker.ItemsSource = catalog?.Strategies.ToList();
             ConfigPicker.SelectedIndex = ConfigPicker.SelectedIndex < 0 && ConfigPicker.Items.Count > 0 ? 0 : ConfigPicker.SelectedIndex;
             StrategyPicker.SelectedIndex = StrategyPicker.SelectedIndex < 0 && StrategyPicker.Items.Count > 0 ? 0 : StrategyPicker.SelectedIndex;
+
+            var previousWishlistId = (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Id;
+            wishlists = await api.GetWishlistsAsync() ?? Array.Empty<MobileWishlistResponse>();
+            suppressPersist = true;
+            WishlistPicker.ItemsSource = wishlists.ToList();
+            WishlistPicker.SelectedItem = wishlists.FirstOrDefault(wishlist => wishlist.Id == previousWishlistId);
+            suppressPersist = false;
+
+            RestoreFormState();
 
             var latestJobs = await api.GetBacktestJobsAsync() ?? Array.Empty<BacktestJobSnapshot>();
             jobs.Clear();
@@ -136,6 +150,134 @@ public partial class BacktestsPage : ContentPage
         finally
         {
             RunButton.IsEnabled = true;
+        }
+    }
+
+    private void OnToggleAdvanced(object? sender, EventArgs e)
+    {
+        AdvancedPanel.IsVisible = !AdvancedPanel.IsVisible;
+        AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide advanced parameters" : "Show advanced parameters";
+    }
+
+    private void OnWishlistPicked(object? sender, EventArgs e)
+    {
+        if (WishlistPicker.SelectedItem is not MobileWishlistResponse wishlist)
+        {
+            return;
+        }
+
+        var tickers = wishlist.Items
+            .Where(item => item.Active)
+            .Select(item => item.Ticker)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (tickers.Length > 0)
+        {
+            TickersEntry.Text = String.Join(", ", tickers);
+        }
+
+        SaveFormState();
+    }
+
+    private void OnFormChanged(object? sender, EventArgs e) => SaveFormState();
+
+    private void RestoreFormState()
+    {
+        if (formRestored)
+        {
+            return;
+        }
+
+        suppressPersist = true;
+        try
+        {
+            if (String.IsNullOrWhiteSpace(TickersEntry.Text))
+            {
+                TickersEntry.Text = Preferences.Get("BacktestTickers", "POET, MXL, RGTI, MU, MSFT");
+            }
+
+            LookbackEntry.Text = Preferences.Get("BacktestLookback", "60");
+            CapitalEntry.Text = Preferences.Get("BacktestCapital", "10000");
+            RiskEntry.Text = Preferences.Get("BacktestRisk", "1");
+            MaxPositionEntry.Text = Preferences.Get("BacktestMaxPosition", "25");
+            MaxConcurrentEntry.Text = Preferences.Get("BacktestMaxConcurrent", "4");
+            RunAllStrategiesCheck.IsChecked = Preferences.Get("BacktestRunAll", false);
+            SelectByValue(CachePolicyPicker, Preferences.Get("BacktestCachePolicy", "reuse"));
+            SelectConfigByPath(Preferences.Get("BacktestConfigPath", string.Empty));
+            SelectStrategyByPath(Preferences.Get("BacktestStrategyPath", string.Empty));
+        }
+        finally
+        {
+            suppressPersist = false;
+            formRestored = true;
+        }
+    }
+
+    private void SaveFormState()
+    {
+        if (suppressPersist)
+        {
+            return;
+        }
+
+        Preferences.Set("BacktestTickers", TickersEntry.Text ?? string.Empty);
+        Preferences.Set("BacktestLookback", LookbackEntry.Text ?? "60");
+        Preferences.Set("BacktestCapital", CapitalEntry.Text ?? "10000");
+        Preferences.Set("BacktestRisk", RiskEntry.Text ?? "1");
+        Preferences.Set("BacktestMaxPosition", MaxPositionEntry.Text ?? "25");
+        Preferences.Set("BacktestMaxConcurrent", MaxConcurrentEntry.Text ?? "4");
+        Preferences.Set("BacktestRunAll", RunAllStrategiesCheck.IsChecked);
+        Preferences.Set("BacktestCachePolicy", CachePolicyPicker.SelectedItem?.ToString() ?? "reuse");
+        if (ConfigPicker.SelectedItem is MobileRunConfigOption config)
+        {
+            Preferences.Set("BacktestConfigPath", config.Path);
+        }
+
+        if (StrategyPicker.SelectedItem is MobileStrategyOption strategy)
+        {
+            Preferences.Set("BacktestStrategyPath", strategy.Path);
+        }
+    }
+
+    private void SelectConfigByPath(string path)
+    {
+        if (String.IsNullOrWhiteSpace(path) || ConfigPicker.ItemsSource is not IEnumerable<MobileRunConfigOption> configs)
+        {
+            return;
+        }
+
+        var match = configs.FirstOrDefault(config => config.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+        {
+            ConfigPicker.SelectedItem = match;
+        }
+    }
+
+    private void SelectStrategyByPath(string path)
+    {
+        if (String.IsNullOrWhiteSpace(path) || StrategyPicker.ItemsSource is not IEnumerable<MobileStrategyOption> strategies)
+        {
+            return;
+        }
+
+        var match = strategies.FirstOrDefault(strategy => strategy.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+        {
+            StrategyPicker.SelectedItem = match;
+        }
+    }
+
+    private static void SelectByValue(Picker picker, string value)
+    {
+        if (picker.ItemsSource is not IEnumerable<string> options)
+        {
+            return;
+        }
+
+        var index = options.ToList().FindIndex(option => option.Equals(value, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0)
+        {
+            picker.SelectedIndex = index;
         }
     }
 

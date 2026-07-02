@@ -17,44 +17,53 @@
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
                         <Label Text="Run Setup" FontAttributes="Bold" FontSize="18" />
-                        <Picker x:Name="ConfigPicker" Title="Backtest config" />
-                        <Picker x:Name="StrategyPicker" Title="Strategy" />
-                        <HorizontalStackLayout Spacing="8">
-                            <CheckBox x:Name="RunAllStrategiesCheck" Scale="0.78" />
-                            <Label Text="Run all listed strategies" VerticalTextAlignment="Center" FontSize="13" />
-                        </HorizontalStackLayout>
+                        <Label Text="Pick a wishlist or type tickers, choose a strategy, then run. Advanced parameters stay collapsed." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="Wishlist" FontAttributes="Bold" FontSize="12" />
+                        <Picker x:Name="WishlistPicker" Title="Wishlist (optional)" SelectedIndexChanged="OnWishlistPicked" />
+                        <Label Text="Backtest config" FontAttributes="Bold" FontSize="12" />
+                        <Picker x:Name="ConfigPicker" Title="Backtest config" SelectedIndexChanged="OnFormChanged" />
+                        <Label Text="Strategy" FontAttributes="Bold" FontSize="12" />
+                        <Picker x:Name="StrategyPicker" Title="Strategy" SelectedIndexChanged="OnFormChanged" />
                         <Label Text="Tickers" FontAttributes="Bold" FontSize="12" />
-                        <Entry x:Name="TickersEntry" Placeholder="Tickers: MU, NVTS, RGTI" Text="POET, MXL, RGTI, MU, MSFT" Keyboard="Text" />
-                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
-                            <VerticalStackLayout Spacing="4">
-                                <Label Text="Lookback days" FontAttributes="Bold" FontSize="12" />
-                                <Entry x:Name="LookbackEntry" Placeholder="Days" Text="60" Keyboard="Numeric" />
-                            </VerticalStackLayout>
-                            <VerticalStackLayout Grid.Column="1" Spacing="4">
-                                <Label Text="Starting capital" FontAttributes="Bold" FontSize="12" />
-                                <Entry x:Name="CapitalEntry" Placeholder="Capital" Text="10000" Keyboard="Numeric" />
-                            </VerticalStackLayout>
-                        </Grid>
-                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
-                            <VerticalStackLayout Spacing="4">
-                                <Label Text="Risk per trade %" FontAttributes="Bold" FontSize="12" />
-                                <Entry x:Name="RiskEntry" Placeholder="Risk %" Text="1" Keyboard="Numeric" />
-                            </VerticalStackLayout>
-                            <VerticalStackLayout Grid.Column="1" Spacing="4">
-                                <Label Text="Max position %" FontAttributes="Bold" FontSize="12" />
-                                <Entry x:Name="MaxPositionEntry" Placeholder="Max pos %" Text="25" Keyboard="Numeric" />
-                            </VerticalStackLayout>
-                        </Grid>
-                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
-                            <VerticalStackLayout Spacing="4">
-                                <Label Text="Max open positions" FontAttributes="Bold" FontSize="12" />
-                                <Entry x:Name="MaxConcurrentEntry" Placeholder="Max positions" Text="4" Keyboard="Numeric" />
-                            </VerticalStackLayout>
-                            <VerticalStackLayout Grid.Column="1" Spacing="4">
-                                <Label Text="Market data cache" FontAttributes="Bold" FontSize="12" />
-                                <Picker x:Name="CachePolicyPicker" Title="Data cache" />
-                            </VerticalStackLayout>
-                        </Grid>
+                        <Entry x:Name="TickersEntry" Placeholder="Tickers: MU, NVTS, RGTI" Keyboard="Text" TextChanged="OnFormChanged" />
+
+                        <Button x:Name="AdvancedToggle" Text="Show advanced parameters" Clicked="OnToggleAdvanced" Padding="12,8" BackgroundColor="#475467" />
+                        <VerticalStackLayout x:Name="AdvancedPanel" Spacing="10" IsVisible="False">
+                            <HorizontalStackLayout Spacing="8">
+                                <CheckBox x:Name="RunAllStrategiesCheck" Scale="0.78" CheckedChanged="OnFormChanged" />
+                                <Label Text="Run all listed strategies" VerticalTextAlignment="Center" FontSize="13" />
+                            </HorizontalStackLayout>
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                                <VerticalStackLayout Spacing="4">
+                                    <Label Text="Lookback days" FontAttributes="Bold" FontSize="12" />
+                                    <Entry x:Name="LookbackEntry" Placeholder="Days" Text="60" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                </VerticalStackLayout>
+                                <VerticalStackLayout Grid.Column="1" Spacing="4">
+                                    <Label Text="Starting capital" FontAttributes="Bold" FontSize="12" />
+                                    <Entry x:Name="CapitalEntry" Placeholder="Capital" Text="10000" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                </VerticalStackLayout>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                                <VerticalStackLayout Spacing="4">
+                                    <Label Text="Risk per trade %" FontAttributes="Bold" FontSize="12" />
+                                    <Entry x:Name="RiskEntry" Placeholder="Risk %" Text="1" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                </VerticalStackLayout>
+                                <VerticalStackLayout Grid.Column="1" Spacing="4">
+                                    <Label Text="Max position %" FontAttributes="Bold" FontSize="12" />
+                                    <Entry x:Name="MaxPositionEntry" Placeholder="Max pos %" Text="25" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                </VerticalStackLayout>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                                <VerticalStackLayout Spacing="4">
+                                    <Label Text="Max open positions" FontAttributes="Bold" FontSize="12" />
+                                    <Entry x:Name="MaxConcurrentEntry" Placeholder="Max positions" Text="4" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                </VerticalStackLayout>
+                                <VerticalStackLayout Grid.Column="1" Spacing="4">
+                                    <Label Text="Market data cache" FontAttributes="Bold" FontSize="12" />
+                                    <Picker x:Name="CachePolicyPicker" Title="Data cache" SelectedIndexChanged="OnFormChanged" />
+                                </VerticalStackLayout>
+                            </Grid>
+                        </VerticalStackLayout>
                         <Button x:Name="RunButton" Text="Run Backtest" Clicked="OnStartBacktest" />
                     </VerticalStackLayout>
                 </Border>

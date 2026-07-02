@@ -1,6 +1,7 @@
 ﻿using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Domain.Market;
+using TradingFlow.Domain.Orders;
 using TradingFlow.Web.Services.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
@@ -215,6 +216,12 @@ public static class MobileApiEndpoints
         {
             var cancelled = await paperJobs.CancelAllBrokerOrdersAsync(jobId);
             return cancelled ? Results.Ok() : Results.BadRequest("No matching broker orders were cancelled.");
+        });
+
+        group.MapGet("/paper/jobs/{jobId:guid}/positions", async (Guid jobId, PaperJobService paperJobs) =>
+        {
+            var positions = await paperJobs.GetOpenPositionsAsync(jobId);
+            return Results.Ok(positions.Select(ToMobilePaperPosition).ToArray());
         });
 
         group.MapGet("/automation/sessions", (MobileAutomationService automation) =>
@@ -527,6 +534,17 @@ public static class MobileApiEndpoints
             signal.NewsProvider,
             signal.Acknowledged);
     }
+    private static MobilePaperPositionResponse ToMobilePaperPosition(BrokerPosition position)
+    {
+        return new MobilePaperPositionResponse(
+            position.Ticker,
+            position.Side,
+            position.Qty,
+            position.EntryPrice,
+            position.CurrentPrice,
+            position.UnrealizedPl);
+    }
+
     private static MobileRunConfigOption ToMobileRunConfig(RunConfigSummary summary)
     {
         return new MobileRunConfigOption(

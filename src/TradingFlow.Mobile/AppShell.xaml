@@ -31,20 +31,29 @@
             ContentTemplate="{DataTemplate pages:NewsPage}"
             Route="NewsPage" />
 
-        <ShellContent
-            Title="Alerts"
-            ContentTemplate="{DataTemplate pages:NotificationsPage}"
-            Route="NotificationsPage" />
+        <Tab Title="Alerts">
+            <ShellContent
+                Title="Automation"
+                ContentTemplate="{DataTemplate pages:AutomationPage}"
+                Route="AutomationPage" />
 
-        <ShellContent
-            Title="Automation"
-            ContentTemplate="{DataTemplate pages:AutomationPage}"
-            Route="AutomationPage" />
+            <ShellContent
+                Title="System"
+                ContentTemplate="{DataTemplate pages:NotificationsPage}"
+                Route="NotificationsPage" />
+        </Tab>
 
-        <ShellContent
-            Title="Settings"
-            ContentTemplate="{DataTemplate pages:SettingsPage}"
-            Route="SettingsPage" />
+        <Tab Title="More">
+            <ShellContent
+                Title="Settings"
+                ContentTemplate="{DataTemplate pages:SettingsPage}"
+                Route="SettingsPage" />
+
+            <ShellContent
+                Title="Warmup"
+                ContentTemplate="{DataTemplate pages:WarmupPage}"
+                Route="WarmupPage" />
+        </Tab>
     </TabBar>
 
 </Shell>

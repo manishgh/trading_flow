@@ -9,22 +9,29 @@ public partial class PaperPage : ContentPage
     private readonly ObservableCollection<BacktestJobSnapshot> jobs = new();
     private readonly ObservableCollection<MobileNewsItem> newsItems = new();
     private readonly ObservableCollection<MobileAutomationSessionSnapshot> automationSessions = new();
+    private readonly ObservableCollection<MobilePaperPositionResponse> positions = new();
     private readonly IDispatcherTimer refreshTimer;
     private MobileCatalogResponse? catalog;
+    private IReadOnlyList<MobileWishlistResponse> wishlists = Array.Empty<MobileWishlistResponse>();
     private BacktestJobSnapshot? selectedJob;
     private BacktestJobSnapshot? lastRun;
     private bool isLoading;
+    private bool suppressPersist;
+    private bool formRestored;
 
     public PaperPage()
     {
         InitializeComponent();
+        suppressPersist = true;
         JobsView.ItemsSource = jobs;
         NewsView.ItemsSource = newsItems;
         AutomationSessionsView.ItemsSource = automationSessions;
+        PositionsView.ItemsSource = positions;
         OrderExpirationPicker.ItemsSource = new[] { "day", "gtc" };
         EntryOrderTypePicker.ItemsSource = new[] { "market", "limit" };
         OrderExpirationPicker.SelectedIndex = 0;
         EntryOrderTypePicker.SelectedIndex = 0;
+        suppressPersist = false;
         refreshTimer = Dispatcher.CreateTimer();
         refreshTimer.Interval = TimeSpan.FromSeconds(6);
         refreshTimer.Tick += async (_, _) => await LoadAsync(showBusy: false);
@@ -66,6 +73,15 @@ public partial class PaperPage : ContentPage
             StrategyPicker.ItemsSource = catalog?.Strategies.ToList();
             ConfigPicker.SelectedIndex = ConfigPicker.SelectedIndex < 0 && ConfigPicker.Items.Count > 0 ? 0 : ConfigPicker.SelectedIndex;
             StrategyPicker.SelectedIndex = StrategyPicker.SelectedIndex < 0 && StrategyPicker.Items.Count > 0 ? 0 : StrategyPicker.SelectedIndex;
+
+            var previousWishlistId = (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Id;
+            wishlists = await api.GetWishlistsAsync() ?? Array.Empty<MobileWishlistResponse>();
+            suppressPersist = true;
+            WishlistPicker.ItemsSource = wishlists.ToList();
+            WishlistPicker.SelectedItem = wishlists.FirstOrDefault(wishlist => wishlist.Id == previousWishlistId);
+            suppressPersist = false;
+
+            RestoreFormState();
 
             var latestJobs = await api.GetPaperJobsAsync() ?? Array.Empty<BacktestJobSnapshot>();
             var latestAutomationSessions = await api.GetAutomationSessionsAsync() ?? Array.Empty<MobileAutomationSessionSnapshot>();
@@ -235,6 +251,7 @@ public partial class PaperPage : ContentPage
         EventsStack.Clear();
         if (selectedJob is null)
         {
+            positions.Clear();
             return;
         }
 
@@ -249,6 +266,32 @@ public partial class PaperPage : ContentPage
                 FontSize = 12,
                 TextColor = Color.FromArgb("#475467")
             });
+        }
+
+        _ = LoadPositionsAsync(selectedJob.JobId);
+    }
+
+    private async Task LoadPositionsAsync(Guid jobId)
+    {
+        try
+        {
+            var latest = await api.GetPaperPositionsAsync(jobId) ?? Array.Empty<MobilePaperPositionResponse>();
+            if (selectedJob?.JobId != jobId)
+            {
+                return; // Selection changed while loading.
+            }
+
+            positions.Clear();
+            foreach (var position in latest)
+            {
+                positions.Add(position);
+            }
+
+            PositionsEmptyLabel.IsVisible = positions.Count == 0;
+        }
+        catch
+        {
+            // Positions are best-effort; leave the last known list intact on transient errors.
         }
     }
 
@@ -276,6 +319,134 @@ public partial class PaperPage : ContentPage
         await api.CancelBrokerOrdersAsync(selectedJob.JobId);
         await DisplayAlertAsync("Paper", "Broker-order cancellation request sent.", "OK");
         await LoadAsync();
+    }
+
+    private void OnToggleAdvanced(object? sender, EventArgs e)
+    {
+        AdvancedPanel.IsVisible = !AdvancedPanel.IsVisible;
+        AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide advanced options" : "Show advanced options";
+    }
+
+    private void OnWishlistPicked(object? sender, EventArgs e)
+    {
+        if (WishlistPicker.SelectedItem is not MobileWishlistResponse wishlist)
+        {
+            return;
+        }
+
+        var tickers = wishlist.Items
+            .Where(item => item.Active)
+            .Select(item => item.Ticker)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (tickers.Length > 0)
+        {
+            TickersEntry.Text = String.Join(", ", tickers);
+        }
+
+        SaveFormState();
+    }
+
+    private void OnFormChanged(object? sender, EventArgs e) => SaveFormState();
+
+    private void RestoreFormState()
+    {
+        if (formRestored)
+        {
+            return;
+        }
+
+        suppressPersist = true;
+        try
+        {
+            var savedTickers = Preferences.Get("PaperTickers", "RDW, OUST, SPCE");
+            if (String.IsNullOrWhiteSpace(TickersEntry.Text))
+            {
+                TickersEntry.Text = savedTickers;
+            }
+
+            RunNameEntry.Text = Preferences.Get("PaperRunName", string.Empty);
+            ScreenerEntry.Text = Preferences.Get("PaperScreener", string.Empty);
+            ExtendedHoursCheck.IsChecked = Preferences.Get("PaperExtendedHours", true);
+            NewsCheck.IsChecked = Preferences.Get("PaperNews", false);
+
+            SelectByValue(OrderExpirationPicker, Preferences.Get("PaperOrderExpiration", "day"));
+            SelectByValue(EntryOrderTypePicker, Preferences.Get("PaperEntryOrderType", "market"));
+            SelectConfigByPath(Preferences.Get("PaperConfigPath", string.Empty));
+            SelectStrategyByPath(Preferences.Get("PaperStrategyPath", string.Empty));
+        }
+        finally
+        {
+            suppressPersist = false;
+            formRestored = true;
+        }
+    }
+
+    private void SaveFormState()
+    {
+        if (suppressPersist)
+        {
+            return;
+        }
+
+        Preferences.Set("PaperTickers", TickersEntry.Text ?? string.Empty);
+        Preferences.Set("PaperRunName", RunNameEntry.Text ?? string.Empty);
+        Preferences.Set("PaperScreener", ScreenerEntry.Text ?? string.Empty);
+        Preferences.Set("PaperExtendedHours", ExtendedHoursCheck.IsChecked);
+        Preferences.Set("PaperNews", NewsCheck.IsChecked);
+        Preferences.Set("PaperOrderExpiration", OrderExpirationPicker.SelectedItem?.ToString() ?? "day");
+        Preferences.Set("PaperEntryOrderType", EntryOrderTypePicker.SelectedItem?.ToString() ?? "market");
+        if (ConfigPicker.SelectedItem is MobileRunConfigOption config)
+        {
+            Preferences.Set("PaperConfigPath", config.Path);
+        }
+
+        if (StrategyPicker.SelectedItem is MobileStrategyOption strategy)
+        {
+            Preferences.Set("PaperStrategyPath", strategy.Path);
+        }
+    }
+
+    private void SelectConfigByPath(string path)
+    {
+        if (String.IsNullOrWhiteSpace(path) || ConfigPicker.ItemsSource is not IEnumerable<MobileRunConfigOption> configs)
+        {
+            return;
+        }
+
+        var match = configs.FirstOrDefault(config => config.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+        {
+            ConfigPicker.SelectedItem = match;
+        }
+    }
+
+    private void SelectStrategyByPath(string path)
+    {
+        if (String.IsNullOrWhiteSpace(path) || StrategyPicker.ItemsSource is not IEnumerable<MobileStrategyOption> strategies)
+        {
+            return;
+        }
+
+        var match = strategies.FirstOrDefault(strategy => strategy.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+        {
+            StrategyPicker.SelectedItem = match;
+        }
+    }
+
+    private static void SelectByValue(Picker picker, string value)
+    {
+        if (picker.ItemsSource is not IEnumerable<string> options)
+        {
+            return;
+        }
+
+        var index = options.ToList().FindIndex(option => option.Equals(value, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0)
+        {
+            picker.SelectedIndex = index;
+        }
     }
 
     private static IReadOnlyList<string> ParseTickers(string? value)

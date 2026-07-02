@@ -10,6 +10,7 @@ public partial class AutomationPage : ContentPage
     private readonly INotificationAccessHelper notificationAccess = AppServices.NotificationAccess;
     private readonly ObservableCollection<MobileAutomationSessionSnapshot> sessions = new();
     private readonly ObservableCollection<CapturedAutomationAlert> alerts = new();
+    private readonly IDispatcherTimer refreshTimer;
     private MobileCatalogResponse? catalog;
     private MobileAutomationSessionSnapshot? selectedSession;
     private CapturedAutomationAlert? selectedAlert;
@@ -20,12 +21,47 @@ public partial class AutomationPage : ContentPage
         SessionsView.ItemsSource = sessions;
         AlertsView.ItemsSource = alerts;
         hub.Updated += OnHubUpdated;
+        // Refresh only the live sessions on a timer so a user's in-progress form
+        // selections (config/strategy/entry mode) are never reset underneath them.
+        refreshTimer = Dispatcher.CreateTimer();
+        refreshTimer.Interval = TimeSpan.FromSeconds(15);
+        refreshTimer.Tick += async (_, _) => await RefreshSessionsAsync();
     }
 
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        refreshTimer.Start();
         await LoadAsync();
+    }
+
+    protected override void OnDisappearing()
+    {
+        refreshTimer.Stop();
+        base.OnDisappearing();
+    }
+
+    private async Task RefreshSessionsAsync()
+    {
+        try
+        {
+            var latestSessions = await api.GetAutomationSessionsAsync() ?? Array.Empty<MobileAutomationSessionSnapshot>();
+            var selectedId = selectedSession?.SessionId;
+            sessions.Clear();
+            foreach (var session in latestSessions.Take(20))
+            {
+                sessions.Add(session);
+            }
+
+            if (selectedId is { } id)
+            {
+                SessionsView.SelectedItem = sessions.FirstOrDefault(session => session.SessionId == id);
+            }
+        }
+        catch
+        {
+            // Best-effort background refresh; the manual Refresh button surfaces errors.
+        }
     }
 
     private async Task LoadAsync()

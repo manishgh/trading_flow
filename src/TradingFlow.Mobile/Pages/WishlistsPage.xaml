@@ -74,7 +74,11 @@
                                             <Label Text="{Binding DisplayTitle}" FontAttributes="Bold" FontSize="16" />
                                             <Label Text="{Binding DetailText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="1" />
                                         </VerticalStackLayout>
-                                        <Label Grid.Column="1" Text="{Binding CurrentPriceText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" VerticalTextAlignment="Center" />
+                                        <VerticalStackLayout Grid.Column="1" Spacing="0" HorizontalOptions="End">
+                                            <Label Text="{Binding PriceText}" FontAttributes="Bold" FontSize="14" HorizontalTextAlignment="End" />
+                                            <Label Text="{Binding BidAskText}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" HorizontalTextAlignment="End" />
+                                            <Label Text="{Binding MovementText}" FontSize="11" TextColor="{Binding MovementColor}" HorizontalTextAlignment="End" IsVisible="{Binding HasMovement}" />
+                                        </VerticalStackLayout>
                                     </Grid>
                                     <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="8">
                                         <Button Text="Trade" Clicked="OnTradeTicker" CommandParameter="{Binding .}" Padding="12,6" />
@@ -123,6 +127,28 @@
                                         <Button Grid.Column="2" Text="Details" Clicked="OnToggleSignalDetails" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" BackgroundColor="#475467" />
                                         <Button Grid.Column="3" Text="Done" Clicked="OnAcknowledgeSignal" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" BackgroundColor="#667085" />
                                     </Grid>
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+
+                <VerticalStackLayout Spacing="0">
+                    <Label Text="Related News" FontAttributes="Bold" FontSize="17" />
+                    <Label x:Name="NewsStatusLabel" Text="Rolling 4-hour window for this group's tickers. Live." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                </VerticalStackLayout>
+
+                <CollectionView x:Name="NewsView" SelectionMode="Single" SelectionChanged="OnNewsSelected" HeightRequest="260">
+                    <CollectionView.EmptyView>
+                        <Label Text="No related news in the last 4 hours." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="10">
+                                <VerticalStackLayout Spacing="4">
+                                    <Label Text="{Binding DisplayHeadline}" FontAttributes="Bold" FontSize="13" LineBreakMode="TailTruncation" MaxLines="2" />
+                                    <Label Text="{Binding DisplaySummary}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="2" IsVisible="{Binding HasSummary}" />
+                                    <Label Text="{Binding SourceLine}" FontSize="11" TextColor="{StaticResource AccentColor}" LineBreakMode="TailTruncation" />
                                 </VerticalStackLayout>
                             </Border>
                         </DataTemplate>
