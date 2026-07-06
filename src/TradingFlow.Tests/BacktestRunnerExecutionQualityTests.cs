@@ -1,4 +1,4 @@
-using TradingFlow.Backtesting;
+﻿using TradingFlow.Backtesting;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
@@ -146,6 +146,30 @@ public class BacktestRunnerExecutionQualityTests
     }
 
     [Fact]
+    public void VolumeConfirmationSoftMarker_DoesNotRejectBacktestCandidate()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "GetVolumeConfirmationRejection",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var baseStrategy = ConfirmedEntryStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 2.0m,
+                VolumeConfirmationMode = "soft_marker"
+            }
+        };
+        var snapshot = Snapshot("2026-06-01T13:30:00Z");
+
+        var rejection = (string?)method.Invoke(null, [strategy, snapshot, 0.25m]);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
     public void BuildPortfolioTrades_WhenTickerDailyLossGuardTrips_SkipsLaterSameTickerCandidateOnly()
     {
         var method = typeof(BacktestRunner).GetMethod(
@@ -180,7 +204,7 @@ public class BacktestRunnerExecutionQualityTests
             Candidate("OKAY", "2026-06-01T13:36:00Z", "2026-06-01T13:41:00Z", 10m, 9m, 12m, "take_profit")
         };
 
-        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(null, [portfolio, strategy, candidates])!;
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(null, [portfolio, strategy, candidates, null])!;
 
         Assert.Equal(2, trades.Count);
         Assert.Single(trades, trade => trade.Ticker == "LOSS");
@@ -188,6 +212,23 @@ public class BacktestRunnerExecutionQualityTests
         Assert.DoesNotContain(trades, trade => trade.Ticker == "LOSS" && trade.NetProfit > 0);
     }
 
+    [Fact]
+    public void SelectBestActiveStrategy_IgnoresNoTradeStrategyWithZeroLoss()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "SelectBestActiveStrategy",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var noTrade = StrategyResult("no-trade", "No Trade", 0m, 0m, 0m, 0, 0, 0);
+        var activeLoss = StrategyResult("active-loss", "Active Loss", -50m, -0.5m, 2m, 4, 1, 3);
+        var activeWorse = StrategyResult("active-worse", "Active Worse", -100m, -1.0m, 3m, 4, 0, 4);
+
+        var best = (StrategyBacktestResult?)method.Invoke(null, [new[] { noTrade, activeLoss, activeWorse }]);
+
+        Assert.NotNull(best);
+        Assert.Equal("active-loss", best.StrategyId);
+    }
     private static IndicatorSnapshot Snapshot(string timestamp)
     {
         return new IndicatorSnapshot(
@@ -264,6 +305,34 @@ public class BacktestRunnerExecutionQualityTests
             100_000m);
     }
 
+    private static StrategyBacktestResult StrategyResult(
+        string id,
+        string name,
+        decimal netProfit,
+        decimal totalReturnPct,
+        decimal maxDrawdownPct,
+        int acceptedTrades,
+        int wins,
+        int losses)
+    {
+        return new StrategyBacktestResult(
+            id,
+            name,
+            "test",
+            10_000m,
+            10_000m + netProfit,
+            netProfit,
+            totalReturnPct,
+            0m,
+            1,
+            maxDrawdownPct,
+            acceptedTrades,
+            acceptedTrades,
+            0,
+            wins,
+            losses,
+            Array.Empty<BacktestTrade>());
+    }
     private static BacktestCandidateTrade Candidate(
         string ticker,
         string entryTimestamp,
@@ -299,3 +368,4 @@ public class BacktestRunnerExecutionQualityTests
             headline);
     }
 }
+

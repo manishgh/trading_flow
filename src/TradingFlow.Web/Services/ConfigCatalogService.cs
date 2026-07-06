@@ -1,10 +1,36 @@
-using TradingFlow.Engine.Configuration;
+﻿using TradingFlow.Engine.Configuration;
 using TradingFlow.Web.Models;
 
 namespace TradingFlow.Web.Services;
 
 public sealed class ConfigCatalogService
 {
+    private static readonly HashSet<string> ActiveStrategyFileNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "intraday-ema10-ema20-macd-volume.v1.yaml",
+        "minervini-trend-template-vcp.v4-trend-rider.yaml",
+        "swing-reversal-reclaim-bull-quality-no-news.v1.yaml"
+    };
+
+    private static readonly IReadOnlyDictionary<string, StrategyAuditSummary> StrategyAudits =
+        new Dictionary<string, StrategyAuditSummary>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["swing-reversal-reclaim-bull-quality-no-news.v1.yaml"] = new(
+                11.9532m,
+                3.8461m,
+                10,
+                60.0m,
+                "12.2 days",
+                "data/backtest/results/shared/portfolio/swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d-0001.json"),
+            ["minervini-trend-template-vcp.v4-trend-rider.yaml"] = new(
+                13.0165m,
+                2.7407m,
+                44,
+                22.7m,
+                "2-6 days",
+                null)
+        };
+
     private readonly ProjectPaths paths;
     private readonly SimpleYamlReader yamlReader;
     private readonly ILogger<ConfigCatalogService> logger;
@@ -34,6 +60,7 @@ public sealed class ConfigCatalogService
         }
 
         return Directory.GetFiles(paths.StrategiesRoot, "*.yaml", SearchOption.TopDirectoryOnly)
+            .Where(path => ActiveStrategyFileNames.Contains(Path.GetFileName(path)))
             .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
             .Select(TryCreateStrategyOption)
             .OfType<StrategyOption>()
@@ -60,6 +87,8 @@ public sealed class ConfigCatalogService
 
         return Directory.GetFiles(root, "*.yaml", SearchOption.AllDirectories)
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}archive{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}temp{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}ui-runs{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}strategies{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .Select(TryGetConfig)
@@ -84,7 +113,9 @@ public sealed class ConfigCatalogService
     {
         try
         {
-            return new StrategyOption(path, Path.GetFileName(path), yamlReader.ReadStrategy(path));
+            var fileName = Path.GetFileName(path);
+            StrategyAudits.TryGetValue(fileName, out var audit);
+            return new StrategyOption(path, fileName, yamlReader.ReadStrategy(path), audit);
         }
         catch (Exception exception) when (IsCatalogRecoverable(exception))
         {
@@ -98,3 +129,5 @@ public sealed class ConfigCatalogService
         return exception is IOException or UnauthorizedAccessException or FormatException or InvalidOperationException;
     }
 }
+
+

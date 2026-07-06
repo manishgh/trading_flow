@@ -1,4 +1,4 @@
-using TradingFlow.Backtesting.Artifacts;
+﻿using TradingFlow.Backtesting.Artifacts;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Orders;
 
@@ -22,6 +22,7 @@ public sealed class BacktestArtifactProjectorTests
         Assert.Equal(result.AverageDailyReturnPct, projected.AverageDailyReturnPct);
         Assert.Equal(result.TradingDayCount, projected.TradingDayCount);
         Assert.Equal(result.Diagnostics, projected.Diagnostics);
+        Assert.Equal(result.MissedMoves, projected.MissedMoves);
         Assert.Equal(result.Diagnostics.Single().DailyPnl, projected.Diagnostics.Single().DailyPnl);
         Assert.Equal(result.TickerResults, projected.TickerResults);
         Assert.Equal(result.Validation, projected.Validation);
@@ -40,6 +41,17 @@ public sealed class BacktestArtifactProjectorTests
         Assert.Single(projected.StrategyResults.Single().CompletedTrades);
     }
 
+
+    [Fact]
+    public void Project_BlankRetention_DefaultsToFullResultDetail()
+    {
+        var result = CreateResult();
+
+        var projected = BacktestArtifactProjector.Project(result, new ArtifactRetentionConfig(String.Empty));
+
+        Assert.Same(result, projected);
+        Assert.Single(projected.CompletedTrades);
+    }
     private static BacktestResult CreateResult()
     {
         var started = DateTimeOffset.Parse("2026-06-09T08:00:00Z");
@@ -137,6 +149,7 @@ public sealed class BacktestArtifactProjectorTests
             CreateValidation(),
             [trade],
             [diagnostics],
+            [new MissedMoveAudit("AMD", "5m", started, started.AddMinutes(30), 100m, 112m, 12m, 6, ["swing"], ["intraday"])],
             [new FinalizedOrder("AMD", "Swing", 10, 100m, 95m, 120m, started)]);
     }
 
@@ -150,3 +163,7 @@ public sealed class BacktestArtifactProjectorTests
             new BiasRiskValidation("test", null, "none", false, false, []));
     }
 }
+
+
+
+

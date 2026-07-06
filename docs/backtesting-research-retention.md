@@ -1,4 +1,4 @@
-# Backtesting Research Retention and Runtime Warmup
+﻿# Backtesting Research Retention and Runtime Warmup
 
 ## Intent
 
@@ -31,12 +31,11 @@ Do not commit raw candle caches, runtime paper/live state, temporary job logs, f
 The current retained runtime baseline is:
 
 ```text
-configs/strategies/intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml
-configs/strategies/intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml
+configs/strategies/intraday-ema10-ema20-macd-volume.v1.yaml
 configs/strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml
 configs/strategies/swing-overbought-rollover-short-no-news.v5.yaml
-configs/backtest/poet-mxl-rgti-mu-msft-intraday-v6-lite-90d.yaml
-configs/backtest/swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d.yaml
+configs/backtest/intraday-backtest-profile.yaml
+configs/backtest/swing-backtest-profile.yaml
 data/research/backtests/2026-06-11_swing_6tickers_180d/
 ```
 
@@ -44,7 +43,7 @@ Older exploratory strategies and failed result artifacts should be treated as di
 
 ## Strategy Promotion
 
-Only promoted strategy configs should remain in active runtime paths. Failed candidates should be deleted after their failure reason is captured in a research manifest or notes file.
+Only promoted strategy configs should remain in active runtime paths. Failed candidates should not appear in the runtime strategy catalog after their failure reason is captured in a research manifest or notes file. Backtest-only research configs may remain under `configs/backtest/strategies` when they document a reusable technical primitive or a user-supplied strategy spec.
 
 Promotion criteria should include:
 
@@ -57,15 +56,16 @@ Promotion criteria should include:
 
 For now, the retained active strategies are:
 
-- `intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml`: promoted intraday default. It combines the Ross-style VWAP/EMA/MACD stack with dual RVOL gating (`cumulative_same_time` plus session RVOL floor) and the safer structural exit model.
-- `intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml`: retained intraday runner-up. It keeps the simpler Ross indicator stack and exits on confirmed VWAP failure plus EMA10/EMA20 structure.
+- `intraday-ema10-ema20-macd-volume.v1.yaml`: simplified intraday reset. It keeps only EMA10/EMA20 alignment, bullish MACD histogram, and 2x cumulative same-time volume versus the 63-session baseline.
 - `swing-reversal-reclaim-bull-quality-no-news.v1.yaml`: primary swing long. It had the best balance of return and drawdown in the six-ticker swing run.
 - `swing-overbought-rollover-short-no-news.v5.yaml`: candidate swing short. It is promoted as a separate short-side candidate because it captured the APP rollover and avoided the noisy false shorts from earlier variants, but its two-trade sample is not enough for live promotion by itself.
+- `minervini-trend-template-vcp.v4-trend-rider.yaml`: current trend-rider swing candidate for long watchlists.
 
-Latest retained intraday comparison on the POET/MXL/RGTI/MU/MSFT 90-day cached window:
+Latest retained intraday comparison: reset pending. Previous V6/V8 candidates were removed from active runtime after the July 2026 simplification pass.
 
-- V6 Lite dual RVOL: +11.79%, max drawdown 1.24%, 43 trades.
-- V3 structural exit: +7.78%, max drawdown 3.41%, 56 trades.
+Latest research-only intraday execution-spec run:
+
+- `intraday-execution-strategies-bt-v1-7d-20260705`: all three strategies were negative over the isolated 7-day cached wishlist window. The configs remain under `configs/backtest/strategies` because they verify reusable execution primitives, not because they are candidates for paper/live.
 
 Latest retained swing comparison on the CRDO/MSFT/APP/INTC/MU/NVDA, 180-day cached Alpaca SIP window:
 
@@ -130,3 +130,4 @@ Backtest and paper jobs should log standard structured lifecycle events:
 - completed/failed/canceled
 
 Metrics should include run duration, ticker failures, API calls, cache hit counts, accepted trades, rejected trades, and result artifact size.
+

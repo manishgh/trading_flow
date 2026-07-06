@@ -1,4 +1,4 @@
-run_name: local-alpaca-paper-swing
+﻿run_name: local-alpaca-paper-swing
 mode: paper
 
 engine:
@@ -16,12 +16,6 @@ time_window:
   end:
 
 tickers:
-  - CRDO
-  - MSFT
-  - APP
-  - INTC
-  - MU
-  - NVDA
 
 market_data:
   provider: alpaca
@@ -71,7 +65,7 @@ validation:
     max_invalid_ohlc_bars: 0
     max_zero_volume_pct: 10.0
   bias_risk:
-    universe_source: static_config
+    universe_source: wishlist
     universe_as_of_date:
     price_adjustment_policy: alpaca_sip
 
@@ -103,7 +97,8 @@ news:
     negative_threshold: -0.6
 
 artifacts:
-  retention_mode: summary
+  retention_mode: full
 
 strategies:
   - ../strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml
+

@@ -25,5 +25,6 @@ public sealed record CatalystEvent(
     string? ExternalId = null,
     string? Summary = null,
     string? Source = null,
-    string? Url = null
+    string? Url = null,
+    DateTimeOffset? ReceivedAt = null
 );

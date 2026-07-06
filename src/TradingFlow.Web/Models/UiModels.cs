@@ -1,4 +1,4 @@
-using TradingFlow.Domain.Backtesting;
+﻿using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Strategies;
 
 namespace TradingFlow.Web.Models;
@@ -6,7 +6,16 @@ namespace TradingFlow.Web.Models;
 public sealed record StrategyOption(
     string Path,
     string FileName,
-    StrategyDefinition Definition);
+    StrategyDefinition Definition,
+    StrategyAuditSummary? Audit);
+
+public sealed record StrategyAuditSummary(
+    decimal ReturnPct,
+    decimal MaxDrawdownPct,
+    int Trades,
+    decimal WinRatePct,
+    string AverageHold,
+    string? ResultPath);
 
 public sealed record RunConfigSummary(
     string Path,
@@ -18,6 +27,8 @@ public sealed record BacktestRunRequest(
     string BaseConfigPath,
     string RunName,
     int LookbackDays,
+    Guid? WishlistId,
+    string? WishlistName,
     IReadOnlyList<string> Tickers,
     IReadOnlyList<string> StrategyPaths,
     decimal StartingCapital,
@@ -113,3 +124,4 @@ public sealed record OptimizationRunSnapshot(
     int? WinningTradeCount,
     int? LosingTradeCount,
     string Status);
+

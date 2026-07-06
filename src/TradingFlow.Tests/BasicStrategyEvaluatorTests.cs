@@ -118,6 +118,23 @@ public class BasicStrategyEvaluatorTests
     }
 
     [Fact]
+    public void GetLongEntryRejection_WhenVolumeIsSoftMarker_DoesNotBlockEntry()
+    {
+        var strategy = CreateBaseStrategy() with
+        {
+            EntryRules = CreateBaseStrategy().EntryRules with
+            {
+                MinVolumeSpike = 2.0m,
+                VolumeConfirmationMode = "soft_marker"
+            }
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, CreateBaseSignal(), relativeVolume: 0.60m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
     public void GetLongEntryRejection_WhenPriceMustBeAboveEma10AndIsNot_ReturnsEma10Reason()
     {
         var strategy = CreateBaseStrategy() with
@@ -461,6 +478,51 @@ public class BasicStrategyEvaluatorTests
         var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
 
         Assert.Equal("close_location_below_minimum (Actual: 0.37, Required: 0.60)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenMacdHistogramAboveMaximum_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                MaxMacdHistogram = 0.30m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            MacdHistogram = 0.5062m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("macd_histogram_above_maximum (Actual: 0.5062, RequiredMax: 0.3000)", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenPriorEntryGainAboveMaximum_ReturnsFormattedString()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MinVolumeSpike = 0.5m,
+                PriorEntryGainLookbackBars = 5,
+                MaxPriorEntryGainPct = 1.00m
+            }
+        };
+        var signal = CreateBaseSignal() with
+        {
+            PriorEntryGainPct = 1.04m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Equal("prior_entry_gain_above_maximum (Actual: 1.04, RequiredMax: 1.00, LookbackBars: 5)", rejection);
     }
 
     [Fact]

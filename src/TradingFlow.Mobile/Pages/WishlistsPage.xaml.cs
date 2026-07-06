@@ -10,8 +10,9 @@ public partial class WishlistsPage : ContentPage
     private readonly TradingFlowApiClient api = AppServices.Api;
     private readonly ObservableCollection<WishlistStockCard> items = new();
     private readonly ObservableCollection<WishlistSignalCard> signals = new();
-    private readonly ObservableCollection<WishlistActivityNews> newsItems = new();
+    private readonly ObservableCollection<MobileNewsItem> newsItems = new();
     private readonly ObservableCollection<string> suggestions = new();
+    private readonly HashSet<Guid> seenSignalIds = new();
     private readonly IDispatcherTimer refreshTimer;
     private MobileCatalogResponse? catalog;
     private IReadOnlyList<MobileWishlistResponse> wishlists = Array.Empty<MobileWishlistResponse>();
@@ -75,8 +76,7 @@ public partial class WishlistsPage : ContentPage
                 ?? wishlists.FirstOrDefault(wishlist => wishlist.IsDefault)
                 ?? wishlists.FirstOrDefault();
             WishlistPicker.SelectedItem = selectedWishlist;
-            RenderWishlist();
-            await LoadSignalsAsync();
+            await LoadDeskAsync(notifyNewSignals: false);
             RefreshSuggestions();
             EnsureStreams();
         }
@@ -95,19 +95,36 @@ public partial class WishlistsPage : ContentPage
         }
     }
 
+    private async Task LoadDeskAsync(bool notifyNewSignals)
+    {
+        if (selectedWishlist is null)
+        {
+            RenderWishlist();
+            MergeSignals([], notifyNew: false);
+            RenderNews([]);
+            return;
+        }
+
+        var desk = await api.GetWishlistDeskAsync(selectedWishlist.Id, signalMinutes: 20, newsHours: 4);
+        if (desk is null)
+        {
+            RenderWishlist();
+            return;
+        }
+
+        selectedWishlist = desk.Wishlist;
+        RenderDesk(desk);
+        MergeSignals(desk.RecentSignals, notifyNewSignals);
+        RenderNews(desk.RelatedNews);
+    }
+
     private async Task LoadSignalsAsync()
     {
-        var latestSignals = await api.GetWishlistSignalsAsync(selectedWishlist?.Id, 1) ?? Array.Empty<MobileWishlistSignalResponse>();
-        var since = DateTimeOffset.Now.AddMinutes(-20);
-        var recent = latestSignals
-            .Where(signal => signal.DetectedAtUtc.ToLocalTime() >= since)
-            .Take(20)
-            .ToArray();
-        MergeSignals(recent);
+        await LoadDeskAsync(notifyNewSignals: false);
     }
 
     // Reconcile the signal cards in place so expand/collapse state survives refreshes.
-    private void MergeSignals(IReadOnlyList<MobileWishlistSignalResponse> latest)
+    private void MergeSignals(IReadOnlyList<MobileWishlistSignalResponse> latest, bool notifyNew)
     {
         var desiredIds = latest.Select(signal => signal.Id).ToHashSet();
         for (var index = signals.Count - 1; index >= 0; index--)
@@ -125,6 +142,32 @@ public partial class WishlistsPage : ContentPage
             if (existing is null)
             {
                 signals.Insert(Math.Min(index, signals.Count), new WishlistSignalCard(signal));
+            }
+
+            var isNewSignal = seenSignalIds.Add(signal.Id);
+            if (notifyNew && isNewSignal)
+            {
+                LocalSignalNotificationService.ShowSignal(signal.Ticker, signal.SignalType, signal.Reason);
+            }
+        }
+
+        ApplySignalsToTickerCards(latest);
+    }
+
+    private void ApplySignalsToTickerCards(IReadOnlyList<MobileWishlistSignalResponse> latest)
+    {
+        var latestByTicker = latest
+            .GroupBy(signal => signal.Ticker, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(signal => signal.DetectedAtUtc).First(), StringComparer.OrdinalIgnoreCase);
+        foreach (var card in items)
+        {
+            if (latestByTicker.TryGetValue(card.Ticker, out var signal))
+            {
+                card.ApplySignal(signal);
+            }
+            else
+            {
+                card.ClearSignal();
             }
         }
     }
@@ -174,6 +217,52 @@ public partial class WishlistsPage : ContentPage
                 existing.UpdateStatic(item);
             }
         }
+    }
+
+    private void RenderDesk(MobileWishlistDeskResponse desk)
+    {
+        selectedWishlist = desk.Wishlist;
+        WishlistNameEntry.Text = selectedWishlist.Name;
+        WishlistDetailLabel.Text = selectedWishlist.DetailText;
+        StockCountLabel.Text = $"{desk.Rows.Count} active | {desk.TotalText}";
+        ObserveButton.Text = selectedWishlist.IsObserved ? "Pause" : "Observe";
+        ObserveButton.BackgroundColor = selectedWishlist.IsObserved ? Color.FromArgb("#B42318") : Color.FromArgb("#067647");
+
+        var desiredTickers = desk.Rows.Select(row => row.Ticker).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (var index = items.Count - 1; index >= 0; index--)
+        {
+            if (!desiredTickers.Contains(items[index].Ticker))
+            {
+                items.RemoveAt(index);
+            }
+        }
+
+        for (var index = 0; index < desk.Rows.Count; index++)
+        {
+            var row = desk.Rows[index];
+            var existing = items.FirstOrDefault(card => card.Ticker.Equals(row.Ticker, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+            {
+                items.Insert(Math.Min(index, items.Count), new WishlistStockCard(row));
+            }
+            else
+            {
+                existing.UpdateFromDesk(row);
+            }
+        }
+    }
+
+    private void RenderNews(IReadOnlyList<MobileNewsItem> latest)
+    {
+        newsItems.Clear();
+        foreach (var item in latest.Take(40))
+        {
+            newsItems.Add(item);
+        }
+
+        NewsStatusLabel.Text = newsItems.Count == 0
+            ? "Rolling 4-hour window for this group's tickers. Live."
+            : $"{newsItems.Count} live item(s) in the rolling 4-hour window.";
     }
 
     private void EnsureStreams()
@@ -310,19 +399,45 @@ public partial class WishlistsPage : ContentPage
 
     private void ApplyActivityUpdate(WishlistActivityUpdate update)
     {
-        newsItems.Clear();
-        foreach (var item in update.News ?? Array.Empty<WishlistActivityNews>())
-        {
-            newsItems.Add(item);
-        }
+        RenderNews((update.News ?? Array.Empty<WishlistActivityNews>())
+            .Select(ToMobileNewsItem)
+            .ToArray());
 
-        NewsStatusLabel.Text = newsItems.Count == 0
-            ? "Rolling 4-hour window for this group's tickers. Live."
-            : $"{newsItems.Count} live item(s) in the rolling 4-hour window.";
+        var signalResponses = (update.Signals ?? Array.Empty<WishlistActivitySignal>())
+            .Select(ToMobileWishlistSignal)
+            .ToArray();
+        MergeSignals(signalResponses, notifyNew: true);
+    }
 
-        // The activity feed signals its own updates; refresh the rich signal cards so
-        // Trade/News/Details/Done stay actionable while keeping expand state.
-        _ = LoadSignalsAsync();
+    private MobileWishlistSignalResponse ToMobileWishlistSignal(WishlistActivitySignal signal)
+    {
+        return new MobileWishlistSignalResponse(
+            signal.Id,
+            selectedWishlist?.Id ?? Guid.Empty,
+            signal.Ticker,
+            signal.SignalType,
+            "high",
+            signal.DetectedAt,
+            0m,
+            signal.Reason,
+            "{}",
+            null,
+            null,
+            null,
+            false);
+    }
+
+    private static MobileNewsItem ToMobileNewsItem(WishlistActivityNews item)
+    {
+        return new MobileNewsItem(
+            item.Ticker,
+            item.Timestamp,
+            item.DisplayHeadline,
+            0m,
+            item.Provider,
+            item.Source,
+            item.Url,
+            item.DisplaySummary);
     }
 
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
@@ -471,6 +586,25 @@ public partial class WishlistsPage : ContentPage
         }
     }
 
+    private async void OnOpenTickerNews(object? sender, EventArgs e)
+    {
+        if (sender is not Button { CommandParameter: WishlistStockCard card } || String.IsNullOrWhiteSpace(card.NewsUrl))
+        {
+            await DisplayAlertAsync("News", "No related news link is available for this ticker.", "OK");
+            return;
+        }
+
+        await NewsNavigation.OpenAsync(card.NewsUrl);
+    }
+
+    private void OnToggleTickerDetails(object? sender, EventArgs e)
+    {
+        if (sender is Button { CommandParameter: WishlistStockCard card })
+        {
+            card.IsExpanded = !card.IsExpanded;
+        }
+    }
+
     private async void OnSellTicker(object? sender, EventArgs e)
     {
         await DisplayAlertAsync(
@@ -537,18 +671,15 @@ public partial class WishlistsPage : ContentPage
             return;
         }
 
-        await Browser.Default.OpenAsync(signal.NewsUrl, BrowserLaunchMode.SystemPreferred);
+        await NewsNavigation.OpenAsync(signal.NewsUrl);
     }
 
     private async void OnNewsSelected(object? sender, SelectionChangedEventArgs e)
     {
-        if (e.CurrentSelection.FirstOrDefault() is WishlistActivityNews news)
+        if (e.CurrentSelection.FirstOrDefault() is MobileNewsItem news)
         {
             NewsView.SelectedItem = null;
-            if (news.HasLink)
-            {
-                await Browser.Default.OpenAsync(news.Url!, BrowserLaunchMode.SystemPreferred);
-            }
+            await NewsNavigation.OpenAsync(news.Url);
         }
     }
 
@@ -663,13 +794,29 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
     private string priceText = "Last --";
     private string bidAskText = "Streaming quotes...";
     private string movementText = String.Empty;
+    private string statusText = "Watching";
+    private string eligibilityReason = "Waiting for VWAP/EMA/MACD/volume conditions.";
+    private string newsText = "No related news";
+    private string tradeText = "No open trade";
+    private string? newsUrl;
+    private Color statusColor = Color.FromArgb("#667085");
     private bool hasMovement;
+    private bool isExpanded;
+    private bool hasNewsLink;
 
     public WishlistStockCard(MobileWishlistItemResponse item)
     {
         Ticker = item.Ticker;
         displayTitle = item.DisplayTitle;
         detailText = item.DetailText;
+    }
+
+    public WishlistStockCard(MobileWishlistDeskRowResponse row)
+    {
+        Ticker = row.Ticker;
+        displayTitle = row.Item.DisplayTitle;
+        detailText = row.Item.DetailText;
+        UpdateFromDesk(row);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -706,10 +853,58 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
         private set => SetField(ref movementText, value);
     }
 
+    public string StatusText
+    {
+        get => statusText;
+        private set => SetField(ref statusText, value);
+    }
+
+    public Color StatusColor
+    {
+        get => statusColor;
+        private set => SetField(ref statusColor, value);
+    }
+
+    public string EligibilityReason
+    {
+        get => eligibilityReason;
+        private set => SetField(ref eligibilityReason, value);
+    }
+
+    public string NewsText
+    {
+        get => newsText;
+        private set => SetField(ref newsText, value);
+    }
+
+    public string TradeText
+    {
+        get => tradeText;
+        private set => SetField(ref tradeText, value);
+    }
+
+    public string? NewsUrl
+    {
+        get => newsUrl;
+        private set => SetField(ref newsUrl, value);
+    }
+
     public bool HasMovement
     {
         get => hasMovement;
         private set => SetField(ref hasMovement, value);
+    }
+
+    public bool HasNewsLink
+    {
+        get => hasNewsLink;
+        private set => SetField(ref hasNewsLink, value);
+    }
+
+    public bool IsExpanded
+    {
+        get => isExpanded;
+        set => SetField(ref isExpanded, value);
     }
 
     public Color MovementColor => Color.FromArgb("#667085");
@@ -718,6 +913,23 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
     {
         DisplayTitle = item.DisplayTitle;
         DetailText = item.DetailText;
+    }
+
+    public void UpdateFromDesk(MobileWishlistDeskRowResponse row)
+    {
+        DisplayTitle = row.Item.DisplayTitle;
+        DetailText = row.Item.DetailText;
+        PriceText = FirstNonEmpty(row.DisplayPrice, Format(row.MidPrice), "Last --");
+        BidAskText = $"Bid {FirstNonEmpty(row.DisplayBid, Format(row.BidPrice), "--")} / Ask {FirstNonEmpty(row.DisplayAsk, Format(row.AskPrice), "--")}";
+        MovementText = row.QuoteTimestamp is { } stamp ? $"as of {stamp.LocalDateTime:HH:mm}" : String.Empty;
+        HasMovement = row.QuoteTimestamp is not null;
+        ApplyStatus(row.StatusText, row.EligibilityReason);
+        NewsText = row.LatestNews?.DisplayHeadline ?? "No related news";
+        NewsUrl = row.LatestNews?.Url;
+        HasNewsLink = !String.IsNullOrWhiteSpace(NewsUrl);
+        TradeText = row.Trade is null
+            ? "No open trade"
+            : $"{row.Trade.SourceLabel} {row.Trade.Quantity:0.####} sh | {row.Trade.PlText} | {row.Trade.ProtectionSummary}";
     }
 
     public void ApplyQuote(WishlistQuoteUpdate update)
@@ -738,6 +950,34 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
             MovementText = String.Empty;
             HasMovement = false;
         }
+    }
+
+    public void ApplySignal(MobileWishlistSignalResponse signal)
+    {
+        ApplyStatus("Eligible", signal.Reason);
+    }
+
+    public void ClearSignal()
+    {
+        if (StatusText.Equals("In trade", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        ApplyStatus("Watching", "Waiting for VWAP/EMA/MACD/volume conditions.");
+    }
+
+    private void ApplyStatus(string status, string reason)
+    {
+        StatusText = String.IsNullOrWhiteSpace(status) ? "Watching" : status;
+        EligibilityReason = String.IsNullOrWhiteSpace(reason)
+            ? "Waiting for VWAP/EMA/MACD/volume conditions."
+            : reason;
+        StatusColor = StatusText.Equals("Eligible", StringComparison.OrdinalIgnoreCase)
+            ? Color.FromArgb("#067647")
+            : StatusText.Equals("In trade", StringComparison.OrdinalIgnoreCase)
+                ? Color.FromArgb("#175CD3")
+                : Color.FromArgb("#667085");
     }
 
     private static string FirstNonEmpty(params string?[] values)

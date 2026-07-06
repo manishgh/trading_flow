@@ -75,11 +75,11 @@ dotnet run --project src\TradingFlow.Web --urls http://127.0.0.1:5088
 Pages:
 
 - `/` dashboard and recent jobs.
-- `/Backtests` config-driven backtest lab with ticker selection, strategy selection, editable strategy parameters, progress, result preview, winner, trades, and diagnostics.
-- `/Paper` paper-mode config inspection, Alpaca credential validation, paper run launch, live metrics, recent decisions, audit links, and broker controls.
+- `/Backtests` wishlist-driven backtest lab with strategy selection, editable strategy parameters, progress, result preview, winner, trades, and diagnostics.
+- `/Paper` paper-mode run launch from wishlists plus optional Finviz, Alpaca credential validation, live metrics, recent decisions, audit links, and broker controls.
 - `/Audit/{runName}` decision-tree audit for accepted, rejected, and no-signal evaluations.
 
-Generated backtest configs are written under `configs/backtest/ui-runs`; per-run strategy overrides are written under `configs/backtest/ui-runs/strategies/<run-name>`.
+Backtest and paper universes come from database wishlists. Generated run files are internal audit artifacts only and should not be used as hand-maintained ticker lists.
 
 ## Rolling Candle Warmup
 
@@ -105,15 +105,24 @@ Secrets should be split by environment and stored in Azure Key Vault. Local pape
 
 ## Active Strategy Set
 
-The active strategy catalog is under `configs/strategies`:
+The promoted strategy catalog is under `configs/strategies`. Research-only strategies live under `configs/backtest/strategies` and must not be used by paper/live until promoted.
 
-- `intraday-ross-gapgo-bullflag.v2-confirmed-entry`
+Current promoted/runtime strategies:
 
-The current winner is reported in each result JSON under the top-level `Winner` property.
+- `intraday-ema10-ema20-macd-volume.v1.yaml`
+- `swing-reversal-reclaim-bull-quality-no-news.v1.yaml`
+- `swing-overbought-rollover-short-no-news.v5.yaml`
+- `minervini-trend-template-vcp.v4-trend-rider.yaml`
 
-The retained day-trading runner keeps RSI as a selection/audit signal, not an entry or exit blocker. Its RSI range is configured as `0-100`; price action, VWAP, relative volume, bull-flag/opening-range breakouts, stops, and end-of-day flattening drive the trade lifecycle.
+Current research-only intraday execution specs:
 
-The retained research baseline is `configs/backtest/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml`, with the successful result kept at `data/backtest/results/shared/portfolio/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.json`. The confirmed-entry research variant is `configs/backtest/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml`; it waits for next-candle confirmation and then fills on the following candle to avoid confirmation look-ahead.
+- `configs/backtest/strategies/intraday-vwap-momentum-pullback.bt-v1.yaml`
+- `configs/backtest/strategies/intraday-atr-compression-breakout.bt-v1.yaml`
+- `configs/backtest/strategies/intraday-macd-divergence-fade.bt-v1.yaml`
+
+The current winner is reported in each result JSON under the top-level `Winner` property. Latest run evidence is tracked in [strategy-last-runs.md](docs/strategy-last-runs.md).
+
+Current limitation: partial exits are not yet modeled. Backtests currently support one entry and one full-position exit. Strategy YAML may express structural stops, VWAP targets, failed-breakout guards, trailing stops, and max-hold exits, but partial scale-out requires a future trade-lot model.
 
 
 ## Safety

@@ -2,33 +2,153 @@
 @model TradingFlow.Web.Pages.IndexModel
 @{
     ViewData["Title"] = "Quant Workstation";
+    var tiles = new[] { Model.RunningTrades, Model.Wishlists, Model.Signals, Model.PaperRuns, Model.Research };
+
+    static string PlClass(decimal value) => value > 0 ? "good" : value < 0 ? "bad" : "muted";
+    static string SourceLabel(string source) => source switch
+    {
+        "stockpulse" => "Stock Pulse",
+        "wishlist" => "Wishlist",
+        "manual" => "Manual",
+        _ => source
+    };
 }
 
-<div class="panel" style="max-width: 800px; margin: 2rem auto; text-align: center;">
-    <h1 style="margin-bottom: 2rem;">Quant Workstation</h1>
-    
-    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem;">
-        
-        <a asp-page="/Backtests" style="text-decoration: none; color: inherit;">
-            <div class="panel" style="padding: 2rem; border: 1px solid #ddd; border-radius: 8px; transition: transform 0.2s, box-shadow 0.2s;" onmouseover="this.style.transform='translateY(-5px)'; this.style.boxShadow='0 10px 20px rgba(0,0,0,0.1)';" onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
-                <h2 style="margin-bottom: 1rem; color: #007bff;">Backtests</h2>
-                <p class="muted">Design strategies, optimize parameters, and run historical backtests.</p>
-            </div>
-        </a>
-        
-        <a asp-page="/Paper" style="text-decoration: none; color: inherit;">
-            <div class="panel" style="padding: 2rem; border: 1px solid #ddd; border-radius: 8px; transition: transform 0.2s, box-shadow 0.2s;" onmouseover="this.style.transform='translateY(-5px)'; this.style.boxShadow='0 10px 20px rgba(0,0,0,0.1)';" onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
-                <h2 style="margin-bottom: 1rem; color: #28a745;">Paper</h2>
-                <p class="muted">Forward-test strategies in a simulated environment using live market data.</p>
-            </div>
-        </a>
-        
-        <a href="#" style="text-decoration: none; color: inherit; opacity: 0.7; cursor: not-allowed;">
-            <div class="panel" style="padding: 2rem; border: 1px solid #ddd; border-radius: 8px;">
-                <h2 style="margin-bottom: 1rem; color: #dc3545;">Live</h2>
-                <p class="muted">Execute trades automatically with a real broker. (Coming soon)</p>
-            </div>
-        </a>
-
+<section class="workstation-hero">
+    <div>
+        <p class="eyebrow">TradingFlow Command Center</p>
+        <h1>Watchlists, active trades, signals, and research in one operator view.</h1>
+        <p class="muted">Use this page as the morning/evening cockpit: observe lists, check active positions, react to Stock Pulse, and jump into paper or backtest work.</p>
     </div>
-</div>
+    <div class="hero-actions">
+        <a class="button" asp-page="/TradeDesk">Open Trade Desk</a>
+        <a class="button secondary" asp-page="/RunningTrades">Running Trades</a>
+    </div>
+</section>
+
+<section class="dashboard-tiles" aria-label="Workspace status">
+    @foreach (var tile in tiles)
+    {
+        <a class="dashboard-tile tone-@tile.Tone" href="@tile.Url">
+            <div class="tile-title">@tile.Title</div>
+            <div class="tile-value">@tile.Value</div>
+            <div class="tile-detail">@tile.Detail</div>
+            <p>@tile.Description</p>
+            <span>@tile.Action</span>
+        </a>
+    }
+</section>
+
+<section class="grid two dashboard-main">
+    <div class="panel">
+        <div class="panel-header compact">
+            <div>
+                <h2>Running Trade Book</h2>
+                <p>Unified view for wishlist, Stock Pulse, and manual entries.</p>
+            </div>
+            <a class="button secondary" asp-page="/TradeDesk" asp-route-source="trade">View All</a>
+        </div>
+
+        @if (Model.OpenTrades.Count == 0)
+        {
+            <div class="empty-state">No open trades right now.</div>
+        }
+        else
+        {
+            <div class="table-scroll">
+                <table class="compact-table">
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Source</th>
+                            <th>Strategy</th>
+                            <th class="num">Last</th>
+                            <th class="num">P/L</th>
+                            <th>Protection</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var trade in Model.OpenTrades)
+                        {
+                            <tr>
+                                <td><strong>@trade.Ticker</strong></td>
+                                <td>@SourceLabel(trade.Source)</td>
+                                <td>@trade.StrategyName</td>
+                                <td class="num">@trade.CurrentPrice.ToString("C2")</td>
+                                <td class="num @PlClass(trade.UnrealizedPl)">@trade.UnrealizedPl.ToString("C2")</td>
+                                <td>@trade.ProtectionSummary</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    <div class="panel">
+        <div class="panel-header compact">
+            <div>
+                <h2>Recent Signals</h2>
+                <p>Last 20 minutes from observed wishlists.</p>
+            </div>
+            <a class="button secondary" asp-page="/TradeDesk" asp-route-source="signal">Open Signals</a>
+        </div>
+
+        @if (Model.RecentSignals.Count == 0)
+        {
+            <div class="empty-state">No recent technical signals.</div>
+        }
+        else
+        {
+            <div class="signal-list">
+                @foreach (var signal in Model.RecentSignals)
+                {
+                    <a class="signal-row" asp-page="/Wishlists" asp-route-id="@signal.WishlistId">
+                        <strong>@signal.Ticker</strong>
+                        <span>@signal.SignalType</span>
+                        <span>@signal.DetectedAtUtc.ToLocalTime().ToString("HH:mm")</span>
+                    </a>
+                }
+            </div>
+        }
+    </div>
+</section>
+
+<section class="panel">
+    <div class="panel-header compact">
+        <div>
+            <h2>Rolling News</h2>
+            <p>Latest one-hour Finviz + Alpaca feed for market context.</p>
+        </div>
+        <a class="button secondary" href="/api/mobile/news?hours=1">API Feed</a>
+    </div>
+
+    @if (Model.RecentNews.Count == 0)
+    {
+        <div class="empty-state">No rolling news cached in the last hour.</div>
+    }
+    else
+    {
+        <div class="news-strip">
+            @foreach (var item in Model.RecentNews)
+            {
+                if (!String.IsNullOrWhiteSpace(item.Url))
+                {
+                    <a class="news-card-link" href="@item.Url" target="_blank" rel="noopener noreferrer">
+                        <div><strong>@item.Ticker</strong> <span class="muted">@item.Provider</span></div>
+                        <div>@item.Headline</div>
+                        <small>@item.Timestamp.ToLocalTime().ToString("HH:mm")</small>
+                    </a>
+                }
+                else
+                {
+                    <article>
+                        <div><strong>@item.Ticker</strong> <span class="muted">@item.Provider</span></div>
+                        <div>@item.Headline</div>
+                        <small>@item.Timestamp.ToLocalTime().ToString("HH:mm")</small>
+                    </article>
+                }
+            }
+        </div>
+    }
+</section>

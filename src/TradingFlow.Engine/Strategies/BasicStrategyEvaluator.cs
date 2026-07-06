@@ -67,6 +67,28 @@ public sealed class BasicStrategyEvaluator
             return $"obv_change_below_minimum (Actual: {signal.ObvChange?.ToString("F0") ?? "n/a"}, Required: {minObvChange:F0})";
         }
 
+        if (strategy.EntryRules.RequirePriorInsideDay && !signal.IsPriorInsideDay)
+        {
+            return "prior_day_not_inside_day";
+        }
+
+        if (strategy.EntryRules.RequirePriorNr7 && !signal.IsPriorNr7)
+        {
+            return $"prior_day_not_nr7 (LookbackDays: {strategy.EntryRules.PriorNr7LookbackDays})";
+        }
+
+        var priorCompressionRejection = GetPriorCompressionRejection(strategy, signal);
+        if (priorCompressionRejection is not null)
+        {
+            return priorCompressionRejection;
+        }
+
+        if (strategy.EntryRules.MinVwapDistanceAtrForDivergence is { } minVwapDistance &&
+            (signal.VwapDistanceAtr is null || signal.VwapDistanceAtr.Value < minVwapDistance))
+        {
+            return $"vwap_distance_atr_below_minimum (Actual: {signal.VwapDistanceAtr?.ToString("F2") ?? "n/a"}, Required: {minVwapDistance:F2})";
+        }
+
         if (signal.CurrentRsi < strategy.EntryRules.MinEntryRsi ||
             signal.CurrentRsi > strategy.EntryRules.MaxEntryRsi)
         {
@@ -112,6 +134,18 @@ public sealed class BasicStrategyEvaluator
             (signal.CloseLocationValue is null || signal.CloseLocationValue.Value < minCloseLocation))
         {
             return $"close_location_below_minimum (Actual: {signal.CloseLocationValue?.ToString("F2") ?? "n/a"}, Required: {minCloseLocation:F2})";
+        }
+
+        if (strategy.EntryRules.MaxMacdHistogram is { } maxMacdHistogram &&
+            (signal.MacdHistogram is null || signal.MacdHistogram.Value > maxMacdHistogram))
+        {
+            return $"macd_histogram_above_maximum (Actual: {signal.MacdHistogram?.ToString("F4") ?? "n/a"}, RequiredMax: {maxMacdHistogram:F4})";
+        }
+
+        if (strategy.EntryRules.MaxPriorEntryGainPct is { } maxPriorEntryGainPct &&
+            (signal.PriorEntryGainPct is null || signal.PriorEntryGainPct.Value > maxPriorEntryGainPct))
+        {
+            return $"prior_entry_gain_above_maximum (Actual: {signal.PriorEntryGainPct?.ToString("F2") ?? "n/a"}, RequiredMax: {maxPriorEntryGainPct:F2}, LookbackBars: {strategy.EntryRules.PriorEntryGainLookbackBars})";
         }
 
         if (strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume &&
@@ -388,6 +422,28 @@ public sealed class BasicStrategyEvaluator
             return $"short_rsi_above_range (Actual: {signal.CurrentRsi:F2}, RequiredMax: {maxShortRsi:F2})";
         }
 
+        if (strategy.EntryRules.RequirePriorInsideDay && !signal.IsPriorInsideDay)
+        {
+            return "prior_day_not_inside_day";
+        }
+
+        if (strategy.EntryRules.RequirePriorNr7 && !signal.IsPriorNr7)
+        {
+            return $"prior_day_not_nr7 (LookbackDays: {strategy.EntryRules.PriorNr7LookbackDays})";
+        }
+
+        var priorCompressionRejection = GetPriorCompressionRejection(strategy, signal);
+        if (priorCompressionRejection is not null)
+        {
+            return priorCompressionRejection;
+        }
+
+        if (strategy.EntryRules.MinVwapDistanceAtrForDivergence is { } minVwapDistance &&
+            (signal.VwapDistanceAtr is null || signal.VwapDistanceAtr.Value < minVwapDistance))
+        {
+            return $"vwap_distance_atr_below_minimum (Actual: {signal.VwapDistanceAtr?.ToString("F2") ?? "n/a"}, Required: {minVwapDistance:F2})";
+        }
+
         if (!PassesShortSetupType(strategy.EntryRules.ShortSetupType, signal))
         {
             return $"setup_{strategy.EntryRules.ShortSetupType}_not_triggered";
@@ -449,7 +505,9 @@ public sealed class BasicStrategyEvaluator
             "momentum" => true,
             "vwap_pullback" => signal.IsVwapPullback || signal.IsVwapReclaim,
             "opening_range_breakout" => signal.IsOpeningRangeBreakout,
+            "atr_compression_breakout" => signal.IsOpeningRangeBreakout,
             "trend_pullback" => signal.IsEma20Pullback || signal.IsVwapPullback,
+            "macd_divergence_fade" => signal.IsMacdBullishDivergenceFade,
             "vcp_trend_breakout" => signal.IsRecentHighBreakout && signal.IsVolatilityContraction,
             "log_breakout" => signal.IsRecentHighBreakout,
             "log_vcp_breakout" => signal.IsRecentHighBreakout && signal.IsVolatilityContraction,
@@ -662,6 +720,8 @@ public sealed class BasicStrategyEvaluator
             "step_breakdown" => signal.IsStepBreakdown,
             "swing_rollover" => signal.IsSwingRollover,
             "opening_range_breakdown" => signal.IsOpeningRangeBreakdown,
+            "atr_compression_breakdown" => signal.IsOpeningRangeBreakdown,
+            "macd_divergence_fade" => signal.IsMacdBearishDivergenceFade,
             "vwap_rejection" => signal.IsVwapRejection,
             _ => throw new NotSupportedException($"Unsupported short_setup_type: {setupType}.")
         };
@@ -765,11 +825,26 @@ public sealed class BasicStrategyEvaluator
             strategy.Direction.Equals("both", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static string? GetPriorCompressionRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        return strategy.EntryRules.PriorCompressionMode.ToLowerInvariant() switch
+        {
+            "none" => null,
+            "inside_day" => signal.IsPriorInsideDay ? null : "prior_day_not_inside_day",
+            "nr7" => signal.IsPriorNr7 ? null : $"prior_day_not_nr7 (LookbackDays: {strategy.EntryRules.PriorNr7LookbackDays})",
+            "inside_or_nr7" => signal.IsPriorInsideDay || signal.IsPriorNr7
+                ? null
+                : $"prior_day_not_inside_or_nr7 (LookbackDays: {strategy.EntryRules.PriorNr7LookbackDays})",
+            _ => throw new NotSupportedException($"Unsupported prior_compression_mode: {strategy.EntryRules.PriorCompressionMode}.")
+        };
+    }
+
     private static string? GetVolumeConfirmationRejection(StrategyDefinition strategy, decimal relativeVolume)
     {
         var mode = strategy.EntryRules.VolumeConfirmationMode;
         if (mode.Equals("none", StringComparison.OrdinalIgnoreCase) ||
-            mode.Equals("soft_confirmation", StringComparison.OrdinalIgnoreCase))
+            mode.Equals("soft_confirmation", StringComparison.OrdinalIgnoreCase) ||
+            mode.Equals("soft_marker", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }

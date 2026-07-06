@@ -1,4 +1,4 @@
-using TradingFlow.Backtesting;
+﻿using TradingFlow.Backtesting;
 using TradingFlow.Backtesting.Optimization;
 using TradingFlow.Domain.Optimization;
 using TradingFlow.Engine.Configuration;
@@ -20,7 +20,7 @@ public class StrategyOptimizerTests
             FindRepositoryRoot(),
             "configs",
             "strategies",
-            "intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml"));
+            "intraday-ema10-ema20-macd-volume.v2-additive.yaml"));
 
         strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
             optimizer,
@@ -242,7 +242,7 @@ parameters:
             update =>
             {
                 Assert.Null(update.CompletedRun!.BacktestResult.Validation.Benchmark.BenchmarkReturnPct);
-                Assert.True(update.CompletedRun.BacktestResult.TradingDayCount > 0);
+                Assert.True(update.CompletedRun.BacktestResult.ProcessedBarCount > 0);
             });
     }
 
@@ -286,3 +286,5 @@ parameters:
         }
     }
 }
+
+

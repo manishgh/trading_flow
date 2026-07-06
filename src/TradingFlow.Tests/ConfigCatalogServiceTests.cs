@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Web.Services;
 
@@ -7,7 +7,22 @@ namespace TradingFlow.Tests;
 public sealed class ConfigCatalogServiceTests
 {
     [Fact]
-    public void GetBacktestConfigs_SkipsMissingStrategyReferenceWithoutFailingCatalog()
+    public void GetStrategies_ReturnsOnlyPromotedStrategies_WithAuditSummaries()
+    {
+        var repoRoot = TestRepository.FindRoot();
+        var catalog = new ConfigCatalogService(new ProjectPaths(repoRoot), new SimpleYamlReader());
+
+        var strategies = catalog.GetStrategies();
+
+        Assert.Equal(3, strategies.Count);
+        Assert.Contains(strategies, strategy => strategy.FileName == "intraday-ema10-ema20-macd-volume.v1.yaml" && strategy.Audit is null);
+        
+        Assert.DoesNotContain(strategies, strategy =>
+            strategy.FileName == "brian_shannon_mta_avwap_strategies.yaml");
+    }
+
+    [Fact]
+    public void GetBacktestConfigs_SkipsStaleRunConfigWithoutFailingCatalog()
     {
         var repoRoot = TestRepository.FindRoot();
         var tempRoot = Path.Combine(Path.GetTempPath(), "trading-flow-catalog-test", Guid.NewGuid().ToString("N"));
@@ -20,7 +35,7 @@ public sealed class ConfigCatalogServiceTests
                 repoRoot,
                 "configs",
                 "backtest",
-                "poet-mxl-rgti-mu-msft-intraday-v8-comparison-90d.yaml");
+                "intraday-backtest-profile.yaml");
             var yaml = File.ReadAllText(sourceConfig);
             yaml = Regex.Replace(
                 yaml,
@@ -33,8 +48,7 @@ public sealed class ConfigCatalogServiceTests
 
             var configs = catalog.GetBacktestConfigs();
 
-            var config = Assert.Single(configs);
-            Assert.Empty(config.Strategies);
+            Assert.Empty(configs);
         }
         finally
         {
@@ -45,3 +59,5 @@ public sealed class ConfigCatalogServiceTests
         }
     }
 }
+
+

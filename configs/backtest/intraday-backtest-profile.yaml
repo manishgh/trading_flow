@@ -1,4 +1,4 @@
-run_name: poet-mxl-rgti-mu-msft-intraday-v8-comparison-90d
+﻿run_name: intraday-backtest-profile
 mode: backtest
 
 engine:
@@ -6,33 +6,28 @@ engine:
   worker_count: 0
   bounded_capacity: 2000
   indicator_warmup_bars: 200
-  ticker_timeout_seconds: 3000
+  ticker_timeout_seconds: 1800
   fail_fast: false
 
 time_window:
-  type: fixed
-  lookback_days: 0
+  type: rolling
+  lookback_days: 60
   warmup_lookback_days: 90
-  start: 2026-03-13T00:00:00Z
-  end: 2026-06-13T00:00:00Z
+  start:
+  end:
 
 tickers:
-  - POET
-  - MXL
-  - RGTI
-  - MU
-  - MSFT
 
 market_data:
-  provider: csv
+  provider: alpaca
   download_timeframes:
     - 1m
     - 5m
   derive_from: 1m
-  raw_root: C:/project/trading_flow/data/backtest/raw
-  normalized_root: C:/project/trading_flow/data/backtest/normalized/20260313-20260613
-  results_root: C:/project/trading_flow/data/backtest/results
-  cache_policy: bypass
+  raw_root: data/backtest/raw
+  normalized_root: data/backtest/normalized
+  results_root: data/backtest/results
+  cache_policy: use_cache
 
 providers:
   alpaca:
@@ -71,8 +66,8 @@ validation:
     max_invalid_ohlc_bars: 0
     max_zero_volume_pct: 15.0
   bias_risk:
-    universe_source: core_intraday_v8_comparison
-    universe_as_of_date: 2026-06-13
+    universe_source: wishlist
+    universe_as_of_date:
     price_adjustment_policy: alpaca_sip_cached
 
 execution:
@@ -95,6 +90,6 @@ artifacts:
   retention_mode: full
 
 strategies:
-  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml
-  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml
-  - ../strategies/intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml
+  - ../strategies/intraday-ema10-ema20-macd-volume.v1.yaml
+
+

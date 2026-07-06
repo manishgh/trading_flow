@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Market;
@@ -47,6 +47,12 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  warmup_lookback_days: {baseConfig.TimeWindow.WarmupLookbackDays}");
         yaml.AppendLine("  start:");
         yaml.AppendLine("  end:");
+        yaml.AppendLine();
+        yaml.AppendLine("universe:");
+        yaml.AppendLine("  source: wishlist");
+        yaml.AppendLine($"  wishlist_id: {request.WishlistId?.ToString() ?? String.Empty}");
+        yaml.AppendLine($"  wishlist_name: {request.WishlistName ?? String.Empty}");
+        yaml.AppendLine("  resolved_at_utc: " + DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
         yaml.AppendLine();
         yaml.AppendLine("tickers:");
         foreach (var ticker in request.Tickers.Select(x => x.Trim().ToUpperInvariant()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -111,7 +117,7 @@ public sealed class RunConfigWriter
         }
         yaml.AppendLine();
         yaml.AppendLine("artifacts:");
-        yaml.AppendLine("  retention_mode: summary");
+        yaml.AppendLine("  retention_mode: full");
         yaml.AppendLine();
         yaml.AppendLine("strategies:");
         foreach (var strategyPath in WriteStrategyConfigs(request, outputPath, runName))
@@ -212,7 +218,10 @@ public sealed class RunConfigWriter
         bool extendedHours = false,
         string? screenerFilter = null,
         string? runName = null,
-        bool? newsEnabled = null)
+        bool? newsEnabled = null,
+        Guid? wishlistId = null,
+        string? wishlistName = null,
+        string universeSource = "ephemeral")
     {
         var rawYaml = File.ReadAllText(baseConfigPath);
         var baseConfig = yamlReader.ReadBacktestRun(baseConfigPath);
@@ -343,6 +352,20 @@ public sealed class RunConfigWriter
         }
 
         newYaml.AppendLine();
+        newYaml.AppendLine("universe:");
+        newYaml.AppendLine($"  source: {universeSource}");
+        if (wishlistId is not null)
+        {
+            newYaml.AppendLine($"  wishlist_id: {wishlistId}");
+        }
+
+        if (!String.IsNullOrWhiteSpace(wishlistName))
+        {
+            newYaml.AppendLine($"  wishlist_name: {wishlistName}");
+        }
+
+        newYaml.AppendLine("  resolved_at_utc: " + DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        newYaml.AppendLine();
         newYaml.AppendLine("screener:");
         if (!string.IsNullOrWhiteSpace(screenerFilter) && screenerFilter != "[]")
         {
@@ -420,6 +443,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  require_ema20_above_ema50: {strategy.EntryRules.RequireEma20AboveEma50.ToString().ToLowerInvariant()}");
         AppendOptionalDecimal(yaml, "  max_vwap_extension_atr", strategy.EntryRules.MaxVwapExtensionAtr);
         yaml.AppendLine($"  opening_range_minutes: {strategy.EntryRules.OpeningRangeMinutes}");
+        yaml.AppendLine($"  opening_range_break_buffer: {strategy.EntryRules.OpeningRangeBreakBuffer.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  recent_high_lookback_bars: {strategy.EntryRules.RecentHighLookbackBars}");
         yaml.AppendLine($"  volatility_contraction_lookback_bars: {strategy.EntryRules.VolatilityContractionLookbackBars}");
         yaml.AppendLine($"  require_log_price_rising: {strategy.EntryRules.RequireLogPriceRising.ToString().ToLowerInvariant()}");
@@ -436,6 +460,16 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  vwap_hold_bars: {strategy.EntryRules.VwapHoldBars}");
         yaml.AppendLine($"  max_entries_per_ticker_per_day: {strategy.EntryRules.MaxEntriesPerTickerPerDay}");
         AppendOptionalDecimal(yaml, "  min_close_location_value", strategy.EntryRules.MinCloseLocationValue);
+        AppendOptionalDecimal(yaml, "  max_macd_histogram", strategy.EntryRules.MaxMacdHistogram);
+        yaml.AppendLine($"  prior_entry_gain_lookback_bars: {strategy.EntryRules.PriorEntryGainLookbackBars}");
+        AppendOptionalDecimal(yaml, "  max_prior_entry_gain_pct", strategy.EntryRules.MaxPriorEntryGainPct);
+        yaml.AppendLine($"  require_prior_inside_day: {strategy.EntryRules.RequirePriorInsideDay.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  require_prior_nr7: {strategy.EntryRules.RequirePriorNr7.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  prior_compression_mode: {strategy.EntryRules.PriorCompressionMode}");
+        yaml.AppendLine($"  prior_nr7_lookback_days: {strategy.EntryRules.PriorNr7LookbackDays}");
+        AppendOptionalDecimal(yaml, "  min_vwap_distance_atr_for_divergence", strategy.EntryRules.MinVwapDistanceAtrForDivergence);
+        yaml.AppendLine($"  divergence_lookback_bars: {strategy.EntryRules.DivergenceLookbackBars}");
+        yaml.AppendLine($"  divergence_start_hour: {strategy.EntryRules.DivergenceStartHour}");
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
@@ -495,6 +529,13 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  exit_on_sma10_cross_below_sma20: {strategy.ExitRules.ExitOnSma10CrossBelowSma20.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  exit_short_on_sma10_cross_above_sma20: {strategy.ExitRules.ExitShortOnSma10CrossAboveSma20.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  exit_on_ema10_cross_below_ema20: {strategy.ExitRules.ExitOnEma10CrossBelowEma20.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  allow_same_bar_stop_target: {strategy.ExitRules.AllowSameBarStopTarget.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  initial_stop_mode: {strategy.ExitRules.InitialStopMode}");
+        yaml.AppendLine($"  profit_target_mode: {strategy.ExitRules.ProfitTargetMode}");
+        yaml.AppendLine($"  enable_failed_breakout_circuit_breaker: {strategy.ExitRules.EnableFailedBreakoutCircuitBreaker.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  failed_breakout_bars: {strategy.ExitRules.FailedBreakoutBars}");
+        yaml.AppendLine($"  failed_breakout_min_r: {strategy.ExitRules.FailedBreakoutMinR.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  stop_tick_buffer: {strategy.ExitRules.StopTickBuffer.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine("execution:");
         yaml.AppendLine($"  timeframe: {strategy.Execution.Timeframe}");
         yaml.AppendLine($"  slippage_bps: {strategy.Execution.SlippageBps.ToString(CultureInfo.InvariantCulture)}");
@@ -635,3 +676,5 @@ public sealed class RunConfigWriter
         return Path.GetFullPath(path).Replace('\\', '/');
     }
 }
+
+

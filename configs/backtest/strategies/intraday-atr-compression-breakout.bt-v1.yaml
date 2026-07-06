@@ -1,0 +1,65 @@
+strategy_id: research.intraday-atr-compression-breakout.bt-v1
+strategy_name: RESEARCH Intraday - ATR Compression OR Breakout BT V1
+source: user_intraday_execution_spec_20260705
+version: 1
+timeframe: 5m
+direction: long_short
+entry_rules:
+  setup_type: atr_compression_breakout
+  short_setup_type: atr_compression_breakdown
+  enable_short: true
+  min_volume_spike: 1.5
+  min_volume_spike_source: cumulative_same_time
+  volume_confirmation_mode: hard_gate
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  min_short_entry_rsi: 0.0
+  max_short_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_below_vwap_for_short: false
+  require_macd_bearish_for_short: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  max_vwap_extension_atr:
+  opening_range_minutes: 15
+  opening_range_break_buffer: 0.10
+  recent_high_lookback_bars: 0
+  volatility_contraction_lookback_bars: 0
+  prior_compression_mode: inside_or_nr7
+  prior_nr7_lookback_days: 7
+  max_entries_per_ticker_per_day: 1
+confluence:
+  enabled: false
+  timeframe: 5m
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.0
+  target_r_multiple: 1.5
+  max_hold_hours: 6.5
+  initial_stop_mode: opening_range_opposite
+  profit_target_mode: r_multiple
+  enable_atr_trailing_stop: true
+  trailing_stop_atr_multiple: 1.0
+  trailing_activation_r: 1.5
+  enable_failed_breakout_circuit_breaker: true
+  failed_breakout_bars: 3
+  failed_breakout_min_r: 0.0
+  stop_tick_buffer: 0.01
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 3
+execution:
+  timeframe: 5m
+  slippage_bps: 10.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

@@ -125,4 +125,11 @@ public sealed record TradeSignal(
     decimal? CurrentObv = null,
     decimal? PreviousObv = null,
     bool IsObvRising = false,
-    decimal? ObvChange = null);
+    decimal? ObvChange = null,
+    decimal? MacdHistogram = null,
+    decimal? PriorEntryGainPct = null,
+    bool IsPriorInsideDay = false,
+    bool IsPriorNr7 = false,
+    bool IsMacdBullishDivergenceFade = false,
+    bool IsMacdBearishDivergenceFade = false,
+    decimal? VwapDistanceAtr = null);

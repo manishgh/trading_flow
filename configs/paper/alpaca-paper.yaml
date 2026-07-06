@@ -1,4 +1,4 @@
-run_name: local-alpaca-paper
+﻿run_name: local-alpaca-paper
 mode: paper
 
 engine:
@@ -16,9 +16,6 @@ time_window:
   end:
 
 tickers:
-  - MU
-  - NVDA
-  - AMD
 
 market_data:
   provider: alpaca
@@ -71,7 +68,7 @@ validation:
     max_invalid_ohlc_bars: 0
     max_zero_volume_pct: 10.0
   bias_risk:
-    universe_source: static_config
+    universe_source: wishlist
     universe_as_of_date:
     price_adjustment_policy: alpaca_sip
 
@@ -103,7 +100,9 @@ news:
     negative_threshold: -0.6
 
 artifacts:
-  retention_mode: summary
+  retention_mode: full
 
 strategies:
-  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v9-confirmed-reclaim.yaml
+  - ../strategies/intraday-ema10-ema20-macd-volume.v1.yaml
+
+

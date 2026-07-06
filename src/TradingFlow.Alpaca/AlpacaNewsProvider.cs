@@ -16,10 +16,11 @@ namespace TradingFlow.Alpaca;
 
 public sealed class AlpacaNewsProvider : ICatalystProvider
 {
+    private sealed record CachedArticleSentiment(decimal Score);
     private const int PageLimit = 50;
     private const int MaxPages = 10;
     private const int MaxConcurrentSentimentRequests = 4;
-    private static readonly ConcurrentDictionary<string, CatalystEvent> ArticleCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, CachedArticleSentiment> ArticleSentimentCache = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly HttpClient _httpClient;
     private readonly AlpacaOptions _options;
@@ -73,6 +74,7 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
                 return events;
             }
 
+            var receivedAt = DateTimeOffset.UtcNow;
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
             using var doc = JsonDocument.Parse(content);
             if (!doc.RootElement.TryGetProperty("news", out var newsArray))
@@ -95,9 +97,9 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
                 }
 
                 var cacheKey = $"{ProviderName}:{article.Id}";
-                if (ArticleCache.TryGetValue(cacheKey, out var cachedEvent))
+                if (ArticleSentimentCache.TryGetValue(cacheKey, out var cachedSentiment))
                 {
-                    events.Add(cachedEvent);
+                    events.Add(BuildCatalystEvent(ticker, article, cachedSentiment.Score, receivedAt));
                     continue;
                 }
 
@@ -146,34 +148,22 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         CancellationToken cancellationToken)
     {
         var cacheKey = $"{ProviderName}:{article.Id}";
-        if (ArticleCache.TryGetValue(cacheKey, out var cachedEvent))
+        if (ArticleSentimentCache.TryGetValue(cacheKey, out var cachedSentiment))
         {
-            return cachedEvent;
+            return BuildCatalystEvent(ticker, article, cachedSentiment.Score, DateTimeOffset.UtcNow);
         }
 
         await throttle.WaitAsync(cancellationToken);
         try
         {
-            if (ArticleCache.TryGetValue(cacheKey, out cachedEvent))
+            if (ArticleSentimentCache.TryGetValue(cacheKey, out cachedSentiment))
             {
-                return cachedEvent;
+                return BuildCatalystEvent(ticker, article, cachedSentiment.Score, DateTimeOffset.UtcNow);
             }
 
             var sentiment = await _sentimentAnalyzer.AnalyzeAsync(article, cancellationToken);
-            var catalyst = new CatalystEvent(
-                ticker.ToUpperInvariant(),
-                article.CreatedAt,
-                CatalystType.NewsReport,
-                article.Headline,
-                sentiment.Score,
-                ProviderName,
-                article.Id,
-                article.Summary,
-                article.Source,
-                article.Url);
-
-            ArticleCache.TryAdd(cacheKey, catalyst);
-            return catalyst;
+            ArticleSentimentCache.TryAdd(cacheKey, new CachedArticleSentiment(sentiment.Score));
+            return BuildCatalystEvent(ticker, article, sentiment.Score, DateTimeOffset.UtcNow);
         }
         finally
         {
@@ -181,6 +171,22 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         }
     }
 
+
+    private static CatalystEvent BuildCatalystEvent(string ticker, NewsArticle article, decimal sentimentScore, DateTimeOffset receivedAt)
+    {
+        return new CatalystEvent(
+            ticker.ToUpperInvariant(),
+            article.CreatedAt,
+            CatalystType.NewsReport,
+            article.Headline,
+            sentimentScore,
+            article.Provider,
+            article.Id,
+            article.Summary,
+            article.Source,
+            article.Url,
+            receivedAt);
+    }
     private void SetHeader(string name, string value)
     {
         if (_httpClient.DefaultRequestHeaders.Contains(name))

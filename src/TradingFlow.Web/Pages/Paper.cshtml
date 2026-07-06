@@ -4,7 +4,13 @@
     ViewData["Title"] = "Paper Trading Lab";
     var selectedConfig = Model.Configs.FirstOrDefault(c => c.Path == Model.ConfigPath);
     var selectedStrategy = Model.Strategies.FirstOrDefault(s => s.Path == Model.SelectedStrategyPath);
-    var tickersCsv = selectedConfig != null ? String.Join(", ", selectedConfig.Config.Tickers) : "";
+    string AuditLine(TradingFlow.Web.Models.StrategyOption strategy)
+    {
+        var audit = strategy.Audit;
+        return audit is null
+            ? "Audit: not available"
+            : $"Audit: {audit.ReturnPct:+0.##;-0.##;0}% / DD {audit.MaxDrawdownPct:0.##}% / {audit.Trades} trades / win {audit.WinRatePct:0.#}% / avg hold {audit.AverageHold}";
+    }
 }
 
 <div class="paper-page">
@@ -23,7 +29,6 @@
             <h2>Wishlist + Finviz</h2>
             <div class="muted" style="margin-bottom: 1rem;">Paper trading universe is the selected wishlist plus optional Finviz screener results.</div>
             <input type="hidden" name="BaseConfigPath" id="BaseConfigPath" value="@Model.ConfigPath" />
-            <input type="hidden" name="TickersCsv" id="TickersCsv" value="@Model.WishlistTickersCsv" />
 
             <label for="WishlistId">Wishlist <span class="tf-help" title="Named ticker group stored in the database. This replaces the old paper-config ticker list.">?</span></label>
             <select name="WishlistId" id="WishlistId" onchange="window.location='?wishlistId=' + encodeURIComponent(this.value) + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '')">
@@ -67,9 +72,13 @@
             <select name="SelectedStrategyPath" id="SelectedStrategyDropdown" onchange="loadStrategyDetails(this.value)">
                 @foreach (var strategy in Model.Strategies)
                 {
-                    <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.FileName</option>
+                    <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.Definition.StrategyName - @AuditLine(strategy)</option>
                 }
             </select>
+            @if (selectedStrategy is not null)
+            {
+                <div class="muted" style="margin-top: 0.4rem;">@AuditLine(selectedStrategy)</div>
+            }
 
             <div style="background: #2a2a2a; border-left: 4px solid #007acc; padding: 1rem; margin-top: 1rem; border-radius: 4px; margin-bottom: 1rem;">
                 <h3 style="margin-top: 0; color: #66b3ff;">Quick Edit</h3>
@@ -349,7 +358,6 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        document.getElementById('TickersCsv').value = data.tickers;
                         document.getElementById('OrderExpirationDropdown').value = data.orderExpiration || 'gtc';
                         document.getElementById('EntryOrderTypeDropdown').value = data.entryOrderType || 'limit';
                         document.getElementById('ExtendedHoursCheckbox').checked = Boolean(data.extendedHours);

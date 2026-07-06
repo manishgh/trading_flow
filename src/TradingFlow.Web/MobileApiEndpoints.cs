@@ -40,6 +40,31 @@ public static class MobileApiEndpoints
             return wishlist is null ? Results.NotFound() : Results.Ok(ToMobileWishlist(wishlist));
         });
 
+        group.MapGet("/wishlists/{wishlistId:guid}/desk", async (
+            Guid wishlistId,
+            string? feed,
+            int? signalMinutes,
+            int? newsHours,
+            IWishlistRepository wishlists,
+            WishlistDeskService desk,
+            CancellationToken cancellationToken) =>
+        {
+            var wishlist = await wishlists.GetByIdAsync(wishlistId, cancellationToken);
+            if (wishlist is null)
+            {
+                return Results.NotFound();
+            }
+
+            var snapshot = await desk.BuildAsync(
+                wishlist,
+                String.IsNullOrWhiteSpace(feed) ? "sip" : feed,
+                TimeSpan.FromMinutes(Math.Clamp(signalMinutes ?? 20, 5, 240)),
+                TimeSpan.FromHours(Math.Clamp(newsHours ?? 4, 1, 24)),
+                cancellationToken);
+
+            return Results.Ok(ToMobileWishlistDesk(wishlist, snapshot));
+        });
+
         group.MapPost("/wishlists", async (
             MobileWishlistSaveRequest request,
             IWishlistRepository wishlists,
@@ -173,8 +198,17 @@ public static class MobileApiEndpoints
             RunConfigWriter configWriter,
             PaperJobService paperJobs,
             WishlistUniverseResolver universeResolver,
+            IWishlistRepository wishlists,
             CancellationToken cancellationToken) =>
         {
+            var wishlist = request.WishlistId is { } wishlistId
+                ? await wishlists.GetByIdAsync(wishlistId, cancellationToken)
+                : null;
+            if (request.WishlistId is not null && wishlist is null)
+            {
+                return Results.NotFound($"Wishlist {request.WishlistId.Value} does not exist.");
+            }
+
             IReadOnlyList<string> tickers;
             try
             {
@@ -202,7 +236,10 @@ public static class MobileApiEndpoints
                 request.ExtendedHours,
                 request.ScreenerFilter,
                 runName,
-                request.NewsEnabled);
+                request.NewsEnabled,
+                wishlist?.Id,
+                wishlist?.Name,
+                wishlist is null ? "ephemeral" : "wishlist");
             return Results.Ok(paperJobs.Start(runName, configPath));
         });
 
@@ -222,6 +259,12 @@ public static class MobileApiEndpoints
         {
             var positions = await paperJobs.GetOpenPositionsAsync(jobId);
             return Results.Ok(positions.Select(ToMobilePaperPosition).ToArray());
+        });
+
+        group.MapPost("/paper/jobs/{jobId:guid}/positions/{ticker}/close", async (Guid jobId, string ticker, PaperJobService paperJobs) =>
+        {
+            var closed = await paperJobs.ClosePositionAsync(jobId, ticker);
+            return closed ? Results.Ok() : Results.BadRequest($"Could not close {ticker} for this run.");
         });
 
         group.MapGet("/automation/sessions", (MobileAutomationService automation) =>
@@ -269,6 +312,25 @@ public static class MobileApiEndpoints
             return Results.Accepted($"/api/mobile/automation/sessions/{sessionId}");
         });
 
+        group.MapPost("/automation/sessions/{sessionId:guid}/close", async (Guid sessionId, MobileAutomationService automation) =>
+        {
+            var closed = await automation.CloseAsync(sessionId);
+            return closed ? Results.Ok() : Results.BadRequest("Could not close this automation position.");
+        });
+
+        group.MapGet("/running-trades", async (
+            string? source,
+            PaperJobService paperJobs,
+            MobileAutomationService automation) =>
+        {
+            var trades = await RunningTradesBuilder.BuildAsync(paperJobs, automation);
+            var filtered = RunningTradesBuilder.Filter(trades, source);
+            return Results.Ok(new MobileRunningTradesResponse(
+                filtered,
+                filtered.Sum(trade => trade.UnrealizedPl),
+                filtered.Count));
+        });
+
         group.MapGet("/backtests/jobs", (BacktestJobService backtestJobs) =>
             Results.Ok(backtestJobs.List()));
 
@@ -278,10 +340,12 @@ public static class MobileApiEndpoints
             return job is null ? Results.NotFound() : Results.Ok(job);
         });
 
-        group.MapPost("/backtests/runs", (
+        group.MapPost("/backtests/runs", async (
             MobileBacktestRunRequest request,
             RunConfigWriter configWriter,
-            BacktestJobService backtestJobs) =>
+            BacktestJobService backtestJobs,
+            IWishlistRepository wishlists,
+            CancellationToken cancellationToken) =>
         {
             var strategyPaths = request.StrategyPaths
                 .Where(path => !String.IsNullOrWhiteSpace(path))
@@ -295,11 +359,35 @@ public static class MobileApiEndpoints
             var runName = String.IsNullOrWhiteSpace(request.RunName)
                 ? $"backtest_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}"
                 : request.RunName.Trim();
+            if (request.WishlistId is null)
+            {
+                return Results.BadRequest("Select a wishlist for the backtest universe.");
+            }
+
+            var wishlist = await wishlists.GetByIdAsync(request.WishlistId.Value, cancellationToken);
+            if (wishlist is null)
+            {
+                return Results.NotFound($"Wishlist {request.WishlistId.Value} does not exist.");
+            }
+
+            var tickers = wishlist.Items
+                .Where(item => item.Active)
+                .Select(item => item.Ticker.Trim().ToUpperInvariant())
+                .Where(ticker => ticker.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (tickers.Length == 0)
+            {
+                return Results.BadRequest($"Wishlist {wishlist.Name} has no active tickers.");
+            }
+
             var configPath = configWriter.WriteBacktestConfig(new BacktestRunRequest(
                 request.BaseConfigPath,
                 runName,
                 request.LookbackDays,
-                request.Tickers,
+                wishlist.Id,
+                wishlist.Name,
+                tickers,
                 strategyPaths,
                 request.StartingCapital,
                 request.RiskPerTradePct,
@@ -534,6 +622,44 @@ public static class MobileApiEndpoints
             signal.NewsProvider,
             signal.Acknowledged);
     }
+
+    private static MobileWishlistDeskResponse ToMobileWishlistDesk(Wishlist wishlist, WishlistDeskSnapshot snapshot)
+    {
+        return new MobileWishlistDeskResponse(
+            ToMobileWishlist(wishlist),
+            snapshot.Rows.Select(ToMobileWishlistDeskRow).ToArray(),
+            snapshot.RecentSignals.Select(ToMobileWishlistSignal).ToArray(),
+            snapshot.RelatedNews,
+            snapshot.RunningTrades,
+            snapshot.TotalPl);
+    }
+
+    private static MobileWishlistDeskRowResponse ToMobileWishlistDeskRow(WishlistDeskRow row)
+    {
+        return new MobileWishlistDeskRowResponse(
+            ToMobileWishlistItem(row.Item),
+            row.Ticker,
+            row.DisplayName,
+            row.Quote.BidPrice,
+            row.Quote.AskPrice,
+            row.Quote.MidPrice,
+            row.Quote.DisplayBid,
+            row.Quote.DisplayAsk,
+            row.Quote.DisplayPrice,
+            row.Quote.BuyCaption,
+            row.Quote.SellCaption,
+            row.Quote.Timestamp,
+            row.HasQuote,
+            row.HasTrade,
+            row.HasSignal,
+            row.HasNews,
+            row.EligibilityLabel,
+            row.EligibilityReason,
+            row.LatestSignal is null ? null : ToMobileWishlistSignal(row.LatestSignal),
+            row.LatestNews,
+            row.Trade);
+    }
+
     private static MobilePaperPositionResponse ToMobilePaperPosition(BrokerPosition position)
     {
         return new MobilePaperPositionResponse(
@@ -570,7 +696,13 @@ public static class MobileApiEndpoints
             strategy.Timeframe,
             strategy.Execution.Timeframe,
             strategy.EntryRules.SetupType,
-            UsesNews(strategy));
+            UsesNews(strategy),
+            option.Audit?.ReturnPct,
+            option.Audit?.MaxDrawdownPct,
+            option.Audit?.Trades,
+            option.Audit?.WinRatePct,
+            option.Audit?.AverageHold,
+            option.Audit?.ResultPath);
     }
 
     private static bool UsesNews(StrategyDefinition strategy)
@@ -656,8 +788,3 @@ public static class MobileApiEndpoints
         }
     }
 }
-
-
-
-
-

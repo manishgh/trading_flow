@@ -30,6 +30,7 @@ public sealed record EntryRules(
     int OpeningRangeMinutes,
     int RecentHighLookbackBars,
     int VolatilityContractionLookbackBars,
+    decimal OpeningRangeBreakBuffer = 0m,
     bool RequireLogPriceRising = false,
     bool RequireLogVolumeRising = false,
     int LogPriceLookbackBars = 12,
@@ -177,7 +178,17 @@ public sealed record EntryRules(
     int AdxRisingLookbackBars = 3,
     bool RequireObvRising = false,
     int ObvRisingLookbackBars = 3,
-    decimal? MinObvChange = null);
+    decimal? MinObvChange = null,
+    decimal? MaxMacdHistogram = null,
+    int PriorEntryGainLookbackBars = 5,
+    decimal? MaxPriorEntryGainPct = null,
+    bool RequirePriorInsideDay = false,
+    bool RequirePriorNr7 = false,
+    string PriorCompressionMode = "none",
+    int PriorNr7LookbackDays = 7,
+    decimal? MinVwapDistanceAtrForDivergence = null,
+    int DivergenceLookbackBars = 20,
+    int DivergenceStartHour = 12);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,
@@ -205,7 +216,14 @@ public sealed record ExitRules(
     decimal Sma10NearSma20Pct = 0.25m,
     bool ExitOnSma10CrossBelowSma20 = false,
     bool ExitShortOnSma10CrossAboveSma20 = false,
-    bool ExitOnEma10CrossBelowEma20 = false);
+    bool ExitOnEma10CrossBelowEma20 = false,
+    bool AllowSameBarStopTarget = true,
+    string InitialStopMode = "atr",
+    string ProfitTargetMode = "r_multiple",
+    bool EnableFailedBreakoutCircuitBreaker = false,
+    int FailedBreakoutBars = 3,
+    decimal FailedBreakoutMinR = 0m,
+    decimal StopTickBuffer = 0.01m);
 
 public sealed record ConfluenceRules(
     bool Enabled,
@@ -223,4 +241,5 @@ public sealed record SessionRules(
     int QuietMinutesAfterOpen,
     int CloseBufferMinutes,
     int FridayCloseBufferMinutes,
-    bool IsContinuousMarket = false);
+    bool IsContinuousMarket = false,
+    bool UseExtendedHours = false);

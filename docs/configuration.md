@@ -1,23 +1,31 @@
-# Configuration
+﻿# Configuration
 
-`trading_flow` uses one run file per mode plus shared strategy files.
+`trading_flow` uses small run profiles per mode plus shared strategy files.
+Ticker universes for backtests and paper trading come from database wishlists,
+not from hand-maintained YAML ticker lists. The generated per-run files are
+audit artifacts that capture the resolved wishlist/ticker snapshot used by that
+specific run.
 
 ```text
 configs/
-  backtest/poet-mxl-rgti-mu-msft-intraday-v6-lite-90d.yaml
+  backtest/intraday-backtest-profile.yaml
+  backtest/swing-backtest-profile.yaml
+  backtest/strategies/*.yaml
   paper/alpaca-paper.yaml
+  paper/alpaca-paper-swing.yaml
   live/local-live-disabled.yaml
   strategies/*.yaml
 ```
 
-Backtest, paper, and live configs have the same structure. Mode changes the data roots and execution sink, not the strategy brain.
+Backtest, paper, and live profiles keep the same shape. Mode changes the data
+roots and execution sink, not the strategy brain.
 
-## Run Config
+## Run Profile
 
-Example: `configs/backtest/poet-mxl-rgti-mu-msft-intraday-v6-lite-90d.yaml`
+Example: `configs/backtest/intraday-backtest-profile.yaml`
 
 ```yaml
-run_name: poet-mxl-rgti-mu-msft-intraday-v6-lite-90d
+run_name: intraday-backtest-profile
 mode: backtest
 
 engine:
@@ -28,28 +36,29 @@ engine:
   fail_fast: false
 
 time_window:
-  type: fixed
-  lookback_days: 0
+  type: rolling
+  lookback_days: 60
   warmup_lookback_days: 90
 
+tickers:
+
 market_data:
-  provider: csv
+  provider: alpaca
   download_timeframes:
     - 1m
     - 5m
   derive_from: 1m
-  raw_root: C:/project/trading_flow/data/backtest/raw
-  normalized_root: C:/project/trading_flow/data/backtest/normalized/20260313-20260613
-  results_root: C:/project/trading_flow/data/backtest/results
-  cache_policy: bypass
+  raw_root: data/backtest/raw
+  normalized_root: data/backtest/normalized
+  results_root: data/backtest/results
+  cache_policy: use_cache
 
 providers:
   alpaca:
     data_feed: sip
 
 strategies:
-  - ../strategies/intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml
-  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml
+  - ../strategies/intraday-ema10-ema20-macd-volume.v1.yaml
 ```
 
 ## Providers
@@ -134,14 +143,14 @@ Set `TRADINGFLOW_RESULT_OWNER` to override the owner.
 
 ## Artifact Retention
 
-Runtime UI and worker runs keep summary artifacts by default:
+Runtime UI, worker, paper, and research runs keep full audit artifacts by default:
 
 ```yaml
 artifacts:
-  retention_mode: summary
+  retention_mode: full
 ```
 
-`summary` preserves portfolio metrics, winner, ticker outcomes, validation, diagnostics, and trade counts, but does not persist trade-level arrays or accepted order detail. Use `retention_mode: full` only for explicit research/archive runs where full trade detail is required.
+`full` preserves portfolio metrics, winner, ticker outcomes, validation, diagnostics, trade-level arrays, and accepted order detail. Use `retention_mode: summary` only for intentionally lightweight optimization runs where full replay/audit is not required.
 
 ## Portfolio Allocation
 
@@ -160,9 +169,12 @@ portfolio:
 
 ## Strategy Families
 
-Supported `entry_rules.setup_type` values in the retained strategy set:
+Supported `entry_rules.setup_type` values in the retained and research strategy set include:
 
 - `indicator_stack`
+- `vwap_pullback`
+- `atr_compression_breakout`
+- `macd_divergence_fade`
 - `swing_reclaim`
 - `swing_rollover`
 - `avwap_pullback_bounce`
@@ -172,17 +184,37 @@ Supported `entry_rules.setup_type` values in the retained strategy set:
 
 Current active strategy files:
 
-- `intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml`
-- `intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml`
+- `intraday-ema10-ema20-macd-volume.v1.yaml`
 - `swing-reversal-reclaim-bull-quality-no-news.v1.yaml`
 - `swing-overbought-rollover-short-no-news.v5.yaml`
+- `minervini-trend-template-vcp.v4-trend-rider.yaml`
 - `brian_shannon_mta_avwap_strategies.yaml`
 - `kristjan_qullamaggie_stream_methodology.yaml`
 - `lance_breitstein_intraday_tactics.yaml`
-- `mark_minervini_trade_like_a_stock_market_wizard.yaml`
 - `minervini-trend-template-vcp.v2.yaml`
 
-The promoted day-trading pair uses RSI for audit context and broad filtering only. Entry is driven by the indicator stack: price above VWAP, price above EMA10/EMA20, EMA10 above EMA20, MACD not bearish, and volume participation checks. V6 Lite adds the stronger dual-RVOL gate; V3 keeps the simpler baseline with structural exits.
+Research-only backtest strategies are stored under `configs/backtest/strategies`. They are intentionally excluded from paper/live promotion until their result is positive, audited, and captured in the strategy ledger.
+
+The promoted day-trading strategy uses RSI for audit context and broad filtering only. Entry is driven by the indicator stack: price above VWAP, price above EMA10/EMA20, EMA10 above EMA20, MACD histogram bullish, and cumulative same-time volume participation.
+
+## Execution Rule Fields
+
+The strategy engine supports generic execution fields:
+
+```yaml
+entry_rules:
+  opening_range_break_buffer: 0.10
+
+exit_rules:
+  initial_stop_mode: atr                 # atr | vwap_minus_atr | vwap_plus_atr | opening_range_opposite | extreme_shadow
+  profit_target_mode: r_multiple         # r_multiple | vwap
+  enable_failed_breakout_circuit_breaker: true
+  failed_breakout_bars: 3
+  failed_breakout_min_r: 0.0
+  stop_tick_buffer: 0.01
+```
+
+Partial exits are not config-supported yet. A strategy can set one full-position target, stop, trailing stop, max hold, or technical exit. Scale-out rules need a trade-lot model before they are production safe.
 
 
 ## Current Pipeline
@@ -196,3 +228,5 @@ Backtest and paper/live modes prepare market data through the same bounded TPL D
 5. Compute indicator snapshots after the configured warm-up history is available.
 6. Run per-ticker strategy workers from prepared market state.
 7. Emit chart metrics, decision audits, portfolio results, and the top-level `Winner` block where applicable.
+
+

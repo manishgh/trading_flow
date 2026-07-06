@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TradingFlow.Mobile.Pages.RunningTradesPage"
+             Title="Trades">
+    <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
+        <ScrollView>
+            <VerticalStackLayout Padding="12" Spacing="10">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <Label Text="Running Trades" Style="{StaticResource Headline}" FontSize="22" />
+                    <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+                </Grid>
+
+                <Border Style="{StaticResource CardBorder}" Padding="10">
+                    <VerticalStackLayout Spacing="6">
+                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="12" LineBreakMode="TailTruncation" />
+                        <Label x:Name="TotalLabel" Text="Total P/L --" FontSize="20" FontAttributes="Bold" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="6">
+                    <Button x:Name="AllButton" Text="All" Clicked="OnSourceSelected" CommandParameter="all" Padding="6,6" FontSize="12" />
+                    <Button x:Name="WishlistButton" Grid.Column="1" Text="Wishlist" Clicked="OnSourceSelected" CommandParameter="wishlist" Padding="6,6" FontSize="12" />
+                    <Button x:Name="StockPulseButton" Grid.Column="2" Text="Pulse" Clicked="OnSourceSelected" CommandParameter="stockpulse" Padding="6,6" FontSize="12" />
+                    <Button x:Name="ManualButton" Grid.Column="3" Text="Manual" Clicked="OnSourceSelected" CommandParameter="manual" Padding="6,6" FontSize="12" />
+                </Grid>
+
+                <CollectionView x:Name="TradesView" HeightRequest="520">
+                    <CollectionView.EmptyView>
+                        <Label Text="No running trades for this source." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="10">
+                                <VerticalStackLayout Spacing="6">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <VerticalStackLayout Spacing="0">
+                                            <Label Text="{Binding Trade.HeaderText}" FontAttributes="Bold" FontSize="16" />
+                                            <Label Text="{Binding Trade.DetailText}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="1" />
+                                        </VerticalStackLayout>
+                                        <Label Grid.Column="1" Text="{Binding Trade.PlText}" FontAttributes="Bold" FontSize="15" TextColor="{Binding PlColor}" VerticalTextAlignment="Center" HorizontalTextAlignment="End" />
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <Label Text="{Binding Trade.PriceText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" VerticalTextAlignment="Center" />
+                                        <Button Grid.Column="1" Text="Sell" Clicked="OnSell" CommandParameter="{Binding .}" Padding="16,6" BackgroundColor="#B42318" />
+                                    </Grid>
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </VerticalStackLayout>
+        </ScrollView>
+    </RefreshView>
+</ContentPage>

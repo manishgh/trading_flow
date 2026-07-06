@@ -1,4 +1,4 @@
-# Architecture
+﻿# Architecture
 
 ## Current System View
 
@@ -46,6 +46,31 @@ OHLCV candles
 
 The source and sink change by mode. The brain does not.
 
+## Strategy Catalog Separation
+
+Strategies are separated by evidence level:
+
+```text
+configs/strategies/
+  promoted/runtime strategies that may appear in paper/backtest UI
+
+configs/backtest/strategies/
+  research-only strategies used for experiments and audits
+```
+
+Do not mutate a promoted strategy for experiments. Copy it into the research/backtest strategy area, change the copy, run it, capture the result in `docs/strategy-last-runs.md`, and promote only after verification.
+
+The July 2026 intraday execution spec is implemented as research-only. The shared engine now supports generic execution primitives for those configs:
+
+- opening-range breakout/breakdown buffers
+- prior inside-day / NR7 compression gates
+- VWAP-minus-ATR and opening-range-opposite stop modes
+- extreme-shadow stop mode for divergence fades
+- VWAP profit target mode
+- failed-breakout circuit breaker
+
+Partial exits are not supported yet because `BacktestTrade` currently represents one entry and one full-position exit. Supporting partial exits requires trade execution legs and per-leg realized P/L.
+
 ## Web UI
 
 `TradingFlow.Web` is an ASP.NET Core Razor Pages app for local research and paper operations:
@@ -56,15 +81,15 @@ Dashboard
   -> quick navigation
 
 Backtest Lab
-  -> read shared configs and strategy YAML
-  -> select tickers and strategies
+  -> read wishlist universe and strategy YAML
+  -> select wishlist/Finviz universe and strategies
   -> edit strategy parameters
   -> generate config under configs/backtest/ui-runs
   -> run BacktestRunner in background
   -> preview winner, trades, diagnostics, and analyzer suggestions
 
 Paper Lab
-  -> read paper config
+  -> resolve selected wishlist and paper profile
   -> validate Alpaca credentials with read-only checks
   -> launch and monitor paper jobs
   -> show live market metrics, broker orders/positions, profiler data, and decision audits
@@ -108,7 +133,7 @@ data/live/raw,     data/live/normalized,     data/live/results
 
 Backtest data can be refreshed and deleted freely. Paper/live data is operational state and must be preserved unless explicitly cleaned.
 
-Runtime artifacts and research artifacts are intentionally separate. Backtest, paper, and worker jobs default to summary result JSON so UI polling and repeated optimization runs do not accumulate full trade detail. Research configs can opt into `artifacts.retention_mode: full` when the full trade/order archive is needed for deeper analysis.
+Runtime artifacts and research artifacts are intentionally separate, but current research/paper operation defaults to full audit retention. Full retention keeps trade-level detail, rejection context, diagnostics, and accepted order detail so failed strategies can be explained without rerunning. Heavy optimization jobs may explicitly opt down to `artifacts.retention_mode: summary` only when trade-level replay is not needed.
 
 ## Azure Storage Model
 
@@ -156,3 +181,4 @@ Important rules:
 - Buffers are bounded so slow broker/audit sinks apply backpressure.
 - Alpaca batched reads fetch many symbols per timeframe, then fan out into candle events.
 - `TradingFlow.Web` does not compute indicators or strategy decisions; it resolves config/credentials and calls module APIs.
+

@@ -199,6 +199,44 @@ if (args.Length > 0 && args[0].Equals("catalyst-trend", StringComparison.Ordinal
     return;
 }
 
+if (args.Length > 0 && args[0].Equals("catalyst-event-study", StringComparison.OrdinalIgnoreCase))
+{
+    var eventStudyConfigPath = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
+        ? args[1]
+        : throw new ArgumentException("Backtest or research config path required.");
+    var reader = new SimpleYamlReader();
+    var run = reader.ReadBacktestRun(eventStudyConfigPath);
+    var lookbackDays = ParseIntOption(args, "--days") ?? run.TimeWindow.LookbackDays;
+    var candleTimeframe = ParseStringOption(args, "--timeframe") ?? run.Intervals.FirstOrDefault() ?? "5m";
+    var end = ParseDateOption(args, "--end") ?? DateTimeOffset.UtcNow;
+    var start = end.AddDays(-lookbackDays);
+    var tickers = ResolveCsvTickers(ParseStringOption(args, "--tickers"), run.Tickers);
+    var outputPath = ParseStringOption(args, "--output") ??
+        Path.Combine(
+            "data",
+            "research",
+            "catalysts",
+            $"event-study-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
+
+    var report = await BuildCatalystEventStudyReportAsync(
+        run,
+        tickers,
+        start,
+        end,
+        candleTimeframe,
+        CancellationToken.None);
+
+    var json = JsonSerializer.Serialize(report, serializerOptions);
+    await AtomicFileArtifactWriter.Instance.WriteTextAsync(outputPath, json, CancellationToken.None);
+    if (!ParseFlag(args, "--quiet"))
+    {
+        Console.WriteLine(json);
+    }
+
+    Console.WriteLine($"Observations={report.Observations.Count} Buckets={report.Buckets.Count}");
+    Console.WriteLine($"ReportPath={Path.GetFullPath(outputPath)}");
+    return;
+}
 if (args.Length > 0 && args[0].Equals("analyze-swing", StringComparison.OrdinalIgnoreCase))
 {
     var resultPath = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
@@ -452,6 +490,61 @@ static TradingFlow.Engine.Abstractions.ISentimentAnalyzer CreateSentimentAnalyze
     return new TradingFlow.Alpaca.VaderSentimentAnalyzer();
 }
 
+static async Task<CatalystEventStudyReport> BuildCatalystEventStudyReportAsync(
+    TradingFlow.Domain.Backtesting.BacktestRunConfig run,
+    IReadOnlyList<string> tickers,
+    DateTimeOffset start,
+    DateTimeOffset end,
+    string candleTimeframe,
+    CancellationToken cancellationToken)
+{
+    var marketProvider = CreateProvider(run);
+    var catalystProvider = CreateRawNewsProvider(run);
+    var barsByTicker = tickers.ToDictionary(
+        ticker => ticker,
+        _ => (IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar>)Array.Empty<TradingFlow.Domain.Market.OhlcvBar>(),
+        StringComparer.OrdinalIgnoreCase);
+    var loadedBars = new List<TradingFlow.Domain.Market.OhlcvBar>();
+    await foreach (var bar in marketProvider.GetBarsAsync(tickers, [candleTimeframe], start, end, cancellationToken))
+    {
+        loadedBars.Add(bar);
+    }
+
+    barsByTicker = loadedBars
+        .Where(x => x.Timeframe.Equals(candleTimeframe, StringComparison.OrdinalIgnoreCase))
+        .GroupBy(x => x.Ticker.ToUpperInvariant(), StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(
+            x => x.Key,
+            x => (IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar>)x.OrderBy(bar => bar.Timestamp).ToArray(),
+            StringComparer.OrdinalIgnoreCase);
+
+    var catalystsByTicker = new Dictionary<string, IReadOnlyList<TradingFlow.Domain.Market.CatalystEvent>>(StringComparer.OrdinalIgnoreCase);
+    if (catalystProvider is not null)
+    {
+        foreach (var ticker in tickers)
+        {
+            try
+            {
+                var catalysts = await catalystProvider.GetCatalystsAsync(ticker, start, end, cancellationToken);
+                catalystsByTicker[ticker] = catalysts.OrderBy(x => x.Timestamp).ToArray();
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss} catalyst_event_study: {ticker} catalyst load failed: {exception.Message}");
+                catalystsByTicker[ticker] = Array.Empty<TradingFlow.Domain.Market.CatalystEvent>();
+            }
+        }
+    }
+
+    var runner = new CatalystTechnicalEventStudyRunner();
+    return runner.Analyze(
+        barsByTicker,
+        catalystsByTicker,
+        start,
+        end,
+        candleTimeframe,
+        new CatalystEventStudyOptions());
+}
 static async Task<object> BuildCatalystTrendReportAsync(
     string ticker,
     DateTimeOffset start,
@@ -729,6 +822,18 @@ static string ResolveWarmOutputRoot(string normalizedRoot, int lookbackDays)
     return Path.Combine(fullRoot, segment);
 }
 
+static IReadOnlyList<string> ResolveCsvTickers(string? tickersCsv, IReadOnlyList<string> fallbackTickers)
+{
+    var source = String.IsNullOrWhiteSpace(tickersCsv)
+        ? fallbackTickers
+        : tickersCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    return source
+        .Select(x => x.Trim().ToUpperInvariant())
+        .Where(x => !String.IsNullOrWhiteSpace(x))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(x => x)
+        .ToArray();
+}
 static IReadOnlyList<string> ResolveSwingAnalysisTickers(
     TradingFlow.Domain.Backtesting.BacktestResult result,
     string strategyName,

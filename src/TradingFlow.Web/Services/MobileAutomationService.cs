@@ -150,6 +150,70 @@ public sealed class MobileAutomationService
         _ = PersistAsync();
     }
 
+    /// <summary>
+    /// Manually closes (sells) the broker position tracked by a session and ends its
+    /// monitoring loop. Used by the Running Trades "Sell" action.
+    /// </summary>
+    public async Task<bool> CloseAsync(Guid sessionId, CancellationToken cancellationToken = default)
+    {
+        if (!sessions.TryGetValue(sessionId, out var session))
+        {
+            return false;
+        }
+
+        var runConfig = runtimeFactory.ResolveRunPaths(yamlReader.ReadBacktestRun(session.ConfigPath));
+        var brokerClient = runtimeFactory.CreateBrokerClient(runConfig);
+        if (brokerClient is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            var quantity = session.ShareQuantity ?? 0;
+            if (quantity <= 0)
+            {
+                session.Report("close_rejected", $"Cannot close {session.Ticker}; session quantity is unavailable.");
+                await PersistAsync(cancellationToken);
+                return false;
+            }
+
+            await CancelOpenSellOrdersForTickerAsync(brokerClient, session.Ticker, cts.Token);
+
+            var closed = await brokerClient.ClosePositionAsync(session.Ticker, quantity, cts.Token);
+            if (closed)
+            {
+                if (cancellationTokens.TryGetValue(sessionId, out var monitorCts))
+                {
+                    monitorCts.Cancel();
+                }
+
+                session.Status = "completed";
+                session.FinishedAt = DateTimeOffset.UtcNow;
+                session.ExitSubmittedAt = DateTimeOffset.UtcNow;
+                session.ExitReason = "manual_sell";
+                session.Report("completed", $"Manually sold {session.Ticker} from Running Trades.");
+                await PersistAsync(cancellationToken);
+            }
+
+            return closed;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Failed to manually close automation session {SessionId} for {Ticker}.", sessionId, session.Ticker);
+            return false;
+        }
+        finally
+        {
+            if (brokerClient is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+    }
+
     private async Task RunAsync(
         MutableAutomationSession session,
         BacktestRunConfig runConfig,
@@ -359,7 +423,16 @@ public sealed class MobileAutomationService
                     }
                 }
 
-                var closed = await brokerClient.ClosePositionAsync(session.Ticker, cancellationToken);
+                var closeQuantity = session.ShareQuantity ?? (int)Math.Floor(position.Qty);
+                if (closeQuantity <= 0)
+                {
+                    session.Report("exit_rejected", $"Exit triggered for {session.Ticker}, but close quantity was unavailable.");
+                    await PersistAsync(cancellationToken);
+                    await Task.Delay(pollingInterval, cancellationToken);
+                    continue;
+                }
+
+                var closed = await brokerClient.ClosePositionAsync(session.Ticker, closeQuantity, cancellationToken);
                 if (closed)
                 {
                     session.Status = "completed";
@@ -413,6 +486,31 @@ public sealed class MobileAutomationService
             session.Report("monitoring", $"Holding {session.Ticker}. Last {position.CurrentPrice:F2}, unrealized {position.UnrealizedPl:F2}. Guardian={guardianDecision.Reason}.");
             await PersistAsync(cancellationToken);
             await Task.Delay(pollingInterval, cancellationToken);
+        }
+    }
+
+    private async Task CancelOpenSellOrdersForTickerAsync(
+        IBrokerClient brokerClient,
+        string ticker,
+        CancellationToken cancellationToken)
+    {
+        var openOrders = await brokerClient.GetOpenOrdersAsync(cancellationToken);
+        foreach (var order in openOrders.Where(order =>
+                     order.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase) &&
+                     order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                await brokerClient.CancelOrderAsync(order.OrderId, cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Failed to cancel sell order {OrderId} before closing automation position for {Ticker}.",
+                    order.OrderId,
+                    ticker);
+            }
         }
     }
 

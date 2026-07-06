@@ -69,7 +69,10 @@ public partial class BacktestsPage : ContentPage
             wishlists = await api.GetWishlistsAsync() ?? Array.Empty<MobileWishlistResponse>();
             suppressPersist = true;
             WishlistPicker.ItemsSource = wishlists.ToList();
-            WishlistPicker.SelectedItem = wishlists.FirstOrDefault(wishlist => wishlist.Id == previousWishlistId);
+            WishlistPicker.SelectedItem = wishlists.FirstOrDefault(wishlist => wishlist.Id == previousWishlistId)
+                ?? wishlists.FirstOrDefault(wishlist => wishlist.Id.ToString().Equals(Preferences.Get("BacktestWishlistId", string.Empty), StringComparison.OrdinalIgnoreCase))
+                ?? wishlists.FirstOrDefault(wishlist => wishlist.IsDefault)
+                ?? wishlists.FirstOrDefault();
             suppressPersist = false;
 
             RestoreFormState();
@@ -109,7 +112,13 @@ public partial class BacktestsPage : ContentPage
     {
         if (ConfigPicker.SelectedItem is not MobileRunConfigOption config)
         {
-            await DisplayAlertAsync("Backtests", "Select a backtest config.", "OK");
+            await DisplayAlertAsync("Backtests", "Select a backtest profile.", "OK");
+            return;
+        }
+
+        if (WishlistPicker.SelectedItem is not MobileWishlistResponse wishlist)
+        {
+            await DisplayAlertAsync("Backtests", "Select a wishlist.", "OK");
             return;
         }
 
@@ -127,7 +136,7 @@ public partial class BacktestsPage : ContentPage
                 config.Path,
                 $"bt_{DateTimeOffset.Now:yyyyMMdd_HHmmss}",
                 ParseInt(LookbackEntry.Text, 60),
-                ParseTickers(TickersEntry.Text),
+                wishlist.Id,
                 strategies.Select(strategy => strategy.Path).ToArray(),
                 ParseDecimal(CapitalEntry.Text, 10000m),
                 ParseDecimal(RiskEntry.Text, 1.0m),
@@ -166,16 +175,6 @@ public partial class BacktestsPage : ContentPage
             return;
         }
 
-        var tickers = wishlist.Items
-            .Where(item => item.Active)
-            .Select(item => item.Ticker)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (tickers.Length > 0)
-        {
-            TickersEntry.Text = String.Join(", ", tickers);
-        }
-
         SaveFormState();
     }
 
@@ -191,11 +190,6 @@ public partial class BacktestsPage : ContentPage
         suppressPersist = true;
         try
         {
-            if (String.IsNullOrWhiteSpace(TickersEntry.Text))
-            {
-                TickersEntry.Text = Preferences.Get("BacktestTickers", "POET, MXL, RGTI, MU, MSFT");
-            }
-
             LookbackEntry.Text = Preferences.Get("BacktestLookback", "60");
             CapitalEntry.Text = Preferences.Get("BacktestCapital", "10000");
             RiskEntry.Text = Preferences.Get("BacktestRisk", "1");
@@ -220,7 +214,6 @@ public partial class BacktestsPage : ContentPage
             return;
         }
 
-        Preferences.Set("BacktestTickers", TickersEntry.Text ?? string.Empty);
         Preferences.Set("BacktestLookback", LookbackEntry.Text ?? "60");
         Preferences.Set("BacktestCapital", CapitalEntry.Text ?? "10000");
         Preferences.Set("BacktestRisk", RiskEntry.Text ?? "1");
@@ -228,6 +221,11 @@ public partial class BacktestsPage : ContentPage
         Preferences.Set("BacktestMaxConcurrent", MaxConcurrentEntry.Text ?? "4");
         Preferences.Set("BacktestRunAll", RunAllStrategiesCheck.IsChecked);
         Preferences.Set("BacktestCachePolicy", CachePolicyPicker.SelectedItem?.ToString() ?? "reuse");
+        if (WishlistPicker.SelectedItem is MobileWishlistResponse wishlist)
+        {
+            Preferences.Set("BacktestWishlistId", wishlist.Id.ToString());
+        }
+
         if (ConfigPicker.SelectedItem is MobileRunConfigOption config)
         {
             Preferences.Set("BacktestConfigPath", config.Path);
@@ -348,15 +346,6 @@ public partial class BacktestsPage : ContentPage
 
         await api.CancelBacktestJobAsync(selectedJob.JobId);
         await LoadAsync();
-    }
-
-    private static IReadOnlyList<string> ParseTickers(string? value)
-    {
-        return (value ?? String.Empty)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(ticker => ticker.ToUpperInvariant())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
     }
 
     private static int ParseInt(string? value, int fallback)

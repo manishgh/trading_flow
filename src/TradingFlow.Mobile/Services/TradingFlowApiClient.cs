@@ -6,7 +6,7 @@ namespace TradingFlow.Mobile.Services;
 
 public sealed class TradingFlowApiClient
 {
-    public const string NgrokDefaultUrl = "https://25e3-178-230-112-108.ngrok-free.app";
+    public const string NgrokDefaultUrl = "https://875a-2001-1c00-820b-7600-d54-b611-ef7-128f.ngrok-free.app";
     public const string PhysicalDeviceDefaultUrl = "http://192.168.178.238:53017";
     public const string AndroidEmulatorDefaultUrl = "http://10.0.2.2:53017";
 
@@ -237,6 +237,18 @@ public sealed class TradingFlowApiClient
             cancellationToken);
     }
 
+    public Task<MobileWishlistDeskResponse?> GetWishlistDeskAsync(
+        Guid wishlistId,
+        int signalMinutes = 20,
+        int newsHours = 4,
+        CancellationToken cancellationToken = default)
+    {
+        var query = $"signalMinutes={signalMinutes}&newsHours={newsHours}";
+        return httpClient.GetFromJsonAsync<MobileWishlistDeskResponse>(
+            $"{BaseUrl}/api/mobile/wishlists/{wishlistId}/desk?{query}",
+            cancellationToken);
+    }
+
     public async Task AcknowledgeWishlistSignalAsync(Guid signalId, CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/wishlists/signals/{signalId}/ack", null, cancellationToken);
@@ -248,6 +260,31 @@ public sealed class TradingFlowApiClient
         return httpClient.GetFromJsonAsync<IReadOnlyList<MobilePaperPositionResponse>>(
             $"{BaseUrl}/api/mobile/paper/jobs/{jobId}/positions",
             cancellationToken);
+    }
+
+    public Task<MobileRunningTradesResponse?> GetRunningTradesAsync(string source = "all", CancellationToken cancellationToken = default)
+    {
+        return httpClient.GetFromJsonAsync<MobileRunningTradesResponse>(
+            $"{BaseUrl}/api/mobile/running-trades?source={Uri.EscapeDataString(source)}",
+            cancellationToken);
+    }
+
+    public async Task ClosePaperPositionAsync(Guid jobId, string ticker, CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsync(
+            $"{BaseUrl}/api/mobile/paper/jobs/{jobId}/positions/{Uri.EscapeDataString(ticker)}/close",
+            null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
+    public async Task CloseAutomationPositionAsync(Guid sessionId, CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsync(
+            $"{BaseUrl}/api/mobile/automation/sessions/{sessionId}/close",
+            null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
     }
 
     // Subscribes to the wishlist live-quote SSE stream. onQuotes is invoked once per stream
@@ -456,9 +493,21 @@ public sealed record MobileStrategyOption(
     string Timeframe,
     string ExecutionTimeframe,
     string SetupType,
-    bool UsesNews)
+    bool UsesNews,
+    decimal? LastAuditedReturnPct = null,
+    decimal? LastAuditedMaxDrawdownPct = null,
+    int? LastAuditedTrades = null,
+    decimal? LastAuditedWinRatePct = null,
+    string? LastAuditedAverageHold = null,
+    string? LastAuditedResultPath = null)
 {
-    public override string ToString() => $"{StrategyName} ({Timeframe}->{ExecutionTimeframe})";
+    public override string ToString()
+    {
+        var audit = LastAuditedReturnPct is null
+            ? "not audited"
+            : $"{LastAuditedReturnPct:0.##}% / DD {LastAuditedMaxDrawdownPct:0.##}% / {LastAuditedAverageHold}";
+        return $"{StrategyName} ({Timeframe}->{ExecutionTimeframe}) - {audit}";
+    }
 }
 
 public sealed record MobilePaperRunRequest(
@@ -477,7 +526,7 @@ public sealed record MobileBacktestRunRequest(
     string BaseConfigPath,
     string RunName,
     int LookbackDays,
-    IReadOnlyList<string> Tickers,
+    Guid? WishlistId,
     IReadOnlyList<string> StrategyPaths,
     decimal StartingCapital,
     decimal RiskPerTradePct,
@@ -676,6 +725,51 @@ public sealed record MobileWishlistSignalResponse(
     public string StatusText => Acknowledged ? "read" : Severity;
 }
 
+public sealed record MobileWishlistDeskResponse(
+    MobileWishlistResponse Wishlist,
+    IReadOnlyList<MobileWishlistDeskRowResponse> Rows,
+    IReadOnlyList<MobileWishlistSignalResponse> RecentSignals,
+    IReadOnlyList<MobileNewsItem> RelatedNews,
+    IReadOnlyList<MobileRunningTrade> RunningTrades,
+    decimal TotalUnrealizedPl)
+{
+    public string TotalText => $"Open P/L {(TotalUnrealizedPl >= 0 ? "+" : String.Empty)}{TotalUnrealizedPl:C2}";
+}
+
+public sealed record MobileWishlistDeskRowResponse(
+    MobileWishlistItemResponse Item,
+    string Ticker,
+    string DisplayName,
+    decimal? BidPrice,
+    decimal? AskPrice,
+    decimal? MidPrice,
+    string DisplayBid,
+    string DisplayAsk,
+    string DisplayPrice,
+    string BuyCaption,
+    string SellCaption,
+    DateTimeOffset? QuoteTimestamp,
+    bool HasQuote,
+    bool HasTrade,
+    bool HasSignal,
+    bool HasNews,
+    string EligibilityLabel,
+    string EligibilityReason,
+    MobileWishlistSignalResponse? LatestSignal,
+    MobileNewsItem? LatestNews,
+    MobileRunningTrade? Trade)
+{
+    public string StatusText => HasTrade ? "In trade" : HasSignal ? "Eligible" : "Watching";
+
+    public string DetailText => HasTrade && Trade is not null
+        ? Trade.PlText
+        : HasSignal
+        ? EligibilityReason
+        : HasNews && LatestNews is not null
+            ? LatestNews.DisplayHeadline
+            : Item.DetailText;
+}
+
 public sealed record MobileWishlistSaveRequest(
     Guid? Id,
     string Name,
@@ -701,6 +795,55 @@ public sealed record MobilePaperPositionResponse(
     public string PnlText => $"{(UnrealizedPl >= 0 ? "+" : String.Empty)}{UnrealizedPl:C2}";
 
     public bool IsProfit => UnrealizedPl >= 0;
+}
+
+public sealed record MobileRunningTradesResponse(
+    IReadOnlyList<MobileRunningTrade> Trades,
+    decimal TotalUnrealizedPl,
+    int Count)
+{
+    public string TotalText => $"Total P/L {(TotalUnrealizedPl >= 0 ? "+" : String.Empty)}{TotalUnrealizedPl:C2}";
+
+    public bool IsTotalProfit => TotalUnrealizedPl >= 0;
+}
+
+public sealed record MobileRunningTrade(
+    string Source,
+    string Ticker,
+    decimal Quantity,
+    decimal EntryPrice,
+    decimal CurrentPrice,
+    decimal UnrealizedPl,
+    decimal UnrealizedPlPct,
+    string Status,
+    string Reference,
+    Guid? JobId,
+    Guid? SessionId,
+    string CloseKind,
+    string StrategyName,
+    decimal? StopLossPrice,
+    decimal? TakeProfitPrice,
+    string? ExitReason,
+    DateTimeOffset? UpdatedAtUtc,
+    string ProtectionSummary)
+{
+    public string SourceLabel => Source switch
+    {
+        "wishlist" => "Wishlist",
+        "stockpulse" => "Stock Pulse",
+        "manual" => "Manual",
+        _ => Source
+    };
+
+    public bool IsProfit => UnrealizedPl >= 0;
+
+    public string HeaderText => $"{Ticker}  x{Quantity:0.####}";
+
+    public string PriceText => $"Entry {EntryPrice:C2} -> {CurrentPrice:C2}";
+
+    public string PlText => $"{(UnrealizedPl >= 0 ? "+" : String.Empty)}{UnrealizedPl:C2} ({UnrealizedPlPct:0.00}%)";
+
+    public string DetailText => $"{SourceLabel} · {Reference}";
 }
 
 // Payload of the /api/wishlists/{id}/quotes/stream SSE feed (one per active ticker).

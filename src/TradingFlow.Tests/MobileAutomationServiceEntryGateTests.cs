@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
@@ -15,7 +15,7 @@ public sealed class MobileAutomationServiceEntryGateTests
         var root = FindRepositoryRoot();
         var service = CreateService(root);
         var reader = new SimpleYamlReader();
-        var strategy = reader.ReadStrategy(Path.Combine(root, "configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml"));
+        var strategy = reader.ReadStrategy(Path.Combine(root, "configs", "strategies", "intraday-ema10-ema20-macd-volume.v2-additive.yaml"));
 
         var snapshot = new IndicatorSnapshot(
             "TDIC",
@@ -137,3 +137,4 @@ public sealed class MobileAutomationServiceEntryGateTests
         throw new DirectoryNotFoundException("Could not locate TradingFlow repository root.");
     }
 }
+

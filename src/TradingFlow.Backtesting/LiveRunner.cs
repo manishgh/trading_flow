@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
@@ -26,7 +26,7 @@ public sealed class LiveRunner(
     ICandleStore? candleStore = null)
 {
     private readonly SignalGenerator _signalGenerator = new();
-    private readonly BasicStrategyEvaluator _evaluator = new();
+    private readonly StrategyDecisionBrain _decisionBrain = new();
     private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
     private readonly TechnicalExecutionEngine _technicalExecutionEngine = new();
     private readonly ExecutionAuditor _auditor = new();
@@ -42,6 +42,7 @@ public sealed class LiveRunner(
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
     {
+        strategies = ApplyRunSessionPolicy(run, strategies);
         logger.LogInformation("Starting LiveRunner for run: {RunName}", run.RunName);
         progress?.Report($"Starting LiveRunner for run: {run.RunName}");
 
@@ -467,7 +468,7 @@ public sealed class LiveRunner(
             var lastSnapshot = snapshots[^1];
             var lastBar = barsList[^1];
             var isFinvizRelativeVolume = screenerRelativeVolumeByTicker.TryGetValue(ticker, out var screenerRelativeVolume);
-            var configuredRelativeVolume = ResolveEntryRelativeVolume(strategy, lastSnapshot);
+            var configuredRelativeVolume = _decisionBrain.ResolveEntryRelativeVolume(strategy, lastSnapshot);
             var relativeVolumeSource = isFinvizRelativeVolume ? "finviz_screener" : strategy.EntryRules.MinVolumeSpikeSource;
             var effectiveRelativeVolume = isFinvizRelativeVolume
                 ? screenerRelativeVolume
@@ -579,7 +580,7 @@ public sealed class LiveRunner(
                 }
 
                 var relativeVolume = effectiveRelativeVolume;
-                var rejectionReason = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume);
+                var rejectionReason = _decisionBrain.GetLongEntryRejection(strategy, signal, lastSnapshot, relativeVolume, relativeVolumeSource);
 
                 if (rejectionReason != null)
                 {
@@ -1053,7 +1054,8 @@ public sealed class LiveRunner(
             }
         }
 
-        var closed = await _brokerClient.ClosePositionAsync(ticker, cancellationToken);
+        var closeQuantity = Math.Max(1, strategyOrder.ShareQuantity);
+        var closed = await _brokerClient.ClosePositionAsync(ticker, closeQuantity, cancellationToken);
         if (closed)
         {
             await _orderRepo.UpdateOrderStatusAsync(strategyOrder.OrderId, "technical_exit_submitted", cancellationToken);
@@ -1216,6 +1218,21 @@ public sealed class LiveRunner(
                 SignalJson = signalJson
             }, cancellationToken);
         }
+    }
+
+    private static StrategyDefinition[] ApplyRunSessionPolicy(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
+    {
+        if (!run.Execution.ExtendedHours)
+        {
+            return strategies.ToArray();
+        }
+
+        return strategies
+            .Select(strategy => strategy with
+            {
+                Session = strategy.Session with { UseExtendedHours = true }
+            })
+            .ToArray();
     }
 
     private static string[] ResolveRequiredTimeframes(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
@@ -1398,3 +1415,4 @@ public sealed class LiveRunner(
             : null;
     }
 }
+

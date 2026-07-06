@@ -5,8 +5,10 @@ namespace TradingFlow.Engine.Sessions;
 
 public sealed class StrategySessionClock
 {
+    private static readonly TimeSpan PremarketOpenTime = new(4, 0, 0);
     private static readonly TimeSpan OpenTime = new(9, 30, 0);
     private static readonly TimeSpan CloseTime = new(16, 0, 0);
+    private static readonly TimeSpan PostmarketCloseTime = new(20, 0, 0);
 
     public bool ValidateExecutionWindow(DateTime exchangeTime, string timeframe, bool vetoFridayWeekend)
     {
@@ -60,6 +62,28 @@ public sealed class StrategySessionClock
         }
 
         var timeOfDay = exchangeTime.TimeOfDay;
+        if (sessionRules.UseExtendedHours)
+        {
+            if (timeOfDay < PremarketOpenTime || timeOfDay > PostmarketCloseTime)
+            {
+                return false;
+            }
+
+            if (timeOfDay >= OpenTime &&
+                timeOfDay < OpenTime.Add(TimeSpan.FromMinutes(sessionRules.QuietMinutesAfterOpen)))
+            {
+                return false;
+            }
+
+            if (exchangeTime.DayOfWeek != DayOfWeek.Friday)
+            {
+                return true;
+            }
+
+            var fridayCutOffTime = PostmarketCloseTime.Subtract(TimeSpan.FromMinutes(sessionRules.FridayCloseBufferMinutes));
+            return timeOfDay < fridayCutOffTime;
+        }
+
         if (timeOfDay < OpenTime || timeOfDay > CloseTime)
         {
             return false;
@@ -93,6 +117,22 @@ public sealed class StrategySessionClock
         }
 
         var timeOfDay = exchangeTime.TimeOfDay;
+        if (sessionRules.UseExtendedHours)
+        {
+            if (exchangeTime.DayOfWeek != DayOfWeek.Friday)
+            {
+                return false;
+            }
+
+            if (timeOfDay < PremarketOpenTime || timeOfDay > PostmarketCloseTime)
+            {
+                return false;
+            }
+
+            var finalExtendedExitTime = PostmarketCloseTime.Subtract(TimeframeParser.Parse(timeframe));
+            return timeOfDay >= finalExtendedExitTime;
+        }
+
         if (timeOfDay < OpenTime || timeOfDay > CloseTime)
         {
             return false;

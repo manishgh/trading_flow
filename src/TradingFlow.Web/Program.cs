@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Backtesting.StrategyEvaluation;
@@ -61,6 +61,7 @@ builder.Services.AddSingleton<WarmupServiceClient>();
 builder.Services.AddSingleton<WishlistUniverseResolver>();
 builder.Services.AddSingleton<WishlistBreakoutEvaluator>();
 builder.Services.AddSingleton<WishlistMarketMonitor>();
+builder.Services.AddSingleton<WishlistDeskService>();
 builder.Services.AddSingleton<WishlistObserverService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WishlistObserverService>());
 builder.Services.AddSingleton<AlpacaQuoteService>();
@@ -248,7 +249,7 @@ app.MapPost("/api/strategies/intraday-top/evaluate", async (
     var result = await evaluator.EvaluateWithAlpacaAsync(
         new StrategyEvaluationRequest(
             ConfigPath: Path.Combine("configs", "paper", "alpaca-paper.yaml"),
-            StrategyPath: Path.Combine("configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml"),
+            StrategyPath: Path.Combine("configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"),
             Tickers: new[] { "RGTI", "POET", "NVTS" },
             LookbackDays: 30,
             Start: null,

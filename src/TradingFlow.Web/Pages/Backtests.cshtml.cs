@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 
@@ -11,66 +12,37 @@ public sealed class BacktestsModel : PageModel
     private readonly RunConfigWriter configWriter;
     private readonly OptimizationJobService optJobs;
     private readonly BacktestJobService backtestJobs;
+    private readonly IWishlistRepository wishlists;
 
-    public BacktestsModel(ConfigCatalogService catalog, RunConfigWriter configWriter, OptimizationJobService optJobs, BacktestJobService backtestJobs)
+    public BacktestsModel(
+        ConfigCatalogService catalog,
+        RunConfigWriter configWriter,
+        OptimizationJobService optJobs,
+        BacktestJobService backtestJobs,
+        IWishlistRepository wishlists)
     {
         this.catalog = catalog;
         this.configWriter = configWriter;
         this.optJobs = optJobs;
         this.backtestJobs = backtestJobs;
+        this.wishlists = wishlists;
     }
 
     [BindProperty] public string SelectedConfigPath { get; set; } = String.Empty;
     [BindProperty] public string SelectedStrategyPath { get; set; } = String.Empty;
-    [BindProperty(SupportsGet = true)] public string? TickersCsv { get; set; }
+    [BindProperty(SupportsGet = true)] public Guid? WishlistId { get; set; }
 
     public IReadOnlyList<RunConfigSummary> Configs { get; private set; } = [];
+    public IReadOnlyList<Wishlist> Wishlists { get; private set; } = [];
+    public Wishlist? SelectedWishlist { get; private set; }
     public IReadOnlyList<StrategyOption> Strategies { get; private set; } = [];
     public IReadOnlyList<OptimizationJobSnapshot> OptimizationJobs { get; private set; } = [];
     public IReadOnlyList<BacktestJobSnapshot> BacktestJobs { get; private set; } = [];
     public IReadOnlyList<ResearchSnapshot> ResearchSnapshots { get; private set; } = [];
 
-    public void OnGet(string? configPath, string? strategyPath, string? tickersCsv)
+    public async Task OnGetAsync(string? configPath, string? strategyPath, Guid? wishlistId, CancellationToken cancellationToken)
     {
-        LoadData(configPath, strategyPath);
-        
-        if (tickersCsv != null)
-        {
-            TickersCsv = tickersCsv;
-        }
-        else
-        {
-            var selectedConfig = Configs.FirstOrDefault(c => c.Path == SelectedConfigPath);
-            TickersCsv = selectedConfig != null ? String.Join(", ", selectedConfig.Config.Tickers) : "";
-        }
-    }
-
-    public IActionResult OnPostSaveConfig()
-    {
-        var form = Request.Form;
-        var baseConfigPath = form["BaseConfigPath"].ToString();
-        var tickersCsv = form["TickersCsv"].ToString();
-        var tickers = tickersCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        if (tickers.Length > 0 && !String.IsNullOrWhiteSpace(baseConfigPath))
-        {
-            var strategyPath = form["SelectedStrategyPath"].ToString();
-            var newPath = configWriter.SaveTempConfig(baseConfigPath, tickers, strategyPath);
-            return RedirectToPage(new { configPath = newPath, strategyPath = strategyPath });
-        }
-
-        return RedirectToPage();
-    }
-
-    public IActionResult OnPostDeleteConfig()
-    {
-        var form = Request.Form;
-        var configPath = form["DeleteConfigPath"].ToString();
-        if (!String.IsNullOrWhiteSpace(configPath))
-        {
-            configWriter.DeleteTempConfig(configPath);
-        }
-        return RedirectToPage(new { strategyPath = form["SelectedStrategyPath"].ToString() });
+        await LoadDataAsync(configPath, strategyPath, wishlistId, cancellationToken);
     }
 
     public IActionResult OnPostSaveStrategy()
@@ -106,30 +78,45 @@ public sealed class BacktestsModel : PageModel
         return RedirectToPage("/OptimizationJob", new { id = job.JobId });
     }
 
-    public IActionResult OnPostRunBacktest()
+    public async Task<IActionResult> OnPostRunBacktestAsync(CancellationToken cancellationToken)
     {
         var form = Request.Form;
         var baseConfigPath = form["SelectedConfigPath"].ToString();
+        var wishlistIdValue = ParseGuid(form["WishlistId"].ToString());
         var strategyPaths = form["StrategyPaths"]
             .Select(x => x?.Trim())
             .Where(x => !String.IsNullOrWhiteSpace(x))
             .Cast<string>()
             .ToArray();
-        var tickers = form["TickersCsv"].ToString()
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(x => x.ToUpperInvariant())
+
+        if (String.IsNullOrWhiteSpace(baseConfigPath) || strategyPaths.Length == 0 || wishlistIdValue is null)
+        {
+            return RedirectToPage(new { configPath = baseConfigPath, strategyPath = form["SelectedStrategyPath"].ToString(), wishlistId = wishlistIdValue });
+        }
+
+        var wishlist = await wishlists.GetByIdAsync(wishlistIdValue.Value, cancellationToken);
+        if (wishlist is null)
+        {
+            return RedirectToPage(new { configPath = baseConfigPath, strategyPath = form["SelectedStrategyPath"].ToString() });
+        }
+
+        var tickers = wishlist.Items
+            .Where(item => item.Active)
+            .Select(item => item.Ticker.Trim().ToUpperInvariant())
+            .Where(ticker => ticker.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-
-        if (String.IsNullOrWhiteSpace(baseConfigPath) || strategyPaths.Length == 0 || tickers.Length == 0)
+        if (tickers.Length == 0)
         {
-            return RedirectToPage(new { configPath = baseConfigPath, strategyPath = form["SelectedStrategyPath"].ToString(), tickersCsv = form["TickersCsv"].ToString() });
+            return RedirectToPage(new { configPath = baseConfigPath, strategyPath = form["SelectedStrategyPath"].ToString(), wishlistId = wishlistIdValue });
         }
 
         var request = new BacktestRunRequest(
             baseConfigPath,
             form["RunName"].ToString(),
             ParseInt(form["LookbackDays"].ToString(), 180),
+            wishlist.Id,
+            wishlist.Name,
             tickers,
             strategyPaths,
             ParseDecimal(form["StartingCapital"].ToString(), 10000m),
@@ -144,9 +131,10 @@ public sealed class BacktestsModel : PageModel
         return RedirectToPage("/Job", new { id = job.JobId });
     }
 
-    private void LoadData(string? configPath, string? strategyPath)
+    private async Task LoadDataAsync(string? configPath, string? strategyPath, Guid? wishlistId, CancellationToken cancellationToken)
     {
         Configs = catalog.GetBacktestConfigs();
+        Wishlists = await wishlists.ListAsync(cancellationToken);
         Strategies = catalog.GetStrategies();
         OptimizationJobs = optJobs.List().Take(5).ToArray();
         BacktestJobs = backtestJobs.List().Take(5).ToArray();
@@ -154,6 +142,10 @@ public sealed class BacktestsModel : PageModel
 
         SelectedConfigPath = configPath ?? (Configs.FirstOrDefault()?.Path ?? String.Empty);
         SelectedStrategyPath = strategyPath ?? (Strategies.FirstOrDefault()?.Path ?? String.Empty);
+        WishlistId = wishlistId ?? Wishlists.FirstOrDefault(wishlist => wishlist.IsDefault)?.Id ?? Wishlists.FirstOrDefault()?.Id;
+        SelectedWishlist = WishlistId is { } id
+            ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == id)
+            : null;
     }
 
     private static IReadOnlyList<ResearchSnapshot> LoadResearchSnapshots()
@@ -222,6 +214,11 @@ public sealed class BacktestsModel : PageModel
     private static int ParseInt(string value, int fallback)
     {
         return Int32.TryParse(value, out var parsed) ? parsed : fallback;
+    }
+
+    private static Guid? ParseGuid(string value)
+    {
+        return Guid.TryParse(value, out var parsed) ? parsed : null;
     }
 
     private static decimal? ParseNullableDecimal(string value)

@@ -1,0 +1,62 @@
+strategy_id: research.intraday-vwap-momentum-pullback.bt-v1
+strategy_name: RESEARCH Intraday - VWAP Momentum Pullback BT V1
+source: user_intraday_execution_spec_20260705
+version: 1
+timeframe: 1m
+direction: long
+entry_rules:
+  setup_type: vwap_pullback
+  min_volume_spike: 2.0
+  min_volume_spike_source: cumulative_same_time
+  volume_confirmation_mode: hard_gate
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: vwap
+  macd_filter: not_bearish
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: true
+  require_price_above_vwap: true
+  require_price_above_ema10: false
+  require_price_above_ema20: false
+  require_ema10_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  max_vwap_extension_atr:
+  opening_range_minutes: 30
+  opening_range_break_buffer: 0.0
+  recent_high_lookback_bars: 0
+  volatility_contraction_lookback_bars: 0
+  min_gap_up_pct: 3.0
+  require_positive_news: false
+  max_entries_per_ticker_per_day: 1
+  min_close_location_value:
+confluence:
+  enabled: true
+  timeframe: 5m
+  ema_period: 20
+  macd_filter: not_bearish
+exit_rules:
+  stop_atr_multiple: 1.0
+  target_r_multiple: 2.0
+  max_hold_hours: 6.5
+  initial_stop_mode: vwap_minus_atr
+  profit_target_mode: r_multiple
+  enable_atr_trailing_stop: true
+  trailing_stop_atr_multiple: 1.5
+  trailing_activation_r: 2.0
+  enable_failed_breakout_circuit_breaker: false
+  failed_breakout_bars: 3
+  failed_breakout_min_r: 0.0
+  stop_tick_buffer: 0.01
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 5
+execution:
+  timeframe: 1m
+  slippage_bps: 10.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

@@ -1,21 +1,28 @@
-strategy_id: research.intraday-ross-vwap-ema-volume-macd.v3-structural-exit
-strategy_name: TOP2 Intraday - Ross VWAP EMA Structural Exit
-source: simplified_ross_indicator_stack_config_structural_exit
-version: 3
+﻿strategy_id: top1.intraday-ema10-ema20-macd-volume.v1
+strategy_name: TOP1 Intraday - EMA10/20 MACD Volume V1
+source: simplified_intraday_three_gate_reset
+version: 1
 timeframe: 1m
 direction: long
 entry_rules:
   setup_type: indicator_stack
   min_volume_spike: 2.0
+  min_volume_spike_source: cumulative_same_time
+  volume_confirmation_mode: hard_gate
+  min_session_relative_volume:
+  require_volume_sma_rising: false
+  volume_sma_period: 5
+  volume_sma_rising_lookback_bars: 3
+  min_volume_sma_rise_pct:
   min_entry_rsi: 0.0
   max_entry_rsi: 100.0
   trend_filter: none
   macd_filter: not_bearish
   require_price_above_bb_middle: false
   require_macd_histogram_positive: true
-  require_price_above_vwap: true
-  require_price_above_ema10: true
-  require_price_above_ema20: true
+  require_price_above_vwap: false
+  require_price_above_ema10: false
+  require_price_above_ema20: false
   require_ema10_above_ema20: true
   require_price_above_ema50: false
   require_ema20_above_ema50: false
@@ -32,8 +39,10 @@ entry_rules:
   reject_falling_price_rising_volume: false
   vwap_hold_bars: 1
   max_entries_per_ticker_per_day: 1
-  min_close_location_value:
+  min_close_location_value: 0.0
   reject_weak_close_on_high_relative_volume: false
+  weak_close_max_location_value: 0.35
+  weak_close_min_relative_volume: 2.0
   min_day_gain_pct:
   min_session_gain_pct:
   max_pre_entry_session_range_pct:
@@ -42,23 +51,37 @@ entry_rules:
   min_news_sentiment:
   veto_news_sentiment_below:
   max_news_age_hours: 18
+  enable_entry_bar_confirmation: false
+  min_entry_bar_close_location_value: 0.60
+  reject_entry_bar_close_location_below_minimum: false
+  reject_entry_bar_breaks_signal_midpoint: false
+  max_vwap_extension_pct_for_direct_entry:
+  extended_vwap_min_entry_bar_close_location_value: 0.70
+  max_bollinger_position_for_direct_entry:
+  extended_bollinger_min_entry_bar_close_location_value:
+risk_guards:
+  per_ticker_daily:
+    enabled: true
+    max_failed_trades: 1
+    max_loss_r: 1.0
+    max_loss_pct_of_account: 1.0
 confluence:
   enabled: false
   timeframe: 5m
   ema_period: 50
   macd_filter: none
 exit_rules:
-  stop_atr_multiple: 2.0
+  stop_atr_multiple: 1.0
   target_r_multiple: 3.0
   max_hold_hours: 6.5
-  enable_atr_trailing_stop: true
-  trailing_stop_atr_multiple: 2.0
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 1.0
   trailing_activation_r: 1.0
   exit_on_close_below_ema20: false
   exit_on_close_below_vwap: false
   exit_on_macd_histogram_negative: false
   min_hold_bars_before_technical_exit: 5
-  enable_confirmed_vwap_exit: true
+  enable_confirmed_vwap_exit: false
   confirmed_vwap_exit_bars: 3
   confirmed_vwap_exit_atr_buffer: 0.15
   disable_confirmed_vwap_exit_after_r: 1.0
@@ -72,12 +95,12 @@ exit_rules:
   exit_on_sma10_near_sma20: false
   sma10_near_sma20_pct: 0.20
   exit_on_sma10_cross_below_sma20: false
-  exit_on_ema10_cross_below_ema20: true
+  exit_on_ema10_cross_below_ema20: false
 execution:
   timeframe: 1m
   slippage_bps: 10.0
 session:
   exchange_timezone: America/New_York
-  quiet_minutes_after_open: 1
+  quiet_minutes_after_open: 0
   close_buffer_minutes: 30
   friday_close_buffer_minutes: 30

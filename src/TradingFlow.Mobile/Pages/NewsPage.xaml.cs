@@ -119,11 +119,6 @@ public partial class NewsPage : ContentPage
             collectionView.SelectedItem = null;
         }
 
-        if (selected is null || String.IsNullOrWhiteSpace(selected.Url))
-        {
-            return;
-        }
-
-        await Browser.Default.OpenAsync(selected.Url, BrowserLaunchMode.SystemPreferred);
+        await NewsNavigation.OpenAsync(selected);
     }
 }

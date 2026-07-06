@@ -5,55 +5,57 @@
              Title="Paper">
     <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
         <ScrollView>
-            <VerticalStackLayout Padding="16" Spacing="14">
-                <Label Text="Paper Trading" Style="{StaticResource Headline}" FontSize="24" />
+            <VerticalStackLayout Padding="12" Spacing="10">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <VerticalStackLayout Spacing="0">
+                        <Label Text="Paper" Style="{StaticResource Headline}" FontSize="22" />
+                        <Label Text="Run a wishlist plus optional Finviz symbols with one selected strategy." Style="{StaticResource SubHeadline}" FontSize="12" />
+                    </VerticalStackLayout>
+                    <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+                </Grid>
+
                 <Border Style="{StaticResource CardBorder}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
-                        <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
                     </Grid>
                 </Border>
 
-                <Border Style="{StaticResource CardBorder}">
-                    <VerticalStackLayout Spacing="10">
-                        <Label Text="Run Setup" FontAttributes="Bold" FontSize="18" />
-                        <Label Text="Pick a wishlist or type tickers, choose a strategy, then start. Advanced options stay collapsed." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                        <Label Text="Wishlist" FontAttributes="Bold" FontSize="12" />
-                        <Picker x:Name="WishlistPicker" Title="Wishlist (optional)" SelectedIndexChanged="OnWishlistPicked" />
-                        <Label Text="Paper environment" FontAttributes="Bold" FontSize="12" />
-                        <Picker x:Name="ConfigPicker" Title="Paper environment" SelectedIndexChanged="OnFormChanged" />
-                        <Label Text="Strategy" FontAttributes="Bold" FontSize="12" />
+                <Border Style="{StaticResource CardBorder}" Padding="10">
+                    <VerticalStackLayout Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <VerticalStackLayout Spacing="0">
+                                <Label Text="Quick Run" FontAttributes="Bold" FontSize="16" />
+                                <Label Text="Wishlist is the trading universe; Finviz can add today's screeners." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                            </VerticalStackLayout>
+                            <Button x:Name="RunButton" Grid.Column="1" Text="Start" Clicked="OnStartPaperRun" Padding="14,8" />
+                        </Grid>
+                        <Picker x:Name="WishlistPicker" Title="Wishlist" SelectedIndexChanged="OnWishlistPicked" />
+                        <Picker x:Name="ConfigPicker" Title="Paper profile" SelectedIndexChanged="OnFormChanged" IsVisible="False" />
                         <Picker x:Name="StrategyPicker" Title="Strategy" SelectedIndexChanged="OnFormChanged" />
-                        <Label Text="Tickers" FontAttributes="Bold" FontSize="12" />
-                        <Entry x:Name="TickersEntry" Placeholder="Tickers: RDW, OUST, SPCE" Keyboard="Text" TextChanged="OnFormChanged" />
+                        <Entry x:Name="ScreenerEntry" Placeholder="Optional Finviz query or URL" Keyboard="Url" TextChanged="OnFormChanged" />
 
-                        <Button x:Name="AdvancedToggle" Text="Show advanced options" Clicked="OnToggleAdvanced" Padding="12,8" BackgroundColor="#475467" />
-                        <VerticalStackLayout x:Name="AdvancedPanel" Spacing="10" IsVisible="False">
-                            <Label Text="Run name" FontAttributes="Bold" FontSize="12" />
+                        <Button x:Name="AdvancedToggle" Text="Advanced" Clicked="OnToggleAdvanced" Padding="12,7" BackgroundColor="#475467" />
+                        <VerticalStackLayout x:Name="AdvancedPanel" Spacing="8" IsVisible="False">
                             <Entry x:Name="RunNameEntry" Placeholder="Run name, optional" TextChanged="OnFormChanged" />
-                            <Label Text="Finviz filter" FontAttributes="Bold" FontSize="12" />
-                            <Entry x:Name="ScreenerEntry" Placeholder="Optional Finviz query or URL" Keyboard="Url" TextChanged="OnFormChanged" />
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                                 <HorizontalStackLayout Spacing="8">
-                                    <CheckBox x:Name="ExtendedHoursCheck" IsChecked="True" Scale="0.85" CheckedChanged="OnFormChanged" />
+                                    <CheckBox x:Name="ExtendedHoursCheck" IsChecked="True" Scale="0.72" CheckedChanged="OnFormChanged" />
                                     <Label Text="Extended hours" VerticalTextAlignment="Center" FontSize="13" />
                                 </HorizontalStackLayout>
                                 <HorizontalStackLayout Grid.Column="1" Spacing="8">
-                                    <CheckBox x:Name="NewsCheck" IsChecked="False" Scale="0.85" CheckedChanged="OnFormChanged" />
-                                    <Label Text="News" VerticalTextAlignment="Center" FontSize="13" />
+                                    <CheckBox x:Name="NewsCheck" IsChecked="False" Scale="0.72" CheckedChanged="OnFormChanged" />
+                                    <Label Text="Use news" VerticalTextAlignment="Center" FontSize="13" />
                                 </HorizontalStackLayout>
                             </Grid>
-                            <Label Text="Order handling" FontAttributes="Bold" FontSize="12" />
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                                 <Picker x:Name="OrderExpirationPicker" Title="Order expiry" SelectedIndexChanged="OnFormChanged" />
                                 <Picker x:Name="EntryOrderTypePicker" Grid.Column="1" Title="Entry order" SelectedIndexChanged="OnFormChanged" />
                             </Grid>
                         </VerticalStackLayout>
-                        <Button x:Name="RunButton" Text="Start Paper Run" Clicked="OnStartPaperRun" />
                     </VerticalStackLayout>
                 </Border>
 
-                <Border Style="{StaticResource CardBorder}">
+                <Border Style="{StaticResource CardBorder}" IsVisible="False">
                     <VerticalStackLayout Spacing="10">
                         <Grid ColumnDefinitions="*,Auto">
                             <Label Text="News Catalysts" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
@@ -93,16 +95,18 @@
                     </Grid>
                 </Border>
 
-                <Grid ColumnDefinitions="*,Auto">
-                    <Label Text="Active Runs" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <VerticalStackLayout Spacing="0">
+                        <Label Text="Active Runs" FontAttributes="Bold" FontSize="17" />
+                        <Label Text="Tap a run for positions, P/L and recent events." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                    </VerticalStackLayout>
                     <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
                 </Grid>
 
-                <Border Style="{StaticResource CardBorder}">
+                <Border Style="{StaticResource CardBorder}" Padding="10">
                     <VerticalStackLayout Spacing="10">
-                        <Label Text="Alert-Triggered Paper Trades" FontAttributes="Bold" FontSize="18" />
-                        <Label Text="Notification entries from the Android app. Each session has its own run id and strategy-managed exit." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                        <CollectionView x:Name="AutomationSessionsView" HeightRequest="220">
+                        <Label Text="Stock Pulse Sessions" FontAttributes="Bold" FontSize="16" />
+                        <CollectionView x:Name="AutomationSessionsView" HeightRequest="150">
                             <CollectionView.EmptyView>
                                 <Label Text="No alert-triggered paper sessions." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
                             </CollectionView.EmptyView>
@@ -124,7 +128,7 @@
                     </VerticalStackLayout>
                 </Border>
 
-                <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected" HeightRequest="340">
+                <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected" HeightRequest="280">
                     <CollectionView.EmptyView>
                         <Label Text="No active paper runs. Use Last Run for the most recent completed, failed, or cancelled run." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
                     </CollectionView.EmptyView>

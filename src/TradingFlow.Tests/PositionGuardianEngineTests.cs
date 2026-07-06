@@ -1,4 +1,4 @@
-using TradingFlow.Domain.Market;
+﻿using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Execution;
@@ -10,7 +10,7 @@ public sealed class PositionGuardianEngineTests
     [Fact]
     public void EvaluateLong_WhenRunnerMovesInFavor_RaisesEffectiveStopWithoutExit()
     {
-        var strategy = LoadV8Strategy();
+        var strategy = LoadStrategyWithTrailingStop();
         var entryTime = new DateTimeOffset(2026, 6, 16, 13, 30, 0, TimeSpan.Zero);
         var bars = Enumerable.Range(0, 12)
             .Select(i => new OhlcvBar(
@@ -44,7 +44,7 @@ public sealed class PositionGuardianEngineTests
     [Fact]
     public void EvaluateLong_WhenConfirmedVwapFailureOccurs_ExitsAfterConfirmation()
     {
-        var strategy = LoadV8Strategy();
+        var strategy = LoadStrategyWithConfirmedVwapExit();
         var entryTime = new DateTimeOffset(2026, 6, 16, 13, 30, 0, TimeSpan.Zero);
         var bars = Enumerable.Range(0, 9)
             .Select(i =>
@@ -117,14 +117,45 @@ public sealed class PositionGuardianEngineTests
             SessionRelativeVolume: 2m);
     }
 
-    private static StrategyDefinition LoadV8Strategy()
+    private static StrategyDefinition LoadStrategyWithTrailingStop()
+    {
+        var strategy = LoadBaseStrategy();
+        return strategy with
+        {
+            ExitRules = strategy.ExitRules with
+            {
+                EnableAtrTrailingStop = true,
+                TrailingStopAtrMultiple = 2.0m,
+                TrailingActivationR = 1.0m,
+                EnableConfirmedVwapExit = false
+            }
+        };
+    }
+
+    private static StrategyDefinition LoadStrategyWithConfirmedVwapExit()
+    {
+        var strategy = LoadBaseStrategy();
+        return strategy with
+        {
+            ExitRules = strategy.ExitRules with
+            {
+                EnableAtrTrailingStop = false,
+                EnableConfirmedVwapExit = true,
+                ConfirmedVwapExitBars = 3,
+                ConfirmedVwapExitAtrBuffer = 0.15m,
+                DisableConfirmedVwapExitAfterR = 1.0m
+            }
+        };
+    }
+
+    private static StrategyDefinition LoadBaseStrategy()
     {
         var root = FindRepositoryRoot();
         return new SimpleYamlReader().ReadStrategy(Path.Combine(
             root,
             "configs",
             "strategies",
-            "intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml"));
+            "intraday-ema10-ema20-macd-volume.v2-additive.yaml"));
     }
 
     private static string FindRepositoryRoot()
@@ -143,3 +174,5 @@ public sealed class PositionGuardianEngineTests
         throw new DirectoryNotFoundException("Could not locate TradingFlow repository root.");
     }
 }
+
+

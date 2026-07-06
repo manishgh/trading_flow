@@ -25,43 +25,21 @@
                 </Border>
 
                 <Border Style="{StaticResource CardBorder}">
-                    <VerticalStackLayout Spacing="10">
-                        <Label Text="Run Ticker" FontAttributes="Bold" FontSize="18" />
-                        <Entry x:Name="ManualTickerEntry" Placeholder="POET, RGTI, NVTS..." Keyboard="Text" />
-                        <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                            <Picker x:Name="ConfigPicker" Title="Paper profile" />
-                            <Picker x:Name="StrategyPicker" Grid.Column="1" Title="Strategy" />
-                        </Grid>
-                        <HorizontalStackLayout Spacing="8">
-                            <CheckBox x:Name="ValidateStrategyCheck" Scale="0.82" CheckedChanged="OnAutomationOptionChanged" />
-                            <VerticalStackLayout Spacing="1">
-                                <Label Text="Require strategy gates before entry" VerticalTextAlignment="Center" FontSize="13" />
-                                <Label Text="Off = enter on Stock Pulse alert, then guardian manages exit." FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
-                            </VerticalStackLayout>
-                        </HorizontalStackLayout>
-                        <Button Text="Start Paper Trade" Clicked="OnRunNow" />
+                    <VerticalStackLayout Spacing="8">
+                        <Label Text="When a Stock Pulse alert arrives" FontAttributes="Bold" FontSize="18" />
+                        <Picker x:Name="ModePicker" Title="Off / Direct enter / a strategy" SelectedIndexChanged="OnModeChanged" />
+                        <Label x:Name="EntryModeHintLabel" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
                     </VerticalStackLayout>
                 </Border>
 
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <VerticalStackLayout Spacing="2">
-                                <Label Text="Stock Pulse Alerts" FontAttributes="Bold" FontSize="18" />
-                                <Label x:Name="SelectedAlertLabel" Text="Captured alerts appear here after notification access is enabled." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                            </VerticalStackLayout>
+                            <Label Text="Stock Pulse Alerts" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
                             <Button Grid.Column="1" Text="Clear" Clicked="OnClearAlerts" Padding="12,6" BackgroundColor="#475467" />
                         </Grid>
 
-                        <Button Text="Start Selected" Clicked="OnForwardAlert" />
-
-                        <HorizontalStackLayout Spacing="8">
-                            <CheckBox x:Name="AutoForwardCheck" Scale="0.82" CheckedChanged="OnAutomationOptionChanged" />
-                            <Label Text="Auto-start when Stock Pulse sends a buy alert" VerticalTextAlignment="Center" FontSize="13" />
-                        </HorizontalStackLayout>
-                        <Button Text="Save Defaults" Clicked="OnSaveDefaults" />
-
-                        <CollectionView x:Name="AlertsView" SelectionMode="Single" SelectionChanged="OnAlertSelected" HeightRequest="300">
+                        <CollectionView x:Name="AlertsView" SelectionMode="None" HeightRequest="300">
                             <CollectionView.EmptyView>
                                 <Label Text="No captured alerts yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
                             </CollectionView.EmptyView>

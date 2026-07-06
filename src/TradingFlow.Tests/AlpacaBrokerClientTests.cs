@@ -53,6 +53,26 @@ public class AlpacaBrokerClientTests
         Assert.False(root.TryGetProperty("limit_price", out _));
     }
 
+    [Fact]
+    public async Task ClosePositionAsync_WithQuantity_UsesScopedPositionClose()
+    {
+        using var handler = new CapturingHandler();
+        using var httpClient = new HttpClient(handler);
+        using var client = new AlpacaBrokerClient(
+            httpClient,
+            AlpacaOptions.CreateDefault() with
+            {
+                KeyId = "test-key",
+                SecretKey = "test-secret"
+            });
+
+        var closed = await client.ClosePositionAsync("rgti", 25, CancellationToken.None);
+
+        Assert.True(closed);
+        Assert.Equal(HttpMethod.Delete, handler.Method);
+        Assert.Equal("/v2/positions/RGTI?qty=25", handler.Path);
+    }
+
     private sealed class CapturingHandler : HttpMessageHandler, IDisposable
     {
         public string RequestJson { get; private set; } = String.Empty;

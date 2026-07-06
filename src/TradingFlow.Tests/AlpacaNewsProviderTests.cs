@@ -54,11 +54,13 @@ public sealed class AlpacaNewsProviderTests
             AlpacaOptions.CreateDefault() with { KeyId = "key", SecretKey = "secret" },
             sentimentAnalyzer: analyzer);
 
+        var beforeFetch = DateTimeOffset.UtcNow;
         var catalysts = await provider.GetCatalystsAsync(
             "MU",
             DateTimeOffset.Parse("2026-06-09T13:00:00Z"),
             DateTimeOffset.Parse("2026-06-09T15:00:00Z"),
             CancellationToken.None);
+        var afterFetch = DateTimeOffset.UtcNow;
 
         Assert.Equal(2, catalysts.Count);
         Assert.Equal(2, handler.Requests.Count);
@@ -67,6 +69,8 @@ public sealed class AlpacaNewsProviderTests
         Assert.Equal("benzinga", catalysts[0].Source);
         Assert.Equal("https://example.test/mu", catalysts[0].Url);
         Assert.Equal("Management cited stronger datacenter orders.", catalysts[0].Summary);
+        Assert.NotNull(catalysts[0].ReceivedAt);
+        Assert.InRange(catalysts[0].ReceivedAt!.Value, beforeFetch.AddSeconds(-1), afterFetch.AddSeconds(1));
         Assert.Equal(2, analyzer.CallCount);
     }
 
@@ -101,6 +105,38 @@ public sealed class AlpacaNewsProviderTests
         Assert.Equal(1, analyzer.CallCount);
     }
 
+    [Fact]
+    public async Task GetCatalystsAsync_ReusesCachedSentimentWithoutReusingCachedTicker()
+    {
+        var payload = """
+        {
+          "news": [
+            {
+              "id": "shared-article",
+              "headline": "Quantum stocks rise on sector catalyst",
+              "created_at": "2026-06-09T13:30:00Z",
+              "symbols": ["POET", "RGTI"]
+            }
+          ]
+        }
+        """;
+        var handler = new QueueHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent(payload) },
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent(payload) });
+
+        var analyzer = new DeterministicSentimentAnalyzer();
+        var provider = new AlpacaNewsProvider(
+            new HttpClient(handler),
+            AlpacaOptions.CreateDefault() with { KeyId = "key", SecretKey = "secret" },
+            sentimentAnalyzer: analyzer);
+
+        var poet = await provider.GetCatalystsAsync("POET", DateTimeOffset.UtcNow.AddHours(-2), DateTimeOffset.UtcNow, CancellationToken.None);
+        var rgti = await provider.GetCatalystsAsync("RGTI", DateTimeOffset.UtcNow.AddHours(-2), DateTimeOffset.UtcNow, CancellationToken.None);
+
+        Assert.Equal("POET", Assert.Single(poet).Ticker);
+        Assert.Equal("RGTI", Assert.Single(rgti).Ticker);
+        Assert.Equal(1, analyzer.CallCount);
+    }
     private static StringContent JsonContent(string json)
     {
         return new StringContent(json, Encoding.UTF8, "application/json");

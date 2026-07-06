@@ -196,7 +196,8 @@ public sealed class WishlistObserverService : BackgroundService
             Provider: item.Provider,
             Summary: item.Summary,
             Source: item.Source,
-            Url: item.Url);
+            Url: item.Url,
+            ReceivedAt: item.IngestedAt);
     }
 
     private static DateOnly ToExchangeDate(DateTimeOffset timestamp)

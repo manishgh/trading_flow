@@ -41,7 +41,6 @@ public sealed class PaperModel : PageModel
     [BindProperty] public string ConfigPath { get; set; } = String.Empty;
     [BindProperty] public string SelectedStrategyPath { get; set; } = String.Empty;
     [BindProperty(SupportsGet = true)] public Guid? WishlistId { get; set; }
-    [BindProperty(SupportsGet = true)] public string? TickersCsv { get; set; }
     [BindProperty(SupportsGet = true)] public string OrderExpiration { get; set; } = "gtc";
     [BindProperty(SupportsGet = true)] public string EntryOrderType { get; set; } = "limit";
     [BindProperty(SupportsGet = true)] public bool ExtendedHours { get; set; } = true;
@@ -78,13 +77,6 @@ public sealed class PaperModel : PageModel
 
         Load(ConfigPath, SelectedStrategyPath);
         await LoadWishlistsAsync(WishlistId, cancellationToken);
-
-        if (string.IsNullOrEmpty(TickersCsv))
-        {
-            TickersCsv = !String.IsNullOrWhiteSpace(WishlistTickersCsv)
-                ? WishlistTickersCsv
-                : String.Join(", ", Selected.Config.Tickers);
-        }
 
         if (string.IsNullOrEmpty(OrderExpiration))
         {
@@ -157,28 +149,6 @@ public sealed class PaperModel : PageModel
         AlpacaCheckJson = JsonSerializer.Serialize(PaperSnapshot.AlpacaReadOnlyCheck, jsonOptions);
     }
 
-    public IActionResult OnPostSaveConfig()
-    {
-        var form = Request.Form;
-        var baseConfigPath = form["BaseConfigPath"].ToString();
-        var tickersCsv = form["TickersCsv"].ToString();
-        var tickers = tickersCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var strategyPath = form["SelectedStrategyPath"].ToString();
-        var orderExpiration = form["OrderExpiration"].ToString();
-        var entryOrderType = form["EntryOrderType"].ToString();
-        var extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase);
-        var newsEnabled = EffectiveNewsEnabled(strategyPath, form.TryGetValue("NewsEnabled", out var ne) && ne.ToString().Contains("true", StringComparison.OrdinalIgnoreCase));
-        var screenerFilter = form["ScreenerFilter"].ToString();
-
-        if (tickers.Length > 0 && !String.IsNullOrWhiteSpace(baseConfigPath))
-        {
-            var newPath = configWriter.SaveTempConfig(baseConfigPath, tickers, strategyPath, orderExpiration, entryOrderType, extendedHours, screenerFilter, newsEnabled: newsEnabled);
-            return RedirectToPage(new { configPath = newPath, strategyPath, orderExpiration, entryOrderType, extendedHours, newsEnabled, screenerFilter });
-        }
-
-        return RedirectToPage();
-    }
-
     public IActionResult OnPostSaveStrategy()
     {
         var form = Request.Form;
@@ -219,25 +189,7 @@ public sealed class PaperModel : PageModel
         return RedirectToPage(new {
             configPath = form["BaseConfigPath"].ToString(),
             strategyPath,
-            tickersCsv = form["TickersCsv"].ToString(),
-            orderExpiration = form["OrderExpiration"].ToString(),
-            entryOrderType = form["EntryOrderType"].ToString(),
-            extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
-            newsEnabled = form.TryGetValue("NewsEnabled", out var ne) && ne.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
-            screenerFilter = form["ScreenerFilter"].ToString()
-        });
-    }
-
-    public IActionResult OnPostDeleteConfig()
-    {
-        var form = Request.Form;
-        var configPath = form["DeleteConfigPath"].ToString();
-        if (!String.IsNullOrWhiteSpace(configPath))
-        {
-            configWriter.DeleteTempConfig(configPath);
-        }
-        return RedirectToPage(new {
-            strategyPath = form["SelectedStrategyPath"].ToString(),
+            wishlistId = form["WishlistId"].ToString(),
             orderExpiration = form["OrderExpiration"].ToString(),
             entryOrderType = form["EntryOrderType"].ToString(),
             extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
@@ -258,26 +210,36 @@ public sealed class PaperModel : PageModel
         var extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase);
         var newsEnabled = EffectiveNewsEnabled(strategyPath, form.TryGetValue("NewsEnabled", out var ne) && ne.ToString().Contains("true", StringComparison.OrdinalIgnoreCase));
         var screenerFilter = form["ScreenerFilter"].ToString();
-        var tickersCsv = form["TickersCsv"].ToString();
 
         if (String.IsNullOrWhiteSpace(runName))
             runName = "paper_" + DateTimeOffset.UtcNow.ToString("yyyyMMdd_HHmmss");
 
         Load(baseConfigPath, strategyPath);
         await LoadWishlistsAsync(Guid.TryParse(wishlistIdText, out var parsedWishlistId) ? parsedWishlistId : null, cancellationToken);
-        var existingConfig = catalog.GetConfig(baseConfigPath);
         var wishlistTickers = SelectedWishlist?.Items
             .Where(item => item.Active)
             .Select(item => item.Ticker)
             .Where(ticker => !String.IsNullOrWhiteSpace(ticker))
             .ToArray() ?? [];
-        var tickers = wishlistTickers.Length > 0
-            ? wishlistTickers
-            : (string.IsNullOrWhiteSpace(tickersCsv)
-                ? existingConfig.Config.Tickers
-                : tickersCsv.Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries));
+        if (wishlistTickers.Length == 0 && String.IsNullOrWhiteSpace(screenerFilter))
+        {
+            ModelState.AddModelError(String.Empty, "Select a wishlist with active tickers or provide a Finviz screener.");
+            return Page();
+        }
 
-        var tempConfigPath = configWriter.SaveTempConfig(baseConfigPath, tickers, strategyPath, orderExpiration, entryOrderType, extendedHours, screenerFilter, runName, newsEnabled);
+        var tempConfigPath = configWriter.SaveTempConfig(
+            baseConfigPath,
+            wishlistTickers,
+            strategyPath,
+            orderExpiration,
+            entryOrderType,
+            extendedHours,
+            screenerFilter,
+            runName,
+            newsEnabled,
+            SelectedWishlist?.Id,
+            SelectedWishlist?.Name,
+            SelectedWishlist is null ? "finviz" : "wishlist");
         var job = paperJobs.Start(runName, tempConfigPath);
         return RedirectToPage("/PaperJob", new { id = job.JobId });
     }
@@ -298,7 +260,7 @@ public sealed class PaperModel : PageModel
             : catalog.GetConfig(configPath);
         ConfigPath = Selected.Path;
         SelectedStrategyPath = String.IsNullOrWhiteSpace(strategyPath)
-            ? Selected.Strategies.FirstOrDefault()?.Path ?? Strategies.FirstOrDefault()?.Path ?? String.Empty
+            ? Strategies.FirstOrDefault()?.Path ?? Selected.Strategies.FirstOrDefault()?.Path ?? String.Empty
             : strategyPath;
     }
 

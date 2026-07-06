@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -28,7 +28,7 @@ public sealed class PaperModelTests
             model.ConfigPath,
             StringComparison.OrdinalIgnoreCase);
         Assert.EndsWith(
-            Path.Combine("configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v9-confirmed-reclaim.yaml"),
+            Path.Combine("configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"),
             model.SelectedStrategyPath,
             StringComparison.OrdinalIgnoreCase);
     }
@@ -47,10 +47,10 @@ public sealed class PaperModelTests
             CancellationToken.None);
 
         Assert.EndsWith(
-            Path.Combine("configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v9-confirmed-reclaim.yaml"),
+            Path.Combine("configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"),
             model.SelectedStrategyPath,
             StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("setup_type: vwap_pullback", model.StrategyYaml, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("setup_type: indicator_stack", model.StrategyYaml, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -104,3 +104,4 @@ public sealed class PaperModelTests
         return TestRepository.FindRoot();
     }
 }
+

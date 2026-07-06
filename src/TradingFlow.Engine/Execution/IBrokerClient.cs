@@ -14,5 +14,6 @@ public interface IBrokerClient
     Task<System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken);
     Task<System.Collections.Generic.IReadOnlyList<BrokerPosition>> GetOpenPositionsAsync(CancellationToken cancellationToken);
     Task<string[]> SubmitExitOrdersAsync(string ticker, int quantity, decimal stopLossPrice, decimal takeProfitPrice, CancellationToken cancellationToken);
+    Task<bool> ClosePositionAsync(string ticker, int quantity, CancellationToken cancellationToken);
     Task<bool> ClosePositionAsync(string ticker, CancellationToken cancellationToken);
 }

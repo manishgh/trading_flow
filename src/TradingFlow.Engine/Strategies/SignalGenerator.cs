@@ -144,6 +144,15 @@ public sealed class SignalGenerator
         var isEpisodicPivotGap = strategy.EntryRules.MinGapUpPct is { } minGap &&
             gapUpPct is not null &&
             gapUpPct.Value >= minGap;
+        var priorEntryGainPct = ComputePriorEntryGainPct(
+            bars,
+            index,
+            strategy.EntryRules.PriorEntryGainLookbackBars);
+        var priorDayStructure = GetPriorDayStructure(strategy, bars, snapshots, index);
+        var divergenceContext = GetMacdDivergenceFadeContext(strategy, bars, snapshots, index);
+        var vwapDistanceAtr = snapshot.Atr.Value <= 0m
+            ? (decimal?)null
+            : Math.Abs(snapshot.CurrentPrice - snapshot.Vwap.Value) / snapshot.Atr.Value;
 
         return new TradeSignal(
             snapshot.Ticker,
@@ -268,7 +277,14 @@ public sealed class SignalGenerator
             snapshot.Obv,
             obvTrend.Previous,
             obvTrend.IsRising,
-            obvTrend.Change);
+            obvTrend.Change,
+            snapshot.MacdHistogram.Value,
+            priorEntryGainPct,
+            priorDayStructure.IsInsideDay,
+            priorDayStructure.IsNr7,
+            divergenceContext.IsBullishFade,
+            divergenceContext.IsBearishFade,
+            vwapDistanceAtr);
     }
 
     private static (bool IsRising, decimal? Previous, decimal? Change) GetNullableIndicatorTrend(
@@ -1236,12 +1252,131 @@ public sealed class SignalGenerator
             ?.Close;
     }
 
+    private static (bool IsInsideDay, bool IsNr7) GetPriorDayStructure(
+        StrategyDefinition strategy,
+        IReadOnlyList<OhlcvBar> bars,
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int index)
+    {
+        var currentExchangeTime = ConvertToExchangeTime(snapshots[index].Timestamp, strategy.Session.ExchangeTimezone);
+        var sessions = GetCompletedRegularSessions(strategy, bars.Take(index).ToArray(), currentExchangeTime.Date);
+        if (sessions.Count < 2)
+        {
+            return (false, false);
+        }
+
+        var prior = sessions[^1];
+        var previous = sessions[^2];
+        var isInsideDay = prior.High <= previous.High && prior.Low >= previous.Low;
+
+        var nrLookback = Math.Max(2, strategy.EntryRules.PriorNr7LookbackDays);
+        var nrWindow = sessions.Skip(Math.Max(0, sessions.Count - nrLookback)).ToArray();
+        var priorRange = prior.High - prior.Low;
+        var isNr7 = nrWindow.Length >= nrLookback && priorRange == nrWindow.Min(session => session.High - session.Low);
+
+        return (isInsideDay, isNr7);
+    }
+
+    private static IReadOnlyList<RegularSessionSummary> GetCompletedRegularSessions(
+        StrategyDefinition strategy,
+        IReadOnlyList<OhlcvBar> historicalBars,
+        DateTime currentExchangeDate)
+    {
+        var regularOpen = new TimeSpan(9, 30, 0);
+        var regularClose = new TimeSpan(16, 0, 0);
+
+        return historicalBars
+            .Select(bar => new
+            {
+                Bar = bar,
+                ExchangeTime = ConvertToExchangeTime(bar.Timestamp, strategy.Session.ExchangeTimezone)
+            })
+            .Where(x => x.ExchangeTime.Date < currentExchangeDate &&
+                x.ExchangeTime.TimeOfDay >= regularOpen &&
+                x.ExchangeTime.TimeOfDay <= regularClose)
+            .GroupBy(x => x.ExchangeTime.Date)
+            .OrderBy(group => group.Key)
+            .Select(group => new RegularSessionSummary(
+                group.Key,
+                group.Max(x => x.Bar.High),
+                group.Min(x => x.Bar.Low),
+                group.Last().Bar.Close))
+            .ToArray();
+    }
+
+    private static (bool IsBullishFade, bool IsBearishFade) GetMacdDivergenceFadeContext(
+        StrategyDefinition strategy,
+        IReadOnlyList<OhlcvBar> bars,
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int index)
+    {
+        var lookback = Math.Max(3, strategy.EntryRules.DivergenceLookbackBars);
+        if (index <= lookback || snapshots[index].MacdHistogram is null)
+        {
+            return (false, false);
+        }
+
+        var currentExchangeTime = ConvertToExchangeTime(snapshots[index].Timestamp, strategy.Session.ExchangeTimezone);
+        if (currentExchangeTime.Hour < strategy.EntryRules.DivergenceStartHour)
+        {
+            return (false, false);
+        }
+
+        var start = Math.Max(0, index - lookback);
+        var priorIndexes = Enumerable.Range(start, index - start)
+            .Where(i => ConvertToExchangeTime(snapshots[i].Timestamp, strategy.Session.ExchangeTimezone).Date == currentExchangeTime.Date)
+            .Where(i => snapshots[i].MacdHistogram is not null)
+            .ToArray();
+        if (priorIndexes.Length == 0)
+        {
+            return (false, false);
+        }
+
+        var currentBar = bars[index];
+        var currentHistogram = snapshots[index].MacdHistogram!.Value;
+        var priorLowIndex = priorIndexes.MinBy(i => bars[i].Low);
+        var priorHighIndex = priorIndexes.MaxBy(i => bars[i].High);
+
+        var bullishFade = currentBar.Low < bars[priorLowIndex].Low &&
+            currentHistogram > snapshots[priorLowIndex].MacdHistogram!.Value &&
+            currentBar.Close > bars[index - 1].Low &&
+            currentBar.Close < bars[index - 1].High;
+
+        var bearishFade = currentBar.High > bars[priorHighIndex].High &&
+            currentHistogram < snapshots[priorHighIndex].MacdHistogram!.Value &&
+            currentBar.Close < bars[index - 1].High &&
+            currentBar.Close > bars[index - 1].Low;
+
+        return (bullishFade, bearishFade);
+    }
+
     private static decimal? ComputeCloseLocationValue(OhlcvBar bar)
     {
         var range = bar.High - bar.Low;
         return range <= 0m
             ? null
             : (bar.Close - bar.Low) / range;
+    }
+
+    private static decimal? ComputePriorEntryGainPct(
+        IReadOnlyList<OhlcvBar> bars,
+        int index,
+        int lookbackBars)
+    {
+        var lookback = Math.Max(1, lookbackBars);
+        var priorIndex = index - lookback;
+        if (priorIndex < 0)
+        {
+            return null;
+        }
+
+        var priorClose = bars[priorIndex].Close;
+        if (priorClose <= 0m)
+        {
+            return null;
+        }
+
+        return ((bars[index].Close / priorClose) - 1m) * 100m;
     }
 
     private static (decimal Slope, decimal R2)? ComputeLogTrend(
@@ -1346,9 +1481,10 @@ public sealed class SignalGenerator
             .Select(bar => (decimal?)bar.High)
             .Max();
 
-        return openingRangeHigh is not null &&
-            snapshots[index].CurrentPrice > openingRangeHigh.Value &&
-            snapshots[index - 1].CurrentPrice <= openingRangeHigh.Value;
+        var breakLevel = openingRangeHigh + strategy.EntryRules.OpeningRangeBreakBuffer;
+        return breakLevel is not null &&
+            snapshots[index].CurrentPrice >= breakLevel.Value &&
+            snapshots[index - 1].CurrentPrice < breakLevel.Value;
     }
 
     private static bool IsOpeningDriveContinuation(
@@ -1434,9 +1570,10 @@ public sealed class SignalGenerator
             .Select(bar => (decimal?)bar.Low)
             .Min();
 
-        return openingRangeLow is not null &&
-            snapshots[index].CurrentPrice < openingRangeLow.Value &&
-            snapshots[index - 1].CurrentPrice >= openingRangeLow.Value;
+        var breakLevel = openingRangeLow - strategy.EntryRules.OpeningRangeBreakBuffer;
+        return breakLevel is not null &&
+            snapshots[index].CurrentPrice <= breakLevel.Value &&
+            snapshots[index - 1].CurrentPrice > breakLevel.Value;
     }
 
     private static bool IsAboveSessionOpen(
@@ -1543,6 +1680,8 @@ public sealed class SignalGenerator
     {
         return TimeZoneInfo.ConvertTime(timestamp, ResolveTimezone(timezoneId)).DateTime;
     }
+
+    private sealed record RegularSessionSummary(DateTime Date, decimal High, decimal Low, decimal Close);
 
     private static TimeZoneInfo ResolveTimezone(string timezoneId)
     {

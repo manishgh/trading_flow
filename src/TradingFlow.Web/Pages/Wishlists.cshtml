@@ -455,18 +455,36 @@
                 {
                     @foreach (var news in Model.RelatedNews)
                     {
-                        <a class="rail-item" href="@news.Url" target="_blank" rel="noopener noreferrer" style="display:block;text-decoration:none;color:inherit;">
-                            <div class="rail-line">
-                                <span class="rail-ticker">@news.Ticker</span>
-                                <span class="muted">@news.Timestamp.ToLocalTime().ToString("dd/MM HH:mm")</span>
+                        if (!String.IsNullOrWhiteSpace(news.Url))
+                        {
+                            <a class="rail-item news-link-card" href="@news.Url" target="_blank" rel="noopener noreferrer">
+                                <div class="rail-line">
+                                    <span class="rail-ticker">@news.Ticker</span>
+                                    <span class="muted">@news.Timestamp.ToLocalTime().ToString("dd/MM HH:mm")</span>
+                                </div>
+                                <div class="rail-title">@news.Headline</div>
+                                @if (!String.IsNullOrWhiteSpace(news.Summary))
+                                {
+                                    <div class="rail-summary">@news.Summary</div>
+                                }
+                                <div class="rail-summary">@news.Provider @(!String.IsNullOrWhiteSpace(news.Source) ? $"- {news.Source}" : "")</div>
+                            </a>
+                        }
+                        else
+                        {
+                            <div class="rail-item">
+                                <div class="rail-line">
+                                    <span class="rail-ticker">@news.Ticker</span>
+                                    <span class="muted">@news.Timestamp.ToLocalTime().ToString("dd/MM HH:mm")</span>
+                                </div>
+                                <div class="rail-title">@news.Headline</div>
+                                @if (!String.IsNullOrWhiteSpace(news.Summary))
+                                {
+                                    <div class="rail-summary">@news.Summary</div>
+                                }
+                                <div class="rail-summary">@news.Provider @(!String.IsNullOrWhiteSpace(news.Source) ? $"- {news.Source}" : "")</div>
                             </div>
-                            <div class="rail-title">@news.Headline</div>
-                            @if (!String.IsNullOrWhiteSpace(news.Summary))
-                            {
-                                <div class="rail-summary">@news.Summary</div>
-                            }
-                            <div class="rail-summary">@news.Provider @(!String.IsNullOrWhiteSpace(news.Source) ? $"- {news.Source}" : "")</div>
-                        </a>
+                        }
                     }
                 }
             </div>

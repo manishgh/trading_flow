@@ -1,4 +1,4 @@
-using TradingFlow.Domain.Orders;
+﻿using TradingFlow.Domain.Orders;
 
 namespace TradingFlow.Domain.Backtesting;
 
@@ -26,6 +26,7 @@ public sealed record BacktestResult(
     BacktestValidationReport Validation,
     IReadOnlyList<BacktestTrade> CompletedTrades,
     IReadOnlyList<StrategyDiagnosticReport> Diagnostics,
+    IReadOnlyList<MissedMoveAudit> MissedMoves,
     IReadOnlyList<FinalizedOrder> AcceptedOrders);
 
 public sealed record WinnerStrategySummary(
@@ -39,6 +40,18 @@ public sealed record WinnerStrategySummary(
     int AcceptedTradeCount,
     int RejectedTradeCount);
 
+
+public sealed record MissedMoveAudit(
+    string Ticker,
+    string Timeframe,
+    DateTimeOffset StartTimestamp,
+    DateTimeOffset PeakTimestamp,
+    decimal StartClose,
+    decimal PeakHigh,
+    decimal MovePct,
+    int BarsToPeak,
+    IReadOnlyList<string> StrategiesWithEntries,
+    IReadOnlyList<string> StrategiesWithoutEntries);
 public sealed record StrategyBacktestResult(
     string StrategyId,
     string StrategyName,
@@ -114,3 +127,6 @@ public sealed record DirectionPnlSummary(
     decimal AverageNetProfit,
     decimal BestTradeNetProfit,
     decimal WorstTradeNetProfit);
+
+
+

@@ -248,6 +248,7 @@ public sealed class FinvizClient : IDisposable
     public static IReadOnlyList<CatalystEvent> ParseNewsExportCsv(string csvContent, string externalIdPrefix)
     {
         var rows = new List<CatalystEvent>();
+        var receivedAt = DateTimeOffset.UtcNow;
         if (String.IsNullOrWhiteSpace(csvContent))
         {
             return rows;
@@ -330,7 +331,8 @@ public sealed class FinvizClient : IDisposable
                     ExternalId: $"{externalIdPrefix}:{ticker}:{timestamp.UtcDateTime:O}:{title.GetHashCode(StringComparison.Ordinal)}",
                     Summary: category,
                     Source: source,
-                    Url: articleUrl));
+                    Url: articleUrl,
+                    ReceivedAt: receivedAt));
             }
         }
 

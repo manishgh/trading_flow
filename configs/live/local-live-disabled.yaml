@@ -1,4 +1,4 @@
-run_name: local-live-disabled
+﻿run_name: local-live-disabled
 mode: live
 
 engine:
@@ -98,7 +98,9 @@ news:
     negative_threshold: -0.6
 
 artifacts:
-  retention_mode: summary
+  retention_mode: full
 
 strategies:
-  - ../strategies/intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml
+  - ../strategies/intraday-ema10-ema20-macd-volume.v1.yaml
+
+

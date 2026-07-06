@@ -8,8 +8,8 @@
             <VerticalStackLayout Padding="12" Spacing="10">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                     <VerticalStackLayout Spacing="0">
-                        <Label Text="Wishlists" Style="{StaticResource Headline}" FontSize="22" />
-                        <Label Text="Observe movers, act fast, inspect only when needed." Style="{StaticResource SubHeadline}" FontSize="12" />
+                        <Label Text="Desk" Style="{StaticResource Headline}" FontSize="22" />
+                        <Label Text="Watch prices, react to signals, start strategy-managed paper trades." Style="{StaticResource SubHeadline}" FontSize="12" />
                     </VerticalStackLayout>
                     <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
                 </Grid>
@@ -22,7 +22,7 @@
                             <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
                         </Grid>
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <Entry x:Name="WishlistNameEntry" Placeholder="New group name" />
+                            <Entry x:Name="WishlistNameEntry" Placeholder="Group name" />
                             <Button Grid.Column="1" Text="Save" Clicked="OnSaveWishlist" Padding="12,6" />
                         </Grid>
                     </VerticalStackLayout>
@@ -50,9 +50,9 @@
                                 </DataTemplate>
                             </CollectionView.ItemTemplate>
                         </CollectionView>
-                        <Picker x:Name="StrategyPicker" Title="Exit / paper strategy" />
+                        <Picker x:Name="StrategyPicker" Title="Strategy for paper runs" />
                         <Picker x:Name="ConfigPicker" Title="Broker profile" IsVisible="False" />
-                        <Button Text="Start Paper Run For Group" Clicked="OnTradeWishlist" />
+                        <Button Text="Run Strategy For Group" Clicked="OnTradeWishlist" />
                     </VerticalStackLayout>
                 </Border>
 
@@ -61,7 +61,7 @@
                     <Label x:Name="StockCountLabel" Grid.Column="1" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" VerticalTextAlignment="Center" />
                 </Grid>
 
-                <CollectionView x:Name="ItemsView" HeightRequest="300">
+                <CollectionView x:Name="ItemsView" HeightRequest="420">
                     <CollectionView.EmptyView>
                         <Label Text="No stocks yet. Add a ticker above or create a group." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
                     </CollectionView.EmptyView>
@@ -75,15 +75,22 @@
                                             <Label Text="{Binding DetailText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="1" />
                                         </VerticalStackLayout>
                                         <VerticalStackLayout Grid.Column="1" Spacing="0" HorizontalOptions="End">
+                                            <Label Text="{Binding StatusText}" FontAttributes="Bold" FontSize="12" TextColor="{Binding StatusColor}" HorizontalTextAlignment="End" />
                                             <Label Text="{Binding PriceText}" FontAttributes="Bold" FontSize="14" HorizontalTextAlignment="End" />
                                             <Label Text="{Binding BidAskText}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" HorizontalTextAlignment="End" />
                                             <Label Text="{Binding MovementText}" FontSize="11" TextColor="{Binding MovementColor}" HorizontalTextAlignment="End" IsVisible="{Binding HasMovement}" />
                                         </VerticalStackLayout>
                                     </Grid>
-                                    <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="8">
-                                        <Button Text="Trade" Clicked="OnTradeTicker" CommandParameter="{Binding .}" Padding="12,6" />
-                                        <Button Grid.Column="1" Text="Sell" Clicked="OnSellTicker" CommandParameter="{Binding .}" Padding="12,6" BackgroundColor="#475467" />
-                                        <Button Grid.Column="2" Text="-" Clicked="OnRemoveTicker" CommandParameter="{Binding .}" Padding="12,6" BackgroundColor="#667085" />
+                                    <VerticalStackLayout IsVisible="{Binding IsExpanded}" Spacing="4">
+                                        <Label Text="{Binding EligibilityReason}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" MaxLines="5" />
+                                        <Label Text="{Binding NewsText}" FontSize="12" TextColor="{StaticResource AccentColor}" LineBreakMode="TailTruncation" MaxLines="2" />
+                                        <Label Text="{Binding TradeText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="2" />
+                                    </VerticalStackLayout>
+                                    <Grid ColumnDefinitions="*,*,*,Auto" ColumnSpacing="6">
+                                        <Button Text="Trade" Clicked="OnTradeTicker" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" />
+                                        <Button Grid.Column="1" Text="News" Clicked="OnOpenTickerNews" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" IsEnabled="{Binding HasNewsLink}" />
+                                        <Button Grid.Column="2" Text="Details" Clicked="OnToggleTickerDetails" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" BackgroundColor="#475467" />
+                                        <Button Grid.Column="3" Text="-" Clicked="OnRemoveTicker" CommandParameter="{Binding .}" Padding="10,6" FontSize="12" BackgroundColor="#667085" />
                                     </Grid>
                                 </VerticalStackLayout>
                             </Border>
@@ -99,7 +106,7 @@
                     <Button Grid.Column="1" Text="Reload" Clicked="OnRefreshSignals" Padding="12,6" />
                 </Grid>
 
-                <CollectionView x:Name="SignalsView" HeightRequest="340">
+                <CollectionView x:Name="SignalsView" HeightRequest="280">
                     <CollectionView.EmptyView>
                         <Label Text="No recent wishlist signals." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
                     </CollectionView.EmptyView>
@@ -138,7 +145,7 @@
                     <Label x:Name="NewsStatusLabel" Text="Rolling 4-hour window for this group's tickers. Live." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
                 </VerticalStackLayout>
 
-                <CollectionView x:Name="NewsView" SelectionMode="Single" SelectionChanged="OnNewsSelected" HeightRequest="260">
+                <CollectionView x:Name="NewsView" SelectionMode="Single" SelectionChanged="OnNewsSelected" HeightRequest="220">
                     <CollectionView.EmptyView>
                         <Label Text="No related news in the last 4 hours." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
                     </CollectionView.EmptyView>

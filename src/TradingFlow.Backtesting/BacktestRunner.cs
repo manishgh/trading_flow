@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using TradingFlow.Backtesting.Artifacts;
 using TradingFlow.Data.Csv;
 using TradingFlow.Domain.Backtesting;
@@ -13,6 +13,7 @@ using TradingFlow.Engine.Pipeline;
 using TradingFlow.Engine.Sessions;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Engine.Strategies;
+using TradingFlow.Engine.Universe;
 using TradingFlow.Data.Catalysts;
 
 namespace TradingFlow.Backtesting;
@@ -25,10 +26,10 @@ public sealed record PreparedBacktestMarket(
     DateTimeOffset WindowStart,
     DateTimeOffset WindowEnd);
 
-public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter? artifactWriter = null, ICandleStore? candleStore = null)
+public sealed partial class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter? artifactWriter = null, ICandleStore? candleStore = null)
 {
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
-    private readonly BasicStrategyEvaluator _strategyEvaluator = new();
+    private readonly StrategyDecisionBrain _decisionBrain = new();
     private readonly StrategySessionClock _sessionClock = new();
     private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
     private readonly BacktestValidator _validator = new();
@@ -44,7 +45,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         progress?.Report(BacktestProgress.StageOnly("loading_config", $"Loading run config {Path.GetFileName(configPath)}."));
         var run = yamlReader.ReadBacktestRun(configPath);
         progress?.Report(BacktestProgress.StageOnly("loading_strategies", $"Loading {run.Strategies.Count} strategy config(s)."));
-        var strategies = run.Strategies.Select(yamlReader.ReadStrategy).ToArray();
+        var strategies = ApplyRunSessionPolicy(run, run.Strategies.Select(yamlReader.ReadStrategy).ToArray());
 
         return await RunAsync(run, strategies, startedAt, GetResultPath(run), cancellationToken, progress);
     }
@@ -57,8 +58,108 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress = null)
     {
+        strategies = ApplyRunSessionPolicy(run, strategies);
+        var (resolvedRun, membership) = await ResolveUniverseAsync(run, cancellationToken, progress);
+        run = resolvedRun;
         var preparedMarket = await PrepareMarketAsync(run, strategies, cancellationToken, progress);
-        return await RunPreparedAsync(run, strategies, startedAt, resultPath, preparedMarket, cancellationToken, progress);
+        return await RunPreparedAsync(run, strategies, startedAt, resultPath, preparedMarket, cancellationToken, progress, membership);
+    }
+
+    /// <summary>
+    /// Replaces the static ticker list with a point-in-time screened universe when the run
+    /// opts into historical_screener mode. No-op for static runs, so existing configs are
+    /// unaffected. The screened list is derived only from data before the evaluation start.
+    /// </summary>
+    private async Task<(BacktestRunConfig Run, UniverseMembership? Membership)> ResolveUniverseAsync(
+        BacktestRunConfig run,
+        CancellationToken cancellationToken,
+        IProgress<BacktestProgress>? progress)
+    {
+        if (run.Universe is not { } universe || !universe.IsHistoricalScreener)
+        {
+            return (run, null);
+        }
+
+        var provider = CreateProvider(run);
+        var (_, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
+        var dailyTimeframe = ResolveDailyTimeframe(run);
+
+        // The candidate pool is either the static list or, for a broad honest pool, a Finviz
+        // screener export. The Finviz screen is applied here; the no-lookahead price/liquidity
+        // screen below still runs on top so within-window selection stays point-in-time.
+        var configuredTickers = run.Tickers;
+        var effectiveUniverse = universe;
+        var universeSource = UniverseConfig.HistoricalScreenerMode;
+        if (universe.UsesFinvizScreen)
+        {
+            var pool = await ResolveFinvizCandidatePoolAsync(universe, cancellationToken);
+            var merged = universe.MergesCuratedAndFinviz
+                ? universe.Candidates.Concat(pool)
+                : pool;
+            configuredTickers = merged
+                .Select(ticker => ticker.Trim().ToUpperInvariant())
+                .Where(ticker => ticker.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            progress?.Report(BacktestProgress.StageOnly(
+                "finviz_candidates",
+                $"Candidate pool: {configuredTickers.Count} ({pool.Count} from Finviz{(universe.MergesCuratedAndFinviz ? $" + {universe.Candidates.Count} curated" : String.Empty)})."));
+            effectiveUniverse = universe with { Candidates = Array.Empty<string>() };
+            universeSource = universe.MergesCuratedAndFinviz ? "historical_screener/curated+finviz" : "historical_screener/finviz";
+        }
+
+        progress?.Report(BacktestProgress.StageOnly(
+            "resolving_universe",
+            $"Screening point-in-time universe as of {evaluationStart:yyyy-MM-dd} (no-lookahead)."));
+
+        var screener = new HistoricalScreenerUniverseProvider(provider);
+        var request = new UniverseRequest(configuredTickers, effectiveUniverse, evaluationStart, dailyTimeframe, windowEnd);
+
+        var resolution = await screener.ResolveAsync(request, cancellationToken);
+        if (resolution.Tickers.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"universe resolved zero tickers as of {resolution.AsOfDate:yyyy-MM-dd}. " +
+                "Check the candidate pool (static list or Finviz screener), daily data availability, and screen thresholds.");
+        }
+
+        await PersistUniverseSnapshotAsync(run, resolution, cancellationToken);
+
+        // Per-run (default): trade the as-of selection. Per-day: trade the union of every
+        // ticker ever eligible, gated day-by-day at trade acceptance.
+        UniverseMembership? membership = null;
+        IReadOnlyList<string> effectiveTickers = resolution.Tickers;
+        if (universe.IsPerDayRescreen)
+        {
+            membership = await screener.ResolveMembershipAsync(request, cancellationToken);
+            var union = membership.Tickers.ToArray();
+            if (union.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    "per_day universe has zero eligible tickers across the window. Check the candidate pool and screen thresholds.");
+            }
+
+            effectiveTickers = union;
+            universeSource += "/per_day";
+        }
+
+        progress?.Report(BacktestProgress.StageOnly(
+            "resolved_universe",
+            universe.IsPerDayRescreen
+                ? $"Per-day universe: {effectiveTickers.Count} ticker(s) ever eligible from {configuredTickers.Count} candidate(s)."
+                : $"Universe: {resolution.Tickers.Count} ticker(s) selected from {configuredTickers.Count} candidate(s), {resolution.Rejections.Count} rejected."));
+
+        var biasRisk = run.Validation.BiasRisk with
+        {
+            UniverseSource = universeSource,
+            UniverseAsOfDate = resolution.AsOfDate
+        };
+        var resolvedRun = run with
+        {
+            Tickers = effectiveTickers,
+            Validation = run.Validation with { BiasRisk = biasRisk }
+        };
+        return (resolvedRun, membership);
     }
 
     public async Task<PreparedBacktestMarket> PrepareMarketAsync(
@@ -67,6 +168,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress = null)
     {
+        strategies = ApplyRunSessionPolicy(run, strategies);
         ValidateRun(run, strategies);
 
         var provider = CreateProvider(run);
@@ -128,8 +230,10 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         string resultPath,
         PreparedBacktestMarket preparedMarket,
         CancellationToken cancellationToken,
-        IProgress<BacktestProgress>? progress = null)
+        IProgress<BacktestProgress>? progress = null,
+        UniverseMembership? universeMembership = null)
     {
+        strategies = ApplyRunSessionPolicy(run, strategies);
         ValidateRun(run, strategies);
         var catalystStreamer = new CatalystStreamer(CreateNewsProvider(run));
 
@@ -248,16 +352,13 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
             .OrderBy(x => x.EntryTimestamp)
             .ThenBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var strategyResults = BuildStrategyResults(run.Portfolio, strategies, candidates, allBars);
+        var strategyResults = BuildStrategyResults(run.Portfolio, strategies, candidates, allBars, universeMembership);
         var diagnostics = BuildDiagnostics(
             strategies,
             strategyResults,
             batches.Select(x => x.Diagnostics).ToArray());
         var completedTrades = strategyResults.SelectMany(x => x.CompletedTrades).ToArray();
-        var bestStrategy = strategyResults
-            .OrderByDescending(x => x.NetProfit)
-            .ThenBy(x => x.MaxDrawdownPct)
-            .FirstOrDefault();
+        var bestStrategy = SelectBestActiveStrategy(strategyResults);
         var winner = bestStrategy is null
             ? null
             : new WinnerStrategySummary(
@@ -271,6 +372,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
                 bestStrategy.AcceptedTradeCount,
                 bestStrategy.RejectedTradeCount);
         var validation = _validator.Validate(run, allBars, preparedMarket.BenchmarkBars, strategyResults);
+        var missedMoves = BuildMissedMoveAudits(strategies, candidates, allBars);
 
         progress?.Report(BacktestProgress.StageOnly("writing_result", $"Writing result {Path.GetFileName(resultPath)}."));
         var result = new BacktestResult(
@@ -297,6 +399,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
             validation,
             completedTrades,
             diagnostics,
+            missedMoves,
             Array.Empty<FinalizedOrder>());
 
         result = result with
@@ -305,6 +408,21 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         };
         progress?.Report(BacktestProgress.StageOnly("completed", "Backtest completed."));
         return result;
+    }
+
+    private static StrategyDefinition[] ApplyRunSessionPolicy(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
+    {
+        if (!run.Execution.ExtendedHours)
+        {
+            return strategies.ToArray();
+        }
+
+        return strategies
+            .Select(strategy => strategy with
+            {
+                Session = strategy.Session with { UseExtendedHours = true }
+            })
+            .ToArray();
     }
 
     private static void ValidateRun(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
@@ -716,6 +834,36 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         return Math.Max(0, index - 1);
     }
 
+    private int FindFirstValidExecutionBarIndexAtOrAfter(
+        IReadOnlyList<OhlcvBar> bars,
+        DateTimeOffset timestamp,
+        StrategyDefinition strategy)
+    {
+        var index = FindFirstBarIndexAtOrAfter(bars, timestamp);
+        while (index < bars.Count &&
+               !_sessionClock.ValidateExecutionWindow(bars[index].Timestamp, strategy.Execution.Timeframe, strategy.Session))
+        {
+            index++;
+        }
+
+        return index;
+    }
+
+    private int FindNextValidExecutionBarIndex(
+        IReadOnlyList<OhlcvBar> bars,
+        int startIndex,
+        StrategyDefinition strategy)
+    {
+        var index = Math.Max(startIndex, 0);
+        while (index < bars.Count &&
+               !_sessionClock.ValidateExecutionWindow(bars[index].Timestamp, strategy.Execution.Timeframe, strategy.Session))
+        {
+            index++;
+        }
+
+        return index;
+    }
+
     private StrategyCandidateEvaluation CreateStrategyCandidates(
         BacktestRunConfig run,
         StrategyDefinition strategy,
@@ -749,7 +897,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
             }
 
             diagnostics.EvaluatedBarCount++;
-            var entryRelativeVolume = ResolveEntryRelativeVolume(strategy, snapshot);
+            var entryRelativeVolume = _decisionBrain.ResolveEntryRelativeVolume(strategy, snapshot);
             if (entryRelativeVolume is null)
             {
                 diagnostics.IncrementRejection("missing_indicator_warmup_or_null");
@@ -781,7 +929,7 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
                 continue;
             }
 
-            var volumeRejection = GetVolumeConfirmationRejection(strategy, snapshot, entryRelativeVolume.Value);
+            var volumeRejection = _decisionBrain.GetVolumeConfirmationRejection(strategy, snapshot, entryRelativeVolume.Value);
             if (volumeRejection is not null)
             {
                 diagnostics.IncrementRejection(volumeRejection);
@@ -796,10 +944,10 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
             }
 
             var longRejection = AllowsLong(strategy)
-                ? _strategyEvaluator.GetLongEntryRejection(strategy, signal, entryRelativeVolume.Value)
+                ? _decisionBrain.GetLongEntryRejection(strategy, signal, snapshot, entryRelativeVolume.Value)
                 : "direction_not_long";
             var shortRejection = AllowsShort(strategy)
-                ? _strategyEvaluator.GetShortEntryRejection(strategy, signal, entryRelativeVolume.Value)
+                ? _decisionBrain.GetShortEntryRejection(strategy, signal, snapshot, entryRelativeVolume.Value)
                 : "direction_not_short";
             if (longRejection is not null && shortRejection is not null)
             {
@@ -844,20 +992,15 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         IReadOnlyList<OhlcvBar> executionBars)
     {
         var signalCloseTimestamp = signal.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
-        var confirmationIndex = FindFirstBarIndexAtOrAfter(executionBars, signalCloseTimestamp);
+        var confirmationIndex = FindFirstValidExecutionBarIndexAtOrAfter(executionBars, signalCloseTimestamp, strategy);
         if (confirmationIndex >= executionBars.Count)
         {
             return ("no_next_bar_or_invalid_stop", confirmationIndex);
         }
 
         var confirmationBar = executionBars[confirmationIndex];
-        if (!_sessionClock.ValidateExecutionWindow(confirmationBar.Timestamp, strategy.Execution.Timeframe, strategy.Session))
-        {
-            return ("entry_outside_session_window", confirmationIndex);
-        }
-
         var entryIndex = strategy.EntryRules.EnableEntryBarConfirmation
-            ? confirmationIndex + 1
+            ? FindNextValidExecutionBarIndex(executionBars, confirmationIndex + 1, strategy)
             : confirmationIndex;
         if (entryIndex >= executionBars.Count)
         {
@@ -865,11 +1008,6 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         }
 
         var entryBar = executionBars[entryIndex];
-        if (!_sessionClock.ValidateExecutionWindow(entryBar.Timestamp, strategy.Execution.Timeframe, strategy.Session))
-        {
-            return ("entry_outside_session_window", entryIndex);
-        }
-
         var confirmationCloseLocation = ComputeCloseLocationValue(confirmationBar);
         if (strategy.EntryRules.EnableEntryBarConfirmation)
         {
@@ -914,1204 +1052,8 @@ public sealed class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter?
         return (null, entryIndex);
     }
 
-    private static decimal? ComputeCloseLocationValue(OhlcvBar bar)
-    {
-        var range = bar.High - bar.Low;
-        return range <= 0m
-            ? null
-            : (bar.Close - bar.Low) / range;
-    }
 
-    private static bool AllowsLong(StrategyDefinition strategy)
-    {
-        return strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase) ||
-            strategy.Direction.Equals("long_short", StringComparison.OrdinalIgnoreCase) ||
-            strategy.Direction.Equals("both", StringComparison.OrdinalIgnoreCase);
-    }
 
-    private static bool AllowsShort(StrategyDefinition strategy)
-    {
-        return strategy.EntryRules.EnableShort &&
-            (strategy.Direction.Equals("short", StringComparison.OrdinalIgnoreCase) ||
-             strategy.Direction.Equals("long_short", StringComparison.OrdinalIgnoreCase) ||
-             strategy.Direction.Equals("both", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static string ChoosePrimaryRejection(string longRejection, string shortRejection)
-    {
-        if (!longRejection.StartsWith("direction_", StringComparison.OrdinalIgnoreCase))
-        {
-            return longRejection;
-        }
-
-        if (!shortRejection.StartsWith("direction_", StringComparison.OrdinalIgnoreCase))
-        {
-            return shortRejection;
-        }
-
-        return longRejection;
-    }
-
-    private (BacktestCandidateTrade Candidate, int ExitIndex)? CreateCandidate(
-        BacktestRunConfig run,
-        StrategyDefinition strategy,
-        TradeSignal signal,
-        string direction,
-        IReadOnlyList<OhlcvBar> bars,
-        IReadOnlyList<IndicatorSnapshot> snapshots,
-        TradingFlow.Engine.Execution.ExecutionAuditor auditor,
-        CancellationToken cancellationToken,
-        int? plannedEntryIndex = null)
-    {
-        var signalCloseTimestamp = signal.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
-        var entryIndex = plannedEntryIndex ?? FindFirstBarIndexAtOrAfter(bars, signalCloseTimestamp);
-        if (entryIndex >= bars.Count)
-        {
-            return null;
-        }
-
-        var entryBar = bars[entryIndex];
-        var entrySnapshot = snapshots[entryIndex];
-        var relativeVolume = entrySnapshot.RelativeVolume ?? 1.0m;
-        if (direction.Equals("short", StringComparison.OrdinalIgnoreCase))
-        {
-            return CreateShortCandidate(run, strategy, signal, entryIndex, bars, snapshots, auditor, relativeVolume, cancellationToken);
-        }
-
-        // Approximate trade amount based on portfolio config
-        var approximateTradeAmount = run.Portfolio.StartingCapital / run.Portfolio.MaxConcurrentPositions;
-        var entryPrice = TradingFlow.Engine.Risk.DynamicSlippageModel.ApplyLongSlippage(entryBar.Open, relativeVolume, strategy.Execution.SlippageBps, approximateTradeAmount);
-
-        var stopDistance = ResolvePositionRiskStopDistance(strategy, signal.CurrentAtr, entryPrice, run.Portfolio.RiskPerTradePct);
-        if (stopDistance <= 0)
-        {
-            return null;
-        }
-
-        var initialStopLossPrice = entryPrice - stopDistance;
-        var currentStopLossPrice = initialStopLossPrice;
-        var takeProfitPrice = entryPrice + (stopDistance * strategy.ExitRules.TargetRMultiple);
-        var entryTimestamp = entryBar.Timestamp;
-        var highestHighSinceEntry = entryPrice;
-
-        auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"LONG signal generated at {signal.CurrentPrice}");
-        auditor.LogEvent(signal.Ticker, strategy.StrategyName, entryTimestamp, TradingFlow.Engine.Execution.ExecutionState.OrderFilled, $"Simulated fill at {entryPrice} (Stop: {initialStopLossPrice}, TP: {takeProfitPrice})");
-
-        var technicalEngine = new TradingFlow.Engine.Execution.TechnicalExecutionEngine();
-
-        for (var i = entryIndex; i < bars.Count; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var bar = bars[i];
-            var exitPriceLogTrend = TradingFlow.Engine.Execution.TechnicalExecutionEngine.ComputeLogTrend(
-                bars,
-                i,
-                strategy.ExitRules.ExitLogPriceLookbackBars,
-                x => x.Close,
-                addOne: false);
-            var exitVolumeLogTrend = TradingFlow.Engine.Execution.TechnicalExecutionEngine.ComputeLogTrend(
-                bars,
-                i,
-                strategy.ExitRules.ExitLogVolumeLookbackBars,
-                x => x.Volume,
-                addOne: true);
-            if (IsIntradayFlatStrategy(strategy) &&
-                _sessionClock.ShouldFlattenBeforeSessionClose(bar.Timestamp, strategy.Execution.Timeframe, strategy.Session))
-            {
-                var eodRelativeVolume = snapshots[i].RelativeVolume ?? relativeVolume;
-                var eodExitPrice = ApplyLongExitSlippage(bar.Open, eodRelativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via end_of_day_exit at {eodExitPrice}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, eodExitPrice, "end_of_day_exit", stopDistance), i);
-            }
-
-            var barsHeld = i - entryIndex;
-            currentStopLossPrice = technicalEngine.CalculateEffectiveStopLoss(
-                strategy,
-                snapshots[i],
-                entryPrice,
-                stopDistance,
-                initialStopLossPrice,
-                currentStopLossPrice,
-                highestHighSinceEntry);
-            if (bar.Low <= currentStopLossPrice)
-            {
-                var stopExitReason = currentStopLossPrice > initialStopLossPrice ? "trailing_stop" : "stop_loss";
-                var slippedStopPrice = ApplyLongExitSlippage(currentStopLossPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via {stopExitReason} at {slippedStopPrice}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedStopPrice, stopExitReason, stopDistance), i);
-            }
-
-            if (bar.High >= takeProfitPrice)
-            {
-                var slippedTakeProfit = ApplyLongExitSlippage(takeProfitPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via take_profit at {slippedTakeProfit}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedTakeProfit, "take_profit", stopDistance), i);
-            }
-
-            if (technicalEngine.ShouldExitLongOnConfirmedVwapFailure(strategy, snapshots, i, entryIndex, entryPrice, stopDistance, Math.Max(highestHighSinceEntry, bar.High), barsHeld))
-            {
-                var exitBar = i + 1 < bars.Count ? bars[i + 1] : bar;
-                var exitSnapshot = i + 1 < snapshots.Count ? snapshots[i + 1] : snapshots[i];
-                var exitBasis = i + 1 < bars.Count ? exitBar.Open : exitBar.Close;
-                var confirmedExitPrice = ApplyLongExitSlippage(exitBasis, exitSnapshot.RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, exitBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via confirmed_vwap_failure at {confirmedExitPrice}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, exitBar.Timestamp, confirmedExitPrice, "confirmed_vwap_failure", stopDistance), Math.Min(i + 1, bars.Count - 1));
-            }
-
-            var (exitPrice, exitReason) = technicalEngine.EvaluateBarForExit(
-                strategy,
-                bar,
-                snapshots[i],
-                entryPrice,
-                initialStopLossPrice,
-                takeProfitPrice,
-                entryTimestamp,
-                stopDistance,
-                barsHeld,
-                ref currentStopLossPrice,
-                ref highestHighSinceEntry,
-                exitPriceLogTrend?.Slope,
-                exitVolumeLogTrend?.Slope,
-                i > 0 ? snapshots[i - 1] : null);
-
-            if (exitPrice.HasValue && exitReason is not null)
-            {
-                // In backtest, for technical exit, we exit on next bar open
-                if (exitReason.StartsWith("technical_exit") && i + 1 < bars.Count)
-                {
-                    var nextBar = bars[i + 1];
-                    var nextRelativeVolume = snapshots[i + 1].RelativeVolume ?? relativeVolume;
-                    var nextExitPrice = ApplyLongExitSlippage(nextBar.Open, nextRelativeVolume, strategy, approximateTradeAmount);
-                    auditor.LogEvent(signal.Ticker, strategy.StrategyName, nextBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via {exitReason} at {nextExitPrice}");
-                    return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, nextBar.Timestamp, nextExitPrice, exitReason, stopDistance), i + 1);
-                }
-
-                var slippedExitPrice = ApplyLongExitSlippage(exitPrice.Value, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via {exitReason} at {slippedExitPrice}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedExitPrice, exitReason, stopDistance), i);
-            }
-        }
-
-        var finalBar = bars[^1];
-        var finalRelativeVolume = snapshots[^1].RelativeVolume ?? relativeVolume;
-        var finalExitPrice = ApplyLongExitSlippage(finalBar.Close, finalRelativeVolume, strategy, approximateTradeAmount);
-        auditor.LogEvent(signal.Ticker, strategy.StrategyName, finalBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via end_of_data at {finalExitPrice}");
-        return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, finalBar.Timestamp, finalExitPrice, "end_of_data", stopDistance), bars.Count - 1);
-    }
-
-    private (BacktestCandidateTrade Candidate, int ExitIndex)? CreateShortCandidate(
-        BacktestRunConfig run,
-        StrategyDefinition strategy,
-        TradeSignal signal,
-        int entryIndex,
-        IReadOnlyList<OhlcvBar> bars,
-        IReadOnlyList<IndicatorSnapshot> snapshots,
-        TradingFlow.Engine.Execution.ExecutionAuditor auditor,
-        decimal relativeVolume,
-        CancellationToken cancellationToken)
-    {
-        var entryBar = bars[entryIndex];
-        var approximateTradeAmount = run.Portfolio.StartingCapital / run.Portfolio.MaxConcurrentPositions;
-        var entryPrice = ApplyShortEntrySlippage(entryBar.Open, relativeVolume, strategy, approximateTradeAmount);
-        var stopDistance = ResolvePositionRiskStopDistance(strategy, signal.CurrentAtr, entryPrice, run.Portfolio.RiskPerTradePct);
-        if (stopDistance <= 0)
-        {
-            return null;
-        }
-
-        var initialStopLossPrice = entryPrice + stopDistance;
-        var currentStopLossPrice = initialStopLossPrice;
-        var takeProfitPrice = entryPrice - (stopDistance * strategy.ExitRules.TargetRMultiple);
-        if (takeProfitPrice <= 0)
-        {
-            return null;
-        }
-
-        var entryTimestamp = entryBar.Timestamp;
-        var lowestLowSinceEntry = entryPrice;
-        auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"SHORT signal generated at {signal.CurrentPrice}");
-        auditor.LogEvent(signal.Ticker, strategy.StrategyName, entryTimestamp, TradingFlow.Engine.Execution.ExecutionState.OrderFilled, $"Simulated short fill at {entryPrice} (Stop: {initialStopLossPrice}, TP: {takeProfitPrice})");
-
-        for (var i = entryIndex; i < bars.Count; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var bar = bars[i];
-            if (IsIntradayFlatStrategy(strategy) &&
-                _sessionClock.ShouldFlattenBeforeSessionClose(bar.Timestamp, strategy.Execution.Timeframe, strategy.Session))
-            {
-                var eodRelativeVolume = snapshots[i].RelativeVolume ?? relativeVolume;
-                var eodExitPrice = ApplyShortExitSlippage(bar.Open, eodRelativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via end_of_day_exit at {eodExitPrice}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, eodExitPrice, "end_of_day_exit", stopDistance), i);
-            }
-
-            var barsHeld = i - entryIndex;
-            if (bar.High >= currentStopLossPrice)
-            {
-                var stopExitReason = currentStopLossPrice < initialStopLossPrice ? "trailing_stop" : "stop_loss";
-                var slippedStopPrice = ApplyShortExitSlippage(currentStopLossPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via {stopExitReason} at {slippedStopPrice}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedStopPrice, stopExitReason, stopDistance), i);
-            }
-
-            if (bar.Low <= takeProfitPrice)
-            {
-                var slippedTakeProfit = ApplyShortExitSlippage(takeProfitPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via take_profit at {slippedTakeProfit}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedTakeProfit, "take_profit", stopDistance), i);
-            }
-
-            if (ShouldExitShortOnConfirmedVwapReclaim(strategy, snapshots, i, entryIndex, entryPrice, stopDistance, Math.Min(lowestLowSinceEntry, bar.Low), barsHeld))
-            {
-                var exitBar = i + 1 < bars.Count ? bars[i + 1] : bar;
-                var exitSnapshot = i + 1 < snapshots.Count ? snapshots[i + 1] : snapshots[i];
-                var exitBasis = i + 1 < bars.Count ? exitBar.Open : exitBar.Close;
-                var confirmedExitPrice = ApplyShortExitSlippage(exitBasis, exitSnapshot.RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, exitBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via confirmed_vwap_reclaim at {confirmedExitPrice}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, exitBar.Timestamp, confirmedExitPrice, "confirmed_vwap_reclaim", stopDistance), Math.Min(i + 1, bars.Count - 1));
-            }
-
-            var (exitPrice, exitReason) = EvaluateShortBarForExit(
-                strategy,
-                bar,
-                snapshots[i],
-                entryPrice,
-                initialStopLossPrice,
-                takeProfitPrice,
-                entryTimestamp,
-                stopDistance,
-                barsHeld,
-                ref currentStopLossPrice,
-                ref lowestLowSinceEntry,
-                i > 0 ? snapshots[i - 1] : null);
-
-            if (exitPrice.HasValue && exitReason is not null)
-            {
-                var slippedExitPrice = ApplyShortExitSlippage(exitPrice.Value, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via {exitReason} at {slippedExitPrice}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedExitPrice, exitReason, stopDistance), i);
-            }
-        }
-
-        var finalBar = bars[^1];
-        var finalRelativeVolume = snapshots[^1].RelativeVolume ?? relativeVolume;
-        var finalExitPrice = ApplyShortExitSlippage(finalBar.Close, finalRelativeVolume, strategy, approximateTradeAmount);
-        return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, finalBar.Timestamp, finalExitPrice, "end_of_data", stopDistance), bars.Count - 1);
-    }
-
-    private static (decimal? ExitPrice, string? ExitReason) EvaluateShortBarForExit(
-        StrategyDefinition strategy,
-        OhlcvBar bar,
-        IndicatorSnapshot snapshot,
-        decimal entryPrice,
-        decimal initialStopLossPrice,
-        decimal takeProfitPrice,
-        DateTimeOffset entryTimestamp,
-        decimal stopDistance,
-        int barsHeld,
-        ref decimal currentStopLossPrice,
-        ref decimal lowestLowSinceEntry,
-        IndicatorSnapshot? previousSnapshot = null)
-    {
-        if (strategy.ExitRules.EnableAtrTrailingStop &&
-            snapshot.Atr is { } atr &&
-            atr > 0)
-        {
-            var profitR = (entryPrice - lowestLowSinceEntry) / stopDistance;
-            if (profitR >= strategy.ExitRules.TrailingActivationR)
-            {
-                var trailingStop = lowestLowSinceEntry + (strategy.ExitRules.TrailingStopAtrMultiple * atr);
-                currentStopLossPrice = Math.Min(initialStopLossPrice, Math.Min(currentStopLossPrice, trailingStop));
-            }
-        }
-
-        if (bar.High >= currentStopLossPrice)
-        {
-            var exitReason = currentStopLossPrice < initialStopLossPrice ? "trailing_stop" : "stop_loss";
-            return (currentStopLossPrice, exitReason);
-        }
-
-        if (bar.Low <= takeProfitPrice)
-        {
-            return (takeProfitPrice, "take_profit");
-        }
-
-        if (barsHeld >= strategy.ExitRules.MinHoldBarsBeforeTechnicalExit)
-        {
-            if (strategy.ExitRules.ExitOnCloseBelowVwap &&
-                snapshot.Vwap is { } vwap &&
-                snapshot.CurrentPrice > vwap)
-            {
-                return (bar.Close, "technical_exit_above_vwap");
-            }
-
-            if (strategy.ExitRules.ExitOnMacdHistogramNegative &&
-                snapshot.MacdHistogram is { } histogram &&
-                histogram > 0)
-            {
-                return (bar.Close, "technical_exit_macd_histogram_positive");
-            }
-
-            if (strategy.ExitRules.ExitShortOnSma10CrossAboveSma20 &&
-                TechnicalExecutionEngine.IsSma10CrossedAboveSma20(snapshot, previousSnapshot))
-            {
-                return (bar.Close, "technical_exit_sma10_cross_above_sma20");
-            }
-        }
-
-        var maxExitTimestamp = entryTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours);
-        if (bar.Timestamp >= maxExitTimestamp)
-        {
-            return (bar.Close, "max_hold");
-        }
-
-        lowestLowSinceEntry = Math.Min(lowestLowSinceEntry, bar.Low);
-        return (null, null);
-    }
-
-    private static bool ShouldExitLongOnConfirmedVwapFailure(
-        StrategyDefinition strategy,
-        IReadOnlyList<IndicatorSnapshot> snapshots,
-        int index,
-        int entryIndex,
-        decimal entryPrice,
-        decimal stopDistance,
-        decimal highestHighSinceEntry,
-        int barsHeld)
-    {
-        if (!strategy.ExitRules.EnableConfirmedVwapExit ||
-            barsHeld < strategy.ExitRules.MinHoldBarsBeforeTechnicalExit ||
-            stopDistance <= 0)
-        {
-            return false;
-        }
-
-        if (strategy.ExitRules.DisableConfirmedVwapExitAfterR is { } disableAfterR &&
-            ((highestHighSinceEntry - entryPrice) / stopDistance) >= disableAfterR)
-        {
-            return false;
-        }
-
-        var confirmationBars = Math.Max(strategy.ExitRules.ConfirmedVwapExitBars, 1);
-        if (index - confirmationBars + 1 < entryIndex)
-        {
-            return false;
-        }
-
-        for (var i = index - confirmationBars + 1; i <= index; i++)
-        {
-            var snapshot = snapshots[i];
-            if (snapshot.Vwap is null || snapshot.Atr is null)
-            {
-                return false;
-            }
-
-            var failureLevel = snapshot.Vwap.Value - (snapshot.Atr.Value * strategy.ExitRules.ConfirmedVwapExitAtrBuffer);
-            if (snapshot.CurrentPrice >= failureLevel)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool ShouldExitShortOnConfirmedVwapReclaim(
-        StrategyDefinition strategy,
-        IReadOnlyList<IndicatorSnapshot> snapshots,
-        int index,
-        int entryIndex,
-        decimal entryPrice,
-        decimal stopDistance,
-        decimal lowestLowSinceEntry,
-        int barsHeld)
-    {
-        if (!strategy.ExitRules.EnableConfirmedVwapExit ||
-            barsHeld < strategy.ExitRules.MinHoldBarsBeforeTechnicalExit ||
-            stopDistance <= 0)
-        {
-            return false;
-        }
-
-        if (strategy.ExitRules.DisableConfirmedVwapExitAfterR is { } disableAfterR &&
-            ((entryPrice - lowestLowSinceEntry) / stopDistance) >= disableAfterR)
-        {
-            return false;
-        }
-
-        var confirmationBars = Math.Max(strategy.ExitRules.ConfirmedVwapExitBars, 1);
-        if (index - confirmationBars + 1 < entryIndex)
-        {
-            return false;
-        }
-
-        for (var i = index - confirmationBars + 1; i <= index; i++)
-        {
-            var snapshot = snapshots[i];
-            if (snapshot.Vwap is null || snapshot.Atr is null)
-            {
-                return false;
-            }
-
-            var reclaimLevel = snapshot.Vwap.Value + (snapshot.Atr.Value * strategy.ExitRules.ConfirmedVwapExitAtrBuffer);
-            if (snapshot.CurrentPrice <= reclaimLevel)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool IsIntradayFlatStrategy(StrategyDefinition strategy)
-    {
-        return !IsDailyOrHigher(strategy.Timeframe) &&
-            !IsDailyOrHigher(strategy.Execution.Timeframe) &&
-            strategy.ExitRules.MaxHoldHours <= 8m;
-    }
-
-    private static decimal ApplyLongExitSlippage(
-        decimal price,
-        decimal relativeVolume,
-        StrategyDefinition strategy,
-        decimal approximateTradeAmount)
-    {
-        return TradingFlow.Engine.Risk.DynamicSlippageModel.ApplyLongExitSlippage(
-            price,
-            relativeVolume,
-            strategy.Execution.SlippageBps,
-            approximateTradeAmount);
-    }
-
-    private static decimal ApplyShortEntrySlippage(
-        decimal price,
-        decimal relativeVolume,
-        StrategyDefinition strategy,
-        decimal approximateTradeAmount)
-    {
-        return TradingFlow.Engine.Risk.DynamicSlippageModel.ApplyShortEntrySlippage(
-            price,
-            relativeVolume,
-            strategy.Execution.SlippageBps,
-            approximateTradeAmount);
-    }
-
-    private static decimal ApplyShortExitSlippage(
-        decimal price,
-        decimal relativeVolume,
-        StrategyDefinition strategy,
-        decimal approximateTradeAmount)
-    {
-        return TradingFlow.Engine.Risk.DynamicSlippageModel.ApplyShortExitSlippage(
-            price,
-            relativeVolume,
-            strategy.Execution.SlippageBps,
-            approximateTradeAmount);
-    }
-
-    private static BacktestCandidateTrade BuildCandidate(
-        StrategyDefinition strategy,
-        TradeSignal signal,
-        string direction,
-        DateTimeOffset entryTimestamp,
-        decimal entryPrice,
-        decimal stopLossPrice,
-        decimal takeProfitPrice,
-        DateTimeOffset exitTimestamp,
-        decimal exitPrice,
-        string exitReason,
-        decimal stopDistance)
-    {
-        return new BacktestCandidateTrade(
-            signal.Ticker,
-            strategy.StrategyName,
-            direction,
-            entryTimestamp,
-            Decimal.Round(entryPrice, 4),
-            Decimal.Round(stopLossPrice, 4),
-            Decimal.Round(takeProfitPrice, 4),
-            exitTimestamp,
-            Decimal.Round(exitPrice, 4),
-            exitReason,
-            Decimal.Round(stopDistance, 4));
-    }
-
-    private static decimal ResolvePositionRiskStopDistance(
-        StrategyDefinition strategy,
-        decimal atr,
-        decimal entryPrice,
-        decimal maxLossPctOfPosition)
-    {
-        var atrStopDistance = strategy.ExitRules.StopAtrMultiple * atr;
-        if (entryPrice <= 0m || maxLossPctOfPosition <= 0m)
-        {
-            return atrStopDistance;
-        }
-
-        var positionRiskStopDistance = entryPrice * (maxLossPctOfPosition / 100m);
-        return Math.Min(atrStopDistance, positionRiskStopDistance);
-    }
-
-    private static IReadOnlyList<StrategyBacktestResult> BuildStrategyResults(
-        PortfolioConfig portfolio,
-        IReadOnlyCollection<StrategyDefinition> strategies,
-        IReadOnlyList<BacktestCandidateTrade> candidates,
-        IReadOnlyCollection<OhlcvBar> allBars)
-    {
-        return strategies
-            .Select(strategy =>
-            {
-                var strategyCandidates = candidates
-                    .Where(x => x.StrategyName.Equals(strategy.StrategyName, StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(x => x.EntryTimestamp)
-                    .ThenBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-                var trades = BuildPortfolioTrades(portfolio, strategy, strategyCandidates);
-                var netProfit = trades.Sum(x => x.NetProfit);
-                var endingCapital = portfolio.StartingCapital + netProfit;
-                var totalReturnPct = portfolio.StartingCapital == 0 ? 0 : (netProfit / portfolio.StartingCapital) * 100m;
-                var maxDrawdownPct = CalculateMaxDrawdown(portfolio.StartingCapital, trades);
-                var dailyMetrics = CalculateDailyMetrics(portfolio.StartingCapital, strategy, trades, allBars);
-
-                return new StrategyBacktestResult(
-                    strategy.StrategyId,
-                    strategy.StrategyName,
-                    strategy.Source,
-                    portfolio.StartingCapital,
-                    Decimal.Round(endingCapital, 4),
-                    Decimal.Round(netProfit, 4),
-                    Decimal.Round(totalReturnPct, 4),
-                    dailyMetrics.AverageDailyReturnPct,
-                    dailyMetrics.TradingDayCount,
-                    Decimal.Round(maxDrawdownPct, 4),
-                    strategyCandidates.Length,
-                    trades.Count,
-                    strategyCandidates.Length - trades.Count,
-                    trades.Count(x => x.NetProfit > 0),
-                    trades.Count(x => x.NetProfit < 0),
-                    trades);
-            })
-            .ToArray();
-    }
-
-    private static IReadOnlyList<StrategyDiagnosticReport> BuildDiagnostics(
-        IReadOnlyCollection<StrategyDefinition> strategies,
-        IReadOnlyCollection<StrategyBacktestResult> strategyResults,
-        IReadOnlyCollection<StrategyCandidateDiagnostics> candidateDiagnostics)
-    {
-        return strategies
-            .Select(strategy =>
-            {
-                var result = strategyResults.Single(x => x.StrategyId.Equals(strategy.StrategyId, StringComparison.OrdinalIgnoreCase));
-                var diagnostics = candidateDiagnostics
-                    .Where(x => x.StrategyId.Equals(strategy.StrategyId, StringComparison.OrdinalIgnoreCase))
-                    .ToArray();
-                var rejectionCounts = diagnostics
-                    .SelectMany(x => x.RejectionCounts)
-                    .GroupBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(x => x.Key, x => x.Sum(y => y.Value), StringComparer.OrdinalIgnoreCase);
-                var rejectionExamples = diagnostics
-                    .SelectMany(x => x.RejectionExamples)
-                    .GroupBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(
-                        x => x.Key,
-                        x => (IReadOnlyList<string>)x.SelectMany(y => y.Value).Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToArray(),
-                        StringComparer.OrdinalIgnoreCase);
-                var evaluatedBarCount = diagnostics.Sum(x => x.EvaluatedBarCount);
-                var exitReasonCounts = result.CompletedTrades
-                    .GroupBy(x => x.ExitReason, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(x => x.Key, x => x.Count(), StringComparer.OrdinalIgnoreCase);
-                var wins = result.CompletedTrades.Where(x => x.NetProfit > 0).ToArray();
-                var losses = result.CompletedTrades.Where(x => x.NetProfit < 0).ToArray();
-                var averageWin = wins.Length == 0 ? 0 : wins.Average(x => x.NetProfit);
-                var averageLoss = losses.Length == 0 ? 0 : Math.Abs(losses.Average(x => x.NetProfit));
-                var realizedRewardRiskRatio = averageLoss == 0
-                    ? (averageWin > 0 ? 999m : 0m)
-                    : averageWin / averageLoss;
-                var winRatePct = result.AcceptedTradeCount == 0
-                    ? 0
-                    : ((decimal)result.WinningTradeCount / result.AcceptedTradeCount) * 100m;
-                var dailyPnl = BuildDailyPnlSummary(result);
-                var directionPnl = BuildDirectionPnlSummary(result);
-
-                return new StrategyDiagnosticReport(
-                    strategy.StrategyId,
-                    strategy.StrategyName,
-                    evaluatedBarCount,
-                    result.CandidateTradeCount,
-                    result.AcceptedTradeCount,
-                    Decimal.Round(winRatePct, 4),
-                    Decimal.Round(averageWin, 4),
-                    Decimal.Round(averageLoss, 4),
-                    Decimal.Round(realizedRewardRiskRatio, 4),
-                    dailyPnl,
-                    directionPnl,
-                    exitReasonCounts,
-                    rejectionCounts
-                        .OrderByDescending(x => x.Value)
-                        .ThenBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
-                        .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase),
-                    rejectionExamples
-                        .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
-                        .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase),
-                    BuildDiagnosticSuggestions(result, rejectionCounts, exitReasonCounts, realizedRewardRiskRatio, winRatePct));
-            })
-            .ToArray();
-    }
-
-    private static IReadOnlyList<DirectionPnlSummary> BuildDirectionPnlSummary(StrategyBacktestResult result)
-    {
-        return result.CompletedTrades
-            .GroupBy(trade => String.IsNullOrWhiteSpace(trade.Direction) ? "long" : trade.Direction, StringComparer.OrdinalIgnoreCase)
-            .Select(group =>
-            {
-                var trades = group.ToArray();
-                return new DirectionPnlSummary(
-                    group.Key,
-                    trades.Length,
-                    trades.Count(trade => trade.NetProfit > 0),
-                    trades.Count(trade => trade.NetProfit < 0),
-                    Decimal.Round(trades.Sum(trade => trade.NetProfit), 4),
-                    Decimal.Round(trades.Average(trade => trade.NetProfit), 4),
-                    Decimal.Round(trades.Max(trade => trade.NetProfit), 4),
-                    Decimal.Round(trades.Min(trade => trade.NetProfit), 4));
-            })
-            .OrderByDescending(summary => summary.NetProfit)
-            .ToArray();
-    }
-
-    private static DailyPnlSummary BuildDailyPnlSummary(StrategyBacktestResult result)
-    {
-        var profitByDay = result.CompletedTrades
-            .GroupBy(trade => ToExchangeDate(trade.ExitTimestamp, "America/New_York"))
-            .Select(group => new
-            {
-                Day = group.Key,
-                NetProfit = group.Sum(trade => trade.NetProfit)
-            })
-            .OrderBy(x => x.Day)
-            .ToArray();
-
-        var activeDayCount = profitByDay.Length;
-        var winningDayCount = profitByDay.Count(x => x.NetProfit > 0);
-        var losingDayCount = profitByDay.Count(x => x.NetProfit < 0);
-        var averagePerTradingDay = result.TradingDayCount <= 0
-            ? 0m
-            : result.NetProfit / result.TradingDayCount;
-        var averagePerActiveDay = activeDayCount == 0
-            ? 0m
-            : profitByDay.Average(x => x.NetProfit);
-        var bestDay = profitByDay.OrderByDescending(x => x.NetProfit).FirstOrDefault();
-        var worstDay = profitByDay.OrderBy(x => x.NetProfit).FirstOrDefault();
-
-        return new DailyPnlSummary(
-            result.TradingDayCount,
-            activeDayCount,
-            winningDayCount,
-            losingDayCount,
-            Decimal.Round(result.NetProfit, 4),
-            Decimal.Round(averagePerTradingDay, 4),
-            Decimal.Round(averagePerActiveDay, 4),
-            Decimal.Round(bestDay?.NetProfit ?? 0m, 4),
-            bestDay?.Day,
-            Decimal.Round(worstDay?.NetProfit ?? 0m, 4),
-            worstDay?.Day);
-    }
-
-    private static IReadOnlyList<string> BuildDiagnosticSuggestions(
-        StrategyBacktestResult result,
-        IReadOnlyDictionary<string, int> rejectionCounts,
-        IReadOnlyDictionary<string, int> exitReasonCounts,
-        decimal realizedRewardRiskRatio,
-        decimal winRatePct)
-    {
-        var suggestions = new List<string>();
-        if (result.AcceptedTradeCount == 0)
-        {
-            if (rejectionCounts.Count == 0)
-            {
-                suggestions.Add("No evaluated bars were available for this strategy timeframe. Check market_data.download_timeframes, market_data.derive_from, and selected strategy timeframes.");
-                return suggestions;
-            }
-
-            var top = rejectionCounts.OrderByDescending(x => x.Value).First();
-            suggestions.Add($"No trades executed. Top blocker was {top.Key} ({top.Value} bars).");
-            if (top.Key.Contains("setup_", StringComparison.OrdinalIgnoreCase))
-            {
-                suggestions.Add("Review setup_type-specific filters; the setup may be too strict for this ticker universe and window.");
-            }
-
-            if (top.Key.StartsWith("confluence_", StringComparison.OrdinalIgnoreCase))
-            {
-                suggestions.Add("Strategy confluence gate rejected most bars. Consider testing with a looser confluence EMA, different confluence timeframe, or disabling confluence for this strategy version.");
-            }
-
-            if (top.Key.Equals("relative_volume_below_minimum", StringComparison.OrdinalIgnoreCase))
-            {
-                suggestions.Add("Volume filter rejected most bars. Consider lowering min_volume_spike or using a session-relative volume window.");
-            }
-
-            return suggestions;
-        }
-
-        if (realizedRewardRiskRatio < 1m && winRatePct < 50m)
-        {
-            suggestions.Add("Average loss is larger than average win with sub-50% win rate. Consider higher target_r_multiple, tighter entry quality, or smaller stop_atr_multiple.");
-        }
-
-        if (exitReasonCounts.TryGetValue("stop_loss", out var stopLossCount) &&
-            stopLossCount > result.AcceptedTradeCount / 2m)
-        {
-            suggestions.Add("More than half of trades hit stop loss. Consider widening stop_atr_multiple or adding stronger trend/setup confirmation.");
-        }
-
-        if (exitReasonCounts.TryGetValue("max_hold", out var maxHoldCount) &&
-            maxHoldCount > result.AcceptedTradeCount * 0.4m)
-        {
-            suggestions.Add("Many trades are timing out at max_hold. Consider tightening entries, extending max_hold_hours, or adding technical exits.");
-        }
-
-        if (result.TotalReturnPct > 0 && result.MaxDrawdownPct <= 2m)
-        {
-            suggestions.Add("Positive return with controlled drawdown. Candidate for broader ticker/window validation before promotion.");
-        }
-
-        if (suggestions.Count == 0)
-        {
-            suggestions.Add("No obvious single blocker. Review ticker universe, sample length, and walk-forward stability.");
-        }
-
-        return suggestions;
-    }
-
-    private static IReadOnlyList<BacktestTrade> BuildPortfolioTrades(
-        PortfolioConfig portfolio,
-        StrategyDefinition strategy,
-        IReadOnlyList<BacktestCandidateTrade> candidates)
-    {
-        var accepted = new List<BacktestTrade>();
-
-        foreach (var candidate in candidates)
-        {
-            var closedProfit = accepted
-                .Where(x => x.ExitTimestamp <= candidate.EntryTimestamp)
-                .Sum(x => x.NetProfit);
-            var equity = portfolio.StartingCapital + closedProfit;
-            var activePositions = accepted
-                .Where(x => x.EntryTimestamp <= candidate.EntryTimestamp && x.ExitTimestamp > candidate.EntryTimestamp)
-                .ToArray();
-
-            if (portfolio.PreventOverlappingTickerPositions &&
-                activePositions.Any(x => x.Ticker.Equals(candidate.Ticker, StringComparison.OrdinalIgnoreCase)))
-            {
-                continue;
-            }
-
-            if (activePositions.Length >= portfolio.MaxConcurrentPositions)
-            {
-                continue;
-            }
-
-            if (ShouldBlockForPerTickerDailyLossGuard(strategy, portfolio, candidate, accepted))
-            {
-                continue;
-            }
-
-            var riskBudget = equity * (portfolio.RiskPerTradePct / 100m);
-            var riskSizedQuantity = (int)Math.Floor(riskBudget / candidate.StopDistance);
-            var slotPositionValue = equity / portfolio.MaxConcurrentPositions;
-            var configuredPositionValue = equity * (portfolio.MaxPositionValuePct / 100m);
-            var reservedPositionValue = activePositions.Sum(x => x.ShareQuantity * x.EntryPrice);
-            var availablePositionValue = Math.Max(0, equity - reservedPositionValue);
-            var maxPositionValue = Math.Min(Math.Min(slotPositionValue, configuredPositionValue), availablePositionValue);
-            var capitalSizedQuantity = (int)Math.Floor(maxPositionValue / candidate.EntryPrice);
-            var shareQuantity = Math.Min(riskSizedQuantity, capitalSizedQuantity);
-            if (shareQuantity <= 0)
-            {
-                continue;
-            }
-
-            var grossProfit = candidate.Direction.Equals("short", StringComparison.OrdinalIgnoreCase)
-                ? (candidate.EntryPrice - candidate.ExitPrice) * shareQuantity
-                : (candidate.ExitPrice - candidate.EntryPrice) * shareQuantity;
-            var fees = portfolio.FixedBuyFee + portfolio.FixedSellFee;
-            var netProfit = grossProfit - fees;
-
-            accepted.Add(new BacktestTrade(
-                candidate.Ticker,
-                candidate.StrategyName,
-                candidate.Direction,
-                candidate.EntryTimestamp,
-                candidate.ExitTimestamp,
-                shareQuantity,
-                candidate.EntryPrice,
-                candidate.ExitPrice,
-                candidate.StopLossPrice,
-                candidate.TakeProfitPrice,
-                candidate.ExitReason,
-                Decimal.Round(grossProfit, 4),
-                Decimal.Round(fees, 4),
-                Decimal.Round(netProfit, 4)));
-        }
-
-        return accepted;
-    }
-
-    private static bool ShouldBlockForPerTickerDailyLossGuard(
-        StrategyDefinition strategy,
-        PortfolioConfig portfolio,
-        BacktestCandidateTrade candidate,
-        IReadOnlyList<BacktestTrade> acceptedTrades)
-    {
-        var rules = strategy.EntryRules;
-        if (!rules.EnablePerTickerDailyLossGuard)
-        {
-            return false;
-        }
-
-        var exchangeDate = ToExchangeDate(candidate.EntryTimestamp, strategy.Session.ExchangeTimezone);
-        var closedTickerTradesToday = acceptedTrades
-            .Where(trade =>
-                trade.ExitTimestamp <= candidate.EntryTimestamp &&
-                trade.Ticker.Equals(candidate.Ticker, StringComparison.OrdinalIgnoreCase) &&
-                ToExchangeDate(trade.ExitTimestamp, strategy.Session.ExchangeTimezone) == exchangeDate)
-            .ToArray();
-
-        if (closedTickerTradesToday.Length == 0)
-        {
-            return false;
-        }
-
-        if (rules.MaxPerTickerDailyFailedTrades > 0 &&
-            closedTickerTradesToday.Count(trade => trade.NetProfit <= 0m) >= rules.MaxPerTickerDailyFailedTrades)
-        {
-            return true;
-        }
-
-        var netTickerProfitToday = closedTickerTradesToday.Sum(trade => trade.NetProfit);
-        if (rules.MaxPerTickerDailyLossPctOfAccount is { } maxLossPct &&
-            maxLossPct > 0m &&
-            netTickerProfitToday <= -(portfolio.StartingCapital * (maxLossPct / 100m)))
-        {
-            return true;
-        }
-
-        var realizedR = closedTickerTradesToday.Sum(CalculateRealizedR);
-        return rules.MaxPerTickerDailyLossR is { } maxLossR &&
-            maxLossR > 0m &&
-            realizedR <= -maxLossR;
-    }
-
-    private static decimal CalculateRealizedR(BacktestTrade trade)
-    {
-        var riskPerShare = Math.Abs(trade.EntryPrice - trade.StopLossPrice);
-        var riskDollars = riskPerShare * trade.ShareQuantity;
-        return riskDollars <= 0m ? 0m : trade.NetProfit / riskDollars;
-    }
-
-    private static decimal? ResolveEntryRelativeVolume(StrategyDefinition strategy, IndicatorSnapshot snapshot)
-    {
-        return strategy.EntryRules.MinVolumeSpikeSource.ToLowerInvariant() switch
-        {
-            "session_vs_average_day" or "session" or "finviz_style" => snapshot.SessionRelativeVolume,
-            "slot_bar" or "bar_same_time" => snapshot.SlotRelativeVolume,
-            _ => snapshot.RelativeVolume
-        };
-    }
-
-    private static string? GetVolumeConfirmationRejection(
-        StrategyDefinition strategy,
-        IndicatorSnapshot snapshot,
-        decimal actualRelativeVolume)
-    {
-        var mode = strategy.EntryRules.VolumeConfirmationMode;
-        if (mode.Equals("none", StringComparison.OrdinalIgnoreCase) ||
-            mode.Equals("soft_confirmation", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        if (mode.Equals("liquidity_floor", StringComparison.OrdinalIgnoreCase))
-        {
-            var floor = strategy.EntryRules.MinVolumeLiquidityFloor ?? 0m;
-            return floor > 0m && actualRelativeVolume < floor
-                ? FormatRelativeVolumeRejection(
-                    "volume_liquidity_floor_below_minimum",
-                    snapshot,
-                    floor,
-                    actualRelativeVolume,
-                    strategy.EntryRules.MinVolumeSpikeSource,
-                    mode)
-                : null;
-        }
-
-        return actualRelativeVolume < strategy.EntryRules.MinVolumeSpike
-            ? FormatRelativeVolumeRejection(
-                "relative_volume_below_minimum",
-                snapshot,
-                strategy.EntryRules.MinVolumeSpike,
-                actualRelativeVolume,
-                strategy.EntryRules.MinVolumeSpikeSource,
-                mode)
-            : null;
-    }
-
-    private static string FormatRelativeVolumeRejection(
-        string reason,
-        IndicatorSnapshot snapshot,
-        decimal requiredRelativeVolume,
-        decimal actualRelativeVolume,
-        string volumeSource,
-        string volumeMode)
-    {
-        return
-            $"{reason} (Actual: {actualRelativeVolume:F2}, Required: {requiredRelativeVolume:F2}, Source: {volumeSource}, Mode: {volumeMode}, " +
-            $"Ticker: {snapshot.Ticker}, BarTime: {snapshot.Timestamp:O}, Timeframe: {snapshot.Timeframe}, " +
-            $"BarVolume: {FormatWhole(snapshot.CurrentVolume)}, CumulativeAvgVolume: {FormatNullableWhole(snapshot.CumulativeAverageVolume)}, " +
-            $"SlotAvgVolume: {FormatNullableWhole(snapshot.SlotAverageVolume)}, AverageSessionVolume: {FormatNullableWhole(snapshot.AverageSessionVolume)}, " +
-            $"SampleSessions: {snapshot.RelativeVolumeSampleCount})";
-    }
-
-    private static string FormatWhole(decimal value)
-    {
-        return value.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
-    }
-
-    private static string FormatNullableWhole(decimal? value)
-    {
-        return value is null
-            ? "n/a"
-            : value.Value.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
-    }
-
-    private static decimal CalculateMaxDrawdown(decimal startingCapital, IReadOnlyList<BacktestTrade> completedTrades)
-    {
-        var equity = startingCapital;
-        var highWaterMark = startingCapital;
-        var maxDrawdown = 0m;
-
-        foreach (var trade in completedTrades.OrderBy(x => x.ExitTimestamp))
-        {
-            equity += trade.NetProfit;
-            highWaterMark = Math.Max(highWaterMark, equity);
-            if (highWaterMark > 0)
-            {
-                maxDrawdown = Math.Max(maxDrawdown, ((highWaterMark - equity) / highWaterMark) * 100m);
-            }
-        }
-
-        return maxDrawdown;
-    }
-
-    private static DailyReturnMetrics CalculateDailyMetrics(
-        decimal startingCapital,
-        StrategyDefinition strategy,
-        IReadOnlyList<BacktestTrade> completedTrades,
-        IReadOnlyCollection<OhlcvBar> allBars)
-    {
-        var tradingDays = allBars
-            .Where(bar => bar.Timeframe.Equals(strategy.Execution.Timeframe, StringComparison.OrdinalIgnoreCase))
-            .Select(bar => ToExchangeDate(bar.Timestamp, strategy.Session.ExchangeTimezone))
-            .Distinct()
-            .OrderBy(day => day)
-            .ToArray();
-
-        if (tradingDays.Length == 0 && completedTrades.Count > 0)
-        {
-            tradingDays = completedTrades
-                .Select(trade => ToExchangeDate(trade.ExitTimestamp, strategy.Session.ExchangeTimezone))
-                .Distinct()
-                .OrderBy(day => day)
-                .ToArray();
-        }
-
-        if (startingCapital <= 0 || tradingDays.Length == 0)
-        {
-            return new DailyReturnMetrics(0, tradingDays.Length);
-        }
-
-        var profitByDay = completedTrades
-            .GroupBy(trade => ToExchangeDate(trade.ExitTimestamp, strategy.Session.ExchangeTimezone))
-            .ToDictionary(group => group.Key, group => group.Sum(trade => trade.NetProfit));
-        var averageDailyReturnPct = tradingDays
-            .Select(day => profitByDay.TryGetValue(day, out var netProfit) ? (netProfit / startingCapital) * 100m : 0m)
-            .Average();
-
-        return new DailyReturnMetrics(Decimal.Round(averageDailyReturnPct, 4), tradingDays.Length);
-    }
-
-    private static DateOnly ToExchangeDate(DateTimeOffset timestamp, string timezoneId)
-    {
-        var zone = ResolveTimezone(timezoneId);
-        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, zone).DateTime);
-    }
-
-    private static TimeZoneInfo ResolveTimezone(string timezoneId)
-    {
-        try
-        {
-            return TimeZoneInfo.FindSystemTimeZoneById(timezoneId);
-        }
-        catch (TimeZoneNotFoundException) when (timezoneId.Equals("America/New_York", StringComparison.OrdinalIgnoreCase))
-        {
-            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
-        }
-    }
-
-    private static ICatalystProvider? CreateNewsProvider(BacktestRunConfig run)
-    {
-        if (!run.News.Enabled) return null;
-
-        ICatalystProvider? provider = run.News.ProviderName.ToLowerInvariant() switch
-        {
-            "alpaca" => new TradingFlow.Alpaca.AlpacaNewsProvider(
-                new HttpClient(),
-                ResolveAlpacaOptions(run),
-                sentimentAnalyzer: CreateSentimentAnalyzer(run.News.SentimentTimeoutSeconds),
-                maxArticlesPerTicker: run.News.MaxArticlesPerTicker),
-            "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(
-                new TradingFlow.Finviz.FinvizClient(
-                    new HttpClient(),
-                    TradingFlow.Finviz.FinvizOptions.CreateDefault() with { AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? "" }
-                )),
-            "none" => null,
-            _ => throw new NotSupportedException($"Unsupported news provider: {run.News.ProviderName}")
-        };
-
-        if (provider is null ||
-            run.CachePolicy.Equals("bypass", StringComparison.OrdinalIgnoreCase))
-        {
-            return provider;
-        }
-
-        return new CachedCatalystProvider(
-            provider,
-            Path.Combine(run.NormalizedRoot, GetCacheWindowSegment(run.TimeWindow)),
-            run.CachePolicy);
-    }
-
-    private static TradingFlow.Engine.Abstractions.ISentimentAnalyzer CreateSentimentAnalyzer(int timeoutSeconds)
-    {
-        var endpoint = Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL");
-        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
-        {
-            return new TradingFlow.Alpaca.FinbertHttpSentimentAnalyzer(
-                new HttpClient(),
-                uri,
-                requestTimeout: TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds)));
-        }
-
-        return new TradingFlow.Alpaca.VaderSentimentAnalyzer();
-    }
-
-    private static IMarketDataProvider CreateProvider(BacktestRunConfig run)
-    {
-        IMarketDataProvider provider = run.Provider.ToLowerInvariant() switch
-        {
-            "csv" => new CsvMarketDataProvider(run.NormalizedRoot),
-            "alpaca" => new TradingFlow.Alpaca.AlpacaMarketDataProvider(
-                new HttpClient(),
-                ResolveAlpacaOptions(run)),
-            "finviz" => new TradingFlow.Finviz.FinvizMarketDataProvider(
-                new TradingFlow.Finviz.FinvizClient(
-                    new HttpClient(),
-                    TradingFlow.Finviz.FinvizOptions.CreateDefault() with { AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? "" }
-                )),
-            _ => throw new NotSupportedException($"Unsupported market data provider: {run.Provider}")
-        };
-
-        if (run.Provider.Equals("csv", StringComparison.OrdinalIgnoreCase) ||
-            run.CachePolicy.Equals("bypass", StringComparison.OrdinalIgnoreCase))
-        {
-            return provider;
-        }
-
-        return new CachedMarketDataProvider(
-            provider,
-            Path.Combine(run.NormalizedRoot, GetCacheWindowSegment(run.TimeWindow)),
-            run.CachePolicy);
-    }
-
-    private static string GetCacheWindowSegment(TimeWindowConfig timeWindow)
-    {
-        if (timeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase))
-        {
-            return $"{timeWindow.LookbackDays + Math.Max(timeWindow.WarmupLookbackDays, 0)}d";
-        }
-
-        if (timeWindow.Start is not null && timeWindow.End is not null)
-        {
-            return $"{timeWindow.Start:yyyyMMdd}-{timeWindow.End:yyyyMMdd}";
-        }
-
-        return "custom-window";
-    }
-
-    private static TradingFlow.Alpaca.AlpacaOptions ResolveAlpacaOptions(BacktestRunConfig run)
-    {
-        return TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
-        {
-            KeyId = ResolveSecret("Alpaca", "KeyId", "ALPACA_KEY_ID"),
-            SecretKey = ResolveSecret("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),
-            MarketDataFeed = run.Providers.Alpaca.DataFeed
-        };
-    }
-
-    private static string ResolveSecret(string section, string key, string environmentVariable)
-    {
-        var settingsPath = FindRepositoryFile(Path.Combine("src", "TradingFlow.Web", "appsettings.local.json"));
-        if (settingsPath is not null)
-        {
-            using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
-            if (document.RootElement.TryGetProperty(section, out var sectionElement) &&
-                sectionElement.TryGetProperty(key, out var keyElement))
-            {
-                var localValue = keyElement.GetString();
-                if (!String.IsNullOrWhiteSpace(localValue))
-                {
-                    return localValue;
-                }
-            }
-
-        }
-
-        return Environment.GetEnvironmentVariable(environmentVariable) ?? String.Empty;
-    }
-
-    internal static string ResolveSecretForTesting(string section, string key, string environmentVariable)
-    {
-        return ResolveSecret(section, key, environmentVariable);
-    }
-
-    private static string? FindRepositoryFile(string relativePath)
-    {
-        foreach (var startPath in new[]
-        {
-            Environment.GetEnvironmentVariable("TRADINGFLOW_REPO_ROOT"),
-            AppContext.BaseDirectory,
-            Environment.CurrentDirectory
-        })
-        {
-            if (String.IsNullOrWhiteSpace(startPath))
-            {
-                continue;
-            }
-
-            var directory = new DirectoryInfo(startPath);
-            while (directory is not null)
-            {
-                var candidate = Path.Combine(directory.FullName, relativePath);
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-
-                directory = directory.Parent;
-            }
-        }
-
-        return null;
-    }
 
     private static string GetResultPath(BacktestRunConfig run)
     {
@@ -2345,3 +1287,11 @@ internal sealed class StrategyCandidateDiagnostics(
             : trimmed;
     }
 }
+
+
+
+
+
+
+
+

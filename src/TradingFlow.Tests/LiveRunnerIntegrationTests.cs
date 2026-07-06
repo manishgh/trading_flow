@@ -453,7 +453,7 @@ public class LiveRunnerIntegrationTests
                 .Setup(x => x.CancelOrderAsync("sell-leg-1", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(true);
             broker
-                .Setup(x => x.ClosePositionAsync("MXL", It.IsAny<CancellationToken>()))
+                .Setup(x => x.ClosePositionAsync("MXL", 100, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(true);
 
             var orderRepo = new Mock<IOrderStateRepository>();
@@ -516,7 +516,7 @@ public class LiveRunnerIntegrationTests
                 progress);
 
             broker.Verify(x => x.CancelOrderAsync("sell-leg-1", It.IsAny<CancellationToken>()), Times.Once);
-            broker.Verify(x => x.ClosePositionAsync("MXL", It.IsAny<CancellationToken>()), Times.Once);
+            broker.Verify(x => x.ClosePositionAsync("MXL", 100, It.IsAny<CancellationToken>()), Times.Once);
             orderRepo.Verify(x => x.UpdateOrderStatusAsync("entry-1", "technical_exit_submitted", It.IsAny<CancellationToken>()), Times.Once);
             Assert.Contains(audits, audit =>
                 audit.Ticker == "MXL" &&
@@ -617,7 +617,7 @@ public class LiveRunnerIntegrationTests
                 progress);
 
             broker.Verify(x => x.ModifyOrderAsync("stop-leg-1", It.Is<decimal>(value => value > 95m), 0m, It.IsAny<CancellationToken>()), Times.Once);
-            broker.Verify(x => x.ClosePositionAsync("RGNT", It.IsAny<CancellationToken>()), Times.Never);
+            broker.Verify(x => x.ClosePositionAsync("RGNT", It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
             Assert.NotNull(savedOrder);
             Assert.True(savedOrder.StopLossPrice > 95m);
         }

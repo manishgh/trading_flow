@@ -1,0 +1,126 @@
+strategy_id: research.swing-catalyst-confirmation-long.v4-fresh-confirmed
+strategy_name: Research Swing Long V4 - Fresh Catalyst Confirmed
+source: event_study_calibrated_fresh_catalyst_confirmation_v4
+version: 4
+timeframe: 1h
+direction: long
+entry_rules:
+  setup_type: catalyst_confirmation_swing
+  min_volume_spike: 1.00
+  min_volume_spike_source: finviz_style
+  volume_confirmation_mode: soft_marker
+  min_volume_liquidity_floor:
+  min_session_relative_volume:
+  min_entry_rsi: 40.0
+  max_entry_rsi: 82.0
+  trend_filter: none
+  macd_filter: bullish
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: true
+  require_price_above_vwap: false
+  require_price_above_ema10: false
+  require_price_above_ema20: true
+  require_price_above_ema50: false
+  require_ema10_above_ema20: true
+  require_ema20_above_ema50: false
+  require_price_above_sma10: false
+  require_price_above_sma20: false
+  require_price_above_sma50: false
+  require_sma10_above_sma20: false
+  require_sma20_above_sma50: false
+  require_price_above_sma150: false
+  require_price_above_sma200: false
+  require_sma50_above_sma150: false
+  require_sma150_above_sma200: false
+  min_adx:
+  require_adx_rising: false
+  adx_rising_lookback_bars: 3
+  require_obv_rising: false
+  obv_rising_lookback_bars: 3
+  min_obv_change:
+  max_vwap_extension_atr: 4.0
+  opening_range_minutes: 0
+  recent_high_lookback_bars: 12
+  volatility_contraction_lookback_bars: 12
+  max_entries_per_ticker_per_day: 1
+  min_close_location_value: 0.55
+  reject_weak_close_on_high_relative_volume: false
+  weak_close_max_location_value: 0.35
+  weak_close_min_relative_volume: 2.0
+  require_positive_news: true
+  min_news_sentiment: 0.00
+  veto_news_sentiment_below: -0.40
+  max_news_age_hours: 24
+  max_catalyst_confirmation_bars: 6
+  min_catalyst_price_move_pct: 0.25
+  max_catalyst_price_move_pct: 12.0
+  gap_variant_min_pct: 4.0
+  require_log_price_rising: false
+  require_log_volume_rising: false
+  log_price_lookback_bars: 12
+  log_volume_lookback_bars: 12
+  min_log_price_slope: 0.0
+  min_log_volume_slope: 0.0
+  reject_falling_price_rising_volume: false
+  anchored_vwap_mode: none
+  anchored_vwap_lookback_bars: 20
+  require_price_above_anchored_vwap: false
+  max_anchored_vwap_extension_atr:
+  min_gap_up_pct:
+  min_day_gain_pct:
+  min_session_gain_pct:
+  max_pre_entry_session_range_pct:
+  max_entry_pullback_from_session_high_pct:
+  enable_entry_bar_confirmation: true
+  min_entry_bar_close_location_value: 0.55
+  reject_entry_bar_close_location_below_minimum: true
+  reject_entry_bar_breaks_signal_midpoint: false
+  max_vwap_extension_pct_for_direct_entry:
+  extended_vwap_min_entry_bar_close_location_value:
+  max_bollinger_position_for_direct_entry:
+  extended_bollinger_min_entry_bar_close_location_value:
+  enable_short: false
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.50
+  target_r_multiple: 3.00
+  max_hold_hours: 72.0
+  enable_atr_trailing_stop: true
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 2
+  enable_confirmed_vwap_exit: false
+  confirmed_vwap_exit_bars: 2
+  confirmed_vwap_exit_atr_buffer: 0.0
+  exit_on_log_price_fade: false
+  exit_log_price_lookback_bars: 6
+  exit_log_volume_lookback_bars: 6
+  max_exit_log_price_slope: -0.0001
+  min_exit_log_volume_slope: 0.003
+  require_rising_volume_for_log_fade_exit: false
+  require_below_vwap_for_log_fade_exit: false
+  exit_on_sma10_near_sma20: false
+  sma10_near_sma20_pct: 0.25
+  exit_on_sma10_cross_below_sma20: true
+  exit_short_on_sma10_cross_above_sma20: false
+  exit_on_ema10_cross_below_ema20: false
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1h
+  slippage_bps: 15.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 0
+  friday_close_buffer_minutes: 0
+  is_continuous_market: false
+  use_extended_hours: true
+
+

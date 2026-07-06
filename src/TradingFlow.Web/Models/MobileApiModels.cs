@@ -24,7 +24,13 @@ public sealed record MobileStrategyOption(
     string Timeframe,
     string ExecutionTimeframe,
     string SetupType,
-    bool UsesNews);
+    bool UsesNews,
+    decimal? LastAuditedReturnPct,
+    decimal? LastAuditedMaxDrawdownPct,
+    int? LastAuditedTrades,
+    decimal? LastAuditedWinRatePct,
+    string? LastAuditedAverageHold,
+    string? LastAuditedResultPath);
 
 public sealed record MobilePaperRunRequest(
     string BaseConfigPath,
@@ -42,7 +48,7 @@ public sealed record MobileBacktestRunRequest(
     string BaseConfigPath,
     string RunName,
     int LookbackDays,
-    IReadOnlyList<string> Tickers,
+    Guid? WishlistId,
     IReadOnlyList<string> StrategyPaths,
     decimal StartingCapital,
     decimal RiskPerTradePct,
@@ -65,6 +71,31 @@ public sealed record MobilePaperPositionResponse(
     decimal EntryPrice,
     decimal CurrentPrice,
     decimal UnrealizedPl);
+
+public sealed record MobileRunningTrade(
+    string Source,
+    string Ticker,
+    decimal Quantity,
+    decimal EntryPrice,
+    decimal CurrentPrice,
+    decimal UnrealizedPl,
+    decimal UnrealizedPlPct,
+    string Status,
+    string Reference,
+    Guid? JobId,
+    Guid? SessionId,
+    string CloseKind,
+    string StrategyName = "",
+    decimal? StopLossPrice = null,
+    decimal? TakeProfitPrice = null,
+    string? ExitReason = null,
+    DateTimeOffset? UpdatedAtUtc = null,
+    string ProtectionSummary = "");
+
+public sealed record MobileRunningTradesResponse(
+    IReadOnlyList<MobileRunningTrade> Trades,
+    decimal TotalUnrealizedPl,
+    int Count);
 
 public sealed record MobileNewsFeedResponse(
     bool Enabled,
@@ -155,6 +186,37 @@ public sealed record MobileWishlistSignalResponse(
     string? NewsUrl,
     string? NewsProvider,
     bool Acknowledged);
+
+public sealed record MobileWishlistDeskResponse(
+    MobileWishlistResponse Wishlist,
+    IReadOnlyList<MobileWishlistDeskRowResponse> Rows,
+    IReadOnlyList<MobileWishlistSignalResponse> RecentSignals,
+    IReadOnlyList<MobileNewsItem> RelatedNews,
+    IReadOnlyList<MobileRunningTrade> RunningTrades,
+    decimal TotalUnrealizedPl);
+
+public sealed record MobileWishlistDeskRowResponse(
+    MobileWishlistItemResponse Item,
+    string Ticker,
+    string DisplayName,
+    decimal? BidPrice,
+    decimal? AskPrice,
+    decimal? MidPrice,
+    string DisplayBid,
+    string DisplayAsk,
+    string DisplayPrice,
+    string BuyCaption,
+    string SellCaption,
+    DateTimeOffset? QuoteTimestamp,
+    bool HasQuote,
+    bool HasTrade,
+    bool HasSignal,
+    bool HasNews,
+    string EligibilityLabel,
+    string EligibilityReason,
+    MobileWishlistSignalResponse? LatestSignal,
+    MobileNewsItem? LatestNews,
+    MobileRunningTrade? Trade);
 
 public sealed record MobileWishlistSaveRequest(
     Guid? Id,

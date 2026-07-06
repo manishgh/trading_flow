@@ -313,6 +313,21 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
         });
     }
 
+    public async Task<bool> ClosePositionAsync(string ticker, int quantity, CancellationToken cancellationToken)
+    {
+        if (quantity <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(quantity), "Close quantity must be greater than zero.");
+        }
+
+        return await ApiProfiler.ProfileAsync("Alpaca", $"/v2/positions/{ticker}?qty={quantity}", "DELETE", async () =>
+        {
+            var symbol = Uri.EscapeDataString(ticker.ToUpperInvariant());
+            var response = await _httpClient.DeleteAsync($"/v2/positions/{symbol}?qty={quantity}", cancellationToken);
+            return response.IsSuccessStatusCode;
+        });
+    }
+
     public void Dispose()
     {
         _httpClient.Dispose();

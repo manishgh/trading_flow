@@ -1,4 +1,4 @@
-using TradingFlow.Alpaca;
+﻿using TradingFlow.Alpaca;
 using TradingFlow.Backtesting.StrategyEvaluation;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Engine.Abstractions;
@@ -44,7 +44,7 @@ public sealed class StrategyEvaluationService
     {
         var configPath = ResolvePath(request.ConfigPath, Path.Combine("configs", "paper", "alpaca-paper.yaml"));
         var runConfig = suppliedRunConfig ?? yamlReader.ReadBacktestRun(configPath);
-        var strategyPath = ResolvePath(request.StrategyPath, Path.Combine("configs", "strategies", "intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml"));
+        var strategyPath = ResolvePath(request.StrategyPath, Path.Combine("configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"));
         var strategy = yamlReader.ReadStrategy(strategyPath);
 
         return evaluationEngine.EvaluateAsync(request, provider, runConfig, strategy, strategyPath, cancellationToken);
@@ -55,3 +55,4 @@ public sealed class StrategyEvaluationService
         return paths.ResolveRepositoryPath(String.IsNullOrWhiteSpace(requestedPath) ? fallbackRelativePath : requestedPath);
     }
 }
+

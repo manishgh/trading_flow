@@ -1,0 +1,71 @@
+strategy_id: research.qullamaggie-swing-breakout.v1
+strategy_name: Qullamaggie Swing Breakout V1
+source: qullamaggie_public_breakout_translation
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: volatility_contraction_pattern
+  min_volume_spike: 1.20
+  min_volume_spike_source: cumulative_same_time
+  volume_confirmation_mode: soft_marker
+  min_session_relative_volume:
+  min_entry_rsi: 45.0
+  max_entry_rsi: 90.0
+  trend_filter: none
+  macd_filter: not_bearish
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema10: true
+  require_price_above_ema20: true
+  require_ema10_above_ema20: true
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma50: false
+  require_price_above_sma150: false
+  require_price_above_sma200: false
+  require_sma50_above_sma150: false
+  require_sma150_above_sma200: false
+  min_price_vs_52_week_low_pct:
+  max_price_vs_52_week_high_pct:
+  opening_range_minutes: 60
+  recent_high_lookback_bars: 20
+  volatility_contraction_lookback_bars: 30
+  min_contractions: 2
+  max_contractions: 6
+  require_volatility_halving_left_to_right: false
+  require_volume_dry_up_pre_breakout: false
+  min_breakout_volume_ratio: 1.20
+  max_entries_per_ticker_per_day: 1
+  min_close_location_value: 0.50
+  reject_weak_close_on_high_relative_volume: false
+  weak_close_max_location_value: 0.35
+  weak_close_min_relative_volume: 2.0
+  require_positive_news: false
+  max_news_age_hours: 72
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.75
+  target_r_multiple: 4.00
+  max_hold_hours: 1440.0
+  enable_atr_trailing_stop: true
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.5
+  exit_on_close_below_ema20: true
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 3
+  exit_on_ema10_cross_below_ema20: false
+execution:
+  timeframe: 1h
+  slippage_bps: 15.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 0
+  friday_close_buffer_minutes: 0

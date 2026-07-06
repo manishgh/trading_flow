@@ -1,4 +1,4 @@
-using TradingFlow.Backtesting.Research;
+﻿using TradingFlow.Backtesting.Research;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 
@@ -154,6 +154,7 @@ public sealed class SwingResearchAnalyzerTests
             CreateValidation(),
             trades,
             [],
+            [],
             []);
     }
 
@@ -167,3 +168,6 @@ public sealed class SwingResearchAnalyzerTests
             new BiasRiskValidation("test", null, "none", false, false, []));
     }
 }
+
+
+

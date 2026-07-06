@@ -78,7 +78,10 @@ public partial class PaperPage : ContentPage
             wishlists = await api.GetWishlistsAsync() ?? Array.Empty<MobileWishlistResponse>();
             suppressPersist = true;
             WishlistPicker.ItemsSource = wishlists.ToList();
-            WishlistPicker.SelectedItem = wishlists.FirstOrDefault(wishlist => wishlist.Id == previousWishlistId);
+            WishlistPicker.SelectedItem = wishlists.FirstOrDefault(wishlist => wishlist.Id == previousWishlistId)
+                ?? wishlists.FirstOrDefault(wishlist => wishlist.Id.ToString().Equals(Preferences.Get("PaperWishlistId", string.Empty), StringComparison.OrdinalIgnoreCase))
+                ?? wishlists.FirstOrDefault(wishlist => wishlist.IsDefault)
+                ?? wishlists.FirstOrDefault();
             suppressPersist = false;
 
             RestoreFormState();
@@ -135,7 +138,7 @@ public partial class PaperPage : ContentPage
         try
         {
             NewsStatusLabel.Text = "Loading catalyst news...";
-            var tickers = ParseTickers(TickersEntry.Text);
+            var tickers = GetSelectedWishlistTickers();
             var feed = await api.GetNewsFeedAsync(config.Path, tickers, 48);
             newsItems.Clear();
 
@@ -178,12 +181,13 @@ public partial class PaperPage : ContentPage
                 String.IsNullOrWhiteSpace(RunNameEntry.Text)
                     ? $"paper_{DateTimeOffset.Now:yyyyMMdd_HHmmss}"
                     : RunNameEntry.Text.Trim(),
-                ParseTickers(TickersEntry.Text),
+                Array.Empty<string>(),
                 String.IsNullOrWhiteSpace(ScreenerEntry.Text) ? null : ScreenerEntry.Text.Trim(),
                 ExtendedHoursCheck.IsChecked,
                 NewsCheck.IsChecked,
                 OrderExpirationPicker.SelectedItem?.ToString() ?? "day",
-                EntryOrderTypePicker.SelectedItem?.ToString() ?? "market");
+                EntryOrderTypePicker.SelectedItem?.ToString() ?? "market",
+                (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Id);
             var job = await api.StartPaperRunAsync(request);
             if (job is not null)
             {
@@ -329,21 +333,6 @@ public partial class PaperPage : ContentPage
 
     private void OnWishlistPicked(object? sender, EventArgs e)
     {
-        if (WishlistPicker.SelectedItem is not MobileWishlistResponse wishlist)
-        {
-            return;
-        }
-
-        var tickers = wishlist.Items
-            .Where(item => item.Active)
-            .Select(item => item.Ticker)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (tickers.Length > 0)
-        {
-            TickersEntry.Text = String.Join(", ", tickers);
-        }
-
         SaveFormState();
     }
 
@@ -359,12 +348,6 @@ public partial class PaperPage : ContentPage
         suppressPersist = true;
         try
         {
-            var savedTickers = Preferences.Get("PaperTickers", "RDW, OUST, SPCE");
-            if (String.IsNullOrWhiteSpace(TickersEntry.Text))
-            {
-                TickersEntry.Text = savedTickers;
-            }
-
             RunNameEntry.Text = Preferences.Get("PaperRunName", string.Empty);
             ScreenerEntry.Text = Preferences.Get("PaperScreener", string.Empty);
             ExtendedHoursCheck.IsChecked = Preferences.Get("PaperExtendedHours", true);
@@ -389,7 +372,6 @@ public partial class PaperPage : ContentPage
             return;
         }
 
-        Preferences.Set("PaperTickers", TickersEntry.Text ?? string.Empty);
         Preferences.Set("PaperRunName", RunNameEntry.Text ?? string.Empty);
         Preferences.Set("PaperScreener", ScreenerEntry.Text ?? string.Empty);
         Preferences.Set("PaperExtendedHours", ExtendedHoursCheck.IsChecked);
@@ -404,6 +386,11 @@ public partial class PaperPage : ContentPage
         if (StrategyPicker.SelectedItem is MobileStrategyOption strategy)
         {
             Preferences.Set("PaperStrategyPath", strategy.Path);
+        }
+
+        if (WishlistPicker.SelectedItem is MobileWishlistResponse wishlist)
+        {
+            Preferences.Set("PaperWishlistId", wishlist.Id.ToString());
         }
     }
 
@@ -449,13 +436,13 @@ public partial class PaperPage : ContentPage
         }
     }
 
-    private static IReadOnlyList<string> ParseTickers(string? value)
+    private IReadOnlyList<string> GetSelectedWishlistTickers()
     {
-        return (value ?? String.Empty)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(ticker => ticker.ToUpperInvariant())
+        return (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Items
+            .Where(item => item.Active)
+            .Select(item => item.Ticker.ToUpperInvariant())
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            .ToArray() ?? Array.Empty<string>();
     }
 
     private static bool IsActiveJob(BacktestJobSnapshot job)

@@ -51,6 +51,12 @@ public sealed class PseudoBroker : IBrokerClient
         return Task.FromResult(true);
     }
 
+    public Task<bool> ClosePositionAsync(string ticker, int quantity, CancellationToken cancellationToken)
+    {
+        // PseudoBroker doesn't currently model positions natively in memory, so just return true
+        return Task.FromResult(quantity > 0);
+    }
+
     public Task<bool> ModifyOrderAsync(string orderId, decimal newStopLoss, decimal newTakeProfit, CancellationToken cancellationToken)
     {
         if (_activeOrders.TryGetValue(orderId, out var existingOrder))

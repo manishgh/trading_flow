@@ -10,10 +10,11 @@ public partial class AutomationPage : ContentPage
     private readonly INotificationAccessHelper notificationAccess = AppServices.NotificationAccess;
     private readonly ObservableCollection<MobileAutomationSessionSnapshot> sessions = new();
     private readonly ObservableCollection<CapturedAutomationAlert> alerts = new();
+    private readonly List<ModeChoice> modeChoices = new();
     private readonly IDispatcherTimer refreshTimer;
     private MobileCatalogResponse? catalog;
+    private IReadOnlyList<MobileStrategyOption> longStrategies = Array.Empty<MobileStrategyOption>();
     private MobileAutomationSessionSnapshot? selectedSession;
-    private CapturedAutomationAlert? selectedAlert;
 
     public AutomationPage()
     {
@@ -21,8 +22,7 @@ public partial class AutomationPage : ContentPage
         SessionsView.ItemsSource = sessions;
         AlertsView.ItemsSource = alerts;
         hub.Updated += OnHubUpdated;
-        // Refresh only the live sessions on a timer so a user's in-progress form
-        // selections (config/strategy/entry mode) are never reset underneath them.
+        // Refresh only the live sessions on a timer so the selected mode is never reset.
         refreshTimer = Dispatcher.CreateTimer();
         refreshTimer.Interval = TimeSpan.FromSeconds(15);
         refreshTimer.Tick += async (_, _) => await RefreshSessionsAsync();
@@ -77,18 +77,16 @@ public partial class AutomationPage : ContentPage
             StatusLabel.TextColor = healthy ? Color.FromArgb("#067647") : Color.FromArgb("#B42318");
 
             catalog ??= await api.GetCatalogAsync();
-            ConfigPicker.ItemsSource = catalog?.PaperConfigs.ToList();
-            StrategyPicker.ItemsSource = (catalog?.Strategies ?? Array.Empty<MobileStrategyOption>())
+            longStrategies = (catalog?.Strategies ?? Array.Empty<MobileStrategyOption>())
                 .Where(x => x.Direction.Equals("long", StringComparison.OrdinalIgnoreCase))
                 .ToList();
+            SelectDefaultConfig();
+            BuildModeChoices();
+            RestoreSavedMode();
 
-            SelectSavedDefaults();
             NotificationAccessLabel.Text = notificationAccess.IsNotificationAccessEnabled()
                 ? "Notification access is enabled."
                 : "Notification access is not enabled yet.";
-            Preferences.Set("TradingFlowAutomationAppName", "Stock Pulse");
-            AutoForwardCheck.IsChecked = Preferences.Get("TradingFlowAutomationAutoForward", false);
-            SelectSavedEntryMode();
 
             var latestSessions = await api.GetAutomationSessionsAsync() ?? Array.Empty<MobileAutomationSessionSnapshot>();
             sessions.Clear();
@@ -113,33 +111,97 @@ public partial class AutomationPage : ContentPage
         }
     }
 
-    private void SelectSavedDefaults()
+    // The paper profile (broker/env) is chosen silently so it never clutters the UI.
+    private void SelectDefaultConfig()
     {
-        var savedConfig = Preferences.Get("TradingFlowAutomationConfigPath", string.Empty);
-        var savedStrategy = Preferences.Get("TradingFlowAutomationStrategyPath", string.Empty);
-
-        if (ConfigPicker.ItemsSource is IEnumerable<MobileRunConfigOption> configs)
+        if (catalog?.PaperConfigs is not { Count: > 0 } configs)
         {
-            ConfigPicker.SelectedItem = configs.FirstOrDefault(x => x.Path.Equals(savedConfig, StringComparison.OrdinalIgnoreCase))
-                ?? configs.FirstOrDefault();
+            return;
         }
 
-        if (StrategyPicker.ItemsSource is IEnumerable<MobileStrategyOption> strategies)
+        var saved = Preferences.Get("TradingFlowAutomationConfigPath", string.Empty);
+        var config = configs.FirstOrDefault(x => x.Path.Equals(saved, StringComparison.OrdinalIgnoreCase)) ?? configs[0];
+        Preferences.Set("TradingFlowAutomationConfigPath", config.Path);
+        Preferences.Set("TradingFlowAutomationPackage", string.Empty);
+        Preferences.Set("TradingFlowAutomationAppName", "Stock Pulse");
+    }
+
+    // One combobox: Off (disable), Direct enter (auto-forward), or a strategy (validate).
+    private void BuildModeChoices()
+    {
+        modeChoices.Clear();
+        modeChoices.Add(new ModeChoice("Off — capture alerts only", ModeKind.Disabled, null));
+        modeChoices.Add(new ModeChoice("Direct enter (auto-forward)", ModeKind.Direct, null));
+        foreach (var strategy in longStrategies)
         {
-            StrategyPicker.SelectedItem = strategies.FirstOrDefault(x => x.Path.Equals(savedStrategy, StringComparison.OrdinalIgnoreCase))
-                ?? strategies.FirstOrDefault();
+            modeChoices.Add(new ModeChoice($"{strategy.StrategyName} (validate)", ModeKind.Strategy, strategy));
+        }
+
+        ModePicker.ItemsSource = modeChoices.ToList();
+    }
+
+    private void RestoreSavedMode()
+    {
+        var autoForward = Preferences.Get("TradingFlowAutomationAutoForward", false);
+        var entryMode = Preferences.Get("TradingFlowAutomationEntryMode", "immediate_paper");
+        var strategyPath = Preferences.Get("TradingFlowAutomationStrategyPath", string.Empty);
+
+        ModeChoice? choice;
+        if (!autoForward)
+        {
+            choice = modeChoices.FirstOrDefault(x => x.Kind == ModeKind.Disabled);
+        }
+        else if (entryMode.Equals("validate_strategy", StringComparison.OrdinalIgnoreCase))
+        {
+            choice = modeChoices.FirstOrDefault(x =>
+                x.Strategy is not null && x.Strategy.Path.Equals(strategyPath, StringComparison.OrdinalIgnoreCase));
+        }
+        else
+        {
+            choice = modeChoices.FirstOrDefault(x => x.Kind == ModeKind.Direct);
+        }
+
+        ModePicker.SelectedItem = choice ?? modeChoices.FirstOrDefault();
+    }
+
+    private ModeChoice? SelectedMode => ModePicker.SelectedItem as ModeChoice ?? modeChoices.FirstOrDefault();
+
+    private void OnModeChanged(object? sender, EventArgs e)
+    {
+        UpdateModeHint();
+        PersistMode();
+    }
+
+    private void PersistMode()
+    {
+        var mode = SelectedMode;
+        if (mode is null)
+        {
+            return;
+        }
+
+        Preferences.Set("TradingFlowAutomationAutoForward", mode.Kind != ModeKind.Disabled);
+        Preferences.Set("TradingFlowAutomationEntryMode", mode.Kind == ModeKind.Strategy ? "validate_strategy" : "immediate_paper");
+
+        var strategyPath = mode.Strategy?.Path ?? longStrategies.FirstOrDefault()?.Path;
+        if (!string.IsNullOrWhiteSpace(strategyPath))
+        {
+            Preferences.Set("TradingFlowAutomationStrategyPath", strategyPath);
         }
     }
 
-    private void SelectSavedEntryMode()
+    private void UpdateModeHint()
     {
-        var savedEntryMode = Preferences.Get("TradingFlowAutomationEntryMode", "immediate_paper");
-        ValidateStrategyCheck.IsChecked = savedEntryMode.Equals("validate_strategy", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private string ResolveEntryMode()
-    {
-        return ValidateStrategyCheck.IsChecked ? "validate_strategy" : "immediate_paper";
+        var mode = SelectedMode;
+        EntryModeHintLabel.Text = mode?.Kind switch
+        {
+            ModeKind.Disabled => "Automation off. Alerts are captured but nothing trades.",
+            ModeKind.Direct => longStrategies.FirstOrDefault() is { } exit
+                ? $"Enters immediately on each alert; {exit.StrategyName} manages the exit."
+                : "Enters immediately on each alert; the strategy engine manages the exit.",
+            ModeKind.Strategy => $"Validates {mode.Strategy!.StrategyName} entry on each alert, then it manages the exit.",
+            _ => string.Empty
+        };
     }
 
     private void ReloadAlerts()
@@ -148,13 +210,6 @@ public partial class AutomationPage : ContentPage
         foreach (var alert in hub.GetAlerts())
         {
             alerts.Add(alert);
-        }
-
-        if (selectedAlert is null || alerts.All(alert => alert.AlertId != selectedAlert.AlertId))
-        {
-            SelectedAlertLabel.Text = alerts.Count == 0
-                ? "No alerts captured yet. Enable notification access, then wait for Stock Pulse to send one alert."
-                : "Select a Stock Pulse alert below. The app extracts the ticker, then sends paper entry to TradingFlow; exits stay strategy-managed.";
         }
     }
 
@@ -166,74 +221,6 @@ public partial class AutomationPage : ContentPage
     private async void OnOpenNotificationSettings(object? sender, EventArgs e)
     {
         await notificationAccess.OpenNotificationAccessSettingsAsync();
-    }
-
-    private async void OnSaveDefaults(object? sender, EventArgs e)
-    {
-        if (ConfigPicker.SelectedItem is not MobileRunConfigOption config ||
-            StrategyPicker.SelectedItem is not MobileStrategyOption strategy)
-        {
-            await DisplayAlertAsync("Automation", "Select a paper config and strategy first.", "OK");
-            return;
-        }
-
-        Preferences.Set("TradingFlowAutomationConfigPath", config.Path);
-        Preferences.Set("TradingFlowAutomationStrategyPath", strategy.Path);
-        Preferences.Set("TradingFlowAutomationPackage", string.Empty);
-        Preferences.Set("TradingFlowAutomationAppName", "Stock Pulse");
-        Preferences.Set("TradingFlowAutomationAutoForward", AutoForwardCheck.IsChecked);
-        Preferences.Set("TradingFlowAutomationEntryMode", ResolveEntryMode());
-        var mode = AutoForwardCheck.IsChecked ? "Auto-forward is ON for Stock Pulse." : "Auto-forward is OFF. Use Start Selected to test manually.";
-        await DisplayAlertAsync("Automation", $"Defaults saved. {mode}", "OK");
-    }
-
-    private void OnAutomationOptionChanged(object? sender, CheckedChangedEventArgs e)
-    {
-        Preferences.Set("TradingFlowAutomationAutoForward", AutoForwardCheck.IsChecked);
-        Preferences.Set("TradingFlowAutomationEntryMode", ResolveEntryMode());
-    }
-
-    private async void OnRunNow(object? sender, EventArgs e)
-    {
-        if (ConfigPicker.SelectedItem is not MobileRunConfigOption config ||
-            StrategyPicker.SelectedItem is not MobileStrategyOption strategy)
-        {
-            await DisplayAlertAsync("Automation", "Select a paper config and strategy first.", "OK");
-            return;
-        }
-
-        var ticker = ManualTickerEntry.Text?.Trim().ToUpperInvariant();
-        if (string.IsNullOrWhiteSpace(ticker))
-        {
-            await DisplayAlertAsync("Automation", "Enter a ticker.", "OK");
-            return;
-        }
-
-        try
-        {
-            var session = await api.StartAutomationEntryAsync(new MobileAutomationStartRequest(
-                config.Path,
-                strategy.Path,
-                ticker,
-                $"mobile_manual_{ticker}_{DateTimeOffset.Now:yyyyMMdd_HHmmss}",
-                "manual_run",
-                null,
-                "Manual run now",
-                $"User started {ticker} from Android app.",
-                ResolveEntryMode()));
-
-            if (session is not null)
-            {
-                sessions.Insert(0, session);
-                await DisplayAlertAsync("Automation", $"Started automation for {ticker}.", "OK");
-                await Task.Delay(1500);
-                await LoadAsync();
-            }
-        }
-        catch (Exception exception)
-        {
-            await DisplayAlertAsync("Automation", exception.Message, "OK");
-        }
     }
 
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
@@ -273,45 +260,20 @@ public partial class AutomationPage : ContentPage
         await LoadAsync();
     }
 
-    private void OnAlertSelected(object? sender, SelectionChangedEventArgs e)
-    {
-        selectedAlert = e.CurrentSelection.FirstOrDefault() as CapturedAutomationAlert;
-        SelectedAlertLabel.Text = selectedAlert is null
-            ? "Select a Stock Pulse alert below. TradingFlow extracts the ticker; auto-start ignores other apps."
-            : $"Selected {selectedAlert.ParsedTickerText} from {selectedAlert.AppName}. Start Paper uses the selected strategy.";
-    }
-
-    private async void OnForwardAlert(object? sender, EventArgs e)
-    {
-        if (selectedAlert is null)
-        {
-            await DisplayAlertAsync("Automation", "Select a captured alert first.", "OK");
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(selectedAlert.Ticker))
-        {
-            await DisplayAlertAsync("Automation", "This alert does not contain a parsed ticker.", "OK");
-            return;
-        }
-
-        var forwarded = await hub.ForwardAsync(selectedAlert.AlertId);
-        if (!forwarded)
-        {
-            await DisplayAlertAsync("Automation", "Alert could not be forwarded.", "OK");
-        }
-
-        ReloadAlerts();
-        await Task.Delay(1500);
-        await LoadAsync();
-    }
-
     private void OnClearAlerts(object? sender, EventArgs e)
     {
         hub.Clear();
-        selectedAlert = null;
-        AlertsView.SelectedItem = null;
-        SelectedAlertLabel.Text = "No alerts captured yet. Enable notification access, then wait for Stock Pulse to send one alert.";
     }
 
+    private enum ModeKind
+    {
+        Disabled,
+        Direct,
+        Strategy
+    }
+
+    private sealed record ModeChoice(string Display, ModeKind Kind, MobileStrategyOption? Strategy)
+    {
+        public override string ToString() => Display;
+    }
 }

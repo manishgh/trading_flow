@@ -11,7 +11,8 @@ public sealed record BacktestCandidateTrade(
     DateTimeOffset ExitTimestamp,
     decimal ExitPrice,
     string ExitReason,
-    decimal StopDistance);
+    decimal StopDistance,
+    decimal EntryBarVolume = 0m);
 
 public sealed record BacktestTrade(
     string Ticker,

@@ -62,6 +62,7 @@ public sealed class WishlistRepositoryTests
         await using var database = await WishlistTestDatabase.CreateAsync();
         var repository = database.CreateRepository();
         var wishlist = await repository.SaveAsync(new Wishlist { Name = "Breakouts", IncludeExtendedHours = true }, CancellationToken.None);
+        var otherWishlist = await repository.SaveAsync(new Wishlist { Name = "Other", IncludeExtendedHours = true }, CancellationToken.None);
         var now = DateTimeOffset.UtcNow;
 
         var signal = await repository.AddSignalAsync(new WishlistSignal
@@ -74,6 +75,36 @@ public sealed class WishlistRepositoryTests
             Price = 14.25m,
             Reason = "Price reclaimed VWAP with rising cumulative volume.",
             SnapshotJson = "{\"rvol\":2.1}"
+        }, CancellationToken.None);
+        await repository.AddSignalAsync(new WishlistSignal
+        {
+            WishlistId = wishlist.Id,
+            Ticker = "MXL",
+            SignalType = "breakout",
+            DetectedAtUtc = now,
+            Price = 90m,
+            Reason = "Different ticker",
+            SnapshotJson = "{}"
+        }, CancellationToken.None);
+        await repository.AddSignalAsync(new WishlistSignal
+        {
+            WishlistId = otherWishlist.Id,
+            Ticker = "POET",
+            SignalType = "breakout",
+            DetectedAtUtc = now,
+            Price = 15m,
+            Reason = "Different wishlist",
+            SnapshotJson = "{}"
+        }, CancellationToken.None);
+        await repository.AddSignalAsync(new WishlistSignal
+        {
+            WishlistId = wishlist.Id,
+            Ticker = "POET",
+            SignalType = "breakout",
+            DetectedAtUtc = now.AddHours(-2),
+            Price = 13m,
+            Reason = "Too old",
+            SnapshotJson = "{}"
         }, CancellationToken.None);
 
         var signals = await repository.GetSignalsAsync(wishlist.Id, "POET", now.AddMinutes(-1), 10, CancellationToken.None);

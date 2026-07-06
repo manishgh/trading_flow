@@ -25,9 +25,12 @@ indicators, rolling volume baselines, and paper/live recovery state.
   - `lookback_days: 260`
   - `warmup_lookback_days: 260`
   - downloads `1h`, `1d`
-- Retained intraday comparison: `configs/backtest/poet-mxl-rgti-mu-msft-intraday-v6-lite-90d.yaml`
-  - `lookback_days: 0`
+- Intraday backtest profile: `configs/backtest/intraday-backtest-profile.yaml`
+  - `lookback_days: 60`
   - `warmup_lookback_days: 90`
+- Swing backtest profile: `configs/backtest/swing-backtest-profile.yaml`
+  - `lookback_days: 180`
+  - `warmup_lookback_days: 260`
 
 ## Runtime Behavior
 

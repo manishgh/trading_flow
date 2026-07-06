@@ -193,22 +193,30 @@ public sealed class SqliteWishlistRepository : IWishlistRepository
         var safeLimit = Math.Clamp(limit, 1, 500);
         var normalizedTicker = String.IsNullOrWhiteSpace(ticker) ? null : NormalizeTicker(ticker);
         using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var signals = await db.WishlistSignals.AsNoTracking().ToArrayAsync(cancellationToken);
-        var query = signals.Where(signal => signal.DetectedAtUtc >= sinceUtc);
+        var parameters = new List<object>();
+        var clauses = new List<string>();
+        var parameterIndex = 0;
+
+        clauses.Add($"DetectedAtUtc >= {{{parameterIndex++}}}");
+        parameters.Add(sinceUtc);
         if (wishlistId.HasValue)
         {
-            query = query.Where(signal => signal.WishlistId == wishlistId.Value);
+            clauses.Add($"WishlistId = {{{parameterIndex++}}}");
+            parameters.Add(wishlistId.Value);
         }
 
         if (normalizedTicker is not null)
         {
-            query = query.Where(signal => signal.Ticker == normalizedTicker);
+            clauses.Add($"Ticker = {{{parameterIndex++}}}");
+            parameters.Add(normalizedTicker);
         }
 
-        return query
-            .OrderByDescending(signal => signal.DetectedAtUtc)
-            .Take(safeLimit)
-            .ToArray();
+        parameters.Add(safeLimit);
+        var sql = $"SELECT * FROM WishlistSignals WHERE {String.Join(" AND ", clauses)} ORDER BY DetectedAtUtc DESC LIMIT {{{parameterIndex}}}";
+        return await db.WishlistSignals
+            .FromSqlRaw(sql, parameters.ToArray())
+            .AsNoTracking()
+            .ToArrayAsync(cancellationToken);
     }
 
     public async Task AcknowledgeSignalAsync(Guid signalId, CancellationToken cancellationToken)

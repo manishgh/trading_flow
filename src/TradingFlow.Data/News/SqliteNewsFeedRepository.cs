@@ -40,7 +40,7 @@ public sealed class SqliteNewsFeedRepository
                     Source = item.Source,
                     Url = item.Url,
                     Summary = item.Summary,
-                    IngestedAt = now
+                    IngestedAt = item.ReceivedAt ?? now
                 });
             }
             else
@@ -49,7 +49,7 @@ public sealed class SqliteNewsFeedRepository
                 existing.Source = item.Source;
                 existing.Url = item.Url;
                 existing.Summary = item.Summary;
-                existing.IngestedAt = now;
+                existing.IngestedAt = item.ReceivedAt ?? now;
             }
         }
 

@@ -1,4 +1,4 @@
-# TradingFlow Agent Context
+﻿# TradingFlow Agent Context
 
 This file is the compact handoff context for Codex/VS CLI sessions working in `C:\project\trading_flow`.
 
@@ -23,6 +23,37 @@ The source/sink can change by mode, but the strategy signal, indicator, confluen
 - Always verify changes with relevant tests. Prefer adding focused tests for engine/risk/pipeline changes.
 - Use standard structured logging so output can later feed Logstash, Elastic, Azure Monitor, or another log sink.
 - Avoid look-ahead bias: signal on completed bar, fill on a later executable bar, warm indicators before scoring, and model realistic slippage/costs.
+
+## Mandatory Agent Workflow
+
+These rules apply to every Codex/agent session in this repository.
+
+1. Keep validated strategies separate from research/backtest strategies. Validated/promoted strategies belong in the main strategy catalog only after evidence supports promotion. Experimental dimensions belong in separate backtest/research strategy files.
+2. Do not mutate a promoted strategy directly for experiments. Copy the validated strategy into a backtest/research strategy file, add new dimensions there, run and audit it, then either promote it or discard it.
+3. Promote only after verification. A strategy can move into the main active strategy folder/catalog only after backtest or paper evidence, audit review, and tests confirm the behavior.
+4. Delete discarded backtest strategy changes and generated experimental configs. Keep only useful audit summaries/results needed for comparison.
+5. Preserve research memory in code and tests when technical primitives change. If a technical indicator, evaluator rule, or signal field is added/removed, add or update focused unit tests and keep a short audit note/result so future agents know why it exists.
+6. Stop TradingFlow runtime processes before code changes. Kill only project processes such as `TradingFlow.Web`, `TradingFlow.WarmupService`, workers, or CLI runs that may lock build outputs or mutate runtime files. Restart and verify services after the change when the user expects the app to remain available.
+7. Never assume silently. If behavior depends on unknown user intent, market regime, data source, or wishlist purpose, inspect local context first; if still unclear and risk is material, ask before changing behavior.
+8. Stay context-aware. Example: a wishlist named `volatile` is not automatically a swing universe. Match strategy horizon, data timeframe, warm-up depth, and candidate universe intentionally.
+9. Keep code testable, concise, and clean. Prefer small generic engine primitives over strategy-specific branches. Add focused unit/integration tests for every non-trivial engine, risk, runner, API, or persistence change.
+10. Maintain deterministic sample candle fixtures for tests:
+    - Intraday: fixed 1m and 5m candle samples covering 30 days.
+    - Swing: fixed 1d and 4h candle samples covering 6 months.
+    These fixtures are for unit/integration determinism; live/backtest research can use larger cached datasets.
+
+## Agentic Programming Best Practices
+
+- Start from repository context. Read current code/config/data flow before editing; do not rely on stale memory.
+- Plan experiments as reversible deltas. Prefer new config files, new test fixtures, or new strategy variants over modifying proven files in place.
+- Keep one brain. Backtest, paper, and future live trading must share `SignalGenerator`, evaluator, risk, portfolio, and execution-decision logic.
+- Separate concerns strictly: UI calls APIs/services; services orchestrate; engine computes; repositories persist; adapters talk to providers.
+- Make changes observable. Add structured logs, rejection reasons, audit fields, or metrics when behavior would otherwise be invisible.
+- Verify before promotion. Run relevant tests and at least one representative backtest/paper simulation for strategy/risk/pipeline work.
+- Prefer deletion over compatibility layers when old code is not production intent, but preserve local secrets, DB state, and cached candle data unless explicitly told otherwise.
+- Record failed experiments. If a tested strategy underperforms, keep the result in the research ledger and do not promote it.
+- Do not optimize on a single lucky run. Compare drawdown, trade count, win rate, expectancy, and whether the rule makes market sense.
+- Keep timestamps explicit. Calculations use New York market time, persisted data uses UTC, and UI/audit should show UTC plus local/operator time where useful.
 
 ## Current Architecture
 
@@ -105,19 +136,18 @@ Paper configs:
 Strategy configs:
 
 - `configs/strategies/intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml`
-- `configs/strategies/intraday-ross-vwap-ema-volume-macd.v2.yaml`
+- `configs/strategies/intraday-ema10-ema20-macd-volume.v1.yaml`
 - `configs/strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml`
 - `configs/strategies/swing-overbought-rollover-short-no-news.v5.yaml`
 
-Backtest research configs currently worth keeping:
+Backtest profiles currently worth keeping:
 
-- `configs/backtest/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml`
-- `configs/backtest/swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d.yaml`
+- `configs/backtest/intraday-backtest-profile.yaml`
+- `configs/backtest/swing-backtest-profile.yaml`
 
-Generated UI/temp configs can be deleted unless the user explicitly asks to preserve a run:
-
-- `configs/backtest/temp`
-- `configs/backtest/ui-runs`
+Backtest and paper universes must come from database wishlists. Generated
+run files are audit artifacts only; do not reintroduce hand-maintained
+backtest ticker-list configs.
 - `configs/optimization/ui-runs`
 
 ## Data Policy
@@ -136,8 +166,7 @@ Safe cleanup targets:
 
 - `.tmp` build/test/web/ngrok artifacts
 - `tmp` if empty
-- `configs/backtest/temp`
-- `configs/backtest/ui-runs`
+- stale generated run artifacts under `configs/backtest/temp` or `configs/backtest/ui-runs` if they reappear
 - `configs/optimization/ui-runs`
 - `data/runtime/logs`
 - `data/web/logs`
@@ -203,3 +232,9 @@ Near-term work is paper trading and backtesting quality:
 - improve audit pages so accepted/rejected decisions show exact matched values and reasons
 
 The user wants the system to be architecturally clean more than merely patched to pass one strategy.
+## Time Zone Convention
+
+- Market calculations use New York exchange time (`America/New_York`) with DST. This applies to sessions, same-time volume baselines, VWAP session resets, and market-open/extended-hours labels.
+- Persist timestamps in UTC where possible.
+- Operator-facing audit/UI screens should display UTC, New York market time, and local Europe/Berlin time, plus a market-session label: `premarket_extended`, `regular_market`, `postmarket_extended`, `closed`, or `closed_weekend`.
+

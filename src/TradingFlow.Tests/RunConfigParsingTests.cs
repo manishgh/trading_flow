@@ -1,4 +1,4 @@
-using TradingFlow.Engine.Configuration;
+﻿using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
@@ -8,22 +8,56 @@ namespace TradingFlow.Tests;
 
 public sealed class RunConfigParsingTests
 {
-    private const string RetainedStrategyFile = "intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml";
-    private const string RunnerUpIntradayStrategyFile = "intraday-ross-vwap-ema-cumulative-volume.v6-lite.yaml";
-    private const string StructuralExitIntradayStrategyFile = "intraday-ross-vwap-ema-volume-macd.v3-structural-exit.yaml";
-    private const string PaperIntradayStrategyFile = "intraday-ross-vwap-ema-cumulative-volume.v9-confirmed-reclaim.yaml";
-    private const string RetainedIntradayStrategyFile = "intraday-ross-vwap-ema-cumulative-volume.v8-adaptive-guard.yaml";
-    private const string RetainedBacktestFile = "poet-mxl-rgti-mu-msft-intraday-v8-comparison-90d.yaml";
-    private const string RetainedSwingBacktestFile = "swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d.yaml";
+    private const string RetainedStrategyFile = "intraday-ema10-ema20-macd-volume.v1.yaml";
+    private const string RunnerUpIntradayStrategyFile = "intraday-ema10-ema20-macd-volume.v1.yaml";
+    private const string PaperIntradayStrategyFile = "intraday-ema10-ema20-macd-volume.v1.yaml";
+    private const string RetainedIntradayStrategyFile = "intraday-ema10-ema20-macd-volume.v1.yaml";
+    private const string AdditiveIntradayStrategyFile = "intraday-ema10-ema20-macd-volume.v2-additive.yaml";
+    private const string RetainedBacktestFile = "intraday-backtest-profile.yaml";
+    private const string RetainedSwingBacktestFile = "swing-backtest-profile.yaml";
     private const string PaperSwingFile = "alpaca-paper-swing.yaml";
     private const string SwingQualityLongStrategyFile = "swing-reversal-reclaim-bull-quality-no-news.v1.yaml";
     private const string SwingOverboughtShortStrategyFile = "swing-overbought-rollover-short-no-news.v5.yaml";
     private const string ShannonAvwapStrategyFile = "brian_shannon_mta_avwap_strategies.yaml";
     private const string BreitsteinVwapTrapStrategyFile = "lance_breitstein_intraday_tactics.yaml";
     private const string QullamaggieEpisodicPivotStrategyFile = "kristjan_qullamaggie_stream_methodology.yaml";
-    private const string MinerviniVcpStrategyFile = "mark_minervini_trade_like_a_stock_market_wizard.yaml";
-    private const string CatalystConfirmationSwingStrategyFile = "swing-catalyst-confirmation-long.v1.yaml";
+    private const string MinerviniVcpStrategyFile = "minervini-trend-template-vcp.v2.yaml";
+    private const string CatalystConfirmationSwingStrategyFile = "swing-catalyst-confirmation-long.v2-adx-obv.yaml";
     private const string CatalystConfirmationSwingAdxObvStrategyFile = "swing-catalyst-confirmation-long.v2-adx-obv.yaml";
+    private const string CatalystConfirmationSwingEventStudyStrategyFile = "swing-catalyst-confirmation-long.v3-event-study.yaml";
+    private const string CatalystConfirmationSwingFreshConfirmedStrategyFile = "swing-catalyst-confirmation-long.v4-fresh-confirmed.yaml";
+
+    [Fact]
+    public void ResearchIntradayExecutionStrategies_ParseExactExecutionFields()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var reader = new SimpleYamlReader();
+        var strategyRoot = Path.Combine(repoRoot, "configs", "backtest", "strategies");
+
+        var vwapPullback = reader.ReadStrategy(Path.Combine(strategyRoot, "intraday-vwap-momentum-pullback.bt-v1.yaml"));
+        Assert.Equal("vwap_pullback", vwapPullback.EntryRules.SetupType);
+        Assert.Equal("vwap_minus_atr", vwapPullback.ExitRules.InitialStopMode);
+        Assert.Equal("r_multiple", vwapPullback.ExitRules.ProfitTargetMode);
+        Assert.Equal(2.0m, vwapPullback.EntryRules.MinVolumeSpike);
+        Assert.Equal(3.0m, vwapPullback.EntryRules.MinGapUpPct);
+
+        var compression = reader.ReadStrategy(Path.Combine(strategyRoot, "intraday-atr-compression-breakout.bt-v1.yaml"));
+        Assert.Equal("atr_compression_breakout", compression.EntryRules.SetupType);
+        Assert.Equal("atr_compression_breakdown", compression.EntryRules.ShortSetupType);
+        Assert.Equal("inside_or_nr7", compression.EntryRules.PriorCompressionMode);
+        Assert.Equal(0.10m, compression.EntryRules.OpeningRangeBreakBuffer);
+        Assert.Equal("opening_range_opposite", compression.ExitRules.InitialStopMode);
+        Assert.True(compression.ExitRules.EnableFailedBreakoutCircuitBreaker);
+        Assert.Equal(3, compression.ExitRules.FailedBreakoutBars);
+
+        var divergence = reader.ReadStrategy(Path.Combine(strategyRoot, "intraday-macd-divergence-fade.bt-v1.yaml"));
+        Assert.Equal("macd_divergence_fade", divergence.EntryRules.SetupType);
+        Assert.Equal("extreme_shadow", divergence.ExitRules.InitialStopMode);
+        Assert.Equal("vwap", divergence.ExitRules.ProfitTargetMode);
+        Assert.Equal(3.0m, divergence.EntryRules.MinVwapDistanceAtrForDivergence);
+        Assert.Equal(20, divergence.EntryRules.DivergenceLookbackBars);
+        Assert.Equal(12, divergence.EntryRules.DivergenceStartHour);
+    }
 
     [Fact]
     public void AlpacaPaperConfig_UsesConfirmedReclaimStrategyAndSipFeed()
@@ -44,7 +78,7 @@ public sealed class RunConfigParsingTests
         Assert.Contains("5m", config.Intervals);
         Assert.Equal("1m", config.DerivedTimeframes.Source);
         Assert.True(config.Execution.ExtendedHours);
-        Assert.Equal("summary", config.Artifacts.RetentionMode);
+        Assert.Equal("full", config.Artifacts.RetentionMode);
         Assert.Single(config.Strategies);
         Assert.Contains(config.Strategies, path => path.EndsWith(PaperIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
     }
@@ -73,13 +107,13 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
-    public void RetainedIntradayTopStrategyConfig_ParsesDualRvolRules()
+    public void RetainedIntradayTopStrategyConfig_ParsesThreeGateRules()
     {
         var repoRoot = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
         var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", RetainedStrategyFile));
 
-        Assert.Equal("TOP1 Intraday - Dual RVOL Lite V8 Adaptive Guard", strategy.StrategyName);
+        Assert.Equal("TOP1 Intraday - EMA10/20 MACD Volume V1", strategy.StrategyName);
         Assert.Equal("indicator_stack", strategy.EntryRules.SetupType);
         Assert.Equal("long", strategy.Direction);
         Assert.Equal("1m", strategy.Timeframe);
@@ -87,78 +121,72 @@ public sealed class RunConfigParsingTests
         Assert.Equal(2.0m, strategy.EntryRules.MinVolumeSpike);
         Assert.Equal("cumulative_same_time", strategy.EntryRules.MinVolumeSpikeSource);
         Assert.Equal("hard_gate", strategy.EntryRules.VolumeConfirmationMode);
-        Assert.Equal(0.70m, strategy.EntryRules.MinSessionRelativeVolume);
-        Assert.True(strategy.EntryRules.RequirePriceAboveVwap);
-        Assert.True(strategy.EntryRules.RequirePriceAboveEma10);
-        Assert.True(strategy.EntryRules.RequirePriceAboveEma20);
+        Assert.Null(strategy.EntryRules.MinSessionRelativeVolume);
+        Assert.False(strategy.EntryRules.RequirePriceAboveVwap);
+        Assert.False(strategy.EntryRules.RequirePriceAboveEma10);
+        Assert.False(strategy.EntryRules.RequirePriceAboveEma20);
         Assert.True(strategy.EntryRules.RequireEma10AboveEma20);
         Assert.True(strategy.EntryRules.RequireMacdHistogramPositive);
         Assert.Equal(1, strategy.EntryRules.MaxEntriesPerTickerPerDay);
         Assert.False(strategy.EntryRules.EnableEntryBarConfirmation);
-        Assert.Equal(0.20m, strategy.EntryRules.MinCloseLocationValue);
-        Assert.True(strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume);
-        Assert.Equal(0.35m, strategy.EntryRules.WeakCloseMaxLocationValue);
-        Assert.Equal(2.0m, strategy.EntryRules.WeakCloseMinRelativeVolume);
-        Assert.True(strategy.ExitRules.EnableConfirmedVwapExit);
-        Assert.Equal(3, strategy.ExitRules.ConfirmedVwapExitBars);
-        Assert.Equal(0.15m, strategy.ExitRules.ConfirmedVwapExitAtrBuffer);
-        Assert.True(strategy.ExitRules.EnableAtrTrailingStop);
-        Assert.Equal(2.0m, strategy.ExitRules.TrailingStopAtrMultiple);
-        Assert.False(strategy.ExitRules.ExitOnSma10NearSma20);
+        Assert.Equal(0.0m, strategy.EntryRules.MinCloseLocationValue);
+        Assert.Null(strategy.EntryRules.MaxMacdHistogram);
+        Assert.Equal(5, strategy.EntryRules.PriorEntryGainLookbackBars);
+        Assert.Null(strategy.EntryRules.MaxPriorEntryGainPct);
+        Assert.False(strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume);
+        Assert.False(strategy.ExitRules.EnableConfirmedVwapExit);
+        Assert.False(strategy.ExitRules.EnableAtrTrailingStop);
+        Assert.Equal(1.0m, strategy.ExitRules.StopAtrMultiple);
+        Assert.Equal(3.0m, strategy.ExitRules.TargetRMultiple);
+        Assert.False(strategy.ExitRules.ExitOnEma10CrossBelowEma20);
     }
 
     [Fact]
-    public void PaperIntradayStrategyConfig_ParsesConfirmedReclaimGuardRules()
+    public void AdditiveIntradayStrategyConfig_ParsesExperimentalHistogramAndChaseGuards()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var reader = new SimpleYamlReader();
+        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", AdditiveIntradayStrategyFile));
+
+        Assert.Equal("TOP1 Intraday - EMA10/20 MACD Histogram Volume V2 Additive", strategy.StrategyName);
+        Assert.True(strategy.EntryRules.RequireMacdHistogramPositive);
+        Assert.Equal(0.50m, strategy.EntryRules.MinCloseLocationValue);
+        Assert.Equal(0.30m, strategy.EntryRules.MaxMacdHistogram);
+        Assert.Equal(5, strategy.EntryRules.PriorEntryGainLookbackBars);
+        Assert.Equal(1.00m, strategy.EntryRules.MaxPriorEntryGainPct);
+    }
+
+    [Fact]
+    public void PaperIntradayStrategyConfig_UsesSimplifiedIntradayStrategy()
     {
         var repoRoot = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
         var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", PaperIntradayStrategyFile));
 
-        Assert.Equal("TOP1 Intraday - Confirmed VWAP Reclaim V9 Guard", strategy.StrategyName);
-        Assert.Equal("vwap_pullback", strategy.EntryRules.SetupType);
-        Assert.Equal("long", strategy.Direction);
-        Assert.Equal("1m", strategy.Timeframe);
-        Assert.Equal("1m", strategy.Execution.Timeframe);
+        Assert.Equal("TOP1 Intraday - EMA10/20 MACD Volume V1", strategy.StrategyName);
+        Assert.Equal("indicator_stack", strategy.EntryRules.SetupType);
         Assert.Equal(2.0m, strategy.EntryRules.MinVolumeSpike);
         Assert.Equal("cumulative_same_time", strategy.EntryRules.MinVolumeSpikeSource);
-        Assert.Equal(0.70m, strategy.EntryRules.MinSessionRelativeVolume);
-        Assert.Equal(2.75m, strategy.EntryRules.MaxVwapExtensionAtr);
-        Assert.Equal(0.35m, strategy.EntryRules.MinCloseLocationValue);
-        Assert.True(strategy.EntryRules.EnableEntryBarConfirmation);
-        Assert.Equal(0.65m, strategy.EntryRules.MinEntryBarCloseLocationValue);
-        Assert.True(strategy.EntryRules.RejectEntryBarCloseLocationBelowMinimum);
-        Assert.True(strategy.EntryRules.RejectEntryBarBreaksSignalMidpoint);
-        Assert.Equal(4.0m, strategy.EntryRules.MaxVwapExtensionPctForDirectEntry);
-        Assert.Equal(0.75m, strategy.EntryRules.ExtendedVwapMinEntryBarCloseLocationValue);
+        Assert.True(strategy.EntryRules.RequireEma10AboveEma20);
+        Assert.True(strategy.EntryRules.RequireMacdHistogramPositive);
+        Assert.False(strategy.EntryRules.RequirePriceAboveVwap);
         Assert.Equal(1.0m, strategy.ExitRules.StopAtrMultiple);
         Assert.Equal(3.0m, strategy.ExitRules.TargetRMultiple);
     }
     [Fact]
-    public void RunnerUpIntradayStrategyConfig_ParsesStructuralExitRules()
+    public void RunnerUpIntradayStrategyConfig_UsesSameSimplifiedIntradayStrategy()
     {
         var repoRoot = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
-        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", StructuralExitIntradayStrategyFile));
+        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", RunnerUpIntradayStrategyFile));
 
-        Assert.Equal("TOP2 Intraday - Ross VWAP EMA Structural Exit", strategy.StrategyName);
+        Assert.Equal("TOP1 Intraday - EMA10/20 MACD Volume V1", strategy.StrategyName);
         Assert.Equal("indicator_stack", strategy.EntryRules.SetupType);
-        Assert.Equal("long", strategy.Direction);
-        Assert.Equal("1m", strategy.Timeframe);
-        Assert.Equal("1m", strategy.Execution.Timeframe);
         Assert.Equal(2.0m, strategy.EntryRules.MinVolumeSpike);
-        Assert.True(strategy.EntryRules.RequirePriceAboveVwap);
-        Assert.True(strategy.EntryRules.RequirePriceAboveEma10);
-        Assert.True(strategy.EntryRules.RequirePriceAboveEma20);
         Assert.True(strategy.EntryRules.RequireEma10AboveEma20);
         Assert.True(strategy.EntryRules.RequireMacdHistogramPositive);
-        Assert.Equal("not_bearish", strategy.EntryRules.MacdFilter);
-        Assert.False(strategy.EntryRules.RequirePositiveNews);
-        Assert.Equal(1, strategy.EntryRules.MaxEntriesPerTickerPerDay);
-        Assert.Equal(2.0m, strategy.ExitRules.StopAtrMultiple);
-        Assert.Equal(3.0m, strategy.ExitRules.TargetRMultiple);
-        Assert.Equal(5, strategy.ExitRules.MinHoldBarsBeforeTechnicalExit);
-        Assert.True(strategy.ExitRules.ExitOnEma10CrossBelowEma20);
-        Assert.True(strategy.ExitRules.EnableConfirmedVwapExit);
+        Assert.Equal(1.0m, strategy.ExitRules.StopAtrMultiple);
+        Assert.False(strategy.ExitRules.EnableAtrTrailingStop);
     }
 
     [Fact]
@@ -230,7 +258,7 @@ public sealed class RunConfigParsingTests
         var reader = new SimpleYamlReader();
         var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", CatalystConfirmationSwingStrategyFile));
 
-        Assert.Equal("Catalyst Confirmation Swing Long V1", strategy.StrategyName);
+        Assert.Equal("Catalyst Confirmation Swing Long V2 - ADX OBV", strategy.StrategyName);
         Assert.Equal("1d", strategy.Timeframe);
         Assert.Equal("1h", strategy.Execution.Timeframe);
         Assert.Equal("long", strategy.Direction);
@@ -245,6 +273,9 @@ public sealed class RunConfigParsingTests
         Assert.Equal(12.0m, strategy.EntryRules.MaxCatalystPriceMovePct);
         Assert.Equal(1.50m, strategy.EntryRules.MinVolumeSpike);
         Assert.Equal("finviz_style", strategy.EntryRules.MinVolumeSpikeSource);
+        Assert.Equal(20.0m, strategy.EntryRules.MinAdx);
+        Assert.True(strategy.EntryRules.RequireAdxRising);
+        Assert.True(strategy.EntryRules.RequireObvRising);
         Assert.False(strategy.EntryRules.EnableShort);
         Assert.True(strategy.EntryRules.RequirePriceAboveSma20);
         Assert.True(strategy.EntryRules.RequirePriceAboveSma50);
@@ -277,6 +308,38 @@ public sealed class RunConfigParsingTests
         Assert.Equal(3, strategy.EntryRules.ObvRisingLookbackBars);
         Assert.Equal(0m, strategy.EntryRules.MinObvChange);
         Assert.False(strategy.EntryRules.EnableShort);
+    }
+    [Fact]
+    public void CatalystConfirmationSwingEventStudyStrategyConfig_UsesSoftVolumeAndWiderCatalystWindow()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var reader = new SimpleYamlReader();
+        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", CatalystConfirmationSwingEventStudyStrategyFile));
+
+        Assert.Equal("Research Swing Long V3 - Catalyst Confirmation Event Study", strategy.StrategyName);
+        Assert.Equal("1h", strategy.Timeframe);
+        Assert.Equal("1h", strategy.Execution.Timeframe);
+        Assert.Equal("long", strategy.Direction);
+        Assert.Equal("catalyst_confirmation_swing", strategy.EntryRules.SetupType);
+        Assert.True(strategy.EntryRules.RequirePositiveNews);
+        Assert.Equal(-0.05m, strategy.EntryRules.MinNewsSentiment);
+        Assert.Equal(-0.40m, strategy.EntryRules.VetoNewsSentimentBelow);
+        Assert.Equal(120m, strategy.EntryRules.MaxNewsAgeHours);
+        Assert.Equal(48, strategy.EntryRules.MaxCatalystConfirmationBars);
+        Assert.Null(strategy.EntryRules.MinCatalystPriceMovePct);
+        Assert.Equal(15.0m, strategy.EntryRules.MaxCatalystPriceMovePct);
+        Assert.Equal(1.00m, strategy.EntryRules.MinVolumeSpike);
+        Assert.Equal("finviz_style", strategy.EntryRules.MinVolumeSpikeSource);
+        Assert.Equal("soft_marker", strategy.EntryRules.VolumeConfirmationMode);
+        Assert.Null(strategy.EntryRules.MinAdx);
+        Assert.False(strategy.EntryRules.RequireAdxRising);
+        Assert.False(strategy.EntryRules.RequireObvRising);
+        Assert.True(strategy.EntryRules.RequirePriceAboveEma20);
+        Assert.False(strategy.EntryRules.RequirePriceAboveSma50);
+        Assert.False(strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume);
+        Assert.True(strategy.Session.UseExtendedHours);
+        Assert.True(strategy.ExitRules.EnableAtrTrailingStop);
+        Assert.Equal(3.0m, strategy.ExitRules.TargetRMultiple);
     }
 
     [Fact]
@@ -317,15 +380,18 @@ public sealed class RunConfigParsingTests
         var minervini = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", MinerviniVcpStrategyFile));
         Assert.Equal("mark_minervini_trade_like_a_stock_market_wizard", minervini.Source);
         Assert.Equal("volatility_contraction_pattern", minervini.EntryRules.SetupType);
-        Assert.True(minervini.EntryRules.RequirePriceAboveSma150);
-        Assert.True(minervini.EntryRules.RequirePriceAboveSma200);
-        Assert.True(minervini.EntryRules.RequireSma50AboveSma150);
-        Assert.True(minervini.EntryRules.RequireSma150AboveSma200);
-        Assert.Equal(30.0m, minervini.EntryRules.MinPriceVs52WeekLowPct);
-        Assert.Equal(-25.0m, minervini.EntryRules.MaxPriceVs52WeekHighPct);
-        Assert.Equal(2, minervini.EntryRules.MinContractions);
-        Assert.Equal(4, minervini.EntryRules.MaxContractions);
-        Assert.Equal(1.50m, minervini.EntryRules.MinBreakoutVolumeRatio);
+        Assert.Equal(2, minervini.Version);
+        Assert.True(minervini.EntryRules.RequirePriceAboveBollingerMiddle);
+        Assert.True(minervini.EntryRules.RequireMacdHistogramPositive);
+        Assert.True(minervini.EntryRules.RequirePriceAboveEma10);
+        Assert.True(minervini.EntryRules.RequirePriceAboveEma20);
+        Assert.True(minervini.EntryRules.RequirePriceAboveEma50);
+        Assert.True(minervini.EntryRules.RequireEma10AboveEma20);
+        Assert.True(minervini.EntryRules.RequireEma20AboveEma50);
+        Assert.Equal(25, minervini.EntryRules.VolatilityContractionLookbackBars);
+        Assert.Equal(0.55m, minervini.EntryRules.MinCloseLocationValue);
+        Assert.True(minervini.ExitRules.EnableAtrTrailingStop);
+        Assert.Equal(4.0m, minervini.ExitRules.TargetRMultiple);
     }
 
     [Fact]
@@ -373,15 +439,16 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
-    public void RetainedIntradayBacktestConfig_ParsesTopTwoComparisonRun()
+    public void RetainedIntradayBacktestProfile_UsesWishlistUniverseAndTopTwoStrategies()
     {
         var repoRoot = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
         var config = reader.ReadBacktestRun(Path.Combine(repoRoot, "configs", "backtest", RetainedBacktestFile));
 
-        Assert.Equal("poet-mxl-rgti-mu-msft-intraday-v8-comparison-90d", config.RunName);
-        Assert.Equal("csv", config.Provider);
-        Assert.Equal(0, config.TimeWindow.LookbackDays);
+        Assert.Equal("intraday-backtest-profile", config.RunName);
+        Assert.Equal("alpaca", config.Provider);
+        Assert.Equal("sip", config.Providers.Alpaca.DataFeed);
+        Assert.Equal(60, config.TimeWindow.LookbackDays);
         Assert.Equal(90, config.TimeWindow.WarmupLookbackDays);
         Assert.Equal(10000m, config.Portfolio.StartingCapital);
         Assert.Equal(1.0m, config.Portfolio.RiskPerTradePct);
@@ -389,31 +456,30 @@ public sealed class RunConfigParsingTests
         Assert.Equal(4, config.Portfolio.MaxConcurrentPositions);
         Assert.False(config.News.Enabled);
         Assert.Equal("1m", config.DerivedTimeframes.Source);
-        Assert.Equal(3, config.Strategies.Count);
-        Assert.Contains("POET", config.Tickers);
-        Assert.Contains("MSFT", config.Tickers);
+        Assert.Equal("wishlist", config.Validation.BiasRisk.UniverseSource);
+        Assert.Empty(config.Tickers);
+        Assert.Single(config.Strategies);
         Assert.Contains(config.Strategies, path => path.EndsWith(RetainedIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(config.Strategies, path => path.EndsWith(RunnerUpIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(config.Strategies, path => path.EndsWith(StructuralExitIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void RetainedSwingBacktestConfig_UsesPromotedLongAndShortStrategies()
+    public void RetainedSwingBacktestProfile_UsesWishlistUniverseAndPromotedLongAndShortStrategies()
     {
         var repoRoot = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
         var config = reader.ReadBacktestRun(Path.Combine(repoRoot, "configs", "backtest", RetainedSwingBacktestFile));
 
-        Assert.Equal("swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d", config.RunName);
+        Assert.Equal("swing-backtest-profile", config.RunName);
         Assert.Equal(180, config.TimeWindow.LookbackDays);
-        Assert.Equal(60, config.TimeWindow.WarmupLookbackDays);
+        Assert.Equal(260, config.TimeWindow.WarmupLookbackDays);
         Assert.Equal("alpaca", config.Provider);
+        Assert.Equal("sip", config.Providers.Alpaca.DataFeed);
         Assert.Contains("1h", config.Intervals);
         Assert.Contains("1d", config.Intervals);
         Assert.Equal("1h", config.DerivedTimeframes.Source);
-        Assert.Equal("summary", config.Artifacts.RetentionMode);
-        Assert.Contains("CRDO", config.Tickers);
-        Assert.Contains("APP", config.Tickers);
+        Assert.Equal("full", config.Artifacts.RetentionMode);
+        Assert.Equal("wishlist", config.Validation.BiasRisk.UniverseSource);
+        Assert.Empty(config.Tickers);
         Assert.Equal(2, config.Strategies.Count);
         Assert.Contains(config.Strategies, path => path.EndsWith(SwingQualityLongStrategyFile, StringComparison.OrdinalIgnoreCase));
         Assert.Contains(config.Strategies, path => path.EndsWith(SwingOverboughtShortStrategyFile, StringComparison.OrdinalIgnoreCase));
@@ -439,6 +505,8 @@ public sealed class RunConfigParsingTests
                 BaseConfigPath: baseConfigPath,
                 RunName: "writer-warmup-test",
                 LookbackDays: 365,
+                WishlistId: Guid.Parse("220939c3-1e91-4c4e-9bca-5d61f9837ebd"),
+                WishlistName: "volatile",
                 Tickers: ["POET"],
                 StrategyPaths: [strategyPath],
                 StartingCapital: 10000m,
@@ -452,6 +520,9 @@ public sealed class RunConfigParsingTests
 
             Assert.Contains("  lookback_days: 365", generatedYaml);
             Assert.Contains("  warmup_lookback_days: 90", generatedYaml);
+            Assert.Contains("universe:", generatedYaml);
+            Assert.Contains("  source: wishlist", generatedYaml);
+            Assert.Contains("  wishlist_name: volatile", generatedYaml);
             Assert.Contains("  - POET", generatedYaml);
             Assert.Contains(RetainedStrategyFile, generatedYaml);
         }
@@ -484,6 +555,8 @@ public sealed class RunConfigParsingTests
                 BaseConfigPath: baseConfigPath,
                 RunName: "writer-timeframe-test",
                 LookbackDays: 30,
+                WishlistId: Guid.Parse("220939c3-1e91-4c4e-9bca-5d61f9837ebd"),
+                WishlistName: "volatile",
                 Tickers: ["PLUG"],
                 StrategyPaths: [strategyPath],
                 StartingCapital: 10000m,
@@ -561,3 +634,10 @@ public sealed class RunConfigParsingTests
         return TestRepository.FindRoot();
     }
 }
+
+
+
+
+
+
+

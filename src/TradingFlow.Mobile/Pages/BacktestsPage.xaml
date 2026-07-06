@@ -17,15 +17,13 @@
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
                         <Label Text="Run Setup" FontAttributes="Bold" FontSize="18" />
-                        <Label Text="Pick a wishlist or type tickers, choose a strategy, then run. Advanced parameters stay collapsed." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="Pick a wishlist, choose a strategy, then run. The wishlist is the backtest universe." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
                         <Label Text="Wishlist" FontAttributes="Bold" FontSize="12" />
-                        <Picker x:Name="WishlistPicker" Title="Wishlist (optional)" SelectedIndexChanged="OnWishlistPicked" />
-                        <Label Text="Backtest config" FontAttributes="Bold" FontSize="12" />
-                        <Picker x:Name="ConfigPicker" Title="Backtest config" SelectedIndexChanged="OnFormChanged" />
+                        <Picker x:Name="WishlistPicker" Title="Wishlist" SelectedIndexChanged="OnWishlistPicked" />
+                        <Label Text="Backtest profile" FontAttributes="Bold" FontSize="12" />
+                        <Picker x:Name="ConfigPicker" Title="Backtest profile" SelectedIndexChanged="OnFormChanged" />
                         <Label Text="Strategy" FontAttributes="Bold" FontSize="12" />
                         <Picker x:Name="StrategyPicker" Title="Strategy" SelectedIndexChanged="OnFormChanged" />
-                        <Label Text="Tickers" FontAttributes="Bold" FontSize="12" />
-                        <Entry x:Name="TickersEntry" Placeholder="Tickers: MU, NVTS, RGTI" Keyboard="Text" TextChanged="OnFormChanged" />
 
                         <Button x:Name="AdvancedToggle" Text="Show advanced parameters" Clicked="OnToggleAdvanced" Padding="12,8" BackgroundColor="#475467" />
                         <VerticalStackLayout x:Name="AdvancedPanel" Spacing="10" IsVisible="False">

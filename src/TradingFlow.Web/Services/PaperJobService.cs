@@ -305,10 +305,35 @@ public sealed class PaperJobService
         {
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             using var profilerScope = TradingFlow.Domain.Logging.ApiProfiler.BeginScope(job.RunName);
-            var success = await brokerClient.ClosePositionAsync(ticker, cts.Token);
+            var scopedQuantity = await GetRunScopedActiveQuantityAsync(job, ticker, cts.Token);
+            if (scopedQuantity <= 0)
+            {
+                job.Report(job.CurrentStage, $"Refused to close {ticker}: no active order ownership was found for this run.", null, job.CompletedTickerCount, job.TotalTickerCount);
+                return false;
+            }
+
+            var activeOwners = await GetActiveOwnerRunNamesAsync(ticker, cts.Token);
+            if (activeOwners.Any(owner => !owner.Equals(job.RunName, StringComparison.OrdinalIgnoreCase)))
+            {
+                job.Report(job.CurrentStage, $"Refused to close {ticker}: another active run also owns this ticker.", null, job.CompletedTickerCount, job.TotalTickerCount);
+                return false;
+            }
+
+            var brokerPosition = (await brokerClient.GetOpenPositionsAsync(cts.Token))
+                .FirstOrDefault(position => position.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase));
+            if (brokerPosition is null || brokerPosition.Qty <= 0)
+            {
+                job.Report(job.CurrentStage, $"No open broker position was found for {ticker}.", null, job.CompletedTickerCount, job.TotalTickerCount);
+                return false;
+            }
+
+            await CancelSellOrdersForTickerAsync(job, brokerClient, ticker, cts.Token);
+
+            var closeQuantity = Math.Min(scopedQuantity, (int)Math.Floor(brokerPosition.Qty));
+            var success = await brokerClient.ClosePositionAsync(ticker, closeQuantity, cts.Token);
             if (success)
             {
-                job.Report(job.CurrentStage, $"Successfully closed position for {ticker}.", null, job.CompletedTickerCount, job.TotalTickerCount);
+                job.Report(job.CurrentStage, $"Successfully submitted close for {closeQuantity} share(s) of {ticker}.", null, job.CompletedTickerCount, job.TotalTickerCount);
             }
             return success;
         }
@@ -472,6 +497,63 @@ public sealed class PaperJobService
         }
 
         return tickers;
+    }
+
+    private async Task<int> GetRunScopedActiveQuantityAsync(MutablePaperJob job, string ticker, CancellationToken cancellationToken)
+    {
+        if (_orderRepo is null)
+        {
+            return 0;
+        }
+
+        var activeOrders = await _orderRepo.GetActiveOrdersByTickerAsync(ticker, cancellationToken);
+        return activeOrders
+            .Where(order => order.RunName.Equals(job.RunName, StringComparison.OrdinalIgnoreCase))
+            .Where(order => !order.Status.Equals("technical_exit_submitted", StringComparison.OrdinalIgnoreCase))
+            .Sum(order => Math.Max(0, order.ShareQuantity));
+    }
+
+    private async Task<IReadOnlyList<string>> GetActiveOwnerRunNamesAsync(string ticker, CancellationToken cancellationToken)
+    {
+        if (_orderRepo is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        var activeOrders = await _orderRepo.GetActiveOrdersByTickerAsync(ticker, cancellationToken);
+        return activeOrders
+            .Where(order => !String.IsNullOrWhiteSpace(order.RunName))
+            .Where(order => !order.Status.Equals("technical_exit_submitted", StringComparison.OrdinalIgnoreCase))
+            .Select(order => order.RunName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private async Task CancelSellOrdersForTickerAsync(
+        MutablePaperJob job,
+        TradingFlow.Engine.Execution.IBrokerClient brokerClient,
+        string ticker,
+        CancellationToken cancellationToken)
+    {
+        var openOrders = await brokerClient.GetOpenOrdersAsync(cancellationToken);
+        foreach (var order in openOrders.Where(order =>
+                     order.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase) &&
+                     order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                await brokerClient.CancelOrderAsync(order.OrderId, cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Failed to cancel sell order {OrderId} before closing {Ticker} for paper job {JobId}.",
+                    order.OrderId,
+                    ticker,
+                    job.JobId);
+            }
+        }
     }
 
     private static bool BelongsToRun(TradingFlow.Domain.Orders.ActiveBrokerOrder order, string runName)

@@ -86,4 +86,106 @@ public sealed class StrategySessionClockTests
         Assert.False(notYet);
         Assert.True(flatten);
     }
+
+
+    [Fact]
+    public void ValidateExecutionWindow_ExtendedHours_AllowsPremarketAndPostmarket()
+    {
+        var clock = new StrategySessionClock();
+        var session = new SessionRules(
+            "America/New_York",
+            QuietMinutesAfterOpen: 1,
+            CloseBufferMinutes: 30,
+            FridayCloseBufferMinutes: 5,
+            UseExtendedHours: true);
+
+        var premarket = clock.ValidateExecutionWindow(
+            DateTimeOffset.Parse("2026-06-09T08:05:00Z"),
+            "5m",
+            session);
+        var postmarket = clock.ValidateExecutionWindow(
+            DateTimeOffset.Parse("2026-06-09T23:30:00Z"),
+            "5m",
+            session);
+
+        Assert.True(premarket);
+        Assert.True(postmarket);
+    }
+
+    [Fact]
+    public void ValidateExecutionWindow_RegularHours_StillRejectsPremarket()
+    {
+        var clock = new StrategySessionClock();
+        var session = new SessionRules(
+            "America/New_York",
+            QuietMinutesAfterOpen: 1,
+            CloseBufferMinutes: 30,
+            FridayCloseBufferMinutes: 5);
+
+        var accepted = clock.ValidateExecutionWindow(
+            DateTimeOffset.Parse("2026-06-09T08:05:00Z"),
+            "5m",
+            session);
+
+        Assert.False(accepted);
+    }
+
+    [Fact]
+    public void ValidateExecutionWindow_ExtendedHours_OnlyFridayPostmarketCloseBufferBlocksEntries()
+    {
+        var clock = new StrategySessionClock();
+        var session = new SessionRules(
+            "America/New_York",
+            QuietMinutesAfterOpen: 0,
+            CloseBufferMinutes: 30,
+            FridayCloseBufferMinutes: 5,
+            UseExtendedHours: true);
+
+        var thursdayPostmarket = clock.ValidateExecutionWindow(
+            DateTimeOffset.Parse("2026-06-11T23:58:00Z"),
+            "5m",
+            session);
+        var fridayBeforeCutoff = clock.ValidateExecutionWindow(
+            DateTimeOffset.Parse("2026-06-12T23:54:00Z"),
+            "5m",
+            session);
+        var fridayAtCutoff = clock.ValidateExecutionWindow(
+            DateTimeOffset.Parse("2026-06-12T23:55:00Z"),
+            "5m",
+            session);
+
+        Assert.True(thursdayPostmarket);
+        Assert.True(fridayBeforeCutoff);
+        Assert.False(fridayAtCutoff);
+    }
+
+    [Fact]
+    public void ShouldFlattenBeforeSessionClose_ExtendedHours_FiresOnlyAtFridayPostmarketClose()
+    {
+        var clock = new StrategySessionClock();
+        var session = new SessionRules(
+            "America/New_York",
+            QuietMinutesAfterOpen: 0,
+            CloseBufferMinutes: 30,
+            FridayCloseBufferMinutes: 5,
+            UseExtendedHours: true);
+
+        var thursday = clock.ShouldFlattenBeforeSessionClose(
+            DateTimeOffset.Parse("2026-06-11T23:55:00Z"),
+            "5m",
+            session);
+        var fridayBeforeFinalBar = clock.ShouldFlattenBeforeSessionClose(
+            DateTimeOffset.Parse("2026-06-12T23:50:00Z"),
+            "5m",
+            session);
+        var fridayFinalBar = clock.ShouldFlattenBeforeSessionClose(
+            DateTimeOffset.Parse("2026-06-12T23:55:00Z"),
+            "5m",
+            session);
+
+        Assert.False(thursday);
+        Assert.False(fridayBeforeFinalBar);
+        Assert.True(fridayFinalBar);
+    }
+
 }

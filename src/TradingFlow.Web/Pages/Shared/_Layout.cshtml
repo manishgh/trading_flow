@@ -9,10 +9,12 @@
 </head>
 <body>
     <header class="topbar">
-        <a class="brand" asp-page="/Index">Quant Workstation</a>
+        <a class="brand" asp-page="/TradeDesk">Quant Workstation</a>
         <nav>
+            <a asp-page="/TradeDesk">Trade Desk</a>
             <a asp-page="/Backtests">Backtest</a>
             <a asp-page="/Paper">Paper</a>
+            <a asp-page="/RunningTrades">Running Trades</a>
             <a asp-page="/Wishlists">Wishlists</a>
             <a asp-page="/Warmup">Warmup</a>
             <a href="#">Live</a>
@@ -25,4 +27,3 @@
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>
-

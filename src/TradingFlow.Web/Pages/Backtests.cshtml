@@ -4,7 +4,14 @@
     ViewData["Title"] = "Quant Workstation";
     var selectedConfig = Model.Configs.FirstOrDefault(c => c.Path == Model.SelectedConfigPath);
     var selectedStrategy = Model.Strategies.FirstOrDefault(s => s.Path == Model.SelectedStrategyPath);
-    var tickersCsv = selectedConfig != null ? String.Join(", ", selectedConfig.Config.Tickers) : "";
+    var selectedWishlist = Model.SelectedWishlist;
+    string AuditLine(TradingFlow.Web.Models.StrategyOption strategy)
+    {
+        var audit = strategy.Audit;
+        return audit is null
+            ? "Audit: not available"
+            : $"Audit: {audit.ReturnPct:+0.##;-0.##;0}% / DD {audit.MaxDrawdownPct:0.##}% / {audit.Trades} trades / win {audit.WinRatePct:0.#}% / avg hold {audit.AverageHold}";
+    }
 }
 
 <div class="section-title">
@@ -17,35 +24,37 @@
 <div class="grid two">
     <!-- LEFT COLUMN: Environment & Strategy Editor -->
     <div>
-        <form method="post" asp-page-handler="SaveConfig" class="panel">
+        <section class="panel">
             <h2>Universe</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Select a base config, inspect its tickers, and optionally save a custom ticker list.</div>
-            
-            <input type="hidden" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
-            
-            <label for="BaseConfigPath">Backtest Environment</label>
-            <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem;">
-                <select name="BaseConfigPath" id="BaseConfigPath" onchange="window.location='?configPath=' + encodeURIComponent(this.value) + '&strategyPath=' + encodeURIComponent(document.querySelector('input[name=\'SelectedStrategyPath\']').value) + '&tickersCsv=' + encodeURIComponent(document.getElementById('TickersCsv').value)" style="flex-grow: 1;">
+            <div class="muted" style="margin-bottom: 1rem;">Backtests now run from a wishlist. Ticker lists are not maintained in backtest config files.</div>
+
+            <label for="WishlistId">Wishlist</label>
+            <select name="WishlistId" id="WishlistId" onchange="window.location='?configPath=' + encodeURIComponent(document.getElementById('BaseConfigPath').value) + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '@Model.SelectedStrategyPath') + '&wishlistId=' + encodeURIComponent(this.value)">
+                @foreach (var wishlist in Model.Wishlists)
+                {
+                    <option value="@wishlist.Id" selected="@(wishlist.Id == Model.WishlistId)">@wishlist.Name (@wishlist.Items.Count(i => i.Active) active)</option>
+                }
+            </select>
+
+            @if (selectedWishlist is not null)
+            {
+                <div class="wishlist-chip-grid" style="margin-top: 0.75rem;">
+                    @foreach (var item in selectedWishlist.Items.Where(i => i.Active).OrderBy(i => i.Ticker))
+                    {
+                        <span class="quote-pill">@item.Ticker</span>
+                    }
+                </div>
+            }
+
+            <label for="BaseConfigPath" style="margin-top: 1rem;">Backtest Profile</label>
+            <select name="BaseConfigPath" id="BaseConfigPath" onchange="window.location='?configPath=' + encodeURIComponent(this.value) + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '@Model.SelectedStrategyPath') + '&wishlistId=' + encodeURIComponent(document.getElementById('WishlistId').value)">
                     @foreach (var config in Model.Configs)
                     {
-                        var isBase = config.FileName.Equals("finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml", StringComparison.OrdinalIgnoreCase);
-                        var label = isBase ? config.FileName : $"[CUSTOM] {config.FileName}";
+                        var label = config.Config.RunName.Replace('-', ' ');
                         <option value="@config.Path" selected="@(config.Path == Model.SelectedConfigPath)">@label</option>
                     }
-                </select>
-                @if (selectedConfig != null && !selectedConfig.FileName.Equals("finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml", StringComparison.OrdinalIgnoreCase))
-                {
-                    <button type="submit" asp-page-handler="DeleteConfig" name="DeleteConfigPath" value="@selectedConfig.Path" class="button secondary" style="background: #fee; color: #c00; border-color: #fcc;" onclick="return confirm('Delete this custom config?');">Delete</button>
-                }
-            </div>
-
-            <label for="TickersCsv">Tickers (CSV)</label>
-            <textarea name="TickersCsv" id="TickersCsv" rows="3">@Model.TickersCsv</textarea>
-            
-            <div class="actions" style="margin-top: 1rem;">
-                <button type="submit">Save Custom List</button>
-            </div>
-        </form>
+            </select>
+        </section>
 
         <section class="panel" style="margin-top: 1rem;">
             <h2>Strategy Catalog</h2>
@@ -57,6 +66,7 @@
                     <article class="strategy-card">
                         <div class="strategy-card-title">@definition.StrategyName</div>
                         <div class="muted">@definition.Direction.ToUpperInvariant() · @definition.Timeframe · @definition.EntryRules.SetupType</div>
+                        <div class="muted" style="margin-top: 0.35rem;">@AuditLine(strategy)</div>
                         <dl class="mini-metrics">
                             <div><dt>Stop</dt><dd>@definition.ExitRules.StopAtrMultiple ATR</dd></div>
                             <div><dt>Target</dt><dd>@definition.ExitRules.TargetRMultiple R</dd></div>
@@ -76,10 +86,10 @@
             <input type="hidden" name="SaveStrategyPath" value="@Model.SelectedStrategyPath" />
 
             <label for="SelectedStrategyDropdown">Strategy</label>
-            <select id="SelectedStrategyDropdown" onchange="window.location='?configPath=' + encodeURIComponent(document.getElementById('SelectedConfigPath_Hidden').value) + '&strategyPath=' + encodeURIComponent(this.value) + '&tickersCsv=' + encodeURIComponent(document.getElementById('TickersCsv').value)" style="margin-bottom: 1rem;">
+            <select id="SelectedStrategyDropdown" onchange="window.location='?configPath=' + encodeURIComponent(document.getElementById('SelectedConfigPath_Hidden').value) + '&strategyPath=' + encodeURIComponent(this.value) + '&wishlistId=' + encodeURIComponent(document.getElementById('WishlistId')?.value || '')" style="margin-bottom: 1rem;">
                 @foreach (var strategy in Model.Strategies)
                 {
-                    <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.Definition.StrategyName v@strategy.Definition.Version</option>
+                    <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.Definition.StrategyName v@(strategy.Definition.Version) - @AuditLine(strategy)</option>
                 }
             </select>
 
@@ -187,7 +197,7 @@
 
             <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
             <input type="hidden" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
-            <input type="hidden" name="TickersCsv" value="@Model.TickersCsv" />
+            <input type="hidden" name="WishlistId" value="@Model.WishlistId" />
 
             <div class="grid two">
                 <div>
@@ -235,7 +245,8 @@
                     var isChecked = configuredStrategyPaths.Contains(strategy.Path) || strategy.Path == Model.SelectedStrategyPath;
                     <label class="check">
                         <input type="checkbox" name="StrategyPaths" value="@strategy.Path" checked="@isChecked" />
-                        @strategy.Definition.StrategyName
+                        <span>@strategy.Definition.StrategyName</span>
+                        <span class="muted"> @AuditLine(strategy)</span>
                     </label>
                 }
             </div>

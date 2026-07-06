@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Optimization;
@@ -35,6 +35,7 @@ public sealed class SimpleYamlReader
                 OptionalInt(map, "entry_rules.opening_range_minutes", 15),
                 OptionalInt(map, "entry_rules.recent_high_lookback_bars", 20),
                 OptionalInt(map, "entry_rules.volatility_contraction_lookback_bars", 10),
+                OptionalDecimal(map, "entry_rules.opening_range_break_buffer") ?? 0m,
                 OptionalBool(map, "entry_rules.require_log_price_rising", false),
                 OptionalBool(map, "entry_rules.require_log_volume_rising", false),
                 OptionalInt(map, "entry_rules.log_price_lookback_bars", 12),
@@ -182,7 +183,17 @@ public sealed class SimpleYamlReader
                 AdxRisingLookbackBars: OptionalInt(map, "entry_rules.adx_rising_lookback_bars", 3),
                 RequireObvRising: OptionalBool(map, "entry_rules.require_obv_rising", false),
                 ObvRisingLookbackBars: OptionalInt(map, "entry_rules.obv_rising_lookback_bars", 3),
-                MinObvChange: OptionalDecimal(map, "entry_rules.min_obv_change")),
+                MinObvChange: OptionalDecimal(map, "entry_rules.min_obv_change"),
+                MaxMacdHistogram: OptionalDecimal(map, "entry_rules.max_macd_histogram"),
+                PriorEntryGainLookbackBars: OptionalInt(map, "entry_rules.prior_entry_gain_lookback_bars", 5),
+                MaxPriorEntryGainPct: OptionalDecimal(map, "entry_rules.max_prior_entry_gain_pct"),
+                RequirePriorInsideDay: OptionalBool(map, "entry_rules.require_prior_inside_day", false),
+                RequirePriorNr7: OptionalBool(map, "entry_rules.require_prior_nr7", false),
+                PriorCompressionMode: OptionalString(map, "entry_rules.prior_compression_mode", "none"),
+                PriorNr7LookbackDays: OptionalInt(map, "entry_rules.prior_nr7_lookback_days", 7),
+                MinVwapDistanceAtrForDivergence: OptionalDecimal(map, "entry_rules.min_vwap_distance_atr_for_divergence"),
+                DivergenceLookbackBars: OptionalInt(map, "entry_rules.divergence_lookback_bars", 20),
+                DivergenceStartHour: OptionalInt(map, "entry_rules.divergence_start_hour", 12)),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -214,7 +225,14 @@ public sealed class SimpleYamlReader
                 OptionalDecimal(map, "exit_rules.sma10_near_sma20_pct") ?? 0.25m,
                 OptionalBool(map, "exit_rules.exit_on_sma10_cross_below_sma20", false),
                 OptionalBool(map, "exit_rules.exit_short_on_sma10_cross_above_sma20", false),
-                OptionalBool(map, "exit_rules.exit_on_ema10_cross_below_ema20", false)),
+                OptionalBool(map, "exit_rules.exit_on_ema10_cross_below_ema20", false),
+                OptionalBool(map, "exit_rules.allow_same_bar_stop_target", true),
+                OptionalString(map, "exit_rules.initial_stop_mode", "atr"),
+                OptionalString(map, "exit_rules.profit_target_mode", "r_multiple"),
+                OptionalBool(map, "exit_rules.enable_failed_breakout_circuit_breaker", false),
+                OptionalInt(map, "exit_rules.failed_breakout_bars", 3),
+                OptionalDecimal(map, "exit_rules.failed_breakout_min_r") ?? 0m,
+                OptionalDecimal(map, "exit_rules.stop_tick_buffer") ?? 0.01m),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
                 RequireDecimal(map, "execution.slippage_bps")),
@@ -223,7 +241,8 @@ public sealed class SimpleYamlReader
                 RequireInt(map, "session.quiet_minutes_after_open"),
                 RequireInt(map, "session.close_buffer_minutes"),
                 RequireInt(map, "session.friday_close_buffer_minutes"),
-                OptionalBool(map, "session.is_continuous_market", false)));
+                OptionalBool(map, "session.is_continuous_market", false),
+                OptionalBool(map, "session.use_extended_hours", false)));
     }
 
     public BacktestRunConfig ReadBacktestRun(string path)
@@ -249,7 +268,7 @@ public sealed class SimpleYamlReader
                 OptionalDateTimeOffset(runMap, "time_window.start"),
                 OptionalDateTimeOffset(runMap, "time_window.end"),
                 OptionalInt(runMap, "time_window.warmup_lookback_days", 0)),
-            RequireList(runMap, "tickers"),
+            OptionalList(runMap, "tickers"),
             RequireString(runMap, "market_data.provider"),
             RequireList(runMap, "market_data.download_timeframes"),
             ResolveRepositoryPath(repositoryRoot, RequireString(runMap, "market_data.raw_root")),
@@ -288,7 +307,11 @@ public sealed class SimpleYamlReader
                 RequireDecimal(runMap, "portfolio.fixed_buy_fee"),
                 RequireDecimal(runMap, "portfolio.fixed_sell_fee"),
                 OptionalInt(runMap, "portfolio.max_open_trades_per_ticker", 1),
-                RequireBool(runMap, "portfolio.prevent_overlapping_ticker_positions")),
+                RequireBool(runMap, "portfolio.prevent_overlapping_ticker_positions"),
+                OptionalDecimal(runMap, "portfolio.max_bar_participation_pct") ?? 0m,
+                OptionalDecimal(runMap, "portfolio.sec_fee_rate") ?? 0m,
+                OptionalDecimal(runMap, "portfolio.finra_taf_per_share") ?? 0m,
+                OptionalDecimal(runMap, "portfolio.finra_taf_cap") ?? 0m),
             new SignalSourceConfig(
                 OptionalString(runMap, "signal_source.type", "internal_candles"),
                 OptionalBool(runMap, "signal_source.require_signature", false),
@@ -316,10 +339,35 @@ public sealed class SimpleYamlReader
                 OptionalString(runMap, "screener.provider", "finviz"),
                 OptionalList(runMap, "screener.filters")),
             new ArtifactRetentionConfig(
-                OptionalString(runMap, "artifacts.retention_mode", "summary")),
+                OptionalString(runMap, "artifacts.retention_mode", "full")),
             RequireList(runMap, "strategies")
                 .Select(strategyPath => ResolveConfigPath(runDirectory, strategyPath))
-                .ToArray());
+                .ToArray(),
+            ReadUniverseConfig(runMap));
+    }
+
+    private static UniverseConfig? ReadUniverseConfig(IReadOnlyDictionary<string, List<string>> runMap)
+    {
+        var mode = OptionalString(runMap, "universe.mode", UniverseConfig.StaticMode);
+        if (String.IsNullOrWhiteSpace(mode) ||
+            mode.Equals(UniverseConfig.StaticMode, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return new UniverseConfig(
+            mode,
+            OptionalList(runMap, "universe.candidates"),
+            OptionalDecimal(runMap, "universe.min_price") ?? 0m,
+            OptionalDecimal(runMap, "universe.min_avg_dollar_volume") ?? 0m,
+            OptionalInt(runMap, "universe.lookback_days", 20),
+            OptionalDecimal(runMap, "universe.min_prior_return_pct"),
+            OptionalNullableInt(runMap, "universe.max_symbols"),
+            OptionalString(runMap, "universe.candidate_source", UniverseConfig.StaticCandidateSource),
+            OptionalString(runMap, "universe.candidate_screener_query", string.Empty) is { Length: > 0 } query
+                ? query
+                : null,
+            OptionalString(runMap, "universe.rescreen_frequency", UniverseConfig.RescreenPerRun));
     }
 
     public OptimizationConfig ReadOptimizationConfig(string path)
@@ -570,3 +618,5 @@ public sealed class SimpleYamlReader
         return null;
     }
 }
+
+
