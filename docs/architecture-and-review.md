@@ -115,13 +115,38 @@ Use **partial classes and pure extracted helpers**, never a rewrite:
 | # | Target | Action | Risk |
 |---|---|---|---|
 | A | `BacktestRunner` | ✅ Split into partials (`.Universe`, `.Simulation`, `.Providers`, `.Diagnostics`). Verified. | Done |
-| B | `BacktestRunner` simulation | Unify long/short exit engine behind a `direction` parameter; delete the duplicate copy only after a golden-output test confirms identical trades. | Medium — gated by a characterization test first |
-| C | `MobileAutomationService` | Extract `AutomationExitMonitor` (the guardian loop) and `AutomationSessionStore` usage into their own classes. | Low–Med |
+| B | `BacktestRunner` simulation | **Reassessed — do NOT fully merge (see ADR below).** Characterization guardrail added instead. | Done (decision) |
+| C | `MobileAutomationService` | ✅ Split into partials: `.ExitMonitor` (guardian loop) and `.EntryPreparation` (market-state + entry gates). 1109 → 476 main. Verified. | Done |
 | D | `SignalGenerator` / evaluator | Group entry gates into `TrendGates`, `VolumeGates`, `NewsGates`, `StructureGates` static checkers. | Medium |
 | E | Mobile | Split `TradingFlowApiClient` DTOs into a `Contracts` file; split `WishlistsPage` view-models out. | Low |
 
 Recommended order: **A → C → E** (all low-risk, immediate line-count win), then a
 characterization test before **B**, then **D**. Do not attempt B without the golden test.
+
+### 2.4a ADR — Increment B: keep long/short exit loops as mirrors (do not merge)
+
+**Decision (2026-07-06):** After reading both `CreateCandidate` (long) and
+`CreateShortCandidate` (short) in full, we will **not** collapse them into one
+direction-parameterized method.
+
+**Context.** The two loops are mirror images: stop below vs above entry, target above
+vs below, `price <= stop` vs `price >= stop`, `confirmed_vwap_failure` vs
+`confirmed_vwap_reclaim`, and per-direction slippage. A merged method would carry a
+`direction == "long" ? … : …` branch at ~15 sign-sensitive comparison points.
+
+**Why not merge.**
+1. This is money-critical logic; a single inverted comparison is a real P&L loss, not a
+   cosmetic bug. Two mirror methods are auditable at a glance; a branchy merged method is not.
+2. The genuinely reusable, direction-agnostic pieces are **already** extracted and take a
+   `direction` parameter: `ResolveInitialRisk`, `ResolveTakeProfitPrice`,
+   `ShouldExitFailedBreakout`, `BuildCandidate`, plus per-direction slippage helpers. The
+   mechanical duplication is already gone; only the intentional mirror loop remains.
+3. DRY is not an absolute. For correctness-critical mirror logic, explicit beats clever.
+
+**What we did instead.** Added `BacktestSimulationCharacterizationTests` freezing the
+sign-sensitive directional risk core (long and short stop/target are exact mirrors around
+entry). This permanently guards the two implementations against silently diverging and would
+make any future merge provably behavior-preserving — so the option stays open, safely.
 
 ### 2.5 Guardrails for this refactor (the #7 promise)
 - No behavior change in any "cleanup" commit; behavior changes are separate, reviewed commits.

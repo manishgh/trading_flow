@@ -3,6 +3,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Market;
+using TradingFlow.Engine.Regime;
 
 namespace TradingFlow.Backtesting;
 
@@ -146,7 +147,8 @@ public sealed partial class BacktestRunner
         IReadOnlyCollection<StrategyDefinition> strategies,
         IReadOnlyList<BacktestCandidateTrade> candidates,
         IReadOnlyCollection<OhlcvBar> allBars,
-        UniverseMembership? universeMembership = null)
+        UniverseMembership? universeMembership = null,
+        IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars = null)
     {
         return strategies
             .Select(strategy =>
@@ -156,7 +158,10 @@ public sealed partial class BacktestRunner
                     .OrderBy(x => x.EntryTimestamp)
                     .ThenBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
-                var trades = BuildPortfolioTrades(portfolio, strategy, strategyCandidates, universeMembership);
+                var regimeCalendar = regimeCalendars is not null && regimeCalendars.TryGetValue(strategy.StrategyId, out var calendar)
+                    ? calendar
+                    : null;
+                var trades = BuildPortfolioTrades(portfolio, strategy, strategyCandidates, universeMembership, regimeCalendar);
                 var netProfit = trades.Sum(x => x.NetProfit);
                 var endingCapital = portfolio.StartingCapital + netProfit;
                 var totalReturnPct = portfolio.StartingCapital == 0 ? 0 : (netProfit / portfolio.StartingCapital) * 100m;
@@ -378,17 +383,25 @@ public sealed partial class BacktestRunner
         PortfolioConfig portfolio,
         StrategyDefinition strategy,
         IReadOnlyList<BacktestCandidateTrade> candidates,
-        UniverseMembership? universeMembership = null)
+        UniverseMembership? universeMembership = null,
+        RegimeCalendar? regimeCalendar = null)
     {
         var accepted = new List<BacktestTrade>();
 
         foreach (var candidate in candidates)
         {
+            var entryDay = DateOnly.FromDateTime(candidate.EntryTimestamp.UtcDateTime);
+
             // Per-day universe gate: a trade is allowed only if its ticker qualified on the
             // entry day. Uses the entry's UTC calendar date, which for US equities is the
             // same trading day the no-lookahead membership was computed against.
-            if (universeMembership is not null &&
-                !universeMembership.IsMember(candidate.Ticker, DateOnly.FromDateTime(candidate.EntryTimestamp.UtcDateTime)))
+            if (universeMembership is not null && !universeMembership.IsMember(candidate.Ticker, entryDay))
+            {
+                continue;
+            }
+
+            // Layer-2 regime gate: no new entries on days the market regime is off.
+            if (regimeCalendar is not null && !regimeCalendar.IsOn(entryDay))
             {
                 continue;
             }
@@ -522,82 +535,6 @@ public sealed partial class BacktestRunner
         var riskPerShare = Math.Abs(trade.EntryPrice - trade.StopLossPrice);
         var riskDollars = riskPerShare * trade.ShareQuantity;
         return riskDollars <= 0m ? 0m : trade.NetProfit / riskDollars;
-    }
-
-    private static decimal? ResolveEntryRelativeVolume(StrategyDefinition strategy, IndicatorSnapshot snapshot)
-    {
-        return strategy.EntryRules.MinVolumeSpikeSource.ToLowerInvariant() switch
-        {
-            "session_vs_average_day" or "session" or "finviz_style" => snapshot.SessionRelativeVolume,
-            "slot_bar" or "bar_same_time" => snapshot.SlotRelativeVolume,
-            _ => snapshot.RelativeVolume
-        };
-    }
-
-    private static string? GetVolumeConfirmationRejection(
-        StrategyDefinition strategy,
-        IndicatorSnapshot snapshot,
-        decimal actualRelativeVolume)
-    {
-        var mode = strategy.EntryRules.VolumeConfirmationMode;
-        if (mode.Equals("none", StringComparison.OrdinalIgnoreCase) ||
-            mode.Equals("soft_confirmation", StringComparison.OrdinalIgnoreCase) ||
-            mode.Equals("soft_marker", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        if (mode.Equals("liquidity_floor", StringComparison.OrdinalIgnoreCase))
-        {
-            var floor = strategy.EntryRules.MinVolumeLiquidityFloor ?? 0m;
-            return floor > 0m && actualRelativeVolume < floor
-                ? FormatRelativeVolumeRejection(
-                    "volume_liquidity_floor_below_minimum",
-                    snapshot,
-                    floor,
-                    actualRelativeVolume,
-                    strategy.EntryRules.MinVolumeSpikeSource,
-                    mode)
-                : null;
-        }
-
-        return actualRelativeVolume < strategy.EntryRules.MinVolumeSpike
-            ? FormatRelativeVolumeRejection(
-                "relative_volume_below_minimum",
-                snapshot,
-                strategy.EntryRules.MinVolumeSpike,
-                actualRelativeVolume,
-                strategy.EntryRules.MinVolumeSpikeSource,
-                mode)
-            : null;
-    }
-
-    private static string FormatRelativeVolumeRejection(
-        string reason,
-        IndicatorSnapshot snapshot,
-        decimal requiredRelativeVolume,
-        decimal actualRelativeVolume,
-        string volumeSource,
-        string volumeMode)
-    {
-        return
-            $"{reason} (Actual: {actualRelativeVolume:F2}, Required: {requiredRelativeVolume:F2}, Source: {volumeSource}, Mode: {volumeMode}, " +
-            $"Ticker: {snapshot.Ticker}, BarTime: {snapshot.Timestamp:O}, Timeframe: {snapshot.Timeframe}, " +
-            $"BarVolume: {FormatWhole(snapshot.CurrentVolume)}, CumulativeAvgVolume: {FormatNullableWhole(snapshot.CumulativeAverageVolume)}, " +
-            $"SlotAvgVolume: {FormatNullableWhole(snapshot.SlotAverageVolume)}, AverageSessionVolume: {FormatNullableWhole(snapshot.AverageSessionVolume)}, " +
-            $"SampleSessions: {snapshot.RelativeVolumeSampleCount})";
-    }
-
-    private static string FormatWhole(decimal value)
-    {
-        return value.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
-    }
-
-    private static string FormatNullableWhole(decimal? value)
-    {
-        return value is null
-            ? "n/a"
-            : value.Value.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static decimal CalculateMaxDrawdown(decimal startingCapital, IReadOnlyList<BacktestTrade> completedTrades)

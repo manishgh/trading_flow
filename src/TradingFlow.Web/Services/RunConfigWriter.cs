@@ -536,6 +536,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  failed_breakout_bars: {strategy.ExitRules.FailedBreakoutBars}");
         yaml.AppendLine($"  failed_breakout_min_r: {strategy.ExitRules.FailedBreakoutMinR.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  stop_tick_buffer: {strategy.ExitRules.StopTickBuffer.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  require_confirmed_ema20_exit: {strategy.ExitRules.RequireConfirmedEma20Exit.ToString().ToLowerInvariant()}");
         yaml.AppendLine("execution:");
         yaml.AppendLine($"  timeframe: {strategy.Execution.Timeframe}");
         yaml.AppendLine($"  slippage_bps: {strategy.Execution.SlippageBps.ToString(CultureInfo.InvariantCulture)}");

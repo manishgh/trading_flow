@@ -3,12 +3,46 @@ using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Regime;
 using TradingFlow.Engine.Risk;
 
 namespace TradingFlow.Tests;
 
 public class BacktestRunnerExecutionQualityTests
 {
+    [Fact]
+    public void BuildPortfolioTrades_RegimeOffDay_SkipsEntryOnlyOnOffDays()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "BuildPortfolioTrades",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var strategy = ConfirmedEntryStrategy();
+        var portfolio = new PortfolioConfig(
+            StartingCapital: 10_000m,
+            RiskPerTradePct: 1.0m,
+            MaxPositionValuePct: 100m,
+            MaxConcurrentPositions: 5,
+            FixedBuyFee: 0m,
+            FixedSellFee: 0m,
+            MaxOpenTradesPerTicker: 1,
+            PreventOverlappingTickerPositions: false);
+        var candidates = new[]
+        {
+            Candidate("AAA", "2026-06-02T13:31:00Z", "2026-06-02T13:40:00Z", 10m, 9m, 12m, "take_profit"),
+            Candidate("BBB", "2026-06-03T13:31:00Z", "2026-06-03T13:40:00Z", 10m, 9m, 12m, "take_profit")
+        };
+        // Regime is on only 2026-06-02, so the 06-03 entry must be gated out.
+        var regime = RegimeCalendar.FromOnDates(new HashSet<DateOnly> { new DateOnly(2026, 6, 2) });
+
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(
+            null, [portfolio, strategy, candidates, null, regime])!;
+
+        Assert.Single(trades);
+        Assert.Equal("AAA", trades[0].Ticker);
+    }
+
     [Fact]
     public void ResolveSecretForTesting_LoadsLocalAlpacaSettings_WhenEnvironmentIsMissing()
     {
@@ -148,11 +182,6 @@ public class BacktestRunnerExecutionQualityTests
     [Fact]
     public void VolumeConfirmationSoftMarker_DoesNotRejectBacktestCandidate()
     {
-        var method = typeof(BacktestRunner).GetMethod(
-            "GetVolumeConfirmationRejection",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        Assert.NotNull(method);
-
         var baseStrategy = ConfirmedEntryStrategy();
         var strategy = baseStrategy with
         {
@@ -164,7 +193,10 @@ public class BacktestRunnerExecutionQualityTests
         };
         var snapshot = Snapshot("2026-06-01T13:30:00Z");
 
-        var rejection = (string?)method.Invoke(null, [strategy, snapshot, 0.25m]);
+        // One brain: soft_marker volume mode must not reject in the shared StrategyDecisionBrain that
+        // both backtest and live use (relative volume 0.25 < MinVolumeSpike 2.0, but soft_marker is advisory).
+        var rejection = new TradingFlow.Engine.Strategies.StrategyDecisionBrain()
+            .GetVolumeConfirmationRejection(strategy, snapshot, 0.25m);
 
         Assert.Null(rejection);
     }
@@ -204,7 +236,7 @@ public class BacktestRunnerExecutionQualityTests
             Candidate("OKAY", "2026-06-01T13:36:00Z", "2026-06-01T13:41:00Z", 10m, 9m, 12m, "take_profit")
         };
 
-        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(null, [portfolio, strategy, candidates, null])!;
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(null, [portfolio, strategy, candidates, null, null])!;
 
         Assert.Equal(2, trades.Count);
         Assert.Single(trades, trade => trade.Ticker == "LOSS");

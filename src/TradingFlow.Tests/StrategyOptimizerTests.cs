@@ -20,7 +20,7 @@ public class StrategyOptimizerTests
             FindRepositoryRoot(),
             "configs",
             "strategies",
-            "intraday-ema10-ema20-macd-volume.v2-additive.yaml"));
+            "intraday-ema10-ema20-macd-volume.v1.yaml"));
 
         strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
             optimizer,

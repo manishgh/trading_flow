@@ -13,7 +13,10 @@ public sealed class StrategyEvaluationEngine
 {
     private readonly CandlePipelineEngine candlePipeline = new();
     private readonly SignalGenerator signalGenerator = new();
-    private readonly BasicStrategyEvaluator evaluator = new();
+    // One brain: route the preview evaluation through the same StrategyDecisionBrain the backtest and
+    // live runners use, so "what would this strategy do now" matches the real accept/reject decision
+    // (including volume confirmation), not a divergent subset.
+    private readonly StrategyDecisionBrain decisionBrain = new();
 
     public async Task<StrategyEvaluationResponse> EvaluateAsync(
         StrategyEvaluationRequest request,
@@ -114,7 +117,11 @@ public sealed class StrategyEvaluationEngine
             return StrategyTickerEvaluation.FromSnapshot(ticker, latest, "Rejected", confluenceRejection, signal);
         }
 
-        var entryRejection = evaluator.GetLongEntryRejection(strategy, signal, ResolveEntryRelativeVolume(strategy, latest) ?? 0m);
+        var entryRejection = decisionBrain.GetLongEntryRejection(
+            strategy,
+            signal,
+            latest,
+            decisionBrain.ResolveEntryRelativeVolume(strategy, latest) ?? 0m);
         if (entryRejection is not null)
         {
             return StrategyTickerEvaluation.FromSnapshot(ticker, latest, "Rejected", entryRejection, signal);
@@ -123,15 +130,6 @@ public sealed class StrategyEvaluationEngine
         return StrategyTickerEvaluation.FromSnapshot(ticker, latest, "Accepted", null, signal);
     }
 
-    private static decimal? ResolveEntryRelativeVolume(StrategyDefinition strategy, IndicatorSnapshot snapshot)
-    {
-        return strategy.EntryRules.MinVolumeSpikeSource.ToLowerInvariant() switch
-        {
-            "session_vs_average_day" or "session" or "finviz_style" => snapshot.SessionRelativeVolume,
-            "slot_bar" or "bar_same_time" => snapshot.SlotRelativeVolume,
-            _ => snapshot.RelativeVolume
-        };
-    }
     private static string? GetSignalReadinessRejection(IndicatorSnapshot snapshot)
     {
         var missing = new List<string>();

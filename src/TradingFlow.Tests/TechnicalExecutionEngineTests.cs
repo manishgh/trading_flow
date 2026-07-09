@@ -219,6 +219,45 @@ public sealed class TechnicalExecutionEngineTests
             MacdHistogram: 0.01m);
     }
 
+    [Fact]
+    public void GetTechnicalExitReason_WhenConfirmedEma20Required_DoesNotExitOnSingleCloseBelowEma20()
+    {
+        var strategy = CreateStrategy(exitOnCloseBelowEma20: true, requireConfirmedEma20Exit: true);
+        // Current bar closes below EMA20, but the prior bar closed above its EMA20 -> only one close -> hold.
+        var current = Ema20Snapshot(currentPrice: 9.5m, ema20: 10m);
+        var previous = Ema20Snapshot(currentPrice: 10.5m, ema20: 10m);
+
+        var reason = new TechnicalExecutionEngine().GetTechnicalExitReason(
+            strategy, current, barsHeld: 6, previousSnapshot: previous);
+
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void GetTechnicalExitReason_WhenConfirmedEma20Required_ExitsOnTwoConsecutiveClosesBelowEma20()
+    {
+        var strategy = CreateStrategy(exitOnCloseBelowEma20: true, requireConfirmedEma20Exit: true);
+        var current = Ema20Snapshot(currentPrice: 9.4m, ema20: 10m);
+        var previous = Ema20Snapshot(currentPrice: 9.6m, ema20: 10m);
+
+        var reason = new TechnicalExecutionEngine().GetTechnicalExitReason(
+            strategy, current, barsHeld: 6, previousSnapshot: previous);
+
+        Assert.Equal("technical_exit_below_ema20", reason);
+    }
+
+    [Fact]
+    public void GetTechnicalExitReason_WhenConfirmedEma20NotRequired_ExitsOnSingleCloseBelowEma20()
+    {
+        var strategy = CreateStrategy(exitOnCloseBelowEma20: true, requireConfirmedEma20Exit: false);
+        var current = Ema20Snapshot(currentPrice: 9.5m, ema20: 10m);
+
+        var reason = new TechnicalExecutionEngine().GetTechnicalExitReason(
+            strategy, current, barsHeld: 6);
+
+        Assert.Equal("technical_exit_below_ema20", reason);
+    }
+
     private static StrategyDefinition CreateStrategy(
         bool requireBelowVwap = false,
         bool exitOnSmaNear = false,
@@ -226,7 +265,9 @@ public sealed class TechnicalExecutionEngineTests
         bool exitOnSmaCrossDown = false,
         bool exitOnCloseBelowVwap = false,
         bool enableConfirmedVwapExit = false,
-        bool exitOnEmaCrossDown = false)
+        bool exitOnEmaCrossDown = false,
+        bool exitOnCloseBelowEma20 = false,
+        bool requireConfirmedEma20Exit = false)
     {
         return new StrategyDefinition(
             "test",
@@ -244,7 +285,7 @@ public sealed class TechnicalExecutionEngineTests
                 EnableAtrTrailingStop: true,
                 TrailingStopAtrMultiple: 2.0m,
                 TrailingActivationR: 1.0m,
-                ExitOnCloseBelowEma20: false,
+                ExitOnCloseBelowEma20: exitOnCloseBelowEma20,
                 ExitOnCloseBelowVwap: exitOnCloseBelowVwap,
                 ExitOnMacdHistogramNegative: true,
                 MinHoldBarsBeforeTechnicalExit: 6,
@@ -261,8 +302,32 @@ public sealed class TechnicalExecutionEngineTests
                 ExitOnSma10NearSma20: exitOnSmaNear,
                 Sma10NearSma20Pct: smaNearPct,
                 ExitOnSma10CrossBelowSma20: exitOnSmaCrossDown,
-                ExitOnEma10CrossBelowEma20: exitOnEmaCrossDown),
+                ExitOnEma10CrossBelowEma20: exitOnEmaCrossDown,
+                RequireConfirmedEma20Exit: requireConfirmedEma20Exit),
             Execution: null!,
             Session: null!);
+    }
+
+    private static IndicatorSnapshot Ema20Snapshot(decimal currentPrice, decimal ema20)
+    {
+        return new IndicatorSnapshot(
+            "TEST",
+            DateTimeOffset.UtcNow,
+            "1d",
+            CurrentPrice: currentPrice,
+            CurrentVolume: 1000m,
+            Vwap: currentPrice,
+            Rsi: 55m,
+            Atr: 0.2m,
+            Ema20: ema20,
+            Ema50: ema20 - 1m,
+            Ema200: ema20 - 2m,
+            BollingerMiddle: ema20,
+            BollingerUpper: ema20 + 2m,
+            BollingerLower: ema20 - 2m,
+            RelativeVolume: 1.2m,
+            MacdLine: 0.1m,
+            MacdSignal: 0.05m,
+            MacdHistogram: 0.01m);
     }
 }

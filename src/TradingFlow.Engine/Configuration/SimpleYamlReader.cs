@@ -232,7 +232,8 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "exit_rules.enable_failed_breakout_circuit_breaker", false),
                 OptionalInt(map, "exit_rules.failed_breakout_bars", 3),
                 OptionalDecimal(map, "exit_rules.failed_breakout_min_r") ?? 0m,
-                OptionalDecimal(map, "exit_rules.stop_tick_buffer") ?? 0.01m),
+                OptionalDecimal(map, "exit_rules.stop_tick_buffer") ?? 0.01m,
+                OptionalBool(map, "exit_rules.require_confirmed_ema20_exit", false)),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
                 RequireDecimal(map, "execution.slippage_bps")),
@@ -242,7 +243,22 @@ public sealed class SimpleYamlReader
                 RequireInt(map, "session.close_buffer_minutes"),
                 RequireInt(map, "session.friday_close_buffer_minutes"),
                 OptionalBool(map, "session.is_continuous_market", false),
-                OptionalBool(map, "session.use_extended_hours", false)));
+                OptionalBool(map, "session.use_extended_hours", false)),
+            ReadRegimeRules(map));
+    }
+
+    private static RegimeRules? ReadRegimeRules(IReadOnlyDictionary<string, List<string>> map)
+    {
+        var benchmark = OptionalString(map, "regime.benchmark", string.Empty);
+        if (string.IsNullOrWhiteSpace(benchmark))
+        {
+            return null;
+        }
+
+        return new RegimeRules(
+            benchmark.Trim().ToUpperInvariant(),
+            OptionalString(map, "regime.rule", RegimeRules.PriceAboveSma),
+            OptionalInt(map, "regime.sma_period", 50));
     }
 
     public BacktestRunConfig ReadBacktestRun(string path)

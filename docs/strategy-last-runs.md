@@ -6,15 +6,14 @@ This file is the short research ledger for strategy selection. Keep only the lat
 
 | Strategy | Config | Last Result | Return | Max DD | Trades | Win Rate | Notes |
 |---|---|---|---:|---:|---:|---:|---|
-| TOP1 Intraday - EMA10/20 MACD Volume V1 | configs/strategies/intraday-ema10-ema20-macd-volume.v1.yaml | `data/backtest/results/shared/portfolio/intraday-ema10-ema20-macd-volume-v1-7d-20260705.json` | 0.09% | 1.12% | 34 | 35.3% | Active intraday reset. Entry gates: EMA10 above EMA20, MACD histogram bullish, and cumulative same-time volume >= 2x the 63-session baseline. Stop risk is 1R. |
-| Experimental Intraday - EMA10/20 MACD Histogram Volume V2 Additive | configs/strategies/intraday-ema10-ema20-macd-volume.v2-additive.yaml | `data/backtest/results/shared/portfolio/intraday-ema10-ema20-macd-volume-v2-additive-7d-20260705.json` | -0.21% | 0.82% | 22 | 27.3% | Not promoted. Additive filters were close-location >= 0.50, MACD histogram <= 0.30, and prior 5-bar gain <= 1.00%. Drawdown improved, but expectancy worsened. |
+| TOP1 Intraday - EMA10/20 MACD Volume V1 | configs/strategies/intraday-ema10-ema20-macd-volume.v1.yaml | `data/backtest/results/shared/portfolio/intraday-ema10-ema20-macd-volume-v1-7d-20260705.json` | 0.09% | 1.12% | 34 | 35.3% | Active intraday reset. Entry gates: EMA10 above EMA20, MACD histogram bullish, and cumulative same-time volume >= 2x the 63-session baseline. Stop risk is 1R. Honest re-score on the volatile five (POET/MXL/RGTI/OUST/NVTS, 1m, 2026-05-06→06-08) = **−1.10%, REJECTED** (17 trades, 17.6% WR, 6/7 gates fail) — a state-stack entry has no intraday edge on volatile names. |
 
 ## Current Swing Candidates
 
 | Strategy | Config | Last Result | Return | Max DD | Trades | Win Rate | Notes |
 |---|---|---|---:|---:|---:|---:|---|
-| TOP1 Swing Long - Minervini Trend Rider V4 | `configs/strategies/minervini-trend-template-vcp.v4-trend-rider.yaml` | metrics retained; full audit file removed during cleanup | 13.02% | 2.74% | 44 | 22.7% | Current promoted swing default for the long wishlist. Winners were large enough to pay for many tight stop-outs; strongest names were SNDK, MU, WDC, and STX. |
-| TOP2 Swing Long - Reversal Reclaim Bull Quality | `configs/strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml` | `data/backtest/results/shared/portfolio/swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d-0001.json` | 11.95% | 3.85% | 10 | 60.0% | Retained as second swing model. Average audited hold time: 12.2 days. Better win rate than V4, smaller sample. |
+| TOP1 Swing Long - Minervini Trend Rider V4 | `configs/strategies/minervini-trend-template-vcp.v4-trend-rider.yaml` | `data/backtest/results/shared/portfolio/honest-rescore-swing-180d-0007.json` | 21.90% | 1.98% | 46 | 30.4% | **Phase 1 hardened = ELIGIBLE (7/7).** (1) L2 regime gate (SPY>50dma): drops 2 weak-tape entries vs the no-regime +24.73%/48-trade run and *improves* OOS. (2) Gate consolidation to <=4 (doctrine §2): removed 3 redundant EMA/BB booleans — byte-identical result, proving they were pure DOF. (3) Confirmed 2-close EMA20 exit (doctrine §6A L5): identical result here (its EMA20 exit never whipsawed in-window) but defensive for live. OOS +2.48% (13 trades), beats SPY +15.36%, walk-forward 5/6, top ticker 26.5%. The one strategy that survives honest measurement. |
+| TOP2 Swing Long - Reversal Reclaim Bull Quality | `configs/strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml` | `data/backtest/results/shared/portfolio/honest-rescore-swing-180d-0003.json` | -1.44% | 2.01% | 15 | 20.0% | **Honest re-score = REJECTED.** Sound event trigger (pullback + reclaim), but fails sample_size, total_return, return/DD, benchmark (−7.98% vs SPY), and walk-forward (2/6). Promoted originally on a cherry-picked basket; does not generalize. |
 
 ## Trader Research Sources Kept
 
@@ -44,9 +43,7 @@ The retired V5-style experiments proved this gate can reduce drawdown, but they 
 |---|---:|---|
 | V6 Lite dual RVOL | 11.79%, 1.24% DD, 43 trades | Promoted as TOP1 intraday. Best retained balance of return, drawdown, and simplicity on the same-session validation basket. |
 | V8 Adaptive Guard | 10.81%, 2.85% DD, 43 trades | Promoted as TOP2 intraday. Better win rate than V6, but lower return and higher drawdown. |
-| Minervini Trend Rider V4 | 13.02%, 2.74% DD, 44 trades | Promoted as TOP1 swing. Corrected daily execution avoided same-candle exits and captured multi-day trend legs in SNDK, MU, WDC, and STX. |
-| V9 Confirmed VWAP Reclaim on volatile five | -2.29%, 2.29% DD, 12 trades | Not promoted. Least-bad intraday baseline on volatile weekly movers, but still negative. The move horizon was weekly/multi-session, not an intraday-only edge. |
-| V10 Volatile Reentry | -13.68%, 14.34% DD, 155 trades | Retired. Relaxing gates increased churn and stop-outs. |
+| Minervini Trend Rider V4 | 13.02%, 2.74% DD, 44 trades (original basket); 24.73%, 1.94% DD, 48 trades (honest re-score) | Promoted as TOP1 swing, then confirmed ELIGIBLE on the honest re-score (see Swing Candidates). |
 | V5 Rising Volume | -0.23%, 2.40% DD, 60 trades | Retired. It reduced drawdown but filtered too many profitable continuation trades. |
 | V6 Daily Quality | 1.08%, 3.92% DD, 70 trades | Retired. Daily EMA/MACD confluence helped some selection but increased drawdown. |
 | Old Ross Gap-Go Bull Flag V2 on screenshot runners | -10.78%, 10.78% DD, 8 trades | Retired. The bull-flag pattern fired late and every trade lost. |
@@ -64,7 +61,7 @@ The Python analyzer report at `data/research/ml/all-intraday-two-batch-20260613/
 
 The volatile POET/RGTI/MXL/NVTS/OUST six-month run did not prove an intraday winner. These names moved up and down across the week, but the retained intraday strategies are explicitly same-session systems: they enter from 5m momentum, use VWAP/EMA/MACD confirmation, and flatten or stop inside the session. A stock can produce a profitable weekly swing while still failing every same-day entry because the intraday bars are pullbacks, gaps, chop, or late continuations.
 
-Do not tune intraday rules to capture weekly oscillation. Build a separate short-term volatile swing model for that behavior: 1d trend/mean-reversion context, 1h or 15m entry timing, multi-day hold, and news/catalyst awareness. V9 remains useful only as a conservative intraday audit baseline; it is not a promoted paper/live strategy.
+Do not tune intraday rules to capture weekly oscillation. Build a separate short-term volatile swing model for that behavior: 1d trend/mean-reversion context, 1h or 15m entry timing, multi-day hold, and news/catalyst awareness. No intraday variant has earned a promoted paper/live slot; the honest re-score of V1 on the volatile five (−1.10%, REJECTED) reconfirms this.
 
 ## Next Design Step
 
@@ -79,13 +76,14 @@ Implemented catalyst event-study research in the CLI and ran two six-month cohor
 | Volatile five: POET/RGTI/MXL/NVTS/OUST | `data/research/catalysts/volatile-five-180d-event-study.json` | 384 | Positive/new general news and earnings/guidance had favorable 1d-5d forward returns, but only as event-study buckets. |
 | Long five: MU/SNDK/SPOT/STX/WDC | `data/research/catalysts/long-five-180d-event-study.json` | 600 | Positive or neutral/new general news with mixed-bullish or bullish-confirmed technical state was strongest over 3d-5d. |
 
-Backtest translation result:
-
-| Strategy | Config | Last Result | Return | Max DD | Trades | Win Rate | Verdict |
-|---|---|---|---:|---:|---:|---:|---|
-| Catalyst Confirmation V2 ADX/OBV | `configs/strategies/swing-catalyst-confirmation-long.v2-adx-obv.yaml` | not retained | 0.00% | 0.00% | 0 | n/a | Too strict; no trades. Retain only as a control. |
-| Research Swing Long V3 - Catalyst Confirmation Event Study | `configs/strategies/swing-catalyst-confirmation-long.v3-event-study.yaml` | not retained | -4.18% long / -17.49% volatile | 4.99% / 18.63% | 96 / 170 | 26.0% / 20.6% | Too loose; repeated catalyst context caused churn. Not promoted. |
-| Research Swing Long V4 - Fresh Catalyst Confirmed | `configs/strategies/swing-catalyst-confirmation-long.v4-fresh-confirmed.yaml` | not retained | -0.92% long / -1.34% volatile | 2.48% / 3.76% | 31 / 46 | 29.0% / 28.3% | Improved after fresh-catalyst and no same-bar stop/target handling, but still not positive. Research-only. |
+Backtest translation result: every attempt to turn the event-study buckets into a
+bar-level trade rule failed and the configs have since been removed. The three failure
+modes are the lesson that survives: a strict required-fresh rule took **0 trades**; a
+loose attached-state rule that stayed tradable every bar **churned** (roughly −4% to
+−17% across cohorts); and a fresh-catalyst-capped variant reduced churn but was still
+**negative** (about −1%). All three shared the same defect — a catalyst was re-evaluated
+on every bar instead of producing one bounded attempt. That is the anti-pattern
+Archetype B's one-shot lifecycle is designed to replace.
 
 Important execution fix: `exit_rules.allow_same_bar_stop_target` now exists. Swing research candidates set it to `false` so a 1h entry bar does not immediately manufacture stop/target fills from unknown intrabar sequence. Existing intraday strategies keep the default `true` unless explicitly changed.
 
@@ -97,7 +95,7 @@ Existing trading catalyst path was already present before the event-study work: 
 
 The new implementation is research-only: `CatalystTechnicalEventStudyRunner` groups point-in-time news by ticker, dedupes repeated stories, estimates novelty, anchors each article to the latest available candle at or before the article timestamp, computes technical regime, and measures forward returns over 1h/4h/1d/3d/5d. It does not replace paper/live catalyst execution.
 
-Failure audit: V3/V4 failed because event-study buckets were translated into repeated bar-level trades. V3 was too permissive and churned; V4 reduced churn with fresh-catalyst and stronger confirmation, but still had too many stop-outs. The result is research signal without a profitable execution rule yet. Next implementation should enforce one trade attempt per catalyst/ticker and evaluate only a bounded confirmation window, not every eligible bar while the catalyst remains attached.
+Failure audit: the catalyst translation attempts failed because event-study buckets were translated into repeated bar-level trades. The permissive variant was too loose and churned; the fresh-catalyst-capped variant reduced churn with stronger confirmation, but still had too many stop-outs. The result is research signal without a profitable execution rule yet. Next implementation should enforce one trade attempt per catalyst/ticker and evaluate only a bounded confirmation window, not every eligible bar while the catalyst remains attached.
 ### Catalyst Published Timeline Audit
 
 `CatalystTechnicalEventStudyRunner` now writes a news-to-candle timeline for each observation:

@@ -12,7 +12,6 @@ public sealed class RunConfigParsingTests
     private const string RunnerUpIntradayStrategyFile = "intraday-ema10-ema20-macd-volume.v1.yaml";
     private const string PaperIntradayStrategyFile = "intraday-ema10-ema20-macd-volume.v1.yaml";
     private const string RetainedIntradayStrategyFile = "intraday-ema10-ema20-macd-volume.v1.yaml";
-    private const string AdditiveIntradayStrategyFile = "intraday-ema10-ema20-macd-volume.v2-additive.yaml";
     private const string RetainedBacktestFile = "intraday-backtest-profile.yaml";
     private const string RetainedSwingBacktestFile = "swing-backtest-profile.yaml";
     private const string PaperSwingFile = "alpaca-paper-swing.yaml";
@@ -22,10 +21,6 @@ public sealed class RunConfigParsingTests
     private const string BreitsteinVwapTrapStrategyFile = "lance_breitstein_intraday_tactics.yaml";
     private const string QullamaggieEpisodicPivotStrategyFile = "kristjan_qullamaggie_stream_methodology.yaml";
     private const string MinerviniVcpStrategyFile = "minervini-trend-template-vcp.v2.yaml";
-    private const string CatalystConfirmationSwingStrategyFile = "swing-catalyst-confirmation-long.v2-adx-obv.yaml";
-    private const string CatalystConfirmationSwingAdxObvStrategyFile = "swing-catalyst-confirmation-long.v2-adx-obv.yaml";
-    private const string CatalystConfirmationSwingEventStudyStrategyFile = "swing-catalyst-confirmation-long.v3-event-study.yaml";
-    private const string CatalystConfirmationSwingFreshConfirmedStrategyFile = "swing-catalyst-confirmation-long.v4-fresh-confirmed.yaml";
 
     [Fact]
     public void ResearchIntradayExecutionStrategies_ParseExactExecutionFields()
@@ -142,21 +137,6 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
-    public void AdditiveIntradayStrategyConfig_ParsesExperimentalHistogramAndChaseGuards()
-    {
-        var repoRoot = FindRepositoryRoot();
-        var reader = new SimpleYamlReader();
-        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", AdditiveIntradayStrategyFile));
-
-        Assert.Equal("TOP1 Intraday - EMA10/20 MACD Histogram Volume V2 Additive", strategy.StrategyName);
-        Assert.True(strategy.EntryRules.RequireMacdHistogramPositive);
-        Assert.Equal(0.50m, strategy.EntryRules.MinCloseLocationValue);
-        Assert.Equal(0.30m, strategy.EntryRules.MaxMacdHistogram);
-        Assert.Equal(5, strategy.EntryRules.PriorEntryGainLookbackBars);
-        Assert.Equal(1.00m, strategy.EntryRules.MaxPriorEntryGainPct);
-    }
-
-    [Fact]
     public void PaperIntradayStrategyConfig_UsesSimplifiedIntradayStrategy()
     {
         var repoRoot = FindRepositoryRoot();
@@ -249,97 +229,6 @@ public sealed class RunConfigParsingTests
         Assert.False(strategy.EntryRules.RequireRolloverCloseBelowPriorLow);
         Assert.False(strategy.ExitRules.ExitOnSma10CrossBelowSma20);
         Assert.True(strategy.ExitRules.ExitShortOnSma10CrossAboveSma20);
-    }
-
-    [Fact]
-    public void CatalystConfirmationSwingStrategyConfig_ParsesCatalystAndGapRules()
-    {
-        var repoRoot = FindRepositoryRoot();
-        var reader = new SimpleYamlReader();
-        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", CatalystConfirmationSwingStrategyFile));
-
-        Assert.Equal("Catalyst Confirmation Swing Long V2 - ADX OBV", strategy.StrategyName);
-        Assert.Equal("1d", strategy.Timeframe);
-        Assert.Equal("1h", strategy.Execution.Timeframe);
-        Assert.Equal("long", strategy.Direction);
-        Assert.Equal("catalyst_confirmation_swing", strategy.EntryRules.SetupType);
-        Assert.True(strategy.EntryRules.RequirePositiveNews);
-        Assert.Equal(0.10m, strategy.EntryRules.MinNewsSentiment);
-        Assert.Equal(-0.40m, strategy.EntryRules.VetoNewsSentimentBelow);
-        Assert.Equal(72m, strategy.EntryRules.MaxNewsAgeHours);
-        Assert.Equal(3, strategy.EntryRules.MaxCatalystConfirmationBars);
-        Assert.Equal(4.0m, strategy.EntryRules.GapVariantMinPct);
-        Assert.Equal(0.50m, strategy.EntryRules.MinCatalystPriceMovePct);
-        Assert.Equal(12.0m, strategy.EntryRules.MaxCatalystPriceMovePct);
-        Assert.Equal(1.50m, strategy.EntryRules.MinVolumeSpike);
-        Assert.Equal("finviz_style", strategy.EntryRules.MinVolumeSpikeSource);
-        Assert.Equal(20.0m, strategy.EntryRules.MinAdx);
-        Assert.True(strategy.EntryRules.RequireAdxRising);
-        Assert.True(strategy.EntryRules.RequireObvRising);
-        Assert.False(strategy.EntryRules.EnableShort);
-        Assert.True(strategy.EntryRules.RequirePriceAboveSma20);
-        Assert.True(strategy.EntryRules.RequirePriceAboveSma50);
-        Assert.True(strategy.EntryRules.RequireSma20AboveSma50);
-        Assert.False(strategy.EntryRules.RequireMacdHistogramPositive);
-        Assert.True(strategy.ExitRules.EnableAtrTrailingStop);
-        Assert.Equal(1.0m, strategy.ExitRules.TrailingActivationR);
-        Assert.Equal(3.0m, strategy.ExitRules.TargetRMultiple);
-        Assert.True(strategy.ExitRules.ExitOnSma10CrossBelowSma20);
-    }
-
-    [Fact]
-    public void CatalystConfirmationSwingAdxObvStrategyConfig_ParsesAdxObvRules()
-    {
-        var repoRoot = FindRepositoryRoot();
-        var reader = new SimpleYamlReader();
-        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", CatalystConfirmationSwingAdxObvStrategyFile));
-
-        Assert.Equal("Catalyst Confirmation Swing Long V2 - ADX OBV", strategy.StrategyName);
-        Assert.Equal("1d", strategy.Timeframe);
-        Assert.Equal("1h", strategy.Execution.Timeframe);
-        Assert.Equal("long", strategy.Direction);
-        Assert.Equal("catalyst_confirmation_swing", strategy.EntryRules.SetupType);
-        Assert.True(strategy.EntryRules.RequirePositiveNews);
-        Assert.Equal("finviz_style", strategy.EntryRules.MinVolumeSpikeSource);
-        Assert.Equal(20.0m, strategy.EntryRules.MinAdx);
-        Assert.True(strategy.EntryRules.RequireAdxRising);
-        Assert.Equal(3, strategy.EntryRules.AdxRisingLookbackBars);
-        Assert.True(strategy.EntryRules.RequireObvRising);
-        Assert.Equal(3, strategy.EntryRules.ObvRisingLookbackBars);
-        Assert.Equal(0m, strategy.EntryRules.MinObvChange);
-        Assert.False(strategy.EntryRules.EnableShort);
-    }
-    [Fact]
-    public void CatalystConfirmationSwingEventStudyStrategyConfig_UsesSoftVolumeAndWiderCatalystWindow()
-    {
-        var repoRoot = FindRepositoryRoot();
-        var reader = new SimpleYamlReader();
-        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", CatalystConfirmationSwingEventStudyStrategyFile));
-
-        Assert.Equal("Research Swing Long V3 - Catalyst Confirmation Event Study", strategy.StrategyName);
-        Assert.Equal("1h", strategy.Timeframe);
-        Assert.Equal("1h", strategy.Execution.Timeframe);
-        Assert.Equal("long", strategy.Direction);
-        Assert.Equal("catalyst_confirmation_swing", strategy.EntryRules.SetupType);
-        Assert.True(strategy.EntryRules.RequirePositiveNews);
-        Assert.Equal(-0.05m, strategy.EntryRules.MinNewsSentiment);
-        Assert.Equal(-0.40m, strategy.EntryRules.VetoNewsSentimentBelow);
-        Assert.Equal(120m, strategy.EntryRules.MaxNewsAgeHours);
-        Assert.Equal(48, strategy.EntryRules.MaxCatalystConfirmationBars);
-        Assert.Null(strategy.EntryRules.MinCatalystPriceMovePct);
-        Assert.Equal(15.0m, strategy.EntryRules.MaxCatalystPriceMovePct);
-        Assert.Equal(1.00m, strategy.EntryRules.MinVolumeSpike);
-        Assert.Equal("finviz_style", strategy.EntryRules.MinVolumeSpikeSource);
-        Assert.Equal("soft_marker", strategy.EntryRules.VolumeConfirmationMode);
-        Assert.Null(strategy.EntryRules.MinAdx);
-        Assert.False(strategy.EntryRules.RequireAdxRising);
-        Assert.False(strategy.EntryRules.RequireObvRising);
-        Assert.True(strategy.EntryRules.RequirePriceAboveEma20);
-        Assert.False(strategy.EntryRules.RequirePriceAboveSma50);
-        Assert.False(strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume);
-        Assert.True(strategy.Session.UseExtendedHours);
-        Assert.True(strategy.ExitRules.EnableAtrTrailingStop);
-        Assert.Equal(3.0m, strategy.ExitRules.TargetRMultiple);
     }
 
     [Fact]

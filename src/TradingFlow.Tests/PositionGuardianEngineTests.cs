@@ -155,7 +155,7 @@ public sealed class PositionGuardianEngineTests
             root,
             "configs",
             "strategies",
-            "intraday-ema10-ema20-macd-volume.v2-additive.yaml"));
+            "intraday-ema10-ema20-macd-volume.v1.yaml"));
     }
 
     private static string FindRepositoryRoot()

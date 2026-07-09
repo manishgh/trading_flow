@@ -289,6 +289,40 @@ if (args.Length > 0 && args[0].Equals("analyze-swing", StringComparison.OrdinalI
     return;
 }
 
+if (args.Length > 0 && args[0].Equals("promotion-check", StringComparison.OrdinalIgnoreCase))
+{
+    var resultPath = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
+        ? args[1]
+        : throw new ArgumentException("Backtest result JSON path required.");
+    var result = JsonSerializer.Deserialize<TradingFlow.Domain.Backtesting.BacktestResult>(
+        File.ReadAllText(resultPath),
+        new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ??
+        throw new InvalidOperationException($"Could not read backtest result from {resultPath}.");
+
+    Console.WriteLine($"Promotion check — {result.RunName} ({result.StrategyResults.Count} strategy result(s))");
+    Console.WriteLine(new string('=', 72));
+    foreach (var strategyResult in result.StrategyResults)
+    {
+        var assessment = TradingFlow.Domain.Backtesting.PromotionEvaluator.Evaluate(strategyResult, result.Validation);
+        Console.WriteLine();
+        Console.WriteLine($"[{(assessment.Eligible ? "ELIGIBLE" : "REJECTED")}] {assessment.StrategyName}");
+        Console.WriteLine(
+            $"  return {strategyResult.TotalReturnPct:F2}%  maxDD {strategyResult.MaxDrawdownPct:F2}%  " +
+            $"accepted {strategyResult.AcceptedTradeCount}  wins {strategyResult.WinningTradeCount}  losses {strategyResult.LosingTradeCount}");
+        foreach (var pass in assessment.PassedChecks)
+        {
+            Console.WriteLine($"    pass: {pass}");
+        }
+
+        foreach (var fail in assessment.FailedChecks)
+        {
+            Console.WriteLine($"    FAIL: {fail}");
+        }
+    }
+
+    return;
+}
+
 if (args.Length > 0 && args[0].Equals("evaluate-entry", StringComparison.OrdinalIgnoreCase))
 {
     var entryConfigPath = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)

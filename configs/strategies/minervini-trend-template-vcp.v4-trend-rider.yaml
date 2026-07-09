@@ -11,12 +11,16 @@ entry_rules:
   max_entry_rsi: 85.0
   trend_filter: none
   macd_filter: not_bearish
-  require_price_above_bb_middle: true
+  # L3 gate discipline (doctrine §2, <=4 independent gates): "uptrend intact" is ONE concept.
+  # price>ema20 and price>ema50 are implied by price>ema10 AND ema10>ema20>ema50, and price>bb_middle
+  # is correlated with the same fact — correlated gates add curve-fitting DOF, not edge. Kept the
+  # minimal expressive set: price above an aligned upward EMA stack.
+  require_price_above_bb_middle: false
   require_macd_histogram_positive: true
   require_price_above_vwap: false
   require_price_above_ema10: true
-  require_price_above_ema20: true
-  require_price_above_ema50: true
+  require_price_above_ema20: false
+  require_price_above_ema50: false
   require_ema10_above_ema20: true
   require_ema20_above_ema50: true
   max_vwap_extension_atr:
@@ -50,6 +54,12 @@ entry_rules:
   max_news_age_hours: 72
   min_catalyst_price_move_pct:
   max_catalyst_price_move_pct:
+# L2 regime (doctrine §6A): only take new long entries while SPY's prior close is above its
+# 50-day SMA, so the trend-continuation edge isn't just long-only sector beta in any tape.
+regime:
+  benchmark: SPY
+  rule: price_above_sma
+  sma_period: 50
 confluence:
   enabled: false
   timeframe: 1d
@@ -63,6 +73,8 @@ exit_rules:
   trailing_stop_atr_multiple: 2.5
   trailing_activation_r: 2.0
   exit_on_close_below_ema20: true
+  # L5 (doctrine §6A): confirmed two-close EMA20 loss, not a single-touch that shakes out trend legs.
+  require_confirmed_ema20_exit: true
   exit_on_close_below_vwap: false
   exit_on_macd_histogram_negative: false
   min_hold_bars_before_technical_exit: 1

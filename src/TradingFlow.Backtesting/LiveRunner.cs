@@ -35,6 +35,7 @@ public sealed class LiveRunner(
     private readonly TradingFlow.Domain.Orders.IOrderStateRepository? _orderRepo = orderRepo;
     private readonly TradingFlow.Domain.Audit.IDecisionAuditRepository? _auditRepo = auditRepo;
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
+    private readonly TradingFlow.Engine.Regime.RegimeGateService _regimeGate = new();
 
     public async Task RunAsync(
         BacktestRunConfig run,
@@ -540,6 +541,45 @@ public sealed class LiveRunner(
                 }
 
                 continue;
+            }
+
+            // L2 regime gate (doctrine §2): block NEW entries when the strategy's regime is off today
+            // (e.g. SPY below its 50-day SMA). Exits above are unaffected, so open positions are still
+            // managed in any regime. Uses the same no-lookahead gate the backtest applies.
+            if (strategy.Regime is { IsActive: true } regimeRule)
+            {
+                var regimeOn = await _regimeGate.IsRegimeOnAsync(
+                    regimeRule,
+                    provider,
+                    run.Intervals,
+                    DateTimeOffset.UtcNow,
+                    cancellationToken);
+                if (!regimeOn)
+                {
+                    var regimeReason = $"regime_off ({regimeRule.BenchmarkSymbol} not above {regimeRule.SmaPeriod}d SMA)";
+                    logger.LogDebug("Skipping {Ticker} entry for {Strategy}: {Reason}.", ticker, strategy.StrategyName, regimeReason);
+                    if (_auditRepo != null)
+                    {
+                        await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
+                        {
+                            RunName = run.RunName,
+                            Ticker = ticker,
+                            StrategyName = strategy.StrategyName,
+                            Timestamp = DateTimeOffset.UtcNow,
+                            Decision = "Rejected",
+                            RejectionReason = regimeReason,
+                            SignalJson = JsonSerializer.Serialize(new
+                            {
+                                ticker,
+                                strategy = strategy.StrategyName,
+                                benchmark = regimeRule.BenchmarkSymbol,
+                                smaPeriod = regimeRule.SmaPeriod
+                            })
+                        }, cancellationToken);
+                    }
+
+                    continue;
+                }
             }
 
             // Evaluate signal

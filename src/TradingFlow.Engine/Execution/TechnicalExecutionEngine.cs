@@ -108,8 +108,12 @@ public sealed class TechnicalExecutionEngine
 
         if (strategy.ExitRules.ExitOnCloseBelowEma20 &&
             snapshot.Ema20 is not null &&
-            snapshot.CurrentPrice < snapshot.Ema20.Value)
+            snapshot.CurrentPrice < snapshot.Ema20.Value &&
+            (!strategy.ExitRules.RequireConfirmedEma20Exit ||
+                (previousSnapshot is { Ema20: { } previousEma20 } && previousSnapshot.CurrentPrice < previousEma20)))
         {
+            // With RequireConfirmedEma20Exit, a single close below EMA20 is only a warning; the prior
+            // bar must also have closed below its EMA20 (two-close confirmation) before we exit.
             return "technical_exit_below_ema20";
         }
 

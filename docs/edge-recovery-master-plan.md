@@ -22,7 +22,7 @@ context anywhere in the strategy schema, so swing results are indistinguishable
 from "semis went up that quarter"; (4) promotion decisions are made from tiny,
 single-window samples with no enforced out-of-sample or walk-forward gate.
 Fix those four and the existing strategies can be judged honestly; skip them
-and every future strategy version will repeat the v1–v10 treadmill.
+and every future strategy version will repeat the endless-version treadmill.
 
 ## Evidence Base (do not re-litigate)
 
@@ -30,7 +30,7 @@ and every future strategy version will repeat the v1–v10 treadmill.
 |---|---|
 | Retained intraday TOP1 is ~flat: 0.09% / 7d, 35% WR | strategy-last-runs.md |
 | All strongly positive runs used pre-selected movers (POET/RGTI/MXL "volatile five", "known runners", SNDK/MU/WDC/STX) | strategy-last-runs.md, retention doc |
-| On non-preselected/volatile names everything is negative (V9 −2.29%, V10 −13.68%) | strategy-last-runs.md |
+| On non-preselected/volatile names every tested intraday variant is negative | strategy-last-runs.md |
 | Catalyst event study found real signal: positive/new news + technical confirmation → favorable 1d–5d forward returns (384 + 600 observations) | 2026-07-05 event study section |
 | Every catalyst → trade-rule translation failed: V2 0 trades, V3 −4.18%/−17.49% (churn), V4 −0.92%/−1.34% | strategy-last-runs.md |
 | Docs' own diagnosis: need one trade attempt per catalyst per ticker with a bounded confirmation window; today a catalyst stays attached to every snapshot in the lookback window | strategy-last-runs.md conclusion + code audit note |
@@ -62,7 +62,7 @@ and every future strategy version will repeat the v1–v10 treadmill.
    documented "next design step" — still unbuilt).
 5. **No enforced validation protocol.** No mandatory OOS window, walk-forward,
    minimum sample, or benchmark delta before a strategy enters the promoted
-   catalog. The v1–v10 churn on the same baskets is an overfitting treadmill.
+   catalog. The endless-version churn on the same baskets is an overfitting treadmill.
 6. **Cost realism.** bps slippage only; low-float runners (POET, RGTI) would
    see spread blowouts and partial fills that bps cannot represent.
 

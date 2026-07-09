@@ -11,7 +11,28 @@ public sealed record StrategyDefinition(
     ConfluenceRules Confluence,
     ExitRules ExitRules,
     ExecutionRules Execution,
-    SessionRules Session);
+    SessionRules Session,
+    RegimeRules? Regime = null);
+
+/// <summary>
+/// Layer-2 market regime gate (docs/strategy-design-doctrine.md §2). A strategy only takes new
+/// entries on days the benchmark passes the rule (e.g. SPY above its 50/200-day SMA). Evaluated
+/// no-lookahead: a day's regime uses only benchmark bars dated before that day. Null/inactive
+/// means the strategy is always eligible, preserving legacy behavior.
+/// </summary>
+public sealed record RegimeRules(
+    string BenchmarkSymbol,
+    string Rule,
+    int SmaPeriod)
+{
+    public const string PriceAboveSma = "price_above_sma";
+    public const string Off = "off";
+
+    public bool IsActive =>
+        !string.IsNullOrWhiteSpace(BenchmarkSymbol) &&
+        Rule.Equals(PriceAboveSma, StringComparison.OrdinalIgnoreCase) &&
+        SmaPeriod > 0;
+}
 
 public sealed record EntryRules(
     string SetupType,
@@ -223,7 +244,11 @@ public sealed record ExitRules(
     bool EnableFailedBreakoutCircuitBreaker = false,
     int FailedBreakoutBars = 3,
     decimal FailedBreakoutMinR = 0m,
-    decimal StopTickBuffer = 0.01m);
+    decimal StopTickBuffer = 0.01m,
+    // Doctrine §6A L5: require two consecutive closes below EMA20 before the EMA20 loss exit fires,
+    // instead of a single-touch exit that shakes out trend riders on one-bar dips. Default false
+    // preserves the existing single-close behaviour for every other strategy.
+    bool RequireConfirmedEma20Exit = false);
 
 public sealed record ConfluenceRules(
     bool Enabled,

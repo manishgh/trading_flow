@@ -352,7 +352,13 @@ public sealed partial class BacktestRunner(SimpleYamlReader yamlReader, IArtifac
             .OrderBy(x => x.EntryTimestamp)
             .ThenBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var strategyResults = BuildStrategyResults(run.Portfolio, strategies, candidates, allBars, universeMembership);
+        var regimeCalendars = await BuildRegimeCalendarsAsync(
+            run,
+            strategies,
+            preparedMarket.DataStart,
+            preparedMarket.WindowEnd,
+            cancellationToken);
+        var strategyResults = BuildStrategyResults(run.Portfolio, strategies, candidates, allBars, universeMembership, regimeCalendars);
         var diagnostics = BuildDiagnostics(
             strategies,
             strategyResults,
@@ -1158,20 +1164,36 @@ public sealed partial class BacktestRunner(SimpleYamlReader yamlReader, IArtifac
             return Array.Empty<OhlcvBar>();
         }
 
-        try
+        // Prefer a daily benchmark bar; otherwise use whatever timeframe the benchmark actually
+        // has available. LoadTickerBarsAsync throws when a timeframe has no data, so each interval
+        // is tried independently — loading only Intervals[0] previously produced a null benchmark
+        // return whenever the benchmark lacked that exact timeframe.
+        var intervals = run.Intervals
+            .OrderBy(interval => TimeframeParser.IsDailyOrHigher(interval) ? 0 : 1)
+            .ToArray();
+        foreach (var interval in intervals)
         {
-            return await LoadTickerBarsAsync(
-                provider,
-                run.Validation.Benchmark.Ticker,
-                [run.Intervals[0]],
-                start,
-                end,
-                cancellationToken);
+            try
+            {
+                var bars = await LoadTickerBarsAsync(
+                    provider,
+                    run.Validation.Benchmark.Ticker,
+                    [interval],
+                    start,
+                    end,
+                    cancellationToken);
+                if (bars.Count > 0)
+                {
+                    return bars;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // This timeframe has no data for the benchmark; try the next.
+            }
         }
-        catch (InvalidOperationException)
-        {
-            return Array.Empty<OhlcvBar>();
-        }
+
+        return Array.Empty<OhlcvBar>();
     }
 }
 
