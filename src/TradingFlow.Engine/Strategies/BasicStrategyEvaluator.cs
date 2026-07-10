@@ -513,6 +513,7 @@ public sealed class BasicStrategyEvaluator
             "log_vcp_breakout" => signal.IsRecentHighBreakout && signal.IsVolatilityContraction,
             "step_breakout" => signal.IsStepBreakout,
             "swing_reclaim" => signal.IsSwingReclaim,
+            "mean_reversion_reclaim" => signal.IsMeanReversionReclaim,
             "vwap_reclaim_trap" => signal.IsVwapReclaimTrap,
             "avwap_pullback_bounce" => signal.IsAnchoredVwapBounce,
             "episodic_pivot_gap" => signal.IsEpisodicPivotGap,
@@ -730,6 +731,19 @@ public sealed class BasicStrategyEvaluator
     private static string? GetNewsSentimentRejection(StrategyDefinition strategy, TradeSignal signal)
     {
         var catalyst = signal.Catalyst;
+
+        // Archetype C no-news veto (Chan 2003): a fresh catalyst of ANY sentiment disqualifies a
+        // mean-reversion entry — reversion pays on no-news drops, while news-driven drops are falling
+        // knives. Independent of MaxNewsAgeHours so it applies even outside the positive-news window.
+        if (catalyst is not null && strategy.EntryRules.VetoFreshNewsHours is { } vetoFreshHours)
+        {
+            var freshAgeHours = signal.CatalystAgeHours ?? (decimal)Math.Abs((signal.Timestamp - catalyst.Timestamp).TotalHours);
+            if (freshAgeHours <= vetoFreshHours)
+            {
+                return $"fresh_news_veto (AgeHours: {freshAgeHours:F1}, VetoWithin: {vetoFreshHours:F1}, Headline: {catalyst.Headline})";
+            }
+        }
+
         if (catalyst is not null)
         {
             var ageHours = signal.CatalystAgeHours ?? (decimal)Math.Abs((signal.Timestamp - catalyst.Timestamp).TotalHours);

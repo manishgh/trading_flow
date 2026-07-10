@@ -209,7 +209,16 @@ public sealed record EntryRules(
     int PriorNr7LookbackDays = 7,
     decimal? MinVwapDistanceAtrForDivergence = null,
     int DivergenceLookbackBars = 20,
-    int DivergenceStartHour = 12);
+    int DivergenceStartHour = 12,
+    // Archetype C mean-reversion (doctrine §6C): a stretch is any of >=N consecutive down closes,
+    // RSI(2) below MaxReversionRsi2, or a close below the lower Bollinger band, occurring within the
+    // lookback before today's reclaim of the prior-day high. VetoFreshNewsHours vetoes the entry when
+    // ANY catalyst is fresher than that many hours (Chan's no-news condition — the reversion edge).
+    int ReversionStretchLookbackBars = 5,
+    int MinConsecutiveDownClosesForStretch = 0,
+    decimal? MaxReversionRsi2 = null,
+    bool EnableLowerBollingerStretch = false,
+    decimal? VetoFreshNewsHours = null);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,

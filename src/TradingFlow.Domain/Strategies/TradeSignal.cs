@@ -132,4 +132,8 @@ public sealed record TradeSignal(
     bool IsPriorNr7 = false,
     bool IsMacdBullishDivergenceFade = false,
     bool IsMacdBearishDivergenceFade = false,
-    decimal? VwapDistanceAtr = null);
+    decimal? VwapDistanceAtr = null,
+    // Archetype C (mean reversion in uptrend): a recent oversold "stretch" resolved by today's first
+    // close back above the prior day's high. StretchLow feeds the swing-low stop.
+    bool IsMeanReversionReclaim = false,
+    decimal? ReversionStretchLow = null);

@@ -193,7 +193,12 @@ public sealed class SimpleYamlReader
                 PriorNr7LookbackDays: OptionalInt(map, "entry_rules.prior_nr7_lookback_days", 7),
                 MinVwapDistanceAtrForDivergence: OptionalDecimal(map, "entry_rules.min_vwap_distance_atr_for_divergence"),
                 DivergenceLookbackBars: OptionalInt(map, "entry_rules.divergence_lookback_bars", 20),
-                DivergenceStartHour: OptionalInt(map, "entry_rules.divergence_start_hour", 12)),
+                DivergenceStartHour: OptionalInt(map, "entry_rules.divergence_start_hour", 12),
+                ReversionStretchLookbackBars: OptionalInt(map, "entry_rules.reversion_stretch_lookback_bars", 5),
+                MinConsecutiveDownClosesForStretch: OptionalInt(map, "entry_rules.min_consecutive_down_closes_for_stretch", 0),
+                MaxReversionRsi2: OptionalDecimal(map, "entry_rules.max_reversion_rsi2"),
+                EnableLowerBollingerStretch: OptionalBool(map, "entry_rules.enable_lower_bollinger_stretch", false),
+                VetoFreshNewsHours: OptionalDecimal(map, "entry_rules.veto_fresh_news_hours")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),

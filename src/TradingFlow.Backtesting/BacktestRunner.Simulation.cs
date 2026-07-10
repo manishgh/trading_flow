@@ -664,6 +664,19 @@ public sealed partial class BacktestRunner
                     : sessionExtreme.Value.Low - strategy.ExitRules.StopTickBuffer;
                 break;
 
+            case "swing_low" when !isShort:
+                // Archetype C: stop just below the mean-reversion stretch low (the swing low the reclaim
+                // rejected from). Falls back to the lowest low over the stretch lookback if unset.
+                var swingLow = signal.ReversionStretchLow
+                    ?? LowestLowThroughIndex(bars, entryIndex, Math.Max(1, strategy.EntryRules.ReversionStretchLookbackBars));
+                if (swingLow is not { } swingLowPrice || swingLowPrice <= 0m)
+                {
+                    return null;
+                }
+
+                stopLossPrice = swingLowPrice - strategy.ExitRules.StopTickBuffer;
+                break;
+
             case "atr":
             default:
                 var distance = ResolvePositionRiskStopDistance(strategy, signal.CurrentAtr, entryPrice, maxLossPctOfPosition);
@@ -678,6 +691,18 @@ public sealed partial class BacktestRunner
 
         var stopDistance = isShort ? stopLossPrice - entryPrice : entryPrice - stopLossPrice;
         return stopDistance <= 0m ? null : (Decimal.Round(stopLossPrice, 4), stopDistance);
+    }
+
+    private static decimal? LowestLowThroughIndex(IReadOnlyList<OhlcvBar> bars, int entryIndex, int lookback)
+    {
+        var start = Math.Max(0, entryIndex - lookback);
+        decimal? low = null;
+        for (var i = start; i <= entryIndex && i < bars.Count; i++)
+        {
+            low = low is { } value ? Math.Min(value, bars[i].Low) : bars[i].Low;
+        }
+
+        return low;
     }
 
     private static decimal ResolveTakeProfitPrice(

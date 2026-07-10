@@ -15,6 +15,23 @@ This file is the short research ledger for strategy selection. Keep only the lat
 | TOP1 Swing Long - Minervini Trend Rider V4 | `configs/strategies/minervini-trend-template-vcp.v4-trend-rider.yaml` | `data/backtest/results/shared/portfolio/honest-rescore-swing-180d-0007.json` | 21.90% | 1.98% | 46 | 30.4% | **Phase 1 hardened = ELIGIBLE (7/7).** (1) L2 regime gate (SPY>50dma): drops 2 weak-tape entries vs the no-regime +24.73%/48-trade run and *improves* OOS. (2) Gate consolidation to <=4 (doctrine §2): removed 3 redundant EMA/BB booleans — byte-identical result, proving they were pure DOF. (3) Confirmed 2-close EMA20 exit (doctrine §6A L5): identical result here (its EMA20 exit never whipsawed in-window) but defensive for live. OOS +2.48% (13 trades), beats SPY +15.36%, walk-forward 5/6, top ticker 26.5%. The one strategy that survives honest measurement. |
 | TOP2 Swing Long - Reversal Reclaim Bull Quality | `configs/strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml` | `data/backtest/results/shared/portfolio/honest-rescore-swing-180d-0003.json` | -1.44% | 2.01% | 15 | 20.0% | **Honest re-score = REJECTED.** Sound event trigger (pullback + reclaim), but fails sample_size, total_return, return/DD, benchmark (−7.98% vs SPY), and walk-forward (2/6). Promoted originally on a cherry-picked basket; does not generalize. |
 
+## Archetype C — Swing Mean Reversion Reclaim (research, 2026-07-10)
+
+New archetype built per doctrine §6C. C-research first (inverted event study, `reversion-study` CLI on
+the 440d cache): stretch-day buys beat the unconditional baseline by ~0.3–1.1% over 1–3d at 55–67% win
+vs ~52% baseline — a real reversion edge, strongest on RSI(2)-oversold and lower-Bollinger triggers.
+
+Engine build: RSI(2) indicator; `mean_reversion_reclaim` setup type (oversold stretch within a lookback,
+resolved by the first close back above the prior-day high); stretch gates + no-fresh-news veto (Chan) in
+the shared evaluator; `swing_low` stop mode. Config `configs/strategies/swing-mean-reversion-reclaim.v1.yaml`.
+
+Honest re-score (`configs/backtest/ui-runs/archetype-c-rescore-440d.yaml`, 20 liquid names): **−1.32%,
+7.96% DD, 75 trades (37W/38L, 49% WR) → REJECTED.** BUT structurally sound: passes sample_size (75),
+**OOS positive (+3.54% over 25 trades)**, walk-forward 5/9. Fails total_return and return/DD (wide DD from
+the swing-low stop). Benchmark not scored (no SPY in the 440d cache). The Chan no-news veto is inactive
+offline (news disabled), so the real differentiator is untested. Next levers: news-data veto + tighter
+stop/smaller mean-reversion target — but tune off-sample to avoid overfitting.
+
 ## Trader Research Sources Kept
 
 | Source File | Purpose |

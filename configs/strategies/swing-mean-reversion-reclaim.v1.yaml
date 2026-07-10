@@ -1,0 +1,63 @@
+strategy_id: research.swing-mean-reversion-reclaim.v1
+strategy_name: Swing Mean Reversion Reclaim (Archetype C)
+source: doctrine_archetype_c_connors_chan
+version: 1
+timeframe: 1d
+direction: long
+# Archetype C (docs/strategy-design-doctrine.md §6C): buy an oversold stretch in a stock whose long-term
+# trend is intact and that has no fresh negative catalyst, entering on the first close back above the
+# prior day's high (a one-shot reclaim), targeting a mean-reversion bounce over a few days.
+entry_rules:
+  setup_type: mean_reversion_reclaim
+  # Buying INTO weakness, so no volume-expansion gate.
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  # L3 uptrend intact: above the 200-day SMA ("buy weakness in strength, never weakness in weakness").
+  require_price_above_sma200: true
+  # L3 stretch (any of): >=3 consecutive down closes, RSI(2) < 10, or a close below the lower Bollinger.
+  reversion_stretch_lookback_bars: 5
+  min_consecutive_down_closes_for_stretch: 3
+  max_reversion_rsi2: 10.0
+  enable_lower_bollinger_stretch: true
+  # L3 no-news veto (Chan): skip if any catalyst is fresher than 48h. Active only when news data is present
+  # (backtests run with news disabled, so this is a no-op offline and the real edge is validated live).
+  veto_fresh_news_hours: 48.0
+  max_entries_per_ticker_per_day: 1
+  require_positive_news: false
+# L2 regime (SPY > 200dma) belongs here for paper/live via a `regime:` block; omitted in this offline
+# config because no cache holds 200+ days of SPY daily. The ticker-level 200dma gate above carries the
+# uptrend context for the backtest.
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  # L5: stop just below the stretch low; ~2.5R target to the reverting mean; 5-day time stop; no trailing.
+  stop_atr_multiple: 2.0
+  target_r_multiple: 2.5
+  max_hold_hours: 120.0
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: swing_low
+  profit_target_mode: r_multiple
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 10.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

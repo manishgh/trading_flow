@@ -6,6 +6,7 @@ namespace TradingFlow.Engine.Indicators;
 public sealed class IndicatorEngine
 {
     private const int RsiPeriod = 14;
+    private const int Rsi2Period = 2;
     private const int AtrPeriod = 14;
     private const int BollingerPeriod = 20;
     private const int RelativeVolumeLookbackSessions = 63;
@@ -62,7 +63,8 @@ public sealed class IndicatorEngine
                 Sma200: standardIndicators.Sma200[i],
                 Ema5: standardIndicators.Ema5[i],
                 Adx: standardIndicators.Adx[i],
-                Obv: standardIndicators.Obv[i]));
+                Obv: standardIndicators.Obv[i],
+                Rsi2: standardIndicators.Rsi2[i]));
         }
 
         return snapshots;
@@ -91,6 +93,7 @@ public sealed class IndicatorEngine
         var ema50 = quotes.GetEma(50).Select(x => ToDecimal(x.Ema)).ToArray();
         var ema200 = quotes.GetEma(200).Select(x => ToDecimal(x.Ema)).ToArray();
         var rsi = quotes.GetRsi(RsiPeriod).Select(x => ToDecimal(x.Rsi)).ToArray();
+        var rsi2 = quotes.GetRsi(Rsi2Period).Select(x => ToDecimal(x.Rsi)).ToArray();
         var atr = quotes.GetAtr(AtrPeriod).Select(x => ToDecimal(x.Atr)).ToArray();
         var adx = quotes.GetAdx(AtrPeriod).Select(x => ToDecimal(x.Adx)).ToArray();
         var obv = quotes.GetObv().Select(x => ToDecimal(x.Obv)).ToArray();
@@ -109,6 +112,7 @@ public sealed class IndicatorEngine
             ema50,
             ema200,
             rsi,
+            rsi2,
             atr,
             adx,
             obv,
@@ -294,6 +298,7 @@ public sealed class IndicatorEngine
         decimal?[] Ema50,
         decimal?[] Ema200,
         decimal?[] Rsi,
+        decimal?[] Rsi2,
         decimal?[] Atr,
         decimal?[] Adx,
         decimal?[] Obv,

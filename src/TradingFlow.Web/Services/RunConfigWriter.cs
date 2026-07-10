@@ -441,6 +441,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  require_price_above_ema50: {strategy.EntryRules.RequirePriceAboveEma50.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  require_ema10_above_ema20: {strategy.EntryRules.RequireEma10AboveEma20.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  require_ema20_above_ema50: {strategy.EntryRules.RequireEma20AboveEma50.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  require_price_above_sma200: {strategy.EntryRules.RequirePriceAboveSma200.ToString().ToLowerInvariant()}");
         AppendOptionalDecimal(yaml, "  max_vwap_extension_atr", strategy.EntryRules.MaxVwapExtensionAtr);
         yaml.AppendLine($"  opening_range_minutes: {strategy.EntryRules.OpeningRangeMinutes}");
         yaml.AppendLine($"  opening_range_break_buffer: {strategy.EntryRules.OpeningRangeBreakBuffer.ToString(CultureInfo.InvariantCulture)}");
@@ -470,6 +471,11 @@ public sealed class RunConfigWriter
         AppendOptionalDecimal(yaml, "  min_vwap_distance_atr_for_divergence", strategy.EntryRules.MinVwapDistanceAtrForDivergence);
         yaml.AppendLine($"  divergence_lookback_bars: {strategy.EntryRules.DivergenceLookbackBars}");
         yaml.AppendLine($"  divergence_start_hour: {strategy.EntryRules.DivergenceStartHour}");
+        yaml.AppendLine($"  reversion_stretch_lookback_bars: {strategy.EntryRules.ReversionStretchLookbackBars}");
+        yaml.AppendLine($"  min_consecutive_down_closes_for_stretch: {strategy.EntryRules.MinConsecutiveDownClosesForStretch}");
+        AppendOptionalDecimal(yaml, "  max_reversion_rsi2", strategy.EntryRules.MaxReversionRsi2);
+        yaml.AppendLine($"  enable_lower_bollinger_stretch: {strategy.EntryRules.EnableLowerBollingerStretch.ToString().ToLowerInvariant()}");
+        AppendOptionalDecimal(yaml, "  veto_fresh_news_hours", strategy.EntryRules.VetoFreshNewsHours);
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");

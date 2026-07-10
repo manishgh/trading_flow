@@ -34,4 +34,6 @@ public sealed record IndicatorSnapshot(
     decimal? Sma200 = null,
     decimal? Ema5 = null,
     decimal? Adx = null,
-    decimal? Obv = null);
+    decimal? Obv = null,
+    // Short-period RSI (Connors RSI(2)) for the mean-reversion archetype's oversold stretch gate.
+    decimal? Rsi2 = null);

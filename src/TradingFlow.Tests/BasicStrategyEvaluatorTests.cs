@@ -1020,6 +1020,73 @@ public class BasicStrategyEvaluatorTests
     }
 
     [Fact]
+    public void GetLongEntryRejection_WhenNoNewsVetoAndCatalystIsFresh_VetoesMeanReversion()
+    {
+        // Archetype C no-news veto (Chan): a fresh catalyst of any sentiment disqualifies the entry.
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "vwap_pullback",
+                MinVolumeSpike = 0.5m,
+                TrendFilter = "vwap",
+                MacdFilter = "not_bearish",
+                RequirePriceAboveVwap = true,
+                VetoFreshNewsHours = 48m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-09T15:00:00Z");
+        var signal = CreateBaseSignal() with
+        {
+            Timestamp = timestamp,
+            IsAboveSessionOpen = true,
+            IsVwapReclaim = true,
+            IsAboveVwap = true,
+            IsMacdNotBearish = true,
+            Catalyst = new CatalystEvent("AAPL", timestamp.AddMinutes(-30), CatalystType.NewsReport, "Fresh news", 0.75m),
+            CatalystAgeHours = 0.5m
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.NotNull(rejection);
+        Assert.StartsWith("fresh_news_veto", rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenNoNewsVetoAndNoFreshCatalyst_DoesNotVeto()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "vwap_pullback",
+                MinVolumeSpike = 0.5m,
+                TrendFilter = "vwap",
+                MacdFilter = "not_bearish",
+                RequirePriceAboveVwap = true,
+                VetoFreshNewsHours = 48m
+            }
+        };
+        var timestamp = DateTimeOffset.Parse("2026-06-09T15:00:00Z");
+        var signal = CreateBaseSignal() with
+        {
+            Timestamp = timestamp,
+            IsAboveSessionOpen = true,
+            IsVwapReclaim = true,
+            IsAboveVwap = true,
+            IsMacdNotBearish = true
+            // No catalyst -> the no-news veto has nothing to veto, entry passes.
+        };
+
+        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.8m);
+
+        Assert.Null(rejection);
+    }
+
+    [Fact]
     public void GetLongEntryRejection_WhenVwapTrapRulesPass_ReturnsNull()
     {
         var baseStrategy = CreateBaseStrategy();

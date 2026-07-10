@@ -117,6 +117,9 @@ public sealed class SignalGenerator
         var reclaimContext = UsesLongSetup(strategy, "swing_reclaim")
             ? GetSwingReclaimContext(strategy, bars, snapshots, index)
             : (false, null, null, null);
+        var reversionContext = UsesLongSetup(strategy, "mean_reversion_reclaim")
+            ? GetMeanReversionReclaimContext(strategy, bars, snapshots, index)
+            : (IsReclaim: false, StretchLow: (decimal?)null);
         var rolloverContext = UsesShortSetup(strategy, "swing_rollover")
             ? GetSwingRolloverContext(strategy, bars, snapshots, index)
             : (false, null, null, null);
@@ -284,7 +287,9 @@ public sealed class SignalGenerator
             priorDayStructure.IsNr7,
             divergenceContext.IsBullishFade,
             divergenceContext.IsBearishFade,
-            vwapDistanceAtr);
+            vwapDistanceAtr,
+            reversionContext.IsReclaim,
+            reversionContext.StretchLow);
     }
 
     private static (bool IsRising, decimal? Previous, decimal? Change) GetNullableIndicatorTrend(
@@ -801,6 +806,59 @@ public sealed class SignalGenerator
              previous.CurrentPrice <= previousSma20);
 
         return (reclaimedSma10 && reclaimedSma20, pullbackDepthPct, recentHigh, pullbackLow);
+    }
+
+    // Archetype C (doctrine §6C): the L4 trigger is today's first close back above the prior day's high,
+    // and the L3 setup is an oversold "stretch" (consecutive down closes, RSI(2) oversold, or a close
+    // below the lower Bollinger band) within the lookback ending at the prior bar. StretchLow is the
+    // lowest low across the stretch (and the reclaim bar) and feeds the swing-low stop.
+    private static (bool IsReclaim, decimal? StretchLow) GetMeanReversionReclaimContext(
+        StrategyDefinition strategy,
+        IReadOnlyList<OhlcvBar> bars,
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int index)
+    {
+        var rules = strategy.EntryRules;
+        if (index <= 0 || bars[index].Close <= bars[index - 1].High)
+        {
+            return (false, null);
+        }
+
+        var start = Math.Max(1, index - Math.Max(1, rules.ReversionStretchLookbackBars));
+        var stretchFound = false;
+        decimal? stretchLow = null;
+        for (var j = start; j <= index - 1; j++)
+        {
+            var isStretch =
+                (rules.MinConsecutiveDownClosesForStretch > 0 &&
+                    CountConsecutiveDownCloses(bars, j) >= rules.MinConsecutiveDownClosesForStretch) ||
+                (rules.MaxReversionRsi2 is { } maxRsi2 && snapshots[j].Rsi2 is { } rsi2 && rsi2 < maxRsi2) ||
+                (rules.EnableLowerBollingerStretch && snapshots[j].BollingerLower is { } lower && bars[j].Close < lower);
+            if (isStretch)
+            {
+                stretchFound = true;
+                stretchLow = stretchLow is { } low ? Math.Min(low, bars[j].Low) : bars[j].Low;
+            }
+        }
+
+        if (!stretchFound)
+        {
+            return (false, null);
+        }
+
+        stretchLow = stretchLow is { } finalLow ? Math.Min(finalLow, bars[index].Low) : bars[index].Low;
+        return (true, stretchLow);
+    }
+
+    private static int CountConsecutiveDownCloses(IReadOnlyList<OhlcvBar> bars, int index)
+    {
+        var count = 0;
+        for (var j = index; j >= 1 && bars[j].Close < bars[j - 1].Close; j--)
+        {
+            count++;
+        }
+
+        return count;
     }
 
     private static (
