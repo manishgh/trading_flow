@@ -24,10 +24,9 @@ unit-tested (6 tests in `CatalystEligibilityServiceTests`):
    window, require the validated event-study bucket (positive/new general news OR earnings/guidance) +
    technical confirmation (EMA10×20 flip OR MACD turn + volume expansion). Evaluate ONCE; on evaluation
    call `TryBeginAttempt` to consume.
-3. **Remove the dead `catalyst_confirmation_swing` handler** — `IsCatalystConfirmationSwing` + its switch
-   case in `BasicStrategyEvaluator`, plus its 4 tests in `BasicStrategyEvaluatorTests` (the four
-   `GetLongEntryRejection_WhenCatalyst*` tests that set `SetupType = "catalyst_confirmation_swing"`). It IS
-   the re-tradable-every-bar anti-pattern the lifecycle replaces.
+3. ~~**Remove the dead `catalyst_confirmation_swing` handler**~~ **DONE** — `IsCatalystConfirmationSwing` +
+   its switch case in `BasicStrategyEvaluator` and its 4 `GetLongEntryRejection_WhenCatalyst*` tests are
+   removed (the re-tradable-every-bar anti-pattern the lifecycle replaces). 239 tests green.
 4. **Persistence** for paper/live: a SQLite-backed consumed-set so a restart never re-fires a story
    (backtest stays in-memory).
 5. **V5 config** `configs/strategies/swing-catalyst-drift.v5.yaml`: Screen B pool; exits = trend-rider

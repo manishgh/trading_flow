@@ -539,35 +539,8 @@ public sealed class BasicStrategyEvaluator
                  signal.IsOpeningRangeBreakout ||
                  signal.IsRecentHighBreakout ||
                  signal.IsOpeningDriveContinuation),
-            "catalyst_confirmation_swing" => IsCatalystConfirmationSwing(strategy, signal),
             _ => throw new NotSupportedException($"Unsupported setup_type: {setupType}.")
         };
-    }
-
-    private static bool IsCatalystConfirmationSwing(StrategyDefinition strategy, TradeSignal signal)
-    {
-        var gapThreshold = strategy.EntryRules.GapVariantMinPct ?? 4.0m;
-        var isGapVariant = signal.GapUpPct is { } gapUpPct && gapUpPct >= gapThreshold;
-
-        var hasPrimaryStructure = signal.IsVcpBreakout ||
-            signal.IsSwingReclaim ||
-            signal.IsRecentHighBreakout ||
-            signal.IsVwapReclaim ||
-            signal.IsVwapPullback ||
-            signal.IsEma20Pullback;
-
-        var primaryConfirmation = hasPrimaryStructure &&
-            signal.IsMacdNotBearish &&
-            (signal.IsMacdHistogramPositive || !strategy.EntryRules.RequireMacdHistogramPositive);
-
-        var gapConfirmation = isGapVariant &&
-            (signal.IsRecentHighBreakout ||
-             signal.IsVcpBreakout ||
-             signal.IsVwapReclaim ||
-             signal.IsVwapPullback ||
-             signal.IsAboveSessionOpen);
-
-        return primaryConfirmation || gapConfirmation;
     }
 
     private static string? GetResearchRuleRejection(StrategyDefinition strategy, TradeSignal signal)
