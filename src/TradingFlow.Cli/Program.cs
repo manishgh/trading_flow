@@ -289,6 +289,61 @@ if (args.Length > 0 && args[0].Equals("analyze-swing", StringComparison.OrdinalI
     return;
 }
 
+if (args.Length > 0 && args[0].Equals("reversion-study", StringComparison.OrdinalIgnoreCase))
+{
+    // C-research (doctrine §8.1): inverted event study for the mean-reversion archetype, fully offline
+    // from cached daily bars. Evidence gate before building Archetype C.
+    var candlesRoot = ParseStringOption(args, "--candles-root") ??
+        Path.Combine("data", "backtest", "normalized", "440d");
+    if (!Directory.Exists(candlesRoot))
+    {
+        throw new InvalidOperationException($"Candles root not found: {Path.GetFullPath(candlesRoot)}.");
+    }
+
+    var availableTickers = Directory.GetDirectories(candlesRoot)
+        .Select(dir => Path.GetFileName(dir)!)
+        .Where(name => !name.StartsWith('_') && File.Exists(Path.Combine(candlesRoot, name, "bars_1d.csv")))
+        .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    var tickers = ResolveCsvTickers(ParseStringOption(args, "--tickers"), availableTickers);
+
+    var dailyBars = tickers
+        .Select(ticker => new { Ticker = ticker, Bars = LoadDailyBars(candlesRoot, ticker) })
+        .Where(x => x.Bars.Count > 0)
+        .ToDictionary(
+            x => x.Ticker,
+            x => (IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar>)x.Bars,
+            StringComparer.OrdinalIgnoreCase);
+    if (dailyBars.Count == 0)
+    {
+        throw new InvalidOperationException($"No daily candle files were found under {Path.GetFullPath(candlesRoot)}.");
+    }
+
+    var reversionOptions = new ReversionResearchOptions(
+        RsiOversoldThreshold: ParseDecimalOption(args, "--rsi-threshold") ?? 10m,
+        RsiPeriod: ParseIntOption(args, "--rsi-period") ?? 2,
+        ConsecutiveDownDays: ParseIntOption(args, "--down-days") ?? 3,
+        SmaTrendPeriod: ParseIntOption(args, "--trend-sma") ?? 200);
+    var reversionReport = new ReversionResearchAnalyzer().Analyze(dailyBars, reversionOptions);
+
+    var reversionOutputPath = ParseStringOption(args, "--output") ??
+        Path.Combine("data", "research", "reversion", $"reversion-study-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
+    var reversionJson = JsonSerializer.Serialize(reversionReport, serializerOptions);
+    await AtomicFileArtifactWriter.Instance.WriteTextAsync(reversionOutputPath, reversionJson, CancellationToken.None);
+
+    Console.WriteLine($"Reversion study — {dailyBars.Count} tickers, {reversionReport.TotalStretchEvents} stretch events from {reversionReport.TotalBarsEvaluated} evaluated bars.");
+    Console.WriteLine($"Trigger: RSI({reversionOptions.RsiPeriod})<{reversionOptions.RsiOversoldThreshold} OR >={reversionOptions.ConsecutiveDownDays} consecutive down closes OR close<lower Bollinger; trend gate {reversionOptions.SmaTrendPeriod}dma.");
+    Console.WriteLine(new string('-', 92));
+    foreach (var cohort in reversionReport.Cohorts)
+    {
+        var cells = String.Join("  ", cohort.Horizons.Select(h => $"+{h.Days}d {h.MeanReturnPct,6:F2}%/{h.WinRatePct,4:F0}%w"));
+        Console.WriteLine($"{cohort.Trigger,-22} {cohort.Regime,-13} n={cohort.Events,-5} {cells}");
+    }
+
+    Console.WriteLine($"ReportPath={Path.GetFullPath(reversionOutputPath)}");
+    return;
+}
+
 if (args.Length > 0 && args[0].Equals("promotion-check", StringComparison.OrdinalIgnoreCase))
 {
     var resultPath = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
