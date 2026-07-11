@@ -121,7 +121,7 @@ public sealed class StrategyEvaluationEngine
             strategy,
             signal,
             latest,
-            decisionBrain.ResolveEntryRelativeVolume(strategy, latest) ?? 0m);
+            StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, latest) ?? 0m);
         if (entryRejection is not null)
         {
             return StrategyTickerEvaluation.FromSnapshot(ticker, latest, "Rejected", entryRejection, signal);

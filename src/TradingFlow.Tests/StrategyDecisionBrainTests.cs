@@ -9,7 +9,6 @@ public sealed class StrategyDecisionBrainTests
     [Fact]
     public void ResolveEntryRelativeVolume_WhenConfiguredForFinvizStyle_UsesSessionRelativeVolume()
     {
-        var brain = new StrategyDecisionBrain();
         var strategy = CreateStrategy() with
         {
             EntryRules = CreateStrategy().EntryRules with
@@ -24,7 +23,7 @@ public sealed class StrategyDecisionBrainTests
             SessionRelativeVolume = 2.50m
         };
 
-        var value = brain.ResolveEntryRelativeVolume(strategy, snapshot);
+        var value = StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, snapshot);
 
         Assert.Equal(2.50m, value);
     }

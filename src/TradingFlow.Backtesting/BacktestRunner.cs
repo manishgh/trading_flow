@@ -903,7 +903,7 @@ public sealed partial class BacktestRunner(SimpleYamlReader yamlReader, IArtifac
             }
 
             diagnostics.EvaluatedBarCount++;
-            var entryRelativeVolume = _decisionBrain.ResolveEntryRelativeVolume(strategy, snapshot);
+            var entryRelativeVolume = StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, snapshot);
             if (entryRelativeVolume is null)
             {
                 diagnostics.IncrementRejection("missing_indicator_warmup_or_null");

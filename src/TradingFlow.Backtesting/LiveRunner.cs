@@ -469,7 +469,7 @@ public sealed class LiveRunner(
             var lastSnapshot = snapshots[^1];
             var lastBar = barsList[^1];
             var isFinvizRelativeVolume = screenerRelativeVolumeByTicker.TryGetValue(ticker, out var screenerRelativeVolume);
-            var configuredRelativeVolume = _decisionBrain.ResolveEntryRelativeVolume(strategy, lastSnapshot);
+            var configuredRelativeVolume = StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, lastSnapshot);
             var relativeVolumeSource = isFinvizRelativeVolume ? "finviz_screener" : strategy.EntryRules.MinVolumeSpikeSource;
             var effectiveRelativeVolume = isFinvizRelativeVolume
                 ? screenerRelativeVolume
@@ -1305,16 +1305,6 @@ public sealed class LiveRunner(
     }
 
     private static TimeSpan ParseTimeframe(string timeframe) => TimeframeParser.Parse(timeframe);
-
-    private static decimal? ResolveEntryRelativeVolume(StrategyDefinition strategy, IndicatorSnapshot snapshot)
-    {
-        return strategy.EntryRules.MinVolumeSpikeSource.ToLowerInvariant() switch
-        {
-            "session_vs_average_day" or "session" or "finviz_style" => snapshot.SessionRelativeVolume,
-            "slot_bar" or "bar_same_time" => snapshot.SlotRelativeVolume,
-            _ => snapshot.RelativeVolume
-        };
-    }
 
     private static string FormatLocalTime(DateTimeOffset timestamp)
     {

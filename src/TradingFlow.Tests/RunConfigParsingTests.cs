@@ -8,6 +8,41 @@ namespace TradingFlow.Tests;
 
 public sealed class RunConfigParsingTests
 {
+    // One-brain: a strategy regenerated for paper/live via RunConfigWriter must round-trip losslessly,
+    // or paper behaviour silently diverges from backtest (review finding #1).
+    [Theory]
+    [InlineData("minervini-trend-template-vcp.v4-trend-rider.yaml")]
+    [InlineData("swing-reversal-reclaim-bull-quality-no-news.v1.yaml")]
+    [InlineData("swing-mean-reversion-reclaim.v1.yaml")]
+    [InlineData("swing-catalyst-drift.v5.yaml")]
+    [InlineData("intraday-ema10-ema20-macd-volume.v1.yaml")]
+    public void WriteStrategyYaml_RoundTrips_PreservesEntryExitAndRegime(string strategyFile)
+    {
+        var repoRoot = FindRepositoryRoot();
+        var reader = new SimpleYamlReader();
+        var original = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", strategyFile));
+
+        var writeMethod = typeof(RunConfigWriter).GetMethod(
+            "WriteStrategyYaml",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(writeMethod);
+        var yaml = (string)writeMethod!.Invoke(null, [original])!;
+
+        var tempPath = Path.Combine(Path.GetTempPath(), $"roundtrip-{Guid.NewGuid():N}.yaml");
+        File.WriteAllText(tempPath, yaml);
+        try
+        {
+            var roundTripped = reader.ReadStrategy(tempPath);
+            Assert.Equal(original.EntryRules, roundTripped.EntryRules);
+            Assert.Equal(original.ExitRules, roundTripped.ExitRules);
+            Assert.Equal(original.Regime, roundTripped.Regime);
+        }
+        finally
+        {
+            File.Delete(tempPath);
+        }
+    }
+
     private const string RetainedStrategyFile = "intraday-ema10-ema20-macd-volume.v1.yaml";
     private const string RunnerUpIntradayStrategyFile = "intraday-ema10-ema20-macd-volume.v1.yaml";
     private const string PaperIntradayStrategyFile = "intraday-ema10-ema20-macd-volume.v1.yaml";

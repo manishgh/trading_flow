@@ -13,7 +13,7 @@ public sealed class StrategyDecisionBrain
 {
     private readonly BasicStrategyEvaluator evaluator = new();
 
-    public decimal? ResolveEntryRelativeVolume(StrategyDefinition strategy, IndicatorSnapshot snapshot)
+    public static decimal? ResolveEntryRelativeVolume(StrategyDefinition strategy, IndicatorSnapshot snapshot)
     {
         return strategy.EntryRules.MinVolumeSpikeSource.ToLowerInvariant() switch
         {
