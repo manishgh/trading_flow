@@ -22,8 +22,12 @@ unit-tested (6 tests in `CatalystEligibilityServiceTests`):
    (paper-live).
 2. **Add `catalyst_drift` (V5) setup type** to the shared `BasicStrategyEvaluator`: within the confirmable
    window, require the validated event-study bucket (positive/new general news OR earnings/guidance) +
-   technical confirmation (EMA10×20 flip OR MACD turn + volume expansion). Evaluate ONCE; on evaluation
-   call `TryBeginAttempt` to consume.
+   technical confirmation. Evaluate ONCE; on evaluation call `TryBeginAttempt` to consume.
+   - **Building block DONE:** `CatalystConfirmation.HasTechnicalConfirmation(current, previous)` (pure,
+     5 tests) — EMA10×20 flip OR MACD-histogram turn-positive + volume expansion. Compose it with
+     `CatalystEligibilityService.ResolveWindow` (window) + `TryBeginAttempt` (one-shot) in the runner.
+   - Still to do: the bucket/news gate reuse + wiring the two building blocks into the attach path/runner
+     so the setup fires once per catalyst.
 3. ~~**Remove the dead `catalyst_confirmation_swing` handler**~~ **DONE** — `IsCatalystConfirmationSwing` +
    its switch case in `BasicStrategyEvaluator` and its 4 `GetLongEntryRejection_WhenCatalyst*` tests are
    removed (the re-tradable-every-bar anti-pattern the lifecycle replaces). 239 tests green.
