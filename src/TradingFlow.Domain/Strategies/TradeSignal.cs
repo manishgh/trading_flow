@@ -136,4 +136,7 @@ public sealed record TradeSignal(
     // Archetype C (mean reversion in uptrend): a recent oversold "stretch" resolved by today's first
     // close back above the prior day's high. StretchLow feeds the swing-low stop.
     bool IsMeanReversionReclaim = false,
-    decimal? ReversionStretchLow = null);
+    decimal? ReversionStretchLow = null,
+    // Archetype B (post-catalyst drift): the first technically-confirmed bar inside a catalyst's bounded
+    // confirmation window — one shot per catalyst (edge-recovery Phase 1, doctrine §6B).
+    bool IsCatalystDrift = false);

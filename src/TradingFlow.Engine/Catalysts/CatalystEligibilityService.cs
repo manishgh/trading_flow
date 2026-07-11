@@ -45,14 +45,23 @@ public sealed class CatalystEligibilityService
 
     /// <summary>The bounded confirmation window: the first candle strictly after the eligibility time,
     /// spanning up to confirmationWindowBars candles. Null when no candle falls after eligibility.</summary>
-    public ConfirmationWindow? ResolveWindow(CatalystEvent catalyst, IReadOnlyList<DateTimeOffset> orderedCandleTimestamps)
+    public ConfirmationWindow? ResolveWindow(CatalystEvent catalyst, IReadOnlyList<DateTimeOffset> orderedCandleTimestamps) =>
+        ResolveWindow(catalyst, orderedCandleTimestamps, confirmationWindowBars);
+
+    /// <summary>Static window resolution for the stateless signal path (same no-lookahead rule): first
+    /// candle strictly after the eligibility time, spanning up to windowBars candles.</summary>
+    public static ConfirmationWindow? ResolveWindow(
+        CatalystEvent catalyst,
+        IReadOnlyList<DateTimeOffset> orderedCandleTimestamps,
+        int windowBars)
     {
+        var bars = Math.Max(1, windowBars);
         var eligibleAt = Eligibility(catalyst).EligibleAt;
         for (var i = 0; i < orderedCandleTimestamps.Count; i++)
         {
             if (orderedCandleTimestamps[i] > eligibleAt)
             {
-                var lastIndex = Math.Min(orderedCandleTimestamps.Count - 1, i + confirmationWindowBars - 1);
+                var lastIndex = Math.Min(orderedCandleTimestamps.Count - 1, i + bars - 1);
                 return new ConfirmationWindow(orderedCandleTimestamps[i], i, lastIndex);
             }
         }

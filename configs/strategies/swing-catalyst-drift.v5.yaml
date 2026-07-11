@@ -1,0 +1,57 @@
+strategy_id: research.swing-catalyst-drift.v5
+strategy_name: Swing Catalyst Drift V5 (Archetype B)
+source: doctrine_archetype_b_pead_episodic_pivot
+version: 5
+timeframe: 1d
+direction: long
+# Archetype B (doctrine §6B / edge-recovery Phase 1): post-catalyst drift. A fresh, positive/new catalyst
+# gets ONE bounded confirmation attempt -- the first technically-confirmed bar (EMA10x20 flip or MACD turn +
+# volume) inside its window after the received time -- then it is consumed. No re-tradable-every-bar churn.
+entry_rules:
+  setup_type: catalyst_drift
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: not_bearish
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  # L3 catalyst bucket (the event-study-validated conditions): fresh positive news, sane price move.
+  require_positive_news: true
+  min_news_sentiment: 0.10
+  max_news_age_hours: 120
+  max_catalyst_confirmation_bars: 3
+  min_catalyst_price_move_pct: 0.25
+  max_catalyst_price_move_pct: 12.0
+  max_entries_per_ticker_per_day: 1
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  # L5 trend-rider: 1.5 ATR stop, 3R target, ATR trail after 1R, SMA10/20 cross exit, ~5-day hold, no
+  # same-bar stop/target, no VWAP exits (wrong horizon).
+  stop_atr_multiple: 1.5
+  target_r_multiple: 3.0
+  max_hold_hours: 120.0
+  enable_atr_trailing_stop: true
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  exit_on_sma10_cross_below_sma20: true
+  initial_stop_mode: atr
+  profit_target_mode: r_multiple
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 10.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

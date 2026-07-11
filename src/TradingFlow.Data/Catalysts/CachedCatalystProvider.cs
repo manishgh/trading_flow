@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using TradingFlow.Domain.Market;
@@ -24,18 +25,66 @@ public sealed class CachedCatalystProvider(
         CancellationToken cancellationToken)
     {
         var path = GetPath(ticker, windowStart, windowEnd);
-        var useExisting = File.Exists(path) &&
-            !cachePolicy.Equals("refresh", StringComparison.OrdinalIgnoreCase);
-
-        if (useExisting)
+        if (!cachePolicy.Equals("refresh", StringComparison.OrdinalIgnoreCase))
         {
-            return await ReadAsync(path, windowStart, windowEnd, cancellationToken);
+            // Exact-window hit, else any cached file whose fetched window COVERS the requested window
+            // (ReadAsync filters by timestamp), so a sub-window backtest reuses a broader cached fetch
+            // instead of missing the cache and going online.
+            if (File.Exists(path))
+            {
+                return await ReadAsync(path, windowStart, windowEnd, cancellationToken);
+            }
+
+            var covering = FindCoveringCacheFile(ticker, windowStart, windowEnd);
+            if (covering is not null)
+            {
+                return await ReadAsync(covering, windowStart, windowEnd, cancellationToken);
+            }
         }
 
         var catalysts = await innerProvider.GetCatalystsAsync(ticker, windowStart, windowEnd, cancellationToken);
         await WriteAsync(path, catalysts, cancellationToken);
         return catalysts;
     }
+
+    private string? FindCoveringCacheFile(string ticker, DateTimeOffset windowStart, DateTimeOffset windowEnd)
+    {
+        var directory = Path.Combine(cacheRoot, ticker.Trim().ToUpperInvariant());
+        if (!Directory.Exists(directory))
+        {
+            return null;
+        }
+
+        var prefix = $"catalysts_{ProviderName.Trim().ToLowerInvariant()}_";
+        string? best = null;
+        var bestSpan = TimeSpan.MaxValue;
+        foreach (var file in Directory.EnumerateFiles(directory, $"{prefix}*.json"))
+        {
+            var stamps = Path.GetFileNameWithoutExtension(file)[prefix.Length..].Split('_');
+            if (stamps.Length != 2 ||
+                !TryParseStamp(stamps[0], out var fileStart) ||
+                !TryParseStamp(stamps[1], out var fileEnd))
+            {
+                continue;
+            }
+
+            if (fileStart <= windowStart && fileEnd >= windowEnd && (fileEnd - fileStart) < bestSpan)
+            {
+                bestSpan = fileEnd - fileStart;
+                best = file;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool TryParseStamp(string stamp, out DateTimeOffset value) =>
+        DateTimeOffset.TryParseExact(
+            stamp,
+            "yyyyMMddHHmm",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out value);
 
     private string GetPath(string ticker, DateTimeOffset windowStart, DateTimeOffset windowEnd)
     {

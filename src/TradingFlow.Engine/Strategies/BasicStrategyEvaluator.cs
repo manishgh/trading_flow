@@ -514,6 +514,7 @@ public sealed class BasicStrategyEvaluator
             "step_breakout" => signal.IsStepBreakout,
             "swing_reclaim" => signal.IsSwingReclaim,
             "mean_reversion_reclaim" => signal.IsMeanReversionReclaim,
+            "catalyst_drift" => signal.IsCatalystDrift,
             "vwap_reclaim_trap" => signal.IsVwapReclaimTrap,
             "avwap_pullback_bounce" => signal.IsAnchoredVwapBounce,
             "episodic_pivot_gap" => signal.IsEpisodicPivotGap,

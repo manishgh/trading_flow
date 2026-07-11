@@ -58,6 +58,24 @@ APLD, and others. So V5 is fully backtestable offline; no news-archive sub-proje
 - `src/TradingFlow.Data/Catalysts/CachedCatalystProvider.cs` — offline catalysts
 - `src/TradingFlow.Backtesting/BacktestRunner*.cs`, `LiveRunner.cs` — per-run service + gating
 
+## Update 2026-07-11 — backtest lifecycle WORKING
+Steps 1–2 done for the **backtest path**:
+- `catalyst_drift` setup type + `SignalGenerator.IsCatalystDriftTrigger` compose `CatalystConfirmation`
+  (EMA10×20 flip / MACD turn + volume) with one-shot-per-catalyst-run (first confirmed bar of the run).
+- Fixed `CachedCatalystProvider` to reuse any cached fetch whose window **covers** the request (was
+  exact-match only → 0 catalysts offline). This unblocked offline catalyst backtesting.
+- Re-score (`archetype-b-rescore-240d.yaml`): **7 clean one-shot trades, +0.02%, REJECTED on sample size**
+  — but ZERO churn (the structural goal). 244 tests green.
+
+Remaining:
+- **LiveRunner one-shot wiring** — the live path still attaches catalysts to every bar; wire the eligibility
+  service (`ResolveWindow` + `TryBeginAttempt`) + `CatalystConfirmation` into `LiveRunner` for real-time
+  one-shot, and **SQLite persistence** (step 4) so restarts don't re-fire. The static `ResolveWindow` +
+  `HasTechnicalConfirmation` are the shared building blocks to compose there.
+- **More data for a promotable sample** — longer window / more tickers with cached catalysts → more trades.
+- Optional: a dedicated `SignalGenerator` catalyst_drift unit test (currently proven by building-block
+  unit tests + the 7-trade e2e re-score).
+
 ## State
-243 tests green. Also open: paper-validate V4 (task, operational) and the lossy-`WriteStrategyYaml`
+244 tests green. Also open: paper-validate V4 (task, operational) and the lossy-`WriteStrategyYaml`
 one-brain fix (spawned task `task_93ae7caa`).

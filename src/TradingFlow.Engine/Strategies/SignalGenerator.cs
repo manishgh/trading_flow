@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Catalysts;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Sessions;
 
@@ -120,6 +121,8 @@ public sealed class SignalGenerator
         var reversionContext = UsesLongSetup(strategy, "mean_reversion_reclaim")
             ? GetMeanReversionReclaimContext(strategy, bars, snapshots, index)
             : (IsReclaim: false, StretchLow: (decimal?)null);
+        var isCatalystDrift = UsesLongSetup(strategy, "catalyst_drift") &&
+            IsCatalystDriftTrigger(strategy, snapshots, index);
         var rolloverContext = UsesShortSetup(strategy, "swing_rollover")
             ? GetSwingRolloverContext(strategy, bars, snapshots, index)
             : (false, null, null, null);
@@ -289,7 +292,8 @@ public sealed class SignalGenerator
             divergenceContext.IsBearishFade,
             vwapDistanceAtr,
             reversionContext.IsReclaim,
-            reversionContext.StretchLow);
+            reversionContext.StretchLow,
+            isCatalystDrift);
     }
 
     private static (bool IsRising, decimal? Previous, decimal? Change) GetNullableIndicatorTrend(
@@ -859,6 +863,39 @@ public sealed class SignalGenerator
         }
 
         return count;
+    }
+
+    // Archetype B one-shot (doctrine §6B / edge-recovery Phase 1): the attached catalyst fires exactly once
+    // -- on the FIRST technically-confirmed bar (EMA10x20 flip or MACD turn + volume) of that catalyst's
+    // attached run. Being the first confirmed bar of THIS catalyst is the anti-churn guarantee in the
+    // backtest without a stateful consumption set; the live runner enforces the same via the eligibility
+    // service (window + TryBeginAttempt). The attacher already bounds attachment to bars after the catalyst,
+    // and the shared evaluator applies the bucket/news freshness gate (positive/new, MaxCatalystConfirmationBars).
+    private static bool IsCatalystDriftTrigger(
+        StrategyDefinition strategy,
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int index)
+    {
+        if (index <= 0 ||
+            snapshots[index].Catalyst is not { } catalyst ||
+            !CatalystConfirmation.HasTechnicalConfirmation(snapshots[index], snapshots[index - 1]))
+        {
+            return false;
+        }
+
+        // One shot: not if an earlier bar of the SAME catalyst's attached run already confirmed.
+        var catalystKey = CatalystEligibilityService.KeyFor(catalyst);
+        for (var i = index - 1;
+             i >= 1 && snapshots[i].Catalyst is { } earlier && CatalystEligibilityService.KeyFor(earlier) == catalystKey;
+             i--)
+        {
+            if (CatalystConfirmation.HasTechnicalConfirmation(snapshots[i], snapshots[i - 1]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static (

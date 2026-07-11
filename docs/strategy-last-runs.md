@@ -32,6 +32,23 @@ the swing-low stop). Benchmark not scored (no SPY in the 440d cache). The Chan n
 offline (news disabled), so the real differentiator is untested. Next levers: news-data veto + tighter
 stop/smaller mean-reversion target — but tune off-sample to avoid overfitting.
 
+## Archetype B — Swing Catalyst Drift V5 (research, 2026-07-11)
+
+Post-catalyst drift (PEAD / episodic pivot) built per doctrine §6B with the **one-shot lifecycle** that
+every prior catalyst config lacked. Engine: `CatalystEligibilityService` (received-time clock, bounded
+confirmation window, dedupe, one-attempt consumption) + `CatalystConfirmation` (EMA10×20 flip OR MACD
+turn + volume) + a `catalyst_drift` setup type that fires exactly once — on the first confirmed bar of a
+catalyst's attached run. Also fixed `CachedCatalystProvider` to reuse any cached fetch whose window
+*covers* the request (was exact-match only → 0 catalysts offline).
+
+Honest re-score (`configs/backtest/ui-runs/archetype-b-rescore-240d.yaml`, 14 names with cached Alpaca
+catalysts): **+0.02%, 0.54% DD, 7 trades (2W/5L) → REJECTED** (sample_size 7 < 30). BUT the structural goal
+is met — **7 clean one-shot trades, zero churn** (V3 produced hundreds on the same idea); total_return,
+OOS (+0.15%), and walk-forward (4/5) are positive. The gates (fresh positive news + technical confirmation)
+are strict, so the sample is thin on this 5-month/14-ticker window. Next: more data (longer window / more
+tickers → more catalysts), the LiveRunner one-shot wiring + SQLite persistence, then re-score for a
+promotable sample. Config `configs/strategies/swing-catalyst-drift.v5.yaml`.
+
 ## Trader Research Sources Kept
 
 | Source File | Purpose |
