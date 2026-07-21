@@ -254,7 +254,7 @@ an automated composition test for this boundary.
 | Phase | Status | Commit | Notes |
 |---|---|---|---|
 | Plan + specs checked in | ✅ 2026-07-21 | (this commit) | Execution awaiting go |
-| S0 | ⬜ | | |
+| S0 | ✅ 2026-07-21 | `222ad71`, `b257028`, `ca8bd77`, `bd26aff` | Governance, secret-store migration, CI gates, and strict SIP WebSocket authentication verified; external credential rotation remains operator action U1. |
 | S1 | ⬜ | | |
 | S2 | ⬜ | | |
 | S3 | ⬜ | | |
