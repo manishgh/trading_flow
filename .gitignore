@@ -4,7 +4,7 @@ obj/
 out/
 publish/
 TestResults/
-artifacts/
+/artifacts/
 .tmp/
 
 # Visual Studio / Rider / VS Code local state
