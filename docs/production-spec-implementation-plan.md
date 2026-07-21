@@ -255,7 +255,7 @@ no eToro behavior; the production-composition test and deployment exclusion land
 |---|---|---|---|
 | Plan + specs checked in | ✅ 2026-07-21 | (this commit) | Execution awaiting go |
 | S0 | ✅ 2026-07-21 | `222ad71`, `b257028`, `ca8bd77`, `bd26aff`, `5bfbdfc`, `872ed8f`, `18ac061`, `18eba68` | Governance, secret-store migration, zero known vulnerable packages, clean-checkout CI, strict SIP WebSocket authentication, deterministic tests, and dormant eToro exclusion verified. GitHub Actions run `29809663008` passed; external credential rotation remains operator action U1. |
-| S1 | ⬜ | | |
+| S1 | ✅ 2026-07-21 | `9d77b87`, `610a9ba`, `4510a7e`, `680b7a9` | Appendix-A registry (99 expanded parameters) is bidirectionally enforced; startup loading is typed, range-validated, immutable, canonically SHA-256 hashed, and structured-logged; live-v1 locks and development-only IEX fallback are enforced; all Alpaca trading and stream URLs derive from profile through one resolver. Local gate: 283/283 tests, Release build 0 warnings/errors, Engine dependency audit 0 known vulnerabilities. GitHub Actions run `29811932023` passed. |
 | S2 | ⬜ | | |
 | S3 | ⬜ | | |
 | S4 | ⬜ | | |
