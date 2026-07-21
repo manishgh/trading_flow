@@ -584,6 +584,7 @@ static TradingFlow.Engine.Abstractions.ICatalystProvider? CreateRawNewsProvider(
         "alpaca" => new TradingFlow.Alpaca.AlpacaNewsProvider(
             new HttpClient(),
             ResolveAlpacaOptions(run),
+            CreateRawArchiveWriter(),
             sentimentAnalyzer: CreateSentimentAnalyzer(run.News.SentimentTimeoutSeconds),
             maxArticlesPerTicker: run.News.MaxArticlesPerTicker),
         "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(
@@ -687,6 +688,7 @@ static async Task<object> BuildCatalystTrendReportAsync(
     var newsProvider = new TradingFlow.Alpaca.AlpacaNewsProvider(
         new HttpClient(),
         options,
+        CreateRawArchiveWriter(),
         sentimentAnalyzer: CreateSentimentAnalyzer());
 
     var bars = new List<TradingFlow.Domain.Market.OhlcvBar>();

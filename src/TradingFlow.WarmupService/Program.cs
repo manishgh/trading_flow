@@ -1,6 +1,7 @@
 using TradingFlow.Alpaca;
 using TradingFlow.Data.Candles;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Storage;
 using TradingFlow.WarmupService.Models;
 using TradingFlow.WarmupService.Services;
 
@@ -22,6 +23,11 @@ builder.Services.AddSingleton<WarmupRequestStore>();
 builder.Services.AddSingleton<WarmupRunStore>();
 builder.Services.AddSingleton<WarmupArtifactWriter>();
 builder.Services.AddSingleton<WarmupJobQueue>();
+builder.Services.AddSingleton<IRawArchiveWriter>(sp =>
+{
+    var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<WarmupOptions>>().Value;
+    return new FileSystemRawArchiveWriter(new RawArchiveOptions(Path.Combine(options.ArchiveRoot, "raw")));
+});
 builder.Services.AddSingleton<ICandleStore>(sp =>
 {
     var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<WarmupOptions>>().Value;
@@ -54,6 +60,7 @@ builder.Services.AddSingleton<ICatalystProvider>(sp =>
             MarketDataFeed = options.MarketDataFeed,
             ExtendedHours = true
         },
+        sp.GetRequiredService<IRawArchiveWriter>(),
         sp.GetService<ILogger<AlpacaNewsProvider>>());
 });
 builder.Services.AddSingleton<IWarmupArchiveSink>(sp =>

@@ -32,6 +32,7 @@ public sealed partial class BacktestRunner
             "alpaca" => new TradingFlow.Alpaca.AlpacaNewsProvider(
                 new HttpClient(),
                 ResolveAlpacaOptions(run),
+                RequireRawArchiveWriter(),
                 sentimentAnalyzer: CreateSentimentAnalyzer(run.News.SentimentTimeoutSeconds),
                 maxArticlesPerTicker: run.News.MaxArticlesPerTicker),
             "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(
@@ -101,7 +102,7 @@ public sealed partial class BacktestRunner
 
     private IRawArchiveWriter RequireRawArchiveWriter() =>
         _rawArchiveWriter ?? throw new InvalidOperationException(
-            "Finviz access requires a raw archive writer so responses are durable before parsing.");
+            "Provider access requires a raw archive writer so required responses are durable before parsing.");
 
     private static string GetCacheWindowSegment(TimeWindowConfig timeWindow)
     {

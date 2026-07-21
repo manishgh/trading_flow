@@ -220,6 +220,7 @@ public sealed class NewsFeedService : BackgroundService
                 KeyId = alpacaCredentials.KeyId,
                 SecretKey = alpacaCredentials.SecretKey
             },
+            runtimeFactory.RawArchiveWriter,
             logger: null,
             sentimentAnalyzer: new VaderSentimentAnalyzer(),
             maxArticlesPerTicker: 25);

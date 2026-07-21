@@ -88,6 +88,7 @@ public sealed class PaperRuntimeFactory
                     SecretKey = alpacaCredentials.SecretKey,
                     MarketDataFeed = run.Providers.Alpaca.DataFeed
                 },
+                rawArchiveWriter,
                 alpacaNewsLogger,
                 CreateSentimentAnalyzer()),
             "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(

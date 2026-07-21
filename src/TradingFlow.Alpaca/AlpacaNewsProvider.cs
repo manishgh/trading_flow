@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,33 +10,39 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Polly.Bulkhead;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Alpaca;
 
 public sealed class AlpacaNewsProvider : ICatalystProvider
 {
     private sealed record CachedArticleSentiment(decimal Score);
+    private sealed record ReceivedNewsArticle(NewsArticle Article, DateTimeOffset FirstSeenAt);
     private const int PageLimit = 50;
     private const int MaxPages = 10;
     private const int MaxConcurrentSentimentRequests = 4;
     private static readonly ConcurrentDictionary<string, CachedArticleSentiment> ArticleSentimentCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, DateTimeOffset> ArticleFirstSeenCache = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly HttpClient _httpClient;
     private readonly AlpacaOptions _options;
     private readonly ISentimentAnalyzer _sentimentAnalyzer;
     private readonly ILogger<AlpacaNewsProvider> _logger;
+    private readonly AlpacaRawResponseArchiver _responseArchiver;
     private readonly int _maxArticlesPerTicker;
     private readonly Polly.Bulkhead.AsyncBulkheadPolicy<HttpResponseMessage> _bulkhead = TradingFlow.Domain.Http.RateLimiterFactory.CreateBulkhead(3, 25);
 
     public AlpacaNewsProvider(
         HttpClient httpClient,
         AlpacaOptions options,
+        IRawArchiveWriter rawArchiveWriter,
         ILogger<AlpacaNewsProvider>? logger = null,
         ISentimentAnalyzer? sentimentAnalyzer = null,
         int maxArticlesPerTicker = 120)
     {
         _httpClient = httpClient;
         _options = options;
+        _responseArchiver = new AlpacaRawResponseArchiver(rawArchiveWriter);
         _sentimentAnalyzer = sentimentAnalyzer ?? new VaderSentimentAnalyzer();
         _logger = logger ?? NullLogger<AlpacaNewsProvider>.Instance;
         _maxArticlesPerTicker = Math.Max(1, maxArticlesPerTicker);
@@ -51,7 +56,7 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
     public async Task<IReadOnlyList<CatalystEvent>> GetCatalystsAsync(string ticker, DateTimeOffset windowStart, DateTimeOffset windowEnd, CancellationToken cancellationToken)
     {
         var events = new List<CatalystEvent>();
-        var pendingArticles = new List<NewsArticle>();
+        var pendingArticles = new List<ReceivedNewsArticle>();
         var startStr = windowStart.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
         var endStr = windowEnd.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
         string? pageToken = null;
@@ -62,21 +67,19 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         {
             cancellationToken.ThrowIfCancellationRequested();
             var url = BuildNewsUrl(ticker, startStr, endStr, pageToken);
-            using var response = await SendNewsRequestAsync(ticker, url, cancellationToken);
+            var response = await SendNewsRequestAsync(ticker, url, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                var error = await response.Content.ReadAsStringAsync(cancellationToken);
                 _logger.LogWarning(
-                    "Alpaca news request failed for {Ticker} with status {StatusCode}. Response={ResponseBody}",
+                    "Alpaca news request failed for {Ticker} with status {StatusCode}. RawArchiveId={RawArchiveId}",
                     ticker,
                     response.StatusCode,
-                    error);
+                    response.Archive.Manifest.ArchiveId);
                 return events;
             }
 
-            var receivedAt = DateTimeOffset.UtcNow;
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            using var doc = JsonDocument.Parse(content);
+            var receivedAt = response.Archive.Manifest.ReceivedAtUtc;
+            using var doc = JsonDocument.Parse(response.Payload);
             if (!doc.RootElement.TryGetProperty("news", out var newsArray))
             {
                 return events;
@@ -97,13 +100,17 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
                 }
 
                 var cacheKey = $"{ProviderName}:{article.Id}";
+                var firstSeenAt = ArticleFirstSeenCache.AddOrUpdate(
+                    cacheKey,
+                    receivedAt,
+                    (_, existing) => existing <= receivedAt ? existing : receivedAt);
                 if (ArticleSentimentCache.TryGetValue(cacheKey, out var cachedSentiment))
                 {
-                    events.Add(BuildCatalystEvent(ticker, article, cachedSentiment.Score, receivedAt));
+                    events.Add(BuildCatalystEvent(ticker, article, cachedSentiment.Score, firstSeenAt));
                     continue;
                 }
 
-                pendingArticles.Add(article);
+                pendingArticles.Add(new ReceivedNewsArticle(article, firstSeenAt));
             }
 
             pageToken = doc.RootElement.TryGetProperty("next_page_token", out var tokenElement)
@@ -133,7 +140,7 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
 
     private async Task<IReadOnlyList<CatalystEvent>> AnalyzeArticlesAsync(
         string ticker,
-        IReadOnlyList<NewsArticle> articles,
+        IReadOnlyList<ReceivedNewsArticle> articles,
         CancellationToken cancellationToken)
     {
         using var throttle = new SemaphoreSlim(MaxConcurrentSentimentRequests);
@@ -143,14 +150,15 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
 
     private async Task<CatalystEvent> AnalyzeArticleAsync(
         string ticker,
-        NewsArticle article,
+        ReceivedNewsArticle receivedArticle,
         SemaphoreSlim throttle,
         CancellationToken cancellationToken)
     {
+        var article = receivedArticle.Article;
         var cacheKey = $"{ProviderName}:{article.Id}";
         if (ArticleSentimentCache.TryGetValue(cacheKey, out var cachedSentiment))
         {
-            return BuildCatalystEvent(ticker, article, cachedSentiment.Score, DateTimeOffset.UtcNow);
+            return BuildCatalystEvent(ticker, article, cachedSentiment.Score, receivedArticle.FirstSeenAt);
         }
 
         await throttle.WaitAsync(cancellationToken);
@@ -158,12 +166,12 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         {
             if (ArticleSentimentCache.TryGetValue(cacheKey, out cachedSentiment))
             {
-                return BuildCatalystEvent(ticker, article, cachedSentiment.Score, DateTimeOffset.UtcNow);
+                return BuildCatalystEvent(ticker, article, cachedSentiment.Score, receivedArticle.FirstSeenAt);
             }
 
             var sentiment = await _sentimentAnalyzer.AnalyzeAsync(article, cancellationToken);
             ArticleSentimentCache.TryAdd(cacheKey, new CachedArticleSentiment(sentiment.Score));
-            return BuildCatalystEvent(ticker, article, sentiment.Score, DateTimeOffset.UtcNow);
+            return BuildCatalystEvent(ticker, article, sentiment.Score, receivedArticle.FirstSeenAt);
         }
         finally
         {
@@ -209,36 +217,45 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
             : $"{url}&page_token={Uri.EscapeDataString(pageToken)}";
     }
 
-    private async Task<HttpResponseMessage> SendNewsRequestAsync(string ticker, string url, CancellationToken cancellationToken)
+    private async Task<ArchivedAlpacaResponse> SendNewsRequestAsync(string ticker, string url, CancellationToken cancellationToken)
     {
         const int maxAttempts = 4;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             try
             {
-                var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync(
+                using var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync(
                     "Alpaca",
                     url,
                     "GET",
                     () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
+                var archivedResponse = await _responseArchiver.ArchiveAsync(
+                    response,
+                    "news-rest-page",
+                    correlationId: ticker.ToUpperInvariant(),
+                    attributes: new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["attempt"] = attempt.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["ticker"] = ticker.ToUpperInvariant()
+                    },
+                    cancellationToken: cancellationToken);
 
-                if ((Int32)response.StatusCode != 429 && (Int32)response.StatusCode < 500)
+                if ((Int32)archivedResponse.StatusCode != 429 && (Int32)archivedResponse.StatusCode < 500)
                 {
-                    return response;
+                    return archivedResponse;
                 }
 
                 if (attempt == maxAttempts)
                 {
-                    return response;
+                    return archivedResponse;
                 }
 
-                var delay = ResolveRetryDelay(response.Headers, attempt);
-                response.Dispose();
+                var delay = ResolveRetryDelay(archivedResponse, attempt);
                 _logger.LogInformation(
                     "Retrying Alpaca news request for {Ticker} after {DelayMs} ms because status was {StatusCode}. Attempt {Attempt}/{MaxAttempts}.",
                     ticker,
                     delay.TotalMilliseconds,
-                    response.StatusCode,
+                    archivedResponse.StatusCode,
                     attempt,
                     maxAttempts);
                 await Task.Delay(delay, cancellationToken);
@@ -259,15 +276,24 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         throw new InvalidOperationException("Alpaca news request retry loop exited unexpectedly.");
     }
 
-    private static TimeSpan ResolveRetryDelay(HttpResponseHeaders headers, int attempt)
+    private static TimeSpan ResolveRetryDelay(ArchivedAlpacaResponse response, int attempt)
     {
-        if (headers.RetryAfter?.Delta is { } delta && delta > TimeSpan.Zero)
+        var retryAfter = response.GetHeaderValues("Retry-After").FirstOrDefault();
+        if (Int32.TryParse(retryAfter, out var retryAfterSeconds) && retryAfterSeconds > 0)
         {
-            return delta;
+            return TimeSpan.FromSeconds(retryAfterSeconds);
         }
 
-        if (headers.TryGetValues("X-RateLimit-Reset", out var resetValues) &&
-            Int64.TryParse(resetValues.FirstOrDefault(), out var resetUnixSeconds))
+        if (DateTimeOffset.TryParse(retryAfter, out var retryAfterAt))
+        {
+            var retryAfterDelay = retryAfterAt - DateTimeOffset.UtcNow;
+            if (retryAfterDelay > TimeSpan.Zero)
+            {
+                return retryAfterDelay;
+            }
+        }
+
+        if (Int64.TryParse(response.GetHeaderValues("X-RateLimit-Reset").FirstOrDefault(), out var resetUnixSeconds))
         {
             var reset = DateTimeOffset.FromUnixTimeSeconds(resetUnixSeconds);
             var delay = reset - DateTimeOffset.UtcNow;
