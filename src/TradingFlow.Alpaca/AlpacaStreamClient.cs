@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace TradingFlow.Alpaca;
 
@@ -15,19 +16,25 @@ public sealed class AlpacaStreamClient : IDisposable
     private readonly ClientWebSocket _webSocket = new();
     private readonly AlpacaOptions _options;
     private readonly Uri _streamUrl;
+    private readonly ILogger<AlpacaStreamClient>? _logger;
 
-    public AlpacaStreamClient(AlpacaOptions options)
+    public AlpacaStreamClient(AlpacaOptions options, ILogger<AlpacaStreamClient>? logger = null)
     {
         _options = options;
-        _streamUrl = new Uri("wss://stream.data.alpaca.markets/v2/iex");
+        _streamUrl = options.ResolveMarketDataStreamUrl();
+        _logger = logger;
     }
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
+        _logger?.LogInformation(
+            "Connecting to Alpaca {MarketDataFeed} market-data stream at {StreamUrl}.",
+            _options.ResolveMarketDataFeed(),
+            _streamUrl);
         await _webSocket.ConnectAsync(_streamUrl, cancellationToken);
 
-        // Wait for welcome message
-        var welcomeMsg = await ReceiveMessageAsync(cancellationToken);
+        // Alpaca sends a connection acknowledgement before accepting authentication.
+        _ = await ReceiveMessageAsync(cancellationToken);
         
         // Send Auth
         var authPayload = new
@@ -40,12 +47,9 @@ public sealed class AlpacaStreamClient : IDisposable
 
         // Wait for auth response
         var authResponse = await ReceiveMessageAsync(cancellationToken);
-        if (!authResponse.Contains("\"status\":\"authorized\"") && !authResponse.Contains("\"status\":\"authenticated\""))
+        if (!IsAuthorizedResponse(authResponse))
         {
-            if (authResponse.Contains("auth_failed") || authResponse.Contains("not authorized"))
-            {
-                throw new Exception($"Alpaca WebSocket Authentication Failed: {authResponse}");
-            }
+            throw new InvalidOperationException("Alpaca market-data WebSocket authentication was rejected.");
         }
     }
 
@@ -114,12 +118,67 @@ public sealed class AlpacaStreamClient : IDisposable
         return Encoding.UTF8.GetString(ms.ToArray());
     }
 
+    internal static bool IsAuthorizedResponse(string response)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            return document.RootElement.ValueKind switch
+            {
+                JsonValueKind.Array => document.RootElement
+                    .EnumerateArray()
+                    .Any(IsAuthorizedElement),
+                JsonValueKind.Object => IsAuthorizedElement(document.RootElement),
+                _ => false
+            };
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsAuthorizedElement(JsonElement element)
+    {
+        var status = element.TryGetProperty("status", out var statusElement)
+            ? statusElement.GetString()
+            : null;
+        if (status is "authorized" or "authenticated")
+        {
+            return true;
+        }
+
+        var type = element.TryGetProperty("T", out var typeElement)
+            ? typeElement.GetString()
+            : null;
+        var message = element.TryGetProperty("msg", out var messageElement)
+            ? messageElement.GetString()
+            : null;
+
+        return String.Equals(type, "success", StringComparison.OrdinalIgnoreCase) &&
+               String.Equals(message, "authenticated", StringComparison.OrdinalIgnoreCase);
+    }
+
     public void Dispose()
     {
-        if (_webSocket.State == WebSocketState.Open)
+        try
         {
-            _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Disposed", CancellationToken.None).GetAwaiter().GetResult();
+            if (_webSocket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                _webSocket
+                    .CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "Disposed", timeout.Token)
+                    .GetAwaiter()
+                    .GetResult();
+            }
         }
-        _webSocket.Dispose();
+        catch (Exception exception) when (exception is WebSocketException or OperationCanceledException)
+        {
+            _webSocket.Abort();
+        }
+        finally
+        {
+            _webSocket.Dispose();
+        }
     }
 }

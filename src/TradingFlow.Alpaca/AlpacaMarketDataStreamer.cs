@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
 
@@ -13,9 +14,11 @@ public sealed class AlpacaMarketDataStreamer : IMarketDataStreamer, IDisposable
 {
     private readonly AlpacaStreamClient _client;
 
-    public AlpacaMarketDataStreamer(AlpacaOptions options)
+    public AlpacaMarketDataStreamer(
+        AlpacaOptions options,
+        ILogger<AlpacaStreamClient>? streamLogger = null)
     {
-        _client = new AlpacaStreamClient(options);
+        _client = new AlpacaStreamClient(options, streamLogger);
     }
 
     public async IAsyncEnumerable<OhlcvBar> SubscribeBarsAsync(

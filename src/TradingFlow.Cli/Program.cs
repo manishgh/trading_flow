@@ -12,6 +12,38 @@ var serializerOptions = new JsonSerializerOptions
     WriteIndented = true
 };
 
+if (args.Length > 0 && args[0].Equals("alpaca-stream-smoke", StringComparison.OrdinalIgnoreCase))
+{
+    var timeoutSeconds = ParseIntOption(args, "--timeout-seconds") ?? 20;
+    if (timeoutSeconds is < 1 or > 120)
+    {
+        throw new ArgumentOutOfRangeException(
+            nameof(timeoutSeconds),
+            timeoutSeconds,
+            "Stream smoke timeout must be between 1 and 120 seconds.");
+    }
+
+    var options = TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
+    {
+        KeyId = ResolveSecret("Alpaca", "KeyId", "ALPACA_KEY_ID"),
+        SecretKey = ResolveSecret("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),
+        MarketDataFeed = "sip",
+        AllowIexFallback = false
+    };
+
+    if (String.IsNullOrWhiteSpace(options.KeyId) || String.IsNullOrWhiteSpace(options.SecretKey))
+    {
+        throw new InvalidOperationException(
+            "Alpaca credentials are not configured. Use ALPACA_KEY_ID and ALPACA_SECRET_KEY or the ignored local development secret store.");
+    }
+
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+    using var stream = new TradingFlow.Alpaca.AlpacaStreamClient(options);
+    await stream.ConnectAsync(timeout.Token);
+    Console.WriteLine("Alpaca SIP market-data stream authentication succeeded.");
+    return;
+}
+
 if (args.Length > 0 && args[0].Equals("optimize", StringComparison.OrdinalIgnoreCase))
 {
     var optConfigPath = args.Length > 1

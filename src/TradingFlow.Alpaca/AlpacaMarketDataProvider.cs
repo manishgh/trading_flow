@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
 
@@ -17,14 +18,18 @@ public sealed class AlpacaMarketDataProvider : IMarketDataProvider
     private readonly string _marketDataFeed;
     private readonly Polly.Bulkhead.AsyncBulkheadPolicy<HttpResponseMessage> _bulkhead = TradingFlow.Domain.Http.RateLimiterFactory.CreateBulkhead(10, 50);
 
-    public AlpacaMarketDataProvider(HttpClient httpClient, AlpacaOptions options)
+    public AlpacaMarketDataProvider(
+        HttpClient httpClient,
+        AlpacaOptions options,
+        ILogger<AlpacaMarketDataProvider>? logger = null)
     {
         _httpClient = httpClient;
         _options = options;
-        _marketDataFeed = NormalizeFeed(options.MarketDataFeed);
+        _marketDataFeed = options.ResolveMarketDataFeed();
         _httpClient.BaseAddress = new Uri("https://data.alpaca.markets");
         _httpClient.DefaultRequestHeaders.Add("APCA-API-KEY-ID", _options.KeyId);
         _httpClient.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", _options.SecretKey);
+        logger?.LogInformation("Alpaca REST market data feed configured as {MarketDataFeed}.", _marketDataFeed);
     }
 
     public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
@@ -136,14 +141,4 @@ public sealed class AlpacaMarketDataProvider : IMarketDataProvider
         throw new HttpRequestException($"Alpaca API request failed after retries: {url}");
     }
 
-    private static string NormalizeFeed(string feed)
-    {
-        var normalized = String.IsNullOrWhiteSpace(feed)
-            ? "sip"
-            : feed.Trim().ToLowerInvariant();
-
-        return normalized is "sip" or "iex" or "otc"
-            ? normalized
-            : throw new ArgumentException($"Unsupported Alpaca market data feed '{feed}'. Use sip, iex, or otc.", nameof(feed));
-    }
 }

@@ -6,6 +6,69 @@ namespace TradingFlow.Tests;
 public class AlpacaMarketDataProviderTests
 {
     [Fact]
+    public void ResolveMarketDataStreamUrl_DefaultsToSip()
+    {
+        var options = AlpacaOptions.CreateDefault();
+
+        Assert.Equal("sip", options.ResolveMarketDataFeed());
+        Assert.Equal(
+            new Uri("wss://stream.data.alpaca.markets/v2/sip"),
+            options.ResolveMarketDataStreamUrl());
+    }
+
+    [Fact]
+    public void ResolveMarketDataStreamUrl_RejectsIexUnlessFallbackIsExplicit()
+    {
+        var options = AlpacaOptions.CreateDefault() with { MarketDataFeed = "iex" };
+
+        var exception = Assert.Throws<InvalidOperationException>(options.ResolveMarketDataStreamUrl);
+
+        Assert.Contains("IEX fallback is disabled", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveMarketDataStreamUrl_AllowsExplicitDevelopmentIexFallback()
+    {
+        var options = AlpacaOptions.CreateDefault() with
+        {
+            MarketDataFeed = "IEX",
+            AllowIexFallback = true
+        };
+
+        Assert.Equal("iex", options.ResolveMarketDataFeed());
+        Assert.Equal(
+            new Uri("wss://stream.data.alpaca.markets/v2/iex"),
+            options.ResolveMarketDataStreamUrl());
+    }
+
+    [Fact]
+    public void ResolveMarketDataFeed_RejectsUnknownFeed()
+    {
+        var options = AlpacaOptions.CreateDefault() with { MarketDataFeed = "unknown" };
+
+        Assert.Throws<ArgumentException>(options.ResolveMarketDataFeed);
+    }
+
+    [Theory]
+    [InlineData("[{\"T\":\"success\",\"msg\":\"authenticated\"}]")]
+    [InlineData("{\"status\":\"authorized\"}")]
+    [InlineData("{\"status\":\"authenticated\"}")]
+    public void IsAuthorizedResponse_AcceptsOnlyExplicitAuthentication(string response)
+    {
+        Assert.True(AlpacaStreamClient.IsAuthorizedResponse(response));
+    }
+
+    [Theory]
+    [InlineData("[{\"T\":\"success\",\"msg\":\"connected\"}]")]
+    [InlineData("[{\"T\":\"error\",\"msg\":\"auth failed\"}]")]
+    [InlineData("not-json")]
+    [InlineData("[]")]
+    public void IsAuthorizedResponse_RejectsAmbiguousOrFailedResponses(string response)
+    {
+        Assert.False(AlpacaStreamClient.IsAuthorizedResponse(response));
+    }
+
+    [Fact]
     public async Task GetBarsAsync_FollowsNextPageToken_ForMultiSymbolResponses()
     {
         using var handler = new PagedBarsHandler();
