@@ -69,14 +69,26 @@ Supported market-data providers:
 - `csv`: local replay provider for deterministic tests and imported datasets.
 - `finviz`: screener/news enrichment only, not the primary candle source.
 
-Alpaca credentials are read from `appsettings.local.json` in the web app or from environment variables for CLI/worker execution:
+Alpaca credentials are read from .NET user-secrets in hosted local development or
+from environment variables in any process:
 
 ```text
 ALPACA_KEY_ID
 ALPACA_SECRET_KEY
 ```
 
-`appsettings.local.json` is ignored by git and should be replaced by Key Vault in production.
+Configure hosted development without creating a repository file:
+
+```powershell
+dotnet user-secrets --project src/TradingFlow.Web set "Alpaca:KeyId" "<paper-key-id>"
+dotnet user-secrets --project src/TradingFlow.Web set "Alpaca:SecretKey" "<paper-secret-key>"
+dotnet user-secrets --project src/TradingFlow.WarmupService set "Alpaca:KeyId" "<paper-key-id>"
+dotnet user-secrets --project src/TradingFlow.WarmupService set "Alpaca:SecretKey" "<paper-secret-key>"
+```
+
+The CLI reads `ALPACA_KEY_ID` and `ALPACA_SECRET_KEY`. The ignored
+`appsettings.local.json` path remains a local migration fallback only. Azure Key Vault
+is required for deployed paper/live environments.
 
 ## Signal Source
 

@@ -101,7 +101,10 @@ Expected production services:
 - C# trading/backtesting worker
 - Python FinBERT sentiment sidecar/service
 
-Secrets should be split by environment and stored in Azure Key Vault. Local paper credentials can live in `src/TradingFlow.Web/appsettings.local.json`, which is ignored by git.
+Secrets are split by environment and stored in Azure Key Vault for deployment. For
+local development, use environment variables or .NET user-secrets; see
+`docs/credential-security.md`. The ignored `appsettings.local.json` path remains a
+temporary local migration fallback and must never be committed.
 
 ## Active Strategy Set
 

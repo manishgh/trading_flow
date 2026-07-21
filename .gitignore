@@ -33,6 +33,7 @@ project.assets.json
 
 # Local ASP.NET launch profiles may contain API keys.
 **/Properties/launchSettings.json
+**/Properties/launchSettings.*.json
 
 # Runtime databases, logs, and generated trading data.
 *.db
@@ -82,6 +83,10 @@ secrets.json
 **/appsettings.local.json
 **/appsettings.Local.json
 appsettings.*.local.json
+*.pfx
+*.p12
+*.pem
+*.key
 deploy/aks/secret.yaml
 deploy/aks/rendered/
 
