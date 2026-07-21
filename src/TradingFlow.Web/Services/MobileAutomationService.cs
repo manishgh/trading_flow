@@ -38,6 +38,7 @@ public sealed partial class MobileAutomationService
     private readonly BasicStrategyEvaluator strategyEvaluator = new();
     private readonly PositionGuardianEngine positionGuardianEngine = new();
     private readonly RiskEngine riskEngine = new();
+    private readonly IOrderSubmissionService? orderSubmissionService;
 
     public MobileAutomationService(
         SimpleYamlReader yamlReader,
@@ -47,7 +48,8 @@ public sealed partial class MobileAutomationService
         ILogger<MobileAutomationService>? logger = null,
         ICandleStore? candleStore = null,
         IOrderStateRepository? orderRepo = null,
-        IDecisionAuditRepository? auditRepo = null)
+        IDecisionAuditRepository? auditRepo = null,
+        IOrderSubmissionService? orderSubmissionService = null)
     {
         this.yamlReader = yamlReader;
         this.runtimeFactory = runtimeFactory;
@@ -57,6 +59,7 @@ public sealed partial class MobileAutomationService
         this.candleStore = candleStore ?? NullCandleStore.Instance;
         this.orderRepo = orderRepo;
         this.auditRepo = auditRepo;
+        this.orderSubmissionService = orderSubmissionService;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -256,13 +259,34 @@ public sealed partial class MobileAutomationService
                 throw new InvalidOperationException($"Unable to size order for {session.Ticker}; ATR or risk budget is invalid.");
             }
 
-            order = order with
+            if (orderSubmissionService is null)
             {
-                ClientOrderId = ClientOrderIdFactory.Create(session.RunName, session.Ticker)
-            };
+                throw new InvalidOperationException(
+                    "Mobile order submission is not armed because the durable submission service is unavailable.");
+            }
 
             session.Report("submitting_entry", $"Submitting entry for {session.Ticker} from {session.Source}. EntryMode={entryMode}.");
-            var orderId = await brokerClient.SubmitOrderAsync(order, cancellationToken);
+            var submittedAt = DateTimeOffset.UtcNow;
+            var executionRunContext = ExecutionRunContextFactory.Create(
+                session.SessionId,
+                runConfig.Mode,
+                new { Run = runConfig, Strategy = strategy },
+                session.StartedAt ?? submittedAt);
+            var submission = await orderSubmissionService.SubmitBracketOrderAsync(
+                new BracketOrderSubmission(
+                    session.SessionId,
+                    CandidateId: null,
+                    executionRunContext,
+                    strategy.StrategyId,
+                    Side: "buy",
+                    OrderType: ResolveEntryOrderType(runConfig),
+                    TimeInForce: ResolveEntryTimeInForce(runConfig),
+                    ExecutionRunContextFactory.ResolveSessionDate(submittedAt, strategy.Session.ExchangeTimezone),
+                    submittedAt,
+                    order),
+                brokerClient,
+                cancellationToken);
+            var orderId = submission.BrokerOrderId;
             session.Status = "running";
             session.EntryOrderId = orderId;
             session.EntryPrice = order.LimitPrice;
@@ -280,7 +304,7 @@ public sealed partial class MobileAutomationService
                     OrderId = orderId,
                     Ticker = session.Ticker,
                     RunName = session.RunName,
-                    ClientOrderId = order.ClientOrderId,
+                    ClientOrderId = submission.ClientOrderId,
                     StrategyName = strategy.StrategyName,
                     Broker = runConfig.Execution.Broker,
                     Status = runConfig.Execution.ExtendedHours ? "pending_exit_setup" : "new",
@@ -337,6 +361,18 @@ public sealed partial class MobileAutomationService
     }
 
     private sealed record PreparedEntryExecution(TradeSignal Signal, TradeSignal ExecutionSignal);
+
+    private static string ResolveEntryOrderType(BacktestRunConfig run) =>
+        run.Execution.ExtendedHours
+            ? "limit"
+            : String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)
+                ? run.Execution.OrderType.Trim().ToLowerInvariant()
+                : run.Execution.EntryOrderType.Trim().ToLowerInvariant();
+
+    private static string ResolveEntryTimeInForce(BacktestRunConfig run) =>
+        run.Execution.ExtendedHours || run.Execution.OrderExpiration.Equals("day", StringComparison.OrdinalIgnoreCase)
+            ? "day"
+            : "gtc";
 
     private sealed class MutableAutomationSession
     {

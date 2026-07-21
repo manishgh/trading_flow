@@ -53,6 +53,14 @@ internal static class ProductionPersistenceModelConfiguration
         entity.Property(record => record.TimeInForce).HasMaxLength(10).IsRequired();
         entity.Property(record => record.RequestJson).IsRequired();
         entity.HasIndex(record => record.ClientOrderId).IsUnique();
+        entity.HasIndex(record => new
+        {
+            record.StrategyId,
+            record.Side,
+            record.Symbol,
+            record.SessionDate,
+            record.SequenceNumber
+        }).IsUnique();
         entity.HasIndex(record => record.CandidateId);
         entity.HasIndex(record => new { record.Symbol, record.CreatedAtUtc });
     }

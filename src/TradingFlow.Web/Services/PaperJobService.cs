@@ -6,6 +6,7 @@ using TradingFlow.Backtesting;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
+using TradingFlow.Engine.Execution;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Web.Models;
@@ -26,6 +27,7 @@ public sealed class PaperJobService
     private readonly IArtifactWriter artifactWriter;
     private readonly ICandleStore candleStore;
     private readonly bool autoResumeJobs;
+    private readonly IOrderSubmissionService? orderSubmissionService;
 
     private readonly IServiceScopeFactory _scopeFactory;
 
@@ -43,7 +45,8 @@ public sealed class PaperJobService
         TradingFlow.Domain.Locking.ITickerLockService? lockService = null,
         TradingFlow.Domain.Orders.IOrderStateRepository? orderRepo = null,
         TradingFlow.Domain.Audit.IDecisionAuditRepository? auditRepo = null,
-        PaperRuntimeFactory? runtimeFactory = null)
+        PaperRuntimeFactory? runtimeFactory = null,
+        IOrderSubmissionService? orderSubmissionService = null)
     {
         this.yamlReader = yamlReader;
         _scopeFactory = scopeFactory;
@@ -59,6 +62,7 @@ public sealed class PaperJobService
         _lockService = lockService;
         _orderRepo = orderRepo;
         _auditRepo = auditRepo;
+        this.orderSubmissionService = orderSubmissionService;
     }
 
     public async Task InitializeAsync()
@@ -184,8 +188,9 @@ public sealed class PaperJobService
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             using var profilerScope = TradingFlow.Domain.Logging.ApiProfiler.BeginScope(job.RunName);
             var openOrders = await brokerClient.GetOpenOrdersAsync(cts.Token);
+            var ownedClientOrderIds = await GetRunScopedClientOrderIdsAsync(job, cts.Token);
             var runOrders = openOrders
-                .Where(order => BelongsToRun(order, job.RunName))
+                .Where(order => ownedClientOrderIds.Contains(order.ClientOrderId))
                 .ToArray();
 
             if (runOrders.Length == 0)
@@ -239,8 +244,9 @@ public sealed class PaperJobService
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             using var profilerScope = TradingFlow.Domain.Logging.ApiProfiler.BeginScope(job.RunName);
             var orders = await brokerClient.GetOpenOrdersAsync(cts.Token);
+            var ownedClientOrderIds = await GetRunScopedClientOrderIdsAsync(job, cts.Token);
             return orders
-                .Where(order => BelongsToRun(order, job.RunName))
+                .Where(order => ownedClientOrderIds.Contains(order.ClientOrderId))
                 .ToArray();
         }
         catch (Exception exception)
@@ -392,6 +398,11 @@ public sealed class PaperJobService
         {
             var runConfig = runtimeFactory.ResolveRunPaths(yamlReader.ReadBacktestRun(job.ConfigPath));
             var strategies = runConfig.Strategies.Select(yamlReader.ReadStrategy).ToArray();
+            var executionRunContext = ExecutionRunContextFactory.Create(
+                job.JobId,
+                runConfig.Mode,
+                new { Run = runConfig, Strategies = strategies },
+                job.StartedAt ?? DateTimeOffset.UtcNow);
             ClearLiveChartSnapshots(runConfig);
 
             var provider = runtimeFactory.CreateProvider(runConfig);
@@ -408,7 +419,9 @@ public sealed class PaperJobService
                 liveRunnerLogger,
                 artifactWriter,
                 candleStore,
-                runtimeFactory.RawArchiveWriter);
+                runtimeFactory.RawArchiveWriter,
+                orderSubmissionService,
+                executionRunContext);
 
             var progress = new Progress<string>(msg =>
             {
@@ -530,6 +543,31 @@ public sealed class PaperJobService
             .ToArray();
     }
 
+    private async Task<HashSet<string>> GetRunScopedClientOrderIdsAsync(
+        MutablePaperJob job,
+        CancellationToken cancellationToken)
+    {
+        var clientOrderIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_orderRepo is null)
+        {
+            return clientOrderIds;
+        }
+
+        var runConfig = yamlReader.ReadBacktestRun(job.ConfigPath);
+        foreach (var ticker in runConfig.Tickers.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var orders = await _orderRepo.GetActiveOrdersByTickerAsync(ticker, cancellationToken);
+            foreach (var order in orders.Where(order =>
+                         order.RunName.Equals(job.RunName, StringComparison.OrdinalIgnoreCase) &&
+                         !String.IsNullOrWhiteSpace(order.ClientOrderId)))
+            {
+                clientOrderIds.Add(order.ClientOrderId);
+            }
+        }
+
+        return clientOrderIds;
+    }
+
     private async Task CancelSellOrdersForTickerAsync(
         MutablePaperJob job,
         TradingFlow.Engine.Execution.IBrokerClient brokerClient,
@@ -555,11 +593,6 @@ public sealed class PaperJobService
                     job.JobId);
             }
         }
-    }
-
-    private static bool BelongsToRun(TradingFlow.Domain.Orders.ActiveBrokerOrder order, string runName)
-    {
-        return order.ClientOrderId.StartsWith(ClientOrderIdFactory.CreatePrefix(runName), StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class MutablePaperJob

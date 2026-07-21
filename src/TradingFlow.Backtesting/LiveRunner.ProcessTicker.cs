@@ -380,16 +380,40 @@ public sealed partial class LiveRunner
 
                     if (order != null)
                     {
-                        order = order with
-                        {
-                            ClientOrderId = TradingFlow.Domain.Orders.ClientOrderIdFactory.Create(run.RunName, ticker)
-                        };
                         var shares = order.ShareQuantity;
 
                         try
                         {
+                            if (_orderSubmissionService is null || _executionRunContext is null)
+                            {
+                                throw new InvalidOperationException(
+                                    "Order submission is not armed because the durable submission service or execution provenance is unavailable.");
+                            }
+
                             progress?.Report($"Submitting Bracket Order: {shares} shares of {ticker}...");
-                            var orderId = await _brokerClient.SubmitOrderAsync(order, cancellationToken);
+                            var intentId = OrderIntentIdFactory.Create(
+                                _executionRunContext.RunId,
+                                strategy.StrategyId,
+                                "buy",
+                                ticker,
+                                orderSignal.Timestamp);
+                            var submission = await _orderSubmissionService.SubmitBracketOrderAsync(
+                                new BracketOrderSubmission(
+                                    intentId,
+                                    CandidateId: null,
+                                    _executionRunContext,
+                                    strategy.StrategyId,
+                                    Side: "buy",
+                                    OrderType: ResolveEntryOrderType(run),
+                                    TimeInForce: ResolveEntryTimeInForce(run),
+                                    ExecutionRunContextFactory.ResolveSessionDate(
+                                        decisionTimestamp,
+                                        strategy.Session.ExchangeTimezone),
+                                    decisionTimestamp,
+                                    order),
+                                _brokerClient,
+                                cancellationToken);
+                            var orderId = submission.BrokerOrderId;
                             var successMsg = $"Order submitted successfully: ID {orderId}";
                             logger.LogInformation(
                                 "Order submitted for {Ticker} {StrategyName}. OrderId={OrderId} Shares={ShareQuantity}",
@@ -407,7 +431,7 @@ public sealed partial class LiveRunner
                                     OrderId = orderId,
                                     Ticker = ticker,
                                     RunName = run.RunName,
-                                    ClientOrderId = order.ClientOrderId,
+                                    ClientOrderId = submission.ClientOrderId,
                                     StrategyName = strategy.StrategyName,
                                     Broker = run.Execution.Broker,
                                     Status = run.Execution.ExtendedHours ? "pending_exit_setup" : "new",
@@ -526,4 +550,16 @@ public sealed partial class LiveRunner
                 : executionSnapshot.Atr ?? signal.CurrentAtr
         };
     }
+
+    private static string ResolveEntryOrderType(BacktestRunConfig run) =>
+        run.Execution.ExtendedHours
+            ? "limit"
+            : String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)
+                ? run.Execution.OrderType.Trim().ToLowerInvariant()
+                : run.Execution.EntryOrderType.Trim().ToLowerInvariant();
+
+    private static string ResolveEntryTimeInForce(BacktestRunConfig run) =>
+        run.Execution.ExtendedHours || run.Execution.OrderExpiration.Equals("day", StringComparison.OrdinalIgnoreCase)
+            ? "day"
+            : "gtc";
 }

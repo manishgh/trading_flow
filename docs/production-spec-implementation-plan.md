@@ -107,6 +107,14 @@ IDs: PER-01..06, FVZ-03, NWS-01 (storage side), PER dependencies for all later j
 Accept: migration tests; write-ahead fsync verified by test (intent row exists if process killed between persist and submit — simulated); raw archive round-trip test.
 
 ### S3 — EXE: order-path hardening (L) ← highest-value safety phase
+**S3.2 checkpoint (2026-07-21):** LiveRunner and mobile automation now reserve a
+durable order intent before broker I/O, share one submission service, reuse the
+persisted `{strategy}-{side}-{symbol}-{yyyymmdd}-{seq}-{uuid8}` client ID on retry,
+and carry run/config/code provenance. Manual Trade Desk routing remains explicitly
+assigned to the universal gate chain in S3.8. Local gate: 333/333 tests, full Release
+build including Android with 0 warnings/errors, current EF model, zero known
+vulnerable packages, and isolated Production web smoke checks passed.
+
 IDs: EXE-01..13, DAY-04 (reject enum), parts of TST-03.
 1. Reject-code enum in `TradingFlow.Domain` — Base-Spec §10 set + DAY-04 additions; one enum, used by gates, journal, and tests (CI sync-check vs spec in S12).
 2. Write-ahead intent: `client_order_id` format `{strategy}-{side}-{symbol}-{yyyymmdd}-{seq}-{uuid8}`; persist INTENT (fsync) **before** `SubmitOrderAsync`; retries reuse the persisted ID (EXE-01). Refactor `MobileAutomationService` entry path and `LiveRunner` submission path onto one shared `OrderSubmissionService` (one-brain discipline applies to execution too).

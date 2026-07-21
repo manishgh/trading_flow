@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
@@ -24,7 +24,9 @@ public sealed partial class LiveRunner(
     ILogger<LiveRunner> logger,
     IArtifactWriter? artifactWriter = null,
     ICandleStore? candleStore = null,
-    IRawArchiveWriter? rawArchiveWriter = null)
+    IRawArchiveWriter? rawArchiveWriter = null,
+    IOrderSubmissionService? orderSubmissionService = null,
+    ExecutionRunContext? executionRunContext = null)
 {
     private readonly SignalGenerator _signalGenerator = new();
     private readonly StrategyDecisionBrain _decisionBrain = new();
@@ -37,6 +39,8 @@ public sealed partial class LiveRunner(
     private readonly TradingFlow.Domain.Audit.IDecisionAuditRepository? _auditRepo = auditRepo;
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
     private readonly IRawArchiveWriter? _rawArchiveWriter = rawArchiveWriter;
+    private readonly IOrderSubmissionService? _orderSubmissionService = orderSubmissionService;
+    private readonly ExecutionRunContext? _executionRunContext = executionRunContext;
     private readonly TradingFlow.Engine.Regime.RegimeGateService _regimeGate = new();
 
     public async Task RunAsync(
@@ -122,7 +126,7 @@ public sealed partial class LiveRunner(
             var maxLookbackDays = run.TimeWindow.WarmupLookbackDays > 0
                 ? run.TimeWindow.WarmupLookbackDays
                 : Math.Max(run.TimeWindow.LookbackDays, 5);
-            foreach(var st in strategies)
+            foreach (var st in strategies)
             {
                 var timeframes = new List<string> { st.Execution.Timeframe, st.Timeframe };
                 if (st.Confluence.Enabled) timeframes.Add(st.Confluence.Timeframe);

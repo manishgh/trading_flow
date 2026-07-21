@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Backtesting.StrategyEvaluation;
@@ -10,6 +10,7 @@ using TradingFlow.Data.Wishlists;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
+using TradingFlow.Engine.Execution;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web;
 using TradingFlow.Web.Services;
@@ -96,6 +97,7 @@ builder.Services.AddSingleton<TradingFlowDatabaseInitializer>();
 builder.Services.AddSingleton<TradingFlow.Domain.Locking.ITickerLockService, TradingFlow.Data.Locking.SqliteTickerLockService>();
 builder.Services.AddSingleton<TradingFlow.Domain.Orders.IOrderStateRepository, TradingFlow.Data.Orders.SqliteOrderStateRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderIntentRepository, TradingFlow.Data.Orders.SqliteOrderIntentRepository>();
+builder.Services.AddSingleton<IOrderSubmissionService, OrderSubmissionService>();
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository, TradingFlow.Data.Jobs.SqliteJobRepository>();
 

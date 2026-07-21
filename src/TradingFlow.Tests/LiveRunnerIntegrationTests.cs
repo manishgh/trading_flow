@@ -395,7 +395,8 @@ public class LiveRunnerIntegrationTests
                 provider.Object,
                 lockService: null,
                 brokerClient: broker.Object,
-                orderStateRepository: orderRepo.Object);
+                orderStateRepository: orderRepo.Object,
+                orderSubmissionService: CreatePassThroughSubmissionService());
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var progress = new Progress<string>(message =>
             {
@@ -699,7 +700,8 @@ public class LiveRunnerIntegrationTests
         ITickerLockService? lockService,
         Mock<IDecisionAuditRepository>? auditRepoMock = null,
         IBrokerClient? brokerClient = null,
-        IOrderStateRepository? orderStateRepository = null)
+        IOrderStateRepository? orderStateRepository = null,
+        IOrderSubmissionService? orderSubmissionService = null)
     {
         var defaultOrderRepo = new Mock<IOrderStateRepository>();
         defaultOrderRepo
@@ -720,7 +722,38 @@ public class LiveRunnerIntegrationTests
             lockService,
             orderStateRepository ?? defaultOrderRepo.Object,
             auditRepo.Object,
-            NullLogger<LiveRunner>.Instance);
+            NullLogger<LiveRunner>.Instance,
+            orderSubmissionService: orderSubmissionService,
+            executionRunContext: orderSubmissionService is null
+                ? null
+                : new ExecutionRunContext(
+                    Guid.Parse("10000000-0000-0000-0000-000000000001"),
+                    "paper",
+                    new string('a', 64),
+                    new string('b', 40),
+                    new DateTimeOffset(2026, 7, 21, 13, 0, 0, TimeSpan.Zero)));
+    }
+
+    private static IOrderSubmissionService CreatePassThroughSubmissionService()
+    {
+        var service = new Mock<IOrderSubmissionService>();
+        service
+            .Setup(candidate => candidate.SubmitBracketOrderAsync(
+                It.IsAny<BracketOrderSubmission>(),
+                It.IsAny<IBrokerClient>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(async (
+                BracketOrderSubmission submission,
+                IBrokerClient broker,
+                CancellationToken cancellationToken) =>
+            {
+                var clientOrderId = $"TEST-B-{submission.Order.Ticker}-20260721-001-12345678";
+                var brokerOrderId = await broker.SubmitOrderAsync(
+                    submission.Order with { ClientOrderId = clientOrderId },
+                    cancellationToken);
+                return new OrderSubmissionResult(brokerOrderId, clientOrderId, submission.IntentId);
+            });
+        return service.Object;
     }
 
     private static async Task RunUntilCancelledAsync(

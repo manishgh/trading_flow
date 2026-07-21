@@ -66,6 +66,8 @@ public sealed class SqliteDurabilityTests
             TimeInForce = "day",
             RequestedQuantity = 2.5m,
             LimitPrice = 420.25m,
+            SessionDate = new DateOnly(2026, 7, 21),
+            SequenceNumber = 1,
             CreatedAtUtc = DateTimeOffset.UtcNow,
             RequestJson = "{\"symbol\":\"MSFT\"}"
         });
@@ -103,6 +105,158 @@ public sealed class SqliteDurabilityTests
             () => repository.AppendAsync(CreateIntent(runId, Guid.NewGuid(), "duplicate-client-id")));
     }
 
+    [Fact]
+    public async Task ReserveAsync_RepeatedLogicalIntent_ReusesPersistedClientOrderId()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var run = CreateRun(Guid.NewGuid());
+        var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
+
+        await using (var context = new TradingFlowDbContext(options))
+        {
+            await new TradingFlowDatabaseInitializer().InitializeAsync(context);
+        }
+
+        var first = await repository.ReserveAsync(run, reservation);
+        var replay = await repository.ReserveAsync(run, reservation);
+
+        Assert.Equal(first.ClientOrderId, replay.ClientOrderId);
+        Assert.Equal(1, replay.SequenceNumber);
+        await using var verification = new TradingFlowDbContext(options);
+        Assert.Equal(1, await verification.OrderIntents.CountAsync());
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ParallelDistinctIntents_AllocatesDistinctMonotonicSequences()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var run = CreateRun(Guid.NewGuid());
+
+        await using (var context = new TradingFlowDbContext(options))
+        {
+            await new TradingFlowDatabaseInitializer().InitializeAsync(context);
+        }
+
+        var reservations = Enumerable.Range(0, 8)
+            .Select(_ => CreateReservation(Guid.NewGuid(), "MSFT"))
+            .ToArray();
+        var reserved = await Task.WhenAll(
+            reservations.Select(reservation => repository.ReserveAsync(run, reservation)));
+
+        Assert.Equal(Enumerable.Range(1, 8), reserved.Select(intent => intent.SequenceNumber).Order());
+        Assert.Equal(8, reserved.Select(intent => intent.ClientOrderId).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ParallelRepositoryInstances_AllocateDistinctMonotonicSequences()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var contextFactory = new TestDbContextFactory(options);
+        var repositories = Enumerable.Range(0, 4)
+            .Select(_ => new SqliteOrderIntentRepository(contextFactory))
+            .ToArray();
+        var run = CreateRun(Guid.NewGuid());
+
+        await using (var context = new TradingFlowDbContext(options))
+        {
+            await new TradingFlowDatabaseInitializer().InitializeAsync(context);
+        }
+
+        var reservations = Enumerable.Range(0, 8)
+            .Select(_ => CreateReservation(Guid.NewGuid(), "MSFT"))
+            .ToArray();
+        var reserved = await Task.WhenAll(reservations.Select((reservation, index) =>
+            repositories[index % repositories.Length].ReserveAsync(run, reservation)));
+
+        Assert.Equal(Enumerable.Range(1, 8), reserved.Select(intent => intent.SequenceNumber).Order());
+        Assert.Equal(8, reserved.Select(intent => intent.ClientOrderId).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ReusedIntentWithChangedRequest_FailsClosed()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var run = CreateRun(Guid.NewGuid());
+        var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
+
+        await using (var context = new TradingFlowDbContext(options))
+        {
+            await new TradingFlowDatabaseInitializer().InitializeAsync(context);
+        }
+
+        await repository.ReserveAsync(run, reservation);
+        var changed = reservation with { RequestedQuantity = reservation.RequestedQuantity + 1m };
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => repository.ReserveAsync(run, changed));
+        Assert.Contains("different order request", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ReusedIntentWithChangedProfile_FailsClosed()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var run = CreateRun(Guid.NewGuid());
+        var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
+
+        await using (var context = new TradingFlowDbContext(options))
+        {
+            await new TradingFlowDatabaseInitializer().InitializeAsync(context);
+        }
+
+        await repository.ReserveAsync(run, reservation);
+        var changedRun = new ProductionRun
+        {
+            RunId = run.RunId,
+            SchemaVersion = run.SchemaVersion,
+            ConfigHash = run.ConfigHash,
+            CodeVersion = run.CodeVersion,
+            Profile = "live",
+            Status = run.Status,
+            StartedAtUtc = run.StartedAtUtc
+        };
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => repository.ReserveAsync(changedRun, reservation));
+        Assert.Contains("different provenance", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ReusedIntentForCompletedRun_FailsClosed()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var run = CreateRun(Guid.NewGuid());
+        var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
+
+        await using (var context = new TradingFlowDbContext(options))
+        {
+            await new TradingFlowDatabaseInitializer().InitializeAsync(context);
+        }
+
+        await repository.ReserveAsync(run, reservation);
+        await using (var context = new TradingFlowDbContext(options))
+        {
+            var persistedRun = await context.ProductionRuns.SingleAsync(record => record.RunId == run.RunId);
+            persistedRun.Status = "completed";
+            await context.SaveChangesAsync();
+        }
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => repository.ReserveAsync(run, reservation));
+        Assert.Contains("state 'completed'", error.Message, StringComparison.Ordinal);
+    }
+
     private static ProductionRun CreateRun(Guid runId) => new()
     {
         RunId = runId,
@@ -128,9 +282,26 @@ public sealed class SqliteDurabilityTests
         OrderType = "market",
         TimeInForce = "day",
         RequestedQuantity = 1m,
+        SessionDate = new DateOnly(2026, 7, 21),
+        SequenceNumber = 1,
         CreatedAtUtc = DateTimeOffset.UtcNow,
         RequestJson = "{\"symbol\":\"MSFT\"}"
     };
+
+    private static OrderIntentReservation CreateReservation(Guid intentId, string symbol) => new(
+        intentId,
+        CandidateId: null,
+        StrategyId: "SWGA",
+        Symbol: symbol,
+        Side: "buy",
+        OrderType: "limit",
+        TimeInForce: "day",
+        RequestedQuantity: 10m,
+        LimitPrice: 100m,
+        StopPrice: 98m,
+        SessionDate: new DateOnly(2026, 7, 21),
+        CreatedAtUtc: new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero),
+        RequestJson: $"{{\"symbol\":\"{symbol}\",\"quantity\":10}}");
 
     private static async Task<string?> ScalarStringAsync(SqliteConnection connection, string sql)
     {

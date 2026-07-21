@@ -13,6 +13,8 @@ public sealed class OrderIntentRecord : OperationalRecord
     public decimal RequestedQuantity { get; set; }
     public decimal? LimitPrice { get; set; }
     public decimal? StopPrice { get; set; }
+    public DateOnly SessionDate { get; set; }
+    public int SequenceNumber { get; set; }
     public DateTimeOffset CreatedAtUtc { get; set; }
     public string RequestJson { get; set; } = string.Empty;
 }

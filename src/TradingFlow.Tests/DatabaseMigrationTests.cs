@@ -38,7 +38,7 @@ public sealed class DatabaseMigrationTests
         var tables = await ReadTablesAsync(connection);
         Assert.Contains("Wishlists", tables);
         Assert.All(ProductionTables, table => Assert.Contains(table, tables));
-        Assert.Equal(2, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
+        Assert.Equal(3, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
         Assert.Empty(await db.Database.GetPendingMigrationsAsync());
 
         var requiredProvenance = new[] { "run_id", "schema_version", "config_hash", "code_version" };
@@ -86,7 +86,53 @@ public sealed class DatabaseMigrationTests
 
         var tables = await ReadTablesAsync(connection);
         Assert.All(ProductionTables, table => Assert.Contains(table, tables));
-        Assert.Equal(2, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
+        Assert.Equal(3, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
+    }
+
+    [Fact]
+    public async Task DurableIntentMigration_BackfillsDistinctSequencesBeforeUniqueIndex()
+    {
+        await using var connection = await OpenInMemoryAsync();
+        var runId = Guid.NewGuid();
+        var firstIntentId = Guid.NewGuid();
+        var secondIntentId = Guid.NewGuid();
+
+        await using (var previousDb = CreateContext(connection))
+        {
+            var migrator = previousDb.GetService<IMigrator>();
+            await migrator.MigrateAsync("20260721080737_ProductionJournalFoundation");
+            await ExecuteAsync(
+                connection,
+                $"""
+                INSERT INTO runs
+                    (run_id, profile, status, started_at_utc, schema_version, config_hash, code_version)
+                VALUES
+                    ('{runId}', 'paper', 'running', '2026-07-21T13:00:00.0000000+00:00', 1, '{new string('a', 64)}', '{new string('b', 40)}');
+
+                INSERT INTO order_intents
+                    (intent_id, client_order_id, strategy_id, symbol, side, order_type, time_in_force,
+                     requested_quantity, limit_price, stop_price, created_at_utc, request_json,
+                     run_id, schema_version, config_hash, code_version)
+                VALUES
+                    ('{firstIntentId}', 'legacy-1', 'SWGA', 'MSFT', 'buy', 'limit', 'day',
+                     '10', '100', '98', '2026-07-21T14:30:00.0000000+00:00', '[]',
+                     '{runId}', 1, '{new string('a', 64)}', '{new string('b', 40)}'),
+                    ('{secondIntentId}', 'legacy-2', 'SWGA', 'MSFT', 'buy', 'limit', 'day',
+                     '10', '101', '99', '2026-07-21T14:35:00.0000000+00:00', '[]',
+                     '{runId}', 1, '{new string('a', 64)}', '{new string('b', 40)}');
+                """);
+            await migrator.MigrateAsync();
+        }
+
+        await using var upgradedDb = CreateContext(connection);
+        var intents = await upgradedDb.OrderIntents
+            .AsNoTracking()
+            .ToArrayAsync();
+        intents = intents.OrderBy(intent => intent.CreatedAtUtc).ToArray();
+
+        Assert.Equal([1, 2], intents.Select(intent => intent.SequenceNumber));
+        Assert.All(intents, intent => Assert.Equal(new DateOnly(2026, 7, 21), intent.SessionDate));
+        Assert.Empty(await upgradedDb.Database.GetPendingMigrationsAsync());
     }
 
     [Fact]
