@@ -117,7 +117,8 @@ public sealed class PaperRuntimeFactory
                     TimeInForce = "day".Equals(run.Execution.OrderExpiration, StringComparison.OrdinalIgnoreCase) ? "day" : "gtc",
                     EntryOrderType = run.Execution.EntryOrderType ?? "limit",
                     ExtendedHours = run.Execution.ExtendedHours
-                }),
+                },
+                rawArchiveWriter),
             "none" => null,
             _ => throw new NotSupportedException($"Unsupported broker client: {run.Execution.Broker}")
         };

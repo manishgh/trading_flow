@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TradingFlow.Alpaca;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Storage;
 using TradingFlow.Web.Models;
 
 namespace TradingFlow.Web.Services;
@@ -9,11 +10,16 @@ public sealed class PaperEnvironmentService
 {
     private readonly ConfigCatalogService catalog;
     private readonly AlpacaCredentialProvider alpacaCredentials;
+    private readonly IRawArchiveWriter rawArchiveWriter;
 
-    public PaperEnvironmentService(ConfigCatalogService catalog, AlpacaCredentialProvider alpacaCredentials)
+    public PaperEnvironmentService(
+        ConfigCatalogService catalog,
+        AlpacaCredentialProvider alpacaCredentials,
+        IRawArchiveWriter rawArchiveWriter)
     {
         this.catalog = catalog;
         this.alpacaCredentials = alpacaCredentials;
+        this.rawArchiveWriter = rawArchiveWriter;
     }
 
     public async Task<PaperEnvironmentSnapshot> InspectAsync(string configPath, CancellationToken cancellationToken)
@@ -27,34 +33,55 @@ public sealed class PaperEnvironmentService
 
         if (targetBroker == "alpaca" && alpacaKeyIdPresent && alpacaSecretKeyPresent)
         {
-            alpacaCheck = await RunAlpacaReadOnlyCheckAsync(alpacaCredentials, cancellationToken);
+            alpacaCheck = await RunAlpacaReadOnlyCheckAsync(alpacaCredentials, rawArchiveWriter, cancellationToken);
         }
 
         return new PaperEnvironmentSnapshot(config, alpacaKeyIdPresent, alpacaSecretKeyPresent, alpacaCheck);
     }
 
-    private static async Task<IReadOnlyDictionary<string, object?>> RunAlpacaReadOnlyCheckAsync(AlpacaCredentialProvider credentials, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyDictionary<string, object?>> RunAlpacaReadOnlyCheckAsync(
+        AlpacaCredentialProvider credentials,
+        IRawArchiveWriter rawArchiveWriter,
+        CancellationToken cancellationToken)
     {
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        using var client = new HttpClient
+        var options = AlpacaOptions.Create(ProductionProfile.Paper) with
         {
-            BaseAddress = AlpacaEndpointResolver.Resolve(ProductionProfile.Paper).TradingRest
+            KeyId = credentials.KeyId,
+            SecretKey = credentials.SecretKey
         };
-        client.DefaultRequestHeaders.Add("APCA-API-KEY-ID", credentials.KeyId);
-        client.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", credentials.SecretKey);
+        using var client = new AlpacaTradingRestClient(new HttpClient(), options, rawArchiveWriter);
 
         result["account"] = await CaptureAsync(async () =>
         {
-            var res = await client.GetAsync("/v2/account", cancellationToken);
-            res.EnsureSuccessStatusCode();
-            return SummarizeJson(JsonDocument.Parse(await res.Content.ReadAsStringAsync(cancellationToken)).RootElement);
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/v2/account");
+            var response = await client.SendAsync(
+                request,
+                "broker-account-check",
+                cancellationToken: cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("account check", response));
+            }
+
+            using var document = JsonDocument.Parse(response.Payload);
+            return SummarizeJson(document.RootElement);
         });
 
         result["positions"] = await CaptureAsync(async () =>
         {
-            var res = await client.GetAsync("/v2/positions", cancellationToken);
-            res.EnsureSuccessStatusCode();
-            return SummarizeJson(JsonDocument.Parse(await res.Content.ReadAsStringAsync(cancellationToken)).RootElement);
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/v2/positions");
+            var response = await client.SendAsync(
+                request,
+                "broker-position-check",
+                cancellationToken: cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("position check", response));
+            }
+
+            using var document = JsonDocument.Parse(response.Payload);
+            return SummarizeJson(document.RootElement);
         });
 
         return result;

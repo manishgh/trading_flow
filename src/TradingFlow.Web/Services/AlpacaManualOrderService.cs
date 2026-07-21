@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using TradingFlow.Alpaca;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Web.Services;
 
@@ -18,10 +18,14 @@ public sealed record ManualOrderResult(string OrderId, string Ticker, string Sid
 public sealed class AlpacaManualOrderService
 {
     private readonly AlpacaCredentialProvider credentials;
+    private readonly IRawArchiveWriter rawArchiveWriter;
 
-    public AlpacaManualOrderService(AlpacaCredentialProvider credentials)
+    public AlpacaManualOrderService(
+        AlpacaCredentialProvider credentials,
+        IRawArchiveWriter rawArchiveWriter)
     {
         this.credentials = credentials;
+        this.rawArchiveWriter = rawArchiveWriter;
     }
 
     public async Task<ManualOrderResult> SubmitLimitOrderAsync(
@@ -76,45 +80,67 @@ public sealed class AlpacaManualOrderService
         };
 
         using var content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
-        using var response = await client.PostAsync("/v2/orders", content, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v2/orders") { Content = content };
+        var response = await client.SendAsync(
+            request,
+            "broker-manual-order",
+            correlationId: requestBody.client_order_id,
+            attributes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["side"] = normalizedSide,
+                ["ticker"] = normalizedTicker
+            },
+            cancellationToken: cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"Alpaca paper order rejected: {(int)response.StatusCode} {body}");
+            throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("manual paper order", response));
         }
 
-        using var document = JsonDocument.Parse(body);
+        using var document = JsonDocument.Parse(response.Payload);
         var orderId = document.RootElement.TryGetProperty("id", out var id) ? id.GetString() ?? String.Empty : String.Empty;
+        if (String.IsNullOrWhiteSpace(orderId))
+        {
+            throw new InvalidOperationException(
+                $"Alpaca manual paper order returned no order id. RawArchiveId={response.Archive.Manifest.ArchiveId}.");
+        }
+
         return new ManualOrderResult(orderId, normalizedTicker, normalizedSide, quantity, limitPrice);
     }
 
-    private HttpClient CreateClient()
+    private AlpacaTradingRestClient CreateClient()
     {
-        var client = new HttpClient
+        var options = AlpacaOptions.Create(ProductionProfile.Paper) with
         {
-            BaseAddress = AlpacaEndpointResolver.Resolve(ProductionProfile.Paper).TradingRest
+            KeyId = credentials.KeyId,
+            SecretKey = credentials.SecretKey
         };
-        client.DefaultRequestHeaders.Add("APCA-API-KEY-ID", credentials.KeyId);
-        client.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", credentials.SecretKey);
-        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        return client;
+        return new AlpacaTradingRestClient(new HttpClient(), options, rawArchiveWriter);
     }
 
-    private static async Task<decimal> GetOpenPositionQuantityAsync(HttpClient client, string ticker, CancellationToken cancellationToken)
+    private static async Task<decimal> GetOpenPositionQuantityAsync(
+        AlpacaTradingRestClient client,
+        string ticker,
+        CancellationToken cancellationToken)
     {
-        using var response = await client.GetAsync($"/v2/positions/{Uri.EscapeDataString(ticker)}", cancellationToken);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/v2/positions/{Uri.EscapeDataString(ticker)}");
+        var response = await client.SendAsync(
+            request,
+            "broker-manual-position-check",
+            correlationId: ticker,
+            cancellationToken: cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return 0m;
         }
 
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"Could not read paper position for {ticker}: {(int)response.StatusCode} {body}");
+            throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("manual position query", response));
         }
 
-        using var document = JsonDocument.Parse(body);
+        using var document = JsonDocument.Parse(response.Payload);
         return document.RootElement.TryGetProperty("qty", out var qty) &&
             Decimal.TryParse(qty.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var value)
             ? value

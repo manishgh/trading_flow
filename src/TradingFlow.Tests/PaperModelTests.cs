@@ -86,7 +86,7 @@ public sealed class PaperModelTests
             .ReturnsAsync(Array.Empty<Wishlist>());
         return new PaperModel(
             catalog,
-            new PaperEnvironmentService(catalog, credentialProvider),
+            new PaperEnvironmentService(catalog, credentialProvider, new Mock<IRawArchiveWriter>().Object),
             new RunConfigWriter(paths, new SimpleYamlReader(), AtomicFileArtifactWriter.Instance),
             paperJobs,
             AtomicFileArtifactWriter.Instance,

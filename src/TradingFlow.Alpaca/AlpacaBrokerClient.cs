@@ -1,6 +1,5 @@
 using System;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -8,23 +7,22 @@ using System.Threading.Tasks;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Logging;
 using TradingFlow.Engine.Execution;
+using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Alpaca;
 
 public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 {
-    private readonly HttpClient _httpClient;
+    private readonly AlpacaTradingRestClient _tradingClient;
     private readonly AlpacaOptions _options;
 
-    public AlpacaBrokerClient(HttpClient httpClient, AlpacaOptions options)
+    public AlpacaBrokerClient(
+        HttpClient httpClient,
+        AlpacaOptions options,
+        IRawArchiveWriter rawArchiveWriter)
     {
-        _httpClient = httpClient;
         _options = options;
-
-        _httpClient.BaseAddress = _options.BaseUrl;
-        _httpClient.DefaultRequestHeaders.Add("APCA-API-KEY-ID", _options.KeyId);
-        _httpClient.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", _options.SecretKey);
-        _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        _tradingClient = new AlpacaTradingRestClient(httpClient, options, rawArchiveWriter);
     }
 
     public async Task<string> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken)
@@ -95,18 +93,21 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
             }
 
             var json = JsonSerializer.Serialize(requestBody);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync("/v2/orders", content, cancellationToken);
-            var responseString = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/v2/orders") { Content = content };
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-submit-order",
+                correlationId: order.ClientOrderId,
+                cancellationToken: cancellationToken);
 
             if (!response.IsSuccessStatusCode)
             {
-                throw new Exception($"Alpaca API Error: {response.StatusCode} - {responseString}");
+                throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("order submission", response));
             }
 
-            using var doc = JsonDocument.Parse(responseString);
-            return doc.RootElement.GetProperty("id").GetString() ?? Guid.NewGuid().ToString();
+            using var doc = JsonDocument.Parse(response.Payload);
+            return RequireOrderId(doc.RootElement, response, "order submission");
         });
     }
 
@@ -114,7 +115,12 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
     {
         return await ApiProfiler.ProfileAsync("Alpaca", $"/v2/orders/{orderId}", "DELETE", async () =>
         {
-            var response = await _httpClient.DeleteAsync($"/v2/orders/{orderId}", cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Delete, $"/v2/orders/{Uri.EscapeDataString(orderId)}");
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-cancel-order",
+                providerRecordId: orderId,
+                cancellationToken: cancellationToken);
             return response.IsSuccessStatusCode;
         });
     }
@@ -123,7 +129,11 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
     {
         return await ApiProfiler.ProfileAsync("Alpaca", "/v2/orders", "DELETE", async () =>
         {
-            var response = await _httpClient.DeleteAsync("/v2/orders", cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Delete, "/v2/orders");
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-cancel-all-orders",
+                cancellationToken: cancellationToken);
             return response.IsSuccessStatusCode;
         });
     }
@@ -160,14 +170,17 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
                 Content = content
             };
 
-            var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
+            var response = await _tradingClient.SendAsync(
+                httpRequest,
+                "broker-modify-order",
+                providerRecordId: orderId,
+                cancellationToken: cancellationToken);
             if (response.IsSuccessStatusCode)
             {
                 return true;
             }
 
-            var responseString = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new Exception($"Alpaca API Error (ModifyOrderAsync): {response.StatusCode} - {responseString}");
+            throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("order modification", response));
         });
     }
 
@@ -194,18 +207,21 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
             };
 
             var json = JsonSerializer.Serialize(requestBody);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync("/v2/orders", content, cancellationToken);
-            var responseString = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/v2/orders") { Content = content };
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-submit-exit-order",
+                correlationId: ticker.ToUpperInvariant(),
+                cancellationToken: cancellationToken);
 
             if (!response.IsSuccessStatusCode)
             {
-                throw new Exception($"Alpaca API Error (SubmitExitOrdersAsync): {response.StatusCode} - {responseString}");
+                throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("exit-order submission", response));
             }
 
-            using var doc = JsonDocument.Parse(responseString);
-            var id = doc.RootElement.GetProperty("id").GetString() ?? Guid.NewGuid().ToString();
+            using var doc = JsonDocument.Parse(response.Payload);
+            var id = RequireOrderId(doc.RootElement, response, "exit-order submission");
 
             // OCO is submitted as one parent order which creates two legs. We just return the parent ID.
             return new[] { id };
@@ -216,14 +232,17 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
     {
         return await ApiProfiler.ProfileAsync("Alpaca", "/v2/orders", "GET", async () =>
         {
-            var response = await _httpClient.GetAsync("/v2/orders?status=open", cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/v2/orders?status=open");
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-open-orders",
+                cancellationToken: cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return (System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>)Array.Empty<ActiveBrokerOrder>();
+                throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("open-order query", response));
             }
 
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-            using var doc = JsonDocument.Parse(json);
+            using var doc = JsonDocument.Parse(response.Payload);
 
             var orders = new System.Collections.Generic.List<ActiveBrokerOrder>();
             foreach (var element in doc.RootElement.EnumerateArray())
@@ -266,14 +285,17 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
     {
         return await ApiProfiler.ProfileAsync("Alpaca", "/v2/positions", "GET", async () =>
         {
-            var response = await _httpClient.GetAsync("/v2/positions", cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/v2/positions");
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-open-positions",
+                cancellationToken: cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return (System.Collections.Generic.IReadOnlyList<BrokerPosition>)Array.Empty<BrokerPosition>();
+                throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("open-position query", response));
             }
 
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-            using var doc = JsonDocument.Parse(json);
+            using var doc = JsonDocument.Parse(response.Payload);
 
             var positions = new System.Collections.Generic.List<BrokerPosition>();
             foreach (var element in doc.RootElement.EnumerateArray())
@@ -308,7 +330,13 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
     {
         return await ApiProfiler.ProfileAsync("Alpaca", $"/v2/positions/{ticker}", "DELETE", async () =>
         {
-            var response = await _httpClient.DeleteAsync($"/v2/positions/{ticker.ToUpperInvariant()}", cancellationToken);
+            var symbol = Uri.EscapeDataString(ticker.ToUpperInvariant());
+            using var request = new HttpRequestMessage(HttpMethod.Delete, $"/v2/positions/{symbol}");
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-close-position",
+                correlationId: ticker.ToUpperInvariant(),
+                cancellationToken: cancellationToken);
             return response.IsSuccessStatusCode;
         });
     }
@@ -323,13 +351,35 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
         return await ApiProfiler.ProfileAsync("Alpaca", $"/v2/positions/{ticker}?qty={quantity}", "DELETE", async () =>
         {
             var symbol = Uri.EscapeDataString(ticker.ToUpperInvariant());
-            var response = await _httpClient.DeleteAsync($"/v2/positions/{symbol}?qty={quantity}", cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Delete, $"/v2/positions/{symbol}?qty={quantity}");
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-close-position-partial",
+                correlationId: ticker.ToUpperInvariant(),
+                cancellationToken: cancellationToken);
             return response.IsSuccessStatusCode;
         });
     }
 
     public void Dispose()
     {
-        _httpClient.Dispose();
+        _tradingClient.Dispose();
+    }
+
+    private static string RequireOrderId(
+        JsonElement root,
+        ArchivedAlpacaResponse response,
+        string operation)
+    {
+        if (root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("id", out var id) &&
+            id.ValueKind == JsonValueKind.String &&
+            !String.IsNullOrWhiteSpace(id.GetString()))
+        {
+            return id.GetString()!;
+        }
+
+        throw new InvalidOperationException(
+            $"Alpaca {operation} returned no order id. RawArchiveId={response.Archive.Manifest.ArchiveId}.");
     }
 }
