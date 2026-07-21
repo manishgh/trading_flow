@@ -244,6 +244,11 @@ violations)" becomes the Appendix-B Phase-2→3 evidence gate. Existing task #20
 | Q6 | Anthropic API key + budget for Stage-2 scorer (defaults: 500 articles/day, $10/day cap) | S10 start | OPEN |
 | D4 | Host choice (Linux VPS vs Windows service) | S11 | DEFERRED by design |
 
+**Q4 resolution (2026-07-21):** retain the eToro client source code, but keep it
+dormant. Paper/live production composition MUST NOT register eToro services, load
+eToro credentials, call eToro startup checks, or route orders through eToro. S3 adds
+an automated composition test for this boundary.
+
 ## 7. Status ledger (updated at every check-in)
 
 | Phase | Status | Commit | Notes |
