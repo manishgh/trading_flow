@@ -162,7 +162,12 @@ public static class ProductionParameterRegistry
             Decimal("swga_close_range_pct", 25m, 10m, 50m, ProductionParameterUnit.Percent, "SWG-06"),
             Decimal("swga_min_rvol", 2.0m, 1.2m, 5m, ProductionParameterUnit.Ratio, "SWG-06"),
             Decimal("swga_min_confirm", 60m, 40m, 90m, ProductionParameterUnit.Score, "SWG-06"),
-            TimeWindow("swga_entry_window", new ProductionTimeWindow(new TimeOnly(9, 45), new TimeOnly(10, 30)), "SWG-06"),
+            TimeWindow(
+                "swga_entry_window",
+                new ProductionTimeWindow(new TimeOnly(9, 45), new TimeOnly(10, 30)),
+                new TimeOnly(9, 30),
+                new TimeOnly(16, 0),
+                "SWG-06"),
             Decimal("swga_max_entry_gap_atr", 1.0m, 0.25m, 2.0m, ProductionParameterUnit.Ratio, "SWG-06"),
             Decimal("swga_stop_atr_mult", 1.5m, 0.5m, 3.0m, ProductionParameterUnit.Ratio, "SWG-06"),
             Decimal("swga_target_r", 2.0m, 1.0m, 5.0m, ProductionParameterUnit.Ratio, "SWG-06"),
@@ -250,7 +255,7 @@ public static class ProductionParameterRegistry
             null,
             ProductionParameterUnit.None,
             specificationReference,
-            allowedValues);
+            Array.AsReadOnly(allowedValues.ToArray()));
 
     private static ProductionParameterDefinition Time(
         string name,
@@ -270,14 +275,16 @@ public static class ProductionParameterRegistry
     private static ProductionParameterDefinition TimeWindow(
         string name,
         ProductionTimeWindow defaultValue,
+        TimeOnly minimum,
+        TimeOnly maximum,
         string specificationReference) =>
         new(
             name,
             ProductionParameterKind.TimeWindow,
             defaultValue,
-            null,
-            null,
-            ProductionParameterUnit.None,
+            minimum.Hour * 60m + minimum.Minute,
+            maximum.Hour * 60m + maximum.Minute,
+            ProductionParameterUnit.Minutes,
             specificationReference);
 
     private static ProductionParameterDefinition StringList(
@@ -287,7 +294,7 @@ public static class ProductionParameterRegistry
         new(
             name,
             ProductionParameterKind.StringList,
-            defaultValue,
+            Array.AsReadOnly(defaultValue.ToArray()),
             null,
             null,
             ProductionParameterUnit.None,
