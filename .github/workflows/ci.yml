@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test (.NET 10)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install Android workload
+        run: dotnet workload install maui-android --skip-manifest-update
+
+      - name: Restore
+        run: dotnet restore TradingFlow.sln
+
+      - name: Build with warnings as errors
+        run: dotnet build TradingFlow.sln --configuration Release --no-restore --nologo
+
+      - name: Test
+        run: dotnet test TradingFlow.sln --configuration Release --no-build --nologo
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan changed content
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
