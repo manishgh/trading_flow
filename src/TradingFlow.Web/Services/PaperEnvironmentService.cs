@@ -1,4 +1,6 @@
 using System.Text.Json;
+using TradingFlow.Alpaca;
+using TradingFlow.Engine.Configuration;
 using TradingFlow.Web.Models;
 
 namespace TradingFlow.Web.Services;
@@ -34,7 +36,10 @@ public sealed class PaperEnvironmentService
     private static async Task<IReadOnlyDictionary<string, object?>> RunAlpacaReadOnlyCheckAsync(AlpacaCredentialProvider credentials, CancellationToken cancellationToken)
     {
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        using var client = new HttpClient { BaseAddress = new Uri("https://paper-api.alpaca.markets") };
+        using var client = new HttpClient
+        {
+            BaseAddress = AlpacaEndpointResolver.Resolve(ProductionProfile.Paper).TradingRest
+        };
         client.DefaultRequestHeaders.Add("APCA-API-KEY-ID", credentials.KeyId);
         client.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", credentials.SecretKey);
 

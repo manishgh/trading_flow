@@ -8,7 +8,7 @@ public class AlpacaMarketDataProviderTests
     [Fact]
     public void ResolveMarketDataStreamUrl_DefaultsToSip()
     {
-        var options = AlpacaOptions.CreateDefault();
+        var options = AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper);
 
         Assert.Equal("sip", options.ResolveMarketDataFeed());
         Assert.Equal(
@@ -19,7 +19,7 @@ public class AlpacaMarketDataProviderTests
     [Fact]
     public void ResolveMarketDataStreamUrl_RejectsIexUnlessFallbackIsExplicit()
     {
-        var options = AlpacaOptions.CreateDefault() with { MarketDataFeed = "iex" };
+        var options = AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with { MarketDataFeed = "iex" };
 
         var exception = Assert.Throws<InvalidOperationException>(options.ResolveMarketDataStreamUrl);
 
@@ -29,7 +29,7 @@ public class AlpacaMarketDataProviderTests
     [Fact]
     public void ResolveMarketDataStreamUrl_AllowsExplicitDevelopmentIexFallback()
     {
-        var options = AlpacaOptions.CreateDefault() with
+        var options = AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
         {
             MarketDataFeed = "IEX",
             AllowIexFallback = true
@@ -44,7 +44,7 @@ public class AlpacaMarketDataProviderTests
     [Fact]
     public void ResolveMarketDataFeed_RejectsUnknownFeed()
     {
-        var options = AlpacaOptions.CreateDefault() with { MarketDataFeed = "unknown" };
+        var options = AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with { MarketDataFeed = "unknown" };
 
         Assert.Throws<ArgumentException>(options.ResolveMarketDataFeed);
     }
@@ -75,7 +75,7 @@ public class AlpacaMarketDataProviderTests
         using var httpClient = new HttpClient(handler);
         var provider = new AlpacaMarketDataProvider(
             httpClient,
-            AlpacaOptions.CreateDefault() with
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
                 SecretKey = "test-secret",

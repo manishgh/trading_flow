@@ -51,7 +51,7 @@ public sealed class AlpacaNewsProviderTests
         var analyzer = new DeterministicSentimentAnalyzer();
         var provider = new AlpacaNewsProvider(
             new HttpClient(handler),
-            AlpacaOptions.CreateDefault() with { KeyId = "key", SecretKey = "secret" },
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with { KeyId = "key", SecretKey = "secret" },
             sentimentAnalyzer: analyzer);
 
         var beforeFetch = DateTimeOffset.UtcNow;
@@ -96,7 +96,7 @@ public sealed class AlpacaNewsProviderTests
         var analyzer = new DeterministicSentimentAnalyzer();
         var provider = new AlpacaNewsProvider(
             new HttpClient(handler),
-            AlpacaOptions.CreateDefault() with { KeyId = "key", SecretKey = "secret" },
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with { KeyId = "key", SecretKey = "secret" },
             sentimentAnalyzer: analyzer);
 
         await provider.GetCatalystsAsync("POET", DateTimeOffset.UtcNow.AddHours(-2), DateTimeOffset.UtcNow, CancellationToken.None);
@@ -127,7 +127,7 @@ public sealed class AlpacaNewsProviderTests
         var analyzer = new DeterministicSentimentAnalyzer();
         var provider = new AlpacaNewsProvider(
             new HttpClient(handler),
-            AlpacaOptions.CreateDefault() with { KeyId = "key", SecretKey = "secret" },
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with { KeyId = "key", SecretKey = "secret" },
             sentimentAnalyzer: analyzer);
 
         var poet = await provider.GetCatalystsAsync("POET", DateTimeOffset.UtcNow.AddHours(-2), DateTimeOffset.UtcNow, CancellationToken.None);

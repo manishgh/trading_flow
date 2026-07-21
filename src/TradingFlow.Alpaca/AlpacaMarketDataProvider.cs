@@ -26,7 +26,7 @@ public sealed class AlpacaMarketDataProvider : IMarketDataProvider
         _httpClient = httpClient;
         _options = options;
         _marketDataFeed = options.ResolveMarketDataFeed();
-        _httpClient.BaseAddress = new Uri("https://data.alpaca.markets");
+        _httpClient.BaseAddress = AlpacaEndpointResolver.Resolve(_options.Profile).MarketDataRest;
         _httpClient.DefaultRequestHeaders.Add("APCA-API-KEY-ID", _options.KeyId);
         _httpClient.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", _options.SecretKey);
         logger?.LogInformation("Alpaca REST market data feed configured as {MarketDataFeed}.", _marketDataFeed);

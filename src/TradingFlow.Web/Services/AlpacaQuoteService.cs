@@ -70,7 +70,12 @@ public sealed class AlpacaQuoteService
 
         try
         {
-            using var client = new HttpClient { BaseAddress = new Uri("https://data.alpaca.markets") };
+            using var client = new HttpClient
+            {
+                BaseAddress = TradingFlow.Alpaca.AlpacaEndpointResolver
+                    .Resolve(TradingFlow.Engine.Configuration.ProductionProfile.Paper)
+                    .MarketDataRest
+            };
             client.DefaultRequestHeaders.Add("APCA-API-KEY-ID", credentials.KeyId);
             client.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", credentials.SecretKey);
 

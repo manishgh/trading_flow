@@ -13,7 +13,7 @@ public class AlpacaBrokerClientTests
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
-            AlpacaOptions.CreateDefault() with
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
                 SecretKey = "test-secret"
@@ -36,7 +36,7 @@ public class AlpacaBrokerClientTests
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
-            AlpacaOptions.CreateDefault() with
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
                 SecretKey = "test-secret"
@@ -60,7 +60,7 @@ public class AlpacaBrokerClientTests
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
-            AlpacaOptions.CreateDefault() with
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
                 SecretKey = "test-secret"

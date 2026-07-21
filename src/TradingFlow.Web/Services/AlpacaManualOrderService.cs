@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using TradingFlow.Alpaca;
+using TradingFlow.Engine.Configuration;
 
 namespace TradingFlow.Web.Services;
 
@@ -88,7 +90,10 @@ public sealed class AlpacaManualOrderService
 
     private HttpClient CreateClient()
     {
-        var client = new HttpClient { BaseAddress = new Uri("https://paper-api.alpaca.markets") };
+        var client = new HttpClient
+        {
+            BaseAddress = AlpacaEndpointResolver.Resolve(ProductionProfile.Paper).TradingRest
+        };
         client.DefaultRequestHeaders.Add("APCA-API-KEY-ID", credentials.KeyId);
         client.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", credentials.SecretKey);
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));

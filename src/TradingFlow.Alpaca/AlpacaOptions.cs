@@ -1,9 +1,10 @@
 using System;
+using TradingFlow.Engine.Configuration;
 
 namespace TradingFlow.Alpaca;
 
 public sealed record AlpacaOptions(
-    Uri BaseUrl,
+    ProductionProfile Profile,
     string KeyId,
     string SecretKey,
     string TimeInForce = "gtc",
@@ -12,12 +13,12 @@ public sealed record AlpacaOptions(
     string MarketDataFeed = "sip",
     bool AllowIexFallback = false)
 {
-    private static readonly Uri MarketDataStreamBaseUrl = new("wss://stream.data.alpaca.markets/v2/");
+    public Uri BaseUrl => AlpacaEndpointResolver.Resolve(Profile).TradingRest;
 
-    public static AlpacaOptions CreateDefault()
+    public static AlpacaOptions Create(ProductionProfile profile)
     {
         return new AlpacaOptions(
-            new Uri("https://paper-api.alpaca.markets", UriKind.Absolute),
+            profile,
             string.Empty, // To be configured
             string.Empty, // To be configured
             "gtc",
@@ -52,6 +53,8 @@ public sealed record AlpacaOptions(
 
     public Uri ResolveMarketDataStreamUrl()
     {
-        return new Uri(MarketDataStreamBaseUrl, ResolveMarketDataFeed());
+        return new Uri(AlpacaEndpointResolver.Resolve(Profile).MarketDataStreamBase, ResolveMarketDataFeed());
     }
+
+    public Uri ResolveTradingStreamUrl() => AlpacaEndpointResolver.Resolve(Profile).TradingStream;
 }

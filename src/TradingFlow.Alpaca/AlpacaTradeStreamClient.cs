@@ -20,13 +20,7 @@ public sealed class AlpacaTradeStreamClient : IDisposable
     {
         _options = options;
         
-        // Use paper stream URL if base URL contains paper
-        var isPaper = _options.BaseUrl.ToString().Contains("paper");
-        var wsEndpoint = isPaper 
-            ? "wss://paper-api.alpaca.markets/stream" 
-            : "wss://api.alpaca.markets/stream";
-            
-        _streamUrl = new Uri(wsEndpoint);
+        _streamUrl = _options.ResolveTradingStreamUrl();
     }
 
     public async Task ConnectAsync(CancellationToken cancellationToken)

@@ -41,7 +41,7 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         _sentimentAnalyzer = sentimentAnalyzer ?? new VaderSentimentAnalyzer();
         _logger = logger ?? NullLogger<AlpacaNewsProvider>.Instance;
         _maxArticlesPerTicker = Math.Max(1, maxArticlesPerTicker);
-        _httpClient.BaseAddress ??= new Uri("https://data.alpaca.markets");
+        _httpClient.BaseAddress ??= AlpacaEndpointResolver.Resolve(_options.Profile).MarketDataRest;
         SetHeader("APCA-API-KEY-ID", _options.KeyId);
         SetHeader("APCA-API-SECRET-KEY", _options.SecretKey);
     }

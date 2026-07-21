@@ -33,7 +33,7 @@ builder.Services.AddSingleton<IMarketDataProvider>(sp =>
     var credentials = sp.GetRequiredService<WarmupCredentialResolver>();
     return new AlpacaMarketDataProvider(
         new HttpClient(),
-        AlpacaOptions.CreateDefault() with
+        AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
         {
             KeyId = credentials.Resolve("Alpaca", "KeyId", "ALPACA_KEY_ID"),
             SecretKey = credentials.Resolve("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),
@@ -47,7 +47,7 @@ builder.Services.AddSingleton<ICatalystProvider>(sp =>
     var credentials = sp.GetRequiredService<WarmupCredentialResolver>();
     return new AlpacaNewsProvider(
         new HttpClient(),
-        AlpacaOptions.CreateDefault() with
+        AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
         {
             KeyId = credentials.Resolve("Alpaca", "KeyId", "ALPACA_KEY_ID"),
             SecretKey = credentials.Resolve("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),

@@ -47,7 +47,7 @@ public sealed class PaperRuntimeFactory
             "csv" => new TradingFlow.Data.Csv.CsvMarketDataProvider(run.NormalizedRoot),
             "alpaca" => new TradingFlow.Alpaca.AlpacaMarketDataProvider(
                 new HttpClient(),
-                TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
+                TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
                 {
                     KeyId = alpacaCredentials.KeyId,
                     SecretKey = alpacaCredentials.SecretKey,
@@ -75,7 +75,7 @@ public sealed class PaperRuntimeFactory
         {
             "alpaca" => new TradingFlow.Alpaca.AlpacaNewsProvider(
                 new HttpClient(),
-                TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
+                TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
                 {
                     KeyId = alpacaCredentials.KeyId,
                     SecretKey = alpacaCredentials.SecretKey,
@@ -101,7 +101,7 @@ public sealed class PaperRuntimeFactory
         {
             "alpaca" => new TradingFlow.Alpaca.AlpacaBrokerClient(
                 new HttpClient(),
-                TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
+                TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
                 {
                     KeyId = alpacaCredentials.KeyId,
                     SecretKey = alpacaCredentials.SecretKey,

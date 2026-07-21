@@ -26,7 +26,7 @@ public sealed class StrategyEvaluationService
         var runConfig = yamlReader.ReadBacktestRun(configPath);
         var provider = new AlpacaMarketDataProvider(
             new HttpClient(),
-            AlpacaOptions.CreateDefault() with
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = alpacaCredentials.KeyId,
                 SecretKey = alpacaCredentials.SecretKey,

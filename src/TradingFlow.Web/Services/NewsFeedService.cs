@@ -214,7 +214,7 @@ public sealed class NewsFeedService : BackgroundService
 
         var provider = new AlpacaNewsProvider(
             new HttpClient(),
-            AlpacaOptions.CreateDefault() with
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = alpacaCredentials.KeyId,
                 SecretKey = alpacaCredentials.SecretKey

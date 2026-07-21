@@ -100,7 +100,7 @@ public class AlpacaCandlePipelineIntegrationTests(ITestOutputHelper output)
             return null;
         }
 
-        return AlpacaOptions.CreateDefault() with
+        return AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
         {
             KeyId = keyId,
             SecretKey = secretKey,

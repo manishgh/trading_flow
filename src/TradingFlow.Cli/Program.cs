@@ -23,7 +23,7 @@ if (args.Length > 0 && args[0].Equals("alpaca-stream-smoke", StringComparison.Or
             "Stream smoke timeout must be between 1 and 120 seconds.");
     }
 
-    var options = TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
+    var options = TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
     {
         KeyId = ResolveSecret("Alpaca", "KeyId", "ALPACA_KEY_ID"),
         SecretKey = ResolveSecret("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),
@@ -674,7 +674,7 @@ static async Task<object> BuildCatalystTrendReportAsync(
     string dailyTimeframe,
     CancellationToken cancellationToken)
 {
-    var options = TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
+    var options = TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
     {
         KeyId = ResolveSecret("Alpaca", "KeyId", "ALPACA_KEY_ID"),
         SecretKey = ResolveSecret("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),
@@ -1036,7 +1036,7 @@ static int ResolveWarmupDataDays(TradingFlow.Domain.Backtesting.BacktestRunConfi
 
 static TradingFlow.Alpaca.AlpacaOptions ResolveAlpacaOptions(TradingFlow.Domain.Backtesting.BacktestRunConfig run)
 {
-    return TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
+    return TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
     {
         KeyId = ResolveSecret("Alpaca", "KeyId", "ALPACA_KEY_ID"),
         SecretKey = ResolveSecret("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),

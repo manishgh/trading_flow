@@ -114,7 +114,7 @@ public sealed partial class BacktestRunner
 
     private static TradingFlow.Alpaca.AlpacaOptions ResolveAlpacaOptions(BacktestRunConfig run)
     {
-        return TradingFlow.Alpaca.AlpacaOptions.CreateDefault() with
+        return TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
         {
             KeyId = ResolveSecret("Alpaca", "KeyId", "ALPACA_KEY_ID"),
             SecretKey = ResolveSecret("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),

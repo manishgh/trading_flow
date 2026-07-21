@@ -94,7 +94,7 @@ public sealed class WishlistObserverService : BackgroundService
         var start = end.Subtract(LookbackWindow);
         var provider = new AlpacaMarketDataProvider(
             new HttpClient(),
-            AlpacaOptions.CreateDefault() with
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = alpacaCredentials.KeyId,
                 SecretKey = alpacaCredentials.SecretKey,
