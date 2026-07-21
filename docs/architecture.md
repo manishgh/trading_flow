@@ -168,6 +168,19 @@ append-only events. Mutable paper-order rows remain UI projections and must not 
 used to infer terminal broker state. In particular, absence from an open-order
 snapshot is not evidence of fill, cancellation, rejection, or expiry.
 
+Every broker position is also subject to the EXE-09 protective-order invariant.
+Startup and periodic account reconciliation, plus an immediate REST cross-check after
+each partial or complete fill, flatten Alpaca's nested order graph and verify that the
+entire position quantity is covered by an opposite-side broker-resting stop. Missing
+coverage is repaired through the same write-ahead submission API used by entries, but
+as a risk-reducing `BACKSTOP` GTC stop that bypasses entry admission blocks. The stop
+uses persisted strategy structure when available, otherwise a point-in-time daily ATR
+fallback computed only from earlier bars. Broker repair never silently clears the
+incident: missing or excess protection is journaled as a reconciliation mismatch and
+requires operator acknowledgement. A temporary backstop is cancelled only after the
+strategy/bracket stop is active and covers the full position; foreign or manual stops
+are never cancelled by this cleanup path.
+
 Ticker locks prevent multiple workers from processing the same ticker concurrently. Order state lets paper jobs recover after a web/worker restart.
 
 ## Candle Event Pipeline
