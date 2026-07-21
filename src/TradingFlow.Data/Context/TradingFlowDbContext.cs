@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using TradingFlow.Domain.Locking;
 using TradingFlow.Domain.Orders;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Wishlists;
 
 namespace TradingFlow.Data.Context;
@@ -20,9 +21,20 @@ public sealed class TradingFlowDbContext : DbContext
     public DbSet<Wishlist> Wishlists => Set<Wishlist>();
     public DbSet<WishlistItem> WishlistItems => Set<WishlistItem>();
     public DbSet<WishlistSignal> WishlistSignals => Set<WishlistSignal>();
+    public DbSet<ProductionRun> ProductionRuns => Set<ProductionRun>();
+    public DbSet<OrderIntentRecord> OrderIntents => Set<OrderIntentRecord>();
+    public DbSet<OrderEventRecord> OrderEvents => Set<OrderEventRecord>();
+    public DbSet<GateEvaluationRecord> GateEvaluations => Set<GateEvaluationRecord>();
+    public DbSet<RiskEventRecord> RiskEvents => Set<RiskEventRecord>();
+    public DbSet<KillSwitchEventRecord> KillSwitchEvents => Set<KillSwitchEventRecord>();
+    public DbSet<ReconciliationRecord> Reconciliations => Set<ReconciliationRecord>();
+    public DbSet<CandidateRecord> Candidates => Set<CandidateRecord>();
+    public DbSet<CatalystResultRecord> CatalystResults => Set<CatalystResultRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureProductionPersistence();
+
         modelBuilder.Entity<TickerLockEntity>(entity =>
         {
             entity.HasKey(e => e.Ticker);

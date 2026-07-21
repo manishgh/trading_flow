@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Backtesting.StrategyEvaluation;
 using TradingFlow.Data.Candles;
+using TradingFlow.Data.Context;
 using TradingFlow.Data.News;
 using TradingFlow.Data.Wishlists;
 using TradingFlow.Engine.Abstractions;
@@ -72,6 +73,7 @@ var dbPath = Path.Combine(dataRoot, "tradingflow.db");
 Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
 builder.Services.AddDbContextFactory<TradingFlow.Data.Context.TradingFlowDbContext>(options =>
     Microsoft.EntityFrameworkCore.SqliteDbContextOptionsBuilderExtensions.UseSqlite(options, $"Data Source={dbPath}"));
+builder.Services.AddSingleton<TradingFlowDatabaseInitializer>();
 
 builder.Services.AddSingleton<TradingFlow.Domain.Locking.ITickerLockService, TradingFlow.Data.Locking.SqliteTickerLockService>();
 builder.Services.AddSingleton<TradingFlow.Domain.Orders.IOrderStateRepository, TradingFlow.Data.Orders.SqliteOrderStateRepository>();
@@ -97,12 +99,9 @@ TradingFlow.Domain.Logging.ApiProfiler.ConfigureMetricSink(metric =>
 
 using (var scope = app.Services.CreateScope())
 {
-    var dbFactory = scope.ServiceProvider.GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<TradingFlow.Data.Context.TradingFlowDbContext>>();
-    using var db = dbFactory.CreateDbContext();
-    db.Database.EnsureCreated();
-    EnsureOrderSchema(db);
-    EnsureNewsSchema(db);
-    EnsureWishlistSchema(db);
+    var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TradingFlowDbContext>>();
+    await using var db = await dbFactory.CreateDbContextAsync();
+    await scope.ServiceProvider.GetRequiredService<TradingFlowDatabaseInitializer>().InitializeAsync(db);
 }
 
 app.Services.GetRequiredService<PaperJobService>().InitializeAsync().GetAwaiter().GetResult();
@@ -345,204 +344,3 @@ static IEnumerable<string> SplitTickerDisplay(string tickerDisplay)
         .Select(ticker => ticker.Trim().ToUpperInvariant())
         .Where(ticker => ticker.Length > 0);
 }
-static void EnsureOrderSchema(TradingFlow.Data.Context.TradingFlowDbContext db)
-{
-    var connection = db.Database.GetDbConnection();
-    var shouldClose = connection.State == System.Data.ConnectionState.Closed;
-    if (shouldClose)
-    {
-        connection.Open();
-    }
-
-    try
-    {
-        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        using (var command = connection.CreateCommand())
-        {
-            command.CommandText = "PRAGMA table_info(Orders);";
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                columns.Add(reader.GetString(1));
-            }
-        }
-
-        ExecuteSqlIfMissing(columns, "RunName", "ALTER TABLE Orders ADD COLUMN RunName TEXT NOT NULL DEFAULT '';");
-        ExecuteSqlIfMissing(columns, "ClientOrderId", "ALTER TABLE Orders ADD COLUMN ClientOrderId TEXT NOT NULL DEFAULT '';");
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_Orders_RunName ON Orders (RunName);");
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_Orders_ClientOrderId ON Orders (ClientOrderId);");
-    }
-    finally
-    {
-        if (shouldClose)
-        {
-            connection.Close();
-        }
-    }
-
-    void ExecuteSqlIfMissing(HashSet<string> columns, string column, string sql)
-    {
-        if (!columns.Contains(column))
-        {
-            ExecuteSql(sql);
-            columns.Add(column);
-        }
-    }
-
-    void ExecuteSql(string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
-    }
-}
-
-static void EnsureNewsSchema(TradingFlow.Data.Context.TradingFlowDbContext db)
-{
-    var connection = db.Database.GetDbConnection();
-    var shouldClose = connection.State == System.Data.ConnectionState.Closed;
-    if (shouldClose)
-    {
-        connection.Open();
-    }
-
-    try
-    {
-        ExecuteSql("""
-            CREATE TABLE IF NOT EXISTS NewsItems (
-                Id TEXT NOT NULL CONSTRAINT PK_NewsItems PRIMARY KEY,
-                Ticker TEXT NOT NULL,
-                Timestamp TEXT NOT NULL,
-                Headline TEXT NOT NULL,
-                SentimentScore TEXT NOT NULL,
-                Provider TEXT NOT NULL,
-                Source TEXT NULL,
-                Url TEXT NULL,
-                Summary TEXT NULL,
-                IngestedAt TEXT NOT NULL
-            );
-            """);
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_NewsItems_Timestamp ON NewsItems (Timestamp);");
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_NewsItems_Ticker ON NewsItems (Ticker);");
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_NewsItems_Provider ON NewsItems (Provider);");
-    }
-    finally
-    {
-        if (shouldClose)
-        {
-            connection.Close();
-        }
-    }
-
-    void ExecuteSql(string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
-    }
-}
-static void EnsureWishlistSchema(TradingFlow.Data.Context.TradingFlowDbContext db)
-{
-    var connection = db.Database.GetDbConnection();
-    var shouldClose = connection.State == System.Data.ConnectionState.Closed;
-    if (shouldClose)
-    {
-        connection.Open();
-    }
-
-    try
-    {
-        ExecuteSql("""
-            CREATE TABLE IF NOT EXISTS Wishlists (
-                Id TEXT NOT NULL CONSTRAINT PK_Wishlists PRIMARY KEY,
-                Name TEXT NOT NULL,
-                Description TEXT NULL,
-                IsDefault INTEGER NOT NULL,
-                IncludeExtendedHours INTEGER NOT NULL,
-                IsObserved INTEGER NOT NULL DEFAULT 0,
-                CreatedAtUtc TEXT NOT NULL,
-                UpdatedAtUtc TEXT NOT NULL
-            );
-            """);
-        ExecuteSql("CREATE UNIQUE INDEX IF NOT EXISTS IX_Wishlists_Name ON Wishlists (Name);");
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_Wishlists_IsDefault ON Wishlists (IsDefault);");
-        EnsureColumn("Wishlists", "IsObserved", "INTEGER NOT NULL DEFAULT 0");
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_Wishlists_IsObserved ON Wishlists (IsObserved);");
-
-        ExecuteSql("""
-            CREATE TABLE IF NOT EXISTS WishlistItems (
-                Id TEXT NOT NULL CONSTRAINT PK_WishlistItems PRIMARY KEY,
-                WishlistId TEXT NOT NULL,
-                Ticker TEXT NOT NULL,
-                DisplayName TEXT NULL,
-                Notes TEXT NULL,
-                Active INTEGER NOT NULL,
-                AddedAtUtc TEXT NOT NULL,
-                CONSTRAINT FK_WishlistItems_Wishlists_WishlistId FOREIGN KEY (WishlistId) REFERENCES Wishlists (Id) ON DELETE CASCADE
-            );
-            """);
-        ExecuteSql("CREATE UNIQUE INDEX IF NOT EXISTS IX_WishlistItems_WishlistId_Ticker ON WishlistItems (WishlistId, Ticker);");
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_WishlistItems_Ticker ON WishlistItems (Ticker);");
-
-        ExecuteSql("""
-            CREATE TABLE IF NOT EXISTS WishlistSignals (
-                Id TEXT NOT NULL CONSTRAINT PK_WishlistSignals PRIMARY KEY,
-                WishlistId TEXT NOT NULL,
-                Ticker TEXT NOT NULL,
-                SignalType TEXT NOT NULL,
-                Severity TEXT NOT NULL,
-                DetectedAtUtc TEXT NOT NULL,
-                Price TEXT NOT NULL,
-                Reason TEXT NOT NULL,
-                SnapshotJson TEXT NOT NULL,
-                NewsHeadline TEXT NULL,
-                NewsUrl TEXT NULL,
-                NewsProvider TEXT NULL,
-                Acknowledged INTEGER NOT NULL,
-                CONSTRAINT FK_WishlistSignals_Wishlists_WishlistId FOREIGN KEY (WishlistId) REFERENCES Wishlists (Id) ON DELETE CASCADE
-            );
-            """);
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_WishlistSignals_WishlistId ON WishlistSignals (WishlistId);");
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_WishlistSignals_Ticker ON WishlistSignals (Ticker);");
-        EnsureColumn("WishlistSignals", "NewsHeadline", "TEXT NULL");
-        EnsureColumn("WishlistSignals", "NewsUrl", "TEXT NULL");
-        EnsureColumn("WishlistSignals", "NewsProvider", "TEXT NULL");
-        ExecuteSql("CREATE INDEX IF NOT EXISTS IX_WishlistSignals_DetectedAtUtc ON WishlistSignals (DetectedAtUtc);");
-    }
-    finally
-    {
-        if (shouldClose)
-        {
-            connection.Close();
-        }
-    }
-
-    void ExecuteSql(string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
-    }
-
-    void EnsureColumn(string tableName, string columnName, string definition)
-    {
-        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        using (var command = connection.CreateCommand())
-        {
-            command.CommandText = $"PRAGMA table_info({tableName});";
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                columns.Add(reader.GetString(1));
-            }
-        }
-
-        if (!columns.Contains(columnName))
-        {
-            ExecuteSql($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};");
-        }
-    }
-}
-
-
-
