@@ -125,6 +125,16 @@ public sealed partial class BacktestRunner
     private static string ResolveSecret(string section, string key, string environmentVariable)
     {
         var settingsPath = FindRepositoryFile(Path.Combine("src", "TradingFlow.Web", "appsettings.local.json"));
+        var environmentValue = Environment.GetEnvironmentVariable(environmentVariable);
+        return ResolveSecretValue(section, key, settingsPath, environmentValue);
+    }
+
+    private static string ResolveSecretValue(
+        string section,
+        string key,
+        string? settingsPath,
+        string? environmentValue)
+    {
         if (settingsPath is not null)
         {
             using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
@@ -140,12 +150,16 @@ public sealed partial class BacktestRunner
 
         }
 
-        return Environment.GetEnvironmentVariable(environmentVariable) ?? String.Empty;
+        return environmentValue ?? String.Empty;
     }
 
-    internal static string ResolveSecretForTesting(string section, string key, string environmentVariable)
+    internal static string ResolveSecretForTesting(
+        string section,
+        string key,
+        string? settingsPath,
+        string? environmentValue)
     {
-        return ResolveSecret(section, key, environmentVariable);
+        return ResolveSecretValue(section, key, settingsPath, environmentValue);
     }
 
     private static string? FindRepositoryFile(string relativePath)

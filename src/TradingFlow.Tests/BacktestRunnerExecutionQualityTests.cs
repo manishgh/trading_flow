@@ -46,38 +46,62 @@ public class BacktestRunnerExecutionQualityTests
     [Fact]
     public void ResolveSecretForTesting_LoadsLocalAlpacaSettings_WhenEnvironmentIsMissing()
     {
-        var previous = Environment.GetEnvironmentVariable("ALPACA_KEY_ID");
+        var settingsPath = CreateTemporaryAlpacaSettings("local-test-key");
         try
         {
-            Environment.SetEnvironmentVariable("ALPACA_KEY_ID", null);
+            var key = BacktestRunner.ResolveSecretForTesting("Alpaca", "KeyId", settingsPath, null);
 
-            var key = BacktestRunner.ResolveSecretForTesting("Alpaca", "KeyId", "ALPACA_KEY_ID");
-
-            Assert.False(String.IsNullOrWhiteSpace(key));
+            Assert.Equal("local-test-key", key);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("ALPACA_KEY_ID", previous);
+            File.Delete(settingsPath);
         }
     }
 
     [Fact]
     public void ResolveSecretForTesting_PrefersLocalAlpacaSettings_OverEnvironment()
     {
-        var previous = Environment.GetEnvironmentVariable("ALPACA_KEY_ID");
+        var settingsPath = CreateTemporaryAlpacaSettings("local-test-key");
         try
         {
-            Environment.SetEnvironmentVariable("ALPACA_KEY_ID", "bad-env-key");
+            var key = BacktestRunner.ResolveSecretForTesting(
+                "Alpaca",
+                "KeyId",
+                settingsPath,
+                "environment-test-key");
 
-            var key = BacktestRunner.ResolveSecretForTesting("Alpaca", "KeyId", "ALPACA_KEY_ID");
-
-            Assert.False(String.IsNullOrWhiteSpace(key));
-            Assert.NotEqual("bad-env-key", key);
+            Assert.Equal("local-test-key", key);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("ALPACA_KEY_ID", previous);
+            File.Delete(settingsPath);
         }
+    }
+
+    [Fact]
+    public void ResolveSecretForTesting_UsesEnvironment_WhenLocalSettingsAreUnavailable()
+    {
+        var key = BacktestRunner.ResolveSecretForTesting(
+            "Alpaca",
+            "KeyId",
+            settingsPath: null,
+            environmentValue: "environment-test-key");
+
+        Assert.Equal("environment-test-key", key);
+    }
+
+    private static string CreateTemporaryAlpacaSettings(string keyId)
+    {
+        var settingsPath = Path.Combine(Path.GetTempPath(), $"tradingflow-test-{Guid.NewGuid():N}.json");
+        File.WriteAllText(settingsPath, $$"""
+            {
+              "Alpaca": {
+                "KeyId": "{{keyId}}"
+              }
+            }
+            """);
+        return settingsPath;
     }
 
     [Fact]
@@ -400,4 +424,3 @@ public class BacktestRunnerExecutionQualityTests
             headline);
     }
 }
-
