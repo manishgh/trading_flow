@@ -2,9 +2,13 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using TradingFlow.Alpaca;
+using TradingFlow.Backtesting;
 using TradingFlow.Data.Context;
+using TradingFlow.Engine.Risk;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Wishlists;
+using TradingFlow.Web.Services;
 
 namespace TradingFlow.Tests;
 
@@ -119,6 +123,65 @@ public sealed class DatabaseMigrationTests
         Assert.Empty(defects);
     }
 
+    [Fact]
+    public async Task RelationalModel_DoesNotPersistBinaryFloatingPointNumbers()
+    {
+        await using var connection = await OpenInMemoryAsync();
+        await using var db = CreateContext(connection);
+
+        var defects = db.Model.GetEntityTypes()
+            .SelectMany(entity => entity.GetProperties().Select(property => (Entity: entity, Property: property)))
+            .Where(item => IsBinaryFloatingPoint(item.Property.ClrType))
+            .Select(item => $"{item.Entity.ClrType.Name}.{item.Property.Name}")
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Empty(defects);
+    }
+
+    [Fact]
+    public void PublicMoneyPathContracts_DoNotExposeBinaryFloatingPointNumbers()
+    {
+        var assemblies = new[]
+        {
+            typeof(OperationalRecord).Assembly,
+            typeof(RiskEngine).Assembly,
+            typeof(BacktestRunner).Assembly,
+            typeof(AlpacaBrokerClient).Assembly,
+            typeof(AlpacaManualOrderService).Assembly
+        };
+        var moneyTerms = new[]
+        {
+            "price", "cost", "fee", "profit", "loss", "pnl", "notional", "capital",
+            "amount", "buyingpower", "cash", "equity", "stop", "target", "fill",
+            "quantity", "units", "proceeds"
+        };
+        var defects = assemblies
+            .Distinct()
+            .SelectMany(assembly => assembly.GetTypes())
+            .Where(type => type.Namespace?.StartsWith("TradingFlow", StringComparison.Ordinal) == true)
+            .SelectMany(type =>
+                type.GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+                    .Where(property => ContainsMoneyTerm(property.Name, moneyTerms))
+                    .Select(property => (Name: $"{type.FullName}.{property.Name}", Type: property.PropertyType))
+                    .Concat(type.GetConstructors()
+                        .SelectMany(constructor => constructor.GetParameters())
+                        .Where(parameter => ContainsMoneyTerm(parameter.Name, moneyTerms))
+                        .Select(parameter => (Name: $"{type.FullName}.ctor({parameter.Name})", Type: parameter.ParameterType)))
+                    .Concat(type.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)
+                        .Where(method => !method.IsSpecialName)
+                        .SelectMany(method => method.GetParameters())
+                        .Where(parameter => ContainsMoneyTerm(parameter.Name, moneyTerms))
+                        .Select(parameter => (Name: $"{type.FullName}.{parameter.Member.Name}({parameter.Name})", Type: parameter.ParameterType))))
+            .Where(item => IsBinaryFloatingPoint(item.Type))
+            .Select(item => item.Name)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Empty(defects);
+    }
+
     private static TradingFlowDbContext CreateContext(SqliteConnection connection)
     {
         var options = new DbContextOptionsBuilder<TradingFlowDbContext>()
@@ -174,5 +237,14 @@ public sealed class DatabaseMigrationTests
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static bool ContainsMoneyTerm(string? value, IReadOnlyCollection<string> terms) =>
+        value is not null && terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsBinaryFloatingPoint(Type type)
+    {
+        var underlyingType = Nullable.GetUnderlyingType(type) ?? type;
+        return underlyingType == typeof(double) || underlyingType == typeof(float);
     }
 }
