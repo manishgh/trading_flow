@@ -182,7 +182,8 @@ public sealed class NewsFeedService : BackgroundService
 
         using var client = new FinvizClient(
             new HttpClient(),
-            FinvizOptions.CreateDefault() with { AuthToken = token });
+            FinvizOptions.CreateDefault() with { AuthToken = token },
+            runtimeFactory.RawArchiveWriter);
 
         var marketNews = await client.GetNewsExportAsync(1, cancellationToken);
         var stockNews = await client.GetNewsExportAsync(3, cancellationToken);

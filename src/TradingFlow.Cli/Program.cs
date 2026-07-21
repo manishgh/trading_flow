@@ -51,7 +51,7 @@ if (args.Length > 0 && args[0].Equals("optimize", StringComparison.OrdinalIgnore
         : throw new ArgumentException("Optimization config path required.");
 
     var reader = new SimpleYamlReader();
-    var runner = new BacktestRunner(reader);
+    var runner = new BacktestRunner(reader, rawArchiveWriter: CreateRawArchiveWriter());
     var optimizer = new StrategyOptimizer(reader, runner);
 
     var progress = new Progress<BacktestProgress>(update =>
@@ -493,7 +493,8 @@ if (runConfig.Mode.Equals("paper", StringComparison.OrdinalIgnoreCase) ||
         null,
         null,
         null,
-        Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRunner>.Instance);
+        Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRunner>.Instance,
+        rawArchiveWriter: CreateRawArchiveWriter());
 
     var strategies = runConfig.Strategies.Select(readerInstance.ReadStrategy).ToArray();
     await runner.RunAsync(runConfig, strategies, CancellationToken.None);
@@ -501,7 +502,7 @@ if (runConfig.Mode.Equals("paper", StringComparison.OrdinalIgnoreCase) ||
 }
 else
 {
-    var runner = new BacktestRunner(readerInstance);
+    var runner = new BacktestRunner(readerInstance, rawArchiveWriter: CreateRawArchiveWriter());
     var result = await runner.RunAsync(configPath, CancellationToken.None);
     Console.WriteLine(JsonSerializer.Serialize(new
     {
@@ -591,7 +592,8 @@ static TradingFlow.Engine.Abstractions.ICatalystProvider? CreateRawNewsProvider(
                 TradingFlow.Finviz.FinvizOptions.CreateDefault() with
                 {
                     AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? ""
-                })),
+                },
+                CreateRawArchiveWriter())),
         "none" => null,
         _ => throw new NotSupportedException($"Unsupported news provider: {run.News.ProviderName}")
     };
@@ -883,7 +885,8 @@ static TradingFlow.Engine.Abstractions.IMarketDataProvider CreateProvider(Tradin
                 TradingFlow.Finviz.FinvizOptions.CreateDefault() with
                 {
                     AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? ""
-                })),
+                },
+                CreateRawArchiveWriter())),
         _ => throw new NotSupportedException($"Unsupported market data provider: {run.Provider}")
     };
 }
@@ -1062,6 +1065,20 @@ static string ResolveSecret(string section, string key, string environmentVariab
     }
 
     return Environment.GetEnvironmentVariable(environmentVariable) ?? String.Empty;
+}
+
+static IRawArchiveWriter CreateRawArchiveWriter()
+{
+    var dataRoot = Environment.GetEnvironmentVariable("TRADINGFLOW_DATA_ROOT");
+    if (String.IsNullOrWhiteSpace(dataRoot))
+    {
+        var solutionPath = FindRepositoryFile("TradingFlow.sln")
+            ?? throw new InvalidOperationException(
+                "Cannot resolve the raw archive root. Set TRADINGFLOW_DATA_ROOT when running outside the repository.");
+        dataRoot = Path.Combine(Path.GetDirectoryName(solutionPath)!, "data");
+    }
+
+    return new FileSystemRawArchiveWriter(new RawArchiveOptions(Path.Combine(dataRoot, "raw")));
 }
 
 static string? FindRepositoryFile(string relativePath)

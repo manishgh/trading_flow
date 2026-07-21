@@ -21,7 +21,7 @@ public sealed partial class BacktestRunner
     // screens (price, volume, market cap, sector) so the pool is not hand-picked. Note: Finviz
     // returns a current screen with no as-of, so for historical backtests this carries delisting
     // survivorship at the candidate level; the no-lookahead screen still governs selection.
-    private static async Task<IReadOnlyList<string>> ResolveFinvizCandidatePoolAsync(
+    private async Task<IReadOnlyList<string>> ResolveFinvizCandidatePoolAsync(
         UniverseConfig universe,
         CancellationToken cancellationToken)
     {
@@ -37,7 +37,8 @@ public sealed partial class BacktestRunner
             TradingFlow.Finviz.FinvizOptions.CreateDefault() with
             {
                 AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? String.Empty
-            });
+            },
+            RequireRawArchiveWriter());
 
         var tickers = await client.GetScreenerTickersAsync(universe.CandidateScreenerQuery, cancellationToken);
         if (tickers.Count == 0)

@@ -26,9 +26,14 @@ public sealed record PreparedBacktestMarket(
     DateTimeOffset WindowStart,
     DateTimeOffset WindowEnd);
 
-public sealed partial class BacktestRunner(SimpleYamlReader yamlReader, IArtifactWriter? artifactWriter = null, ICandleStore? candleStore = null)
+public sealed partial class BacktestRunner(
+    SimpleYamlReader yamlReader,
+    IArtifactWriter? artifactWriter = null,
+    ICandleStore? candleStore = null,
+    IRawArchiveWriter? rawArchiveWriter = null)
 {
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
+    private readonly IRawArchiveWriter? _rawArchiveWriter = rawArchiveWriter;
     private readonly StrategyDecisionBrain _decisionBrain = new();
     private readonly StrategySessionClock _sessionClock = new();
     private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
@@ -1309,7 +1314,6 @@ internal sealed class StrategyCandidateDiagnostics(
             : trimmed;
     }
 }
-
 
 
 

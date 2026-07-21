@@ -23,7 +23,7 @@ namespace TradingFlow.Backtesting;
 // partial file for readability; behavior is identical to the inline version.
 public sealed partial class BacktestRunner
 {
-    private static ICatalystProvider? CreateNewsProvider(BacktestRunConfig run)
+    private ICatalystProvider? CreateNewsProvider(BacktestRunConfig run)
     {
         if (!run.News.Enabled) return null;
 
@@ -37,7 +37,8 @@ public sealed partial class BacktestRunner
             "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(
                 new TradingFlow.Finviz.FinvizClient(
                     new HttpClient(),
-                    TradingFlow.Finviz.FinvizOptions.CreateDefault() with { AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? "" }
+                    TradingFlow.Finviz.FinvizOptions.CreateDefault() with { AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? "" },
+                    RequireRawArchiveWriter()
                 )),
             "none" => null,
             _ => throw new NotSupportedException($"Unsupported news provider: {run.News.ProviderName}")
@@ -69,7 +70,7 @@ public sealed partial class BacktestRunner
         return new TradingFlow.Alpaca.VaderSentimentAnalyzer();
     }
 
-    private static IMarketDataProvider CreateProvider(BacktestRunConfig run)
+    private IMarketDataProvider CreateProvider(BacktestRunConfig run)
     {
         IMarketDataProvider provider = run.Provider.ToLowerInvariant() switch
         {
@@ -80,7 +81,8 @@ public sealed partial class BacktestRunner
             "finviz" => new TradingFlow.Finviz.FinvizMarketDataProvider(
                 new TradingFlow.Finviz.FinvizClient(
                     new HttpClient(),
-                    TradingFlow.Finviz.FinvizOptions.CreateDefault() with { AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? "" }
+                    TradingFlow.Finviz.FinvizOptions.CreateDefault() with { AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? "" },
+                    RequireRawArchiveWriter()
                 )),
             _ => throw new NotSupportedException($"Unsupported market data provider: {run.Provider}")
         };
@@ -96,6 +98,10 @@ public sealed partial class BacktestRunner
             Path.Combine(run.NormalizedRoot, GetCacheWindowSegment(run.TimeWindow)),
             run.CachePolicy);
     }
+
+    private IRawArchiveWriter RequireRawArchiveWriter() =>
+        _rawArchiveWriter ?? throw new InvalidOperationException(
+            "Finviz access requires a raw archive writer so responses are durable before parsing.");
 
     private static string GetCacheWindowSegment(TimeWindowConfig timeWindow)
     {

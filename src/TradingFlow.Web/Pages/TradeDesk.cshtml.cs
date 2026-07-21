@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Finviz;
+using TradingFlow.Engine.Storage;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Wishlists;
@@ -17,6 +18,7 @@ public sealed class TradeDeskModel : PageModel
     private readonly PaperJobService paperJobs;
     private readonly MobileAutomationService automation;
     private readonly WishlistDeskService deskService;
+    private readonly IRawArchiveWriter rawArchiveWriter;
 
     public TradeDeskModel(
         IWishlistRepository repository,
@@ -25,7 +27,8 @@ public sealed class TradeDeskModel : PageModel
         RunConfigWriter configWriter,
         PaperJobService paperJobs,
         MobileAutomationService automation,
-        WishlistDeskService deskService)
+        WishlistDeskService deskService,
+        IRawArchiveWriter rawArchiveWriter)
     {
         this.repository = repository;
         this.manualOrders = manualOrders;
@@ -34,6 +37,7 @@ public sealed class TradeDeskModel : PageModel
         this.paperJobs = paperJobs;
         this.automation = automation;
         this.deskService = deskService;
+        this.rawArchiveWriter = rawArchiveWriter;
     }
 
     [BindProperty(SupportsGet = true)] public Guid? Id { get; set; }
@@ -111,7 +115,10 @@ public sealed class TradeDeskModel : PageModel
 
         try
         {
-            using var client = new FinvizClient(new HttpClient(), FinvizOptions.CreateDefault() with { AuthToken = token });
+            using var client = new FinvizClient(
+                new HttpClient(),
+                FinvizOptions.CreateDefault() with { AuthToken = token },
+                rawArchiveWriter);
             var tickers = (await client.GetScreenerTickersAsync(finvizFilter, cancellationToken))
                 .Where(ticker => !String.IsNullOrWhiteSpace(ticker))
                 .Distinct(StringComparer.OrdinalIgnoreCase)

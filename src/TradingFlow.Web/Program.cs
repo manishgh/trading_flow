@@ -37,6 +37,8 @@ var cacheRoot = ResolveRootFromEnvironment("TRADINGFLOW_CACHE_ROOT", Path.Combin
 builder.Services.AddSingleton(new ProjectPaths(repositoryRoot, dataRoot, cacheRoot));
 builder.Services.AddSingleton<SimpleYamlReader>();
 builder.Services.AddSingleton<IArtifactWriter>(AtomicFileArtifactWriter.Instance);
+builder.Services.AddSingleton(new RawArchiveOptions(Path.Combine(dataRoot, "raw")));
+builder.Services.AddSingleton<IRawArchiveWriter, FileSystemRawArchiveWriter>();
 builder.Services.AddSingleton<ICandleStore>(sp =>
 {
     var paths = sp.GetRequiredService<ProjectPaths>();

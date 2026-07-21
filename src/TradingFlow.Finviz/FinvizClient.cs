@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualBasic.FileIO;
 using TradingFlow.Domain.Market;
+using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Finviz;
 
@@ -14,12 +17,14 @@ public sealed class FinvizClient : IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly FinvizOptions _options;
+    private readonly IRawArchiveWriter _rawArchiveWriter;
     private readonly Polly.Bulkhead.AsyncBulkheadPolicy<HttpResponseMessage> _bulkhead = TradingFlow.Domain.Http.RateLimiterFactory.CreateBulkhead(10, 50);
 
-    public FinvizClient(HttpClient httpClient, FinvizOptions options)
+    public FinvizClient(HttpClient httpClient, FinvizOptions options, IRawArchiveWriter rawArchiveWriter)
     {
-        _httpClient = httpClient;
-        _options = options;
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _rawArchiveWriter = rawArchiveWriter ?? throw new ArgumentNullException(nameof(rawArchiveWriter));
         _httpClient.BaseAddress = _options.BaseUrl;
     }
 
@@ -38,12 +43,13 @@ public sealed class FinvizClient : IDisposable
         var normalizedFilterQuery = NormalizeScreenerFilterQuery(filterQuery);
         var separator = String.IsNullOrWhiteSpace(normalizedFilterQuery) ? "" : "&";
         var url = $"/export?{normalizedFilterQuery}{separator}auth={_options.AuthToken}";
-        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET",
-            () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
-        response.EnsureSuccessStatusCode();
-
-        var csvContent = await response.Content.ReadAsStringAsync(cancellationToken);
-        return ParseScreenerCsv(csvContent);
+        var archived = await GetArchivedTextAsync(
+            url,
+            "screener_csv",
+            "csv",
+            CreateQueryPresetId(normalizedFilterQuery),
+            cancellationToken);
+        return ParseScreenerCsv(archived.Text);
     }
 
     private static IReadOnlyList<FinvizScreenerRow> ParseScreenerCsv(string csvContent)
@@ -217,10 +223,7 @@ public sealed class FinvizClient : IDisposable
     {
         // Example: /stock?t=MSFT&p=d&auth=xxx
         var url = $"/stock?t={ticker.ToUpperInvariant()}&p={period}&auth={_options.AuthToken}";
-        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET",
-            () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsStringAsync(cancellationToken);
+        return (await GetArchivedTextAsync(url, "stock_snapshot", "html", null, cancellationToken)).Text;
     }
 
     public async Task<string> GetNewsAsync(string ticker, CancellationToken cancellationToken = default)
@@ -228,27 +231,31 @@ public sealed class FinvizClient : IDisposable
         // "v=3" - Stocks feed (no-ETFs)
         // "t=MSFT,AAPL" - Filter out only for specified tickers
         var url = $"/news?t={ticker.ToUpperInvariant()}&v=3&auth={_options.AuthToken}";
-        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET",
-            () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsStringAsync(cancellationToken);
+        return (await GetArchivedTextAsync(url, "stock_news_html", "html", null, cancellationToken)).Text;
     }
 
     public async Task<IReadOnlyList<CatalystEvent>> GetNewsExportAsync(int view, CancellationToken cancellationToken = default)
     {
         var url = $"/export/news?v={view}&auth={_options.AuthToken}";
-        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET",
-            () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
-        response.EnsureSuccessStatusCode();
-
-        var csvContent = await response.Content.ReadAsStringAsync(cancellationToken);
-        return ParseNewsExportCsv(csvContent, $"finviz-export-v{view}");
+        var archived = await GetArchivedTextAsync(
+            url,
+            "news_export_csv",
+            "csv",
+            $"news-v{view}",
+            cancellationToken);
+        return ParseNewsExportCsv(
+            archived.Text,
+            $"finviz-export-v{view}",
+            archived.Receipt.Manifest.ReceivedAtUtc);
     }
 
-    public static IReadOnlyList<CatalystEvent> ParseNewsExportCsv(string csvContent, string externalIdPrefix)
+    public static IReadOnlyList<CatalystEvent> ParseNewsExportCsv(
+        string csvContent,
+        string externalIdPrefix,
+        DateTimeOffset? receivedAtUtc = null)
     {
         var rows = new List<CatalystEvent>();
-        var receivedAt = DateTimeOffset.UtcNow;
+        var receivedAt = receivedAtUtc?.ToUniversalTime() ?? DateTimeOffset.UtcNow;
         if (String.IsNullOrWhiteSpace(csvContent))
         {
             return rows;
@@ -368,14 +375,103 @@ public sealed class FinvizClient : IDisposable
         // "o=-filingDate" - order descending by filing date
         // filter e.g. "annual-quarterly-current"
         var url = $"/stock?t={ticker.ToUpperInvariant()}&f={filter}&o=-filingDate&auth={_options.AuthToken}";
-        var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Finviz", url, "GET",
+        return (await GetArchivedTextAsync(url, "filings_html", "html", null, cancellationToken)).Text;
+    }
+
+    /// <summary>
+    /// Archives the exact response bytes, then decodes only the committed archive copy. Failed HTTP
+    /// responses are archived before EnsureSuccessStatusCode throws so production failures remain replayable.
+    /// </summary>
+    private async Task<ArchivedTextResponse> GetArchivedTextAsync(
+        string url,
+        string artifactType,
+        string extension,
+        string? presetId,
+        CancellationToken cancellationToken)
+    {
+        using var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync(
+            "Finviz",
+            RemoveSensitiveQueryParameters(url),
+            "GET",
             () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
+        var receivedAtUtc = DateTimeOffset.UtcNow;
+        var responseBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        var requestUri = response.RequestMessage?.RequestUri ?? new Uri(_options.BaseUrl, url);
+        var receipt = await _rawArchiveWriter.ArchiveAsync(
+            new RawArchiveRequest(
+                "finviz",
+                artifactType,
+                receivedAtUtc,
+                extension,
+                response.Content.Headers.ContentType?.ToString(),
+                PresetId: presetId,
+                Http: new RawArchiveHttpMetadata(
+                    requestUri,
+                    (int)response.StatusCode,
+                    CollectResponseHeaders(response))),
+            responseBytes,
+            cancellationToken);
+
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsStringAsync(cancellationToken);
+        var archivedBytes = await File.ReadAllBytesAsync(receipt.PayloadPath, cancellationToken);
+        var encoding = ResolveEncoding(response.Content.Headers.ContentType?.CharSet);
+        return new ArchivedTextResponse(encoding.GetString(archivedBytes), receipt);
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<string>> CollectResponseHeaders(
+        HttpResponseMessage response)
+    {
+        return response.Headers
+            .Concat(response.Content.Headers)
+            .GroupBy(header => header.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<string>)Array.AsReadOnly(group.SelectMany(header => header.Value).ToArray()),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static Encoding ResolveEncoding(string? charset)
+    {
+        if (String.IsNullOrWhiteSpace(charset))
+        {
+            return Encoding.UTF8;
+        }
+
+        try
+        {
+            return Encoding.GetEncoding(charset.Trim().Trim('"'));
+        }
+        catch (ArgumentException)
+        {
+            return Encoding.UTF8;
+        }
+    }
+
+    private static string CreateQueryPresetId(string normalizedFilterQuery)
+    {
+        var fingerprint = SHA256.HashData(Encoding.UTF8.GetBytes(normalizedFilterQuery));
+        return $"adhoc-query-{Convert.ToHexString(fingerprint)[..16].ToLowerInvariant()}";
+    }
+
+    private static string RemoveSensitiveQueryParameters(string url)
+    {
+        var parts = url.Split('?', 2);
+        if (parts.Length == 1)
+        {
+            return url;
+        }
+
+        var safeQuery = parts[1]
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Where(pair => !pair.StartsWith("auth=", StringComparison.OrdinalIgnoreCase));
+        var query = String.Join('&', safeQuery);
+        return query.Length == 0 ? parts[0] : $"{parts[0]}?{query}";
     }
 
     public void Dispose()
     {
         _httpClient.Dispose();
     }
+
+    private sealed record ArchivedTextResponse(string Text, RawArchiveReceipt Receipt);
 }

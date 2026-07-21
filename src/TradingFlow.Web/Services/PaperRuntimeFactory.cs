@@ -18,16 +18,22 @@ public sealed class PaperRuntimeFactory
     private readonly AlpacaCredentialProvider alpacaCredentials;
     private readonly ProjectPaths paths;
     private readonly ILogger<TradingFlow.Alpaca.AlpacaNewsProvider> alpacaNewsLogger;
+    private readonly IRawArchiveWriter rawArchiveWriter;
 
     public PaperRuntimeFactory(
         AlpacaCredentialProvider alpacaCredentials,
         ProjectPaths paths,
-        ILogger<TradingFlow.Alpaca.AlpacaNewsProvider>? alpacaNewsLogger = null)
+        ILogger<TradingFlow.Alpaca.AlpacaNewsProvider>? alpacaNewsLogger = null,
+        IRawArchiveWriter? rawArchiveWriter = null)
     {
         this.alpacaCredentials = alpacaCredentials;
         this.paths = paths;
         this.alpacaNewsLogger = alpacaNewsLogger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TradingFlow.Alpaca.AlpacaNewsProvider>.Instance;
+        this.rawArchiveWriter = rawArchiveWriter ?? new FileSystemRawArchiveWriter(
+            new RawArchiveOptions(Path.Combine(paths.DataRoot, "raw")));
     }
+
+    public IRawArchiveWriter RawArchiveWriter => rawArchiveWriter;
 
     public BacktestRunConfig ResolveRunPaths(BacktestRunConfig run)
     {
@@ -59,7 +65,8 @@ public sealed class PaperRuntimeFactory
                     TradingFlow.Finviz.FinvizOptions.CreateDefault() with
                     {
                         AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? string.Empty
-                    })),
+                    },
+                    rawArchiveWriter)),
             _ => throw new NotSupportedException($"Unsupported market data provider: {run.Provider}")
         };
     }
@@ -89,7 +96,8 @@ public sealed class PaperRuntimeFactory
                     TradingFlow.Finviz.FinvizOptions.CreateDefault() with
                     {
                         AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? string.Empty
-                    })),
+                    },
+                    rawArchiveWriter)),
             "none" => null,
             _ => throw new NotSupportedException($"Unsupported news provider: {run.News.ProviderName}")
         };

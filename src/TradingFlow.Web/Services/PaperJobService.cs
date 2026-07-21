@@ -407,7 +407,8 @@ public sealed class PaperJobService
                 _auditRepo,
                 liveRunnerLogger,
                 artifactWriter,
-                candleStore);
+                candleStore,
+                runtimeFactory.RawArchiveWriter);
 
             var progress = new Progress<string>(msg =>
             {

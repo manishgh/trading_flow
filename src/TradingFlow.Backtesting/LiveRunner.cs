@@ -23,7 +23,8 @@ public sealed partial class LiveRunner(
     TradingFlow.Domain.Audit.IDecisionAuditRepository? auditRepo,
     ILogger<LiveRunner> logger,
     IArtifactWriter? artifactWriter = null,
-    ICandleStore? candleStore = null)
+    ICandleStore? candleStore = null,
+    IRawArchiveWriter? rawArchiveWriter = null)
 {
     private readonly SignalGenerator _signalGenerator = new();
     private readonly StrategyDecisionBrain _decisionBrain = new();
@@ -35,6 +36,7 @@ public sealed partial class LiveRunner(
     private readonly TradingFlow.Domain.Orders.IOrderStateRepository? _orderRepo = orderRepo;
     private readonly TradingFlow.Domain.Audit.IDecisionAuditRepository? _auditRepo = auditRepo;
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
+    private readonly IRawArchiveWriter? _rawArchiveWriter = rawArchiveWriter;
     private readonly TradingFlow.Engine.Regime.RegimeGateService _regimeGate = new();
 
     public async Task RunAsync(
@@ -72,7 +74,9 @@ public sealed partial class LiveRunner(
                 using var httpClient = new System.Net.Http.HttpClient();
                 using var finvizClient = new TradingFlow.Finviz.FinvizClient(httpClient, new TradingFlow.Finviz.FinvizOptions(
                     new Uri("https://finviz.com", UriKind.Absolute),
-                    Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? ""));
+                    Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? ""),
+                    _rawArchiveWriter ?? throw new InvalidOperationException(
+                        "Finviz screening requires a raw archive writer so responses are durable before parsing."));
 
                 foreach (var filter in run.Screener.Filters)
                 {
