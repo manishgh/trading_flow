@@ -137,12 +137,15 @@ Runtime artifacts and research artifacts are intentionally separate, but current
 
 ## Azure Storage Model
 
-AKS uses two storage tiers:
+AKS uses three storage tiers:
 
 ```text
-/app/data   -> durable Azure Files for runtime state, UI configs, summaries, SQLite paper state, and warmup metadata
-/app/cache  -> pod-local emptyDir for high-churn candle/indicator working files
+/app/data     -> single-writer Azure Disk for SQLite and operational state
+/app/backups  -> separate durable backup mount with Azure Blob archival
+/app/cache    -> pod-local emptyDir for high-churn candle/indicator working files
 ```
+
+SQLite runs in WAL mode with `synchronous=FULL` and must not live on Azure Files or another network filesystem. The pod that owns `/app/data` is the sole SQLite writer. Daily online backups are integrity-checked, SHA-256 manifested, and retained under `/app/backups`; see `docs/database-backup-restore.md`.
 
 TradingFlow owns its own candle cache and archive. The ML/research project can fetch the same Alpaca candles independently and choose Parquet or feature-store formats without forcing TradingFlow to carry that storage dependency.
 
@@ -154,6 +157,7 @@ SQLite is used locally for:
 - decision audit records
 - ticker locks
 - active paper order state
+- the versioned production journal, including write-ahead order intents
 
 Ticker locks prevent multiple workers from processing the same ticker concurrently. Order state lets paper jobs recover after a web/worker restart.
 

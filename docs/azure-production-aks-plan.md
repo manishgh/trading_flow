@@ -106,7 +106,8 @@ These are config-map values, not code. We can move tickers between pods without 
 
 Storage model:
 
-- `/app/data` is durable Azure Files and stores runtime state, UI-generated configs, summaries, SQLite paper state, and warmup run metadata.
+- `/app/data` is a single-writer Azure Disk (`ReadWriteOnce`) and stores SQLite plus operational runtime state. SQLite WAL must not run on Azure Files or a shared network filesystem.
+- `/app/backups` is a separate durable backup target; daily SQLite online backups are integrity-checked and archived to Blob Storage. It must not share the operational disk's failure domain.
 - `/app/cache` is pod-local `emptyDir` and stores hot candle/indicator working data. It is deliberately fast and disposable.
 - TradingFlow owns its own candle archive under Blob container `tradingflow-candles`.
 - ML/research systems may read Alpaca independently and store Parquet in their own format. Duplicate source reads are acceptable because the source price data is canonical and the systems optimize for different workloads.

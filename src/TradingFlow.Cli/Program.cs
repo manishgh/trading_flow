@@ -12,6 +12,34 @@ var serializerOptions = new JsonSerializerOptions
     WriteIndented = true
 };
 
+if (args.Length > 0 && args[0].Equals("database-backup", StringComparison.OrdinalIgnoreCase))
+{
+    var databasePath = RequireStringOption(args, "--database");
+    var backupRoot = RequireStringOption(args, "--backup-root");
+    var operationalDateText = RequireStringOption(args, "--operational-date");
+    var operationalDate = DateOnly.ParseExact(
+        operationalDateText,
+        "yyyy-MM-dd",
+        System.Globalization.CultureInfo.InvariantCulture);
+    var service = new TradingFlow.Data.Backups.SqliteDatabaseBackupService(
+        databasePath,
+        backupRoot,
+        AtomicFileArtifactWriter.Instance);
+    var result = await service.CreateDailyBackupAsync(operationalDate);
+    Console.WriteLine(JsonSerializer.Serialize(result, serializerOptions));
+    return;
+}
+
+if (args.Length > 0 && args[0].Equals("database-restore", StringComparison.OrdinalIgnoreCase))
+{
+    var backupPath = RequireStringOption(args, "--backup");
+    var destinationPath = RequireStringOption(args, "--destination");
+    var service = new TradingFlow.Data.Backups.SqliteDatabaseRestoreService();
+    var result = await service.RestoreToEmptyAsync(backupPath, destinationPath);
+    Console.WriteLine(JsonSerializer.Serialize(result, serializerOptions));
+    return;
+}
+
 if (args.Length > 0 && args[0].Equals("alpaca-stream-smoke", StringComparison.OrdinalIgnoreCase))
 {
     var timeoutSeconds = ParseIntOption(args, "--timeout-seconds") ?? 20;
@@ -923,6 +951,10 @@ static string? ParseStringOption(string[] args, string name)
 
     return null;
 }
+
+static string RequireStringOption(string[] args, string name) =>
+    ParseStringOption(args, name)
+    ?? throw new ArgumentException($"Required option {name} was not provided.");
 
 static bool ParseFlag(string[] args, string name)
 {

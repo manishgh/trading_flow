@@ -9,5 +9,6 @@
     <ProjectReference Include="..\TradingFlow.Domain\TradingFlow.Domain.csproj" />
     <ProjectReference Include="..\TradingFlow.Engine\TradingFlow.Engine.csproj" />
     <ProjectReference Include="..\TradingFlow.Backtesting\TradingFlow.Backtesting.csproj" />
+    <ProjectReference Include="..\TradingFlow.Data\TradingFlow.Data.csproj" />
   </ItemGroup>
 </Project>

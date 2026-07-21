@@ -2,6 +2,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Backtesting.StrategyEvaluation;
+using TradingFlow.Data.Backups;
 using TradingFlow.Data.Candles;
 using TradingFlow.Data.Context;
 using TradingFlow.Data.News;
@@ -34,6 +35,7 @@ builder.Services.AddRazorPages();
 var repositoryRoot = ResolveRepositoryRoot(builder.Environment.ContentRootPath);
 var dataRoot = ResolveRootFromEnvironment("TRADINGFLOW_DATA_ROOT", Path.Combine(repositoryRoot, "data"));
 var cacheRoot = ResolveRootFromEnvironment("TRADINGFLOW_CACHE_ROOT", Path.Combine(dataRoot, "cache"));
+var backupRoot = ResolveRootFromEnvironment("TRADINGFLOW_BACKUP_ROOT", Path.Combine(dataRoot, "backups"));
 builder.Services.AddSingleton(new ProjectPaths(repositoryRoot, dataRoot, cacheRoot));
 builder.Services.AddSingleton<SimpleYamlReader>();
 builder.Services.AddSingleton<IArtifactWriter>(AtomicFileArtifactWriter.Instance);
@@ -73,6 +75,17 @@ builder.Services.AddSingleton<StrategyEvaluationService>();
 
 var dbPath = Path.Combine(dataRoot, "tradingflow.db");
 Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+var backupLocalTime = ResolveBackupLocalTime(builder.Configuration["DatabaseBackup:LocalTime"]);
+var backupTimeZone = ResolveMarketTimeZone(builder.Configuration["DatabaseBackup:MarketTimeZone"]);
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(new DatabaseBackupSchedule(backupLocalTime, backupTimeZone));
+builder.Services.AddSingleton(serviceProvider => new SqliteDatabaseBackupService(
+    dbPath,
+    backupRoot,
+    serviceProvider.GetRequiredService<IArtifactWriter>(),
+    serviceProvider.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton<SqliteDatabaseRestoreService>();
+builder.Services.AddHostedService<DatabaseBackupHostedService>();
 builder.Services.AddSingleton<SqliteConnectionDurabilityInterceptor>();
 builder.Services.AddDbContextFactory<TradingFlowDbContext>((serviceProvider, options) =>
     options
@@ -281,6 +294,49 @@ static string ResolveRootFromEnvironment(string variableName, string fallback)
     return String.IsNullOrWhiteSpace(value)
         ? Path.GetFullPath(fallback)
         : Path.GetFullPath(value);
+}
+
+static TimeOnly ResolveBackupLocalTime(string? value)
+{
+    const string fallback = "20:30";
+    var configured = String.IsNullOrWhiteSpace(value) ? fallback : value;
+    if (!TimeOnly.TryParseExact(
+            configured,
+            "HH:mm",
+            CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None,
+            out var localTime))
+    {
+        throw new InvalidOperationException(
+            $"DatabaseBackup:LocalTime must use 24-hour HH:mm format; received '{configured}'.");
+    }
+
+    return localTime;
+}
+
+static TimeZoneInfo ResolveMarketTimeZone(string? value)
+{
+    var configured = String.IsNullOrWhiteSpace(value) ? "America/New_York" : value;
+    var candidates = configured.Equals("America/New_York", StringComparison.OrdinalIgnoreCase)
+        || configured.Equals("Eastern Standard Time", StringComparison.OrdinalIgnoreCase)
+        ? new[] { configured, "America/New_York", "Eastern Standard Time" }.Distinct()
+        : [configured];
+    foreach (var candidate in candidates)
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(candidate);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+        }
+        catch (InvalidTimeZoneException)
+        {
+        }
+    }
+
+    throw new InvalidOperationException(
+        $"DatabaseBackup:MarketTimeZone '{configured}' could not be resolved on this host.");
 }
 
 static string ResolveWebContentRoot(string currentDirectory)
