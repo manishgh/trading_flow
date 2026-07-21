@@ -247,14 +247,14 @@ violations)" becomes the Appendix-B Phase-2→3 evidence gate. Existing task #20
 **Q4 resolution (2026-07-21):** retain the eToro client source code, but keep it
 dormant. Paper/live production composition MUST NOT register eToro services, load
 eToro credentials, call eToro startup checks, or route orders through eToro. S3 adds
-an automated composition test for this boundary.
+no eToro behavior; the production-composition test and deployment exclusion landed in S0.
 
 ## 7. Status ledger (updated at every check-in)
 
 | Phase | Status | Commit | Notes |
 |---|---|---|---|
 | Plan + specs checked in | ✅ 2026-07-21 | (this commit) | Execution awaiting go |
-| S0 | ✅ 2026-07-21 | `222ad71`, `b257028`, `ca8bd77`, `bd26aff` | Governance, secret-store migration, CI gates, and strict SIP WebSocket authentication verified; external credential rotation remains operator action U1. |
+| S0 | ✅ 2026-07-21 | `222ad71`, `b257028`, `ca8bd77`, `bd26aff`, `5bfbdfc`, `872ed8f`, `18ac061`, `18eba68` | Governance, secret-store migration, zero known vulnerable packages, clean-checkout CI, strict SIP WebSocket authentication, deterministic tests, and dormant eToro exclusion verified. GitHub Actions run `29809663008` passed; external credential rotation remains operator action U1. |
 | S1 | ⬜ | | |
 | S2 | ⬜ | | |
 | S3 | ⬜ | | |
