@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.Logging;
 
 namespace TradingFlow.Engine.Configuration;
 
@@ -69,6 +70,13 @@ public sealed class ProductionConfigurationSnapshot
 /// </summary>
 public sealed class ProductionConfigurationLoader
 {
+    private readonly ILogger<ProductionConfigurationLoader>? logger;
+
+    public ProductionConfigurationLoader(ILogger<ProductionConfigurationLoader>? logger = null)
+    {
+        this.logger = logger;
+    }
+
     public ProductionConfigurationSnapshot Load(
         ProductionProfile profile,
         IReadOnlyDictionary<string, string?> overrides)
@@ -105,10 +113,16 @@ public sealed class ProductionConfigurationLoader
         }
 
         var immutableValues = values.ToImmutable();
-        return new ProductionConfigurationSnapshot(
+        var snapshot = new ProductionConfigurationSnapshot(
             profile,
             immutableValues,
             ComputeHash(profile, immutableValues));
+        logger?.LogInformation(
+            "Loaded immutable production configuration for profile {Profile} with hash {ConfigHash} and {ParameterCount} parameters.",
+            profile,
+            snapshot.ConfigHash,
+            snapshot.Values.Count);
+        return snapshot;
     }
 
     private static object Parse(ProductionParameterDefinition definition, string? rawValue)
@@ -244,7 +258,14 @@ public sealed class ProductionConfigurationLoader
 
         if (profile == ProductionProfile.Live && definition.IsLockedInLiveV1 && !Equals(value, definition.DefaultValue))
         {
-            throw new ProductionConfigurationException(definition.Name, "value is locked to its Appendix-A default in live v1");
+                throw new ProductionConfigurationException(definition.Name, "value is locked to its Appendix-A default in live v1");
+        }
+
+        if (profile != ProductionProfile.Development &&
+            definition.Name == "allow_iex_fallback" &&
+            value is true)
+        {
+            throw new ProductionConfigurationException(definition.Name, "IEX fallback is permitted only in the development profile");
         }
     }
 

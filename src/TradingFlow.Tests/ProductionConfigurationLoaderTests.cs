@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using Microsoft.Extensions.Logging;
+using Moq;
 using TradingFlow.Engine.Configuration;
 
 namespace TradingFlow.Tests;
@@ -111,6 +113,45 @@ public sealed class ProductionConfigurationLoaderTests
 
         var paper = loader.Load(ProductionProfile.Paper, RequiredValues().Append(parameterName, "true"));
         Assert.True(paper.Get<bool>(parameterName));
+    }
+
+    [Theory]
+    [InlineData(ProductionProfile.Paper)]
+    [InlineData(ProductionProfile.Live)]
+    public void Load_RejectsDevelopmentOnlyIexFallbackOutsideDevelopment(ProductionProfile profile)
+    {
+        var loader = new ProductionConfigurationLoader();
+
+        AssertParameterError(
+            "allow_iex_fallback",
+            () => loader.Load(profile, RequiredValues().Append("allow_iex_fallback", "true")));
+
+        var development = loader.Load(
+            ProductionProfile.Development,
+            RequiredValues().Append("allow_iex_fallback", "true"));
+        Assert.True(development.Get<bool>("allow_iex_fallback"));
+    }
+
+    [Fact]
+    public void Load_LogsOnlyProfileHashAndParameterCountAtStartup()
+    {
+        var logger = new Mock<ILogger<ProductionConfigurationLoader>>();
+        var loader = new ProductionConfigurationLoader(logger.Object);
+
+        var snapshot = loader.Load(ProductionProfile.Paper, RequiredValues());
+
+        logger.Verify(
+            candidate => candidate.Log(
+                LogLevel.Information,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) =>
+                    state.ToString()!.Contains(snapshot.ConfigHash, StringComparison.Ordinal) &&
+                    state.ToString()!.Contains("Paper", StringComparison.Ordinal) &&
+                    !state.ToString()!.Contains(ExpectedAccountId, StringComparison.Ordinal) &&
+                    !state.ToString()!.Contains(CatalystModel, StringComparison.Ordinal)),
+                null,
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
     }
 
     private static ProductionConfigurationSnapshot Load(IReadOnlyDictionary<string, string?>? values = null) =>
