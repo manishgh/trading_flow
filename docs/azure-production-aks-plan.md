@@ -287,7 +287,7 @@ Trading operations:
 
 - Final paper ticker shards for the first production run.
 - Whether each shard should own 10, 20, or more tickers.
-- Paper/live broker providers for phase 1: Alpaca only, or Alpaca plus eToro later.
+- Alpaca account/feed details for the paper environment. Alpaca is the only production broker integration.
 - Whether live trading should initially deploy with `replicas: 0`.
 
 Secrets:

@@ -239,7 +239,7 @@ violations)" becomes the Appendix-B Phase-2→3 evidence gate. Existing task #20
 | U1 | **Rotate exposed Alpaca + eToro + Finviz keys** (they live in git history) | S0 | USER ACTION |
 | Q2 | Dedup similarity method: embedding provider or Jaccard fallback | S10 start | OPEN |
 | Q3 | Alert delivery channel for page/notify (mobile push exists; email?) | S11 start | OPEN |
-| Q4 | eToro path: spec is Alpaca-only — remove eToro client or leave dormant out of the production path | S3 start | OPEN |
+| Q4 | eToro path: retain reference source, exclude it from every production path | S0 | RESOLVED |
 | U5 | NWS-11 ground-truth labeling (~500 articles) — harness built by me, labels by you | S10 gate | USER ACTION |
 | Q6 | Anthropic API key + budget for Stage-2 scorer (defaults: 500 articles/day, $10/day cap) | S10 start | OPEN |
 | D4 | Host choice (Linux VPS vs Windows service) | S11 | DEFERRED by design |

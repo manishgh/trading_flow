@@ -31,12 +31,12 @@ Azure Files CSI
 
 Kubernetes Secrets
   trading-flow-demo-secrets
-    ETORO_DEMO_API_KEY
-    ETORO_DEMO_USER_KEY
+    ALPACA_KEY_ID
+    ALPACA_SECRET_KEY
     TRADINGVIEW_WEBHOOK_SECRET
   trading-flow-live-secrets
-    ETORO_LIVE_API_KEY
-    ETORO_LIVE_USER_KEY
+    ALPACA_KEY_ID
+    ALPACA_SECRET_KEY
     TRADINGVIEW_WEBHOOK_SECRET
 ```
 
@@ -92,16 +92,16 @@ Edit `deploy/aks/secret.yaml` and set only the secret block for the environment 
 Demo/paper:
 
 ```text
-ETORO_DEMO_API_KEY
-ETORO_DEMO_USER_KEY
+ALPACA_KEY_ID
+ALPACA_SECRET_KEY
 TRADINGVIEW_WEBHOOK_SECRET
 ```
 
 Live:
 
 ```text
-ALPACA_LIVE_KEY_ID
-ALPACA_LIVE_SECRET_KEY
+ALPACA_KEY_ID
+ALPACA_SECRET_KEY
 ```
 
 Do not mount paper and live Alpaca secrets into the same pod. Paper and live workloads should use separate Kubernetes secrets or Key Vault references.

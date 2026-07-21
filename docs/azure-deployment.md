@@ -45,8 +45,8 @@ Log Analytics
   app logs and job logs
 
 Container App Secrets
-  ETORO_DEMO_API_KEY
-  ETORO_DEMO_USER_KEY
+  ALPACA_KEY_ID
+  ALPACA_SECRET_KEY
   optional live keys kept disabled until approved
 ```
 
@@ -109,9 +109,6 @@ The included Bicep template creates:
 Deploy:
 
 ```powershell
-$demoApiKey = Read-Host "ETORO_DEMO_API_KEY"
-$demoUserKey = Read-Host "ETORO_DEMO_USER_KEY"
-
 az deployment group create `
   -g $rg `
   -f deploy/azure/main.bicep `
@@ -173,10 +170,8 @@ The web/trading services should call it by internal FQDN from the Bicep output.
 Use separate secrets for demo and live:
 
 ```text
-ETORO_DEMO_API_KEY
-ETORO_DEMO_USER_KEY
-ETORO_LIVE_API_KEY
-ETORO_LIVE_USER_KEY
+ALPACA_KEY_ID
+ALPACA_SECRET_KEY
 TRADINGVIEW_WEBHOOK_SECRET
 ```
 
