@@ -83,6 +83,7 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
     private readonly IPositionLedgerRepository positions;
     private readonly IReconciliationRepository reconciliations;
     private readonly IEntryAdmissionControl admission;
+    private readonly IProtectiveOrderInvariantService protectiveOrders;
     private readonly ReconciliationRunContext runContext;
     private readonly AccountReconciliationOptions options;
     private readonly TimeProvider timeProvider;
@@ -99,6 +100,7 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
         IPositionLedgerRepository positions,
         IReconciliationRepository reconciliations,
         IEntryAdmissionControl admission,
+        IProtectiveOrderInvariantService protectiveOrders,
         ReconciliationRunContext runContext,
         AccountReconciliationOptions options,
         TimeProvider timeProvider,
@@ -108,6 +110,7 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
         this.positions = positions;
         this.reconciliations = reconciliations;
         this.admission = admission;
+        this.protectiveOrders = protectiveOrders;
         this.runContext = runContext;
         this.options = options;
         this.timeProvider = timeProvider;
@@ -139,7 +142,23 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
             var startedAt = timeProvider.GetUtcNow();
             var brokerPositions = await broker.GetOpenPositionsAsync(cancellationToken);
             var localPositions = await positions.ListCurrentAsync(cancellationToken);
-            var localOrders = await orderEvents.ListReconcilableAsync(cancellationToken);
+            var localOrders = (await orderEvents.ListReconcilableAsync(cancellationToken)).ToList();
+            foreach (var parentClientOrderId in openOrders
+                         .Select(order => order.ParentClientOrderId)
+                         .Where(ClientOrderIdFactory.IsBindingFormat)
+                         .Distinct(StringComparer.Ordinal))
+            {
+                if (localOrders.Any(order => order.ClientOrderId == parentClientOrderId))
+                {
+                    continue;
+                }
+
+                var parent = await orderEvents.GetCurrentAsync(parentClientOrderId!, cancellationToken);
+                if (parent is not null)
+                {
+                    localOrders.Add(parent);
+                }
+            }
             var differences = BuildDifferences(
                 brokerPositions,
                 openOrders,
@@ -225,6 +244,25 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
                 }
             }
 
+            if (differences.Any(item => item.Kind is "missing_protective_order" or "protective_order_overcoverage"))
+            {
+                var repairs = await protectiveOrders.EnsureAsync(
+                    broker,
+                    brokerPositions,
+                    openOrders,
+                    cancellationToken);
+                foreach (var repair in repairs)
+                {
+                    logger.Log(
+                        repair.Succeeded ? LogLevel.Critical : LogLevel.Error,
+                        "EXE-09 repair result for {Symbol}. Succeeded={Succeeded} Detail={Detail} BrokerOrderId={BrokerOrderId}",
+                        repair.Symbol,
+                        repair.Succeeded,
+                        repair.Detail,
+                        repair.BrokerOrderId);
+                }
+            }
+
             return new AccountReconciliationResult(
                 recorded.ReconciliationId,
                 status,
@@ -307,6 +345,26 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
             }
         }
 
+        foreach (var brokerPosition in brokerPositions.Where(position => position.Qty != 0m))
+        {
+            var coverage = ProtectiveOrderInvariantService.ProtectiveCoverage(brokerPosition, brokerOrders);
+            var required = Math.Abs(brokerPosition.Qty);
+            if (coverage < required)
+            {
+                differences.Add(new ReconciliationDifference(
+                    "missing_protective_order",
+                    NormalizeSymbol(brokerPosition.Ticker),
+                    $"Broker position side={brokerPosition.Side} quantity={required} has active opposite-side stop coverage={coverage}."));
+            }
+            else if (coverage > required)
+            {
+                differences.Add(new ReconciliationDifference(
+                    "protective_order_overcoverage",
+                    NormalizeSymbol(brokerPosition.Ticker),
+                    $"Broker position side={brokerPosition.Side} quantity={required} has excessive active stop coverage={coverage}."));
+            }
+        }
+
         foreach (var brokerOrder in brokerOrders.Where(order =>
                      !localOrders.Any(localOrder => OrdersMatch(localOrder, order))))
         {
@@ -341,7 +399,9 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
         (!String.IsNullOrWhiteSpace(local.BrokerOrderId) &&
          local.BrokerOrderId.Equals(broker.OrderId, StringComparison.Ordinal)) ||
         (ClientOrderIdFactory.IsBindingFormat(broker.ClientOrderId) &&
-         local.ClientOrderId.Equals(broker.ClientOrderId, StringComparison.Ordinal));
+         local.ClientOrderId.Equals(broker.ClientOrderId, StringComparison.Ordinal)) ||
+        (ClientOrderIdFactory.IsBindingFormat(broker.ParentClientOrderId) &&
+         local.ClientOrderId.Equals(broker.ParentClientOrderId, StringComparison.Ordinal));
 
     private static decimal SignedBrokerQuantity(BrokerPosition position) =>
         position.Side.Trim().ToLowerInvariant() switch

@@ -23,10 +23,25 @@ public sealed record OrderSubmissionResult(
     Guid IntentId,
     DateTimeOffset BrokerAcceptedAtUtc);
 
+public sealed record ProtectiveStopSubmission(
+    Guid IntentId,
+    ExecutionRunContext RunContext,
+    string Symbol,
+    string Side,
+    decimal Quantity,
+    decimal StopPrice,
+    DateOnly SessionDate,
+    DateTimeOffset CreatedAtUtc);
+
 public interface IOrderSubmissionService
 {
     Task<OrderSubmissionResult> SubmitBracketOrderAsync(
         BracketOrderSubmission submission,
+        IBrokerClient brokerClient,
+        CancellationToken cancellationToken);
+
+    Task<OrderSubmissionResult> SubmitProtectiveStopAsync(
+        ProtectiveStopSubmission submission,
         IBrokerClient brokerClient,
         CancellationToken cancellationToken);
 }
@@ -187,6 +202,132 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 ?? throw new InvalidOperationException("ACKED order has no broker timestamp."));
     }
 
+    public async Task<OrderSubmissionResult> SubmitProtectiveStopAsync(
+        ProtectiveStopSubmission submission,
+        IBrokerClient brokerClient,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(submission);
+        ArgumentNullException.ThrowIfNull(brokerClient);
+        Validate(submission);
+
+        var symbol = submission.Symbol.Trim().ToUpperInvariant();
+        var side = NormalizeSide(submission.Side);
+        var requestJson = JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            strategyId = "BACKSTOP",
+            symbol,
+            side,
+            orderType = "stop",
+            timeInForce = "gtc",
+            quantity = submission.Quantity,
+            stopPrice = submission.StopPrice,
+            submission.SessionDate
+        });
+        var run = new ProductionRun
+        {
+            RunId = submission.RunContext.RunId,
+            SchemaVersion = 1,
+            ConfigHash = submission.RunContext.ConfigHash,
+            CodeVersion = submission.RunContext.CodeVersion,
+            Profile = submission.RunContext.Profile,
+            Status = "running",
+            StartedAtUtc = submission.RunContext.StartedAtUtc
+        };
+        var intent = await intentRepository.ReserveAsync(
+            run,
+            new OrderIntentReservation(
+                submission.IntentId,
+                null,
+                "BACKSTOP",
+                symbol,
+                side,
+                "stop",
+                "gtc",
+                submission.Quantity,
+                null,
+                submission.StopPrice,
+                submission.SessionDate,
+                submission.CreatedAtUtc.ToUniversalTime(),
+                requestJson),
+            cancellationToken);
+
+        var current = await eventRepository.GetCurrentAsync(intent.ClientOrderId, cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Persisted protective intent '{intent.ClientOrderId}' has no lifecycle state.");
+        if (current.State == OrderState.Acked)
+        {
+            if (String.IsNullOrWhiteSpace(current.BrokerOrderId) || current.BrokerTimestampUtc is null)
+            {
+                throw new InvalidOperationException(
+                    $"ACKED protective order '{intent.ClientOrderId}' is missing broker provenance.");
+            }
+
+            return new OrderSubmissionResult(
+                current.BrokerOrderId,
+                intent.ClientOrderId,
+                intent.IntentId,
+                current.BrokerTimestampUtc.Value);
+        }
+
+        if (current.State != OrderState.Intent)
+        {
+            throw new InvalidOperationException(
+                $"Protective order '{intent.ClientOrderId}' is in state {current.State.ToStorageValue()} and must reconcile before retry.");
+        }
+
+        var submitted = await eventRepository.TransitionAsync(
+            new OrderTransitionRequest(
+                intent.ClientOrderId,
+                OrderState.Intent,
+                OrderState.Submitted,
+                Source: "engine",
+                LocalTimestampUtc: submission.CreatedAtUtc.ToUniversalTime(),
+                PayloadJson: requestJson),
+            cancellationToken);
+        if (!submitted.Applied)
+        {
+            throw new InvalidOperationException(
+                $"Protective order '{intent.ClientOrderId}' is already being submitted and must reconcile before retry.");
+        }
+
+        var receipt = await brokerClient.SubmitProtectiveStopAsync(
+            new ProtectiveStopOrder(
+                symbol,
+                side,
+                submission.Quantity,
+                submission.StopPrice,
+                "gtc",
+                intent.ClientOrderId),
+            cancellationToken);
+        var acknowledged = await eventRepository.TransitionAsync(
+            new OrderTransitionRequest(
+                intent.ClientOrderId,
+                OrderState.Submitted,
+                OrderState.Acked,
+                Source: "broker_rest",
+                LocalTimestampUtc: DateTimeOffset.UtcNow,
+                BrokerTimestampUtc: receipt.BrokerAcceptedAtUtc,
+                BrokerOrderId: receipt.BrokerOrderId,
+                PayloadJson: JsonSerializer.Serialize(receipt)),
+            cancellationToken);
+        logger.LogCritical(
+            "Restored broker protection for {Symbol}. ClientOrderId={ClientOrderId} BrokerOrderId={BrokerOrderId} StopPrice={StopPrice} Quantity={Quantity}.",
+            symbol,
+            intent.ClientOrderId,
+            receipt.BrokerOrderId,
+            submission.StopPrice,
+            submission.Quantity);
+        return new OrderSubmissionResult(
+            acknowledged.Snapshot.BrokerOrderId
+                ?? throw new InvalidOperationException("ACKED protective order has no broker order ID."),
+            intent.ClientOrderId,
+            intent.IntentId,
+            acknowledged.Snapshot.BrokerTimestampUtc
+                ?? throw new InvalidOperationException("ACKED protective order has no broker timestamp."));
+    }
+
     private static void Validate(BracketOrderSubmission submission)
     {
         if (submission.IntentId == Guid.Empty || submission.RunContext.RunId == Guid.Empty)
@@ -225,6 +366,27 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             submission.RunContext.Profile is not ("paper" or "live"))
         {
             throw new InvalidOperationException("Execution run provenance is invalid.");
+        }
+    }
+
+    private static void Validate(ProtectiveStopSubmission submission)
+    {
+        if (submission.IntentId == Guid.Empty || submission.RunContext.RunId == Guid.Empty ||
+            String.IsNullOrWhiteSpace(submission.Symbol) || submission.Quantity <= 0m ||
+            submission.Quantity != Decimal.Truncate(submission.Quantity) || submission.StopPrice <= 0m)
+        {
+            throw new InvalidOperationException(
+                "A GTC protective stop requires run/intent identity, symbol, positive whole-share quantity, and stop price.");
+        }
+
+        _ = NormalizeSide(submission.Side);
+        if (submission.RunContext.ConfigHash.Length != 64 ||
+            !submission.RunContext.ConfigHash.All(Uri.IsHexDigit) ||
+            submission.RunContext.CodeVersion.Length is not (40 or 64) ||
+            !submission.RunContext.CodeVersion.All(Uri.IsHexDigit) ||
+            submission.RunContext.Profile is not ("paper" or "live"))
+        {
+            throw new InvalidOperationException("Protective execution run provenance is invalid.");
         }
     }
 

@@ -113,6 +113,52 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
         });
     }
 
+    public async Task<BrokerOrderReceipt> SubmitProtectiveStopAsync(
+        ProtectiveStopOrder order,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        if (order.Quantity <= 0m || order.StopPrice <= 0m ||
+            order.Side.Trim().ToLowerInvariant() is not ("buy" or "sell") ||
+            !order.TimeInForce.Equals("gtc", StringComparison.OrdinalIgnoreCase) ||
+            String.IsNullOrWhiteSpace(order.ClientOrderId))
+        {
+            throw new InvalidOperationException("A protective stop requires side, positive quantity/price, GTC, and client order ID.");
+        }
+
+        return await ApiProfiler.ProfileAsync("Alpaca", "/v2/orders", "POST (Protective Stop)", async () =>
+        {
+            var requestBody = new
+            {
+                symbol = order.Ticker.Trim().ToUpperInvariant(),
+                qty = order.Quantity.ToString("0.#########", CultureInfo.InvariantCulture),
+                side = order.Side.Trim().ToLowerInvariant(),
+                type = "stop",
+                time_in_force = "gtc",
+                stop_price = FormatOrderPrice(order.StopPrice),
+                client_order_id = order.ClientOrderId
+            };
+            using var content = new StringContent(
+                JsonSerializer.Serialize(requestBody),
+                Encoding.UTF8,
+                "application/json");
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/v2/orders") { Content = content };
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-submit-protective-stop",
+                correlationId: order.ClientOrderId,
+                cancellationToken: cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    AlpacaTradingRestClient.DescribeFailure("protective-stop submission", response));
+            }
+
+            using var document = JsonDocument.Parse(response.Payload);
+            return RequireOrderReceipt(document.RootElement, response, "protective-stop submission");
+        });
+    }
+
     public async Task<bool> CancelOrderAsync(string orderId, CancellationToken cancellationToken)
     {
         return await ApiProfiler.ProfileAsync("Alpaca", $"/v2/orders/{orderId}", "DELETE", async () =>
@@ -234,7 +280,7 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
     {
         return await ApiProfiler.ProfileAsync("Alpaca", "/v2/orders", "GET", async () =>
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, "/v2/orders?status=open");
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/v2/orders?status=open&nested=true&limit=500");
             var response = await _tradingClient.SendAsync(
                 request,
                 "broker-open-orders",
@@ -246,10 +292,27 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 
             using var doc = JsonDocument.Parse(response.Payload);
 
-            var orders = doc.RootElement
-                .EnumerateArray()
-                .Select(element => ParseOrder(element, "open-order query"))
-                .ToArray();
+            var orders = new System.Collections.Generic.List<ActiveBrokerOrder>();
+            foreach (var element in doc.RootElement.EnumerateArray())
+            {
+                var parent = ParseOrder(element, "open-order query");
+                if (IsOpenStatus(parent.Status))
+                {
+                    orders.Add(parent);
+                }
+
+                if (element.TryGetProperty("legs", out var legs) && legs.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var leg in legs.EnumerateArray())
+                    {
+                        var child = ParseOrder(leg, "open-order leg query", parent.ClientOrderId);
+                        if (IsOpenStatus(child.Status))
+                        {
+                            orders.Add(child);
+                        }
+                    }
+                }
+            }
 
             return (System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>)orders;
         });
@@ -291,7 +354,10 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
         });
     }
 
-    private static ActiveBrokerOrder ParseOrder(JsonElement element, string operation)
+    private static ActiveBrokerOrder ParseOrder(
+        JsonElement element,
+        string operation,
+        string? parentClientOrderId = null)
     {
         var id = RequireString(element, "id", operation);
         var symbol = RequireString(element, "symbol", operation).Trim().ToUpperInvariant();
@@ -312,8 +378,14 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
             clientOrderId,
             ParseRequiredDecimal(element, "filled_qty", operation),
             ParseOptionalDecimal(element, "filled_avg_price"),
-            RequireTimestamp(element, "updated_at", operation));
+            RequireTimestamp(element, "updated_at", operation),
+            parentClientOrderId);
     }
+
+    private static bool IsOpenStatus(string status) =>
+        status.Trim().ToLowerInvariant() is
+            "accepted" or "pending_new" or "accepted_for_bidding" or "new" or
+            "partially_filled" or "pending_cancel" or "pending_replace";
 
     private static string RequireString(JsonElement element, string propertyName, string operation)
     {
@@ -481,5 +553,12 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 
         throw new InvalidOperationException(
             $"Alpaca {operation} returned no valid created_at timestamp. RawArchiveId={response.Archive.Manifest.ArchiveId}.");
+    }
+
+    private static string FormatOrderPrice(decimal price)
+    {
+        var decimals = price >= 1m ? 2 : 4;
+        return Decimal.Round(price, decimals, MidpointRounding.ToZero)
+            .ToString(decimals == 2 ? "0.00" : "0.0000", CultureInfo.InvariantCulture);
     }
 }

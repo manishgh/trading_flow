@@ -9,19 +9,44 @@ namespace TradingFlow.Engine.Execution;
 public sealed class PseudoBroker : IBrokerClient
 {
     private readonly ConcurrentDictionary<string, FinalizedOrder> _activeOrders = new();
+    private readonly ConcurrentDictionary<string, ProtectiveStopOrder> _protectiveOrders = new();
 
     public Task<BrokerOrderReceipt> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken)
     {
         var orderId = Guid.NewGuid().ToString("N");
         _activeOrders.TryAdd(orderId, order);
-        
+
         // Simulate network latency
+        return Task.FromResult(new BrokerOrderReceipt(orderId, DateTimeOffset.UtcNow));
+    }
+
+    public Task<BrokerOrderReceipt> SubmitProtectiveStopAsync(
+        ProtectiveStopOrder order,
+        CancellationToken cancellationToken)
+    {
+        var orderId = Guid.NewGuid().ToString("N");
+        _protectiveOrders.TryAdd(orderId, order);
         return Task.FromResult(new BrokerOrderReceipt(orderId, DateTimeOffset.UtcNow));
     }
 
     public Task<System.Collections.Generic.IReadOnlyList<TradingFlow.Domain.Orders.ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken)
     {
-        return Task.FromResult<System.Collections.Generic.IReadOnlyList<TradingFlow.Domain.Orders.ActiveBrokerOrder>>(Array.Empty<TradingFlow.Domain.Orders.ActiveBrokerOrder>());
+        var now = DateTimeOffset.UtcNow;
+        var orders = _protectiveOrders.Select(item => new ActiveBrokerOrder(
+            item.Key,
+            item.Value.Ticker,
+            item.Value.Side,
+            "new",
+            "stop",
+            null,
+            item.Value.StopPrice,
+            item.Value.Quantity,
+            now,
+            item.Value.ClientOrderId,
+            0m,
+            null,
+            now)).ToArray();
+        return Task.FromResult<System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>>(orders);
     }
 
     public Task<TradingFlow.Domain.Orders.ActiveBrokerOrder?> GetOrderByClientOrderIdAsync(
@@ -33,7 +58,29 @@ public sealed class PseudoBroker : IBrokerClient
             .SingleOrDefault(item => String.Equals(item.Value.ClientOrderId, clientOrderId, StringComparison.Ordinal));
         if (order.Value is null)
         {
-            return Task.FromResult<TradingFlow.Domain.Orders.ActiveBrokerOrder?>(null);
+            var protective = _protectiveOrders
+                .Select(item => (item.Key, item.Value))
+                .SingleOrDefault(item => String.Equals(item.Value.ClientOrderId, clientOrderId, StringComparison.Ordinal));
+            if (protective.Value is null)
+            {
+                return Task.FromResult<TradingFlow.Domain.Orders.ActiveBrokerOrder?>(null);
+            }
+
+            var protectiveNow = DateTimeOffset.UtcNow;
+            return Task.FromResult<ActiveBrokerOrder?>(new ActiveBrokerOrder(
+                protective.Key,
+                protective.Value.Ticker,
+                protective.Value.Side,
+                "new",
+                "stop",
+                null,
+                protective.Value.StopPrice,
+                protective.Value.Quantity,
+                protectiveNow,
+                protective.Value.ClientOrderId,
+                0m,
+                null,
+                protectiveNow));
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -65,12 +112,15 @@ public sealed class PseudoBroker : IBrokerClient
 
     public Task<bool> CancelOrderAsync(string orderId, CancellationToken cancellationToken)
     {
-        return Task.FromResult(_activeOrders.TryRemove(orderId, out _));
+        return Task.FromResult(
+            _activeOrders.TryRemove(orderId, out _) ||
+            _protectiveOrders.TryRemove(orderId, out _));
     }
 
     public Task<bool> CancelAllOrdersAsync(CancellationToken cancellationToken)
     {
         _activeOrders.Clear();
+        _protectiveOrders.Clear();
         return Task.FromResult(true);
     }
 
@@ -90,10 +140,10 @@ public sealed class PseudoBroker : IBrokerClient
     {
         if (_activeOrders.TryGetValue(orderId, out var existingOrder))
         {
-            var updated = existingOrder with 
-            { 
-                StopLossPrice = newStopLoss, 
-                TakeProfitPrice = newTakeProfit 
+            var updated = existingOrder with
+            {
+                StopLossPrice = newStopLoss,
+                TakeProfitPrice = newTakeProfit
             };
             _activeOrders[orderId] = updated;
             return Task.FromResult(true);
@@ -119,8 +169,8 @@ public sealed class PseudoBroker : IBrokerClient
     }
 
     public async Task StartStreamingAsync(
-        TradingFlow.Engine.Abstractions.IMarketDataStreamer streamer, 
-        string[] tickers, 
+        TradingFlow.Engine.Abstractions.IMarketDataStreamer streamer,
+        string[] tickers,
         CancellationToken cancellationToken)
     {
         await foreach (var bar in streamer.SubscribeBarsAsync(tickers, cancellationToken))

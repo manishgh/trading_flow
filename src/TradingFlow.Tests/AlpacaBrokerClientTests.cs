@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using TradingFlow.Alpaca;
+using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Tests;
@@ -15,6 +16,74 @@ public class AlpacaBrokerClientTests : IDisposable
 
     private IRawArchiveWriter CreateArchiveWriter() =>
         new FileSystemRawArchiveWriter(new RawArchiveOptions(archiveRoot));
+
+    [Fact]
+    public async Task SubmitProtectiveStopAsync_SendsStandaloneGtcStopWithBindingClientId()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """{"id":"stop-order-id","created_at":"2026-07-21T15:00:00Z"}""");
+        using var httpClient = new HttpClient(handler);
+        using var client = new AlpacaBrokerClient(
+            httpClient,
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+            {
+                KeyId = "test-key",
+                SecretKey = "test-secret"
+            },
+            CreateArchiveWriter());
+
+        var receipt = await client.SubmitProtectiveStopAsync(
+            new ProtectiveStopOrder(
+                "MSFT", "sell", 10m, 98.123m, "gtc",
+                "BACKSTOP-S-MSFT-20260721-001-12345678"),
+            CancellationToken.None);
+
+        Assert.Equal("stop-order-id", receipt.BrokerOrderId);
+        using var document = JsonDocument.Parse(handler.RequestJson);
+        var root = document.RootElement;
+        Assert.Equal("stop", root.GetProperty("type").GetString());
+        Assert.Equal("gtc", root.GetProperty("time_in_force").GetString());
+        Assert.Equal("sell", root.GetProperty("side").GetString());
+        Assert.Equal("10", root.GetProperty("qty").GetString());
+        Assert.Equal("98.12", root.GetProperty("stop_price").GetString());
+        Assert.Equal("BACKSTOP-S-MSFT-20260721-001-12345678", root.GetProperty("client_order_id").GetString());
+    }
+
+    [Fact]
+    public async Task GetOpenOrdersAsync_FlattensOpenBracketLegs_WithParentOwnership()
+    {
+        const string parentClientId = "SWGA-B-MSFT-20260721-001-12345678";
+        var response = $$"""
+        [{
+          "id":"parent-1","symbol":"MSFT","side":"buy","status":"filled","type":"limit",
+          "client_order_id":"{{parentClientId}}","limit_price":"100","stop_price":null,"qty":"10",
+          "filled_qty":"10","filled_avg_price":"100","created_at":"2026-07-21T14:30:00Z","updated_at":"2026-07-21T14:31:00Z",
+          "legs":[{
+            "id":"stop-leg-1","symbol":"MSFT","side":"sell","status":"new","type":"stop",
+            "client_order_id":"broker-generated-leg-id","limit_price":null,"stop_price":"98","qty":"10",
+            "filled_qty":"0","filled_avg_price":null,"created_at":"2026-07-21T14:31:00Z","updated_at":"2026-07-21T14:31:00Z","legs":null
+          }]
+        }]
+        """;
+        using var handler = new CapturingHandler(responseBody: response);
+        using var httpClient = new HttpClient(handler);
+        using var client = new AlpacaBrokerClient(
+            httpClient,
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+            {
+                KeyId = "test-key",
+                SecretKey = "test-secret"
+            },
+            CreateArchiveWriter());
+
+        var order = Assert.Single(await client.GetOpenOrdersAsync(CancellationToken.None));
+
+        Assert.Equal("/v2/orders?status=open&nested=true&limit=500", handler.Path);
+        Assert.Equal("stop-leg-1", order.OrderId);
+        Assert.Equal(parentClientId, order.ParentClientOrderId);
+        Assert.Equal(98m, order.StopPrice);
+    }
+
 
     [Fact]
     public async Task SubmitExitOrdersAsync_SendsTakeProfitLimitPrice_ForOcoOrder()

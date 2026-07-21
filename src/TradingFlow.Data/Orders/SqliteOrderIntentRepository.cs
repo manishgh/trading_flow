@@ -18,6 +18,19 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
         this.contextFactory = contextFactory;
     }
 
+    public async Task<OrderIntentRecord?> GetByClientOrderIdAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = !String.IsNullOrWhiteSpace(clientOrderId)
+            ? clientOrderId.Trim()
+            : throw new ArgumentException("Client order ID is required.", nameof(clientOrderId));
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.OrderIntents
+            .AsNoTracking()
+            .SingleOrDefaultAsync(record => record.ClientOrderId == normalized, cancellationToken);
+    }
+
     public async Task<OrderIntentRecord> ReserveAsync(
         ProductionRun run,
         OrderIntentReservation reservation,

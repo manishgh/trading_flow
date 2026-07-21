@@ -5,6 +5,10 @@ namespace TradingFlow.Domain.Persistence;
 /// </summary>
 public interface IOrderIntentRepository
 {
+    Task<OrderIntentRecord?> GetByClientOrderIdAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Atomically creates the owning run and reserves one immutable intent. Repeating the
     /// same intent ID returns the original row and therefore the original client order ID.

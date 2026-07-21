@@ -5,7 +5,10 @@ public sealed record PositionLedgerSnapshot(
     decimal Quantity,
     DateTimeOffset BrokerTimestampUtc,
     DateTimeOffset LocalTimestampUtc,
-    long PositionEventId);
+    long PositionEventId,
+    string LatestClientOrderId,
+    decimal LatestFillPrice,
+    string LatestFillSide);
 
 public sealed record PositionFillAppendRequest(
     ProductionRun Run,

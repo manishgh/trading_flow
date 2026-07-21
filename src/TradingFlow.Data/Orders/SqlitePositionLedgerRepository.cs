@@ -81,7 +81,10 @@ public sealed class SqlitePositionLedgerRepository(
                 record.QuantityAfter,
                 record.BrokerTimestampUtc,
                 record.LocalTimestampUtc,
-                record.PositionEventId))
+                record.PositionEventId,
+                record.ClientOrderId,
+                record.FillPrice,
+                record.Side))
             .ToArrayAsync(cancellationToken);
     }
 
@@ -158,5 +161,8 @@ public sealed class SqlitePositionLedgerRepository(
         record.QuantityAfter,
         record.BrokerTimestampUtc,
         record.LocalTimestampUtc,
-        record.PositionEventId);
+        record.PositionEventId,
+        record.ClientOrderId,
+        record.FillPrice,
+        record.Side);
 }

@@ -383,7 +383,10 @@ public sealed class OrderSynchronizationCoordinatorTests
                 request.QuantityAfter,
                 request.BrokerTimestampUtc,
                 request.LocalTimestampUtc,
-                Interlocked.Increment(ref eventId));
+                Interlocked.Increment(ref eventId),
+                request.ClientOrderId,
+                request.FillPrice,
+                request.Side);
             snapshots[request.Symbol] = snapshot;
             accountedByBrokerOrder[request.BrokerOrderId] =
                 accountedByBrokerOrder.GetValueOrDefault(request.BrokerOrderId) + request.FillQuantity;

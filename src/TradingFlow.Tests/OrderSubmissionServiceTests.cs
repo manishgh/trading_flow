@@ -9,6 +9,43 @@ namespace TradingFlow.Tests;
 public sealed class OrderSubmissionServiceTests
 {
     [Fact]
+    public async Task SubmitProtectiveStopAsync_BypassesEntryBlock_ButStillWritesIntentBeforeBrokerCall()
+    {
+        var repository = new RecordingIntentRepository();
+        var events = new RecordingEventRepository(repository);
+        var admission = new EntryAdmissionControl();
+        admission.Block("test", "ENTRIES_BLOCKED", "Protection must still be allowed.", DateTimeOffset.UtcNow);
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker.Setup(client => client.SubmitProtectiveStopAsync(
+                It.IsAny<ProtectiveStopOrder>(), It.IsAny<CancellationToken>()))
+            .Callback<ProtectiveStopOrder, CancellationToken>((_, _) =>
+            {
+                Assert.True(repository.ReservationCompleted);
+                Assert.Equal(OrderState.Submitted, events.State);
+            })
+            .ReturnsAsync(new BrokerOrderReceipt("backstop-1", DateTimeOffset.UtcNow));
+        var service = new OrderSubmissionService(
+            repository,
+            events,
+            admission,
+            NullLogger<OrderSubmissionService>.Instance);
+        var context = ExecutionRunContextFactory.Create(
+            Guid.NewGuid(), "paper", new { test = true }, DateTimeOffset.UtcNow, typeof(OrderSubmissionServiceTests).Assembly);
+
+        var result = await service.SubmitProtectiveStopAsync(
+            new ProtectiveStopSubmission(
+                Guid.NewGuid(), context, "MSFT", "sell", 10m, 98m,
+                new DateOnly(2026, 7, 21), DateTimeOffset.UtcNow),
+            broker.Object,
+            CancellationToken.None);
+
+        Assert.Equal("backstop-1", result.BrokerOrderId);
+        Assert.Equal("BACKSTOP", repository.Intent!.StrategyId);
+        Assert.Equal(OrderState.Acked, events.State);
+        broker.VerifyAll();
+    }
+
+    [Fact]
     public async Task SubmitBracketOrderAsync_PersistsIntentBeforeBrokerNetworkCall()
     {
         var repository = new RecordingIntentRepository();
@@ -218,6 +255,12 @@ public sealed class OrderSubmissionServiceTests
         public bool ReservationCompleted { get; private set; }
 
         public int ReservationAttempts { get; private set; }
+
+        public Task<OrderIntentRecord?> GetByClientOrderIdAsync(
+            string clientOrderId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(
+                Intent?.ClientOrderId == clientOrderId ? Intent : null);
 
         public Task<OrderIntentRecord> ReserveAsync(
             ProductionRun run,

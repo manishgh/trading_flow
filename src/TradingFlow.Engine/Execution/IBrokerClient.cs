@@ -9,6 +9,14 @@ public sealed record BrokerOrderReceipt(
     string BrokerOrderId,
     DateTimeOffset BrokerAcceptedAtUtc);
 
+public sealed record ProtectiveStopOrder(
+    string Ticker,
+    string Side,
+    decimal Quantity,
+    decimal StopPrice,
+    string TimeInForce,
+    string ClientOrderId);
+
 public interface IBrokerOrderReader
 {
     Task<System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>> GetOpenOrdersAsync(
@@ -22,6 +30,9 @@ public interface IBrokerOrderReader
 public interface IBrokerClient : IBrokerOrderReader
 {
     Task<BrokerOrderReceipt> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken);
+    Task<BrokerOrderReceipt> SubmitProtectiveStopAsync(
+        ProtectiveStopOrder order,
+        CancellationToken cancellationToken);
     Task<bool> CancelOrderAsync(string orderId, CancellationToken cancellationToken);
     Task<bool> CancelAllOrdersAsync(CancellationToken cancellationToken);
     Task<bool> ModifyOrderAsync(string orderId, decimal newStopLoss, decimal newTakeProfit, CancellationToken cancellationToken);

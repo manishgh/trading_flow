@@ -31,7 +31,8 @@ public sealed class AccountReconciliationServiceTests
         var mismatch = await fixture.Service.ReconcileAsync(fixture.Broker, [], CancellationToken.None);
 
         Assert.Equal("reconcile_mismatch", mismatch.Status);
-        Assert.Single(mismatch.Differences, item => item.Kind == "position_quantity" && item.Key == "MSFT");
+        Assert.Contains(mismatch.Differences, item => item.Kind == "position_quantity" && item.Key == "MSFT");
+        Assert.Contains(mismatch.Differences, item => item.Kind == "missing_protective_order" && item.Key == "MSFT");
         Assert.False(fixture.Admission.GetSnapshot().EntriesAllowed);
         Assert.Contains(fixture.Admission.GetSnapshot().Blocks, block => block.Code == "RECONCILE_MISMATCH");
 
@@ -116,7 +117,10 @@ public sealed class AccountReconciliationServiceTests
             -5m,
             fixture.Time.GetUtcNow(),
             fixture.Time.GetUtcNow(),
-            1);
+            1,
+            "SWGA-S-MSFT-20260721-001-12345678",
+            100m,
+            "sell");
         fixture.Broker.Positions = [new BrokerPosition("MSFT", "short", 5m, 100m, 99m, 5m)];
         var localOrder = new OrderStateSnapshot(
             Guid.NewGuid(),
@@ -128,12 +132,25 @@ public sealed class AccountReconciliationServiceTests
             null,
             null,
             1);
-        fixture.Orders.Current = [localOrder];
+        var localStopOrder = new OrderStateSnapshot(
+            Guid.NewGuid(),
+            "BACKSTOP-B-MSFT-20260721-001-12345678",
+            "stop-1",
+            OrderState.Acked,
+            fixture.Time.GetUtcNow(),
+            fixture.Time.GetUtcNow(),
+            null,
+            null,
+            2);
+        fixture.Orders.Current = [localOrder, localStopOrder];
         var openOrders = new[]
         {
             new ActiveBrokerOrder(
                 "broker-1", "MSFT", "sell", "new", "limit", 99m, null, 5m,
-                fixture.Time.GetUtcNow(), localOrder.ClientOrderId, 0m, null, fixture.Time.GetUtcNow())
+                fixture.Time.GetUtcNow(), localOrder.ClientOrderId, 0m, null, fixture.Time.GetUtcNow()),
+            new ActiveBrokerOrder(
+                "stop-1", "MSFT", "buy", "new", "stop", null, 102m, 5m,
+                fixture.Time.GetUtcNow(), "BACKSTOP-B-MSFT-20260721-001-12345678", 0m, null, fixture.Time.GetUtcNow())
         };
 
         var result = await fixture.Service.ReconcileAsync(fixture.Broker, openOrders, CancellationToken.None);
@@ -172,6 +189,32 @@ public sealed class AccountReconciliationServiceTests
         Assert.False(fixture.Admission.GetSnapshot().EntriesAllowed);
     }
 
+    [Fact]
+    public async Task BrokerGeneratedBracketStopLeg_IsOwnedThroughPersistedParentClientId()
+    {
+        var fixture = new Fixture();
+        const string parentClientId = "SWGA-B-MSFT-20260721-001-12345678";
+        fixture.Positions.Current["MSFT"] = new PositionLedgerSnapshot(
+            "MSFT", 10m, fixture.Time.GetUtcNow(), fixture.Time.GetUtcNow(), 1,
+            parentClientId, 100m, "buy");
+        fixture.Broker.Positions = [new BrokerPosition("MSFT", "long", 10m, 100m, 101m, 10m)];
+        fixture.Orders.Additional[parentClientId] = new OrderStateSnapshot(
+            Guid.NewGuid(), parentClientId, "parent-1", OrderState.Filled,
+            fixture.Time.GetUtcNow(), fixture.Time.GetUtcNow(), 10m, 100m, 1);
+        var stopLeg = new ActiveBrokerOrder(
+            "stop-leg-1", "MSFT", "sell", "new", "stop", null, 98m, 10m,
+            fixture.Time.GetUtcNow(), "broker-generated-leg-id", 0m, null,
+            fixture.Time.GetUtcNow(), parentClientId);
+
+        var result = await fixture.Service.ReconcileAsync(
+            fixture.Broker,
+            [stopLeg],
+            CancellationToken.None);
+
+        Assert.Empty(result.Differences);
+        Assert.True(fixture.Admission.GetSnapshot().EntriesAllowed);
+    }
+
     private sealed class Fixture
     {
         public Fixture()
@@ -181,6 +224,7 @@ public sealed class AccountReconciliationServiceTests
                 Positions,
                 Reconciliations,
                 Admission,
+                Protector,
                 new ReconciliationRunContext(CreateRun(Time.GetUtcNow())),
                 new AccountReconciliationOptions(60, 30),
                 Time,
@@ -193,6 +237,7 @@ public sealed class AccountReconciliationServiceTests
         public InMemoryPositions Positions { get; } = new();
         public InMemoryReconciliations Reconciliations { get; } = new();
         public EntryAdmissionControl Admission { get; } = new();
+        public RecordingProtector Protector { get; } = new();
         public RecordingBroker Broker { get; } = new();
         public AccountReconciliationService Service { get; }
     }
@@ -210,9 +255,12 @@ public sealed class AccountReconciliationServiceTests
     private sealed class InMemoryOrderEvents : IOrderEventRepository
     {
         public IReadOnlyList<OrderStateSnapshot> Current { get; set; } = [];
+        public Dictionary<string, OrderStateSnapshot> Additional { get; } = new(StringComparer.Ordinal);
 
         public Task<OrderStateSnapshot?> GetCurrentAsync(string clientOrderId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Current.SingleOrDefault(item => item.ClientOrderId == clientOrderId));
+            Task.FromResult(
+                Current.SingleOrDefault(item => item.ClientOrderId == clientOrderId) ??
+                Additional.GetValueOrDefault(clientOrderId));
 
         public Task<IReadOnlyList<OrderStateSnapshot>> ListReconcilableAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(Current);
@@ -308,12 +356,28 @@ public sealed class AccountReconciliationServiceTests
         public Task<IReadOnlyList<ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ActiveBrokerOrder>>([]);
         public Task<ActiveBrokerOrder?> GetOrderByClientOrderIdAsync(string clientOrderId, CancellationToken cancellationToken) => Task.FromResult<ActiveBrokerOrder?>(null);
         public Task<BrokerOrderReceipt> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<BrokerOrderReceipt> SubmitProtectiveStopAsync(ProtectiveStopOrder order, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> CancelOrderAsync(string orderId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> CancelAllOrdersAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> ModifyOrderAsync(string orderId, decimal newStopLoss, decimal newTakeProfit, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<string[]> SubmitExitOrdersAsync(string ticker, int quantity, decimal stopLossPrice, decimal takeProfitPrice, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> ClosePositionAsync(string ticker, int quantity, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> ClosePositionAsync(string ticker, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class RecordingProtector : IProtectiveOrderInvariantService
+    {
+        public List<string> Symbols { get; } = [];
+
+        public Task<IReadOnlyList<ProtectiveOrderRepair>> EnsureAsync(
+            IBrokerClient broker,
+            IReadOnlyList<BrokerPosition> brokerPositions,
+            IReadOnlyList<ActiveBrokerOrder> openOrders,
+            CancellationToken cancellationToken = default)
+        {
+            Symbols.AddRange(brokerPositions.Select(position => position.Ticker));
+            return Task.FromResult<IReadOnlyList<ProtectiveOrderRepair>>([]);
+        }
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider

@@ -15,4 +15,5 @@ public sealed record ActiveBrokerOrder(
     string ClientOrderId,
     decimal FilledQuantity,
     decimal? FilledAveragePrice,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string? ParentClientOrderId = null);

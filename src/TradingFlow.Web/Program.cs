@@ -123,6 +123,26 @@ var reconciliationOptions = new AccountReconciliationOptions(
     reconcileIntervalSeconds,
     orphanTimeoutSeconds);
 builder.Services.AddSingleton(reconciliationOptions);
+var backstopAtrMultiple = productionConfiguration.ResolveParameter<decimal>(
+    ProductionProfile.Paper,
+    "backstop_atr_mult",
+    builder.Configuration["TradingFlow:Production:backstop_atr_mult"]
+        ?? Environment.GetEnvironmentVariable("TRADINGFLOW_BACKSTOP_ATR_MULT"));
+builder.Services.AddSingleton(new ProtectiveOrderOptions(backstopAtrMultiple));
+builder.Services.AddSingleton<TradingFlow.Engine.Indicators.IndicatorEngine>();
+builder.Services.AddSingleton(serviceProvider => new Lazy<IMarketDataProvider>(() =>
+{
+    var credentials = serviceProvider.GetRequiredService<AlpacaCredentialProvider>();
+    var options = TradingFlow.Alpaca.AlpacaOptions.Create(ProductionProfile.Paper) with
+    {
+        KeyId = credentials.KeyId,
+        SecretKey = credentials.SecretKey
+    };
+    return new TradingFlow.Alpaca.AlpacaMarketDataProvider(
+        new HttpClient(),
+        options,
+        serviceProvider.GetRequiredService<ILogger<TradingFlow.Alpaca.AlpacaMarketDataProvider>>());
+}));
 var synchronizationStartedAt = DateTimeOffset.UtcNow;
 var synchronizationRunContext = ExecutionRunContextFactory.Create(
     Guid.NewGuid(),
@@ -143,6 +163,7 @@ builder.Services.AddSingleton(new ReconciliationRunContext(new TradingFlow.Domai
     ConfigHash = synchronizationRunContext.ConfigHash,
     CodeVersion = synchronizationRunContext.CodeVersion
 }));
+builder.Services.AddSingleton<IProtectiveOrderInvariantService, ProtectiveOrderInvariantService>();
 builder.Services.AddSingleton<IAccountReconciliationService, AccountReconciliationService>();
 builder.Services.AddSingleton<IOrderSynchronizationCoordinator, OrderSynchronizationCoordinator>();
 builder.Services.AddSingleton<IOrderSubmissionService, OrderSubmissionService>();
