@@ -50,6 +50,8 @@ public sealed class TradingFlowDatabaseInitializer
 
         try
         {
+            await SqliteDurability.ConfigureDatabaseAsync(connection, cancellationToken);
+
             var tables = await ReadTablesAsync(connection, cancellationToken);
             if (tables.Count > 0 && !tables.Contains(HistoryTable))
             {

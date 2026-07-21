@@ -12,6 +12,7 @@ public sealed class TradingFlowDesignTimeDbContextFactory : IDesignTimeDbContext
     {
         var options = new DbContextOptionsBuilder<TradingFlowDbContext>()
             .UseSqlite("Data Source=tradingflow.design.db")
+            .AddInterceptors(new SqliteConnectionDurabilityInterceptor())
             .Options;
         return new TradingFlowDbContext(options);
     }

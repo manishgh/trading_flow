@@ -73,12 +73,16 @@ builder.Services.AddSingleton<StrategyEvaluationService>();
 
 var dbPath = Path.Combine(dataRoot, "tradingflow.db");
 Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-builder.Services.AddDbContextFactory<TradingFlow.Data.Context.TradingFlowDbContext>(options =>
-    Microsoft.EntityFrameworkCore.SqliteDbContextOptionsBuilderExtensions.UseSqlite(options, $"Data Source={dbPath}"));
+builder.Services.AddSingleton<SqliteConnectionDurabilityInterceptor>();
+builder.Services.AddDbContextFactory<TradingFlowDbContext>((serviceProvider, options) =>
+    options
+        .UseSqlite($"Data Source={dbPath}")
+        .AddInterceptors(serviceProvider.GetRequiredService<SqliteConnectionDurabilityInterceptor>()));
 builder.Services.AddSingleton<TradingFlowDatabaseInitializer>();
 
 builder.Services.AddSingleton<TradingFlow.Domain.Locking.ITickerLockService, TradingFlow.Data.Locking.SqliteTickerLockService>();
 builder.Services.AddSingleton<TradingFlow.Domain.Orders.IOrderStateRepository, TradingFlow.Data.Orders.SqliteOrderStateRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderIntentRepository, TradingFlow.Data.Orders.SqliteOrderIntentRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository, TradingFlow.Data.Jobs.SqliteJobRepository>();
 
