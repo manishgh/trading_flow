@@ -26,86 +26,6 @@ public sealed class SqliteDurabilityTests
     }
 
     [Fact]
-    public async Task AppendAsync_ClosedAndReopenedDatabase_PreservesOrderIntent()
-    {
-        await using var database = new TemporarySqliteDatabase();
-        var options = database.CreateOptions(withDurabilityInterceptor: true);
-        var contextFactory = new TestDbContextFactory(options);
-        var runId = Guid.NewGuid();
-        var intentId = Guid.NewGuid();
-
-        await using (var context = await contextFactory.CreateDbContextAsync())
-        {
-            await new TradingFlowDatabaseInitializer().InitializeAsync(context);
-            context.ProductionRuns.Add(new ProductionRun
-            {
-                RunId = runId,
-                SchemaVersion = 1,
-                ConfigHash = new string('a', 64),
-                CodeVersion = "test-code-version",
-                Profile = "paper",
-                Status = "running",
-                StartedAtUtc = DateTimeOffset.UtcNow
-            });
-            await context.SaveChangesAsync();
-        }
-
-        var repository = new SqliteOrderIntentRepository(contextFactory);
-        await repository.AppendAsync(new OrderIntentRecord
-        {
-            IntentId = intentId,
-            RunId = runId,
-            SchemaVersion = 1,
-            ConfigHash = new string('a', 64),
-            CodeVersion = "test-code-version",
-            ClientOrderId = "durable-intent-001",
-            StrategyId = "test-strategy",
-            Symbol = "MSFT",
-            Side = "buy",
-            OrderType = "limit",
-            TimeInForce = "day",
-            RequestedQuantity = 2.5m,
-            LimitPrice = 420.25m,
-            SessionDate = new DateOnly(2026, 7, 21),
-            SequenceNumber = 1,
-            CreatedAtUtc = DateTimeOffset.UtcNow,
-            RequestJson = "{\"symbol\":\"MSFT\"}"
-        });
-
-        await using var reopenedContext = new TradingFlowDbContext(
-            database.CreateOptions(withDurabilityInterceptor: false));
-        var persisted = await reopenedContext.OrderIntents
-            .AsNoTracking()
-            .SingleAsync(record => record.IntentId == intentId);
-
-        Assert.Equal("durable-intent-001", persisted.ClientOrderId);
-        Assert.Equal(2.5m, persisted.RequestedQuantity);
-        Assert.Equal(420.25m, persisted.LimitPrice);
-    }
-
-    [Fact]
-    public async Task AppendAsync_DuplicateClientOrderId_IsRejected()
-    {
-        await using var database = new TemporarySqliteDatabase();
-        var options = database.CreateOptions(withDurabilityInterceptor: true);
-        var contextFactory = new TestDbContextFactory(options);
-        var runId = Guid.NewGuid();
-
-        await using (var context = await contextFactory.CreateDbContextAsync())
-        {
-            await new TradingFlowDatabaseInitializer().InitializeAsync(context);
-            context.ProductionRuns.Add(CreateRun(runId));
-            await context.SaveChangesAsync();
-        }
-
-        var repository = new SqliteOrderIntentRepository(contextFactory);
-        await repository.AppendAsync(CreateIntent(runId, Guid.NewGuid(), "duplicate-client-id"));
-
-        await Assert.ThrowsAsync<DbUpdateException>(
-            () => repository.AppendAsync(CreateIntent(runId, Guid.NewGuid(), "duplicate-client-id")));
-    }
-
-    [Fact]
     public async Task ReserveAsync_RepeatedLogicalIntent_ReusesPersistedClientOrderId()
     {
         await using var database = new TemporarySqliteDatabase();
@@ -266,26 +186,6 @@ public sealed class SqliteDurabilityTests
         Profile = "paper",
         Status = "running",
         StartedAtUtc = DateTimeOffset.UtcNow
-    };
-
-    private static OrderIntentRecord CreateIntent(Guid runId, Guid intentId, string clientOrderId) => new()
-    {
-        IntentId = intentId,
-        RunId = runId,
-        SchemaVersion = 1,
-        ConfigHash = new string('b', 64),
-        CodeVersion = "test-code-version",
-        ClientOrderId = clientOrderId,
-        StrategyId = "test-strategy",
-        Symbol = "MSFT",
-        Side = "buy",
-        OrderType = "market",
-        TimeInForce = "day",
-        RequestedQuantity = 1m,
-        SessionDate = new DateOnly(2026, 7, 21),
-        SequenceNumber = 1,
-        CreatedAtUtc = DateTimeOffset.UtcNow,
-        RequestJson = "{\"symbol\":\"MSFT\"}"
     };
 
     private static OrderIntentReservation CreateReservation(Guid intentId, string symbol) => new(

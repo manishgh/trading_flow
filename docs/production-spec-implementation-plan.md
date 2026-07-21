@@ -115,6 +115,22 @@ assigned to the universal gate chain in S3.8. Local gate: 333/333 tests, full Re
 build including Android with 0 warnings/errors, current EF model, zero known
 vulnerable packages, and isolated Production web smoke checks passed.
 
+**S3.3 checkpoint (2026-07-21):** The canonical EXE-02 order state graph is now
+enforced by an append-only SQLite repository. Reserving an intent creates `INTENT`
+in the same transaction; submission journals `SUBMITTED` before broker I/O and
+`ACKED` from the broker receipt timestamp. Broker snapshots from both LiveRunner
+and mobile automation flow through one lifecycle service for acknowledgments and
+cumulative partial fills. Cancel requests journal `CANCEL_PENDING` before the
+network call. Exact replays are idempotent, broker identity and timestamps cannot
+move backwards, terminal states cannot reopen, and an uncertain `SUBMITTED` retry
+is blocked for reconciliation. The obsolete direct intent-append API and the
+unsafe "missing from open orders means canceled" inference were removed rather
+than retained for compatibility. Authoritative terminal events and REST/stream
+divergence remain assigned to S3.4; orphan escalation remains part of S3.5/EXE-08.
+Local gate: 370/370 tests, full Release build including Android with 0 warnings/errors,
+current EF model, zero known vulnerable packages, and isolated Production web
+smoke checks passed.
+
 IDs: EXE-01..13, DAY-04 (reject enum), parts of TST-03.
 1. Reject-code enum in `TradingFlow.Domain` — Base-Spec §10 set + DAY-04 additions; one enum, used by gates, journal, and tests (CI sync-check vs spec in S12).
 2. Write-ahead intent: `client_order_id` format `{strategy}-{side}-{symbol}-{yyyymmdd}-{seq}-{uuid8}`; persist INTENT (fsync) **before** `SubmitOrderAsync`; retries reuse the persisted ID (EXE-01). Refactor `MobileAutomationService` entry path and `LiveRunner` submission path onto one shared `OrderSubmissionService` (one-brain discipline applies to execution too).
@@ -265,7 +281,7 @@ no eToro behavior; the production-composition test and deployment exclusion land
 | S0 | ✅ 2026-07-21 | `222ad71`, `b257028`, `ca8bd77`, `bd26aff`, `5bfbdfc`, `872ed8f`, `18ac061`, `18eba68` | Governance, secret-store migration, zero known vulnerable packages, clean-checkout CI, strict SIP WebSocket authentication, deterministic tests, and dormant eToro exclusion verified. GitHub Actions run `29809663008` passed; external credential rotation remains operator action U1. |
 | S1 | ✅ 2026-07-21 | `9d77b87`, `610a9ba`, `4510a7e`, `680b7a9` | Appendix-A registry (99 expanded parameters) is bidirectionally enforced; startup loading is typed, range-validated, immutable, canonically SHA-256 hashed, and structured-logged; live-v1 locks and development-only IEX fallback are enforced; all Alpaca trading and stream URLs derive from profile through one resolver. Local gate: 283/283 tests, Release build 0 warnings/errors, Engine dependency audit 0 known vulnerabilities. GitHub Actions run `29811932023` passed. |
 | S2 | ✅ 2026-07-21 | `4bbd5c8`, `eb43cd1`, `54a163e`, `08d6fd3`, `27348a9`, `f6e9810`, `06a4f05`, `a7564b9` | Versioned operational journal, byte-exact provider archives, decimal money audit, WAL/FULL durability, immutable daily backup, fail-closed restore, and recovery drill complete. GitHub Actions run `29839320815` passed. |
-| S3 | 🟨 2026-07-21 | (this checkpoint) | In progress. Canonical 17-value reject-code enum is bidirectionally synchronized with both binding specs and stored as exact text in the gate journal. |
+| S3 | 🟨 2026-07-21 | (this checkpoint) | In progress. Canonical reject codes, write-ahead intent, idempotent submission, and the enforced EXE-02 lifecycle journal are complete. EXE-03 stream authority and EXE-08 reconciliation are next. |
 | S4 | ⬜ | | |
 | S5 | ⬜ | | |
 | S6 | ⬜ | | |

@@ -28,6 +28,7 @@ public sealed class PaperJobService
     private readonly ICandleStore candleStore;
     private readonly bool autoResumeJobs;
     private readonly IOrderSubmissionService? orderSubmissionService;
+    private readonly IOrderLifecycleService? orderLifecycleService;
 
     private readonly IServiceScopeFactory _scopeFactory;
 
@@ -46,7 +47,8 @@ public sealed class PaperJobService
         TradingFlow.Domain.Orders.IOrderStateRepository? orderRepo = null,
         TradingFlow.Domain.Audit.IDecisionAuditRepository? auditRepo = null,
         PaperRuntimeFactory? runtimeFactory = null,
-        IOrderSubmissionService? orderSubmissionService = null)
+        IOrderSubmissionService? orderSubmissionService = null,
+        IOrderLifecycleService? orderLifecycleService = null)
     {
         this.yamlReader = yamlReader;
         _scopeFactory = scopeFactory;
@@ -63,6 +65,7 @@ public sealed class PaperJobService
         _orderRepo = orderRepo;
         _auditRepo = auditRepo;
         this.orderSubmissionService = orderSubmissionService;
+        this.orderLifecycleService = orderLifecycleService;
     }
 
     public async Task InitializeAsync()
@@ -202,6 +205,18 @@ public sealed class PaperJobService
             var cancelled = 0;
             foreach (var order in runOrders)
             {
+                if (orderLifecycleService is not null &&
+                    ClientOrderIdFactory.IsBindingFormat(order.ClientOrderId))
+                {
+                    await orderLifecycleService.ApplyBrokerUpdateAsync(
+                        BrokerOrderUpdateFactory.Create(order),
+                        cts.Token);
+                    await orderLifecycleService.RequestCancelAsync(
+                        order.ClientOrderId,
+                        order.OrderId,
+                        cts.Token);
+                }
+
                 if (await brokerClient.CancelOrderAsync(order.OrderId, cts.Token))
                 {
                     cancelled++;
@@ -421,7 +436,8 @@ public sealed class PaperJobService
                 candleStore,
                 runtimeFactory.RawArchiveWriter,
                 orderSubmissionService,
-                executionRunContext);
+                executionRunContext,
+                orderLifecycleService);
 
             var progress = new Progress<string>(msg =>
             {

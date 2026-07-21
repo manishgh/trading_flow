@@ -10,13 +10,13 @@ public sealed class PseudoBroker : IBrokerClient
 {
     private readonly ConcurrentDictionary<string, FinalizedOrder> _activeOrders = new();
 
-    public Task<string> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken)
+    public Task<BrokerOrderReceipt> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken)
     {
         var orderId = Guid.NewGuid().ToString("N");
         _activeOrders.TryAdd(orderId, order);
         
         // Simulate network latency
-        return Task.FromResult(orderId);
+        return Task.FromResult(new BrokerOrderReceipt(orderId, DateTimeOffset.UtcNow));
     }
 
     public Task<System.Collections.Generic.IReadOnlyList<TradingFlow.Domain.Orders.ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken)

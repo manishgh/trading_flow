@@ -5,9 +5,13 @@ using TradingFlow.Domain.Orders;
 
 namespace TradingFlow.Engine.Execution;
 
+public sealed record BrokerOrderReceipt(
+    string BrokerOrderId,
+    DateTimeOffset BrokerAcceptedAtUtc);
+
 public interface IBrokerClient
 {
-    Task<string> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken);
+    Task<BrokerOrderReceipt> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken);
     Task<bool> CancelOrderAsync(string orderId, CancellationToken cancellationToken);
     Task<bool> CancelAllOrdersAsync(CancellationToken cancellationToken);
     Task<bool> ModifyOrderAsync(string orderId, decimal newStopLoss, decimal newTakeProfit, CancellationToken cancellationToken);

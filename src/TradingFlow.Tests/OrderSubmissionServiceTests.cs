@@ -12,18 +12,22 @@ public sealed class OrderSubmissionServiceTests
     public async Task SubmitBracketOrderAsync_PersistsIntentBeforeBrokerNetworkCall()
     {
         var repository = new RecordingIntentRepository();
+        var events = new RecordingEventRepository(repository);
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
         FinalizedOrder? brokerOrder = null;
+        var brokerAcceptedAt = new DateTimeOffset(2026, 7, 21, 14, 35, 1, TimeSpan.Zero);
         broker
             .Setup(client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()))
             .Callback<FinalizedOrder, CancellationToken>((order, _) =>
             {
                 Assert.True(repository.ReservationCompleted);
+                Assert.Equal(OrderState.Submitted, events.State);
                 brokerOrder = order;
             })
-            .ReturnsAsync("broker-order-1");
+            .ReturnsAsync(new BrokerOrderReceipt("broker-order-1", brokerAcceptedAt));
         var service = new OrderSubmissionService(
             repository,
+            events,
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -32,21 +36,26 @@ public sealed class OrderSubmissionServiceTests
         Assert.Equal("broker-order-1", result.BrokerOrderId);
         Assert.Equal(repository.Intent!.ClientOrderId, result.ClientOrderId);
         Assert.Equal(result.ClientOrderId, brokerOrder!.ClientOrderId);
+        Assert.Equal(brokerAcceptedAt, result.BrokerAcceptedAtUtc);
+        Assert.Equal(OrderState.Acked, events.State);
+        Assert.Equal([OrderState.Submitted, OrderState.Acked], events.AppliedStates);
         broker.VerifyAll();
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_Retry_ReusesPersistedClientOrderId()
+    public async Task SubmitBracketOrderAsync_AcknowledgedRetry_SuppressesDuplicateBrokerCall()
     {
         var repository = new RecordingIntentRepository();
+        var events = new RecordingEventRepository(repository);
         var submittedClientIds = new List<string>();
         var broker = new Mock<IBrokerClient>();
         broker
             .Setup(client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()))
             .Callback<FinalizedOrder, CancellationToken>((order, _) => submittedClientIds.Add(order.ClientOrderId))
-            .ReturnsAsync("broker-order-1");
+            .ReturnsAsync(new BrokerOrderReceipt("broker-order-1", DateTimeOffset.UtcNow));
         var service = new OrderSubmissionService(
             repository,
+            events,
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -54,8 +63,37 @@ public sealed class OrderSubmissionServiceTests
         await service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None);
 
         Assert.Equal(2, repository.ReservationAttempts);
-        Assert.Equal(2, submittedClientIds.Count);
-        Assert.Single(submittedClientIds.Distinct(StringComparer.Ordinal));
+        Assert.Single(submittedClientIds);
+        broker.Verify(
+            client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task SubmitBracketOrderAsync_BrokerFailure_LeavesUncertainSubmissionAndBlocksRetry()
+    {
+        var repository = new RecordingIntentRepository();
+        var events = new RecordingEventRepository(repository);
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker
+            .Setup(client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new TimeoutException("Broker response was not received."));
+        var service = new OrderSubmissionService(
+            repository,
+            events,
+            NullLogger<OrderSubmissionService>.Instance);
+        var submission = CreateSubmission(Guid.NewGuid());
+
+        await Assert.ThrowsAsync<TimeoutException>(
+            () => service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None));
+        var retryError = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None));
+
+        Assert.Equal(OrderState.Submitted, events.State);
+        Assert.Contains("must be reconciled", retryError.Message, StringComparison.Ordinal);
+        broker.Verify(
+            client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -70,6 +108,9 @@ public sealed class OrderSubmissionServiceTests
             Guid.Parse("1f9c2a7e-0000-0000-0000-000000000000"));
 
         Assert.Equal("RESEARCHSW-B-MSFTUS-20260721-003-1f9c2a7e", clientOrderId);
+        Assert.True(ClientOrderIdFactory.IsBindingFormat(clientOrderId));
+        Assert.False(ClientOrderIdFactory.IsBindingFormat("legacy-order-id"));
+        Assert.False(ClientOrderIdFactory.IsBindingFormat("RESEARCHSW-B-MSFTUS-20260721-000-1f9c2a7e"));
     }
 
     [Fact]
@@ -146,9 +187,6 @@ public sealed class OrderSubmissionServiceTests
 
         public int ReservationAttempts { get; private set; }
 
-        public Task AppendAsync(OrderIntentRecord intent, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
         public Task<OrderIntentRecord> ReserveAsync(
             ProductionRun run,
             OrderIntentReservation reservation,
@@ -184,6 +222,60 @@ public sealed class OrderSubmissionServiceTests
             };
             ReservationCompleted = true;
             return Task.FromResult(Intent);
+        }
+    }
+
+    private sealed class RecordingEventRepository(RecordingIntentRepository intents) : IOrderEventRepository
+    {
+        private long eventId;
+        private OrderStateSnapshot? current;
+
+        public OrderState? State => current?.State;
+
+        public List<OrderState> AppliedStates { get; } = [];
+
+        public Task<OrderStateSnapshot?> GetCurrentAsync(
+            string clientOrderId,
+            CancellationToken cancellationToken = default)
+        {
+            if (current is null && intents.Intent is not null)
+            {
+                current = new OrderStateSnapshot(
+                    intents.Intent.RunId,
+                    clientOrderId,
+                    BrokerOrderId: null,
+                    OrderState.Intent,
+                    intents.Intent.CreatedAtUtc,
+                    BrokerTimestampUtc: null,
+                    FilledQuantity: null,
+                    FillPrice: null,
+                    ++eventId);
+            }
+
+            return Task.FromResult(current);
+        }
+
+        public Task<OrderTransitionResult> TransitionAsync(
+            OrderTransitionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (current is null || current.State != request.ExpectedPreviousState)
+            {
+                throw new InvalidOperationException("Unexpected lifecycle state in test repository.");
+            }
+
+            current = current with
+            {
+                BrokerOrderId = request.BrokerOrderId ?? current.BrokerOrderId,
+                State = request.NewState,
+                LocalTimestampUtc = request.LocalTimestampUtc,
+                BrokerTimestampUtc = request.BrokerTimestampUtc ?? current.BrokerTimestampUtc,
+                FilledQuantity = request.FilledQuantity ?? current.FilledQuantity,
+                FillPrice = request.FillPrice ?? current.FillPrice,
+                EventId = ++eventId
+            };
+            AppliedStates.Add(request.NewState);
+            return Task.FromResult(new OrderTransitionResult(current, Applied: true));
         }
     }
 }

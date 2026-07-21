@@ -159,6 +159,15 @@ SQLite is used locally for:
 - active paper order state
 - the versioned production journal, including write-ahead order intents
 
+The production order journal is the source of truth for order lifecycle. An order
+intent and its initial `INTENT` event commit atomically. The shared submission
+service then appends `SUBMITTED` before broker I/O and `ACKED` only from a broker
+receipt. LiveRunner and mobile automation project typed broker updates through the
+same `OrderLifecycleService`; cumulative partial fills and cancel requests are
+append-only events. Mutable paper-order rows remain UI projections and must not be
+used to infer terminal broker state. In particular, absence from an open-order
+snapshot is not evidence of fill, cancellation, rejection, or expiry.
+
 Ticker locks prevent multiple workers from processing the same ticker concurrently. Order state lets paper jobs recover after a web/worker restart.
 
 ## Candle Event Pipeline

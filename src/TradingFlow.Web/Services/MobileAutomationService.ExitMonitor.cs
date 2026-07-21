@@ -33,6 +33,18 @@ public sealed partial class MobileAutomationService
                 !x.Side.Equals("short", StringComparison.OrdinalIgnoreCase));
 
             var openOrders = await brokerClient.GetOpenOrdersAsync(cancellationToken);
+            if (orderLifecycleService is not null)
+            {
+                foreach (var order in openOrders.Where(order =>
+                             order.Side.Equals("buy", StringComparison.OrdinalIgnoreCase) &&
+                             ClientOrderIdFactory.IsBindingFormat(order.ClientOrderId)))
+                {
+                    await orderLifecycleService.ApplyBrokerUpdateAsync(
+                        BrokerOrderUpdateFactory.Create(order),
+                        cancellationToken);
+                }
+            }
+
             if (position is null)
             {
                 if (session.EntryOrderId is not null && openOrders.Any(x => x.OrderId == session.EntryOrderId))

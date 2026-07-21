@@ -2,6 +2,31 @@ namespace TradingFlow.Domain.Orders;
 
 public static class ClientOrderIdFactory
 {
+    public static bool IsBindingFormat(string? clientOrderId)
+    {
+        if (String.IsNullOrWhiteSpace(clientOrderId))
+        {
+            return false;
+        }
+
+        var parts = clientOrderId.Split('-', StringSplitOptions.None);
+        return parts.Length == 6 &&
+            IsComponent(parts[0], 10) &&
+            parts[1] is "B" or "S" &&
+            IsComponent(parts[2], 10) &&
+            DateOnly.TryParseExact(
+                parts[3],
+                "yyyyMMdd",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out _) &&
+            parts[4].Length == 3 &&
+            Int32.TryParse(parts[4], out var sequence) &&
+            sequence is >= 1 and <= 999 &&
+            parts[5].Length == 8 &&
+            parts[5].All(Uri.IsHexDigit);
+    }
+
     public static string Create(
         string strategyId,
         string side,
@@ -38,6 +63,9 @@ public static class ClientOrderIdFactory
             ? normalized
             : throw new ArgumentException("Value must contain at least one letter or digit.", parameterName);
     }
+
+    private static bool IsComponent(string value, int maximumLength) =>
+        value.Length is > 0 && value.Length <= maximumLength && value.All(Char.IsLetterOrDigit);
 
     private static string NormalizeSide(string side) => side.Trim().ToLowerInvariant() switch
     {

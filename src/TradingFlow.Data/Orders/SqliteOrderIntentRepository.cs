@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Data.Context;
+using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 
 namespace TradingFlow.Data.Orders;
@@ -15,17 +16,6 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
     public SqliteOrderIntentRepository(IDbContextFactory<TradingFlowDbContext> contextFactory)
     {
         this.contextFactory = contextFactory;
-    }
-
-    public async Task AppendAsync(
-        OrderIntentRecord intent,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(intent);
-
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        context.OrderIntents.Add(intent);
-        await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<OrderIntentRecord> ReserveAsync(
@@ -110,6 +100,19 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             };
 
             context.OrderIntents.Add(intent);
+            context.OrderEvents.Add(new OrderEventRecord
+            {
+                ClientOrderId = clientOrderId,
+                PreviousState = null,
+                NewState = OrderState.Intent.ToStorageValue(),
+                Source = "engine",
+                LocalTimestampUtc = reservation.CreatedAtUtc.ToUniversalTime(),
+                PayloadJson = reservation.RequestJson,
+                RunId = run.RunId,
+                SchemaVersion = run.SchemaVersion,
+                ConfigHash = run.ConfigHash,
+                CodeVersion = run.CodeVersion
+            });
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return intent;

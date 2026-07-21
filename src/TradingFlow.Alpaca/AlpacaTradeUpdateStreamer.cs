@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,44 +36,54 @@ public sealed class AlpacaTradeUpdateStreamer : ITradeUpdateStreamer, IDisposabl
                         var orderId = orderNode.GetProperty("id").GetString() ?? string.Empty;
                         var clientOrderId = orderNode.GetProperty("client_order_id").GetString() ?? string.Empty;
                         var ticker = orderNode.GetProperty("symbol").GetString() ?? string.Empty;
+                        var status = OrderStatusCodec.ParseBrokerValue(eventType ?? String.Empty);
                         
                         var filledQtyString = orderNode.GetProperty("filled_qty").GetString();
-                        decimal.TryParse(filledQtyString, out var filledQty);
+                        if (!decimal.TryParse(
+                                filledQtyString,
+                                NumberStyles.Number,
+                                CultureInfo.InvariantCulture,
+                                out var filledQty))
+                        {
+                            throw new InvalidOperationException("Alpaca trade update has invalid filled_qty.");
+                        }
                         
-                        var filledPriceString = orderNode.TryGetProperty("filled_avg_price", out var priceProp) ? priceProp.GetString() : "0";
-                        decimal.TryParse(filledPriceString, out var filledPrice);
+                        var filledPriceString = orderNode.TryGetProperty("filled_avg_price", out var priceProp) &&
+                            priceProp.ValueKind == System.Text.Json.JsonValueKind.String
+                                ? priceProp.GetString()
+                                : null;
+                        var filledPrice = 0m;
+                        if (!String.IsNullOrWhiteSpace(filledPriceString) &&
+                            !decimal.TryParse(
+                                filledPriceString,
+                                NumberStyles.Number,
+                                CultureInfo.InvariantCulture,
+                                out filledPrice))
+                        {
+                            throw new InvalidOperationException("Alpaca trade update has invalid filled_avg_price.");
+                        }
+
+                        if (status is (OrderStatus.PartiallyFilled or OrderStatus.Filled) && filledPrice <= 0m)
+                        {
+                            throw new InvalidOperationException("Alpaca fill update is missing filled_avg_price.");
+                        }
 
                         var timestampString = orderNode.GetProperty("updated_at").GetString();
-                        DateTimeOffset.TryParse(timestampString, out var timestamp);
+                        if (!DateTimeOffset.TryParse(
+                                timestampString,
+                                CultureInfo.InvariantCulture,
+                                DateTimeStyles.AssumeUniversal,
+                                out var timestamp))
+                        {
+                            throw new InvalidOperationException("Alpaca trade update has invalid updated_at.");
+                        }
 
-                        var status = MapStatus(eventType);
                         yield return new OrderUpdate(orderId, clientOrderId, ticker, status, filledQty, filledPrice, timestamp);
                     }
                 }
             }
         }
     }
-
-    private static OrderStatus MapStatus(string? eventType) => eventType switch
-    {
-        "new" => OrderStatus.New,
-        "fill" => OrderStatus.Filled,
-        "partial_fill" => OrderStatus.PartiallyFilled,
-        "canceled" => OrderStatus.Canceled,
-        "expired" => OrderStatus.Expired,
-        "done_for_day" => OrderStatus.DoneForDay,
-        "replaced" => OrderStatus.Replaced,
-        "rejected" => OrderStatus.Rejected,
-        "pending_new" => OrderStatus.PendingNew,
-        "accepted" => OrderStatus.Accepted,
-        "pending_cancel" => OrderStatus.PendingCancel,
-        "pending_replace" => OrderStatus.PendingReplace,
-        "suspended" => OrderStatus.Suspended,
-        "calculated" => OrderStatus.Calculated,
-        "accepted_for_bidding" => OrderStatus.AcceptedForBidding,
-        "stopped" => OrderStatus.Stopped,
-        _ => OrderStatus.New // Fallback
-    };
 
     public void Dispose()
     {

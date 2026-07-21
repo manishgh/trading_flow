@@ -12,4 +12,7 @@ public sealed record ActiveBrokerOrder(
     decimal? StopPrice,
     decimal? Qty,
     DateTimeOffset CreatedAt,
-    string ClientOrderId = "");
+    string ClientOrderId,
+    decimal FilledQuantity,
+    decimal? FilledAveragePrice,
+    DateTimeOffset UpdatedAt);

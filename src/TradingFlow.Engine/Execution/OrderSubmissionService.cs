@@ -20,7 +20,8 @@ public sealed record BracketOrderSubmission(
 public sealed record OrderSubmissionResult(
     string BrokerOrderId,
     string ClientOrderId,
-    Guid IntentId);
+    Guid IntentId,
+    DateTimeOffset BrokerAcceptedAtUtc);
 
 public interface IOrderSubmissionService
 {
@@ -37,13 +38,16 @@ public interface IOrderSubmissionService
 public sealed class OrderSubmissionService : IOrderSubmissionService
 {
     private readonly IOrderIntentRepository intentRepository;
+    private readonly IOrderEventRepository eventRepository;
     private readonly ILogger<OrderSubmissionService> logger;
 
     public OrderSubmissionService(
         IOrderIntentRepository intentRepository,
+        IOrderEventRepository eventRepository,
         ILogger<OrderSubmissionService> logger)
     {
         this.intentRepository = intentRepository;
+        this.eventRepository = eventRepository;
         this.logger = logger;
     }
 
@@ -98,6 +102,55 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 requestJson),
             cancellationToken);
 
+        var current = await eventRepository.GetCurrentAsync(intent.ClientOrderId, cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Persisted order intent '{intent.ClientOrderId}' has no lifecycle state.");
+        if (current.State == OrderState.Acked)
+        {
+            if (String.IsNullOrWhiteSpace(current.BrokerOrderId) || current.BrokerTimestampUtc is null)
+            {
+                throw new InvalidOperationException(
+                    $"ACKED order '{intent.ClientOrderId}' is missing broker provenance.");
+            }
+
+            logger.LogInformation(
+                "Suppressing duplicate submission for acknowledged intent {IntentId} with client order ID {ClientOrderId}.",
+                intent.IntentId,
+                intent.ClientOrderId);
+            return new OrderSubmissionResult(
+                current.BrokerOrderId,
+                intent.ClientOrderId,
+                intent.IntentId,
+                current.BrokerTimestampUtc.Value);
+        }
+
+        if (current.State == OrderState.Submitted)
+        {
+            throw new InvalidOperationException(
+                $"Order '{intent.ClientOrderId}' has an uncertain prior submission and must be reconciled before retry.");
+        }
+
+        if (current.State != OrderState.Intent)
+        {
+            throw new InvalidOperationException(
+                $"Order '{intent.ClientOrderId}' cannot be submitted from terminal/state {current.State.ToStorageValue()}.");
+        }
+
+        var submitted = await eventRepository.TransitionAsync(
+            new OrderTransitionRequest(
+                intent.ClientOrderId,
+                OrderState.Intent,
+                OrderState.Submitted,
+                Source: "engine",
+                LocalTimestampUtc: DateTimeOffset.UtcNow,
+                PayloadJson: requestJson),
+            cancellationToken);
+        if (!submitted.Applied)
+        {
+            throw new InvalidOperationException(
+                $"Order '{intent.ClientOrderId}' is already being submitted and must be reconciled before retry.");
+        }
+
         var persistedOrder = submission.Order with { ClientOrderId = intent.ClientOrderId };
         logger.LogInformation(
             "Submitting persisted order intent {IntentId} with client order ID {ClientOrderId} for {Symbol} {StrategyId}.",
@@ -105,8 +158,29 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             intent.ClientOrderId,
             intent.Symbol,
             intent.StrategyId);
-        var brokerOrderId = await brokerClient.SubmitOrderAsync(persistedOrder, cancellationToken);
-        return new OrderSubmissionResult(brokerOrderId, intent.ClientOrderId, intent.IntentId);
+        var receipt = await brokerClient.SubmitOrderAsync(persistedOrder, cancellationToken);
+        var acknowledged = await eventRepository.TransitionAsync(
+            new OrderTransitionRequest(
+                intent.ClientOrderId,
+                OrderState.Submitted,
+                OrderState.Acked,
+                Source: "broker_rest",
+                LocalTimestampUtc: DateTimeOffset.UtcNow,
+                BrokerTimestampUtc: receipt.BrokerAcceptedAtUtc,
+                BrokerOrderId: receipt.BrokerOrderId,
+                PayloadJson: JsonSerializer.Serialize(new
+                {
+                    receipt.BrokerOrderId,
+                    receipt.BrokerAcceptedAtUtc
+                })),
+            cancellationToken);
+        return new OrderSubmissionResult(
+            acknowledged.Snapshot.BrokerOrderId
+                ?? throw new InvalidOperationException("ACKED order has no broker order ID."),
+            intent.ClientOrderId,
+            intent.IntentId,
+            acknowledged.Snapshot.BrokerTimestampUtc
+                ?? throw new InvalidOperationException("ACKED order has no broker timestamp."));
     }
 
     private static void Validate(BracketOrderSubmission submission)

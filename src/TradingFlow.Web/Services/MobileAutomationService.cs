@@ -39,6 +39,7 @@ public sealed partial class MobileAutomationService
     private readonly PositionGuardianEngine positionGuardianEngine = new();
     private readonly RiskEngine riskEngine = new();
     private readonly IOrderSubmissionService? orderSubmissionService;
+    private readonly IOrderLifecycleService? orderLifecycleService;
 
     public MobileAutomationService(
         SimpleYamlReader yamlReader,
@@ -49,7 +50,8 @@ public sealed partial class MobileAutomationService
         ICandleStore? candleStore = null,
         IOrderStateRepository? orderRepo = null,
         IDecisionAuditRepository? auditRepo = null,
-        IOrderSubmissionService? orderSubmissionService = null)
+        IOrderSubmissionService? orderSubmissionService = null,
+        IOrderLifecycleService? orderLifecycleService = null)
     {
         this.yamlReader = yamlReader;
         this.runtimeFactory = runtimeFactory;
@@ -60,6 +62,7 @@ public sealed partial class MobileAutomationService
         this.orderRepo = orderRepo;
         this.auditRepo = auditRepo;
         this.orderSubmissionService = orderSubmissionService;
+        this.orderLifecycleService = orderLifecycleService;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)

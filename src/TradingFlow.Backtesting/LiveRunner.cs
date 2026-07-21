@@ -26,7 +26,8 @@ public sealed partial class LiveRunner(
     ICandleStore? candleStore = null,
     IRawArchiveWriter? rawArchiveWriter = null,
     IOrderSubmissionService? orderSubmissionService = null,
-    ExecutionRunContext? executionRunContext = null)
+    ExecutionRunContext? executionRunContext = null,
+    IOrderLifecycleService? orderLifecycleService = null)
 {
     private readonly SignalGenerator _signalGenerator = new();
     private readonly StrategyDecisionBrain _decisionBrain = new();
@@ -41,6 +42,7 @@ public sealed partial class LiveRunner(
     private readonly IRawArchiveWriter? _rawArchiveWriter = rawArchiveWriter;
     private readonly IOrderSubmissionService? _orderSubmissionService = orderSubmissionService;
     private readonly ExecutionRunContext? _executionRunContext = executionRunContext;
+    private readonly IOrderLifecycleService? _orderLifecycleService = orderLifecycleService;
     private readonly TradingFlow.Engine.Regime.RegimeGateService _regimeGate = new();
 
     public async Task RunAsync(
@@ -155,6 +157,18 @@ public sealed partial class LiveRunner(
                     var openOrders = await _brokerClient.GetOpenOrdersAsync(cancellationToken);
                     openOrdersSnapshot = openOrders;
 
+                    if (_orderLifecycleService is not null)
+                    {
+                        foreach (var order in openOrders.Where(order =>
+                                     order.Side.Equals("buy", StringComparison.OrdinalIgnoreCase) &&
+                                     ClientOrderIdFactory.IsBindingFormat(order.ClientOrderId)))
+                        {
+                            await _orderLifecycleService.ApplyBrokerUpdateAsync(
+                                BrokerOrderUpdateFactory.Create(order),
+                                cancellationToken);
+                        }
+                    }
+
                     // State Reconciliation: Adopt any open orders from the broker that are not in our database
                     if (_orderRepo != null)
                     {
@@ -207,6 +221,15 @@ public sealed partial class LiveRunner(
                             {
                                 logger.LogInformation("Active cancellation: Entry order {OrderId} for {Ticker} is unfilled after 30 minutes. Cancelling...", order.OrderId, order.Ticker);
                                 progress?.Report($"Active cancellation: Entry order {order.OrderId} for {order.Ticker} is unfilled after 30 minutes. Cancelling...");
+                                if (_orderLifecycleService is not null &&
+                                    ClientOrderIdFactory.IsBindingFormat(order.ClientOrderId))
+                                {
+                                    await _orderLifecycleService.RequestCancelAsync(
+                                        order.ClientOrderId,
+                                        order.OrderId,
+                                        cancellationToken);
+                                }
+
                                 await _brokerClient.CancelOrderAsync(order.OrderId, cancellationToken);
                             }
                         }
@@ -277,12 +300,10 @@ public sealed partial class LiveRunner(
                                 }
                                 else
                                 {
-                                    if (dbOrder.Status != "cancelled" && dbOrder.Status != "expired")
-                                    {
-                                        dbOrder.Status = "cancelled";
-                                        dbOrder.UpdatedAt = DateTimeOffset.UtcNow;
-                                        await _orderRepo.SaveOrderAsync(dbOrder, cancellationToken);
-                                    }
+                                    logger.LogDebug(
+                                        "Order {OrderId} for {Ticker} is absent from the open-order snapshot; terminal state requires an authoritative broker update.",
+                                        dbOrder.OrderId,
+                                        dbOrder.Ticker);
                                 }
                             }
                         }

@@ -1,12 +1,10 @@
 namespace TradingFlow.Domain.Persistence;
 
 /// <summary>
-/// Appends immutable order intents to the operational journal before broker submission.
+/// Reserves immutable order intents and their initial lifecycle event before broker submission.
 /// </summary>
 public interface IOrderIntentRepository
 {
-    Task AppendAsync(OrderIntentRecord intent, CancellationToken cancellationToken = default);
-
     /// <summary>
     /// Atomically creates the owning run and reserves one immutable intent. Repeating the
     /// same intent ID returns the original row and therefore the original client order ID.

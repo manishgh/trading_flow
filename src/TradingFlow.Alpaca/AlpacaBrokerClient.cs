@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -25,7 +26,7 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
         _tradingClient = new AlpacaTradingRestClient(httpClient, options, rawArchiveWriter);
     }
 
-    public async Task<string> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken)
+    public async Task<BrokerOrderReceipt> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken)
     {
         return await ApiProfiler.ProfileAsync("Alpaca", "/v2/orders", "POST", async () =>
         {
@@ -107,7 +108,7 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
             }
 
             using var doc = JsonDocument.Parse(response.Payload);
-            return RequireOrderId(doc.RootElement, response, "order submission");
+            return RequireOrderReceipt(doc.RootElement, response, "order submission");
         });
     }
 
@@ -253,32 +254,78 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
                 var status = element.GetProperty("status").GetString() ?? "";
                 var type = element.TryGetProperty("type", out var tp) && tp.ValueKind != JsonValueKind.Null ? tp.GetString() ?? "" : "";
 
-                decimal? limit = null;
-                if (element.TryGetProperty("limit_price", out var lp) && lp.ValueKind != JsonValueKind.Null && decimal.TryParse(lp.GetString(), out var lVal))
-                    limit = lVal;
-
-                decimal? stop = null;
-                if (element.TryGetProperty("stop_price", out var sp) && sp.ValueKind != JsonValueKind.Null && decimal.TryParse(sp.GetString(), out var sVal))
-                    stop = sVal;
-
-                decimal? qty = null;
-                if (element.TryGetProperty("qty", out var qp) && qp.ValueKind != JsonValueKind.Null && decimal.TryParse(qp.GetString(), out var qVal))
-                    qty = qVal;
-
-                DateTimeOffset createdAt = DateTimeOffset.UtcNow;
-                if (element.TryGetProperty("created_at", out var cp) && cp.ValueKind != JsonValueKind.Null)
-                    createdAt = cp.GetDateTimeOffset();
+                var limit = ParseOptionalDecimal(element, "limit_price");
+                var stop = ParseOptionalDecimal(element, "stop_price");
+                var qty = ParseOptionalDecimal(element, "qty");
+                var filledQuantity = ParseRequiredDecimal(element, "filled_qty", "open-order query");
+                var filledAveragePrice = ParseOptionalDecimal(element, "filled_avg_price");
+                var createdAt = RequireTimestamp(element, "created_at", "open-order query");
+                var updatedAt = RequireTimestamp(element, "updated_at", "open-order query");
 
                 var clientOrderId = element.TryGetProperty("client_order_id", out var clientOrderIdProperty) &&
                     clientOrderIdProperty.ValueKind != JsonValueKind.Null
                         ? clientOrderIdProperty.GetString() ?? ""
                         : "";
 
-                orders.Add(new ActiveBrokerOrder(id, symbol, side, status, type, limit, stop, qty, createdAt, clientOrderId));
+                orders.Add(new ActiveBrokerOrder(
+                    id,
+                    symbol,
+                    side,
+                    status,
+                    type,
+                    limit,
+                    stop,
+                    qty,
+                    createdAt,
+                    clientOrderId,
+                    filledQuantity,
+                    filledAveragePrice,
+                    updatedAt));
             }
 
             return (System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>)orders;
         });
+    }
+
+    private static decimal? ParseOptionalDecimal(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return decimal.TryParse(
+            property.GetString(),
+            NumberStyles.Number,
+            CultureInfo.InvariantCulture,
+            out var value)
+                ? value
+                : throw new InvalidOperationException(
+                    $"Alpaca open-order response has invalid {propertyName}.");
+    }
+
+    private static decimal ParseRequiredDecimal(
+        JsonElement element,
+        string propertyName,
+        string operation) =>
+        ParseOptionalDecimal(element, propertyName)
+        ?? throw new InvalidOperationException(
+            $"Alpaca {operation} response is missing {propertyName}.");
+
+    private static DateTimeOffset RequireTimestamp(
+        JsonElement element,
+        string propertyName,
+        string operation)
+    {
+        if (element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String &&
+            property.TryGetDateTimeOffset(out var timestamp))
+        {
+            return timestamp.ToUniversalTime();
+        }
+
+        throw new InvalidOperationException(
+            $"Alpaca {operation} response is missing a valid {propertyName} timestamp.");
     }
 
     public async Task<System.Collections.Generic.IReadOnlyList<BrokerPosition>> GetOpenPositionsAsync(CancellationToken cancellationToken)
@@ -381,5 +428,22 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 
         throw new InvalidOperationException(
             $"Alpaca {operation} returned no order id. RawArchiveId={response.Archive.Manifest.ArchiveId}.");
+    }
+
+    private static BrokerOrderReceipt RequireOrderReceipt(
+        JsonElement root,
+        ArchivedAlpacaResponse response,
+        string operation)
+    {
+        var orderId = RequireOrderId(root, response, operation);
+        if (root.TryGetProperty("created_at", out var createdAt) &&
+            createdAt.ValueKind == JsonValueKind.String &&
+            createdAt.TryGetDateTimeOffset(out var brokerAcceptedAt))
+        {
+            return new BrokerOrderReceipt(orderId, brokerAcceptedAt.ToUniversalTime());
+        }
+
+        throw new InvalidOperationException(
+            $"Alpaca {operation} returned no valid created_at timestamp. RawArchiveId={response.Archive.Manifest.ArchiveId}.");
     }
 }
