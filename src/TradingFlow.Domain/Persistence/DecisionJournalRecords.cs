@@ -1,3 +1,5 @@
+using TradingFlow.Domain.Execution;
+
 namespace TradingFlow.Domain.Persistence;
 
 public sealed class GateEvaluationRecord : OperationalRecord
@@ -8,7 +10,7 @@ public sealed class GateEvaluationRecord : OperationalRecord
     public int GateOrder { get; set; }
     public string GateName { get; set; } = string.Empty;
     public bool Passed { get; set; }
-    public string? RejectCode { get; set; }
+    public RejectCode? RejectCode { get; set; }
     public DateTimeOffset EvaluatedAtUtc { get; set; }
     public string InputsJson { get; set; } = string.Empty;
 }

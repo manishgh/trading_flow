@@ -79,7 +79,7 @@ internal static class ProductionPersistenceModelConfiguration
         ConfigureProvenance(entity);
         entity.Property(record => record.ClientOrderId).HasMaxLength(100);
         entity.Property(record => record.GateName).HasMaxLength(80).IsRequired();
-        entity.Property(record => record.RejectCode).HasMaxLength(80);
+        entity.Property(record => record.RejectCode).HasConversion<string>().HasMaxLength(80);
         entity.Property(record => record.InputsJson).IsRequired();
         entity.HasIndex(record => new { record.CandidateId, record.GateOrder });
         entity.HasIndex(record => record.RejectCode);
