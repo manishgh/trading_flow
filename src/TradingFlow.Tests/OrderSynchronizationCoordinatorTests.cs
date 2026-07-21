@@ -8,7 +8,7 @@ namespace TradingFlow.Tests;
 public sealed class OrderSynchronizationCoordinatorTests
 {
     [Fact]
-    public async Task CrossCheck_SecondMissingBrokerCycle_BlocksEntries_ThenRestRepairClears()
+    public async Task CrossCheck_OrphanTimeoutThenSecondMissingCycle_BlocksEntries_ThenRestRepairClears()
     {
         var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
         var time = new MutableTimeProvider(now);
@@ -18,6 +18,18 @@ public sealed class OrderSynchronizationCoordinatorTests
         var broker = new RecordingBrokerReader();
         coordinator.MarkStreamConnected();
 
+        await coordinator.CrossCheckAsync(broker, CancellationToken.None);
+
+        Assert.True(admission.GetSnapshot().EntriesAllowed);
+        Assert.Empty(coordinator.GetHealth().DivergenceCycles);
+
+        time.Advance(TimeSpan.FromSeconds(15));
+        await coordinator.CrossCheckAsync(broker, CancellationToken.None);
+
+        Assert.True(admission.GetSnapshot().EntriesAllowed);
+        Assert.Empty(coordinator.GetHealth().DivergenceCycles);
+
+        time.Advance(TimeSpan.FromSeconds(15));
         await coordinator.CrossCheckAsync(broker, CancellationToken.None);
 
         Assert.True(admission.GetSnapshot().EntriesAllowed);
@@ -54,9 +66,13 @@ public sealed class OrderSynchronizationCoordinatorTests
                 "broker-1",
                 repository.Current.ClientOrderId,
                 "MSFT",
+                "buy",
                 OrderStatus.Filled,
                 10m,
                 100.50m,
+                10m,
+                10m,
+                "execution-1",
                 now.AddSeconds(1),
                 BrokerUpdateSource.TradeStream),
             CancellationToken.None);
@@ -80,25 +96,101 @@ public sealed class OrderSynchronizationCoordinatorTests
     {
         var now = DateTimeOffset.UtcNow;
         var repository = new InMemoryEventRepository(CreateSnapshot(OrderState.Submitted, now));
+        var positions = new InMemoryPositionLedgerRepository();
         var coordinator = CreateCoordinator(
             repository,
             new EntryAdmissionControl(),
-            new MutableTimeProvider(now));
+            new MutableTimeProvider(now),
+            positions);
 
         await coordinator.ProcessStreamUpdateAsync(
             new OrderUpdate(
                 "external-order",
                 "manual-client-id",
                 "MSFT",
+                "buy",
                 OrderStatus.Filled,
                 1m,
                 100m,
+                1m,
+                1m,
+                "external-execution-1",
                 now,
                 BrokerUpdateSource.TradeStream),
             CancellationToken.None);
 
         Assert.Equal(OrderState.Submitted, repository.Current.State);
         Assert.Empty(repository.Sources);
+        Assert.Equal(1m, (await positions.GetCurrentAsync("MSFT"))?.Quantity);
+    }
+
+    [Fact]
+    public async Task RestDiscoveredKnownFill_RepairsPositionLedgerIdempotently()
+    {
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var repository = new InMemoryEventRepository(CreateSnapshot(OrderState.Submitted, now));
+        var positions = new InMemoryPositionLedgerRepository();
+        var coordinator = CreateCoordinator(
+            repository,
+            new EntryAdmissionControl(),
+            new MutableTimeProvider(now.AddSeconds(31)),
+            positions);
+        coordinator.MarkStreamConnected();
+        var broker = new RecordingBrokerReader
+        {
+            ByClientOrderId = CreateBrokerOrder("filled", 10m, now.AddSeconds(30), 100.50m)
+        };
+
+        await coordinator.CrossCheckAsync(broker, CancellationToken.None);
+        await coordinator.CrossCheckAsync(broker, CancellationToken.None);
+
+        Assert.Equal(OrderState.Filled, repository.Current.State);
+        Assert.Equal(10m, (await positions.GetCurrentAsync("MSFT"))?.Quantity);
+        Assert.Single(positions.ExecutionIds);
+    }
+
+    [Fact]
+    public async Task RestRepair_DoesNotDoubleCountStreamFillWhenLifecycleWriteInitiallyFails()
+    {
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var repository = new InMemoryEventRepository(CreateSnapshot(OrderState.Submitted, now))
+        {
+            FailTransitions = true
+        };
+        var positions = new InMemoryPositionLedgerRepository();
+        var coordinator = CreateCoordinator(
+            repository,
+            new EntryAdmissionControl(),
+            new MutableTimeProvider(now.AddSeconds(31)),
+            positions);
+        coordinator.MarkStreamConnected();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.ProcessStreamUpdateAsync(
+            new OrderUpdate(
+                "broker-1",
+                repository.Current.ClientOrderId,
+                "MSFT",
+                "buy",
+                OrderStatus.Filled,
+                10m,
+                100.50m,
+                10m,
+                10m,
+                "execution-1",
+                now.AddSeconds(1),
+                BrokerUpdateSource.TradeStream),
+            CancellationToken.None));
+
+        repository.FailTransitions = false;
+        var broker = new RecordingBrokerReader
+        {
+            ByClientOrderId = CreateBrokerOrder("filled", 10m, now.AddSeconds(30), 100.50m)
+        };
+        await coordinator.CrossCheckAsync(broker, CancellationToken.None);
+
+        Assert.Equal(OrderState.Filled, repository.Current.State);
+        Assert.Equal(10m, (await positions.GetCurrentAsync("MSFT"))?.Quantity);
+        Assert.Single(positions.ExecutionIds);
     }
 
     [Fact]
@@ -121,12 +213,26 @@ public sealed class OrderSynchronizationCoordinatorTests
     private static OrderSynchronizationCoordinator CreateCoordinator(
         InMemoryEventRepository repository,
         EntryAdmissionControl admission,
-        TimeProvider timeProvider) => new(
+        TimeProvider timeProvider,
+        InMemoryPositionLedgerRepository? positions = null) => new(
         repository,
         new OrderLifecycleService(repository),
         admission,
+        positions ?? new InMemoryPositionLedgerRepository(),
+        new ReconciliationRunContext(CreateRun(timeProvider.GetUtcNow())),
+        new AccountReconciliationOptions(60, 30),
         timeProvider,
         NullLogger<OrderSynchronizationCoordinator>.Instance);
+
+    private static ProductionRun CreateRun(DateTimeOffset startedAt) => new()
+    {
+        RunId = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+        Profile = "paper",
+        Status = "running",
+        StartedAtUtc = startedAt,
+        ConfigHash = new string('a', 64),
+        CodeVersion = new string('b', 40)
+    };
 
     private static OrderStateSnapshot CreateSnapshot(OrderState state, DateTimeOffset timestamp) => new(
         Guid.Parse("11111111-1111-1111-1111-111111111111"),
@@ -189,6 +295,8 @@ public sealed class OrderSynchronizationCoordinatorTests
 
         public List<string> Sources { get; } = [];
 
+        public bool FailTransitions { get; set; }
+
         public Task<OrderStateSnapshot?> GetCurrentAsync(
             string clientOrderId,
             CancellationToken cancellationToken = default) =>
@@ -208,6 +316,11 @@ public sealed class OrderSynchronizationCoordinatorTests
             OrderTransitionRequest request,
             CancellationToken cancellationToken = default)
         {
+            if (FailTransitions)
+            {
+                throw new InvalidOperationException("Simulated lifecycle persistence failure.");
+            }
+
             if (request.ClientOrderId != Current.ClientOrderId)
             {
                 throw new InvalidOperationException("Unknown client order ID.");
@@ -244,5 +357,51 @@ public sealed class OrderSynchronizationCoordinatorTests
         public override DateTimeOffset GetUtcNow() => now;
 
         public void Advance(TimeSpan duration) => now = now.Add(duration);
+    }
+
+    private sealed class InMemoryPositionLedgerRepository : IPositionLedgerRepository
+    {
+        private readonly Dictionary<string, PositionLedgerSnapshot> snapshots =
+            new(StringComparer.Ordinal);
+        private readonly HashSet<string> executionIds = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, decimal> accountedByBrokerOrder = new(StringComparer.Ordinal);
+        private long eventId;
+
+        public IReadOnlyCollection<string> ExecutionIds => executionIds;
+
+        public Task<PositionLedgerSnapshot> AppendFillAsync(
+            PositionFillAppendRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (!executionIds.Add(request.ExecutionId) && snapshots.TryGetValue(request.Symbol, out var replay))
+            {
+                return Task.FromResult(replay);
+            }
+
+            var snapshot = new PositionLedgerSnapshot(
+                request.Symbol,
+                request.QuantityAfter,
+                request.BrokerTimestampUtc,
+                request.LocalTimestampUtc,
+                Interlocked.Increment(ref eventId));
+            snapshots[request.Symbol] = snapshot;
+            accountedByBrokerOrder[request.BrokerOrderId] =
+                accountedByBrokerOrder.GetValueOrDefault(request.BrokerOrderId) + request.FillQuantity;
+            return Task.FromResult(snapshot);
+        }
+
+        public Task<decimal> GetAccountedFillQuantityAsync(
+            string brokerOrderId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(accountedByBrokerOrder.GetValueOrDefault(brokerOrderId));
+
+        public Task<PositionLedgerSnapshot?> GetCurrentAsync(
+            string symbol,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<PositionLedgerSnapshot?>(snapshots.GetValueOrDefault(symbol));
+
+        public Task<IReadOnlyList<PositionLedgerSnapshot>> ListCurrentAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<PositionLedgerSnapshot>>(snapshots.Values.ToArray());
     }
 }

@@ -98,15 +98,53 @@ builder.Services.AddSingleton<TradingFlow.Domain.Locking.ITickerLockService, Tra
 builder.Services.AddSingleton<TradingFlow.Domain.Orders.IOrderStateRepository, TradingFlow.Data.Orders.SqliteOrderStateRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderIntentRepository, TradingFlow.Data.Orders.SqliteOrderIntentRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderEventRepository, TradingFlow.Data.Orders.SqliteOrderEventRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IPositionLedgerRepository, TradingFlow.Data.Orders.SqlitePositionLedgerRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IReconciliationRepository, TradingFlow.Data.Orders.SqliteReconciliationRepository>();
 builder.Services.AddSingleton<TradingFlow.Engine.Execution.IOrderLifecycleService, TradingFlow.Engine.Execution.OrderLifecycleService>();
 builder.Services.AddSingleton<IEntryAdmissionControl, EntryAdmissionControl>();
-builder.Services.AddSingleton<IOrderSynchronizationCoordinator, OrderSynchronizationCoordinator>();
-var orderPollIntervalSeconds = new ProductionConfigurationLoader().ResolveParameter<int>(
+var productionConfiguration = new ProductionConfigurationLoader();
+var orderPollIntervalSeconds = productionConfiguration.ResolveParameter<int>(
     ProductionProfile.Paper,
     "order_poll_interval_s",
     builder.Configuration["TradingFlow:Production:order_poll_interval_s"]
         ?? Environment.GetEnvironmentVariable("TRADINGFLOW_ORDER_POLL_INTERVAL_S"));
 builder.Services.AddSingleton(new OrderSynchronizationOptions(orderPollIntervalSeconds));
+var reconcileIntervalSeconds = productionConfiguration.ResolveParameter<int>(
+    ProductionProfile.Paper,
+    "reconcile_interval_s",
+    builder.Configuration["TradingFlow:Production:reconcile_interval_s"]
+        ?? Environment.GetEnvironmentVariable("TRADINGFLOW_RECONCILE_INTERVAL_S"));
+var orphanTimeoutSeconds = productionConfiguration.ResolveParameter<int>(
+    ProductionProfile.Paper,
+    "order_orphan_timeout_s",
+    builder.Configuration["TradingFlow:Production:order_orphan_timeout_s"]
+        ?? Environment.GetEnvironmentVariable("TRADINGFLOW_ORDER_ORPHAN_TIMEOUT_S"));
+var reconciliationOptions = new AccountReconciliationOptions(
+    reconcileIntervalSeconds,
+    orphanTimeoutSeconds);
+builder.Services.AddSingleton(reconciliationOptions);
+var synchronizationStartedAt = DateTimeOffset.UtcNow;
+var synchronizationRunContext = ExecutionRunContextFactory.Create(
+    Guid.NewGuid(),
+    "paper",
+    new
+    {
+        orderPollIntervalSeconds,
+        reconcileIntervalSeconds,
+        orphanTimeoutSeconds
+    },
+    synchronizationStartedAt);
+builder.Services.AddSingleton(new ReconciliationRunContext(new TradingFlow.Domain.Persistence.ProductionRun
+{
+    RunId = synchronizationRunContext.RunId,
+    Profile = synchronizationRunContext.Profile,
+    Status = "running",
+    StartedAtUtc = synchronizationRunContext.StartedAtUtc,
+    ConfigHash = synchronizationRunContext.ConfigHash,
+    CodeVersion = synchronizationRunContext.CodeVersion
+}));
+builder.Services.AddSingleton<IAccountReconciliationService, AccountReconciliationService>();
+builder.Services.AddSingleton<IOrderSynchronizationCoordinator, OrderSynchronizationCoordinator>();
 builder.Services.AddSingleton<IOrderSubmissionService, OrderSubmissionService>();
 builder.Services.AddHostedService<AlpacaOrderSynchronizationHostedService>();
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
@@ -139,6 +177,7 @@ using (var scope = app.Services.CreateScope())
 // Resolve before any resumable job starts so entry submission is fail-closed until
 // the account stream and initial REST cross-check have both completed.
 _ = app.Services.GetRequiredService<IOrderSynchronizationCoordinator>();
+_ = app.Services.GetRequiredService<IAccountReconciliationService>();
 
 app.Services.GetRequiredService<PaperJobService>().InitializeAsync().GetAwaiter().GetResult();
 app.Services.GetRequiredService<MobileAutomationService>().InitializeAsync().GetAwaiter().GetResult();
@@ -155,6 +194,7 @@ app.MapTradingFlowMobileApi();
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "TradingFlow.Web" }));
 app.MapGet("/health/trading-readiness", (
     IOrderSynchronizationCoordinator synchronization,
+    IAccountReconciliationService reconciliation,
     IEntryAdmissionControl admission) =>
 {
     var synchronizationHealth = synchronization.GetHealth();
@@ -164,6 +204,7 @@ app.MapGet("/health/trading-readiness", (
         status = admissionSnapshot.EntriesAllowed ? "ready" : "blocked",
         entriesAllowed = admissionSnapshot.EntriesAllowed,
         orderSynchronization = synchronizationHealth,
+        accountReconciliation = reconciliation.GetHealth(),
         blocks = admissionSnapshot.Blocks
     };
     return admissionSnapshot.EntriesAllowed
@@ -171,6 +212,19 @@ app.MapGet("/health/trading-readiness", (
         : Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable);
 });
 app.MapGet("/api/profiler/alpaca", () => Results.Ok(TradingFlow.Domain.Logging.ApiProfiler.GetSummary("Alpaca")));
+app.MapPost("/api/operations/reconciliations/{reconciliationId:guid}/ack", async (
+    Guid reconciliationId,
+    ReconciliationAcknowledgementRequest request,
+    IAccountReconciliationService reconciliation,
+    CancellationToken cancellationToken) =>
+{
+    await reconciliation.AcknowledgeAsync(
+        reconciliationId,
+        request.Actor,
+        request.Reason,
+        cancellationToken);
+    return Results.Ok(reconciliation.GetHealth());
+});
 app.MapGet("/api/wishlists/{wishlistId:guid}/quotes/stream", async (
     Guid wishlistId,
     IWishlistRepository wishlists,

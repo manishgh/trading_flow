@@ -28,6 +28,7 @@ public sealed class TradingFlowDbContext : DbContext
     public DbSet<RiskEventRecord> RiskEvents => Set<RiskEventRecord>();
     public DbSet<KillSwitchEventRecord> KillSwitchEvents => Set<KillSwitchEventRecord>();
     public DbSet<ReconciliationRecord> Reconciliations => Set<ReconciliationRecord>();
+    public DbSet<PositionEventRecord> PositionEvents => Set<PositionEventRecord>();
     public DbSet<CandidateRecord> Candidates => Set<CandidateRecord>();
     public DbSet<CatalystResultRecord> CatalystResults => Set<CatalystResultRecord>();
 

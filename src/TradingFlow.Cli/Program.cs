@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Net.Http.Json;
 using TradingFlow.Backtesting;
 using TradingFlow.Backtesting.Optimization;
 using TradingFlow.Backtesting.Research;
@@ -11,6 +12,29 @@ var serializerOptions = new JsonSerializerOptions
 {
     WriteIndented = true
 };
+
+if (args.Length > 1 &&
+    args[0].Equals("ops", StringComparison.OrdinalIgnoreCase) &&
+    args[1].Equals("ack", StringComparison.OrdinalIgnoreCase))
+{
+    var serviceUrl = RequireStringOption(args, "--url").TrimEnd('/');
+    var reconciliationId = Guid.Parse(RequireStringOption(args, "--reconciliation-id"));
+    var actor = RequireStringOption(args, "--actor");
+    var reason = RequireStringOption(args, "--reason");
+    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+    using var response = await client.PostAsJsonAsync(
+        $"{serviceUrl}/api/operations/reconciliations/{reconciliationId:D}/ack",
+        new { actor, reason });
+    var payload = await response.Content.ReadAsStringAsync();
+    if (!response.IsSuccessStatusCode)
+    {
+        throw new InvalidOperationException(
+            $"Reconciliation acknowledgement failed with HTTP {(int)response.StatusCode}: {payload}");
+    }
+
+    Console.WriteLine(payload);
+    return;
+}
 
 if (args.Length > 0 && args[0].Equals("database-backup", StringComparison.OrdinalIgnoreCase))
 {

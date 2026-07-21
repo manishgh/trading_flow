@@ -16,6 +16,7 @@ internal static class ProductionPersistenceModelConfiguration
         ConfigureRiskEvents(modelBuilder.Entity<RiskEventRecord>());
         ConfigureKillSwitchEvents(modelBuilder.Entity<KillSwitchEventRecord>());
         ConfigureReconciliations(modelBuilder.Entity<ReconciliationRecord>());
+        ConfigurePositionEvents(modelBuilder.Entity<PositionEventRecord>());
         ConfigureCandidates(modelBuilder.Entity<CandidateRecord>());
         ConfigureCatalystResults(modelBuilder.Entity<CatalystResultRecord>());
 
@@ -128,9 +129,31 @@ internal static class ProductionPersistenceModelConfiguration
         entity.Property(record => record.BrokerSnapshotJson).IsRequired();
         entity.Property(record => record.LocalSnapshotJson).IsRequired();
         entity.Property(record => record.DiffJson).IsRequired();
+        entity.Property(record => record.DiffHash).HasMaxLength(64).IsRequired();
         entity.Property(record => record.AcknowledgedBy).HasMaxLength(120);
+        entity.Property(record => record.AcknowledgementReason).HasMaxLength(1000);
         entity.HasIndex(record => record.StartedAtUtc);
         entity.HasIndex(record => record.Status);
+        entity.HasIndex(record => record.RequiresAcknowledgement)
+            .HasFilter("requires_acknowledgement = 1")
+            .IsUnique();
+    }
+
+    private static void ConfigurePositionEvents(EntityTypeBuilder<PositionEventRecord> entity)
+    {
+        entity.ToTable("position_events");
+        entity.HasKey(record => record.PositionEventId);
+        ConfigureProvenance(entity);
+        entity.Property(record => record.Symbol).HasMaxLength(20).IsRequired();
+        entity.Property(record => record.Side).HasMaxLength(10).IsRequired();
+        entity.Property(record => record.BrokerOrderId).HasMaxLength(100).IsRequired();
+        entity.Property(record => record.ClientOrderId).HasMaxLength(100).IsRequired();
+        entity.Property(record => record.ExecutionId).HasMaxLength(160).IsRequired();
+        entity.Property(record => record.Source).HasMaxLength(30).IsRequired();
+        entity.Property(record => record.PayloadJson).IsRequired();
+        entity.HasIndex(record => record.ExecutionId).IsUnique();
+        entity.HasIndex(record => new { record.Symbol, record.PositionEventId });
+        entity.HasIndex(record => record.BrokerOrderId);
     }
 
     private static void ConfigureCandidates(EntityTypeBuilder<CandidateRecord> entity)

@@ -388,26 +388,21 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
             var positions = new System.Collections.Generic.List<BrokerPosition>();
             foreach (var element in doc.RootElement.EnumerateArray())
             {
-                var symbol = element.GetProperty("symbol").GetString() ?? "";
-                var side = element.GetProperty("side").GetString() ?? "";
+                var symbol = RequireString(element, "symbol", "open-position query").Trim().ToUpperInvariant();
+                var side = RequireString(element, "side", "open-position query").Trim().ToLowerInvariant();
+                if (side is not ("long" or "short"))
+                {
+                    throw new InvalidOperationException(
+                        $"Alpaca open-position query returned unsupported side '{side}' for {symbol}.");
+                }
 
-                decimal qty = 0;
-                if (element.TryGetProperty("qty", out var qp) && decimal.TryParse(qp.GetString(), out var qVal))
-                    qty = qVal;
-
-                decimal avgEntry = 0;
-                if (element.TryGetProperty("avg_entry_price", out var ap) && decimal.TryParse(ap.GetString(), out var aVal))
-                    avgEntry = aVal;
-
-                decimal currentPrice = 0;
-                if (element.TryGetProperty("current_price", out var cp) && decimal.TryParse(cp.GetString(), out var cVal))
-                    currentPrice = cVal;
-
-                decimal unPl = 0;
-                if (element.TryGetProperty("unrealized_pl", out var up) && decimal.TryParse(up.GetString(), out var uVal))
-                    unPl = uVal;
-
-                positions.Add(new BrokerPosition(symbol, side, qty, avgEntry, currentPrice, unPl));
+                positions.Add(new BrokerPosition(
+                    symbol,
+                    side,
+                    ParseRequiredDecimal(element, "qty", "open-position query"),
+                    ParseRequiredDecimal(element, "avg_entry_price", "open-position query"),
+                    ParseRequiredDecimal(element, "current_price", "open-position query"),
+                    ParseRequiredDecimal(element, "unrealized_pl", "open-position query")));
             }
 
             return (System.Collections.Generic.IReadOnlyList<BrokerPosition>)positions;

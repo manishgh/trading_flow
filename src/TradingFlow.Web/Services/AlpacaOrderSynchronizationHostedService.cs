@@ -12,8 +12,10 @@ public sealed class AlpacaOrderSynchronizationHostedService(
     AlpacaCredentialProvider credentials,
     IRawArchiveWriter rawArchiveWriter,
     IOrderSynchronizationCoordinator coordinator,
+    IAccountReconciliationService reconciliation,
     IEntryAdmissionControl entryAdmission,
     OrderSynchronizationOptions options,
+    AccountReconciliationOptions reconciliationOptions,
     TimeProvider timeProvider,
     ILoggerFactory loggerFactory,
     ILogger<AlpacaOrderSynchronizationHostedService> logger) : BackgroundService
@@ -48,7 +50,9 @@ public sealed class AlpacaOrderSynchronizationHostedService(
             new AlpacaTradeUpdateStreamerFactory(alpacaOptions),
             broker,
             coordinator,
+            reconciliation,
             options,
+            reconciliationOptions,
             timeProvider,
             loggerFactory.CreateLogger<OrderSynchronizationRunner>());
         await runner.RunAsync(stoppingToken);

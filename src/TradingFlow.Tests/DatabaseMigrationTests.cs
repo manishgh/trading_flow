@@ -23,6 +23,7 @@ public sealed class DatabaseMigrationTests
         "risk_events",
         "kill_switch_events",
         "reconciliations",
+        "position_events",
         "candidates",
         "catalyst_results"
     ];
@@ -38,7 +39,7 @@ public sealed class DatabaseMigrationTests
         var tables = await ReadTablesAsync(connection);
         Assert.Contains("Wishlists", tables);
         Assert.All(ProductionTables, table => Assert.Contains(table, tables));
-        Assert.Equal(3, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
+        Assert.Equal(4, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
         Assert.Empty(await db.Database.GetPendingMigrationsAsync());
 
         var requiredProvenance = new[] { "run_id", "schema_version", "config_hash", "code_version" };
@@ -86,7 +87,7 @@ public sealed class DatabaseMigrationTests
 
         var tables = await ReadTablesAsync(connection);
         Assert.All(ProductionTables, table => Assert.Contains(table, tables));
-        Assert.Equal(3, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
+        Assert.Equal(4, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
     }
 
     [Fact]
@@ -156,7 +157,7 @@ public sealed class DatabaseMigrationTests
             .Where(type => !type.IsAbstract && typeof(OperationalRecord).IsAssignableFrom(type))
             .ToArray();
 
-        Assert.Equal(9, recordTypes.Length);
+        Assert.Equal(10, recordTypes.Length);
         var defects = recordTypes
             .SelectMany(type => type.GetProperties().Select(property => (Type: type, Property: property)))
             .Where(item => item.Property.PropertyType == typeof(double)

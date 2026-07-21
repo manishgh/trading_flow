@@ -63,6 +63,10 @@ public static class AlpacaTradeUpdateParser
         var status = OrderStatusCodec.ParseBrokerValue(RequireString(data, "event"));
         var filledQuantity = ParseDecimal(order, "filled_qty", required: true);
         var filledPrice = ParseDecimal(order, "filled_avg_price", required: false);
+        var isFill = status is OrderStatus.PartiallyFilled or OrderStatus.Filled;
+        var lastFillQuantity = isFill ? ParseDecimal(data, "qty", required: true) : 0m;
+        var positionQuantity = isFill ? ParseDecimal(data, "position_qty", required: true) : (decimal?)null;
+        var executionId = isFill ? RequireString(data, "execution_id") : null;
         if (status is (OrderStatus.PartiallyFilled or OrderStatus.Filled) && filledPrice <= 0m)
         {
             throw new InvalidOperationException("Alpaca fill update is missing a positive filled_avg_price.");
@@ -82,9 +86,13 @@ public static class AlpacaTradeUpdateParser
             RequireString(order, "id"),
             RequireString(order, "client_order_id"),
             RequireString(order, "symbol").Trim().ToUpperInvariant(),
+            RequireString(order, "side").Trim().ToLowerInvariant(),
             status,
             filledQuantity,
             filledPrice,
+            lastFillQuantity,
+            positionQuantity,
+            executionId,
             timestamp.ToUniversalTime(),
             BrokerUpdateSource.TradeStream);
     }

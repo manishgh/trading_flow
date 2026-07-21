@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
@@ -44,7 +45,9 @@ public interface IOrderSynchronizationCoordinator
 
     Task ProcessStreamUpdateAsync(OrderUpdate update, CancellationToken cancellationToken);
 
-    Task CrossCheckAsync(IBrokerOrderReader broker, CancellationToken cancellationToken);
+    Task<IReadOnlyList<ActiveBrokerOrder>> CrossCheckAsync(
+        IBrokerOrderReader broker,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -60,6 +63,9 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
     private readonly IOrderEventRepository events;
     private readonly IOrderLifecycleService lifecycle;
     private readonly IEntryAdmissionControl admission;
+    private readonly IPositionLedgerRepository positions;
+    private readonly ReconciliationRunContext runContext;
+    private readonly AccountReconciliationOptions reconciliationOptions;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<OrderSynchronizationCoordinator> logger;
     private readonly ConcurrentDictionary<string, byte> terminalAwaitingRest =
@@ -74,12 +80,18 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         IOrderEventRepository events,
         IOrderLifecycleService lifecycle,
         IEntryAdmissionControl admission,
+        IPositionLedgerRepository positions,
+        ReconciliationRunContext runContext,
+        AccountReconciliationOptions reconciliationOptions,
         TimeProvider timeProvider,
         ILogger<OrderSynchronizationCoordinator> logger)
     {
         this.events = events;
         this.lifecycle = lifecycle;
         this.admission = admission;
+        this.positions = positions;
+        this.runContext = runContext;
+        this.reconciliationOptions = reconciliationOptions;
         this.timeProvider = timeProvider;
         this.logger = logger;
         var now = timeProvider.GetUtcNow();
@@ -121,6 +133,28 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
             throw new InvalidOperationException("The primary stream path accepts only trade-stream updates.");
         }
 
+        if (update.Status is OrderStatus.PartiallyFilled or OrderStatus.Filled)
+        {
+            await positions.AppendFillAsync(
+                new PositionFillAppendRequest(
+                    runContext.Run,
+                    update.Ticker,
+                    update.PositionQuantity ?? throw new InvalidOperationException(
+                        "A stream fill requires authoritative position_qty."),
+                    update.LastFillQuantity,
+                    update.FilledPrice,
+                    update.Side,
+                    update.OrderId,
+                    update.ClientOrderId,
+                    update.ExecutionId ?? throw new InvalidOperationException(
+                        "A stream fill requires execution_id."),
+                    "broker_stream",
+                    update.Timestamp,
+                    timeProvider.GetUtcNow(),
+                    JsonSerializer.Serialize(update)),
+                cancellationToken);
+        }
+
         if (!ClientOrderIdFactory.IsBindingFormat(update.ClientOrderId))
         {
             logger.LogDebug(
@@ -150,7 +184,7 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         }
     }
 
-    public async Task CrossCheckAsync(
+    public async Task<IReadOnlyList<ActiveBrokerOrder>> CrossCheckAsync(
         IBrokerOrderReader broker,
         CancellationToken cancellationToken)
     {
@@ -229,6 +263,8 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         {
             admission.Clear(DivergenceBlockSource);
         }
+
+        return openOrders;
     }
 
     private async Task<CrossCheckResult> CrossCheckOrderAsync(
@@ -241,15 +277,24 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         brokerOrder ??= await broker.GetOrderByClientOrderIdAsync(local.ClientOrderId, cancellationToken);
         if (brokerOrder is null)
         {
+            var age = timeProvider.GetUtcNow() - local.LocalTimestampUtc.ToUniversalTime();
+            if (age < reconciliationOptions.OrphanTimeout)
+            {
+                logger.LogDebug(
+                    "Tracked order {ClientOrderId} has no broker REST record at age {AgeSeconds:F3}s; deferring until orphan timeout {TimeoutSeconds:F0}s.",
+                    local.ClientOrderId,
+                    age.TotalSeconds,
+                    reconciliationOptions.OrphanTimeout.TotalSeconds);
+                return new CrossCheckResult(local.ClientOrderId, local.State, Matches: true);
+            }
+
             RegisterCycleDivergence(local.ClientOrderId, "Broker REST returned no order for a tracked client order ID.");
             return new CrossCheckResult(local.ClientOrderId, local.State, Matches: false);
         }
 
         try
         {
-            await lifecycle.ApplyBrokerUpdateAsync(
-                BrokerOrderUpdateFactory.Create(brokerOrder),
-                cancellationToken);
+            await ApplyRestUpdateWithPositionRepairAsync(local, brokerOrder, cancellationToken);
         }
         catch (InvalidOperationException exception)
         {
@@ -270,6 +315,58 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         }
 
         return new CrossCheckResult(local.ClientOrderId, refreshed.State, matches);
+    }
+
+    private async Task ApplyRestUpdateWithPositionRepairAsync(
+        OrderStateSnapshot local,
+        ActiveBrokerOrder brokerOrder,
+        CancellationToken cancellationToken)
+    {
+        var update = BrokerOrderUpdateFactory.Create(brokerOrder);
+        var brokerState = BrokerOrderStateProjection.Project(OrderStatusCodec.ParseBrokerValue(brokerOrder.Status));
+        var accountedFillQuantity = await positions.GetAccountedFillQuantityAsync(
+            brokerOrder.OrderId,
+            cancellationToken);
+        var fillDelta = brokerOrder.FilledQuantity - accountedFillQuantity;
+        if (fillDelta < 0m)
+        {
+            throw new InvalidOperationException(
+                $"Position journal fill quantity {accountedFillQuantity} exceeds broker cumulative fill " +
+                $"{brokerOrder.FilledQuantity} for order {brokerOrder.OrderId}.");
+        }
+
+        if (brokerState is OrderState.PartiallyFilled or OrderState.Filled && fillDelta > 0m)
+        {
+            var currentPosition = await positions.GetCurrentAsync(brokerOrder.Ticker, cancellationToken);
+            var signedDelta = brokerOrder.Side.Trim().ToLowerInvariant() switch
+            {
+                "buy" => fillDelta,
+                "sell" => -fillDelta,
+                _ => throw new InvalidOperationException(
+                    $"Broker order {brokerOrder.OrderId} has unsupported side '{brokerOrder.Side}'.")
+            };
+            var quantityAfter = (currentPosition?.Quantity ?? 0m) + signedDelta;
+            var executionId = $"rest:{brokerOrder.OrderId}:{brokerOrder.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+            await positions.AppendFillAsync(
+                new PositionFillAppendRequest(
+                    runContext.Run,
+                    brokerOrder.Ticker,
+                    quantityAfter,
+                    fillDelta,
+                    brokerOrder.FilledAveragePrice ?? throw new InvalidOperationException(
+                        $"Broker fill {brokerOrder.OrderId} is missing filled_avg_price."),
+                    brokerOrder.Side,
+                    brokerOrder.OrderId,
+                    brokerOrder.ClientOrderId,
+                    executionId,
+                    "broker_rest",
+                    brokerOrder.UpdatedAt,
+                    timeProvider.GetUtcNow(),
+                    JsonSerializer.Serialize(brokerOrder)),
+                cancellationToken);
+        }
+
+        await lifecycle.ApplyBrokerUpdateAsync(update, cancellationToken);
     }
 
     private void RegisterImmediateDivergence(string clientOrderId, string detail)
@@ -312,9 +409,11 @@ public interface IOrderSynchronizationRunner
 /// </summary>
 public sealed class OrderSynchronizationRunner(
     ITradeUpdateStreamerFactory streamerFactory,
-    IBrokerOrderReader broker,
+    IBrokerClient broker,
     IOrderSynchronizationCoordinator coordinator,
+    IAccountReconciliationService reconciliation,
     OrderSynchronizationOptions options,
+    AccountReconciliationOptions reconciliationOptions,
     TimeProvider timeProvider,
     ILogger<OrderSynchronizationRunner> logger) : IOrderSynchronizationRunner
 {
@@ -346,7 +445,8 @@ public sealed class OrderSynchronizationRunner(
     {
         await streamer.ConnectAsync(cancellationToken);
         coordinator.MarkStreamConnected();
-        await coordinator.CrossCheckAsync(broker, cancellationToken);
+        var initialOrders = await coordinator.CrossCheckAsync(broker, cancellationToken);
+        await reconciliation.ReconcileAsync(broker, initialOrders, cancellationToken);
 
         using var sessionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var streamTask = ConsumeStreamAsync(streamer, sessionCancellation.Token);
@@ -391,9 +491,16 @@ public sealed class OrderSynchronizationRunner(
     private async Task PollRestAsync(CancellationToken cancellationToken)
     {
         using var timer = new PeriodicTimer(options.PollInterval, timeProvider);
+        var nextReconciliationAt = timeProvider.GetUtcNow().Add(reconciliationOptions.ReconcileInterval);
         while (await timer.WaitForNextTickAsync(cancellationToken))
         {
-            await coordinator.CrossCheckAsync(broker, cancellationToken);
+            var openOrders = await coordinator.CrossCheckAsync(broker, cancellationToken);
+            var now = timeProvider.GetUtcNow();
+            if (now >= nextReconciliationAt)
+            {
+                await reconciliation.ReconcileAsync(broker, openOrders, cancellationToken);
+                nextReconciliationAt = now.Add(reconciliationOptions.ReconcileInterval);
+            }
         }
     }
 

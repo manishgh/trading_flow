@@ -853,6 +853,108 @@ namespace TradingFlow.Data.Context.Migrations
                     b.ToTable("order_intents", (string)null);
                 });
 
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.PositionEventRecord", b =>
+                {
+                    b.Property<long>("PositionEventId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("position_event_id");
+
+                    b.Property<string>("BrokerOrderId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("broker_order_id");
+
+                    b.Property<DateTimeOffset>("BrokerTimestampUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("broker_timestamp_utc");
+
+                    b.Property<string>("ClientOrderId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("client_order_id");
+
+                    b.Property<string>("CodeVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("code_version");
+
+                    b.Property<string>("ConfigHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("config_hash");
+
+                    b.Property<string>("ExecutionId")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("execution_id");
+
+                    b.Property<decimal>("FillPrice")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("fill_price");
+
+                    b.Property<decimal>("FillQuantity")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("fill_quantity");
+
+                    b.Property<DateTimeOffset>("LocalTimestampUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("local_timestamp_utc");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("payload_json");
+
+                    b.Property<decimal>("QuantityAfter")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("quantity_after");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<int>("SchemaVersion")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("schema_version");
+
+                    b.Property<string>("Side")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("side");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("symbol");
+
+                    b.HasKey("PositionEventId");
+
+                    b.HasIndex("BrokerOrderId");
+
+                    b.HasIndex("ExecutionId")
+                        .IsUnique();
+
+                    b.HasIndex("RunId");
+
+                    b.HasIndex("Symbol", "PositionEventId");
+
+                    b.ToTable("position_events", (string)null);
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Persistence.ProductionRun", b =>
                 {
                     b.Property<Guid>("RunId")
@@ -921,6 +1023,11 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("acknowledged_by");
 
+                    b.Property<string>("AcknowledgementReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("acknowledgement_reason");
+
                     b.Property<string>("BrokerSnapshotJson")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -941,6 +1048,12 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT")
                         .HasColumnName("config_hash");
+
+                    b.Property<string>("DiffHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("diff_hash");
 
                     b.Property<string>("DiffJson")
                         .IsRequired()
@@ -975,6 +1088,10 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasColumnName("status");
 
                     b.HasKey("ReconciliationId");
+
+                    b.HasIndex("RequiresAcknowledgement")
+                        .IsUnique()
+                        .HasFilter("requires_acknowledgement = 1");
 
                     b.HasIndex("RunId");
 
@@ -1248,6 +1365,15 @@ namespace TradingFlow.Data.Context.Migrations
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Persistence.OrderIntentRecord", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.Persistence.ProductionRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.PositionEventRecord", b =>
                 {
                     b.HasOne("TradingFlow.Domain.Persistence.ProductionRun", null)
                         .WithMany()

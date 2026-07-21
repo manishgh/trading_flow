@@ -25,9 +25,13 @@ public static class BrokerOrderUpdateFactory
             order.OrderId,
             order.ClientOrderId,
             order.Ticker,
+            order.Side,
             OrderStatusCodec.ParseBrokerValue(order.Status),
             order.FilledQuantity,
             order.FilledAveragePrice ?? 0m,
+            0m,
+            null,
+            null,
             order.UpdatedAt,
             BrokerUpdateSource.BrokerRest);
     }
@@ -157,6 +161,7 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
                 update.OrderId,
                 update.ClientOrderId,
                 update.Ticker,
+                update.Side,
                 status = update.Status.ToString(),
                 update.FilledQuantity,
                 update.FilledPrice,
@@ -199,6 +204,7 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
         if (String.IsNullOrWhiteSpace(update.OrderId) ||
             String.IsNullOrWhiteSpace(update.ClientOrderId) ||
             String.IsNullOrWhiteSpace(update.Ticker) ||
+            String.IsNullOrWhiteSpace(update.Side) ||
             update.Timestamp == default ||
             update.FilledQuantity < 0m ||
             update.FilledPrice < 0m)
@@ -207,7 +213,10 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
         }
 
         if (update.Status is (OrderStatus.PartiallyFilled or OrderStatus.Filled) &&
-            (update.FilledQuantity <= 0m || update.FilledPrice <= 0m))
+            (update.FilledQuantity <= 0m || update.FilledPrice <= 0m ||
+             (update.Source == BrokerUpdateSource.TradeStream &&
+              (update.LastFillQuantity <= 0m || update.PositionQuantity is null ||
+               String.IsNullOrWhiteSpace(update.ExecutionId)))))
         {
             throw new InvalidOperationException("Fill updates require positive cumulative quantity and price.");
         }

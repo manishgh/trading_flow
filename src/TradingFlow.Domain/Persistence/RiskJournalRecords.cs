@@ -33,7 +33,30 @@ public sealed class ReconciliationRecord : OperationalRecord
     public string BrokerSnapshotJson { get; set; } = "{}";
     public string LocalSnapshotJson { get; set; } = "{}";
     public string DiffJson { get; set; } = "{}";
+    public string DiffHash { get; set; } = string.Empty;
     public bool RequiresAcknowledgement { get; set; }
     public DateTimeOffset? AcknowledgedAtUtc { get; set; }
     public string? AcknowledgedBy { get; set; }
+    public string? AcknowledgementReason { get; set; }
+}
+
+/// <summary>
+/// Append-only account position state emitted by authoritative broker fills or a proven REST repair.
+/// QuantityAfter is signed: positive is long, negative is short, and zero is flat.
+/// </summary>
+public sealed class PositionEventRecord : OperationalRecord
+{
+    public long PositionEventId { get; set; }
+    public string Symbol { get; set; } = string.Empty;
+    public decimal QuantityAfter { get; set; }
+    public decimal FillQuantity { get; set; }
+    public decimal FillPrice { get; set; }
+    public string Side { get; set; } = string.Empty;
+    public string BrokerOrderId { get; set; } = string.Empty;
+    public string ClientOrderId { get; set; } = string.Empty;
+    public string ExecutionId { get; set; } = string.Empty;
+    public string Source { get; set; } = string.Empty;
+    public DateTimeOffset BrokerTimestampUtc { get; set; }
+    public DateTimeOffset LocalTimestampUtc { get; set; }
+    public string PayloadJson { get; set; } = "{}";
 }

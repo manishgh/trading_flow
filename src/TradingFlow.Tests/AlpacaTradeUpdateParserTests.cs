@@ -60,10 +60,14 @@ public sealed class AlpacaTradeUpdateParserTests
               "stream": "trade_updates",
               "data": {
                 "event": "fill",
+                "execution_id": "execution-1",
+                "qty": "10",
+                "position_qty": "10",
                 "order": {
                   "id": "broker-1",
                   "client_order_id": "SWGA-B-MSFT-20260721-001-12345678",
                   "symbol": "msft",
+                  "side": "buy",
                   "filled_qty": "10",
                   "filled_avg_price": "100.50",
                   "updated_at": "2026-07-21T11:00:00-04:00"
@@ -78,6 +82,10 @@ public sealed class AlpacaTradeUpdateParserTests
         Assert.Equal(OrderStatus.Filled, update.Status);
         Assert.Equal(BrokerUpdateSource.TradeStream, update.Source);
         Assert.Equal("MSFT", update.Ticker);
+        Assert.Equal("buy", update.Side);
+        Assert.Equal(10m, update.LastFillQuantity);
+        Assert.Equal(10m, update.PositionQuantity);
+        Assert.Equal("execution-1", update.ExecutionId);
         Assert.Equal(new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero), update.Timestamp);
     }
 
@@ -94,9 +102,9 @@ public sealed class AlpacaTradeUpdateParserTests
     {
         using var document = JsonDocument.Parse(
             """
-            {"stream":"trade_updates","data":{"event":"fill","order":{
+            {"stream":"trade_updates","data":{"event":"fill","execution_id":"execution-1","qty":"10","position_qty":"10","order":{
               "id":"broker-1","client_order_id":"SWGA-B-MSFT-20260721-001-12345678",
-              "symbol":"MSFT","filled_qty":"10","filled_avg_price":null,
+              "symbol":"MSFT","side":"buy","filled_qty":"10","filled_avg_price":null,
               "updated_at":"2026-07-21T15:00:00Z"}}}
             """);
 

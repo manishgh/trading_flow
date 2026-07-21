@@ -322,18 +322,26 @@ public sealed class SqliteOrderEventRepositoryTests
             "broker-1",
             intent.ClientOrderId,
             intent.Symbol,
+            "buy",
             OrderStatus.PartiallyFilled,
             4m,
             100.25m,
+            4m,
+            4m,
+            "exec-1",
             intent.CreatedAtUtc.AddSeconds(2),
             BrokerUpdateSource.TradeStream));
         snapshot = await lifecycle.ApplyBrokerUpdateAsync(new OrderUpdate(
             "broker-1",
             intent.ClientOrderId,
             intent.Symbol,
+            "buy",
             OrderStatus.PartiallyFilled,
             7m,
             100.40m,
+            3m,
+            7m,
+            "exec-2",
             intent.CreatedAtUtc.AddSeconds(3),
             BrokerUpdateSource.TradeStream));
 
@@ -360,9 +368,13 @@ public sealed class SqliteOrderEventRepositoryTests
             "broker-1",
             intent.ClientOrderId,
             intent.Symbol,
+            "buy",
             OrderStatus.Filled,
             10m,
             100.50m,
+            10m,
+            10m,
+            "exec-1",
             intent.CreatedAtUtc.AddSeconds(2),
             BrokerUpdateSource.TradeStream);
 
@@ -396,9 +408,13 @@ public sealed class SqliteOrderEventRepositoryTests
             "broker-1",
             intent.ClientOrderId,
             intent.Symbol,
+            "buy",
             brokerStatus,
             0m,
             0m,
+            0m,
+            null,
+            null,
             intent.CreatedAtUtc.AddSeconds(2),
             BrokerUpdateSource.TradeStream));
 
@@ -416,9 +432,13 @@ public sealed class SqliteOrderEventRepositoryTests
                 "broker-1",
                 "SWGA-B-MSFT-20260721-001-12345678",
                 "MSFT",
+                "buy",
                 OrderStatus.Accepted,
                 0m,
                 0m,
+                0m,
+                null,
+                null,
                 DateTimeOffset.UtcNow,
                 BrokerUpdateSource.TradeStream)));
 
@@ -440,9 +460,13 @@ public sealed class SqliteOrderEventRepositoryTests
             "broker-1",
             intent.ClientOrderId,
             intent.Symbol,
+            "buy",
             OrderStatus.Accepted,
             0m,
             0m,
+            0m,
+            null,
+            null,
             intent.CreatedAtUtc.AddSeconds(2),
             BrokerUpdateSource.TradeStream));
 
