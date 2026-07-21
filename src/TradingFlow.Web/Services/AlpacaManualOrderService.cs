@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using TradingFlow.Alpaca;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Web.Services;
@@ -19,13 +20,16 @@ public sealed class AlpacaManualOrderService
 {
     private readonly AlpacaCredentialProvider credentials;
     private readonly IRawArchiveWriter rawArchiveWriter;
+    private readonly IEntryAdmissionControl entryAdmission;
 
     public AlpacaManualOrderService(
         AlpacaCredentialProvider credentials,
-        IRawArchiveWriter rawArchiveWriter)
+        IRawArchiveWriter rawArchiveWriter,
+        IEntryAdmissionControl entryAdmission)
     {
         this.credentials = credentials;
         this.rawArchiveWriter = rawArchiveWriter;
+        this.entryAdmission = entryAdmission;
     }
 
     public async Task<ManualOrderResult> SubmitLimitOrderAsync(
@@ -37,6 +41,10 @@ public sealed class AlpacaManualOrderService
     {
         var normalizedTicker = NormalizeTicker(ticker);
         var normalizedSide = NormalizeSide(side);
+        if (normalizedSide == "buy")
+        {
+            entryAdmission.EnsureEntriesAllowed();
+        }
         if (quantity <= 0m)
         {
             throw new InvalidOperationException("Quantity must be greater than zero.");

@@ -2,6 +2,12 @@ using System;
 
 namespace TradingFlow.Domain.Orders;
 
+public enum BrokerUpdateSource
+{
+    TradeStream,
+    BrokerRest
+}
+
 public record OrderUpdate(
     string OrderId,
     string ClientOrderId,
@@ -9,5 +15,6 @@ public record OrderUpdate(
     OrderStatus Status,
     decimal FilledQuantity,
     decimal FilledPrice,
-    DateTimeOffset Timestamp
+    DateTimeOffset Timestamp,
+    BrokerUpdateSource Source
 );

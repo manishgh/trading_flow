@@ -24,6 +24,35 @@ public sealed class PseudoBroker : IBrokerClient
         return Task.FromResult<System.Collections.Generic.IReadOnlyList<TradingFlow.Domain.Orders.ActiveBrokerOrder>>(Array.Empty<TradingFlow.Domain.Orders.ActiveBrokerOrder>());
     }
 
+    public Task<TradingFlow.Domain.Orders.ActiveBrokerOrder?> GetOrderByClientOrderIdAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken)
+    {
+        var order = _activeOrders
+            .Select(item => (item.Key, item.Value))
+            .SingleOrDefault(item => String.Equals(item.Value.ClientOrderId, clientOrderId, StringComparison.Ordinal));
+        if (order.Value is null)
+        {
+            return Task.FromResult<TradingFlow.Domain.Orders.ActiveBrokerOrder?>(null);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        return Task.FromResult<TradingFlow.Domain.Orders.ActiveBrokerOrder?>(new TradingFlow.Domain.Orders.ActiveBrokerOrder(
+            order.Key,
+            order.Value.Ticker,
+            "buy",
+            "new",
+            "limit",
+            order.Value.LimitPrice,
+            order.Value.StopLossPrice,
+            order.Value.ShareQuantity,
+            order.Value.ExecutionTimestamp,
+            order.Value.ClientOrderId,
+            0m,
+            null,
+            now));
+    }
+
     public Task<System.Collections.Generic.IReadOnlyList<TradingFlow.Domain.Orders.BrokerPosition>> GetOpenPositionsAsync(CancellationToken cancellationToken)
     {
         return Task.FromResult<System.Collections.Generic.IReadOnlyList<TradingFlow.Domain.Orders.BrokerPosition>>(Array.Empty<TradingFlow.Domain.Orders.BrokerPosition>());

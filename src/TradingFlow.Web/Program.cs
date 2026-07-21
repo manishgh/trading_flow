@@ -99,7 +99,16 @@ builder.Services.AddSingleton<TradingFlow.Domain.Orders.IOrderStateRepository, T
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderIntentRepository, TradingFlow.Data.Orders.SqliteOrderIntentRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderEventRepository, TradingFlow.Data.Orders.SqliteOrderEventRepository>();
 builder.Services.AddSingleton<TradingFlow.Engine.Execution.IOrderLifecycleService, TradingFlow.Engine.Execution.OrderLifecycleService>();
+builder.Services.AddSingleton<IEntryAdmissionControl, EntryAdmissionControl>();
+builder.Services.AddSingleton<IOrderSynchronizationCoordinator, OrderSynchronizationCoordinator>();
+var orderPollIntervalSeconds = new ProductionConfigurationLoader().ResolveParameter<int>(
+    ProductionProfile.Paper,
+    "order_poll_interval_s",
+    builder.Configuration["TradingFlow:Production:order_poll_interval_s"]
+        ?? Environment.GetEnvironmentVariable("TRADINGFLOW_ORDER_POLL_INTERVAL_S"));
+builder.Services.AddSingleton(new OrderSynchronizationOptions(orderPollIntervalSeconds));
 builder.Services.AddSingleton<IOrderSubmissionService, OrderSubmissionService>();
+builder.Services.AddHostedService<AlpacaOrderSynchronizationHostedService>();
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository, TradingFlow.Data.Jobs.SqliteJobRepository>();
 
@@ -127,6 +136,10 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<TradingFlowDatabaseInitializer>().InitializeAsync(db);
 }
 
+// Resolve before any resumable job starts so entry submission is fail-closed until
+// the account stream and initial REST cross-check have both completed.
+_ = app.Services.GetRequiredService<IOrderSynchronizationCoordinator>();
+
 app.Services.GetRequiredService<PaperJobService>().InitializeAsync().GetAwaiter().GetResult();
 app.Services.GetRequiredService<MobileAutomationService>().InitializeAsync().GetAwaiter().GetResult();
 
@@ -140,6 +153,23 @@ app.UseRouting();
 app.MapRazorPages();
 app.MapTradingFlowMobileApi();
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "TradingFlow.Web" }));
+app.MapGet("/health/trading-readiness", (
+    IOrderSynchronizationCoordinator synchronization,
+    IEntryAdmissionControl admission) =>
+{
+    var synchronizationHealth = synchronization.GetHealth();
+    var admissionSnapshot = admission.GetSnapshot();
+    var response = new
+    {
+        status = admissionSnapshot.EntriesAllowed ? "ready" : "blocked",
+        entriesAllowed = admissionSnapshot.EntriesAllowed,
+        orderSynchronization = synchronizationHealth,
+        blocks = admissionSnapshot.Blocks
+    };
+    return admissionSnapshot.EntriesAllowed
+        ? Results.Ok(response)
+        : Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable);
+});
 app.MapGet("/api/profiler/alpaca", () => Results.Ok(TradingFlow.Domain.Logging.ApiProfiler.GetSummary("Alpaca")));
 app.MapGet("/api/wishlists/{wishlistId:guid}/quotes/stream", async (
     Guid wishlistId,

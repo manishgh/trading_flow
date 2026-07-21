@@ -18,69 +18,21 @@ public sealed class AlpacaTradeUpdateStreamer : ITradeUpdateStreamer, IDisposabl
         _client = new AlpacaTradeStreamClient(options);
     }
 
-    public async IAsyncEnumerable<OrderUpdate> SubscribeTradeUpdatesAsync(
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    public async Task ConnectAsync(CancellationToken cancellationToken)
     {
         await _client.ConnectAsync(cancellationToken);
         await _client.SubscribeTradeUpdatesAsync(cancellationToken);
+    }
 
+    public async IAsyncEnumerable<OrderUpdate> ReadUpdatesAsync(
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         await foreach (var element in _client.ReadMessagesAsync(cancellationToken))
         {
-            if (element.TryGetProperty("stream", out var streamProp) && streamProp.GetString() == "trade_updates")
+            var update = AlpacaTradeUpdateParser.Parse(element);
+            if (update is not null)
             {
-                if (element.TryGetProperty("data", out var dataNode))
-                {
-                    if (dataNode.TryGetProperty("event", out var eventProp) && dataNode.TryGetProperty("order", out var orderNode))
-                    {
-                        var eventType = eventProp.GetString();
-                        var orderId = orderNode.GetProperty("id").GetString() ?? string.Empty;
-                        var clientOrderId = orderNode.GetProperty("client_order_id").GetString() ?? string.Empty;
-                        var ticker = orderNode.GetProperty("symbol").GetString() ?? string.Empty;
-                        var status = OrderStatusCodec.ParseBrokerValue(eventType ?? String.Empty);
-                        
-                        var filledQtyString = orderNode.GetProperty("filled_qty").GetString();
-                        if (!decimal.TryParse(
-                                filledQtyString,
-                                NumberStyles.Number,
-                                CultureInfo.InvariantCulture,
-                                out var filledQty))
-                        {
-                            throw new InvalidOperationException("Alpaca trade update has invalid filled_qty.");
-                        }
-                        
-                        var filledPriceString = orderNode.TryGetProperty("filled_avg_price", out var priceProp) &&
-                            priceProp.ValueKind == System.Text.Json.JsonValueKind.String
-                                ? priceProp.GetString()
-                                : null;
-                        var filledPrice = 0m;
-                        if (!String.IsNullOrWhiteSpace(filledPriceString) &&
-                            !decimal.TryParse(
-                                filledPriceString,
-                                NumberStyles.Number,
-                                CultureInfo.InvariantCulture,
-                                out filledPrice))
-                        {
-                            throw new InvalidOperationException("Alpaca trade update has invalid filled_avg_price.");
-                        }
-
-                        if (status is (OrderStatus.PartiallyFilled or OrderStatus.Filled) && filledPrice <= 0m)
-                        {
-                            throw new InvalidOperationException("Alpaca fill update is missing filled_avg_price.");
-                        }
-
-                        var timestampString = orderNode.GetProperty("updated_at").GetString();
-                        if (!DateTimeOffset.TryParse(
-                                timestampString,
-                                CultureInfo.InvariantCulture,
-                                DateTimeStyles.AssumeUniversal,
-                                out var timestamp))
-                        {
-                            throw new InvalidOperationException("Alpaca trade update has invalid updated_at.");
-                        }
-
-                        yield return new OrderUpdate(orderId, clientOrderId, ticker, status, filledQty, filledPrice, timestamp);
-                    }
-                }
+                yield return update;
             }
         }
     }
@@ -88,5 +40,90 @@ public sealed class AlpacaTradeUpdateStreamer : ITradeUpdateStreamer, IDisposabl
     public void Dispose()
     {
         _client.Dispose();
+    }
+}
+
+public static class AlpacaTradeUpdateParser
+{
+    public static OrderUpdate? Parse(System.Text.Json.JsonElement element)
+    {
+        if (!element.TryGetProperty("stream", out var streamProperty) ||
+            !String.Equals(streamProperty.GetString(), "trade_updates", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (!element.TryGetProperty("data", out var data) ||
+            !data.TryGetProperty("event", out var eventProperty) ||
+            !data.TryGetProperty("order", out var order))
+        {
+            throw new InvalidOperationException("Alpaca trade update is missing data.event or data.order.");
+        }
+
+        var status = OrderStatusCodec.ParseBrokerValue(RequireString(data, "event"));
+        var filledQuantity = ParseDecimal(order, "filled_qty", required: true);
+        var filledPrice = ParseDecimal(order, "filled_avg_price", required: false);
+        if (status is (OrderStatus.PartiallyFilled or OrderStatus.Filled) && filledPrice <= 0m)
+        {
+            throw new InvalidOperationException("Alpaca fill update is missing a positive filled_avg_price.");
+        }
+
+        var timestampText = RequireString(order, "updated_at");
+        if (!DateTimeOffset.TryParse(
+                timestampText,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var timestamp))
+        {
+            throw new InvalidOperationException("Alpaca trade update has invalid updated_at.");
+        }
+
+        return new OrderUpdate(
+            RequireString(order, "id"),
+            RequireString(order, "client_order_id"),
+            RequireString(order, "symbol").Trim().ToUpperInvariant(),
+            status,
+            filledQuantity,
+            filledPrice,
+            timestamp.ToUniversalTime(),
+            BrokerUpdateSource.TradeStream);
+    }
+
+    private static string RequireString(System.Text.Json.JsonElement element, string propertyName)
+    {
+        if (element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == System.Text.Json.JsonValueKind.String &&
+            !String.IsNullOrWhiteSpace(property.GetString()))
+        {
+            return property.GetString()!;
+        }
+
+        throw new InvalidOperationException($"Alpaca trade update is missing {propertyName}.");
+    }
+
+    private static decimal ParseDecimal(
+        System.Text.Json.JsonElement element,
+        string propertyName,
+        bool required)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind == System.Text.Json.JsonValueKind.Null)
+        {
+            return required
+                ? throw new InvalidOperationException($"Alpaca trade update is missing {propertyName}.")
+                : 0m;
+        }
+
+        if (property.ValueKind == System.Text.Json.JsonValueKind.String &&
+            decimal.TryParse(
+                property.GetString(),
+                NumberStyles.Number,
+                CultureInfo.InvariantCulture,
+                out var value))
+        {
+            return value;
+        }
+
+        throw new InvalidOperationException($"Alpaca trade update has invalid {propertyName}.");
     }
 }

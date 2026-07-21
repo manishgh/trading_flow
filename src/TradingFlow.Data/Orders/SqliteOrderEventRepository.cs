@@ -32,6 +32,25 @@ public sealed class SqliteOrderEventRepository : IOrderEventRepository
         return current is null ? null : ToSnapshot(current);
     }
 
+    public async Task<IReadOnlyList<OrderStateSnapshot>> ListReconcilableAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var latestEventIds = context.OrderEvents
+            .GroupBy(record => record.ClientOrderId)
+            .Select(group => group.Max(record => record.EventId));
+        var records = await context.OrderEvents
+            .AsNoTracking()
+            .Where(record => latestEventIds.Contains(record.EventId))
+            .OrderBy(record => record.ClientOrderId)
+            .ToListAsync(cancellationToken);
+
+        return records
+            .Where(record => IsReconcilable(OrderStateMachine.ParseStorageValue(record.NewState)))
+            .Select(ToSnapshot)
+            .ToArray();
+    }
+
     public async Task<OrderTransitionResult> TransitionAsync(
         OrderTransitionRequest request,
         CancellationToken cancellationToken = default)
@@ -164,7 +183,13 @@ public sealed class SqliteOrderEventRepository : IOrderEventRepository
         }
 
         var source = request.Source.Trim().ToLowerInvariant();
-        if (source is "broker" or "broker_rest" &&
+        if (source is not ("engine" or "broker_stream" or "broker_rest"))
+        {
+            throw new InvalidOperationException(
+                $"Unsupported order event source '{request.Source}'.");
+        }
+
+        if (source is "broker_stream" or "broker_rest" &&
             (String.IsNullOrWhiteSpace(request.BrokerOrderId) || request.BrokerTimestampUtc is null))
         {
             throw new InvalidOperationException(
@@ -187,6 +212,12 @@ public sealed class SqliteOrderEventRepository : IOrderEventRepository
         !String.IsNullOrWhiteSpace(clientOrderId)
             ? clientOrderId.Trim()
             : throw new InvalidOperationException("Client order ID is required.");
+
+    private static bool IsReconcilable(OrderState state) => state is
+        OrderState.Submitted or
+        OrderState.Acked or
+        OrderState.PartiallyFilled or
+        OrderState.CancelPending;
 
     private static OrderStateSnapshot ToSnapshot(OrderEventRecord orderEvent) => new(
         orderEvent.RunId,

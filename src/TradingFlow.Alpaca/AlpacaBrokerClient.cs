@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -245,46 +246,86 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 
             using var doc = JsonDocument.Parse(response.Payload);
 
-            var orders = new System.Collections.Generic.List<ActiveBrokerOrder>();
-            foreach (var element in doc.RootElement.EnumerateArray())
-            {
-                var id = element.GetProperty("id").GetString() ?? "";
-                var symbol = element.GetProperty("symbol").GetString() ?? "";
-                var side = element.GetProperty("side").GetString() ?? "";
-                var status = element.GetProperty("status").GetString() ?? "";
-                var type = element.TryGetProperty("type", out var tp) && tp.ValueKind != JsonValueKind.Null ? tp.GetString() ?? "" : "";
-
-                var limit = ParseOptionalDecimal(element, "limit_price");
-                var stop = ParseOptionalDecimal(element, "stop_price");
-                var qty = ParseOptionalDecimal(element, "qty");
-                var filledQuantity = ParseRequiredDecimal(element, "filled_qty", "open-order query");
-                var filledAveragePrice = ParseOptionalDecimal(element, "filled_avg_price");
-                var createdAt = RequireTimestamp(element, "created_at", "open-order query");
-                var updatedAt = RequireTimestamp(element, "updated_at", "open-order query");
-
-                var clientOrderId = element.TryGetProperty("client_order_id", out var clientOrderIdProperty) &&
-                    clientOrderIdProperty.ValueKind != JsonValueKind.Null
-                        ? clientOrderIdProperty.GetString() ?? ""
-                        : "";
-
-                orders.Add(new ActiveBrokerOrder(
-                    id,
-                    symbol,
-                    side,
-                    status,
-                    type,
-                    limit,
-                    stop,
-                    qty,
-                    createdAt,
-                    clientOrderId,
-                    filledQuantity,
-                    filledAveragePrice,
-                    updatedAt));
-            }
+            var orders = doc.RootElement
+                .EnumerateArray()
+                .Select(element => ParseOrder(element, "open-order query"))
+                .ToArray();
 
             return (System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>)orders;
         });
+    }
+
+    public async Task<ActiveBrokerOrder?> GetOrderByClientOrderIdAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken)
+    {
+        if (String.IsNullOrWhiteSpace(clientOrderId))
+        {
+            throw new ArgumentException("Client order ID is required.", nameof(clientOrderId));
+        }
+
+        var normalized = clientOrderId.Trim();
+        return await ApiProfiler.ProfileAsync("Alpaca", "/v2/orders:by_client_order_id", "GET", async () =>
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/v2/orders:by_client_order_id?client_order_id={Uri.EscapeDataString(normalized)}");
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-order-by-client-id",
+                correlationId: normalized,
+                cancellationToken: cancellationToken);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                return null;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    AlpacaTradingRestClient.DescribeFailure("order-by-client-ID query", response));
+            }
+
+            using var document = JsonDocument.Parse(response.Payload);
+            return ParseOrder(document.RootElement, "order-by-client-ID query");
+        });
+    }
+
+    private static ActiveBrokerOrder ParseOrder(JsonElement element, string operation)
+    {
+        var id = RequireString(element, "id", operation);
+        var symbol = RequireString(element, "symbol", operation).Trim().ToUpperInvariant();
+        var side = RequireString(element, "side", operation);
+        var status = RequireString(element, "status", operation);
+        var orderType = RequireString(element, "type", operation);
+        var clientOrderId = RequireString(element, "client_order_id", operation);
+        return new ActiveBrokerOrder(
+            id,
+            symbol,
+            side,
+            status,
+            orderType,
+            ParseOptionalDecimal(element, "limit_price"),
+            ParseOptionalDecimal(element, "stop_price"),
+            ParseOptionalDecimal(element, "qty"),
+            RequireTimestamp(element, "created_at", operation),
+            clientOrderId,
+            ParseRequiredDecimal(element, "filled_qty", operation),
+            ParseOptionalDecimal(element, "filled_avg_price"),
+            RequireTimestamp(element, "updated_at", operation));
+    }
+
+    private static string RequireString(JsonElement element, string propertyName, string operation)
+    {
+        if (element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String &&
+            !String.IsNullOrWhiteSpace(property.GetString()))
+        {
+            return property.GetString()!;
+        }
+
+        throw new InvalidOperationException(
+            $"Alpaca {operation} response is missing {propertyName}.");
     }
 
     private static decimal? ParseOptionalDecimal(JsonElement element, string propertyName)

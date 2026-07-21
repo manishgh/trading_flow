@@ -28,7 +28,8 @@ public static class BrokerOrderUpdateFactory
             OrderStatusCodec.ParseBrokerValue(order.Status),
             order.FilledQuantity,
             order.FilledAveragePrice ?? 0m,
-            order.UpdatedAt);
+            order.UpdatedAt,
+            BrokerUpdateSource.BrokerRest);
     }
 }
 
@@ -136,7 +137,12 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
             update.ClientOrderId,
             current.State,
             target,
-            Source: "broker",
+            Source: update.Source switch
+            {
+                BrokerUpdateSource.TradeStream => "broker_stream",
+                BrokerUpdateSource.BrokerRest => "broker_rest",
+                _ => throw new ArgumentOutOfRangeException(nameof(update.Source), update.Source, "Unknown broker update source.")
+            },
             LocalTimestampUtc: DateTimeOffset.UtcNow,
             BrokerTimestampUtc: update.Timestamp.ToUniversalTime(),
             BrokerOrderId: update.OrderId,

@@ -153,6 +153,74 @@ public class AlpacaBrokerClientTests : IDisposable
     }
 
     [Fact]
+    public async Task GetOrderByClientOrderIdAsync_ParsesTerminalOrderAndArchivesResponse()
+    {
+        const string clientOrderId = "SWGA-B-MSFT-20260721-001-12345678";
+        using var handler = new CapturingHandler(
+            HttpStatusCode.OK,
+            $$"""
+            {
+              "id":"broker-1","client_order_id":"{{clientOrderId}}","symbol":"MSFT",
+              "side":"buy","status":"filled","type":"limit","limit_price":"100.00",
+              "stop_price":null,"qty":"10","filled_qty":"10","filled_avg_price":"100.50",
+              "created_at":"2026-07-21T14:59:00Z","updated_at":"2026-07-21T15:00:00Z"
+            }
+            """);
+        using var httpClient = new HttpClient(handler);
+        using var client = new AlpacaBrokerClient(
+            httpClient,
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+            {
+                KeyId = "test-key",
+                SecretKey = "test-secret"
+            },
+            CreateArchiveWriter());
+
+        var order = await client.GetOrderByClientOrderIdAsync(clientOrderId, CancellationToken.None);
+
+        Assert.NotNull(order);
+        Assert.Equal("filled", order.Status);
+        Assert.Equal(10m, order.FilledQuantity);
+        Assert.Equal(100.50m, order.FilledAveragePrice);
+        Assert.Equal(
+            $"/v2/orders:by_client_order_id?client_order_id={clientOrderId}",
+            handler.Path);
+        var manifestPath = Assert.Single(
+            Directory.EnumerateFiles(archiveRoot, "*.manifest.json", SearchOption.AllDirectories));
+        var manifest = JsonSerializer.Deserialize<RawArchiveManifest>(
+            await File.ReadAllTextAsync(manifestPath),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Equal("broker-order-by-client-id", manifest!.ArtifactType);
+    }
+
+    [Fact]
+    public async Task GetOrderByClientOrderIdAsync_NotFound_ReturnsNullAfterArchiving()
+    {
+        using var handler = new CapturingHandler(HttpStatusCode.NotFound, """{"message":"order not found"}""");
+        using var httpClient = new HttpClient(handler);
+        using var client = new AlpacaBrokerClient(
+            httpClient,
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+            {
+                KeyId = "test-key",
+                SecretKey = "test-secret"
+            },
+            CreateArchiveWriter());
+
+        var order = await client.GetOrderByClientOrderIdAsync(
+            "SWGA-B-MSFT-20260721-001-12345678",
+            CancellationToken.None);
+
+        Assert.Null(order);
+        var manifestPath = Assert.Single(
+            Directory.EnumerateFiles(archiveRoot, "*.manifest.json", SearchOption.AllDirectories));
+        var manifest = JsonSerializer.Deserialize<RawArchiveManifest>(
+            await File.ReadAllTextAsync(manifestPath),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Equal(404, manifest!.Http!.StatusCode);
+    }
+
+    [Fact]
     public async Task SubmitExitOrdersAsync_DoesNotInventOrderIdWhenProviderOmitsIt()
     {
         using var handler = new CapturingHandler(HttpStatusCode.OK, "{}");

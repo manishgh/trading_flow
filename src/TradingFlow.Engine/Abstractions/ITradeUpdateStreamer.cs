@@ -4,11 +4,15 @@ using TradingFlow.Domain.Orders;
 
 namespace TradingFlow.Engine.Abstractions;
 
-public interface ITradeUpdateStreamer
+public interface ITradeUpdateStreamer : IDisposable
 {
     /// <summary>
-    /// Subscribes to real-time trade execution updates from the broker.
-    /// Yields incoming OrderUpdates continuously until cancellation.
+    /// Connects, authenticates, and subscribes before the caller permits entries.
     /// </summary>
-    IAsyncEnumerable<OrderUpdate> SubscribeTradeUpdatesAsync(CancellationToken cancellationToken);
+    Task ConnectAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Yields authoritative account trade updates after a successful connection.
+    /// </summary>
+    IAsyncEnumerable<OrderUpdate> ReadUpdatesAsync(CancellationToken cancellationToken);
 }

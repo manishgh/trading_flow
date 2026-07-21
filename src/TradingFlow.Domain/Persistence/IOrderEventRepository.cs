@@ -35,6 +35,9 @@ public interface IOrderEventRepository
         string clientOrderId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<OrderStateSnapshot>> ListReconcilableAsync(
+        CancellationToken cancellationToken = default);
+
     Task<OrderTransitionResult> TransitionAsync(
         OrderTransitionRequest request,
         CancellationToken cancellationToken = default);

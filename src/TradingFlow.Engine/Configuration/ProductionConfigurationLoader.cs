@@ -125,6 +125,28 @@ public sealed class ProductionConfigurationLoader
         return snapshot;
     }
 
+    public T ResolveParameter<T>(
+        ProductionProfile profile,
+        string name,
+        string? overrideValue = null)
+    {
+        if (!ProductionParameterRegistry.ByName.TryGetValue(name, out var definition))
+        {
+            throw new ProductionConfigurationException(name, "parameter is not declared in Appendix A");
+        }
+
+        var value = !String.IsNullOrWhiteSpace(overrideValue)
+            ? Parse(definition, overrideValue)
+            : definition.DefaultValue
+              ?? throw new ProductionConfigurationException(name, "a value is required");
+        Validate(definition, value, profile);
+        return value is T typed
+            ? typed
+            : throw new ProductionConfigurationException(
+                name,
+                $"parameter resolves to {value.GetType().Name}, not {typeof(T).Name}");
+    }
+
     private static object Parse(ProductionParameterDefinition definition, string? rawValue)
     {
         var value = rawValue?.Trim();

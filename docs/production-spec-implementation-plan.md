@@ -126,10 +126,34 @@ move backwards, terminal states cannot reopen, and an uncertain `SUBMITTED` retr
 is blocked for reconciliation. The obsolete direct intent-append API and the
 unsafe "missing from open orders means canceled" inference were removed rather
 than retained for compatibility. Authoritative terminal events and REST/stream
-divergence remain assigned to S3.4; orphan escalation remains part of S3.5/EXE-08.
+divergence are implemented in S3.4; orphan escalation remains part of S3.5/EXE-08.
 Local gate: 370/370 tests, full Release build including Android with 0 warnings/errors,
 current EF model, zero known vulnerable packages, and isolated Production web
 smoke checks passed.
+
+**S3.4 checkpoint (2026-07-21):** EXE-03 now has one process-owned Alpaca account
+trade-update WebSocket as the authoritative fill source. The client sends Alpaca's
+documented `auth` message immediately after the WebSocket handshake; authentication
+and the `trade_updates` subscription acknowledgement are validated before trading can arm.
+Every provider event is parsed strictly, normalized to UTC, tagged `broker_stream`,
+and applied through the shared lifecycle service. A provider-neutral coordinator
+cross-checks the journal against broker REST every validated
+`order_poll_interval_s` (default 15, range 5-60), repairs REST-ahead lifecycle state
+through the same service, tolerates one propagation cycle, and independently blocks
+new entries after a second consecutive mismatch. Manual buys and shared strategy
+submission use the same fail-closed entry-admission control; sell actions remain
+available. `/health` remains liveness-only while `/health/trading-readiness` exposes
+stream/REST timestamps, divergence cycles, and exact entry blocks with HTTP 503 when
+entries are unsafe. Broker-order absence aging and position/ledger reconciliation
+remain assigned to S3.5/EXE-08. Evidence: `OrderSynchronizationService.cs`,
+`AlpacaTradeStreamClient.cs`, `AlpacaTradeUpdateStreamer.cs`,
+`SqliteOrderEventRepository.cs`, `AlpacaOrderSynchronizationHostedService.cs`, and
+the synchronization/parser/broker/submission/configuration tests. Local gate:
+386/386 tests; full Release build including Android with 0 warnings/errors; current
+EF model; zero known vulnerable packages. Isolated web smoke proved fail-closed
+readiness 503 before synchronization, then used the configured paper account to
+authenticate the stream, complete REST reconciliation, and remain readiness 200
+through a full 15-second poll cycle without submitting an order.
 
 IDs: EXE-01..13, DAY-04 (reject enum), parts of TST-03.
 1. Reject-code enum in `TradingFlow.Domain` — Base-Spec §10 set + DAY-04 additions; one enum, used by gates, journal, and tests (CI sync-check vs spec in S12).
@@ -281,7 +305,7 @@ no eToro behavior; the production-composition test and deployment exclusion land
 | S0 | ✅ 2026-07-21 | `222ad71`, `b257028`, `ca8bd77`, `bd26aff`, `5bfbdfc`, `872ed8f`, `18ac061`, `18eba68` | Governance, secret-store migration, zero known vulnerable packages, clean-checkout CI, strict SIP WebSocket authentication, deterministic tests, and dormant eToro exclusion verified. GitHub Actions run `29809663008` passed; external credential rotation remains operator action U1. |
 | S1 | ✅ 2026-07-21 | `9d77b87`, `610a9ba`, `4510a7e`, `680b7a9` | Appendix-A registry (99 expanded parameters) is bidirectionally enforced; startup loading is typed, range-validated, immutable, canonically SHA-256 hashed, and structured-logged; live-v1 locks and development-only IEX fallback are enforced; all Alpaca trading and stream URLs derive from profile through one resolver. Local gate: 283/283 tests, Release build 0 warnings/errors, Engine dependency audit 0 known vulnerabilities. GitHub Actions run `29811932023` passed. |
 | S2 | ✅ 2026-07-21 | `4bbd5c8`, `eb43cd1`, `54a163e`, `08d6fd3`, `27348a9`, `f6e9810`, `06a4f05`, `a7564b9` | Versioned operational journal, byte-exact provider archives, decimal money audit, WAL/FULL durability, immutable daily backup, fail-closed restore, and recovery drill complete. GitHub Actions run `29839320815` passed. |
-| S3 | 🟨 2026-07-21 | (this checkpoint) | In progress. Canonical reject codes, write-ahead intent, idempotent submission, and the enforced EXE-02 lifecycle journal are complete. EXE-03 stream authority and EXE-08 reconciliation are next. |
+| S3 | 🟨 2026-07-21 | (this checkpoint) | In progress. Canonical reject codes, write-ahead intent, idempotent submission, EXE-02 lifecycle journaling, and EXE-03 stream-authoritative fills with REST cross-check and fail-closed entry admission are complete. EXE-08 full startup/periodic position-order reconciliation is next. |
 | S4 | ⬜ | | |
 | S5 | ⬜ | | |
 | S6 | ⬜ | | |

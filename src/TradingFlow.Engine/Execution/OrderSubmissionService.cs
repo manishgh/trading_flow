@@ -39,15 +39,18 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
 {
     private readonly IOrderIntentRepository intentRepository;
     private readonly IOrderEventRepository eventRepository;
+    private readonly IEntryAdmissionControl entryAdmission;
     private readonly ILogger<OrderSubmissionService> logger;
 
     public OrderSubmissionService(
         IOrderIntentRepository intentRepository,
         IOrderEventRepository eventRepository,
+        IEntryAdmissionControl entryAdmission,
         ILogger<OrderSubmissionService> logger)
     {
         this.intentRepository = intentRepository;
         this.eventRepository = eventRepository;
+        this.entryAdmission = entryAdmission;
         this.logger = logger;
     }
 
@@ -59,6 +62,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         ArgumentNullException.ThrowIfNull(submission);
         ArgumentNullException.ThrowIfNull(brokerClient);
         Validate(submission);
+        entryAdmission.EnsureEntriesAllowed();
 
         var requestJson = JsonSerializer.Serialize(new
         {

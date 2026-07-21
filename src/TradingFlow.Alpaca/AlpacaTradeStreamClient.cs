@@ -26,45 +26,22 @@ public sealed class AlpacaTradeStreamClient : IDisposable
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
         await _webSocket.ConnectAsync(_streamUrl, cancellationToken);
-
-        // Wait for welcome message
-        var welcomeMsg = await ReceiveMessageAsync(cancellationToken);
-        
-        // Send Auth
-        var authPayload = new
-        {
-            action = "authenticate",
-            data = new 
-            {
-                key_id = _options.KeyId,
-                secret_key = _options.SecretKey
-            }
-        };
-        await SendMessageAsync(authPayload, cancellationToken);
-
-        // Wait for auth response
+        await SendMessageAsync(
+            AlpacaTradeStreamProtocol.CreateAuthenticationMessage(
+                _options.KeyId,
+                _options.SecretKey),
+            cancellationToken);
         var authResponse = await ReceiveMessageAsync(cancellationToken);
-        if (!authResponse.Contains("\"status\":\"authorized\"") && !authResponse.Contains("\"status\":\"authenticated\""))
-        {
-            if (authResponse.Contains("auth_failed") || authResponse.Contains("not authorized") || authResponse.Contains("unauthorized"))
-            {
-                throw new Exception($"Alpaca Trade WebSocket Authentication Failed: {authResponse}");
-            }
-        }
+        AlpacaTradeStreamProtocol.RequireAuthorization(authResponse);
     }
 
     public async Task SubscribeTradeUpdatesAsync(CancellationToken cancellationToken)
     {
-        var subPayload = new
-        {
-            action = "listen",
-            data = new 
-            {
-                streams = new[] { "trade_updates" }
-            }
-        };
-        await SendMessageAsync(subPayload, cancellationToken);
-        var subResponse = await ReceiveMessageAsync(cancellationToken);
+        await SendMessageAsync(
+            AlpacaTradeStreamProtocol.CreateTradeUpdateSubscriptionMessage(),
+            cancellationToken);
+        var subscriptionResponse = await ReceiveMessageAsync(cancellationToken);
+        AlpacaTradeStreamProtocol.RequireTradeUpdateSubscription(subscriptionResponse);
     }
 
     public async IAsyncEnumerable<JsonElement> ReadMessagesAsync([EnumeratorCancellation] CancellationToken cancellationToken)
@@ -87,6 +64,12 @@ public sealed class AlpacaTradeStreamClient : IDisposable
                 break;
             }
 
+            if (result.MessageType is not (WebSocketMessageType.Text or WebSocketMessageType.Binary))
+            {
+                throw new InvalidOperationException(
+                    $"Unsupported Alpaca trade-stream message type {result.MessageType}.");
+            }
+
             var messageJson = Encoding.UTF8.GetString(ms.ToArray());
             
             // Note: Trade Updates payload format differs from Market Data
@@ -95,9 +78,8 @@ public sealed class AlpacaTradeStreamClient : IDisposable
         }
     }
 
-    private async Task SendMessageAsync(object payload, CancellationToken cancellationToken)
+    private async Task SendMessageAsync(string json, CancellationToken cancellationToken)
     {
-        var json = JsonSerializer.Serialize(payload);
         var bytes = Encoding.UTF8.GetBytes(json);
         await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cancellationToken);
     }
@@ -113,15 +95,87 @@ public sealed class AlpacaTradeStreamClient : IDisposable
             ms.Write(buffer, 0, result.Count);
         } while (!result.EndOfMessage);
 
+        if (result.MessageType == WebSocketMessageType.Close)
+        {
+            throw new WebSocketException("Alpaca closed the account stream during protocol negotiation.");
+        }
+
+        if (result.MessageType is not (WebSocketMessageType.Text or WebSocketMessageType.Binary))
+        {
+            throw new InvalidOperationException(
+                $"Unsupported Alpaca trade-stream message type {result.MessageType}.");
+        }
+
         return Encoding.UTF8.GetString(ms.ToArray());
     }
 
     public void Dispose()
     {
-        if (_webSocket.State == WebSocketState.Open)
-        {
-            _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Disposed", CancellationToken.None).GetAwaiter().GetResult();
-        }
+        _webSocket.Abort();
         _webSocket.Dispose();
+    }
+}
+
+/// <summary>
+/// Validates Alpaca's documented account-stream acknowledgements before order processing is armed.
+/// </summary>
+public static class AlpacaTradeStreamProtocol
+{
+    public static string CreateAuthenticationMessage(string keyId, string secretKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(secretKey);
+        return JsonSerializer.Serialize(new
+        {
+            action = "auth",
+            key = keyId,
+            secret = secretKey
+        });
+    }
+
+    public static string CreateTradeUpdateSubscriptionMessage() =>
+        JsonSerializer.Serialize(new
+        {
+            action = "listen",
+            data = new
+            {
+                streams = new[] { "trade_updates" }
+            }
+        });
+
+    public static void RequireAuthorization(string payload)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload);
+        using var document = JsonDocument.Parse(payload);
+        var root = document.RootElement;
+        if (root.TryGetProperty("stream", out var stream) &&
+            String.Equals(stream.GetString(), "authorization", StringComparison.Ordinal) &&
+            root.TryGetProperty("data", out var data) &&
+            data.TryGetProperty("status", out var status) &&
+            String.Equals(status.GetString(), "authorized", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException("Alpaca trade WebSocket authentication was not authorized.");
+    }
+
+    public static void RequireTradeUpdateSubscription(string payload)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(payload);
+        using var document = JsonDocument.Parse(payload);
+        var root = document.RootElement;
+        if (root.TryGetProperty("stream", out var stream) &&
+            String.Equals(stream.GetString(), "listening", StringComparison.Ordinal) &&
+            root.TryGetProperty("data", out var data) &&
+            data.TryGetProperty("streams", out var streams) &&
+            streams.ValueKind == JsonValueKind.Array &&
+            streams.EnumerateArray().Any(item =>
+                String.Equals(item.GetString(), "trade_updates", StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException("Alpaca did not acknowledge the trade_updates subscription.");
     }
 }

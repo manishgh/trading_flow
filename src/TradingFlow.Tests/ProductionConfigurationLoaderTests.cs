@@ -154,6 +154,18 @@ public sealed class ProductionConfigurationLoaderTests
             Times.Once);
     }
 
+    [Fact]
+    public void ResolveParameter_UsesRegistryDefaultAndValidatedOverride()
+    {
+        var loader = new ProductionConfigurationLoader();
+
+        Assert.Equal(15, loader.ResolveParameter<int>(ProductionProfile.Paper, "order_poll_interval_s"));
+        Assert.Equal(30, loader.ResolveParameter<int>(ProductionProfile.Paper, "order_poll_interval_s", "30"));
+        AssertParameterError(
+            "order_poll_interval_s",
+            () => loader.ResolveParameter<int>(ProductionProfile.Paper, "order_poll_interval_s", "4"));
+    }
+
     private static ProductionConfigurationSnapshot Load(IReadOnlyDictionary<string, string?>? values = null) =>
         new ProductionConfigurationLoader().Load(ProductionProfile.Paper, values ?? RequiredValues());
 

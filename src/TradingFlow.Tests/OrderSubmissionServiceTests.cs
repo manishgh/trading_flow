@@ -28,6 +28,7 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
+            new EntryAdmissionControl(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -56,6 +57,7 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
+            new EntryAdmissionControl(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -81,6 +83,7 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
+            new EntryAdmissionControl(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -94,6 +97,35 @@ public sealed class OrderSubmissionServiceTests
         broker.Verify(
             client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Fact]
+    public async Task SubmitBracketOrderAsync_EntryAdmissionBlocked_DoesNotPersistOrCallBroker()
+    {
+        var repository = new RecordingIntentRepository();
+        var events = new RecordingEventRepository(repository);
+        var admission = new EntryAdmissionControl();
+        admission.Block(
+            "order_sync",
+            "ORDER_STREAM_DISCONNECTED",
+            "stream down",
+            DateTimeOffset.UtcNow);
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        var service = new OrderSubmissionService(
+            repository,
+            events,
+            admission,
+            NullLogger<OrderSubmissionService>.Instance);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SubmitBracketOrderAsync(
+                CreateSubmission(Guid.NewGuid()),
+                broker.Object,
+                CancellationToken.None));
+
+        Assert.Contains("ORDER_STREAM_DISCONNECTED", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, repository.ReservationAttempts);
+        broker.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -254,6 +286,17 @@ public sealed class OrderSubmissionServiceTests
 
             return Task.FromResult(current);
         }
+
+        public Task<IReadOnlyList<OrderStateSnapshot>> ListReconcilableAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<OrderStateSnapshot>>(
+                current is not null && current.State is
+                    OrderState.Submitted or
+                    OrderState.Acked or
+                    OrderState.PartiallyFilled or
+                    OrderState.CancelPending
+                        ? [current]
+                        : []);
 
         public Task<OrderTransitionResult> TransitionAsync(
             OrderTransitionRequest request,

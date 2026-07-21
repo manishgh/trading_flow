@@ -249,7 +249,7 @@ public sealed class SqliteOrderEventRepositoryTests
                 intent.ClientOrderId,
                 OrderState.Submitted,
                 OrderState.Acked,
-                Source: "broker",
+                Source: "broker_stream",
                 LocalTimestampUtc: intent.CreatedAtUtc.AddSeconds(2),
                 BrokerOrderId: "broker-1",
                 PayloadJson: "{}")));
@@ -281,6 +281,32 @@ public sealed class SqliteOrderEventRepositoryTests
     }
 
     [Fact]
+    public async Task ListReconcilableAsync_ReturnsOnlyLatestNonTerminalBrokerRelevantState()
+    {
+        await using var database = await OrderEventTestDatabase.CreateAsync();
+        var intent = await database.ReserveAsync();
+
+        Assert.Empty(await database.Events.ListReconcilableAsync());
+        await database.TransitionAsync(
+            intent,
+            OrderState.Intent,
+            OrderState.Submitted,
+            intent.CreatedAtUtc.AddSeconds(1));
+
+        var active = await database.Events.ListReconcilableAsync();
+        Assert.Single(active);
+        Assert.Equal(OrderState.Submitted, active[0].State);
+
+        await database.TransitionAsync(
+            intent,
+            OrderState.Submitted,
+            OrderState.Rejected,
+            intent.CreatedAtUtc.AddSeconds(2));
+
+        Assert.Empty(await database.Events.ListReconcilableAsync());
+    }
+
+    [Fact]
     public async Task LifecycleService_PartialFillFromSubmitted_JournalsAckBeforeFill()
     {
         await using var database = await OrderEventTestDatabase.CreateAsync();
@@ -299,7 +325,8 @@ public sealed class SqliteOrderEventRepositoryTests
             OrderStatus.PartiallyFilled,
             4m,
             100.25m,
-            intent.CreatedAtUtc.AddSeconds(2)));
+            intent.CreatedAtUtc.AddSeconds(2),
+            BrokerUpdateSource.TradeStream));
         snapshot = await lifecycle.ApplyBrokerUpdateAsync(new OrderUpdate(
             "broker-1",
             intent.ClientOrderId,
@@ -307,7 +334,8 @@ public sealed class SqliteOrderEventRepositoryTests
             OrderStatus.PartiallyFilled,
             7m,
             100.40m,
-            intent.CreatedAtUtc.AddSeconds(3)));
+            intent.CreatedAtUtc.AddSeconds(3),
+            BrokerUpdateSource.TradeStream));
 
         Assert.Equal(OrderState.PartiallyFilled, snapshot.State);
         Assert.Equal(7m, snapshot.FilledQuantity);
@@ -335,7 +363,8 @@ public sealed class SqliteOrderEventRepositoryTests
             OrderStatus.Filled,
             10m,
             100.50m,
-            intent.CreatedAtUtc.AddSeconds(2));
+            intent.CreatedAtUtc.AddSeconds(2),
+            BrokerUpdateSource.TradeStream);
 
         var first = await lifecycle.ApplyBrokerUpdateAsync(update);
         var replay = await lifecycle.ApplyBrokerUpdateAsync(update);
@@ -370,7 +399,8 @@ public sealed class SqliteOrderEventRepositoryTests
             brokerStatus,
             0m,
             0m,
-            intent.CreatedAtUtc.AddSeconds(2)));
+            intent.CreatedAtUtc.AddSeconds(2),
+            BrokerUpdateSource.TradeStream));
 
         Assert.Equal(expectedState, snapshot.State);
     }
@@ -389,7 +419,8 @@ public sealed class SqliteOrderEventRepositoryTests
                 OrderStatus.Accepted,
                 0m,
                 0m,
-                DateTimeOffset.UtcNow)));
+                DateTimeOffset.UtcNow,
+                BrokerUpdateSource.TradeStream)));
 
         Assert.Contains("unknown client order ID", error.Message, StringComparison.Ordinal);
     }
@@ -412,7 +443,8 @@ public sealed class SqliteOrderEventRepositoryTests
             OrderStatus.Accepted,
             0m,
             0m,
-            intent.CreatedAtUtc.AddSeconds(2)));
+            intent.CreatedAtUtc.AddSeconds(2),
+            BrokerUpdateSource.TradeStream));
 
         var pending = await lifecycle.RequestCancelAsync(intent.ClientOrderId, "broker-1");
         var replay = await lifecycle.RequestCancelAsync(intent.ClientOrderId, "broker-1");
@@ -503,7 +535,7 @@ public sealed class SqliteOrderEventRepositoryTests
                 intent.ClientOrderId,
                 previous,
                 next,
-                Source: "test",
+                Source: "engine",
                 LocalTimestampUtc: timestamp,
                 BrokerTimestampUtc: brokerTimestampUtc,
                 BrokerOrderId: brokerOrderId,
