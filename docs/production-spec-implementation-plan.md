@@ -155,12 +155,33 @@ readiness 503 before synchronization, then used the configured paper account to
 authenticate the stream, complete REST reconciliation, and remain readiness 200
 through a full 15-second poll cycle without submitting an order.
 
+**S3.5 checkpoint (2026-07-21):** EXE-08 now reconciles the complete broker account
+on startup and every validated `reconcile_interval_s` (default 60, range 15-300).
+The broker position and open-order snapshots are compared with append-only order and
+position journals carrying run/config/code provenance. Account stream fills record
+Alpaca `execution_id`, incremental fill quantity, signed `position_qty`, broker time,
+local receive time, and raw normalized payload before lifecycle processing. Known-order
+REST repair compares broker cumulative fill with fill quantity already journaled for
+that broker order, preventing duplicate position changes after a partial persistence
+failure. Unknown positions, all unmatched broker orders (including manual/foreign
+orders), and local orders absent after `order_orphan_timeout_s` create a durable full
+diff, block every entry independently, and remain visible in trading readiness.
+Identical mismatch snapshots are deduplicated. `TradingFlow.Cli ops ack` calls the
+running service API and stores actor, reason, and UTC acknowledgement; the exact
+acknowledged diff remains cleared, while a changed diff or recurrence after a clean
+reconciliation blocks again. No broker state is silently adopted. Commit `963343f`.
+Local gate: 397/397 tests; full Release build including Android with 0 warnings/errors;
+current EF model; zero known vulnerable packages. Final isolated paper-profile smoke
+authenticated the one account stream, completed startup reconciliation, remained
+readiness 200 through a full 15-second REST poll, and reported clean/zero differences
+without submitting an order.
+
 IDs: EXE-01..13, DAY-04 (reject enum), parts of TST-03.
 1. Reject-code enum in `TradingFlow.Domain` — Base-Spec §10 set + DAY-04 additions; one enum, used by gates, journal, and tests (CI sync-check vs spec in S12).
 2. Write-ahead intent: `client_order_id` format `{strategy}-{side}-{symbol}-{yyyymmdd}-{seq}-{uuid8}`; persist INTENT (fsync) **before** `SubmitOrderAsync`; retries reuse the persisted ID (EXE-01). Refactor `MobileAutomationService` entry path and `LiveRunner` submission path onto one shared `OrderSubmissionService` (one-brain discipline applies to execution too).
 3. `OrderStateMachine` (EXE-02): allowed transitions enforced; every transition → `order_events` with broker + local timestamps; orphan timeout `order_orphan_timeout_s` → RECONCILE_MISMATCH.
 4. Fill-source discipline (EXE-03): `AlpacaTradeUpdateStreamer` primary; REST polling cross-check every `order_poll_interval_s`; divergence > 1 cycle → alert + block entries.
-5. Full reconciliation loop (EXE-08): startup + every `reconcile_interval_s`, diff broker positions/orders vs ledger; RECONCILE_MISMATCH blocks new entries globally; auto-resolve only broker-has-fills-we-missed; `ops ack` CLI command clears others. (Extends, does not replace, the existing orphan-adoption at `LiveRunner.cs:150`.)
+5. Full reconciliation loop (EXE-08): startup + every `reconcile_interval_s`, diff broker positions/orders vs ledger; RECONCILE_MISMATCH blocks new entries globally; auto-resolve only broker-has-fills-we-missed; `ops ack` CLI command clears others. The shared reconciliation service is the production path; no legacy orphan-adoption path is retained.
 6. Protective-order invariant (EXE-09): after every fill and every reconcile pass, verify a broker-resting stop exists for each open position; if absent → auto-place backstop (`backstop_atr_mult`) + alert + RECONCILE_MISMATCH. Bracket entry orders already satisfy this at entry; this closes the gap for legs canceled/expired out-of-band.
 7. Position-conflict rule (EXE-10): one open position per symbol across strategies, checked in the gate chain against the internal strategy-tagged ledger.
 8. Gate-chain framework (EXE-04): ordered 12-slot short-circuiting chain; each gate returns pass/fail + reject code; ALL evaluations journaled to `gate_evaluations` (pass included). Slots for not-yet-built gates block (see §3 rule). Wire existing checks (spread, quote fetch, sizing) into their slots.
@@ -305,7 +326,7 @@ no eToro behavior; the production-composition test and deployment exclusion land
 | S0 | ✅ 2026-07-21 | `222ad71`, `b257028`, `ca8bd77`, `bd26aff`, `5bfbdfc`, `872ed8f`, `18ac061`, `18eba68` | Governance, secret-store migration, zero known vulnerable packages, clean-checkout CI, strict SIP WebSocket authentication, deterministic tests, and dormant eToro exclusion verified. GitHub Actions run `29809663008` passed; external credential rotation remains operator action U1. |
 | S1 | ✅ 2026-07-21 | `9d77b87`, `610a9ba`, `4510a7e`, `680b7a9` | Appendix-A registry (99 expanded parameters) is bidirectionally enforced; startup loading is typed, range-validated, immutable, canonically SHA-256 hashed, and structured-logged; live-v1 locks and development-only IEX fallback are enforced; all Alpaca trading and stream URLs derive from profile through one resolver. Local gate: 283/283 tests, Release build 0 warnings/errors, Engine dependency audit 0 known vulnerabilities. GitHub Actions run `29811932023` passed. |
 | S2 | ✅ 2026-07-21 | `4bbd5c8`, `eb43cd1`, `54a163e`, `08d6fd3`, `27348a9`, `f6e9810`, `06a4f05`, `a7564b9` | Versioned operational journal, byte-exact provider archives, decimal money audit, WAL/FULL durability, immutable daily backup, fail-closed restore, and recovery drill complete. GitHub Actions run `29839320815` passed. |
-| S3 | 🟨 2026-07-21 | `ca65626` | In progress. Canonical reject codes, write-ahead intent, idempotent submission, EXE-02 lifecycle journaling, and EXE-03 stream-authoritative fills with REST cross-check and fail-closed entry admission are complete. GitHub Actions run `29864509930` passed both the clean .NET/Android build-test job and secret scan. EXE-08 full startup/periodic position-order reconciliation is next. |
+| S3 | 🟨 2026-07-21 | `ca65626`, `963343f` | In progress. Canonical rejects, write-ahead intent, idempotent submission, EXE-02 lifecycle journal, EXE-03 stream-authoritative fills/REST cross-check, and EXE-08 startup/periodic account reconciliation with durable operator acknowledgement are complete. Local gate: 397/397 tests, full Release build including Android with 0 warnings/errors, current EF model, zero vulnerable packages, and clean paper-profile runtime smoke. EXE-09 protective-order invariant is next. |
 | S4 | ⬜ | | |
 | S5 | ⬜ | | |
 | S6 | ⬜ | | |
