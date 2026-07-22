@@ -116,6 +116,25 @@ test.describe("UI2 web trading workstation", () => {
     await expect(rows.locator("form, button[type=submit], [data-operator-direct-buy]")).toHaveCount(0);
   });
 
+  test("protected buy requires a server-reviewed ticket before confirmation", async ({ page }) => {
+    await openSeededDesk(page);
+    const reviewLink = page.getByRole("link", { name: "Review protected buy" });
+    await expect(reviewLink).toBeVisible();
+    await expect(page.getByRole("button", { name: /confirm paper order/i })).toHaveCount(0);
+
+    await reviewLink.click();
+    await expect(page).toHaveURL(/OrderTicket/);
+    await page.getByLabel("Limit price").fill("10.00");
+    await page.getByLabel("Stop price").fill("9.50");
+    await page.getByLabel("Take-profit price").fill("11.00");
+    await page.getByRole("button", { name: "Review order" }).click();
+
+    await expect(page.getByRole("heading", { name: /UI2T/ })).toBeVisible();
+    await expect(page.getByText("Submission blocked")).toBeVisible();
+    await expect(page.getByRole("button", { name: /confirm paper order/i })).toHaveCount(0);
+    await expect(page.locator(".reviewed-order")).toContainText(/fresh two-sided SIP quote|credentials are not configured/i);
+  });
+
   test("keyed quote patches preserve focused controls", async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await openSeededDesk(page);

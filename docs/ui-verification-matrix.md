@@ -97,3 +97,25 @@ the successful generated-XAML Release build.
 
 Physical-device screenshots, font-scale checks, TalkBack, and Android Accessibility Scanner remain
 manual release gates and are not inferred from the successful Android Release build.
+
+### UI5 - reviewed order and strategy workflow
+
+- Trade Desk market rows remain read-only. A selected symbol exposes a distinct `Review protected
+  buy` command that opens a paper-only order ticket; no list-row action can submit an order.
+- Preview is server-owned and displays quantity, limit, notional, bid/ask, quote age, spread,
+  session, time in force, stop, target, entry policy, extended-hours choice, and ticket expiry.
+- Confirmation uses an encrypted, immutable, two-minute review token. It rechecks quote freshness,
+  spread, quote drift, market session, asset eligibility, buying power, position state, admission
+  blocks, and manual-entry policy before using a stable durable intent identity.
+- Data Protection keys persist beneath the configured TradingFlow data root, so process restarts do
+  not invalidate active review tokens merely because the web process restarted.
+- Android Symbol Detail opens the same shared review/confirm API contract. The phone flow keeps the
+  draft, review, blocked, and accepted states separate and never exposes confirmation before a
+  successful server review.
+- Verification completed: web and Android Release builds with 0 warnings and 0 errors, 466 .NET
+  tests, and 24 Playwright tests passed. Live desktop and 390 px checks found no horizontal
+  overflow; the real paper profile correctly exposed a strategy-gated blocked state and no confirm
+  command. Browser console contained no warnings or errors.
+
+Physical-device order-page screenshots, font-scale checks, TalkBack, and Android Accessibility
+Scanner remain manual release gates and are not inferred from the successful Android Release build.

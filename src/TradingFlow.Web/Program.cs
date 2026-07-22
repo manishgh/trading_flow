@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Backtesting.StrategyEvaluation;
 using TradingFlow.Data.Backups;
@@ -43,6 +44,12 @@ builder.Services.AddRazorPages();
 var repositoryRoot = ResolveRepositoryRoot(builder.Environment.ContentRootPath);
 var dataRoot = ResolveRootFromEnvironment("TRADINGFLOW_DATA_ROOT", Path.Combine(repositoryRoot, "data"));
 var cacheRoot = ResolveRootFromEnvironment("TRADINGFLOW_CACHE_ROOT", Path.Combine(dataRoot, "cache"));
+var dataProtectionKeyRoot = Path.Combine(dataRoot, "security", "data-protection-keys");
+Directory.CreateDirectory(dataProtectionKeyRoot);
+builder.Services
+    .AddDataProtection()
+    .SetApplicationName("TradingFlow.Web")
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyRoot));
 var backupRoot = ResolveRootFromEnvironment("TRADINGFLOW_BACKUP_ROOT", Path.Combine(dataRoot, "backups"));
 builder.Services.AddSingleton(new ProjectPaths(repositoryRoot, dataRoot, cacheRoot));
 builder.Services.AddSingleton<SimpleYamlReader>();
@@ -113,6 +120,8 @@ if (!uiTestMode)
 }
 builder.Services.AddSingleton<AlpacaQuoteService>();
 builder.Services.AddSingleton<AlpacaManualOrderService>();
+builder.Services.AddSingleton<IManualOrderMarketGateway, AlpacaManualOrderMarketGateway>();
+builder.Services.AddSingleton<ManualOrderTicketService>();
 builder.Services.AddSingleton<StrategyEvaluationService>();
 
 var dbPath = Path.Combine(dataRoot, "tradingflow.db");

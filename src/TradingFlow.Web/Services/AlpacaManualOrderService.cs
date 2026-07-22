@@ -13,6 +13,16 @@ namespace TradingFlow.Web.Services;
 
 public sealed record ManualOrderResult(string OrderId, string Ticker, string Side, decimal Quantity, decimal LimitPrice);
 
+public sealed record ManualBrokerContext(
+    EquityTradingSession Session,
+    DateOnly TradeDate,
+    decimal BuyingPower,
+    decimal Equity,
+    decimal OpenPositionQuantity,
+    bool AssetActive,
+    bool AssetTradable,
+    bool OvernightTradable);
+
 /// <summary>
 /// Manual paper-trading order helper for the wishlist UI. It intentionally keeps
 /// sell conservative: sell is treated as closing an existing paper position, not
@@ -49,7 +59,8 @@ public sealed class AlpacaManualOrderService : IDisposable
         decimal? takeProfitPrice,
         string? horizon,
         CancellationToken cancellationToken,
-        bool allowExtendedHoursTrading = false)
+        bool allowExtendedHoursTrading = false,
+        Guid? ticketId = null)
     {
         var normalizedTicker = NormalizeTicker(ticker);
         var normalizedSide = NormalizeSide(side);
@@ -84,7 +95,8 @@ public sealed class AlpacaManualOrderService : IDisposable
                 takeProfitPrice,
                 horizon,
                 allowExtendedHoursTrading,
-                cancellationToken);
+                cancellationToken,
+                ticketId);
         }
 
         return await SubmitLimitOrderCoreAsync(
@@ -93,7 +105,35 @@ public sealed class AlpacaManualOrderService : IDisposable
                 quantity,
                 limitPrice,
                 allowExtendedHoursTrading,
-                cancellationToken);
+                cancellationToken,
+                ticketId);
+    }
+
+    public async Task<ManualBrokerContext> GetBrokerContextAsync(
+        string ticker,
+        CancellationToken cancellationToken)
+    {
+        var normalizedTicker = NormalizeTicker(ticker);
+        if (!credentials.IsConfigured)
+        {
+            throw new InvalidOperationException("Alpaca paper credentials are not configured.");
+        }
+
+        var (trading, provider) = GetClients();
+        var session = await provider.GetSessionAsync(DateTimeOffset.UtcNow, cancellationToken);
+        var eligibility = await provider.GetEligibilityAsync(normalizedTicker, cancellationToken)
+            ?? throw new InvalidOperationException($"Alpaca returned no asset eligibility for {normalizedTicker}.");
+        var account = await provider.GetAccountSnapshotAsync(cancellationToken);
+        var positionQuantity = await GetOpenPositionQuantityAsync(trading, normalizedTicker, cancellationToken);
+        return new ManualBrokerContext(
+            session.Session,
+            session.TradeDate,
+            account.BuyingPower,
+            account.Equity,
+            positionQuantity,
+            eligibility.Active,
+            eligibility.Tradable,
+            eligibility.OvernightTradable);
     }
 
     private async Task<ManualOrderResult> SubmitOperatorDirectBuyAsync(
@@ -104,7 +144,8 @@ public sealed class AlpacaManualOrderService : IDisposable
         decimal? takeProfitPrice,
         string? horizon,
         bool allowExtendedHoursTrading,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? ticketId)
     {
         if (quantity != Decimal.Truncate(quantity) || quantity > Int32.MaxValue)
         {
@@ -127,15 +168,9 @@ public sealed class AlpacaManualOrderService : IDisposable
             throw new InvalidOperationException("Operator-direct buy requires a take-profit price above the entry limit.");
         }
 
-        if (allowExtendedHoursTrading)
-        {
-            throw new InvalidOperationException(
-                "Operator-direct extended-hours entry is blocked because Alpaca does not support protected bracket entries outside regular hours.");
-        }
-
         var (_, broker) = GetClients();
         var now = DateTimeOffset.UtcNow;
-        var runId = Guid.NewGuid();
+        var runId = ticketId ?? Guid.NewGuid();
         const string strategyId = "MANUAL-OPERATOR-DIRECT";
         var runContext = ExecutionRunContextFactory.Create(
             runId,
@@ -152,7 +187,7 @@ public sealed class AlpacaManualOrderService : IDisposable
                 allowExtendedHoursTrading
             },
             now);
-        var intentId = OrderIntentIdFactory.Create(runId, strategyId, "buy", ticker, now);
+        var intentId = ticketId ?? OrderIntentIdFactory.Create(runId, strategyId, "buy", ticker, now);
         var candidateId = Guid.NewGuid();
         var result = await orderSubmissions.SubmitBracketOrderAsync(
             new BracketOrderSubmission(
@@ -186,7 +221,7 @@ public sealed class AlpacaManualOrderService : IDisposable
                     stopLossPrice.Value,
                     takeProfitPrice.Value,
                     now),
-                AllowExtendedHoursTrading: false),
+                AllowExtendedHoursTrading: allowExtendedHoursTrading),
             broker,
             cancellationToken);
 
@@ -204,7 +239,8 @@ public sealed class AlpacaManualOrderService : IDisposable
         decimal quantity,
         decimal limitPrice,
         bool allowExtendedHoursTrading,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? ticketId)
     {
         var (client, provider) = GetClients();
         var now = DateTimeOffset.UtcNow;
@@ -237,7 +273,9 @@ public sealed class AlpacaManualOrderService : IDisposable
             }
         }
 
-        var clientOrderId = $"tf-manual-{normalizedSide}-{normalizedTicker}-{now:yyyyMMddHHmmssfff}";
+        var clientOrderId = ticketId is { } stableTicketId
+            ? $"tf-manual-{normalizedSide}-{stableTicketId:N}"
+            : $"tf-manual-{normalizedSide}-{normalizedTicker}-{now:yyyyMMddHHmmssfff}";
         var submitOutsideRegularHours = session.Session != EquityTradingSession.Regular;
         object requestBody = submitOutsideRegularHours
             ? new
@@ -280,7 +318,9 @@ public sealed class AlpacaManualOrderService : IDisposable
         }
 
         using var document = JsonDocument.Parse(response.Payload);
-        var orderId = document.RootElement.TryGetProperty("id", out var id) ? id.GetString() ?? String.Empty : String.Empty;
+        var orderId = document.RootElement.TryGetProperty("id", out var orderIdElement)
+            ? orderIdElement.GetString() ?? String.Empty
+            : String.Empty;
         if (String.IsNullOrWhiteSpace(orderId))
         {
             throw new InvalidOperationException(

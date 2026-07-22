@@ -1,0 +1,95 @@
+@page "/OrderTicket"
+@model TradingFlow.Web.Pages.OrderTicketModel
+@{
+    ViewData["Title"] = "Review Order";
+}
+
+<header class="page-header compact-page-header">
+    <div>
+        <h1>Review Protected Buy</h1>
+        <p>Paper environment. The server revalidates quote, spread, session, account, exposure, and duplicate controls before submission.</p>
+    </div>
+    <a class="button secondary" asp-page="/TradeDesk" asp-route-id="@Model.WishlistId" asp-route-ticker="@Model.Ticker">Back to Desk</a>
+</header>
+
+@if (!String.IsNullOrWhiteSpace(Model.ErrorMessage))
+{
+    <div class="status-banner error" role="alert">@Model.ErrorMessage</div>
+}
+@if (Model.Confirmation is { } confirmation)
+{
+    <section class="panel order-confirmation" role="status">
+        <span class="environment-badge">PAPER</span>
+        <h2>Order accepted</h2>
+        <p>@confirmation.Quantity.ToString("0.####") shares of @confirmation.Ticker at limit @confirmation.LimitPrice.ToString("C2").</p>
+        <dl class="evidence-grid">
+            <div><dt>Order ID</dt><dd class="truncate-value">@confirmation.OrderId</dd></div>
+            <div><dt>Ticket ID</dt><dd>@confirmation.TicketId</dd></div>
+        </dl>
+        <a class="button" asp-page="/RunningTrades">View order lifecycle</a>
+    </section>
+}
+else if (Model.Preview is { } preview)
+{
+    <section class="panel reviewed-order" aria-labelledby="review-heading">
+        <div class="section-heading compact-heading">
+            <div>
+                <span class="environment-badge">@preview.Environment</span>
+                <h2 id="review-heading">@preview.Side.ToUpperInvariant() @preview.Ticker</h2>
+            </div>
+            <strong class="@(preview.CanSubmit ? "status-ok" : "status-bad")">@(preview.CanSubmit ? "Ready to confirm" : "Blocked")</strong>
+        </div>
+        <dl class="evidence-grid order-review-grid">
+            <div><dt>Quantity</dt><dd>@preview.Quantity.ToString("0.####")</dd></div>
+            <div><dt>Limit</dt><dd>@preview.LimitPrice.ToString("C2")</dd></div>
+            <div><dt>Notional</dt><dd>@preview.Notional.ToString("C2")</dd></div>
+            <div><dt>Bid / Ask</dt><dd>@preview.BidPrice?.ToString("C2") / @preview.AskPrice?.ToString("C2")</dd></div>
+            <div><dt>Quote age</dt><dd>@(preview.QuoteAgeMilliseconds?.ToString() ?? "--") ms</dd></div>
+            <div><dt>Spread</dt><dd>@preview.SpreadBps?.ToString("0.##") bps</dd></div>
+            <div><dt>Session</dt><dd>@preview.Session</dd></div>
+            <div><dt>Time in force</dt><dd>@preview.TimeInForce</dd></div>
+            <div><dt>Stop</dt><dd>@preview.StopLossPrice?.ToString("C2")</dd></div>
+            <div><dt>Target</dt><dd>@preview.TakeProfitPrice?.ToString("C2")</dd></div>
+            <div><dt>Entry policy</dt><dd>@preview.Policy</dd></div>
+            <div><dt>Expires</dt><dd>@preview.ExpiresAtUtc.ToString("HH:mm:ss") UTC</dd></div>
+        </dl>
+        @if (preview.Rejections.Count > 0)
+        {
+            <div class="status-banner error" role="alert">
+                <strong>Submission blocked</strong>
+                <ul class="compact-list">
+                    @foreach (var rejection in preview.Rejections) { <li>@rejection</li> }
+                </ul>
+            </div>
+        }
+        <div class="actions">
+            <a class="button secondary" asp-page="/OrderTicket" asp-route-wishlistId="@Model.WishlistId" asp-route-ticker="@preview.Ticker" asp-route-limitPrice="@preview.LimitPrice">Edit order</a>
+            @if (preview.CanSubmit)
+            {
+                <form method="post" asp-page-handler="Confirm">
+                    <input type="hidden" asp-for="WishlistId" />
+                    <input type="hidden" asp-for="Ticker" />
+                    <input type="hidden" asp-for="TicketToken" />
+                    <button class="button buy" type="submit">Confirm paper order</button>
+                </form>
+            }
+        </div>
+    </section>
+}
+else
+{
+    <section class="panel order-entry-panel">
+        <form method="post" asp-page-handler="Preview" class="form-grid compact-form-grid">
+            <input type="hidden" asp-for="WishlistId" />
+            <label asp-for="Ticker">Ticker<input asp-for="Ticker" readonly /></label>
+            <label asp-for="Quantity">Quantity<input asp-for="Quantity" type="number" min="1" step="1" required /></label>
+            <label asp-for="LimitPrice">Limit price<input asp-for="LimitPrice" type="number" min="0.0001" step="0.0001" required /></label>
+            <label asp-for="StopLossPrice">Stop price<input asp-for="StopLossPrice" type="number" min="0.0001" step="0.0001" required /></label>
+            <label asp-for="TakeProfitPrice">Take-profit price<input asp-for="TakeProfitPrice" type="number" min="0.0001" step="0.0001" required /></label>
+            <label asp-for="Horizon">Horizon<select asp-for="Horizon"><option value="intraday">Intraday</option><option value="swing">Swing</option></select></label>
+            <label class="checkbox-field"><input asp-for="AllowExtendedHoursTrading" />Allow extended-hours trading</label>
+            <p class="field-help">Extended-hours requests fail closed unless the session, asset, order type, and broker protection are eligible.</p>
+            <button class="button" type="submit">Review order</button>
+        </form>
+    </section>
+}

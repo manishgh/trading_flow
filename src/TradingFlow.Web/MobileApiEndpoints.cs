@@ -114,6 +114,47 @@ public static class MobileApiEndpoints
             return Results.Ok(response);
         });
 
+        group.MapPost("/orders/preview", async (
+            MobileOrderPreviewRequest request,
+            ManualOrderTicketService tickets,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var preview = await tickets.PreviewAsync(
+                    new ManualOrderDraft(
+                        request.Ticker,
+                        "buy",
+                        request.Quantity,
+                        request.LimitPrice,
+                        request.StopLossPrice,
+                        request.TakeProfitPrice,
+                        request.Horizon,
+                        request.AllowExtendedHoursTrading),
+                    cancellationToken);
+                return Results.Ok(preview);
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.BadRequest(exception.Message);
+            }
+        });
+
+        group.MapPost("/orders/confirm", async (
+            MobileOrderConfirmRequest request,
+            ManualOrderTicketService tickets,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                return Results.Ok(await tickets.ConfirmAsync(request.TicketToken, cancellationToken));
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.BadRequest(exception.Message);
+            }
+        });
+
         group.MapPost("/wishlists", async (
             MobileWishlistSaveRequest request,
             IWishlistRepository wishlists,

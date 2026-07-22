@@ -8,6 +8,7 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
     private string ticker = String.Empty;
     private string mode = "unified";
     private bool isLoading;
+    private decimal? latestAskPrice;
 
     public SymbolDetailPage()
     {
@@ -78,6 +79,8 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
         PositionLabel.Text = decision.HasOpenTrade && decision.Trade is not null
             ? $"Open position | {decision.Trade.Quantity:0.####} shares | {decision.Trade.PlText}"
             : "No open tracked position";
+        latestAskPrice = decision.AskPrice;
+        ReviewOrderButton.IsEnabled = latestAskPrice is > 0m;
 
         var model = response.ModelIntelligence;
         ModelStatusLabel.Text = model.StatusText;
@@ -117,6 +120,17 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
     }
 
     private async void OnRefreshClicked(object? sender, EventArgs e) => await LoadAsync();
+
+    private async void OnReviewOrderClicked(object? sender, EventArgs e)
+    {
+        if (latestAskPrice is not > 0m)
+        {
+            return;
+        }
+
+        await Shell.Current.GoToAsync(
+            $"{nameof(OrderTicketPage)}?wishlistId={wishlistId}&ticker={Uri.EscapeDataString(ticker)}&limitPrice={latestAskPrice.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+    }
 
     private void UpdateModeButtons()
     {

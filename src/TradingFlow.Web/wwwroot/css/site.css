@@ -829,6 +829,66 @@ pre {
   font-variant-numeric: tabular-nums;
   margin: 2px 0 0;
 }
+
+.order-entry-panel,
+.reviewed-order,
+.order-confirmation {
+  max-width: 920px;
+  margin-inline: auto;
+}
+
+.compact-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+  align-items: end;
+}
+
+.compact-form-grid > label:not(.checkbox-field) {
+  display: grid;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.compact-form-grid .checkbox-field {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+}
+
+.compact-form-grid .checkbox-field input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  margin: 0;
+}
+
+.compact-form-grid .field-help,
+.compact-form-grid > button {
+  grid-column: 1 / -1;
+}
+
+.compact-form-grid > button {
+  justify-self: start;
+}
+
+.order-review-grid {
+  margin-block: 16px;
+}
+
+@media (max-width: 640px) {
+  .compact-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .compact-form-grid .field-help,
+  .compact-form-grid > button {
+    grid-column: auto;
+  }
+}
 .truncate-value {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -316,6 +316,17 @@ public sealed record MobileWishlistItemRequest(
     string? DisplayName,
     string? Notes);
 
+public sealed record MobileOrderPreviewRequest(
+    string Ticker,
+    decimal Quantity,
+    decimal LimitPrice,
+    decimal StopLossPrice,
+    decimal TakeProfitPrice,
+    string Horizon,
+    bool AllowExtendedHoursTrading);
+
+public sealed record MobileOrderConfirmRequest(string TicketToken);
+
 
 public sealed record MobileWishlistMonitorSnapshotRequest(
     string Ticker,

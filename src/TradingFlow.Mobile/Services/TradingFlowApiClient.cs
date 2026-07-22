@@ -263,6 +263,27 @@ public sealed class TradingFlowApiClient
             cancellationToken);
     }
 
+    public async Task<MobileOrderTicketPreview?> PreviewManualOrderAsync(
+        MobileOrderPreviewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/orders/preview", request, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<MobileOrderTicketPreview>(cancellationToken);
+    }
+
+    public async Task<MobileOrderTicketConfirmation?> ConfirmManualOrderAsync(
+        string ticketToken,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsJsonAsync(
+            $"{BaseUrl}/api/mobile/orders/confirm",
+            new MobileOrderConfirmRequest(ticketToken),
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<MobileOrderTicketConfirmation>(cancellationToken);
+    }
+
     public async Task AcknowledgeWishlistSignalAsync(Guid signalId, CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/wishlists/signals/{signalId}/ack", null, cancellationToken);
@@ -789,6 +810,50 @@ public sealed record MobileSymbolIntelligenceResponse(
     DateTimeOffset FetchedAtUtc,
     MobileTradingFlowDecisionResponse TradingFlowDecision,
     MobileModelIntelligenceResponse ModelIntelligence);
+
+public sealed record MobileOrderPreviewRequest(
+    string Ticker,
+    decimal Quantity,
+    decimal LimitPrice,
+    decimal StopLossPrice,
+    decimal TakeProfitPrice,
+    string Horizon,
+    bool AllowExtendedHoursTrading);
+
+public sealed record MobileOrderConfirmRequest(string TicketToken);
+
+public sealed record MobileOrderTicketPreview(
+    bool CanSubmit,
+    string? TicketToken,
+    Guid TicketId,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset ExpiresAtUtc,
+    string Environment,
+    string Ticker,
+    string Side,
+    decimal Quantity,
+    decimal LimitPrice,
+    decimal? StopLossPrice,
+    decimal? TakeProfitPrice,
+    decimal Notional,
+    decimal? BidPrice,
+    decimal? AskPrice,
+    DateTimeOffset? QuoteTimestampUtc,
+    long? QuoteAgeMilliseconds,
+    decimal? SpreadBps,
+    string Session,
+    string TimeInForce,
+    bool AllowExtendedHoursTrading,
+    string Policy,
+    IReadOnlyList<string> Rejections);
+
+public sealed record MobileOrderTicketConfirmation(
+    string OrderId,
+    Guid TicketId,
+    string Ticker,
+    string Side,
+    decimal Quantity,
+    decimal LimitPrice);
 
 public sealed record MobileTradingFlowDecisionResponse(
     string EligibilityLabel,

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:TradingFlow.Mobile.Controls"
+             x:Class="TradingFlow.Mobile.Pages.OrderTicketPage"
+             Title="Review Order">
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="14">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                <VerticalStackLayout Spacing="2">
+                    <Label Text="Protected Buy" Style="{StaticResource Headline}" />
+                    <Label x:Name="TickerLabel" Text="Paper order" Style="{StaticResource SubHeadline}" />
+                </VerticalStackLayout>
+                <controls:EnvironmentBadgeView Grid.Column="1" />
+            </Grid>
+
+            <Label x:Name="ErrorLabel" IsVisible="False" TextColor="{StaticResource StateError}" LineBreakMode="WordWrap" />
+            <ActivityIndicator x:Name="BusyIndicator" IsVisible="False" IsRunning="False" Color="{StaticResource Primary}" />
+
+            <VerticalStackLayout x:Name="DraftSection" Spacing="10">
+                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="10">
+                    <VerticalStackLayout>
+                        <Label Text="Quantity" Style="{StaticResource Caption}" />
+                        <Entry x:Name="QuantityEntry" Text="1" Keyboard="Numeric" />
+                    </VerticalStackLayout>
+                    <VerticalStackLayout Grid.Column="1">
+                        <Label Text="Limit price" Style="{StaticResource Caption}" />
+                        <Entry x:Name="LimitEntry" Keyboard="Numeric" />
+                    </VerticalStackLayout>
+                    <VerticalStackLayout Grid.Row="1">
+                        <Label Text="Stop price" Style="{StaticResource Caption}" />
+                        <Entry x:Name="StopEntry" Keyboard="Numeric" />
+                    </VerticalStackLayout>
+                    <VerticalStackLayout Grid.Row="1" Grid.Column="1">
+                        <Label Text="Take-profit price" Style="{StaticResource Caption}" />
+                        <Entry x:Name="TargetEntry" Keyboard="Numeric" />
+                    </VerticalStackLayout>
+                    <VerticalStackLayout Grid.Row="2">
+                        <Label Text="Horizon" Style="{StaticResource Caption}" />
+                        <Picker x:Name="HorizonPicker" SelectedIndex="0">
+                            <Picker.Items>
+                                <x:String>intraday</x:String>
+                                <x:String>swing</x:String>
+                            </Picker.Items>
+                        </Picker>
+                    </VerticalStackLayout>
+                    <HorizontalStackLayout Grid.Row="2" Grid.Column="1" VerticalOptions="Center" Spacing="8">
+                        <CheckBox x:Name="ExtendedHoursCheckBox" />
+                        <Label Text="Extended hours" VerticalTextAlignment="Center" />
+                    </HorizontalStackLayout>
+                </Grid>
+                <Label Text="Extended-hours requests fail closed unless the session, asset, order type, and broker protection are eligible."
+                       Style="{StaticResource Caption}" LineBreakMode="WordWrap" />
+                <Button Text="Review order" Clicked="OnPreviewClicked" />
+            </VerticalStackLayout>
+
+            <VerticalStackLayout x:Name="ReviewSection" IsVisible="False" Spacing="10">
+                <Label x:Name="ReviewStatusLabel" FontAttributes="Bold" FontSize="18" />
+                <Label x:Name="ReviewSummaryLabel" LineBreakMode="WordWrap" />
+                <Label x:Name="MarketEvidenceLabel" FontFamily="monospace" LineBreakMode="WordWrap" />
+                <Label x:Name="PolicyLabel" Style="{StaticResource Caption}" LineBreakMode="WordWrap" />
+                <Label x:Name="RejectionsLabel" IsVisible="False" TextColor="{StaticResource StateError}" LineBreakMode="WordWrap" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                    <Button Text="Edit" Clicked="OnEditClicked" />
+                    <Button x:Name="ConfirmButton" Grid.Column="1" Text="Confirm paper order" Clicked="OnConfirmClicked" />
+                </Grid>
+            </VerticalStackLayout>
+
+            <VerticalStackLayout x:Name="ConfirmationSection" IsVisible="False" Spacing="8">
+                <Label Text="Order accepted" FontAttributes="Bold" FontSize="20" TextColor="{StaticResource StateSuccess}" />
+                <Label x:Name="ConfirmationLabel" LineBreakMode="WordWrap" />
+            </VerticalStackLayout>
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

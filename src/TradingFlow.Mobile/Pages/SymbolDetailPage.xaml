@@ -73,6 +73,11 @@
             <Button Text="Refresh evidence"
                     Clicked="OnRefreshClicked"
                     SemanticProperties.Description="Refresh symbol quote, TradingFlow decision, and model evidence" />
+            <Button x:Name="ReviewOrderButton"
+                    Text="Review protected buy"
+                    IsEnabled="False"
+                    Clicked="OnReviewOrderClicked"
+                    SemanticProperties.Description="Open a reviewed paper buy ticket for this symbol" />
         </VerticalStackLayout>
     </ScrollView>
 </ContentPage>

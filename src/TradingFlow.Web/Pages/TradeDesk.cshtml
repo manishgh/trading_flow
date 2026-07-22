@@ -292,6 +292,11 @@
                     }
                 </div>
                 <div class="symbol-actions">
+                    <a class="button buy"
+                       asp-page="/OrderTicket"
+                       asp-route-wishlistId="@selectedId"
+                       asp-route-ticker="@selected.Ticker"
+                       asp-route-limitPrice="@selected.Quote.AskPrice">Review protected buy</a>
                     <a class="button" asp-page="/Paper" asp-route-wishlistId="@selectedId">Review strategy run</a>
                     <a class="button secondary" asp-page="/RunningTrades">Open positions</a>
                 </div>
