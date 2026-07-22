@@ -1,4 +1,9 @@
-﻿<!DOCTYPE html>
+@{
+    var currentPage = ViewContext.RouteData.Values["page"]?.ToString() ?? String.Empty;
+    bool IsCurrent(params string[] pages) => pages.Any(page =>
+        String.Equals(page, currentPage, StringComparison.OrdinalIgnoreCase));
+}
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
@@ -8,19 +13,25 @@
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
 </head>
 <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
     <header class="topbar">
-        <a class="brand" asp-page="/TradeDesk">Quant Workstation</a>
-        <nav>
-            <a asp-page="/TradeDesk">Trade Desk</a>
-            <a asp-page="/Backtests">Backtest</a>
-            <a asp-page="/Paper">Paper</a>
-            <a asp-page="/RunningTrades">Running Trades</a>
-            <a asp-page="/Wishlists">Wishlists</a>
-            <a asp-page="/Warmup">Warmup</a>
-            <a href="#">Live</a>
+        <a class="brand" asp-page="/TradeDesk" aria-label="TradingFlow operator desk">TradingFlow</a>
+        <nav class="primary-nav" aria-label="Primary navigation">
+            <a asp-page="/TradeDesk"
+               class="@(IsCurrent("/TradeDesk", "/Index") ? "active" : null)"
+               aria-current="@(IsCurrent("/TradeDesk", "/Index") ? "page" : null)">Desk</a>
+            <a asp-page="/RunningTrades"
+               class="@(IsCurrent("/RunningTrades") ? "active" : null)"
+               aria-current="@(IsCurrent("/RunningTrades") ? "page" : null)">Positions</a>
+            <a asp-page="/Backtests"
+               class="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "active" : null)"
+               aria-current="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "page" : null)">Research</a>
+            <a asp-page="/Paper"
+               class="@(IsCurrent("/Paper", "/PaperJob", "/Warmup", "/Wishlists") ? "active" : null)"
+               aria-current="@(IsCurrent("/Paper", "/PaperJob", "/Warmup", "/Wishlists") ? "page" : null)">Operations</a>
         </nav>
     </header>
-    <main class="shell">
+    <main id="main-content" class="shell" tabindex="-1">
         @RenderBody()
     </main>
 
