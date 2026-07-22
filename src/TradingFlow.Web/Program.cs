@@ -27,6 +27,10 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     ContentRootPath = webContentRoot,
     WebRootPath = Path.Combine(webContentRoot, "wwwroot")
 });
+var uiTestMode = String.Equals(
+    Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_MODE"),
+    "true",
+    StringComparison.OrdinalIgnoreCase);
 if (builder.Environment.IsDevelopment())
 {
     builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
@@ -65,14 +69,20 @@ builder.Services.AddSingleton<SqliteNewsFeedRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Wishlists.IWishlistRepository, SqliteWishlistRepository>();
 builder.Services.AddSingleton<ArticleTextFetcher>();
 builder.Services.AddSingleton<NewsFeedService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<NewsFeedService>());
+if (!uiTestMode)
+{
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<NewsFeedService>());
+}
 builder.Services.AddSingleton<WarmupServiceClient>();
 builder.Services.AddSingleton<WishlistUniverseResolver>();
 builder.Services.AddSingleton<WishlistBreakoutEvaluator>();
 builder.Services.AddSingleton<WishlistMarketMonitor>();
 builder.Services.AddSingleton<WishlistDeskService>();
 builder.Services.AddSingleton<WishlistObserverService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<WishlistObserverService>());
+if (!uiTestMode)
+{
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<WishlistObserverService>());
+}
 builder.Services.AddSingleton<AlpacaQuoteService>();
 builder.Services.AddSingleton<AlpacaManualOrderService>();
 builder.Services.AddSingleton<StrategyEvaluationService>();
@@ -89,7 +99,10 @@ builder.Services.AddSingleton(serviceProvider => new SqliteDatabaseBackupService
     serviceProvider.GetRequiredService<IArtifactWriter>(),
     serviceProvider.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton<SqliteDatabaseRestoreService>();
-builder.Services.AddHostedService<DatabaseBackupHostedService>();
+if (!uiTestMode)
+{
+    builder.Services.AddHostedService<DatabaseBackupHostedService>();
+}
 builder.Services.AddSingleton<SqliteConnectionDurabilityInterceptor>();
 builder.Services.AddDbContextFactory<TradingFlowDbContext>((serviceProvider, options) =>
     options
@@ -129,8 +142,11 @@ builder.Services.AddSingleton(ManualEntryOptions.Parse(
 builder.Services.AddSingleton<AlpacaSecurityTradingStatusService>();
 builder.Services.AddSingleton<ISecurityTradingStatusProvider>(serviceProvider =>
     serviceProvider.GetRequiredService<AlpacaSecurityTradingStatusService>());
-builder.Services.AddHostedService(serviceProvider =>
-    serviceProvider.GetRequiredService<AlpacaSecurityTradingStatusService>());
+if (!uiTestMode)
+{
+    builder.Services.AddHostedService(serviceProvider =>
+        serviceProvider.GetRequiredService<AlpacaSecurityTradingStatusService>());
+}
 builder.Services.AddSingleton<IEntryGateChain, EntryGateChain>();
 var orderPollIntervalSeconds = productionConfiguration.ResolveParameter<int>(
     ProductionProfile.Paper,
@@ -203,7 +219,10 @@ builder.Services.AddSingleton<IProtectiveOrderInvariantService, ProtectiveOrderI
 builder.Services.AddSingleton<IAccountReconciliationService, AccountReconciliationService>();
 builder.Services.AddSingleton<IOrderSynchronizationCoordinator, OrderSynchronizationCoordinator>();
 builder.Services.AddSingleton<IOrderSubmissionService, OrderSubmissionService>();
-builder.Services.AddHostedService<AlpacaOrderSynchronizationHostedService>();
+if (!uiTestMode)
+{
+    builder.Services.AddHostedService<AlpacaOrderSynchronizationHostedService>();
+}
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository, TradingFlow.Data.Jobs.SqliteJobRepository>();
 
@@ -231,13 +250,16 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<TradingFlowDatabaseInitializer>().InitializeAsync(db);
 }
 
-// Resolve before any resumable job starts so entry submission is fail-closed until
-// the account stream and initial REST cross-check have both completed.
-_ = app.Services.GetRequiredService<IOrderSynchronizationCoordinator>();
-_ = app.Services.GetRequiredService<IAccountReconciliationService>();
+if (!uiTestMode)
+{
+    // Resolve before any resumable job starts so entry submission is fail-closed until
+    // the account stream and initial REST cross-check have both completed.
+    _ = app.Services.GetRequiredService<IOrderSynchronizationCoordinator>();
+    _ = app.Services.GetRequiredService<IAccountReconciliationService>();
 
-app.Services.GetRequiredService<PaperJobService>().InitializeAsync().GetAwaiter().GetResult();
-app.Services.GetRequiredService<MobileAutomationService>().InitializeAsync().GetAwaiter().GetResult();
+    app.Services.GetRequiredService<PaperJobService>().InitializeAsync().GetAwaiter().GetResult();
+    app.Services.GetRequiredService<MobileAutomationService>().InitializeAsync().GetAwaiter().GetResult();
+}
 
 if (!app.Environment.IsDevelopment())
 {

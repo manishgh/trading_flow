@@ -1,189 +1,652 @@
-# UI Design Optimization Plan — Mobile (MAUI) + Web (Razor) (2026-07)
+# TradingFlow UI Accessibility And Trading-Desk Redesign Plan
 
-**Status: PLAN ONLY — not executed.** Research + design plan for unifying and optimizing the
-TradingFlow mobile and web UIs. Execute phase-by-phase with the verification protocol at the end.
-Companion to the earlier mobile UX pass (P1–P5: SSE wiring, simplified forms, nav consolidation,
-Running Trades) — that pass fixed *workflows*; this one fixes the *design system and code health*
-underneath them.
+Status: approved design plan; implementation not started
 
----
+Audit date: 2026-07-22
 
-## 1. Research Findings (current state)
+Applies to:
 
-### 1.1 Two products, visually
-| | Web | Mobile |
-|---|---|---|
-| Brand name | "Quant Workstation" (`_Layout.cshtml`) | "TradingFlow" (`AppShell.xaml`) |
-| Accent | teal `#176b87` (`site.css --accent`) | blue `#007ACC` (`Colors.xaml Primary`) |
-| Gain/Loss | `--good #116d42` / `--bad #a12a2a` | hardcoded `#067647` / `#B42318` in code-behind |
-| Dark mode | none (no `prefers-color-scheme`) | none (light-only) |
-| Typography | Segoe UI 14px | MAUI defaults (OpenSans) |
+- `src/TradingFlow.Web` - ASP.NET Core Razor workstation and responsive web UI
+- `src/TradingFlow.Mobile` - .NET MAUI Android application
+- `market-predictor` API integration as read-only prediction intelligence
 
-Same app, two identities. Every semantic color exists twice with different values.
+This document replaces the earlier UI optimization plan. The previous plan focused on visual tokens and code extraction but excluded workflow changes. The current audit found that responsive behavior, mobile scrolling, action meaning, order review, data freshness, and accessibility must be corrected together. Visual polish alone would leave unsafe and inaccessible interaction paths in place.
 
-### 1.2 Web (`src/TradingFlow.Web`)
-**Good foundation:** `site.css` already uses `:root` CSS variables (78 var refs), a consistent
-`.page-header` pattern, semantic `PlClass()` helpers (TradeDesk), `aria-live` toast, and
-`RenderSection Scripts`. Extend it — do not replace it.
+## 1. Product Boundary
 
-**Debt:**
-- **~930 lines of inline JS across 8 pages, zero shared JS files** (`wwwroot/` has only css + favicon):
-  PaperJob 249, TradeDesk 177, Audit 150, Wishlists 145, OptimizationJob 142, Paper 62. Duplicated
-  across pages: fetch+error handling, polling loops, **EventSource/SSE wiring (duplicated in
-  Wishlists AND TradeDesk)**, money/pct/time formatters, badge/status rendering, HTML escaping.
-- **4 pages carry their own `<style>` blocks** (Audit, Backtests, Paper, Wishlists) on top of
-  site.css → per-page drift.
-- **One breakpoint total** (`@media (max-width: 920px)`); data tables unusable on phone browsers.
-- **No dark theme** despite the CSS-variable foundation making it nearly free.
-- Nav: dead `Live` link (`href="#"`), no active-page state, Audit page unreachable from nav.
-- Accessibility: 1 focus/overflow rule in 708 lines; tables lack `overflow-x` containers.
+TradingFlow is the user-facing trading workstation. It owns:
 
-### 1.3 Mobile (`src/TradingFlow.Mobile`)
-**Good foundation:** all 8 content pages have `RefreshView` (pull-to-refresh) + `ActivityIndicator`;
-SSE client exists in `TradingFlowApiClient`; nav already consolidated to 4 tabs + More.
+- watchlists and candidate triage
+- technical strategy decisions
+- alerts and activity
+- risk and order validation
+- paper/live environment state
+- order preview, submission, reconciliation, and execution state
 
-**Debt:**
-- **UI built in code-behind**: 2,802 lines of `.xaml.cs` vs 1,437 of `.xaml`. Dynamic list items are
-  constructed in C# (`new Label { TextColor = Color.FromArgb("#475467") … }`). `WishlistsPage.xaml.cs`
-  = **1,092 lines** mixing view construction, timers, SSE, and state.
-- **34+ hardcoded hex colors** across every page (`#067647`, `#B42318`, `#475467`, `#344054`,
-  `#667085`…). It IS a coherent palette (Untitled-UI grays) — it just was never tokenized.
-- `Colors.xaml` still ships **MAUI template junk**: `Magenta`, `MidnightBlue`, `Tertiary #2B0B98`,
-  `Secondary #DFD8F7` — unused or conflicting with the real palette.
-- `AppShell.xaml` hardcodes tab-bar colors inline instead of resources.
-- **No shared controls**: every page re-implements card, status chip, metric row, section header,
-  empty state.
-- `AppThemeBinding` only in template defaults → dark theme impossible until colors are tokenized.
+Market Predictor remains prediction-only. It owns:
 
----
+- swing and intraday model inference
+- model and data readiness
+- opportunity and downside probabilities
+- catalyst confirmation or conflict
+- global-context impact
+- SPY/QQQ comparison
+- immutable prediction evidence
 
-## 2. Design Principles (trading-app specific)
+The UI must not blur these boundaries. A model opinion is not an executable trading instruction.
 
-1. **One design language, two renderers.** Same brand, same palette, same semantics on web and
-   mobile. A user glancing at either should read P/L, status, and freshness identically.
-2. **Color is information.** Green/red are RESERVED for gain/loss. Status (running/idle/error) uses
-   chips, not raw green/red text. Accent is for actions/navigation only.
-3. **Numbers are the UI.** Prices/P/L use tabular numerals (`font-variant-numeric: tabular-nums` on
-   web; consistent numeric formatting + right-alignment on mobile) so columns don't dance on refresh.
-4. **State is always visible**: every async surface has loading / empty / error+retry states from a
-   shared component, never a blank panel.
-5. **Dark mode is a token swap**, not a redesign — which requires Phase U0 first.
-6. **No new frameworks.** Razor stays Razor, MAUI stays MAUI, vanilla JS modules (ES modules), no
-   CSS framework, no MVVM big-bang.
+Every symbol detail view must present two separate blocks:
 
----
+1. **Model intelligence** - what Market Predictor estimates and whether that estimate is ready.
+2. **TradingFlow decision** - whether the configured strategy and risk controls permit an action.
 
-## 3. Unified Design Language (the spec)
+Market Predictor must not acquire alert, position, portfolio, or order-entry responsibilities.
 
-One brand name everywhere: **TradingFlow** (web topbar keeps a "Trade Desk" page, but the brand is
-TradingFlow). One accent: **`#176B87` (teal)** — it wins over `#007ACC` because the web already uses
-it and it collides less with the semantic blue "info" range. (Swap acceptable if the user prefers
-blue; decide once, apply everywhere.)
+## 2. Goals
 
-### 3.1 Tokens (identical values on both platforms)
-| Token | Light | Dark | Use |
-|---|---|---|---|
-| `bg` | `#F6F8FA` | `#0F1418` | page background |
-| `panel` | `#FFFFFF` | `#161D24` | cards/tables |
-| `ink` | `#17202A` | `#E6EBF0` | primary text |
-| `muted` | `#5F6B7A` | `#94A3B2` | secondary text |
-| `line` | `#D8DEE6` | `#2A3540` | borders/dividers |
-| `accent` | `#176B87` | `#4FA3BF` | actions, links, active nav |
-| `gain` | `#116D42` | `#4CC38A` | positive P/L only |
-| `loss` | `#A12A2A` | `#E5654F` | negative P/L only |
-| `warn` | `#8A5A00` | `#D9A946` | warnings/stale data |
-| `info` | `#1B4F9C` | `#6CA0E8` | neutral notices |
+1. Make the web workstation efficient for cross-sectional monitoring and repeated desktop use.
+2. Make the native app safe and comfortable for one-handed triage and position response.
+3. Make responsive web usable at 320 CSS pixels without document-level horizontal scrolling.
+4. Make all order-related actions explicit, reviewable, and environment-aware.
+5. Make data source, market session, freshness, and stale state visible before an action.
+6. Meet WCAG 2.2 AA for the web and equivalent Android accessibility expectations for the native app.
+7. Preserve one engine: UI changes must not duplicate strategy, risk, or execution rules.
+8. Keep the implementation testable, cloud-deployable, and independent of a large frontend framework.
 
-Spacing scale 4/8/12/16/24; radius 8 (cards) / 999 (chips); touch targets ≥ 44px (mobile);
-type scale 12/13/14 (body) / 16/18 (section) / 22 (page title).
+## 3. Non-Goals
 
-### 3.2 Where they live
-- **Web**: extend `site.css` `:root` + add `@media (prefers-color-scheme: dark)` block and a
-  `[data-theme]` override hook. Rename/alias `--good/--bad` → `--gain/--loss` (keep old names as
-  aliases during migration).
-- **Mobile**: rewrite `Resources/Styles/Colors.xaml` with the same semantic keys ×2 (Light/Dark
-  values) and wire via `AppThemeBinding` in `Styles.xaml`; delete template junk colors. AppShell
-  colors move to resources.
+- No React, Blazor, SPA, or CSS-framework rewrite.
+- No reimplementation of engine rules in Razor, JavaScript, XAML, or code-behind.
+- No direct Market Predictor order or alert integration.
+- No real-money execution enablement as part of the visual redesign.
+- No large MVVM migration before the navigation and scrolling defects are resolved.
+- No dark-mode work ahead of reflow, action safety, semantic accessibility, and data freshness.
+- No compatibility layer for obsolete UI structures; the application is not yet in production.
 
----
+## 4. Audit Baseline
 
-## 4. Phases (execute in order; each independently shippable)
+### 4.1 Runtime measurements
 
-### Phase U0 — Token layer (both platforms) — *prerequisite for everything*
-1. Web: extend `:root`, add dark block, alias old names. No page edits yet → zero visual change in light mode.
-2. Mobile: new `Colors.xaml` (semantic keys, Light+Dark), `Styles.xaml` styles point at semantic keys,
-   AppShell de-hardcoded. App still renders identically in light.
-3. Add shared C# helper for mobile P/L color (`PnlColors.For(decimal)`) and keep web's `PlClass()` pattern.
-**Verify:** builds green; visual smoke light mode unchanged on both.
+The Razor application was audited against live local data on 2026-07-22.
 
-### Phase U1 — Web foundation
-1. **Extract inline JS** to `wwwroot/js/` ES modules; pages keep only page-specific glue:
-   - `api.js` (fetch wrapper: JSON, errors, anti-forgery header)
-   - `stream.js` (EventSource with auto-reconnect + stale indicator — single SSE client for Wishlists/TradeDesk)
-   - `format.js` (money, pct, signed-P/L class, relative time, HTML escape)
-   - `ui.js` (status chips, toast, empty/loading/error block, table renderer helpers)
-   - `poll.js` (visibility-aware polling loop: pause when tab hidden)
-2. **Fold per-page `<style>` blocks** into site.css sections (or delete where duplicative).
-3. Nav: remove dead `Live`, add `Audit`, add active-page underline (`ViewContext` compare), brand → TradingFlow.
-4. Responsive: add 720px breakpoint; wrap all tables in `.table-scroll { overflow-x:auto }`;
-   card grids collapse to single column; topbar collapses to wrap/scroll.
-5. Dark mode enabled (tokens from U0) + `tabular-nums` on all numeric cells + visible `:focus-visible` styles.
-**Verify:** run web, screenshot every page light+dark, wide+narrow; JS behavior identical (SSE, polling, actions).
+| Surface | Viewport | Measured document width | Result |
+|---|---:|---:|---|
+| Trade Desk | 1440 x 900 | 1425 px | No horizontal document overflow |
+| Trade Desk | 390 x 844 | 570 px | 180 px horizontal overflow |
+| Trade Desk | 320 x 800 | 570 px | 250 px horizontal overflow |
+| Running Trades | 390 x 844 | 506 px | Horizontal overflow |
+| Paper | 390 x 844 | 506 px | Horizontal overflow |
+| Wishlists | 390 x 844 | 506 px | Horizontal overflow; page exceeded 11,000 px height |
+| Backtests | 390 x 844 | 709 px | Severe horizontal overflow |
+| Warmup | 390 x 844 | 506 px | Horizontal overflow |
 
-### Phase U2 — Mobile foundation
-1. **Purge hardcoded hex** from all 9 pages (`.xaml` + `.xaml.cs`) → semantic StaticResource / PnlColors.
-2. **Shared controls** in `Controls/`: `CardBorder`, `StatusChip`, `MetricRow` (label+value+optional
-   P/L coloring), `SectionHeader`, `EmptyStateView` (message + retry). Replace per-page copies.
-3. **Slim the giant code-behind**: keep code-behind (no MVVM big-bang) but split by concern the same
-   way the runners were split — e.g. `WishlistsPage.xaml.cs` (1,092) → partial files
-   (`WishlistsPage.Signals.cs`, `WishlistsPage.Quotes.cs`, `WishlistsPage.Tickers.cs`) + move
-   repeated view construction into the shared controls; target main file < 400 lines.
-4. Dark theme flows automatically from U0 tokens; verify every page in both themes.
-**Verify:** `dotnet build -f net10.0-android`; install APK; walk all tabs light+dark; pull-to-refresh
-and SSE still live-update.
+At 320 px, the top navigation alone measured 490 px wide and the Trade Desk table measured 528 px. No skip link or `aria-current="page"` marker was present.
 
-### Phase U3 — UX consistency pass (both)
-1. **Uniform screen anatomy**: page title + health/status chip row → primary action → content cards.
-   Mobile section headers standardized (16–18px, one weight); web `.page-header` used on every page.
-2. **P/L semantics everywhere**: signed values, arrow or +/- prefix, `gain`/`loss` tokens only; status
-   never uses raw green/red text (chips instead).
-3. **Freshness indicators**: shared "last updated Xs ago / STALE" chip on every polling/SSE surface
-   (web `stream.js`/`poll.js` emit it; mobile shared control).
-4. Standardize empty/loading/error states via the shared components from U1/U2.
-**Verify:** side-by-side screenshot review of the same data on web + mobile — identical reading.
+Visible web controls are generally 36 px high; compact trade controls are 30-39 px high. These sizes are inappropriate for touch-first use.
 
-### Phase U4 — Page-by-page application & polish (bounded, one commit per page)
-Web order: TradeDesk → Wishlists → Paper/PaperJob → Backtests/Job/OptimizationJob → RunningTrades →
-Audit → Warmup → Index. Mobile order: Wishlists (Desk) → RunningTrades → Paper → News → More pages.
-Each page: apply anatomy/tokens/components, delete now-dead local code, screenshot before/after.
+### 4.2 Web findings
 
----
+1. The top navigation does not collapse or scroll within its own bounded region.
+2. Responsive rules stack grids but do not control intrinsic table or navigation width.
+3. Trade Desk combines monitoring, wishlist administration, Finviz import, signals, news, and immediate order actions.
+4. Buy and Sell post immediately with a hidden quantity of one.
+5. Quote labels and order-button prices update through SSE without quote age, feed, session, or stale state.
+6. The dead `Live` navigation item has `href="#"`.
+7. There is no active-page state, skip link, or deliberate focus-visible system.
+8. Inline page JavaScript replaces complete signal/news containers, which can disrupt focus and screen-reader position.
+9. Page-specific CSS and JavaScript increase behavior and accessibility drift.
 
-## 5. Verification protocol (every phase)
-1. `dotnet build` web + `dotnet build -f net10.0-android` mobile — clean (warnings = errors).
-2. Existing test suite stays green (`dotnet test src/TradingFlow.Tests`) — UI work must not touch
-   engine/one-brain code; if a shared model changes, stop and re-plan.
-3. Web: run site, browser-check each touched page in light/dark × wide/narrow; confirm SSE + polling
-   + form posts still work (Wishlists quotes stream, TradeDesk desk stream, PaperJob events).
-4. Mobile: deploy APK to device; walk each touched tab; verify pull-to-refresh, SSE updates, and all
-   buttons (Trade/Sell/Cancel) against a running backend.
-5. Commit per phase (U4: per page), push after each phase.
+### 4.3 Native mobile findings
 
-## 6. Non-goals (explicitly out of scope)
-- No SPA/Blazor/React rewrite; no CSS framework; no component library dependency.
-- No MVVM migration on mobile (partial-class + shared-controls discipline instead).
-- No functional/workflow changes (those were the earlier P1–P5 pass) — this is design system,
-  consistency, dark mode, responsiveness, and code health only.
-- No engine/back-end changes of any kind.
+1. Major screens place fixed-height `CollectionView` controls inside a parent `ScrollView`.
+2. Wishlist uses separate nested scrolling regions for stocks, signals, and news.
+3. Fixed heights such as 420, 280, and 220 prevent content from adapting naturally to screen and font size.
+4. The Android target hardcodes many controls to 44 units; Android recommends a 48 dp focusable target.
+5. The project has no explicit MAUI `SemanticProperties` for ambiguous controls and dynamic state.
+6. Buttons labelled `+` and `-` do not expose a descriptive operation or ticker context.
+7. Buttons labelled `Trade` start automated paper strategy runs rather than opening an order ticket.
+8. Paper is presented as a destination even though paper/live is an execution environment.
+9. Five primary tab destinations plus a nested More group create a wide and inconsistent information architecture.
+10. Status and live-update announcements are not designed for TalkBack.
 
-## 7. Effort & risk
-| Phase | Size | Risk | Value |
-|---|---|---|---|
-| U0 tokens | S | very low (additive) | unblocks everything |
-| U1 web foundation | M | low (JS extraction is mechanical; SSE consolidation needs care) | kills ~900 lines duplication, dark mode, responsive |
-| U2 mobile foundation | M–L | low-medium (many small edits; partial-split proven pattern) | kills 34+ hardcoded colors, 1,092-line page, dark mode |
-| U3 consistency | S–M | low | the "one product" payoff |
-| U4 per-page | M (spread) | low (bounded per page) | polish + dead-code removal |
+### 4.4 Useful foundations to retain
 
-Recommended execution order: **U0 → U1 → U2 → U3 → U4**, one commit per phase (per page in U4),
-push after each.
+- The desktop split between a watchlist table and contextual intelligence rail is directionally correct.
+- Existing status text generally supplements color rather than relying on color alone.
+- The native app has centralized resource dictionaries and a consistent minimum-control baseline.
+- Running Trades already asks for confirmation before a paper position is closed.
+- Razor pages already use a common layout and shared CSS entry point.
+- Market Predictor already returns structured readiness, probability, downside, catalyst, context, and model metadata.
+
+## 5. Design Principles
+
+1. **Status before action.** Environment, market session, connection, quote age, and risk state appear before Buy or Sell.
+2. **Progressive disclosure.** Lists support scanning; details, news, predictions, and order parameters open only after selecting a symbol.
+3. **One scroll owner.** A screen must have one primary vertical scrolling surface.
+4. **Desktop density, mobile focus.** Desktop compares many symbols; mobile handles one decision at a time.
+5. **No direct trading from ambiguous list controls.** Buy, Sell, and Start Strategy open a reviewable workflow.
+6. **Probability is not certainty.** Model scores always include horizon, readiness, downside, and evidence age.
+7. **Color reinforces text.** Gain/loss, readiness, and action state always have textual or iconographic labels.
+8. **Stable live updates.** Streaming values may update text, but must not move controls, steal focus, or replace focused containers.
+9. **Touch-safe defaults.** Android interactive targets are at least 48 dp. Web controls used at mobile breakpoints are at least 44 CSS pixels.
+10. **Simple visual system.** Restrained colors, small radii, tabular numbers, compact rows, no decorative dashboard cards, and no nested cards.
+
+## 6. Reference Patterns
+
+The redesign adopts established interaction patterns without copying a vendor's visual identity.
+
+### TradingView
+
+- Watchlist, alerts, news, and symbol details are contextual tools rather than separate full-screen forms on desktop.
+- Watchlist alerts apply independently to symbols and explicitly support regular or extended sessions.
+- Reference: https://www.tradingview.com/support/solutions/43000746464-getting-started-with-supercharts/
+- Reference: https://www.tradingview.com/support/solutions/43000739708-watchlist-alerts-your-trading-edge/
+
+### Interactive Brokers
+
+- Selecting a watchlist row leads to quote details before order entry.
+- The order ticket exposes quantity, order type, price, time in force, and preview before submission.
+- Mobile submission can require a deliberate slider or explicit submit action after preview.
+- Reference: https://www.ibkrguides.com/ipad/watchlist.htm
+- Reference: https://www.ibkrguides.com/androidtablet/order-ticket.htm
+
+### Accessibility standards
+
+- WCAG 2.2 reflow: https://www.w3.org/TR/WCAG22/#reflow
+- WCAG target size: https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html
+- WCAG financial error prevention: https://www.w3.org/WAI/WCAG22/Understanding/error-prevention-legal-financial-data.html
+- Android 48 dp guidance: https://developer.android.com/guide/topics/ui/accessibility/views/apps-views
+- MAUI semantic accessibility: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/accessibility
+- MAUI scrolling guidance: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/controls/scrollview
+
+## 7. Target Information Architecture
+
+### 7.1 Web workstation
+
+Primary navigation:
+
+1. **Desk** - cross-sectional monitoring and symbol selection
+2. **Positions** - open positions, protection, P/L, and close workflow
+3. **Orders** - working, rejected, filled, and cancelled orders
+4. **Research** - backtests, audit, and optimization
+5. **Operations** - warmup, environment validation, and service health
+
+Persistent operational strip:
+
+- environment: `PAPER` or `LIVE`
+- market session: premarket, regular, postmarket, closed, or weekend
+- market time in New York
+- quote connection and feed
+- newest quote age
+- model service readiness
+- broker synchronization state
+- risk/admission state
+
+Desk layout at desktop width:
+
+```text
+Operational strip
+Watchlist/filter toolbar
++--------------------------------------+--------------------------+
+| Dense watchlist table                | Selected symbol detail   |
+| sortable and keyboard navigable      | Overview / Model / News  |
+| no direct submission from each row   | Chart / Strategy state   |
++--------------------------------------+--------------------------+
+```
+
+Desk layout below 760 px:
+
+- toolbar becomes a compact disclosure panel
+- watchlist becomes a single-column row list
+- selecting a symbol navigates to or reveals a full-width detail view
+- no multi-column trading table is rendered
+- any genuinely two-dimensional table scrolls inside its own labelled container, never at document level
+
+Wishlist editing, notes, and Finviz import move to a dedicated management view and do not occupy the primary monitoring viewport.
+
+### 7.2 Native Android application
+
+Bottom navigation:
+
+1. **Watch** - compact watchlist and candidates
+2. **Positions** - open positions and protection state
+3. **Activity** - signals, alerts, orders, and fills
+4. **More** - research, warmup, settings, and operational tools
+
+Paper/live is a persistent environment badge, not a navigation destination.
+
+The Watch screen uses one root `CollectionView`:
+
+- a `Header` contains environment, connection, market state, wishlist picker, and filters
+- list items contain ticker, price, daily movement, strategy state, prediction state, and freshness
+- tapping an item opens Symbol Detail
+- item actions are limited to familiar icon controls with accessible names
+- destructive or transactional actions remain in Symbol Detail or an order ticket
+
+Symbol Detail contains:
+
+- Overview
+- Prediction
+- Chart and technical state
+- Catalyst and news
+- Position and order state
+
+Tabs may be a segmented control inside the page. The bottom navigation must not change when switching symbol-detail sections.
+
+## 8. Prediction Presentation Contract
+
+The UI consumes the existing unified prediction response. It must not derive new model logic.
+
+### 8.1 Summary fields
+
+- ticker
+- final signal
+- readiness status
+- generated time
+- requested and resolved horizon
+- snapshot identifier
+
+### 8.2 Swing block
+
+- probability and decision score
+- signal and rank
+- one-day return context
+- volume context
+- catalyst status, direction, relevance, and age
+- global-context impact and active flashpoints
+- SPY/QQQ and sector context where available
+- readiness reasons and source status
+
+### 8.3 Intraday block
+
+- opportunity probability
+- downside probability
+- decision score and rank
+- relative volume, RSI, and MACD state
+- modeled stop and target percentages
+- catalyst confirmation as a separate overlay
+- readiness reasons, feed, benchmark state, and latest price date
+
+### 8.4 Display rules
+
+1. `invalid` readiness disables all model-derived actionable styling.
+2. `warn` is presented as incomplete intelligence, never as a Buy recommendation.
+3. Catalyst status is visually separate from model probability.
+4. Opportunity and downside probabilities appear together.
+5. Probability includes its target horizon in the same visual block.
+6. Model age and latest feature timestamp are visible.
+7. TradingFlow eligibility may veto a valid model signal and must show the exact rejection reason.
+8. Model drivers are explanatory evidence, not order defaults.
+
+## 9. Order And Strategy Safety
+
+### 9.1 Row actions
+
+- Watchlist rows expose `View`, `Start strategy`, and `Order` actions.
+- Buy and Sell never submit directly from a row.
+- `Start strategy` must be labelled as paper or live and name the selected strategy.
+- Icon-only controls require a tooltip on web and `SemanticProperties.Description` on MAUI.
+
+### 9.2 Order ticket
+
+The order ticket displays:
+
+- environment and account
+- ticker and side
+- quantity
+- order type
+- limit or stop price
+- time in force
+- regular or extended-hours policy
+- latest bid/ask, spread, feed, and quote age
+- estimated notional
+- available position or buying power
+- strategy ownership, when applicable
+- stop/target or protection intent
+- validation and rejection reasons
+
+Submission flow:
+
+1. User enters or reviews parameters.
+2. Server validates position conflict, environment, market session, quote freshness, risk, and broker state.
+3. UI presents a review summary.
+4. User explicitly confirms.
+5. Server revalidates and creates the durable intent.
+6. UI reports accepted, rejected, working, partially filled, filled, cancelled, or unknown state.
+
+For paper mode, this flow should be structurally identical to future live mode even though the account and risk policy differ.
+
+## 10. Shared Design System
+
+### 10.1 Tokens
+
+Use one semantic token vocabulary on both platforms:
+
+- page background
+- surface
+- elevated surface
+- primary text
+- secondary text
+- border
+- accent
+- gain
+- loss
+- warning
+- information
+- disabled
+- focus ring
+
+Green and red are reserved for positive/negative financial state and explicit Buy/Sell semantics. Readiness and service status use text, neutral icons, and warning/information tokens.
+
+### 10.2 Typography and numbers
+
+- body text minimum: 14 px web, platform-scaled 14sp equivalent on Android
+- secondary text minimum: 12 px only when nonessential and still dynamically scalable
+- compact panel headings: 16-18 px
+- page headings: 22-24 px
+- tabular numerals for prices, percentages, quantity, and P/L
+- no viewport-width font scaling
+- no fixed text container heights
+
+### 10.3 Controls
+
+- 48 dp minimum native target
+- 44 px minimum responsive-web target
+- stable dimensions for ticker rows, action bars, tabs, and status chips
+- familiar Lucide icons packaged locally for web and equivalent licensed SVG assets for MAUI
+- icon buttons require tooltip, accessible name, and visible focus state
+- text buttons are reserved for explicit commands
+- segmented controls select mode or view; they do not submit work
+
+### 10.4 Live state
+
+- live quote updates use tabular numbers and fixed-width fields to avoid layout movement
+- quote updates do not announce every tick to screen readers
+- connection loss, stale data, order status, and new actionable signals are announced through bounded live regions
+- streaming code patches keyed elements instead of replacing complete focused containers
+- animation respects reduced-motion settings
+
+## 11. Implementation Checkpoints
+
+Each checkpoint is independently reviewable and committed only after its acceptance tests pass.
+
+### UI0 - Baseline And Test Harness
+
+Scope:
+
+- preserve audit measurements as automated checks
+- add responsive browser tests for core Razor routes
+- add accessibility assertions for landmarks, active navigation, names, focus, and document overflow
+- define the native device and font-scale test matrix
+- capture before screenshots for comparison
+
+Likely files:
+
+- new web UI test project or test folder using Microsoft Playwright
+- `src/TradingFlow.Tests` only for shared API/view-model contract tests
+- no engine changes
+
+Acceptance:
+
+- tests reproduce current overflow at 320/390 before UI1
+- tests can run locally and in CI without provider credentials
+- test fixtures do not submit orders or mutate paper state
+
+### UI1 - Shared Accessibility And Responsive Foundation
+
+Scope:
+
+- semantic design tokens on web and MAUI
+- web skip link, main target, active page, dead-link removal, focus-visible styles
+- responsive navigation that does not widen the document
+- 44 px responsive-web and 48 dp Android targets
+- MAUI semantic names/descriptions for icon-only and state controls
+- remove fixed control heights that block large text
+
+Primary files:
+
+- `src/TradingFlow.Web/Pages/Shared/_Layout.cshtml`
+- `src/TradingFlow.Web/wwwroot/css/site.css`
+- `src/TradingFlow.Mobile/AppShell.xaml`
+- `src/TradingFlow.Mobile/Resources/Styles/Colors.xaml`
+- `src/TradingFlow.Mobile/Resources/Styles/Styles.xaml`
+
+Acceptance:
+
+- no document overflow at 320, 390, 768, 1024, or 1440 px on core routes
+- keyboard focus is visible and ordered
+- current destination is exposed visually and through `aria-current`
+- all named actions pass touch-target checks
+- TalkBack reads icon-only controls with purpose and ticker context
+
+Commit checkpoint: `UI1 accessible responsive foundation`
+
+### UI2 - Web Workstation Restructure
+
+Scope:
+
+- simplify primary navigation and add operational status strip
+- keep dense desktop table but create compact mobile watch rows
+- move ticker creation, notes, and Finviz import to Wishlist management
+- row selection drives one symbol-detail rail
+- standardize loading, empty, error, partial, disconnected, and stale states
+- extract shared streaming and formatting JavaScript after behavior is covered
+
+Primary files:
+
+- `src/TradingFlow.Web/Pages/TradeDesk.cshtml`
+- `src/TradingFlow.Web/Pages/TradeDesk.cshtml.cs`
+- `src/TradingFlow.Web/Pages/Wishlists.cshtml`
+- `src/TradingFlow.Web/Pages/RunningTrades.cshtml`
+- new partials under `src/TradingFlow.Web/Pages/Shared`
+- new modules under `src/TradingFlow.Web/wwwroot/js`
+
+Acceptance:
+
+- first desktop viewport shows operational state, filters, and actionable symbols without administration forms
+- mobile web shows one symbol row per item with no trading table
+- SSE updates preserve keyboard and screen-reader focus
+- stale feed and disconnected states are obvious without using color alone
+- no direct order submission remains in watchlist rows
+
+Commit checkpoint: `UI2 web trading workstation`
+
+### UI3 - Native Navigation And Single-Scroll Screens
+
+Scope:
+
+- replace bottom navigation with Watch, Positions, Activity, More
+- make environment persistent and remove Paper as a primary destination
+- make Watch, Positions, Activity, and News each use one primary `CollectionView`
+- move screen controls into collection headers/footers
+- remove fixed-height nested lists
+- introduce compact reusable row, status, empty, and error controls
+- split oversized code-behind by concern only after view behavior is stable
+
+Primary files:
+
+- `src/TradingFlow.Mobile/AppShell.xaml`
+- `src/TradingFlow.Mobile/Pages/WishlistsPage.xaml`
+- `src/TradingFlow.Mobile/Pages/RunningTradesPage.xaml`
+- `src/TradingFlow.Mobile/Pages/NotificationsPage.xaml`
+- `src/TradingFlow.Mobile/Pages/NewsPage.xaml`
+- new reusable views under `src/TradingFlow.Mobile/Controls`
+
+Acceptance:
+
+- every main screen has one vertical scroll owner
+- 200% font size does not clip controls or text
+- TalkBack order matches visual order
+- state changes are announced selectively
+- one-handed primary actions remain in the lower reachable area
+- list virtualization remains active with at least 500 synthetic symbols
+
+Commit checkpoint: `UI3 native mobile trading shell`
+
+### UI4 - Symbol Intelligence And Predictor Integration
+
+Scope:
+
+- add one shared symbol-detail contract to TradingFlow Web/Mobile APIs
+- call Market Predictor through a typed server-side client
+- cache only according to model/data freshness metadata
+- render separate Model Intelligence and TradingFlow Decision blocks
+- include swing/intraday segmented view, catalyst, global context, SPY/QQQ context, and readiness
+- fail closed when the predictor is unavailable, stale, invalid, or schema-incompatible
+
+Primary files:
+
+- new typed predictor client in `src/TradingFlow.Web/Services`
+- shared mobile API records in `src/TradingFlow.Web/Models/MobileApiModels.cs`
+- `src/TradingFlow.Web/MobileApiEndpoints.cs`
+- symbol-detail partials and MAUI pages/controls
+
+Acceptance:
+
+- predictor errors never block ordinary quote/position monitoring
+- invalid readiness cannot appear as an actionable recommendation
+- catalyst never modifies displayed estimator probability
+- horizon, generated time, data age, model identity, and snapshot evidence are available in detail
+- response contract tests detect schema drift
+
+Commit checkpoint: `UI4 prediction intelligence integration`
+
+### UI5 - Order Ticket And Strategy Review
+
+Scope:
+
+- replace direct list submissions with an order/strategy ticket
+- expose quote age, spread, session, environment, quantity, TIF, and notional
+- call existing server-side validation services; do not replicate logic in clients
+- add preview and explicit confirmation
+- make order lifecycle visible in Activity and Positions
+- keep paper/live composition explicit and fail closed
+
+Primary files:
+
+- Razor order-ticket partial/page and handlers
+- MAUI order-ticket page or bottom sheet
+- existing `AlpacaManualOrderService`, admission, reconciliation, and order services only where API orchestration is required
+- API contract tests and UI workflow tests
+
+Acceptance:
+
+- no Buy/Sell operation submits from one tap on a list row
+- preview and submission both validate server-side
+- a changed or stale quote triggers re-review or a clear rejection
+- extended-hours policy is visible before confirmation
+- paper and live environment cannot be confused
+- duplicate taps cannot create duplicate order intents
+
+Commit checkpoint: `UI5 reviewed order and strategy workflow`
+
+### UI6 - Remaining Pages And Release Audit
+
+Scope:
+
+- apply common navigation, tokens, state components, and reflow to Backtests, Audit, Warmup, Paper jobs, Settings, and Operations
+- remove obsolete CSS, duplicated JavaScript, and dead page fragments
+- add dark mode only after accessibility and task flows pass
+- run final physical-device and browser audit
+
+Acceptance:
+
+- core routes pass WCAG 2.2 AA automated checks with documented manual exceptions
+- Android Accessibility Scanner has no high-severity findings
+- TalkBack walkthrough completes Watch -> Symbol -> Prediction -> Paper order preview -> Activity
+- Playwright screenshot and overflow matrix passes
+- no engine or strategy behavior changed as part of UI cleanup
+- documentation and operator runbook match the implemented navigation
+
+Commit checkpoint: `UI6 UI release audit`
+
+## 12. Verification Matrix
+
+### 12.1 Web
+
+Viewports:
+
+- 1440 x 900 desktop
+- 1024 x 768 compact desktop/tablet landscape
+- 768 x 1024 tablet portrait
+- 390 x 844 common phone
+- 320 x 800 WCAG reflow boundary
+
+For each core route verify:
+
+- no document-level horizontal overflow
+- no clipped text at 200% zoom
+- keyboard-only completion
+- visible focus
+- skip navigation
+- active navigation state
+- accessible names and error association
+- touch target size
+- light and high-contrast mode
+- loading, empty, error, partial, disconnected, stale, and ready states
+- live updates preserve focus and do not resize controls
+
+### 12.2 Native Android
+
+Devices:
+
+- narrow phone around 360 dp
+- standard phone around 411 dp
+- tablet portrait and landscape
+
+Configurations:
+
+- default text
+- 200% font scaling
+- display scaling increased
+- TalkBack enabled
+- high-contrast text where available
+- reduced motion
+- portrait and landscape
+- slow network, disconnected backend, and stale stream
+
+Required tools:
+
+- Android Accessibility Scanner
+- TalkBack manual walkthrough
+- Android Studio Layout Inspector
+- automated MAUI/Appium smoke flows where stable
+
+## 13. Production Telemetry
+
+UI telemetry must avoid market or credential leakage and should record:
+
+- route/screen load success and latency
+- stream connected, reconnecting, stale, and failed transitions
+- predictor availability and readiness category
+- order-preview validation failures by rejection code
+- confirmation abandonment, without logging confidential account data
+- duplicate-action prevention events
+- client version, viewport/device class, and accessibility mode where permitted
+
+Do not log API keys, account identifiers, raw broker responses, unrestricted news text, or full predictor payloads.
+
+## 14. Rollout Rules
+
+1. Implement checkpoints in order: UI0 -> UI1 -> UI2 -> UI3 -> UI4 -> UI5 -> UI6.
+2. Commit each checkpoint separately after its tests pass.
+3. Do not push unless explicitly requested.
+4. Stop only TradingFlow-owned runtime processes before UI code changes.
+5. Preserve database, paper state, credentials, and cached market data.
+6. Do not promote live execution during the redesign.
+7. A later checkpoint must not weaken an earlier accessibility or fail-closed gate.
+8. Do not claim native accessibility complete until tested with TalkBack on a physical Android device.
+
+## 15. Definition Of Done
+
+The redesign is complete only when:
+
+- desktop and responsive web serve the same workflows without document overflow
+- native screens use one primary scrolling surface
+- all controls have accessible names, states, and adequate targets
+- paper/live, session, connection, quote freshness, and model readiness are always visible before action
+- Market Predictor output is clearly separated from TradingFlow strategy/risk decisions
+- every order has a review and confirmation path backed by server validation
+- live updates remain stable under keyboard, screen reader, and touch use
+- automated and manual verification evidence is stored with the release checkpoint
+- obsolete UI code and the superseded design paths are removed

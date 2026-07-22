@@ -6,6 +6,9 @@ publish/
 TestResults/
 /artifacts/
 .tmp/
+**/node_modules/
+**/test-results/
+**/playwright-report/
 
 # Visual Studio / Rider / VS Code local state
 .vs/
