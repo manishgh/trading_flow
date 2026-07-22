@@ -35,7 +35,7 @@ body {
   background: var(--bg);
   color: var(--ink);
   font: 14px/1.45 "Segoe UI", Arial, sans-serif;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 button,
 input,
@@ -1013,13 +1013,47 @@ pre {
 }
 .trade-desk-table {
   font-size: 13px;
+  table-layout: fixed;
+  width: 100%;
 }
 .trade-desk-table th,
 .trade-desk-table td {
-  white-space: normal;
+  overflow-wrap: break-word;
+  vertical-align: top;
 }
 .trade-desk-table .operator-row td {
   padding: 10px 8px;
+}
+.trade-desk-table .market-column { width: 132px; }
+.trade-desk-table .quote-column { width: 154px; }
+.trade-desk-table .position-column { width: 118px; }
+.trade-desk-table .action-column { width: 84px; }
+.market-cell,
+.position-cell,
+.action-cell,
+.market-symbol,
+.action-cell .button {
+  overflow-wrap: normal;
+  white-space: nowrap;
+  word-break: normal;
+}
+.market-cell .market-name {
+  max-width: 116px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eligibility-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.action-cell {
+  text-align: right;
+}
+.action-cell .compact-command {
+  display: inline-flex;
 }
 .price-stack {
   display: grid;
@@ -1250,6 +1284,16 @@ button.danger, .button.danger {
   .wishlist-news-list {
     max-height: none;
     overflow: visible;
+  }
+}
+
+@media (max-width: 1180px) {
+  .trade-desk-layout {
+    grid-template-columns: 1fr;
+  }
+  .symbol-detail-rail {
+    max-height: none;
+    position: static;
   }
 }
 

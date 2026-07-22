@@ -109,6 +109,65 @@ test.describe("UI2 web trading workstation", () => {
     await expect(page.locator(`.mobile-market-row[data-symbol="${testTicker}"]`)).toHaveCount(1);
   });
 
+  test("dense operator columns keep symbols and actions on one line", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openSeededDesk(page);
+
+    const marketSymbol = page.locator(`.desk-desktop-table [data-symbol="${testTicker}"] .market-symbol`);
+    const inspectLink = page.locator(`.desk-desktop-table [data-symbol="${testTicker}"]`).getByRole("link", { name: `Inspect ${testTicker}` });
+    await expect(marketSymbol).toHaveCSS("white-space", "nowrap");
+    await expect(inspectLink).toHaveCSS("white-space", "nowrap");
+    await expect(inspectLink).toHaveText("Inspect");
+
+    const wrapping = await page.locator(`.desk-desktop-table [data-symbol="${testTicker}"]`).evaluate(row => {
+      const symbol = row.querySelector(".market-symbol");
+      const action = row.querySelector(".action-cell .button");
+      return {
+        symbolLines: Math.round(symbol.getBoundingClientRect().height / parseFloat(getComputedStyle(symbol).lineHeight)),
+        actionOverflows: action.scrollWidth > action.clientWidth + 1
+      };
+    });
+    expect(wrapping).toEqual({ symbolLines: 1, actionOverflows: false });
+  });
+
+  test("operator URLs use strategy identities and never expose local config paths", async ({ page }) => {
+    await openSeededDesk(page);
+    const hrefs = await page.locator('a[href*="/TradeDesk"]').evaluateAll(nodes => nodes.map(node => node.getAttribute("href")));
+    expect(hrefs.some(href => href?.includes("strategyId="))).toBeTruthy();
+    expect(hrefs.some(href => href?.includes("strategyPath=") || href?.toLowerCase().includes("%5cproject"))).toBeFalsy();
+  });
+
+  test("operator links complete their intended navigation", async ({ page }) => {
+    const targetId = await openSeededDesk(page);
+
+    await page.getByRole("link", { name: "Manage Wishlist" }).click();
+    await expect(page).toHaveURL(new RegExp(`/Wishlists\\?id=${targetId}`));
+    await expect(page.getByRole("heading", { name: "Wishlist Management" })).toBeVisible();
+
+    await page.goto(`/TradeDesk?id=${targetId}`);
+    const inspectLink = page.locator(`.desk-desktop-table [data-symbol="${testTicker}"]`).getByRole("link", { name: `Inspect ${testTicker}` });
+    await expect(inspectLink).toBeVisible();
+    await inspectLink.click();
+    await expect(page).toHaveURL(new RegExp(`ticker=${testTicker}`));
+    await expect(page.locator(`[data-selected-symbol="${testTicker}"]`)).toBeVisible();
+
+    await page.getByRole("link", { name: "Review strategy run" }).click();
+    await expect(page).toHaveURL(/\/Paper/);
+    await expect(page.getByRole("heading", { name: "Paper Trading Lab" })).toBeVisible();
+
+    await page.goto(`/TradeDesk?id=${targetId}&ticker=${testTicker}`);
+    await page.getByRole("link", { name: "Open positions" }).click();
+    await expect(page).toHaveURL(/\/RunningTrades/);
+    await expect(page.getByRole("heading", { name: "Running Trades" })).toBeVisible();
+  });
+
+  test("the detail rail cannot squeeze the market table at tablet width", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await openSeededDesk(page);
+    const layoutColumns = await page.locator(".trade-desk-layout").evaluate(node => getComputedStyle(node).gridTemplateColumns);
+    expect(layoutColumns.trim().split(/\s+/)).toHaveLength(1);
+  });
+
   test("watch rows select without submitting orders", async ({ page }) => {
     await openSeededDesk(page);
     const rows = page.locator("[data-symbol-row]");
@@ -139,7 +198,9 @@ test.describe("UI2 web trading workstation", () => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await openSeededDesk(page);
     await page.waitForFunction(() => Boolean(window.TradingFlowDesk));
-    const view = page.locator(`[data-symbol="${testTicker}"]`).first().getByRole("link", { name: "View" });
+    const matchingRows = page.locator(`[data-symbol="${testTicker}"]`);
+    expect(await matchingRows.count()).toBe(2);
+    const view = matchingRows.nth(0).getByRole("link", { name: `Inspect ${testTicker}` });
     await view.focus();
     const identityBefore = await view.evaluate(node => {
       node.dataset.focusIdentity = "preserve-me";

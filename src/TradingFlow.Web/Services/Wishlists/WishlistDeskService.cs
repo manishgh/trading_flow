@@ -52,17 +52,24 @@ public sealed class WishlistDeskService
             .Where(ticker => ticker.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var quotes = await quoteService.GetLatestQuotesAsync(tickerSet.ToArray(), quoteFeed, cancellationToken);
-        var runningTrades = (await RunningTradesBuilder.BuildAsync(paperJobs, automation))
-            .Where(trade => tickerSet.Contains(trade.Ticker))
-            .ToArray();
-        var recentSignals = await wishlists.GetSignalsAsync(
+        var quotesTask = quoteService.GetLatestQuotesAsync(tickerSet.ToArray(), quoteFeed, cancellationToken);
+        var runningTradesTask = RunningTradesBuilder.BuildAsync(paperJobs, automation);
+        var recentSignalsTask = wishlists.GetSignalsAsync(
             wishlist.Id,
             ticker: null,
             DateTimeOffset.UtcNow.Subtract(signalWindow),
             limit: 100,
             cancellationToken);
-        var relatedNews = await LoadRelatedNewsAsync(tickerSet, newsWindow, cancellationToken);
+        var relatedNewsTask = LoadRelatedNewsAsync(tickerSet, newsWindow, cancellationToken);
+
+        await Task.WhenAll(quotesTask, runningTradesTask, recentSignalsTask, relatedNewsTask);
+
+        var quotes = await quotesTask;
+        var runningTrades = (await runningTradesTask)
+            .Where(trade => tickerSet.Contains(trade.Ticker))
+            .ToArray();
+        var recentSignals = await recentSignalsTask;
+        var relatedNews = await relatedNewsTask;
 
         var latestSignalByTicker = recentSignals
             .GroupBy(signal => signal.Ticker, StringComparer.OrdinalIgnoreCase)

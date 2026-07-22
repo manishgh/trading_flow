@@ -31,7 +31,7 @@ public sealed class TradeDeskModel : PageModel
 
     [BindProperty(SupportsGet = true)] public Guid? Id { get; set; }
     [BindProperty(SupportsGet = true)] public string Source { get; set; } = "all";
-    [BindProperty(SupportsGet = true)] public string? StrategyPath { get; set; }
+    [BindProperty(SupportsGet = true)] public string? StrategyId { get; set; }
     [BindProperty(SupportsGet = true)] public string? Ticker { get; set; }
     [BindProperty(SupportsGet = true)] public string PredictionMode { get; set; } = "unified";
     [BindProperty(SupportsGet = true)] public string PredictionHorizon { get; set; } = "auto";
@@ -39,7 +39,7 @@ public sealed class TradeDeskModel : PageModel
     public IReadOnlyList<Wishlist> Wishlists { get; private set; } = [];
     public Wishlist? SelectedWishlist { get; private set; }
     public IReadOnlyList<StrategyOption> Strategies { get; private set; } = [];
-    public string? SelectedStrategyPath { get; private set; }
+    public string? SelectedStrategyId { get; private set; }
     public string? SelectedPaperConfigPath { get; private set; }
     public IReadOnlyList<WishlistDeskRow> Rows { get; private set; } = [];
     public IReadOnlyList<WishlistSignal> RecentSignals { get; private set; } = [];
@@ -74,13 +74,13 @@ public sealed class TradeDeskModel : PageModel
     {
         await repository.SetObservedAsync(wishlistId, isObserved, cancellationToken);
         StatusMessage = isObserved ? "Wishlist observer started." : "Wishlist observer paused.";
-        return RedirectToPage("/TradeDesk", new { id = wishlistId, source = Source, strategyPath = StrategyPath, ticker = Ticker });
+        return RedirectToPage("/TradeDesk", new { id = wishlistId, source = Source, strategyId = StrategyId, ticker = Ticker });
     }
 
     private async Task LoadAsync(CancellationToken cancellationToken)
     {
         Strategies = catalog.GetStrategies();
-        SelectedStrategyPath = ResolveStrategyPath();
+        SelectedStrategyId = ResolveStrategyId();
         SelectedPaperConfigPath = ResolvePaperConfigPath();
         Wishlists = await repository.ListAsync(cancellationToken);
         SelectedWishlist = Id.HasValue
@@ -122,17 +122,25 @@ public sealed class TradeDeskModel : PageModel
             ? normalizedMode
             : "unified";
         PredictionHorizon = String.IsNullOrWhiteSpace(PredictionHorizon) ? "auto" : PredictionHorizon.Trim().ToLowerInvariant();
-        SymbolIntelligence = SelectedRow is null
-            ? null
-            : await symbolIntelligence.BuildAsync(
+        var operationalStatusTask = operationalStatus.GetAsync(
+            quoteFeed,
+            snapshot.Rows.Select(row => row.Quote.Timestamp),
+            cancellationToken);
+        if (SelectedRow is null)
+        {
+            OperationalStatus = await operationalStatusTask;
+        }
+        else
+        {
+            var symbolIntelligenceTask = symbolIntelligence.BuildAsync(
                 SelectedRow,
                 PredictionMode,
                 PredictionHorizon,
                 cancellationToken);
-        OperationalStatus = await operationalStatus.GetAsync(
-            quoteFeed,
-            snapshot.Rows.Select(row => row.Quote.Timestamp),
-            cancellationToken);
+            await Task.WhenAll(operationalStatusTask, symbolIntelligenceTask);
+            OperationalStatus = await operationalStatusTask;
+            SymbolIntelligence = await symbolIntelligenceTask;
+        }
     }
 
     private static string NewsIdentity(MobileNewsItem item)
@@ -169,16 +177,16 @@ public sealed class TradeDeskModel : PageModel
             ?? String.Empty;
     }
 
-    private string ResolveStrategyPath()
+    private string ResolveStrategyId()
     {
-        if (!String.IsNullOrWhiteSpace(StrategyPath) &&
-            Strategies.Any(strategy => strategy.Path.Equals(StrategyPath, StringComparison.OrdinalIgnoreCase)))
+        if (!String.IsNullOrWhiteSpace(StrategyId) &&
+            Strategies.Any(strategy => strategy.Definition.StrategyId.Equals(StrategyId, StringComparison.OrdinalIgnoreCase)))
         {
-            return StrategyPath;
+            return StrategyId;
         }
 
-        return Strategies.FirstOrDefault(strategy => strategy.Definition.StrategyId.Contains("intraday", StringComparison.OrdinalIgnoreCase))?.Path
-            ?? Strategies.FirstOrDefault()?.Path
+        return Strategies.FirstOrDefault(strategy => strategy.Definition.StrategyId.Contains("intraday", StringComparison.OrdinalIgnoreCase))?.Definition.StrategyId
+            ?? Strategies.FirstOrDefault()?.Definition.StrategyId
             ?? String.Empty;
     }
 

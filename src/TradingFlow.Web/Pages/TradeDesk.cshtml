@@ -95,11 +95,11 @@
             </select>
         </div>
         <div>
-            <label for="StrategyPath">Strategy context</label>
-            <select id="StrategyPath" name="strategyPath">
+            <label for="StrategyId">Strategy context</label>
+            <select id="StrategyId" name="strategyId">
                 @foreach (var strategy in Model.Strategies)
                 {
-                    <option value="@strategy.Path" selected="@(Model.SelectedStrategyPath == strategy.Path)">@strategy.Definition.StrategyName</option>
+                    <option value="@strategy.Definition.StrategyId" selected="@(Model.SelectedStrategyId == strategy.Definition.StrategyId)">@strategy.Definition.StrategyName</option>
                 }
             </select>
         </div>
@@ -124,7 +124,7 @@
                 <input type="hidden" name="WishlistId" value="@Model.SelectedWishlist.Id" />
                 <input type="hidden" name="IsObserved" value="@(Model.SelectedWishlist.IsObserved ? "false" : "true")" />
                 <input type="hidden" name="Source" value="@Model.Source" />
-                <input type="hidden" name="StrategyPath" value="@Model.SelectedStrategyPath" />
+                <input type="hidden" name="StrategyId" value="@Model.SelectedStrategyId" />
                 <input type="hidden" name="Ticker" value="@Model.Ticker" />
                 <button class="secondary compact-command" type="submit">@(Model.SelectedWishlist.IsObserved ? "Pause observer" : "Start observer")</button>
             </form>
@@ -139,7 +139,7 @@
         <a asp-page="/TradeDesk"
            asp-route-id="@selectedId"
            asp-route-source="@key"
-           asp-route-strategyPath="@Model.SelectedStrategyPath"
+           asp-route-strategyId="@Model.SelectedStrategyId"
            asp-route-ticker="@Model.Ticker"
            class="@(active ? "active" : null)"
            aria-current="@(active ? "page" : null)">@label</a>
@@ -168,6 +168,13 @@
             {
                 <div class="desk-desktop-table table-scroll" role="region" aria-label="Watchlist markets" tabindex="0">
                     <table class="trade-desk-table">
+                        <colgroup>
+                            <col class="market-column" />
+                            <col class="quote-column" />
+                            <col class="eligibility-column" />
+                            <col class="position-column" />
+                            <col class="action-column" />
+                        </colgroup>
                         <thead>
                             <tr>
                                 <th scope="col">Market</th>
@@ -182,8 +189,8 @@
                         {
                             var isSelected = selected?.Ticker.Equals(row.Ticker, StringComparison.OrdinalIgnoreCase) == true;
                             <tr data-symbol-row data-symbol="@row.Ticker.ToUpperInvariant()" data-quote-row="@row.Ticker.ToUpperInvariant()" class="operator-row @(isSelected ? "selected-row" : null)">
-                                <td>
-                                    <strong>@row.Ticker</strong>
+                                <td class="market-cell">
+                                    <strong class="market-symbol">@row.Ticker</strong>
                                     <span class="market-name">@row.DisplayName</span>
                                 </td>
                                 <td class="quote-cell">
@@ -191,11 +198,11 @@
                                     <span><small>Ask</small><strong data-quote-field="ask">@row.Quote.DisplayAsk</strong></span>
                                     <small data-quote-age>@(row.Quote.Timestamp is null ? "No quote" : "Quote received")</small>
                                 </td>
-                                <td>
+                                <td class="eligibility-cell">
                                     <span class="signal-badge @(row.HasSignal ? "eligible" : "watching")" data-signal-badge>@row.EligibilityLabel</span>
-                                    <span class="cell-detail" data-signal-status>@row.EligibilityReason</span>
+                                    <span class="cell-detail eligibility-summary" data-signal-status title="@row.EligibilityReason">@row.EligibilityReason</span>
                                 </td>
-                                <td>
+                                <td class="position-cell">
                                     @if (row.Trade is null)
                                     {
                                         <span class="muted">No open trade</span>
@@ -207,14 +214,15 @@
                                         <span class="@PlClass(row.Trade.UnrealizedPl)">@row.Trade.UnrealizedPl.ToString("C2")</span>
                                     }
                                 </td>
-                                <td>
+                                <td class="action-cell">
                                     <a class="button secondary compact-command"
                                        asp-page="/TradeDesk"
                                        asp-route-id="@selectedId"
                                        asp-route-source="@Model.Source"
-                                       asp-route-strategyPath="@Model.SelectedStrategyPath"
+                                       asp-route-strategyId="@Model.SelectedStrategyId"
                                        asp-route-ticker="@row.Ticker"
-                                       aria-current="@(isSelected ? "true" : null)">View</a>
+                                       aria-label="Inspect @row.Ticker"
+                                       aria-current="@(isSelected ? "true" : null)">Inspect</a>
                                 </td>
                             </tr>
                         }
@@ -231,7 +239,7 @@
                                asp-page="/TradeDesk"
                                asp-route-id="@selectedId"
                                asp-route-source="@Model.Source"
-                               asp-route-strategyPath="@Model.SelectedStrategyPath"
+                               asp-route-strategyId="@Model.SelectedStrategyId"
                                asp-route-ticker="@row.Ticker"
                                aria-current="@(isSelected ? "true" : null)">
                                 <span class="mobile-market-identity"><strong>@row.Ticker</strong><small>@row.DisplayName</small></span>
@@ -320,7 +328,7 @@
                                asp-page="/TradeDesk"
                                asp-route-id="@selectedId"
                                asp-route-source="@Model.Source"
-                               asp-route-strategyPath="@Model.SelectedStrategyPath"
+                               asp-route-strategyId="@Model.SelectedStrategyId"
                                asp-route-ticker="@selected.Ticker"
                                asp-route-predictionMode="@view"
                                asp-route-predictionHorizon="@Model.PredictionHorizon">@view</a>
