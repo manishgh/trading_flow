@@ -44,6 +44,7 @@ public sealed class AlpacaOrderSynchronizationHostedService(
         };
         using var broker = new AlpacaBrokerClient(
             new HttpClient(),
+            new HttpClient(),
             alpacaOptions,
             rawArchiveWriter);
         var runner = new OrderSynchronizationRunner(

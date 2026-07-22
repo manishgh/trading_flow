@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using TradingFlow.Alpaca;
 using TradingFlow.Domain.Execution;
+using TradingFlow.Domain.Orders;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Storage;
@@ -21,8 +22,8 @@ public sealed class AlpacaManualOrderService : IDisposable
 {
     private readonly AlpacaCredentialProvider credentials;
     private readonly IRawArchiveWriter rawArchiveWriter;
-    private readonly IEntryAdmissionControl entryAdmission;
-    private readonly IPositionConflictGuard positionConflict;
+    private readonly IOrderSubmissionService orderSubmissions;
+    private readonly ManualEntryOptions manualEntryOptions;
     private readonly object clientLock = new();
     private AlpacaTradingRestClient? tradingClient;
     private AlpacaBrokerClient? providerClient;
@@ -30,13 +31,13 @@ public sealed class AlpacaManualOrderService : IDisposable
     public AlpacaManualOrderService(
         AlpacaCredentialProvider credentials,
         IRawArchiveWriter rawArchiveWriter,
-        IEntryAdmissionControl entryAdmission,
-        IPositionConflictGuard positionConflict)
+        IOrderSubmissionService orderSubmissions,
+        ManualEntryOptions manualEntryOptions)
     {
         this.credentials = credentials;
         this.rawArchiveWriter = rawArchiveWriter;
-        this.entryAdmission = entryAdmission;
-        this.positionConflict = positionConflict;
+        this.orderSubmissions = orderSubmissions;
+        this.manualEntryOptions = manualEntryOptions;
     }
 
     public async Task<ManualOrderResult> SubmitLimitOrderAsync(
@@ -44,15 +45,14 @@ public sealed class AlpacaManualOrderService : IDisposable
         string side,
         decimal quantity,
         decimal limitPrice,
+        decimal? stopLossPrice,
+        decimal? takeProfitPrice,
+        string? horizon,
         CancellationToken cancellationToken,
         bool allowExtendedHoursTrading = false)
     {
         var normalizedTicker = NormalizeTicker(ticker);
         var normalizedSide = NormalizeSide(side);
-        if (normalizedSide == "buy")
-        {
-            entryAdmission.EnsureEntriesAllowed();
-        }
         if (quantity <= 0m)
         {
             throw new InvalidOperationException("Quantity must be greater than zero.");
@@ -68,25 +68,134 @@ public sealed class AlpacaManualOrderService : IDisposable
             throw new InvalidOperationException("Alpaca paper credentials are not configured.");
         }
 
-        return normalizedSide == "buy"
-            ? await positionConflict.ExecuteEntryAsync(
+        if (normalizedSide == "buy")
+        {
+            if (manualEntryOptions.Policy != ManualEntryPolicy.OperatorDirect)
+            {
+                throw new InvalidOperationException(
+                    "Manual buy is strategy-gated. Start the selected strategy so it can produce a validated entry candidate.");
+            }
+
+            return await SubmitOperatorDirectBuyAsync(
                 normalizedTicker,
-                "MANUAL",
-                token => SubmitLimitOrderCoreAsync(
-                    normalizedTicker,
-                    normalizedSide,
-                    quantity,
-                    limitPrice,
-                    allowExtendedHoursTrading,
-                    token),
-                cancellationToken)
-            : await SubmitLimitOrderCoreAsync(
+                quantity,
+                limitPrice,
+                stopLossPrice,
+                takeProfitPrice,
+                horizon,
+                allowExtendedHoursTrading,
+                cancellationToken);
+        }
+
+        return await SubmitLimitOrderCoreAsync(
                 normalizedTicker,
                 normalizedSide,
                 quantity,
                 limitPrice,
                 allowExtendedHoursTrading,
                 cancellationToken);
+    }
+
+    private async Task<ManualOrderResult> SubmitOperatorDirectBuyAsync(
+        string ticker,
+        decimal quantity,
+        decimal limitPrice,
+        decimal? stopLossPrice,
+        decimal? takeProfitPrice,
+        string? horizon,
+        bool allowExtendedHoursTrading,
+        CancellationToken cancellationToken)
+    {
+        if (quantity != Decimal.Truncate(quantity) || quantity > Int32.MaxValue)
+        {
+            throw new InvalidOperationException("Operator-direct buy quantity must be a positive whole-share value.");
+        }
+
+        var normalizedHorizon = horizon?.Trim().ToLowerInvariant();
+        if (normalizedHorizon is not ("intraday" or "swing"))
+        {
+            throw new InvalidOperationException("Operator-direct buy horizon must be intraday or swing.");
+        }
+
+        if (stopLossPrice is not > 0m || stopLossPrice >= limitPrice)
+        {
+            throw new InvalidOperationException("Operator-direct buy requires a stop price below the entry limit.");
+        }
+
+        if (takeProfitPrice is not > 0m || takeProfitPrice <= limitPrice)
+        {
+            throw new InvalidOperationException("Operator-direct buy requires a take-profit price above the entry limit.");
+        }
+
+        if (allowExtendedHoursTrading)
+        {
+            throw new InvalidOperationException(
+                "Operator-direct extended-hours entry is blocked because Alpaca does not support protected bracket entries outside regular hours.");
+        }
+
+        var (_, broker) = GetClients();
+        var now = DateTimeOffset.UtcNow;
+        var runId = Guid.NewGuid();
+        const string strategyId = "MANUAL-OPERATOR-DIRECT";
+        var runContext = ExecutionRunContextFactory.Create(
+            runId,
+            "paper",
+            new
+            {
+                policy = "operator_direct",
+                symbol = ticker,
+                quantity,
+                limitPrice,
+                stopLossPrice,
+                takeProfitPrice,
+                horizon = normalizedHorizon,
+                allowExtendedHoursTrading
+            },
+            now);
+        var intentId = OrderIntentIdFactory.Create(runId, strategyId, "buy", ticker, now);
+        var candidateId = Guid.NewGuid();
+        var result = await orderSubmissions.SubmitBracketOrderAsync(
+            new BracketOrderSubmission(
+                intentId,
+                new ValidatedEntryCandidate(
+                    candidateId,
+                    "operator_direct",
+                    normalizedHorizon,
+                    now,
+                    now,
+                    JsonSerializer.Serialize(new
+                    {
+                        operatorOverride = true,
+                        quantity,
+                        limitPrice,
+                        stopLossPrice,
+                        takeProfitPrice
+                    })),
+                runContext,
+                strategyId,
+                "buy",
+                "limit",
+                "day",
+                ExecutionRunContextFactory.ResolveSessionDate(now, "America/New_York"),
+                now,
+                new FinalizedOrder(
+                    ticker,
+                    "Manual Operator Direct",
+                    Decimal.ToInt32(quantity),
+                    limitPrice,
+                    stopLossPrice.Value,
+                    takeProfitPrice.Value,
+                    now),
+                AllowExtendedHoursTrading: false),
+            broker,
+            cancellationToken);
+
+        return new ManualOrderResult(
+            result.BrokerOrderId,
+            ticker,
+            "buy",
+            quantity,
+            limitPrice);
     }
 
     private async Task<ManualOrderResult> SubmitLimitOrderCoreAsync(
@@ -125,22 +234,6 @@ public sealed class AlpacaManualOrderService : IDisposable
             if (quantity > positionQuantity)
             {
                 throw new InvalidOperationException($"Sell quantity {quantity} exceeds open paper position {positionQuantity} for {normalizedTicker}.");
-            }
-        }
-        else
-        {
-            if (positionQuantity != 0m)
-            {
-                throw new PositionConflictException(
-                    RejectCode.REJECT_SETUP_INVALID,
-                    $"Position conflict for {normalizedTicker}: the broker already reports quantity {positionQuantity}.");
-            }
-
-            if (await HasOpenBrokerOrderAsync(client, normalizedTicker, cancellationToken))
-            {
-                throw new PositionConflictException(
-                    RejectCode.REJECT_SETUP_INVALID,
-                    $"Position conflict for {normalizedTicker}: the broker already has an open order for this symbol.");
             }
         }
 
@@ -197,30 +290,6 @@ public sealed class AlpacaManualOrderService : IDisposable
         return new ManualOrderResult(orderId, normalizedTicker, normalizedSide, quantity, limitPrice);
     }
 
-    private static async Task<bool> HasOpenBrokerOrderAsync(
-        AlpacaTradingRestClient client,
-        string ticker,
-        CancellationToken cancellationToken)
-    {
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"/v2/orders?status=open&symbols={Uri.EscapeDataString(ticker)}&limit=500&nested=true");
-        var response = await client.SendAsync(
-            request,
-            "broker-manual-open-order-check",
-            correlationId: ticker,
-            cancellationToken: cancellationToken);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException(
-                AlpacaTradingRestClient.DescribeFailure("manual open-order query", response));
-        }
-
-        using var document = JsonDocument.Parse(response.Payload);
-        return document.RootElement.ValueKind == JsonValueKind.Array &&
-            document.RootElement.GetArrayLength() > 0;
-    }
-
     private (AlpacaTradingRestClient Trading, AlpacaBrokerClient Provider) GetClients()
     {
         lock (clientLock)
@@ -236,7 +305,11 @@ public sealed class AlpacaManualOrderService : IDisposable
                 SecretKey = credentials.SecretKey
             };
             tradingClient = new AlpacaTradingRestClient(new HttpClient(), options, rawArchiveWriter);
-            providerClient = new AlpacaBrokerClient(new HttpClient(), options, rawArchiveWriter);
+            providerClient = new AlpacaBrokerClient(
+                new HttpClient(),
+                new HttpClient(),
+                options,
+                rawArchiveWriter);
             return (tradingClient, providerClient);
         }
     }

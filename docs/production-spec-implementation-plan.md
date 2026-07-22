@@ -215,6 +215,31 @@ with 0 warnings/errors; current EF model; zero known vulnerable packages. Isolat
 Production smoke returned health 200 and fail-closed trading-readiness 503 with empty
 provider credentials.
 
+**S3.8 checkpoint (2026-07-22):** EXE-04 entry admission now has one ordered,
+short-circuiting 12-gate implementation shared by LiveRunner, mobile automation, and
+operator-direct paper entries. A candidate is durably revalidated before the chain;
+every evaluated pass and the terminal rejection are stored as one contiguous SQLite
+prefix before broker submission. The chain uses provider calendar state, the shared
+SIP trade/status stream, fresh SIP quote and trade snapshots, spread, account status,
+asset eligibility, buying power, durable position ownership, size/notional limits,
+gross exposure and position count, expected slippage, and broker duplicate orders.
+Unknown/stale market state and provider errors fail closed. A fresh SIP trade may
+establish the startup TRADING baseline only when no halt/pause has been observed;
+an explicit halt remains sticky until Alpaca emits a trading-resumption status.
+Trading and market-data REST transports are separately injected and their documented
+numeric/string response shapes are covered by mapping tests.
+
+Manual buys are controlled by immutable `manual_entry_policy`: `strategy_gated` is
+the default and requires a strategy candidate; `operator_direct` is permitted only
+in paper/development and still requires explicit whole-share quantity, limit, stop,
+target, and horizon before running the same 12 safety gates. Live v1 locks the policy
+to `strategy_gated`. Extended-hours data continues to stream, but entries fail closed
+even when the toggle is enabled because Alpaca does not support broker-protected
+bracket equity entries outside the regular session; this preserves EXE-09 rather than
+creating a naked-position interval. Local gate: 455/455 tests, including provider
+mapping, status stickiness, ordered short-circuit behavior, SQLite round trips, and
+manual-policy routing.
+
 IDs: EXE-01..13, DAY-04 (reject enum), parts of TST-03.
 1. Reject-code enum in `TradingFlow.Domain` — Base-Spec §10 set + DAY-04 additions; one enum, used by gates, journal, and tests (CI sync-check vs spec in S12).
 2. Write-ahead intent: `client_order_id` format `{strategy}-{side}-{symbol}-{yyyymmdd}-{seq}-{uuid8}`; persist INTENT (fsync) **before** `SubmitOrderAsync`; retries reuse the persisted ID (EXE-01). Refactor `MobileAutomationService` entry path and `LiveRunner` submission path onto one shared `OrderSubmissionService` (one-brain discipline applies to execution too).
@@ -365,7 +390,7 @@ no eToro behavior; the production-composition test and deployment exclusion land
 | S0 | ✅ 2026-07-21 | `222ad71`, `b257028`, `ca8bd77`, `bd26aff`, `5bfbdfc`, `872ed8f`, `18ac061`, `18eba68` | Governance, secret-store migration, zero known vulnerable packages, clean-checkout CI, strict SIP WebSocket authentication, deterministic tests, and dormant eToro exclusion verified. GitHub Actions run `29809663008` passed; external credential rotation remains operator action U1. |
 | S1 | ✅ 2026-07-21 | `9d77b87`, `610a9ba`, `4510a7e`, `680b7a9` | Appendix-A registry (99 expanded parameters) is bidirectionally enforced; startup loading is typed, range-validated, immutable, canonically SHA-256 hashed, and structured-logged; live-v1 locks and development-only IEX fallback are enforced; all Alpaca trading and stream URLs derive from profile through one resolver. Local gate: 283/283 tests, Release build 0 warnings/errors, Engine dependency audit 0 known vulnerabilities. GitHub Actions run `29811932023` passed. |
 | S2 | ✅ 2026-07-21 | `4bbd5c8`, `eb43cd1`, `54a163e`, `08d6fd3`, `27348a9`, `f6e9810`, `06a4f05`, `a7564b9` | Versioned operational journal, byte-exact provider archives, decimal money audit, WAL/FULL durability, immutable daily backup, fail-closed restore, and recovery drill complete. GitHub Actions run `29839320815` passed. |
-| S3 | 🟨 2026-07-22 | `ca65626`, `963343f`, `6c26801`, `c7cff89` | In progress. Canonical rejects, write-ahead intent, idempotent submission, EXE-02 lifecycle journal, EXE-03 stream-authoritative fills/REST cross-check, EXE-08 durable account reconciliation, EXE-09 automatic protective-order invariant, and EXE-10 cross-strategy position ownership are complete. Local gate: 418/418 tests, formatter clean for changed files, full Release build including Android with 0 warnings/errors, current EF model, zero vulnerable packages, and fail-closed Production runtime smoke. EXE-04 ordered gate chain is next. |
+| S3 | 🟨 2026-07-22 | `ca65626`, `963343f`, `6c26801`, `c7cff89`, current change | In progress. Canonical rejects, write-ahead intent, idempotent submission, EXE-02 lifecycle journal, EXE-03 stream-authoritative fills/REST cross-check, EXE-08 durable account reconciliation, EXE-09 automatic protective-order invariant, EXE-10 cross-strategy position ownership, and the EXE-04 ordered universal entry gate chain are complete. Manual policy is configurable and paper operator-direct entries still use the universal gates. Local gate: 455/455 tests. Remaining S3 work is EXE-05/06/07 sizing floors and liquidity caps plus EXE-13 graceful shutdown. |
 | S4 | ⬜ | | |
 | S5 | ⬜ | | |
 | S6 | ⬜ | | |

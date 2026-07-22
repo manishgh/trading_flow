@@ -103,9 +103,35 @@ builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderIntentReposit
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderEventRepository, TradingFlow.Data.Orders.SqliteOrderEventRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IPositionLedgerRepository, TradingFlow.Data.Orders.SqlitePositionLedgerRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IReconciliationRepository, TradingFlow.Data.Orders.SqliteReconciliationRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.ICandidateRepository, TradingFlow.Data.Orders.SqliteCandidateRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IGateEvaluationRepository, TradingFlow.Data.Orders.SqliteGateEvaluationRepository>();
 builder.Services.AddSingleton<TradingFlow.Engine.Execution.IOrderLifecycleService, TradingFlow.Engine.Execution.OrderLifecycleService>();
 builder.Services.AddSingleton<IEntryAdmissionControl, EntryAdmissionControl>();
 var productionConfiguration = new ProductionConfigurationLoader();
+T ResolveProductionParameter<T>(string name, string environmentVariable) =>
+    productionConfiguration.ResolveParameter<T>(
+        ProductionProfile.Paper,
+        name,
+        builder.Configuration[$"TradingFlow:Production:{name}"]
+            ?? Environment.GetEnvironmentVariable(environmentVariable));
+builder.Services.AddSingleton(new EntryGateOptions(
+    ResolveProductionParameter<int>("setup_max_age_s", "TRADINGFLOW_SETUP_MAX_AGE_S"),
+    ResolveProductionParameter<int>("quote_max_age_ms", "TRADINGFLOW_QUOTE_MAX_AGE_MS"),
+    ResolveProductionParameter<decimal>("max_spread_bps", "TRADINGFLOW_MAX_SPREAD_BPS"),
+    ResolveProductionParameter<decimal>("max_expected_slippage_bps", "TRADINGFLOW_MAX_EXPECTED_SLIPPAGE_BPS"),
+    ResolveProductionParameter<decimal>("max_notional_per_trade_pct", "TRADINGFLOW_MAX_NOTIONAL_PER_TRADE_PCT"),
+    ResolveProductionParameter<decimal>("max_gross_exposure_intraday_pct", "TRADINGFLOW_MAX_GROSS_EXPOSURE_INTRADAY_PCT"),
+    ResolveProductionParameter<decimal>("max_gross_exposure_overnight_pct", "TRADINGFLOW_MAX_GROSS_EXPOSURE_OVERNIGHT_PCT"),
+    ResolveProductionParameter<int>("max_positions_day", "TRADINGFLOW_MAX_POSITIONS_DAY"),
+    ResolveProductionParameter<int>("max_positions_swing", "TRADINGFLOW_MAX_POSITIONS_SWING")));
+builder.Services.AddSingleton(ManualEntryOptions.Parse(
+    ResolveProductionParameter<string>("manual_entry_policy", "TRADINGFLOW_MANUAL_ENTRY_POLICY")));
+builder.Services.AddSingleton<AlpacaSecurityTradingStatusService>();
+builder.Services.AddSingleton<ISecurityTradingStatusProvider>(serviceProvider =>
+    serviceProvider.GetRequiredService<AlpacaSecurityTradingStatusService>());
+builder.Services.AddHostedService(serviceProvider =>
+    serviceProvider.GetRequiredService<AlpacaSecurityTradingStatusService>());
+builder.Services.AddSingleton<IEntryGateChain, EntryGateChain>();
 var orderPollIntervalSeconds = productionConfiguration.ResolveParameter<int>(
     ProductionProfile.Paper,
     "order_poll_interval_s",

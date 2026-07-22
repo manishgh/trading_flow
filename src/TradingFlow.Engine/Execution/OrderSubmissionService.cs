@@ -5,9 +5,17 @@ using TradingFlow.Domain.Persistence;
 
 namespace TradingFlow.Engine.Execution;
 
+public sealed record ValidatedEntryCandidate(
+    Guid CandidateId,
+    string DiscoverySource,
+    string Horizon,
+    DateTimeOffset DiscoveredAtUtc,
+    DateTimeOffset RevalidatedAtUtc,
+    string SetupEvidenceJson);
+
 public sealed record BracketOrderSubmission(
     Guid IntentId,
-    Guid? CandidateId,
+    ValidatedEntryCandidate Candidate,
     ExecutionRunContext RunContext,
     string StrategyId,
     string Side,
@@ -56,21 +64,21 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
 {
     private readonly IOrderIntentRepository intentRepository;
     private readonly IOrderEventRepository eventRepository;
-    private readonly IEntryAdmissionControl entryAdmission;
-    private readonly IPositionConflictGuard positionConflict;
+    private readonly ICandidateRepository candidateRepository;
+    private readonly IEntryGateChain entryGates;
     private readonly ILogger<OrderSubmissionService> logger;
 
     public OrderSubmissionService(
         IOrderIntentRepository intentRepository,
         IOrderEventRepository eventRepository,
-        IEntryAdmissionControl entryAdmission,
-        IPositionConflictGuard positionConflict,
+        ICandidateRepository candidateRepository,
+        IEntryGateChain entryGates,
         ILogger<OrderSubmissionService> logger)
     {
         this.intentRepository = intentRepository;
         this.eventRepository = eventRepository;
-        this.entryAdmission = entryAdmission;
-        this.positionConflict = positionConflict;
+        this.candidateRepository = candidateRepository;
+        this.entryGates = entryGates;
         this.logger = logger;
     }
 
@@ -82,10 +90,14 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         ArgumentNullException.ThrowIfNull(submission);
         ArgumentNullException.ThrowIfNull(brokerClient);
         Validate(submission);
-        entryAdmission.EnsureEntriesAllowed();
-        return await positionConflict.ExecuteEntryAsync(
-            submission.Order.Ticker,
-            submission.StrategyId,
+        var run = ToRun(submission.RunContext);
+        await candidateRepository.UpsertValidatedAsync(
+            run,
+            ToCandidate(submission, run),
+            cancellationToken);
+        return await entryGates.ExecuteAsync(
+            submission,
+            brokerClient,
             async token =>
             {
                 var session = await ValidateTradingSessionAsync(submission, brokerClient, token);
@@ -144,21 +156,12 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             submitOutsideRegularHours,
             submission.SessionDate
         });
-        var run = new ProductionRun
-        {
-            RunId = submission.RunContext.RunId,
-            SchemaVersion = 1,
-            ConfigHash = submission.RunContext.ConfigHash,
-            CodeVersion = submission.RunContext.CodeVersion,
-            Profile = submission.RunContext.Profile,
-            Status = "running",
-            StartedAtUtc = submission.RunContext.StartedAtUtc
-        };
+        var run = ToRun(submission.RunContext);
         var intent = await intentRepository.ReserveAsync(
             run,
             new OrderIntentReservation(
                 submission.IntentId,
-                submission.CandidateId,
+                submission.Candidate.CandidateId,
                 submission.StrategyId,
                 submission.Order.Ticker.Trim().ToUpperInvariant(),
                 NormalizeSide(submission.Side),
@@ -390,9 +393,21 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
 
     private static void Validate(BracketOrderSubmission submission)
     {
-        if (submission.IntentId == Guid.Empty || submission.RunContext.RunId == Guid.Empty)
+        if (submission.IntentId == Guid.Empty || submission.Candidate.CandidateId == Guid.Empty ||
+            submission.RunContext.RunId == Guid.Empty)
         {
-            throw new InvalidOperationException("Run and intent identity are required before order submission.");
+            throw new InvalidOperationException(
+                "Run, candidate, and intent identity are required before order submission.");
+        }
+
+        if (submission.Candidate.RevalidatedAtUtc == default ||
+            submission.Candidate.DiscoveredAtUtc == default ||
+            String.IsNullOrWhiteSpace(submission.Candidate.DiscoverySource) ||
+            String.IsNullOrWhiteSpace(submission.Candidate.Horizon) ||
+            String.IsNullOrWhiteSpace(submission.Candidate.SetupEvidenceJson))
+        {
+            throw new InvalidOperationException(
+                "A validated candidate requires source, horizon, timestamps, and setup evidence.");
         }
 
         if (submission.Order.ShareQuantity <= 0 ||
@@ -428,6 +443,39 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             throw new InvalidOperationException("Execution run provenance is invalid.");
         }
     }
+
+    private static CandidateRecord ToCandidate(
+        BracketOrderSubmission submission,
+        ProductionRun run) => new()
+        {
+            CandidateId = submission.Candidate.CandidateId,
+            Symbol = submission.Order.Ticker.Trim().ToUpperInvariant(),
+            DiscoveredAtUtc = submission.Candidate.DiscoveredAtUtc.ToUniversalTime(),
+            RevalidatedAtUtc = submission.Candidate.RevalidatedAtUtc.ToUniversalTime(),
+            DiscoverySource = submission.Candidate.DiscoverySource.Trim(),
+            FinvizPreset = String.Empty,
+            Horizon = submission.Candidate.Horizon.Trim().ToLowerInvariant(),
+            LastPrice = submission.Order.LimitPrice,
+            SetupScoresJson = submission.Candidate.SetupEvidenceJson,
+            SelectedStrategy = submission.StrategyId,
+            State = "SETUP_VALID",
+            RejectReasonsJson = "[]",
+            RunId = run.RunId,
+            SchemaVersion = run.SchemaVersion,
+            ConfigHash = run.ConfigHash,
+            CodeVersion = run.CodeVersion
+        };
+
+    private static ProductionRun ToRun(ExecutionRunContext context) => new()
+    {
+        RunId = context.RunId,
+        SchemaVersion = 1,
+        ConfigHash = context.ConfigHash,
+        CodeVersion = context.CodeVersion,
+        Profile = context.Profile,
+        Status = "running",
+        StartedAtUtc = context.StartedAtUtc
+    };
 
     private static bool ResolveSubmittedOutsideRegularHours(string requestJson, bool fallback)
     {

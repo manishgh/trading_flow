@@ -129,6 +129,12 @@ public static class ProductionParameterRegistry
             Integer("ambiguity_cooloff_min", 240, 60, 1_440, ProductionParameterUnit.Minutes, "NWS-13"),
 
             Integer("setup_max_age_s", 20, 5, 120, ProductionParameterUnit.Seconds, "EXE-04"),
+            Choice(
+                "manual_entry_policy",
+                "strategy_gated",
+                ["strategy_gated", "operator_direct"],
+                "EXE-04",
+                isLockedInLiveV1: true),
             Decimal("max_spread_bps", 20m, 2m, 100m, ProductionParameterUnit.BasisPoints, "EXE-04"),
             Decimal("max_expected_slippage_bps", 15m, 2m, 100m, ProductionParameterUnit.BasisPoints, "EXE-04"),
             Decimal("min_stop_spread_mult", 4m, 2m, 10m, ProductionParameterUnit.Ratio, "EXE-05"),
@@ -246,7 +252,8 @@ public static class ProductionParameterRegistry
         string name,
         string defaultValue,
         IReadOnlyList<string> allowedValues,
-        string specificationReference) =>
+        string specificationReference,
+        bool isLockedInLiveV1 = false) =>
         new(
             name,
             ProductionParameterKind.Enumeration,
@@ -255,7 +262,8 @@ public static class ProductionParameterRegistry
             null,
             ProductionParameterUnit.None,
             specificationReference,
-            Array.AsReadOnly(allowedValues.ToArray()));
+            Array.AsReadOnly(allowedValues.ToArray()),
+            IsLockedInLiveV1: isLockedInLiveV1);
 
     private static ProductionParameterDefinition Time(
         string name,

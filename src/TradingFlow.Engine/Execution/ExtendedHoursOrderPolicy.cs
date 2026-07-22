@@ -28,7 +28,9 @@ public sealed record AssetTradingEligibility(
     bool Active,
     bool Tradable,
     bool OvernightTradable,
-    DateTimeOffset ObservedAtUtc);
+    DateTimeOffset ObservedAtUtc,
+    bool Shortable = false,
+    string? BorrowStatus = null);
 
 public interface IAssetTradingEligibilityProvider
 {
@@ -79,6 +81,9 @@ public static class ExtendedHoursOrderPolicy
             throw new InvalidOperationException(
                 "Extended-hours equity entries require time_in_force=day.");
         }
+
+        throw new InvalidOperationException(
+            "Extended-hours equity entry is blocked because Alpaca does not support broker-protected bracket orders outside the regular session.");
     }
 
     private static string ToDisplayName(EquityTradingSession session) => session switch

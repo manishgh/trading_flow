@@ -1,4 +1,5 @@
 using System.Net;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using TradingFlow.Alpaca;
@@ -19,6 +20,77 @@ public class AlpacaBrokerClientTests : IDisposable
         new FileSystemRawArchiveWriter(new RawArchiveOptions(archiveRoot));
 
     [Fact]
+    public async Task GetAccountSnapshotAsync_MapsAuthoritativeAccountFields()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """
+            {
+              "id":"account-1","status":"ACTIVE","account_blocked":false,
+              "trading_blocked":false,"trade_suspended_by_user":false,
+              "shorting_enabled":true,"buying_power":"125000.50","equity":"100000.25",
+              "long_market_value":"25000.00","short_market_value":"-5000.00"
+            }
+            """);
+        using var client = CreateClient(handler);
+
+        var account = await client.GetAccountSnapshotAsync(CancellationToken.None);
+
+        Assert.Equal("/v2/account", handler.Path);
+        Assert.Equal("account-1", account.AccountId);
+        Assert.Equal("ACTIVE", account.Status);
+        Assert.False(account.AccountBlocked);
+        Assert.False(account.TradingBlocked);
+        Assert.False(account.TradeSuspendedByUser);
+        Assert.True(account.ShortingEnabled);
+        Assert.Equal(125000.50m, account.BuyingPower);
+        Assert.Equal(100000.25m, account.Equity);
+        Assert.Equal(25000m, account.LongMarketValue);
+        Assert.Equal(-5000m, account.ShortMarketValue);
+    }
+
+    [Fact]
+    public async Task GetMarketObservationAsync_MapsConcurrentSipQuoteAndTrade()
+    {
+        using var marketHandler = new RoutingHandler(path => path switch
+        {
+            "/v2/stocks/MSFT/quotes/latest?feed=sip" =>
+                """{"quote":{"bp":412.10,"ap":412.14,"t":"2026-07-22T14:30:00.100Z"}}""",
+            "/v2/stocks/MSFT/trades/latest?feed=sip" =>
+                """{"trade":{"p":412.12,"t":"2026-07-22T14:30:00.050Z"}}""",
+            _ => throw new InvalidOperationException($"Unexpected market-data path: {path}")
+        });
+        using var client = new AlpacaBrokerClient(
+            CreateUnexpectedRequestClient(),
+            new HttpClient(marketHandler),
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+            {
+                KeyId = "test-key",
+                SecretKey = "test-secret",
+                MarketDataFeed = "sip"
+            },
+            CreateArchiveWriter());
+
+        var observation = await client.GetMarketObservationAsync(
+            "msft",
+            EquityTradingSession.Regular,
+            CancellationToken.None);
+
+        Assert.Equal("MSFT", observation.Symbol);
+        Assert.Equal("sip", observation.Feed);
+        Assert.Equal(412.10m, observation.BidPrice);
+        Assert.Equal(412.14m, observation.AskPrice);
+        Assert.Equal(412.12m, observation.MidPrice);
+        Assert.Equal(412.12m, observation.LastTradePrice);
+        Assert.Equal(
+            new DateTimeOffset(2026, 7, 22, 14, 30, 0, 100, TimeSpan.Zero),
+            observation.QuoteTimestampUtc);
+        Assert.Equal(
+            new DateTimeOffset(2026, 7, 22, 14, 30, 0, 50, TimeSpan.Zero),
+            observation.LastTradeTimestampUtc);
+        Assert.Equal(2, marketHandler.Paths.Count);
+    }
+
+    [Fact]
     public async Task SubmitProtectiveStopAsync_SendsStandaloneGtcStopWithBindingClientId()
     {
         using var handler = new CapturingHandler(
@@ -26,6 +98,7 @@ public class AlpacaBrokerClientTests : IDisposable
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
+            CreateUnusedMarketDataClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
@@ -70,6 +143,7 @@ public class AlpacaBrokerClientTests : IDisposable
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
+            CreateUnusedMarketDataClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
@@ -93,6 +167,7 @@ public class AlpacaBrokerClientTests : IDisposable
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
+            CreateUnusedMarketDataClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
@@ -131,6 +206,7 @@ public class AlpacaBrokerClientTests : IDisposable
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
+            CreateUnusedMarketDataClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
@@ -156,6 +232,7 @@ public class AlpacaBrokerClientTests : IDisposable
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
+            CreateUnusedMarketDataClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
@@ -179,6 +256,7 @@ public class AlpacaBrokerClientTests : IDisposable
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
+            CreateUnusedMarketDataClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
@@ -209,6 +287,7 @@ public class AlpacaBrokerClientTests : IDisposable
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
+            CreateUnusedMarketDataClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
@@ -239,6 +318,7 @@ public class AlpacaBrokerClientTests : IDisposable
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
+            CreateUnusedMarketDataClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
@@ -270,6 +350,7 @@ public class AlpacaBrokerClientTests : IDisposable
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
+            CreateUnusedMarketDataClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
@@ -297,6 +378,7 @@ public class AlpacaBrokerClientTests : IDisposable
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
+            CreateUnusedMarketDataClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
@@ -442,12 +524,17 @@ public class AlpacaBrokerClientTests : IDisposable
     private AlpacaBrokerClient CreateClient(HttpMessageHandler handler) =>
         new(
             new HttpClient(handler, disposeHandler: false),
+            CreateUnexpectedRequestClient(),
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = "test-key",
                 SecretKey = "test-secret"
             },
             CreateArchiveWriter());
+
+    private static HttpClient CreateUnusedMarketDataClient() => CreateUnexpectedRequestClient();
+
+    private static HttpClient CreateUnexpectedRequestClient() => new(new UnexpectedRequestHandler());
 
     private static BrokerEntryOrder CreateEntryOrder(bool submitOutsideRegularHours) =>
         new(
@@ -493,6 +580,33 @@ public class AlpacaBrokerClientTests : IDisposable
                 }
             };
         }
+    }
+
+    private sealed class RoutingHandler(Func<string, string> responseFactory) : HttpMessageHandler
+    {
+        public ConcurrentBag<string> Paths { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.PathAndQuery
+                ?? throw new InvalidOperationException("Request URI is unavailable.");
+            Paths.Add(path);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseFactory(path), Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class UnexpectedRequestHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(
+                $"Unexpected HTTP request: {request.Method} {request.RequestUri}.");
     }
 
     private sealed class FailingRawArchiveWriter : IRawArchiveWriter

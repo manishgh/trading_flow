@@ -278,7 +278,15 @@ public sealed partial class MobileAutomationService
             var submission = await orderSubmissionService.SubmitBracketOrderAsync(
                 new BracketOrderSubmission(
                     session.SessionId,
-                    CandidateId: null,
+                    new ValidatedEntryCandidate(
+                        session.SessionId,
+                        DiscoverySource: session.Source,
+                        Horizon: strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)
+                            ? "swing"
+                            : "intraday",
+                        DiscoveredAtUtc: execution.ExecutionSignal.Timestamp,
+                        RevalidatedAtUtc: submittedAt,
+                        SetupEvidenceJson: JsonSerializer.Serialize(execution.ExecutionSignal)),
                     executionRunContext,
                     strategy.StrategyId,
                     Side: "buy",

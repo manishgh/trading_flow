@@ -39,7 +39,7 @@ public sealed class DatabaseMigrationTests
         var tables = await ReadTablesAsync(connection);
         Assert.Contains("Wishlists", tables);
         Assert.All(ProductionTables, table => Assert.Contains(table, tables));
-        Assert.Equal(5, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
+        Assert.Equal(6, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
         Assert.Empty(await db.Database.GetPendingMigrationsAsync());
 
         var requiredProvenance = new[] { "run_id", "schema_version", "config_hash", "code_version" };
@@ -91,7 +91,7 @@ public sealed class DatabaseMigrationTests
 
         var tables = await ReadTablesAsync(connection);
         Assert.All(ProductionTables, table => Assert.Contains(table, tables));
-        Assert.Equal(5, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
+        Assert.Equal(6, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
         var positionColumns = await ReadColumnsAsync(connection, "position_events");
         Assert.Contains("strategy_id", positionColumns);
         Assert.Contains("execution_strategy_id", positionColumns);

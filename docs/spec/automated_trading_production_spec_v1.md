@@ -228,6 +228,8 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 **EXE-04 (MUST):** The [BS §14] entry-control list is implemented as an **ordered, short-circuiting gate chain**, every gate producing a pass/fail with a reject code, all results journaled even on pass. Order: (1) system state (no kill switch, not degraded, not stale); (2) calendar window valid for the strategy; (3) candidate state = SETUP_VALID and revalidated within `setup_max_age_s` (default 20 s); (4) halt/LULD = TRADING; (5) quote age ≤ `quote_max_age_ms`; (6) spread ≤ strategy `max_spread_bps`; (7) ACC gates (PDT, buying power, shortability); (8) position-conflict check (EXE-10); (9) sizing valid (EXE-05/06); (10) exposure limits (RSK); (11) expected-slippage estimate ≤ `max_expected_slippage_bps`; (12) duplicate-order check against open orders. Any fail → no order, reject journaled.
 
+Manual buy entry uses `manual_entry_policy`. `strategy_gated` requires a freshly validated strategy candidate. `operator_direct` is a paper-only operator override that still runs every system, provider-session, halt, quote, spread, account, position, sizing, exposure, slippage, duplicate-order, durable-intent, and protective-order control. The live-v1 profile locks this parameter to `strategy_gated`.
+
 ### 6.3 Sizing
 
 **EXE-05 (MUST):** Base formula [BS §14] `shares = floor(per_trade_risk_dollars / (entry − stop))` with a mandatory **minimum stop distance**: `stop_distance ≥ max(min_stop_spread_mult × current_spread, min_stop_atr_frac × ATR_ref)` where defaults are `min_stop_spread_mult = 4`, `min_stop_atr_frac = 0.25`, and `ATR_ref` is intraday-scaled daily ATR for day trades and daily ATR(14) for swing. If the strategy's natural stop is closer than the floor, the floor distance is used for sizing (not for the stop placement), shrinking size.
@@ -244,7 +246,7 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 **EXE-10 (MUST):** Position-conflict rule: at most one open position per symbol across all strategies (`allow_multi_strategy_same_symbol = false`, not raisable in v1), because broker positions net per account and per-strategy attribution would otherwise be unverifiable. The OMS maintains a strategy-tagged internal position ledger (via EXE-01 IDs) reconciled to the broker's net position.
 
-**EXE-11 (MUST):** Extended-hours trading is controlled by `allow_extended_hours_trading` and defaults to `false` in every profile. When disabled, entries outside the provider-reported regular session MUST fail closed. When enabled, only explicit limit + time-in-force DAY entries are permitted outside regular hours; the adapter MUST set Alpaca `extended_hours = true` only for an order actually submitted during an extended session and MUST NOT convert another order type. Session classification MUST use Alpaca's trading calendar, including holidays and early closes. Overnight entries additionally require a current asset response with `status=active`, `tradable=true`, and `overnight_tradable=true`. Market-data ingestion and indicator warm-up are independent of this execution permission.
+**EXE-11 (MUST):** Extended-hours trading is controlled by `allow_extended_hours_trading` and defaults to `false` in every profile. When disabled, entries outside the provider-reported regular session MUST fail closed. Enabling the toggle permits the engine to evaluate only explicit limit + time-in-force DAY entries and MUST NOT convert another order type, but it does not waive EXE-09. If the broker cannot attach broker-resting stop protection to the entry in the current session, submission MUST fail closed. Alpaca currently accepts only standalone DAY limit equity orders outside regular hours and does not support bracket orders there, so TradingFlow MUST reject extended-hours entries until a provider-native protected contract is available. Session classification MUST use Alpaca's trading calendar, including holidays and early closes. Overnight evaluation additionally requires a current asset response with `status=active`, `tradable=true`, and `overnight_tradable=true`. Market-data ingestion and indicator warm-up are independent of this execution permission.
 
 **EXE-12 (MUST):** Cancel/replace: modifications use the broker replace endpoint where available; a replace that fails MUST leave the resolved state journaled (original live, or canceled) after re-query — never assumed. Trailing stops MUST NOT be combined inside bracket/OCO structures unless a Phase-0 broker-behavior test demonstrates and documents the exact semantics [BS §14].
 
@@ -482,6 +484,7 @@ Units: s = seconds, ms = milliseconds, bps = basis points, pct = percent of acco
 | contradiction_window_min | int | 120 | 30–480 | NWS-13 |
 | ambiguity_cooloff_min | int | 240 | 60–1440 | NWS-13 |
 | setup_max_age_s | int | 20 | 5–120 | EXE-04 |
+| manual_entry_policy | enum | strategy_gated | strategy_gated / operator_direct | EXE-04 |
 | max_spread_bps | bps | per-strategy, default 20 | 2–100 | EXE-04 |
 | max_expected_slippage_bps | bps | 15 | 2–100 | EXE-04 |
 | min_stop_spread_mult | float | 4 | 2–10 | EXE-05 |

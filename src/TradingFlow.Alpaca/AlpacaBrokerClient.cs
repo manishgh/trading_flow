@@ -14,21 +14,119 @@ using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Alpaca;
 
-public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
+public sealed class AlpacaBrokerClient :
+    IBrokerClient,
+    IBrokerAccountProvider,
+    IBrokerMarketObservationProvider,
+    IDisposable
 {
     private readonly AlpacaTradingRestClient _tradingClient;
+    private readonly AlpacaMarketDataRestClient _marketDataClient;
     private readonly AlpacaOptions _options;
     private readonly ConcurrentDictionary<string, CachedAssetEligibility> assetEligibilityCache =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<DateOnly, CachedCalendarDay> tradingCalendarCache = new();
 
     public AlpacaBrokerClient(
-        HttpClient httpClient,
+        HttpClient tradingHttpClient,
+        HttpClient marketDataHttpClient,
         AlpacaOptions options,
         IRawArchiveWriter rawArchiveWriter)
     {
         _options = options;
-        _tradingClient = new AlpacaTradingRestClient(httpClient, options, rawArchiveWriter);
+        _tradingClient = new AlpacaTradingRestClient(tradingHttpClient, options, rawArchiveWriter);
+        _marketDataClient = new AlpacaMarketDataRestClient(marketDataHttpClient, options, rawArchiveWriter);
+    }
+
+    public async Task<BrokerAccountSnapshot> GetAccountSnapshotAsync(
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/v2/account");
+        var response = await _tradingClient.SendAsync(
+            request,
+            "broker-account-snapshot",
+            cancellationToken: cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                AlpacaTradingRestClient.DescribeFailure("account snapshot", response));
+        }
+
+        using var document = JsonDocument.Parse(response.Payload);
+        var root = document.RootElement;
+        return new BrokerAccountSnapshot(
+            RequireString(root, "id", "account snapshot"),
+            RequireString(root, "status", "account snapshot"),
+            ReadBoolean(root, "account_blocked"),
+            ReadBoolean(root, "trading_blocked"),
+            ReadBoolean(root, "trade_suspended_by_user"),
+            ReadBoolean(root, "shorting_enabled"),
+            ParseRequiredDecimal(root, "buying_power", "account snapshot"),
+            ParseRequiredDecimal(root, "equity", "account snapshot"),
+            ParseRequiredDecimal(root, "long_market_value", "account snapshot"),
+            ParseRequiredDecimal(root, "short_market_value", "account snapshot"),
+            DateTimeOffset.UtcNow);
+    }
+
+    public async Task<BrokerMarketObservation> GetMarketObservationAsync(
+        string symbol,
+        EquityTradingSession session,
+        CancellationToken cancellationToken)
+    {
+        var normalized = symbol.Trim().ToUpperInvariant();
+        if (String.IsNullOrWhiteSpace(normalized))
+        {
+            throw new ArgumentException("Asset symbol is required.", nameof(symbol));
+        }
+
+        var feed = session == EquityTradingSession.Overnight
+            ? "overnight"
+            : _options.ResolveMarketDataFeed();
+        var escaped = Uri.EscapeDataString(normalized);
+        using var quoteRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/v2/stocks/{escaped}/quotes/latest?feed={feed}");
+        using var tradeRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/v2/stocks/{escaped}/trades/latest?feed={feed}");
+        var quoteTask = _marketDataClient.SendAsync(
+            quoteRequest,
+            "market-latest-quote",
+            normalized,
+            cancellationToken);
+        var tradeTask = _marketDataClient.SendAsync(
+            tradeRequest,
+            "market-latest-trade",
+            normalized,
+            cancellationToken);
+        await Task.WhenAll(quoteTask, tradeTask);
+        var quoteResponse = await quoteTask;
+        var tradeResponse = await tradeTask;
+        if (!quoteResponse.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                AlpacaTradingRestClient.DescribeFailure("latest quote", quoteResponse));
+        }
+
+        if (!tradeResponse.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                AlpacaTradingRestClient.DescribeFailure("latest trade", tradeResponse));
+        }
+
+        using var quoteDocument = JsonDocument.Parse(quoteResponse.Payload);
+        using var tradeDocument = JsonDocument.Parse(tradeResponse.Payload);
+        var quote = quoteDocument.RootElement.GetProperty("quote");
+        var trade = tradeDocument.RootElement.GetProperty("trade");
+        return new BrokerMarketObservation(
+            normalized,
+            feed,
+            ParseOptionalDecimal(quote, "bp"),
+            ParseOptionalDecimal(quote, "ap"),
+            ParseOptionalTimestamp(quote, "t"),
+            ParseOptionalDecimal(trade, "p"),
+            ParseOptionalTimestamp(trade, "t"),
+            DateTimeOffset.UtcNow);
     }
 
     public async Task<BrokerOrderReceipt> SubmitOrderAsync(BrokerEntryOrder entryOrder, CancellationToken cancellationToken)
@@ -163,7 +261,11 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
             String.Equals(root.GetProperty("status").GetString(), "active", StringComparison.OrdinalIgnoreCase),
             root.GetProperty("tradable").GetBoolean(),
             root.TryGetProperty("overnight_tradable", out var overnight) && overnight.GetBoolean(),
-            now);
+            now,
+            root.TryGetProperty("shortable", out var shortable) && shortable.GetBoolean(),
+            root.TryGetProperty("borrow_status", out var borrowStatus) && borrowStatus.ValueKind == JsonValueKind.String
+                ? borrowStatus.GetString()
+                : null);
         assetEligibilityCache[normalized] = new CachedAssetEligibility(eligibility, now);
         return eligibility;
     }
@@ -596,14 +698,21 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
             return null;
         }
 
-        return decimal.TryParse(
-            property.GetString(),
-            NumberStyles.Number,
-            CultureInfo.InvariantCulture,
-            out var value)
-                ? value
-                : throw new InvalidOperationException(
-                    $"Alpaca open-order response has invalid {propertyName}.");
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetDecimal(out var numericValue))
+        {
+            return numericValue;
+        }
+
+        if (property.ValueKind == JsonValueKind.String && decimal.TryParse(
+                property.GetString(),
+                NumberStyles.Number,
+                CultureInfo.InvariantCulture,
+                out var stringValue))
+        {
+            return stringValue;
+        }
+
+        throw new InvalidOperationException($"Alpaca response has invalid {propertyName}.");
     }
 
     private static decimal ParseRequiredDecimal(
@@ -707,7 +816,23 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 
     public void Dispose()
     {
+        _marketDataClient.Dispose();
         _tradingClient.Dispose();
+    }
+
+    private static bool ReadBoolean(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) &&
+        property.ValueKind == JsonValueKind.True;
+
+    private static DateTimeOffset? ParseOptionalTimestamp(
+        JsonElement element,
+        string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String &&
+            property.TryGetDateTimeOffset(out var timestamp)
+                ? timestamp.ToUniversalTime()
+                : null;
     }
 
     private static string RequireOrderId(

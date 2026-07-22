@@ -1,0 +1,63 @@
+@model TradingFlow.Web.Pages.Shared.ManualOrderDialogModel
+
+<dialog id="operator-direct-order-dialog" class="order-dialog">
+    <form method="post" asp-page-handler="ManualOrder">
+        <input type="hidden" name="WishlistId" value="@Model.WishlistId" />
+        <input type="hidden" name="Ticker" data-order-field="ticker" />
+        <input type="hidden" name="Side" value="buy" />
+        <input type="hidden" name="LimitPrice" data-order-field="limit" />
+        <input type="hidden" name="Source" value="@Model.Source" />
+        <input type="hidden" name="StrategyPath" value="@Model.StrategyPath" />
+        <header>
+            <div>
+                <h2>Protected Buy</h2>
+                <p><strong data-order-display="ticker"></strong> limit <span data-order-display="limit"></span></p>
+            </div>
+        </header>
+        <div class="order-dialog-grid">
+            <label>
+                Quantity
+                <input name="Quantity" type="number" min="1" step="1" value="1" required />
+            </label>
+            <label>
+                Horizon
+                <select name="Horizon" required>
+                    <option value="intraday">Intraday</option>
+                    <option value="swing">Swing</option>
+                </select>
+            </label>
+            <label>
+                Stop price
+                <input name="StopLossPrice" type="number" min="0.0001" step="0.0001" inputmode="decimal" required />
+            </label>
+            <label>
+                Take-profit price
+                <input name="TakeProfitPrice" type="number" min="0.0001" step="0.0001" inputmode="decimal" required />
+            </label>
+        </div>
+        <p class="muted">All account, market-state, quote, spread, sizing, exposure, slippage, duplicate, and protection gates still apply.</p>
+        <div class="actions">
+            <button class="secondary" type="button" data-order-cancel>Cancel</button>
+            <button class="button buy" type="submit">Submit protected buy</button>
+        </div>
+    </form>
+</dialog>
+
+<script>
+    (() => {
+        const dialog = document.getElementById('operator-direct-order-dialog');
+        if (!dialog) return;
+        document.querySelectorAll('[data-operator-direct-buy]').forEach(button => {
+            button.addEventListener('click', () => {
+                const ticker = button.dataset.ticker || '';
+                const limit = button.dataset.limit || '';
+                dialog.querySelector('[data-order-field="ticker"]').value = ticker;
+                dialog.querySelector('[data-order-field="limit"]').value = limit;
+                dialog.querySelector('[data-order-display="ticker"]').textContent = ticker;
+                dialog.querySelector('[data-order-display="limit"]').textContent = button.dataset.displayLimit || limit;
+                dialog.showModal();
+            });
+        });
+        dialog.querySelector('[data-order-cancel]').addEventListener('click', () => dialog.close());
+    })();
+</script>

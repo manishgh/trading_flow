@@ -20,6 +20,7 @@ public sealed class CandidateRecord : OperationalRecord
     public Guid CandidateId { get; set; }
     public string Symbol { get; set; } = string.Empty;
     public DateTimeOffset DiscoveredAtUtc { get; set; }
+    public DateTimeOffset RevalidatedAtUtc { get; set; }
     public string DiscoverySource { get; set; } = string.Empty;
     public string FinvizPreset { get; set; } = string.Empty;
     public string Horizon { get; set; } = string.Empty;

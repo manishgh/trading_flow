@@ -337,6 +337,10 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("reject_reasons_json");
 
+                    b.Property<DateTimeOffset>("RevalidatedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("revalidated_at_utc");
+
                     b.Property<Guid>("RunId")
                         .HasColumnType("TEXT")
                         .HasColumnName("run_id");

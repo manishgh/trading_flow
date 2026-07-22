@@ -28,8 +28,8 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
-            admission,
-            new PassThroughPositionConflictGuard(),
+            new RecordingCandidateRepository(),
+            new PassThroughEntryGateChain(),
             NullLogger<OrderSubmissionService>.Instance);
         var context = ExecutionRunContextFactory.Create(
             Guid.NewGuid(), "paper", new { test = true }, DateTimeOffset.UtcNow, typeof(OrderSubmissionServiceTests).Assembly);
@@ -68,8 +68,8 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
-            new EntryAdmissionControl(),
-            new PassThroughPositionConflictGuard(),
+            new RecordingCandidateRepository(),
+            new PassThroughEntryGateChain(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -93,11 +93,11 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             new RecordingEventRepository(repository),
-            new EntryAdmissionControl(),
-            new RejectingPositionConflictGuard(),
+            new RecordingCandidateRepository(),
+            new RejectingEntryGateChain(),
             NullLogger<OrderSubmissionService>.Instance);
 
-        var error = await Assert.ThrowsAsync<PositionConflictException>(() =>
+        var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
             service.SubmitBracketOrderAsync(
                 CreateSubmission(Guid.NewGuid()),
                 broker.Object,
@@ -125,8 +125,8 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
-            new EntryAdmissionControl(),
-            new PassThroughPositionConflictGuard(),
+            new RecordingCandidateRepository(),
+            new PassThroughEntryGateChain(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -153,8 +153,8 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
-            new EntryAdmissionControl(),
-            new PassThroughPositionConflictGuard(),
+            new RecordingCandidateRepository(),
+            new PassThroughEntryGateChain(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -175,27 +175,25 @@ public sealed class OrderSubmissionServiceTests
     {
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
-        var admission = new EntryAdmissionControl();
-        admission.Block(
-            "order_sync",
-            "ORDER_STREAM_DISCONNECTED",
-            "stream down",
-            DateTimeOffset.UtcNow);
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
         var service = new OrderSubmissionService(
             repository,
             events,
-            admission,
-            new PassThroughPositionConflictGuard(),
+            new RecordingCandidateRepository(),
+            new RejectingEntryGateChain(
+                new EntryGateRejectedException(
+                    EntryGateSlot.SystemState,
+                    RejectCode.REJECT_DEGRADED_DATA,
+                    "stream down")),
             NullLogger<OrderSubmissionService>.Instance);
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
             service.SubmitBracketOrderAsync(
                 CreateSubmission(Guid.NewGuid()),
                 broker.Object,
                 CancellationToken.None));
 
-        Assert.Contains("ORDER_STREAM_DISCONNECTED", error.Message, StringComparison.Ordinal);
+        Assert.Contains("stream down", error.Message, StringComparison.Ordinal);
         Assert.Equal(0, repository.ReservationAttempts);
         broker.VerifyNoOtherCalls();
     }
@@ -252,7 +250,7 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_OvernightIneligibleAsset_FailsBeforeIntentReservation()
+    public async Task SubmitBracketOrderAsync_OvernightEntry_FailsBeforeIntentReservationWhenProtectionIsUnavailable()
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
@@ -265,23 +263,19 @@ public sealed class OrderSubmissionServiceTests
                     timestamp,
                     timestamp.AddHours(12),
                     timestamp.AddHours(18.5)));
-        broker
-            .Setup(client => client.GetEligibilityAsync("MSFT", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new AssetTradingEligibility(
-                "MSFT", Active: true, Tradable: true, OvernightTradable: false, DateTimeOffset.UtcNow));
         var service = CreateService(repository);
         var submission = CreateSubmission(Guid.NewGuid()) with { AllowExtendedHoursTrading = true };
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None));
 
-        Assert.Contains("overnight_tradable=False", error.Message, StringComparison.Ordinal);
+        Assert.Contains("does not support broker-protected bracket orders", error.Message, StringComparison.Ordinal);
         Assert.Equal(0, repository.ReservationAttempts);
         broker.VerifyAll();
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_OvernightEligibleAsset_MarksActualOrderAsExtended()
+    public async Task SubmitBracketOrderAsync_AfterHoursEnabled_DoesNotSubmitUnprotectedEntry()
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
@@ -289,31 +283,21 @@ public sealed class OrderSubmissionServiceTests
             .Setup(client => client.GetSessionAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((DateTimeOffset timestamp, CancellationToken _) =>
                 new TradingSessionSnapshot(
-                    new DateOnly(2026, 7, 22),
-                    EquityTradingSession.Overnight,
+                    new DateOnly(2026, 7, 21),
+                    EquityTradingSession.AfterHours,
                     timestamp,
-                    timestamp.AddHours(12),
-                    timestamp.AddHours(18.5)));
-        broker
-            .Setup(client => client.GetEligibilityAsync("MSFT", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new AssetTradingEligibility(
-                "MSFT", Active: true, Tradable: true, OvernightTradable: true, DateTimeOffset.UtcNow));
-        BrokerEntryOrder? submitted = null;
-        broker
-            .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
-            .Callback<BrokerEntryOrder, CancellationToken>((order, _) => submitted = order)
-            .ReturnsAsync(new BrokerOrderReceipt("overnight-order", DateTimeOffset.UtcNow));
+                    timestamp.AddHours(-8),
+                    timestamp.AddHours(-1)));
         var service = CreateService(repository);
 
-        var result = await service.SubmitBracketOrderAsync(
-            CreateSubmission(Guid.NewGuid()) with { AllowExtendedHoursTrading = true },
-            broker.Object,
-            CancellationToken.None);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SubmitBracketOrderAsync(
+                CreateSubmission(Guid.NewGuid()) with { AllowExtendedHoursTrading = true },
+                broker.Object,
+                CancellationToken.None));
 
-        Assert.NotNull(submitted);
-        Assert.True(submitted.SubmitOutsideRegularHours);
-        Assert.True(result.SubmittedOutsideRegularHours);
-        Assert.Contains("\"submitOutsideRegularHours\":true", repository.Intent!.RequestJson, StringComparison.Ordinal);
+        Assert.Contains("does not support broker-protected bracket orders", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, repository.ReservationAttempts);
         broker.VerifyAll();
     }
 
@@ -389,7 +373,13 @@ public sealed class OrderSubmissionServiceTests
             new DateTimeOffset(2026, 7, 21, 14, 0, 0, TimeSpan.Zero));
         return new BracketOrderSubmission(
             intentId,
-            CandidateId: null,
+            new ValidatedEntryCandidate(
+                Guid.NewGuid(),
+                "test",
+                "swing",
+                new DateTimeOffset(2026, 7, 21, 14, 34, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 7, 21, 14, 35, 0, TimeSpan.Zero),
+                "{}"),
             runContext,
             "SWGA",
             "buy",
@@ -417,8 +407,8 @@ public sealed class OrderSubmissionServiceTests
         new(
             repository,
             new RecordingEventRepository(repository),
-            new EntryAdmissionControl(),
-            new PassThroughPositionConflictGuard(),
+            new RecordingCandidateRepository(),
+            new PassThroughEntryGateChain(),
             NullLogger<OrderSubmissionService>.Instance);
 
     private sealed class RecordingIntentRepository : IOrderIntentRepository
@@ -478,26 +468,46 @@ public sealed class OrderSubmissionServiceTests
         }
     }
 
-    private sealed class PassThroughPositionConflictGuard : IPositionConflictGuard
+    private sealed class RecordingCandidateRepository : ICandidateRepository
     {
-        public Task<T> ExecuteEntryAsync<T>(
-            string symbol,
-            string strategyId,
+        private CandidateRecord? candidate;
+
+        public Task<CandidateRecord> UpsertValidatedAsync(
+            ProductionRun run,
+            CandidateRecord value,
+            CancellationToken cancellationToken = default)
+        {
+            candidate = value;
+            return Task.FromResult(value);
+        }
+
+        public Task<CandidateRecord?> GetAsync(
+            Guid candidateId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(candidate?.CandidateId == candidateId ? candidate : null);
+    }
+
+    private sealed class PassThroughEntryGateChain : IEntryGateChain
+    {
+        public Task<T> ExecuteAsync<T>(
+            BracketOrderSubmission submission,
+            IBrokerClient brokerClient,
             Func<CancellationToken, Task<T>> submit,
             CancellationToken cancellationToken = default) =>
             submit(cancellationToken);
     }
 
-    private sealed class RejectingPositionConflictGuard : IPositionConflictGuard
+    private sealed class RejectingEntryGateChain(Exception? exception = null) : IEntryGateChain
     {
-        public Task<T> ExecuteEntryAsync<T>(
-            string symbol,
-            string strategyId,
+        public Task<T> ExecuteAsync<T>(
+            BracketOrderSubmission submission,
+            IBrokerClient brokerClient,
             Func<CancellationToken, Task<T>> submit,
             CancellationToken cancellationToken = default) =>
-            throw new PositionConflictException(
+            throw exception ?? new EntryGateRejectedException(
+                EntryGateSlot.PositionConflict,
                 RejectCode.REJECT_SETUP_INVALID,
-                $"Position for {symbol} belongs to another strategy.");
+                $"Position for {submission.Order.Ticker} belongs to another strategy.");
     }
 
     private sealed class RecordingEventRepository(RecordingIntentRepository intents) : IOrderEventRepository

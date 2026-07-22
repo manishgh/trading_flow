@@ -49,13 +49,16 @@ public sealed class ExtendedHoursOrderPolicyTests
     [InlineData(EquityTradingSession.Premarket)]
     [InlineData(EquityTradingSession.AfterHours)]
     [InlineData(EquityTradingSession.Overnight)]
-    public void Validate_EnabledDayLimit_IsAllowedAcrossExtendedSessions(EquityTradingSession session)
+    public void Validate_EnabledDayLimit_FailsWhenBrokerProtectionIsUnavailable(EquityTradingSession session)
     {
-        ExtendedHoursOrderPolicy.Validate(
-            Session(session),
-            "limit",
-            "day",
-            allowExtendedHoursTrading: true);
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            ExtendedHoursOrderPolicy.Validate(
+                Session(session),
+                "limit",
+                "day",
+                allowExtendedHoursTrading: true));
+
+        Assert.Contains("does not support broker-protected bracket orders", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

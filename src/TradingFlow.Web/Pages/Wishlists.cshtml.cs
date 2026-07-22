@@ -218,11 +218,22 @@ public sealed class WishlistsModel : PageModel
         string side,
         decimal quantity,
         decimal limitPrice,
+        decimal? stopLossPrice,
+        decimal? takeProfitPrice,
+        string? horizon,
         CancellationToken cancellationToken)
     {
         try
         {
-            var result = await manualOrders.SubmitLimitOrderAsync(ticker, side, quantity, limitPrice, cancellationToken);
+            var result = await manualOrders.SubmitLimitOrderAsync(
+                ticker,
+                side,
+                quantity,
+                limitPrice,
+                stopLossPrice,
+                takeProfitPrice,
+                horizon,
+                cancellationToken);
             StatusMessage = $"{result.Side.ToUpperInvariant()} order submitted for {result.Quantity} {result.Ticker} at {AlpacaLatestQuote.Format(result.LimitPrice)}. Order {result.OrderId}.";
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

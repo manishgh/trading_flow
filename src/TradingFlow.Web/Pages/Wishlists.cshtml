@@ -1,6 +1,8 @@
 @page "/Wishlists"
 @using System.Globalization
+@using TradingFlow.Engine.Execution
 @model TradingFlow.Web.Pages.WishlistsModel
+@inject ManualEntryOptions ManualEntryOptions
 @{
     ViewData["Title"] = "Wishlists";
     var selectedId = Model.SelectedWishlist?.Id;
@@ -371,13 +373,16 @@
                                 <td><input class="qty-input" id="@quantityId" name="Quantity" type="number" min="0.0001" step="0.0001" value="1" form="buy_@rowKey" aria-label="@row.Ticker buy quantity" /></td>
                                 <td>
                                     <div class="row-actions">
-                                        <form id="buy_@rowKey" method="post" asp-page-handler="ManualOrder">
-                                            <input type="hidden" name="WishlistId" value="@Model.SelectedWishlist?.Id" />
-                                            <input type="hidden" name="Ticker" value="@row.Ticker" />
-                                            <input type="hidden" name="Side" value="buy" />
-                                            <input type="hidden" name="LimitPrice" value="@row.Quote.AskPrice?.ToString(CultureInfo.InvariantCulture)" data-quote-input="buy" />
-                                            <button class="button buy mini-button" type="submit" disabled="@(row.Quote.AskPrice is null)" data-quote-button="buy">Buy @row.Quote.DisplayAsk</button>
-                                        </form>
+                                        @if (ManualEntryOptions.Policy == ManualEntryPolicy.OperatorDirect)
+                                        {
+                                            <button class="button buy mini-button"
+                                                    type="button"
+                                                    disabled="@(row.Quote.AskPrice is null)"
+                                                    data-operator-direct-buy
+                                                    data-ticker="@row.Ticker"
+                                                    data-limit="@row.Quote.AskPrice?.ToString(CultureInfo.InvariantCulture)"
+                                                    data-display-limit="@row.Quote.DisplayAsk">Buy @row.Quote.DisplayAsk</button>
+                                        }
                                         <form method="post" asp-page-handler="ManualOrder">
                                             <input type="hidden" name="WishlistId" value="@Model.SelectedWishlist?.Id" />
                                             <input type="hidden" name="Ticker" value="@row.Ticker" />
@@ -491,6 +496,11 @@
         </section>
     </aside>
 </div>
+
+@if (ManualEntryOptions.Policy == ManualEntryPolicy.OperatorDirect)
+{
+    <partial name="_ManualOrderDialog" model="new TradingFlow.Web.Pages.Shared.ManualOrderDialogModel(Model.SelectedWishlist?.Id, null, Model.SelectedStrategyPath)" />
+}
 
 @section Scripts {
     <script>

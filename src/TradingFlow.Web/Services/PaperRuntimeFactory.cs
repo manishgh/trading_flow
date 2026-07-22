@@ -110,6 +110,7 @@ public sealed class PaperRuntimeFactory
         {
             "alpaca" => new TradingFlow.Alpaca.AlpacaBrokerClient(
                 new HttpClient(),
+                new HttpClient(),
                 TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
                 {
                     KeyId = alpacaCredentials.KeyId,

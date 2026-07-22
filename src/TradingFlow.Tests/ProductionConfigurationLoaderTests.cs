@@ -20,6 +20,7 @@ public sealed class ProductionConfigurationLoaderTests
         Assert.Equal(300, snapshot.Get<int>("pdt_recheck_interval_s"));
         Assert.Equal(0.92m, snapshot.Get<decimal>("dedup_similarity_threshold"));
         Assert.False(snapshot.Get<bool>("allow_extended_hours_trading"));
+        Assert.Equal("strategy_gated", snapshot.Get<string>("manual_entry_policy"));
         Assert.Equal(new TimeOnly(3, 30), snapshot.Get<TimeOnly>("calendar_fetch_time"));
         Assert.Equal(ExpectedAccountId, snapshot.Get<string>("expected_account_id"));
         Assert.Matches("^[0-9a-f]{64}$", snapshot.ConfigHash);
@@ -112,6 +113,23 @@ public sealed class ProductionConfigurationLoaderTests
 
         var paper = loader.Load(ProductionProfile.Paper, RequiredValues().Append(parameterName, "true"));
         Assert.True(paper.Get<bool>(parameterName));
+    }
+
+    [Fact]
+    public void Load_LiveProfileRejectsOperatorDirectManualEntry()
+    {
+        var loader = new ProductionConfigurationLoader();
+
+        AssertParameterError(
+            "manual_entry_policy",
+            () => loader.Load(
+                ProductionProfile.Live,
+                RequiredValues().Append("manual_entry_policy", "operator_direct")));
+
+        var paper = loader.Load(
+            ProductionProfile.Paper,
+            RequiredValues().Append("manual_entry_policy", "operator_direct"));
+        Assert.Equal("operator_direct", paper.Get<string>("manual_entry_policy"));
     }
 
     [Theory]

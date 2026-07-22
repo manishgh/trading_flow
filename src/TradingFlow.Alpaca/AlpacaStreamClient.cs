@@ -14,6 +14,7 @@ namespace TradingFlow.Alpaca;
 public sealed class AlpacaStreamClient : IDisposable
 {
     private readonly ClientWebSocket _webSocket = new();
+    private readonly SemaphoreSlim sendLock = new(1, 1);
     private readonly AlpacaOptions _options;
     private readonly Uri _streamUrl;
     private readonly ILogger<AlpacaStreamClient>? _logger;
@@ -35,7 +36,7 @@ public sealed class AlpacaStreamClient : IDisposable
 
         // Alpaca sends a connection acknowledgement before accepting authentication.
         _ = await ReceiveMessageAsync(cancellationToken);
-        
+
         // Send Auth
         var authPayload = new
         {
@@ -64,6 +65,36 @@ public sealed class AlpacaStreamClient : IDisposable
         var subResponse = await ReceiveMessageAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Adds symbols to the shared market-state subscription. The acknowledgement is
+    /// consumed by the normal read loop so this method never races a second receive.
+    /// </summary>
+    public Task SubscribeMarketStateAsync(
+        IReadOnlyCollection<string> tickers,
+        CancellationToken cancellationToken)
+    {
+        var symbols = tickers
+            .Select(symbol => symbol.Trim().ToUpperInvariant())
+            .Where(symbol => symbol.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (symbols.Length == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        return SendMessageAsync(
+            new
+            {
+                action = "subscribe",
+                trades = symbols,
+                quotes = symbols,
+                statuses = symbols,
+                lulds = symbols
+            },
+            cancellationToken);
+    }
+
     public async IAsyncEnumerable<JsonElement> ReadMessagesAsync([EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var buffer = new byte[8192];
@@ -85,7 +116,7 @@ public sealed class AlpacaStreamClient : IDisposable
             }
 
             var messageJson = Encoding.UTF8.GetString(ms.ToArray());
-            
+
             using var doc = JsonDocument.Parse(messageJson);
             if (doc.RootElement.ValueKind == JsonValueKind.Array)
             {
@@ -99,9 +130,21 @@ public sealed class AlpacaStreamClient : IDisposable
 
     private async Task SendMessageAsync(object payload, CancellationToken cancellationToken)
     {
-        var json = JsonSerializer.Serialize(payload);
-        var bytes = Encoding.UTF8.GetBytes(json);
-        await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cancellationToken);
+        await sendLock.WaitAsync(cancellationToken);
+        try
+        {
+            var json = JsonSerializer.Serialize(payload);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            await _webSocket.SendAsync(
+                new ArraySegment<byte>(bytes),
+                WebSocketMessageType.Text,
+                true,
+                cancellationToken);
+        }
+        finally
+        {
+            sendLock.Release();
+        }
     }
 
     private async Task<string> ReceiveMessageAsync(CancellationToken cancellationToken)
@@ -179,6 +222,7 @@ public sealed class AlpacaStreamClient : IDisposable
         finally
         {
             _webSocket.Dispose();
+            sendLock.Dispose();
         }
     }
 }

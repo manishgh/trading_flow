@@ -400,7 +400,15 @@ public sealed partial class LiveRunner
                             var submission = await _orderSubmissionService.SubmitBracketOrderAsync(
                                 new BracketOrderSubmission(
                                     intentId,
-                                    CandidateId: null,
+                                    new ValidatedEntryCandidate(
+                                        intentId,
+                                        DiscoverySource: "strategy_signal",
+                                        Horizon: strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)
+                                            ? "swing"
+                                            : "intraday",
+                                        DiscoveredAtUtc: decisionTimestamp,
+                                        RevalidatedAtUtc: decisionTimestamp,
+                                        SetupEvidenceJson: signalJson),
                                     _executionRunContext,
                                     strategy.StrategyId,
                                     Side: "buy",

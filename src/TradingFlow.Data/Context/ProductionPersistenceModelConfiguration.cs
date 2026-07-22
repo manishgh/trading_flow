@@ -169,6 +169,7 @@ internal static class ProductionPersistenceModelConfiguration
         entity.Property(record => record.Horizon).HasMaxLength(20).IsRequired();
         entity.Property(record => record.SelectedStrategy).HasMaxLength(120);
         entity.Property(record => record.State).HasMaxLength(40).IsRequired();
+        entity.Property(record => record.RevalidatedAtUtc).IsRequired();
         entity.Property(record => record.SetupScoresJson).IsRequired();
         entity.Property(record => record.RejectReasonsJson).IsRequired();
         entity.HasIndex(record => new { record.Symbol, record.DiscoveredAtUtc });
