@@ -475,8 +475,8 @@ public class LiveRunnerIntegrationTests
                 .Setup(x => x.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
             broker
-                .Setup(x => x.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()))
-                .Callback<FinalizedOrder, CancellationToken>((order, _) => submittedOrder = order)
+                .Setup(x => x.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
+                .Callback<BrokerEntryOrder, CancellationToken>((order, _) => submittedOrder = order.Order)
                 .ReturnsAsync(new BrokerOrderReceipt("order-1", DateTimeOffset.UtcNow));
 
             var orderRepo = new Mock<IOrderStateRepository>();
@@ -889,7 +889,12 @@ public class LiveRunnerIntegrationTests
             {
                 var clientOrderId = $"TEST-B-{submission.Order.Ticker}-20260721-001-12345678";
                 var receipt = await broker.SubmitOrderAsync(
-                    submission.Order with { ClientOrderId = clientOrderId },
+                    new BrokerEntryOrder(
+                        submission.Order with { ClientOrderId = clientOrderId },
+                        "buy",
+                        submission.OrderType,
+                        submission.TimeInForce,
+                        SubmitOutsideRegularHours: false),
                     cancellationToken);
                 return new OrderSubmissionResult(
                     receipt.BrokerOrderId,
@@ -948,7 +953,7 @@ public class LiveRunnerIntegrationTests
                 new AlpacaProviderConfig("sip")),
             Portfolio: new PortfolioConfig(100000m, 1m, 20m, 5, 0m, 0m, 1, true),
             SignalSource: new SignalSourceConfig("internal_candles", false, "", 300, 0),
-            Execution: new ExecutionConfig("simulated", "none", dryRun, allowLiveOrders, "market", "day", "market", ExtendedHours: true),
+            Execution: new ExecutionConfig("simulated", "none", dryRun, allowLiveOrders, "market", "day", "market", AllowExtendedHoursTrading: true),
             News: new NewsConfig(false, "none", 0, 0),
             Screener: new ScreenerConfig(false, "none", []),
             Artifacts: new ArtifactRetentionConfig("summary"),

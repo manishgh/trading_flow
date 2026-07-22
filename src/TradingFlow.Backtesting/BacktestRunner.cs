@@ -199,7 +199,7 @@ public sealed partial class BacktestRunner(
                 windowEnd,
                 run.Engine.BoundedCapacity,
                 run.Engine.WorkerCount,
-                run.Execution.ExtendedHours,
+                IncludeExtendedHours: true,
                 ResolveExchangeTimezone(strategies),
                 CreateCandleStoreContext(run)),
             provider,
@@ -423,15 +423,13 @@ public sealed partial class BacktestRunner(
 
     private static StrategyDefinition[] ApplyRunSessionPolicy(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
     {
-        if (!run.Execution.ExtendedHours)
-        {
-            return strategies.ToArray();
-        }
-
         return strategies
             .Select(strategy => strategy with
             {
-                Session = strategy.Session with { UseExtendedHours = true }
+                Session = strategy.Session with
+                {
+                    UseExtendedHours = run.Execution.AllowExtendedHoursTrading
+                }
             })
             .ToArray();
     }
@@ -1314,8 +1312,6 @@ internal sealed class StrategyCandidateDiagnostics(
             : trimmed;
     }
 }
-
-
 
 
 

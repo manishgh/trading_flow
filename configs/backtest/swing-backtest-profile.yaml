@@ -76,7 +76,7 @@ execution:
   dry_run: true
   allow_live_orders: false
   order_type: bracket
-  extended_hours: true
+  allow_extended_hours_trading: false
 
 news:
   enabled: true

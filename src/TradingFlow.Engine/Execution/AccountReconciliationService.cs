@@ -65,7 +65,7 @@ public interface IAccountReconciliationService
 }
 
 /// <summary>
-/// Performs EXE-08 account reconciliation against the durable order and position journals.
+/// Reconciles the broker account against the durable order and position journals.
 /// A mismatch is never adopted as truth. Position state advances only from authoritative
 /// stream fills or idempotent REST repair for an order already owned by TradingFlow.
 /// </summary>
@@ -255,7 +255,7 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
                 {
                     logger.Log(
                         repair.Succeeded ? LogLevel.Critical : LogLevel.Error,
-                        "EXE-09 repair result for {Symbol}. Succeeded={Succeeded} Detail={Detail} BrokerOrderId={BrokerOrderId}",
+                        "Protective-order repair result for {Symbol}. Succeeded={Succeeded} Detail={Detail} BrokerOrderId={BrokerOrderId}",
                         repair.Symbol,
                         repair.Succeeded,
                         repair.Detail,

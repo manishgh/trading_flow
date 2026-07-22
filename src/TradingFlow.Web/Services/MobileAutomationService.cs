@@ -286,7 +286,8 @@ public sealed partial class MobileAutomationService
                     TimeInForce: ResolveEntryTimeInForce(runConfig),
                     ExecutionRunContextFactory.ResolveSessionDate(submittedAt, strategy.Session.ExchangeTimezone),
                     submittedAt,
-                    order),
+                    order,
+                    AllowExtendedHoursTrading: runConfig.Execution.AllowExtendedHoursTrading),
                 brokerClient,
                 cancellationToken);
             var orderId = submission.BrokerOrderId;
@@ -297,6 +298,7 @@ public sealed partial class MobileAutomationService
             session.TakeProfitPrice = order.TakeProfitPrice;
             session.ShareQuantity = order.ShareQuantity;
             session.EntrySubmittedAt = DateTimeOffset.UtcNow;
+            session.ExitSafetyOrdersSubmitted = !submission.SubmittedOutsideRegularHours;
             session.Report("running", $"Entry submitted: {order.ShareQuantity} shares of {session.Ticker} at {order.LimitPrice:F2}.");
             await PersistAsync(cancellationToken);
 
@@ -310,7 +312,7 @@ public sealed partial class MobileAutomationService
                     ClientOrderId = submission.ClientOrderId,
                     StrategyName = strategy.StrategyName,
                     Broker = runConfig.Execution.Broker,
-                    Status = runConfig.Execution.ExtendedHours ? "pending_exit_setup" : "new",
+                    Status = submission.SubmittedOutsideRegularHours ? "pending_exit_setup" : "new",
                     EntryPrice = order.LimitPrice,
                     StopLossPrice = order.StopLossPrice,
                     TakeProfitPrice = order.TakeProfitPrice,
@@ -366,14 +368,12 @@ public sealed partial class MobileAutomationService
     private sealed record PreparedEntryExecution(TradeSignal Signal, TradeSignal ExecutionSignal);
 
     private static string ResolveEntryOrderType(BacktestRunConfig run) =>
-        run.Execution.ExtendedHours
-            ? "limit"
-            : String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)
-                ? run.Execution.OrderType.Trim().ToLowerInvariant()
-                : run.Execution.EntryOrderType.Trim().ToLowerInvariant();
+        String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)
+            ? run.Execution.OrderType.Trim().ToLowerInvariant()
+            : run.Execution.EntryOrderType.Trim().ToLowerInvariant();
 
     private static string ResolveEntryTimeInForce(BacktestRunConfig run) =>
-        run.Execution.ExtendedHours || run.Execution.OrderExpiration.Equals("day", StringComparison.OrdinalIgnoreCase)
+        run.Execution.OrderExpiration.Equals("day", StringComparison.OrdinalIgnoreCase)
             ? "day"
             : "gtc";
 

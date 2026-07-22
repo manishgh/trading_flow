@@ -215,7 +215,7 @@ public sealed class RunConfigWriter
         string strategyPath,
         string? orderExpiration = null,
         string? entryOrderType = null,
-        bool extendedHours = false,
+        bool allowExtendedHoursTrading = false,
         string? screenerFilter = null,
         string? runName = null,
         bool? newsEnabled = null,
@@ -223,6 +223,7 @@ public sealed class RunConfigWriter
         string? wishlistName = null,
         string universeSource = "ephemeral")
     {
+        ValidateExecutionSelection(entryOrderType, orderExpiration, allowExtendedHoursTrading);
         var rawYaml = File.ReadAllText(baseConfigPath);
         var baseConfig = yamlReader.ReadBacktestRun(baseConfigPath);
         var effectiveNewsEnabled = newsEnabled ?? baseConfig.News.Enabled;
@@ -280,9 +281,9 @@ public sealed class RunConfigWriter
                 continue; // Skip existing entry_order_type to avoid duplicates, we write it below
             }
 
-            if (line.StartsWith("  extended_hours:"))
+            if (line.StartsWith("  allow_extended_hours_trading:"))
             {
-                continue; // Skip existing extended_hours
+                continue;
             }
 
             if (line.StartsWith("  order_type:"))
@@ -296,7 +297,7 @@ public sealed class RunConfigWriter
                 {
                     newYaml.AppendLine($"  entry_order_type: {entryOrderType}");
                 }
-                newYaml.AppendLine($"  extended_hours: {extendedHours.ToString().ToLowerInvariant()}");
+                newYaml.AppendLine($"  allow_extended_hours_trading: {allowExtendedHoursTrading.ToString().ToLowerInvariant()}");
                 continue;
             }
 
@@ -399,6 +400,24 @@ public sealed class RunConfigWriter
 
         artifactWriter.WriteText(outputPath, newYaml.ToString());
         return outputPath;
+    }
+
+    private static void ValidateExecutionSelection(
+        string? entryOrderType,
+        string? orderExpiration,
+        bool allowExtendedHoursTrading)
+    {
+        if (!allowExtendedHoursTrading)
+        {
+            return;
+        }
+
+        if (!String.Equals(entryOrderType?.Trim(), "limit", StringComparison.OrdinalIgnoreCase) ||
+            !String.Equals(orderExpiration?.Trim(), "day", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Extended-hours execution requires an explicit limit entry and DAY expiration.");
+        }
     }
 
     public void DeleteTempConfig(string configPath)
@@ -732,5 +751,3 @@ public sealed class RunConfigWriter
         return Path.GetFullPath(path).Replace('\\', '/');
     }
 }
-
-

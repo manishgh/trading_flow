@@ -39,7 +39,7 @@
                             <Entry x:Name="RunNameEntry" Placeholder="Run name, optional" TextChanged="OnFormChanged" />
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                                 <HorizontalStackLayout Spacing="8">
-                                    <CheckBox x:Name="ExtendedHoursCheck" IsChecked="True" Scale="0.72" CheckedChanged="OnFormChanged" />
+                                    <CheckBox x:Name="AllowExtendedHoursTradingCheck" IsChecked="False" Scale="0.72" CheckedChanged="OnFormChanged" />
                                     <Label Text="Extended hours" VerticalTextAlignment="Center" FontSize="13" />
                                 </HorizontalStackLayout>
                                 <HorizontalStackLayout Grid.Column="1" Spacing="8">

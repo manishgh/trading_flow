@@ -43,7 +43,7 @@ public sealed class PaperModel : PageModel
     [BindProperty(SupportsGet = true)] public Guid? WishlistId { get; set; }
     [BindProperty(SupportsGet = true)] public string OrderExpiration { get; set; } = "gtc";
     [BindProperty(SupportsGet = true)] public string EntryOrderType { get; set; } = "limit";
-    [BindProperty(SupportsGet = true)] public bool ExtendedHours { get; set; } = true;
+    [BindProperty(SupportsGet = true)] public bool AllowExtendedHoursTrading { get; set; }
     [BindProperty(SupportsGet = true)] public bool NewsEnabled { get; set; } = true;
     [BindProperty(SupportsGet = true)] public string? ScreenerFilter { get; set; }
     [BindProperty] public string? StrategyYaml { get; set; }
@@ -90,7 +90,7 @@ public sealed class PaperModel : PageModel
             EntryOrderType = selectedExecutionConfig?.Config.Execution.EntryOrderType ?? "limit";
         }
 
-        ExtendedHours = selectedExecutionConfig?.Config.Execution.ExtendedHours ?? true;
+        AllowExtendedHoursTrading = selectedExecutionConfig?.Config.Execution.AllowExtendedHoursTrading ?? false;
         ScreenerFilter ??= String.Empty;
 
         var selectedStrategy = Strategies.FirstOrDefault(s => s.Path == SelectedStrategyPath);
@@ -192,7 +192,8 @@ public sealed class PaperModel : PageModel
             wishlistId = form["WishlistId"].ToString(),
             orderExpiration = form["OrderExpiration"].ToString(),
             entryOrderType = form["EntryOrderType"].ToString(),
-            extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
+            allowExtendedHoursTrading = form.TryGetValue("AllowExtendedHoursTrading", out var extendedHoursValue) &&
+                extendedHoursValue.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
             newsEnabled = form.TryGetValue("NewsEnabled", out var ne) && ne.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
             screenerFilter = form["ScreenerFilter"].ToString()
         });
@@ -207,7 +208,8 @@ public sealed class PaperModel : PageModel
         var wishlistIdText = form["WishlistId"].ToString();
         var orderExpiration = form["OrderExpiration"].ToString();
         var entryOrderType = form["EntryOrderType"].ToString();
-        var extendedHours = form.TryGetValue("ExtendedHours", out var eh) && eh.ToString().Contains("true", StringComparison.OrdinalIgnoreCase);
+        var allowExtendedHoursTrading = form.TryGetValue("AllowExtendedHoursTrading", out var extendedHoursValue) &&
+            extendedHoursValue.ToString().Contains("true", StringComparison.OrdinalIgnoreCase);
         var newsEnabled = EffectiveNewsEnabled(strategyPath, form.TryGetValue("NewsEnabled", out var ne) && ne.ToString().Contains("true", StringComparison.OrdinalIgnoreCase));
         var screenerFilter = form["ScreenerFilter"].ToString();
 
@@ -233,7 +235,7 @@ public sealed class PaperModel : PageModel
             strategyPath,
             orderExpiration,
             entryOrderType,
-            extendedHours,
+            allowExtendedHoursTrading,
             screenerFilter,
             runName,
             newsEnabled,
@@ -312,7 +314,7 @@ public sealed class PaperModel : PageModel
                 tickers = String.Join(", ", config.Config.Tickers),
                 orderExpiration = config.Config.Execution.OrderExpiration,
                 entryOrderType = config.Config.Execution.EntryOrderType,
-                extendedHours = config.Config.Execution.ExtendedHours,
+                allowExtendedHoursTrading = config.Config.Execution.AllowExtendedHoursTrading,
                 newsEnabled = config.Config.News.Enabled,
                 screenerFilter = config.Config.Screener?.Filters?.FirstOrDefault() ?? "",
                 broker = config.Config.Execution.Broker

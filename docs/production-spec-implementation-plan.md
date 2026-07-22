@@ -95,7 +95,7 @@ Accept: CI green on a pushed commit; `git grep` finds no key material; SIP WS au
 IDs: CFG-01..04, ACC-13 (URL derivation), Appendix A.
 1. `ProductionParameterRegistry`: every Appendix-A parameter as typed metadata (name, type, default, min, max, unit, spec ref) — code is the single source; a generator test asserts the registry ⊇ Appendix-A table parsed from `docs/spec/` (bidirectional CFG-04 check).
 2. Startup loader: validate ranges, reject out-of-range, compute `config_hash` (SHA-256 over canonical serialization), log it; config immutable after load (CFG-02).
-3. Profiles `paper`/`live` (CFG-03): profile selects Alpaca base URLs (trading + stream) — never independently configurable (ACC-13); live profile enforces locked-v1 params (`allow_extended_hours=false` etc.) and refuses non-defaults.
+3. Profiles `paper`/`live` (CFG-03): profile selects Alpaca base URLs (trading + stream) — never independently configurable (ACC-13); live profile enforces locked parameters and refuses non-defaults. `allow_extended_hours_trading` is configurable in paper/live, defaults to false, and is validated against provider calendar and asset eligibility at order submission.
 Accept: unit tests for range validation, hash stability, locked-param refusal, profile URL derivation; CFG-04 test green.
 
 ### S2 — PER: persistence foundation (M)

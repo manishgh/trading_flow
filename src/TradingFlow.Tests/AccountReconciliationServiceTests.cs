@@ -356,7 +356,21 @@ public sealed class AccountReconciliationServiceTests
         public Task<IReadOnlyList<BrokerPosition>> GetOpenPositionsAsync(CancellationToken cancellationToken) => Task.FromResult(Positions);
         public Task<IReadOnlyList<ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ActiveBrokerOrder>>([]);
         public Task<ActiveBrokerOrder?> GetOrderByClientOrderIdAsync(string clientOrderId, CancellationToken cancellationToken) => Task.FromResult<ActiveBrokerOrder?>(null);
-        public Task<BrokerOrderReceipt> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<BrokerOrderReceipt> SubmitOrderAsync(BrokerEntryOrder order, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<TradingSessionSnapshot> GetSessionAsync(DateTimeOffset timestampUtc, CancellationToken cancellationToken) =>
+            Task.FromResult(new TradingSessionSnapshot(
+                DateOnly.FromDateTime(timestampUtc.UtcDateTime),
+                EquityTradingSession.Regular,
+                timestampUtc,
+                null,
+                null));
+        public Task<AssetTradingEligibility?> GetEligibilityAsync(string symbol, CancellationToken cancellationToken) =>
+            Task.FromResult<AssetTradingEligibility?>(new AssetTradingEligibility(
+                symbol,
+                Active: true,
+                Tradable: true,
+                OvernightTradable: true,
+                DateTimeOffset.UtcNow));
         public Task<BrokerOrderReceipt> SubmitProtectiveStopAsync(ProtectiveStopOrder order, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> CancelOrderAsync(string orderId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> CancelAllOrdersAsync(CancellationToken cancellationToken) => throw new NotSupportedException();

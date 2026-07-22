@@ -410,7 +410,8 @@ public sealed partial class LiveRunner
                                         decisionTimestamp,
                                         strategy.Session.ExchangeTimezone),
                                     decisionTimestamp,
-                                    order),
+                                    order,
+                                    AllowExtendedHoursTrading: run.Execution.AllowExtendedHoursTrading),
                                 _brokerClient,
                                 cancellationToken);
                             var orderId = submission.BrokerOrderId;
@@ -434,7 +435,7 @@ public sealed partial class LiveRunner
                                     ClientOrderId = submission.ClientOrderId,
                                     StrategyName = strategy.StrategyName,
                                     Broker = run.Execution.Broker,
-                                    Status = run.Execution.ExtendedHours ? "pending_exit_setup" : "new",
+                                    Status = submission.SubmittedOutsideRegularHours ? "pending_exit_setup" : "new",
                                     EntryPrice = order.LimitPrice,
                                     StopLossPrice = order.StopLossPrice,
                                     TakeProfitPrice = order.TakeProfitPrice,
@@ -552,14 +553,12 @@ public sealed partial class LiveRunner
     }
 
     private static string ResolveEntryOrderType(BacktestRunConfig run) =>
-        run.Execution.ExtendedHours
-            ? "limit"
-            : String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)
-                ? run.Execution.OrderType.Trim().ToLowerInvariant()
-                : run.Execution.EntryOrderType.Trim().ToLowerInvariant();
+        String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)
+            ? run.Execution.OrderType.Trim().ToLowerInvariant()
+            : run.Execution.EntryOrderType.Trim().ToLowerInvariant();
 
     private static string ResolveEntryTimeInForce(BacktestRunConfig run) =>
-        run.Execution.ExtendedHours || run.Execution.OrderExpiration.Equals("day", StringComparison.OrdinalIgnoreCase)
+        run.Execution.OrderExpiration.Equals("day", StringComparison.OrdinalIgnoreCase)
             ? "day"
             : "gtc";
 }

@@ -127,7 +127,7 @@ public sealed record ExecutionConfig(
     string OrderType,
     string OrderExpiration,
     string EntryOrderType,
-    bool ExtendedHours = false);
+    bool AllowExtendedHoursTrading = false);
 
 public sealed record ProviderConfig(
     AlpacaProviderConfig Alpaca);

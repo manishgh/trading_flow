@@ -38,7 +38,7 @@ public interface IProtectiveOrderInvariantService
 }
 
 /// <summary>
-/// Enforces EXE-09 independently of strategy logic. A missing stop is priced from the
+/// Enforces broker-side position protection independently of strategy logic. A missing stop is priced from the
 /// original structural stop when available, otherwise from point-in-time daily ATR.
 /// </summary>
 public sealed class ProtectiveOrderInvariantService(
@@ -145,7 +145,7 @@ public sealed class ProtectiveOrderInvariantService(
             {
                 logger.LogCritical(
                     exception,
-                    "EXE-09 protection could not be restored for {Symbol}.",
+                    "Broker-side protection could not be restored for {Symbol}.",
                     symbol);
                 repairs.Add(new ProtectiveOrderRepair(symbol, false, exception.Message));
             }

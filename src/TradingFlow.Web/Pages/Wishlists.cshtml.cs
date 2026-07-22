@@ -250,7 +250,7 @@ public sealed class WishlistsModel : PageModel
                 strategyPath,
                 orderExpiration: "day",
                 entryOrderType: "limit",
-                extendedHours: true,
+                allowExtendedHoursTrading: false,
                 screenerFilter: null,
                 runName: runName,
                 newsEnabled: newsEnabled);

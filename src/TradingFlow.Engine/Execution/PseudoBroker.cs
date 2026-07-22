@@ -8,10 +8,10 @@ namespace TradingFlow.Engine.Execution;
 
 public sealed class PseudoBroker : IBrokerClient
 {
-    private readonly ConcurrentDictionary<string, FinalizedOrder> _activeOrders = new();
+    private readonly ConcurrentDictionary<string, BrokerEntryOrder> _activeOrders = new();
     private readonly ConcurrentDictionary<string, ProtectiveStopOrder> _protectiveOrders = new();
 
-    public Task<BrokerOrderReceipt> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken)
+    public Task<BrokerOrderReceipt> SubmitOrderAsync(BrokerEntryOrder order, CancellationToken cancellationToken)
     {
         var orderId = Guid.NewGuid().ToString("N");
         _activeOrders.TryAdd(orderId, order);
@@ -28,6 +28,28 @@ public sealed class PseudoBroker : IBrokerClient
         _protectiveOrders.TryAdd(orderId, order);
         return Task.FromResult(new BrokerOrderReceipt(orderId, DateTimeOffset.UtcNow));
     }
+
+    public Task<AssetTradingEligibility?> GetEligibilityAsync(
+        string symbol,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<AssetTradingEligibility?>(
+            new AssetTradingEligibility(
+                symbol.Trim().ToUpperInvariant(),
+                true,
+                true,
+                true,
+                DateTimeOffset.UtcNow));
+
+    public Task<TradingSessionSnapshot> GetSessionAsync(
+        DateTimeOffset timestampUtc,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(
+            new TradingSessionSnapshot(
+                DateOnly.FromDateTime(timestampUtc.UtcDateTime),
+                EquityTradingSession.Regular,
+                DateTimeOffset.UtcNow,
+                null,
+                null));
 
     public Task<System.Collections.Generic.IReadOnlyList<TradingFlow.Domain.Orders.ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken)
     {
@@ -55,7 +77,7 @@ public sealed class PseudoBroker : IBrokerClient
     {
         var order = _activeOrders
             .Select(item => (item.Key, item.Value))
-            .SingleOrDefault(item => String.Equals(item.Value.ClientOrderId, clientOrderId, StringComparison.Ordinal));
+            .SingleOrDefault(item => String.Equals(item.Value.Order.ClientOrderId, clientOrderId, StringComparison.Ordinal));
         if (order.Value is null)
         {
             var protective = _protectiveOrders
@@ -86,15 +108,15 @@ public sealed class PseudoBroker : IBrokerClient
         var now = DateTimeOffset.UtcNow;
         return Task.FromResult<TradingFlow.Domain.Orders.ActiveBrokerOrder?>(new TradingFlow.Domain.Orders.ActiveBrokerOrder(
             order.Key,
-            order.Value.Ticker,
-            "buy",
+            order.Value.Order.Ticker,
+            order.Value.Side,
             "new",
-            "limit",
-            order.Value.LimitPrice,
-            order.Value.StopLossPrice,
-            order.Value.ShareQuantity,
-            order.Value.ExecutionTimestamp,
-            order.Value.ClientOrderId,
+            order.Value.OrderType,
+            order.Value.Order.LimitPrice,
+            order.Value.Order.StopLossPrice,
+            order.Value.Order.ShareQuantity,
+            order.Value.Order.ExecutionTimestamp,
+            order.Value.Order.ClientOrderId,
             0m,
             null,
             now));
@@ -140,12 +162,12 @@ public sealed class PseudoBroker : IBrokerClient
     {
         if (_activeOrders.TryGetValue(orderId, out var existingOrder))
         {
-            var updated = existingOrder with
+            var updatedOrder = existingOrder.Order with
             {
                 StopLossPrice = newStopLoss,
                 TakeProfitPrice = newTakeProfit
             };
-            _activeOrders[orderId] = updated;
+            _activeOrders[orderId] = existingOrder with { Order = updatedOrder };
             return Task.FromResult(true);
         }
         return Task.FromResult(false);
@@ -156,7 +178,7 @@ public sealed class PseudoBroker : IBrokerClient
     {
         foreach (var kvp in _activeOrders)
         {
-            var order = kvp.Value;
+            var order = kvp.Value.Order;
             if (!order.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase)) continue;
 
             if (price <= order.StopLossPrice || price >= order.TakeProfitPrice)

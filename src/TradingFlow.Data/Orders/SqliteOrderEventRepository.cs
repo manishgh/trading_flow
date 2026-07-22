@@ -6,7 +6,7 @@ using TradingFlow.Domain.Persistence;
 namespace TradingFlow.Data.Orders;
 
 /// <summary>
-/// Atomically validates and appends the EXE-02 lifecycle for one persisted order intent.
+/// Atomically validates and appends the lifecycle for one persisted order intent.
 /// </summary>
 public sealed class SqliteOrderEventRepository : IOrderEventRepository
 {

@@ -19,7 +19,7 @@ public sealed class ProductionConfigurationLoaderTests
         Assert.Equal(ProductionParameterRegistry.Definitions.Count, snapshot.Values.Count);
         Assert.Equal(300, snapshot.Get<int>("pdt_recheck_interval_s"));
         Assert.Equal(0.92m, snapshot.Get<decimal>("dedup_similarity_threshold"));
-        Assert.False(snapshot.Get<bool>("allow_extended_hours"));
+        Assert.False(snapshot.Get<bool>("allow_extended_hours_trading"));
         Assert.Equal(new TimeOnly(3, 30), snapshot.Get<TimeOnly>("calendar_fetch_time"));
         Assert.Equal(ExpectedAccountId, snapshot.Get<string>("expected_account_id"));
         Assert.Matches("^[0-9a-f]{64}$", snapshot.ConfigHash);
@@ -101,7 +101,6 @@ public sealed class ProductionConfigurationLoaderTests
 
     [Theory]
     [InlineData("allow_multi_strategy_same_symbol")]
-    [InlineData("allow_extended_hours")]
     [InlineData("allow_day_to_swing_conversion")]
     public void Load_LiveProfileRejectsLockedV1Overrides(string parameterName)
     {
@@ -113,6 +112,18 @@ public sealed class ProductionConfigurationLoaderTests
 
         var paper = loader.Load(ProductionProfile.Paper, RequiredValues().Append(parameterName, "true"));
         Assert.True(paper.Get<bool>(parameterName));
+    }
+
+    [Theory]
+    [InlineData(ProductionProfile.Paper)]
+    [InlineData(ProductionProfile.Live)]
+    public void Load_AllowsExplicitExtendedHoursTradingInTradingProfiles(ProductionProfile profile)
+    {
+        var snapshot = new ProductionConfigurationLoader().Load(
+            profile,
+            RequiredValues().Append("allow_extended_hours_trading", "true"));
+
+        Assert.True(snapshot.Get<bool>("allow_extended_hours_trading"));
     }
 
     [Theory]

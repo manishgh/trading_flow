@@ -347,7 +347,7 @@ public sealed class SimpleYamlReader
                 RequireString(runMap, "execution.order_type"),
                 OptionalString(runMap, "execution.order_expiration", "gtc"),
                 OptionalString(runMap, "execution.entry_order_type", "limit"),
-                OptionalBool(runMap, "execution.extended_hours", false)),
+                OptionalBool(runMap, "execution.allow_extended_hours_trading", false)),
             new NewsConfig(
                 OptionalBool(runMap, "news.enabled", false),
                 OptionalString(runMap, "news.provider.name", "none"),
@@ -639,5 +639,4 @@ public sealed class SimpleYamlReader
         return null;
     }
 }
-
 

@@ -174,7 +174,7 @@ public sealed class TradeDeskModel : PageModel
                 strategyPath,
                 orderExpiration: "day",
                 entryOrderType: "limit",
-                extendedHours: true,
+                allowExtendedHoursTrading: false,
                 screenerFilter: null,
                 runName: runName,
                 newsEnabled: newsEnabled);

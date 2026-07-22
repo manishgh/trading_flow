@@ -269,7 +269,7 @@ public sealed partial class LiveRunner(
                             {
                                 if (dbOrder.Status == "pending_exit_setup" && pos != null)
                                 {
-                                    if (run.Execution != null && run.Execution.ExtendedHours)
+                                    if (run.Execution != null && run.Execution.AllowExtendedHoursTrading)
                                     {
                                         logger.LogInformation("Entry order {OrderId} filled for {Ticker}. Submitting exit OCO order...", dbOrder.OrderId, dbOrder.Ticker);
                                         progress?.Report($"Entry filled for {dbOrder.Ticker}. Submitting OCO exit bracket...");
@@ -341,7 +341,7 @@ public sealed partial class LiveRunner(
                         end,
                         run.Engine.BoundedCapacity,
                         run.Engine.WorkerCount,
-                        run.Execution?.ExtendedHours ?? true,
+                        IncludeExtendedHours: true,
                         ResolveExchangeTimezone(strategies),
                         CreateCandleStoreContext(run)),
                     provider,

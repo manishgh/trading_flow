@@ -233,7 +233,7 @@ public static class MobileApiEndpoints
                 request.StrategyPath,
                 request.OrderExpiration,
                 request.EntryOrderType,
-                request.ExtendedHours,
+                request.AllowExtendedHoursTrading,
                 request.ScreenerFilter,
                 runName,
                 request.NewsEnabled,
@@ -292,8 +292,8 @@ public static class MobileApiEndpoints
                 [request.Ticker.Trim().ToUpperInvariant()],
                 request.StrategyPath,
                 orderExpiration: "day",
-                entryOrderType: "market",
-                extendedHours: true,
+                entryOrderType: request.EntryOrderType,
+                allowExtendedHoursTrading: request.AllowExtendedHoursTrading,
                 screenerFilter: string.Empty,
                 runName: string.IsNullOrWhiteSpace(request.RunName)
                     ? $"mobile_auto_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}"

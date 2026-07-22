@@ -113,10 +113,7 @@ public sealed class PaperRuntimeFactory
                 TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
                 {
                     KeyId = alpacaCredentials.KeyId,
-                    SecretKey = alpacaCredentials.SecretKey,
-                    TimeInForce = "day".Equals(run.Execution.OrderExpiration, StringComparison.OrdinalIgnoreCase) ? "day" : "gtc",
-                    EntryOrderType = run.Execution.EntryOrderType ?? "limit",
-                    ExtendedHours = run.Execution.ExtendedHours
+                    SecretKey = alpacaCredentials.SecretKey
                 },
                 rawArchiveWriter),
             "none" => null,

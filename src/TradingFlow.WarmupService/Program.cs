@@ -43,8 +43,7 @@ builder.Services.AddSingleton<IMarketDataProvider>(sp =>
         {
             KeyId = credentials.Resolve("Alpaca", "KeyId", "ALPACA_KEY_ID"),
             SecretKey = credentials.Resolve("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),
-            MarketDataFeed = options.MarketDataFeed,
-            ExtendedHours = true
+            MarketDataFeed = options.MarketDataFeed
         });
 });
 builder.Services.AddSingleton<ICatalystProvider>(sp =>
@@ -57,8 +56,7 @@ builder.Services.AddSingleton<ICatalystProvider>(sp =>
         {
             KeyId = credentials.Resolve("Alpaca", "KeyId", "ALPACA_KEY_ID"),
             SecretKey = credentials.Resolve("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),
-            MarketDataFeed = options.MarketDataFeed,
-            ExtendedHours = true
+            MarketDataFeed = options.MarketDataFeed
         },
         sp.GetRequiredService<IRawArchiveWriter>(),
         sp.GetService<ILogger<AlpacaNewsProvider>>());

@@ -39,7 +39,7 @@ public sealed partial class MobileAutomationService
                 end,
                 runConfig.Engine.BoundedCapacity,
                 runConfig.Engine.WorkerCount,
-                runConfig.Execution.ExtendedHours,
+                runConfig.Execution.AllowExtendedHoursTrading,
                 strategy.Session.ExchangeTimezone),
             provider,
             cancellationToken);

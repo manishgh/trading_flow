@@ -9,6 +9,18 @@ public sealed record BrokerOrderReceipt(
     string BrokerOrderId,
     DateTimeOffset BrokerAcceptedAtUtc);
 
+/// <summary>
+/// Carries the exact entry contract approved by the execution layer to the broker adapter.
+/// The adapter must submit these values as-is and must never silently change market orders
+/// into limit orders or alter their time in force.
+/// </summary>
+public sealed record BrokerEntryOrder(
+    FinalizedOrder Order,
+    string Side,
+    string OrderType,
+    string TimeInForce,
+    bool SubmitOutsideRegularHours);
+
 public sealed record ProtectiveStopOrder(
     string Ticker,
     string Side,
@@ -27,9 +39,12 @@ public interface IBrokerOrderReader
         CancellationToken cancellationToken);
 }
 
-public interface IBrokerClient : IBrokerOrderReader
+public interface IBrokerClient :
+    IBrokerOrderReader,
+    ITradingSessionProvider,
+    IAssetTradingEligibilityProvider
 {
-    Task<BrokerOrderReceipt> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken);
+    Task<BrokerOrderReceipt> SubmitOrderAsync(BrokerEntryOrder order, CancellationToken cancellationToken);
     Task<BrokerOrderReceipt> SubmitProtectiveStopAsync(
         ProtectiveStopOrder order,
         CancellationToken cancellationToken);

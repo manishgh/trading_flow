@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using TradingFlow.Alpaca;
+using TradingFlow.Domain.Orders;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Storage;
 
@@ -310,6 +311,160 @@ public class AlpacaBrokerClientTests : IDisposable
         Assert.Contains("RawArchiveId=", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task SubmitOrderAsync_RegularLimitOrder_PreservesBracketAndOmitsExtendedFlag()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """{"id":"regular-order","created_at":"2026-07-21T15:00:00Z"}""");
+        using var client = CreateClient(handler);
+
+        await client.SubmitOrderAsync(
+            CreateEntryOrder(submitOutsideRegularHours: false),
+            CancellationToken.None);
+
+        using var document = JsonDocument.Parse(handler.RequestJson);
+        var root = document.RootElement;
+        Assert.Equal("bracket", root.GetProperty("order_class").GetString());
+        Assert.False(root.TryGetProperty("extended_hours", out _));
+        Assert.Equal("limit", root.GetProperty("type").GetString());
+        Assert.Equal("day", root.GetProperty("time_in_force").GetString());
+    }
+
+    [Fact]
+    public async Task SubmitOrderAsync_ExtendedLimitOrder_SendsExactStandaloneContract()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """{"id":"extended-order","created_at":"2026-07-21T12:00:00Z"}""");
+        using var client = CreateClient(handler);
+
+        await client.SubmitOrderAsync(
+            CreateEntryOrder(submitOutsideRegularHours: true),
+            CancellationToken.None);
+
+        using var document = JsonDocument.Parse(handler.RequestJson);
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("extended_hours").GetBoolean());
+        Assert.False(root.TryGetProperty("order_class", out _));
+        Assert.Equal("limit", root.GetProperty("type").GetString());
+        Assert.Equal("day", root.GetProperty("time_in_force").GetString());
+        Assert.Equal("100.00", root.GetProperty("limit_price").GetString());
+    }
+
+    [Fact]
+    public async Task GetSessionAsync_UsesProviderCalendarAndCachesTheTradeDate()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """[{"date":"2026-07-21","open":"09:30","close":"16:00"}]""");
+        using var client = CreateClient(handler);
+
+        var premarket = await client.GetSessionAsync(
+            new DateTimeOffset(2026, 7, 21, 12, 0, 0, TimeSpan.Zero),
+            CancellationToken.None);
+        var regular = await client.GetSessionAsync(
+            new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero),
+            CancellationToken.None);
+        var afterHours = await client.GetSessionAsync(
+            new DateTimeOffset(2026, 7, 21, 21, 0, 0, TimeSpan.Zero),
+            CancellationToken.None);
+
+        Assert.Equal(EquityTradingSession.Premarket, premarket.Session);
+        Assert.Equal(EquityTradingSession.Regular, regular.Session);
+        Assert.Equal(EquityTradingSession.AfterHours, afterHours.Session);
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal("/v2/calendar?start=2026-07-21&end=2026-07-21", handler.Path);
+    }
+
+    [Fact]
+    public async Task GetSessionAsync_AfterEightPm_UsesNextTradeDateForOvernight()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """[{"date":"2026-07-21","open":"09:30","close":"16:00"}]""");
+        using var client = CreateClient(handler);
+
+        var session = await client.GetSessionAsync(
+            new DateTimeOffset(2026, 7, 21, 1, 0, 0, TimeSpan.Zero),
+            CancellationToken.None);
+
+        Assert.Equal(new DateOnly(2026, 7, 21), session.TradeDate);
+        Assert.Equal(EquityTradingSession.Overnight, session.Session);
+        Assert.Equal("/v2/calendar?start=2026-07-21&end=2026-07-21", handler.Path);
+    }
+
+    [Fact]
+    public async Task GetSessionAsync_UsesProviderEarlyCloseInsteadOfHardcodedClose()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """[{"date":"2026-07-02","open":"09:30","close":"13:00"}]""");
+        using var client = CreateClient(handler);
+
+        var session = await client.GetSessionAsync(
+            new DateTimeOffset(2026, 7, 2, 17, 1, 0, TimeSpan.Zero),
+            CancellationToken.None);
+
+        Assert.Equal(EquityTradingSession.AfterHours, session.Session);
+        Assert.Equal(new DateTimeOffset(2026, 7, 2, 17, 0, 0, TimeSpan.Zero), session.RegularCloseUtc);
+    }
+
+    [Fact]
+    public async Task GetSessionAsync_EmptyProviderCalendar_FailsClosed()
+    {
+        using var handler = new CapturingHandler(responseBody: "[]");
+        using var client = CreateClient(handler);
+
+        var session = await client.GetSessionAsync(
+            new DateTimeOffset(2026, 7, 25, 15, 0, 0, TimeSpan.Zero),
+            CancellationToken.None);
+
+        Assert.Equal(EquityTradingSession.Closed, session.Session);
+        Assert.Null(session.RegularOpenUtc);
+        Assert.Null(session.RegularCloseUtc);
+    }
+
+    [Fact]
+    public async Task GetEligibilityAsync_MapsOvernightEligibilityAndCachesAsset()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """{"symbol":"MSFT","status":"active","tradable":true,"overnight_tradable":true}""");
+        using var client = CreateClient(handler);
+
+        var first = await client.GetEligibilityAsync("msft", CancellationToken.None);
+        var second = await client.GetEligibilityAsync("MSFT", CancellationToken.None);
+
+        Assert.NotNull(first);
+        Assert.True(first.Active);
+        Assert.True(first.Tradable);
+        Assert.True(first.OvernightTradable);
+        Assert.Equal(first, second);
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal("/v2/assets/MSFT", handler.Path);
+    }
+
+    private AlpacaBrokerClient CreateClient(HttpMessageHandler handler) =>
+        new(
+            new HttpClient(handler, disposeHandler: false),
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+            {
+                KeyId = "test-key",
+                SecretKey = "test-secret"
+            },
+            CreateArchiveWriter());
+
+    private static BrokerEntryOrder CreateEntryOrder(bool submitOutsideRegularHours) =>
+        new(
+            new FinalizedOrder(
+                "MSFT",
+                "Test Strategy",
+                10,
+                100m,
+                98m,
+                104m,
+                new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero),
+                "TEST-B-MSFT-20260721-001-12345678"),
+            "buy",
+            "limit",
+            "day",
+            submitOutsideRegularHours);
+
     private sealed class CapturingHandler(
         HttpStatusCode statusCode = HttpStatusCode.OK,
         string responseBody = """{"id":"oco-order-id"}""") : HttpMessageHandler, IDisposable
@@ -319,9 +474,11 @@ public class AlpacaBrokerClientTests : IDisposable
         public string RequestJson { get; private set; } = String.Empty;
         public HttpMethod? Method { get; private set; }
         public string? Path { get; private set; }
+        public int RequestCount { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            RequestCount++;
             Method = request.Method;
             Path = request.RequestUri?.PathAndQuery;
             RequestJson = request.Content is null

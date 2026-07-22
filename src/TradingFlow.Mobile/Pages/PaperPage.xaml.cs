@@ -183,7 +183,7 @@ public partial class PaperPage : ContentPage
                     : RunNameEntry.Text.Trim(),
                 Array.Empty<string>(),
                 String.IsNullOrWhiteSpace(ScreenerEntry.Text) ? null : ScreenerEntry.Text.Trim(),
-                ExtendedHoursCheck.IsChecked,
+                AllowExtendedHoursTradingCheck.IsChecked,
                 NewsCheck.IsChecked,
                 OrderExpirationPicker.SelectedItem?.ToString() ?? "day",
                 EntryOrderTypePicker.SelectedItem?.ToString() ?? "market",
@@ -350,7 +350,7 @@ public partial class PaperPage : ContentPage
         {
             RunNameEntry.Text = Preferences.Get("PaperRunName", string.Empty);
             ScreenerEntry.Text = Preferences.Get("PaperScreener", string.Empty);
-            ExtendedHoursCheck.IsChecked = Preferences.Get("PaperExtendedHours", true);
+            AllowExtendedHoursTradingCheck.IsChecked = Preferences.Get("AllowExtendedHoursTrading", false);
             NewsCheck.IsChecked = Preferences.Get("PaperNews", false);
 
             SelectByValue(OrderExpirationPicker, Preferences.Get("PaperOrderExpiration", "day"));
@@ -374,7 +374,7 @@ public partial class PaperPage : ContentPage
 
         Preferences.Set("PaperRunName", RunNameEntry.Text ?? string.Empty);
         Preferences.Set("PaperScreener", ScreenerEntry.Text ?? string.Empty);
-        Preferences.Set("PaperExtendedHours", ExtendedHoursCheck.IsChecked);
+        Preferences.Set("AllowExtendedHoursTrading", AllowExtendedHoursTradingCheck.IsChecked);
         Preferences.Set("PaperNews", NewsCheck.IsChecked);
         Preferences.Set("PaperOrderExpiration", OrderExpirationPicker.SelectedItem?.ToString() ?? "day");
         Preferences.Set("PaperEntryOrderType", EntryOrderTypePicker.SelectedItem?.ToString() ?? "market");

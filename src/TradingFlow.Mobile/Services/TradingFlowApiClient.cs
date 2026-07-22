@@ -516,7 +516,7 @@ public sealed record MobilePaperRunRequest(
     string RunName,
     IReadOnlyList<string> Tickers,
     string? ScreenerFilter,
-    bool ExtendedHours,
+    bool AllowExtendedHoursTrading,
     bool NewsEnabled,
     string OrderExpiration,
     string EntryOrderType,
@@ -979,7 +979,9 @@ public sealed record MobileAutomationStartRequest(
     string? SourcePackage,
     string? SourceTitle,
     string? SourceMessage,
-    string EntryMode = "validate_strategy");
+    string EntryMode = "validate_strategy",
+    bool AllowExtendedHoursTrading = false,
+    string EntryOrderType = "market");
 
 public sealed record MobileAutomationSessionSnapshot(
     Guid SessionId,

@@ -51,7 +51,7 @@ public sealed class StrategyEvaluationEngine
                 end,
                 runConfig.Engine.BoundedCapacity,
                 runConfig.Engine.WorkerCount,
-                runConfig.Execution.ExtendedHours,
+                IncludeExtendedHours: true,
                 strategy.Session.ExchangeTimezone),
             provider,
             cancellationToken);

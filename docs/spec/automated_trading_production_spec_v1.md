@@ -244,7 +244,7 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 **EXE-10 (MUST):** Position-conflict rule: at most one open position per symbol across all strategies (`allow_multi_strategy_same_symbol = false`, not raisable in v1), because broker positions net per account and per-strategy attribution would otherwise be unverifiable. The OMS maintains a strategy-tagged internal position ledger (via EXE-01 IDs) reconciled to the broker's net position.
 
-**EXE-11 (MUST):** Extended-hours orders are prohibited in v1 (`allow_extended_hours = false`). If ever enabled by config in a later phase, only limit + time-in-force DAY + `extended_hours = true` orders are permitted, per broker constraints, behind its own validation phase [BS §7.1].
+**EXE-11 (MUST):** Extended-hours trading is controlled by `allow_extended_hours_trading` and defaults to `false` in every profile. When disabled, entries outside the provider-reported regular session MUST fail closed. When enabled, only explicit limit + time-in-force DAY entries are permitted outside regular hours; the adapter MUST set Alpaca `extended_hours = true` only for an order actually submitted during an extended session and MUST NOT convert another order type. Session classification MUST use Alpaca's trading calendar, including holidays and early closes. Overnight entries additionally require a current asset response with `status=active`, `tradable=true`, and `overnight_tradable=true`. Market-data ingestion and indicator warm-up are independent of this execution permission.
 
 **EXE-12 (MUST):** Cancel/replace: modifications use the broker replace endpoint where available; a replace that fails MUST leave the resolved state journaled (original live, or canceled) after re-query — never assumed. Trailing stops MUST NOT be combined inside bracket/OCO structures unless a Phase-0 broker-behavior test demonstrates and documents the exact semantics [BS §14].
 
@@ -494,7 +494,7 @@ Units: s = seconds, ms = milliseconds, bps = basis points, pct = percent of acco
 | order_poll_interval_s | int | 15 | 5–60 | EXE-03 |
 | backstop_atr_mult | float | 1.5 | 1.0–3.0 | EXE-09 |
 | allow_multi_strategy_same_symbol | bool | false (locked v1) | — | EXE-10 |
-| allow_extended_hours | bool | false (locked v1) | — | EXE-11 |
+| allow_extended_hours_trading | bool | false | true/false | EXE-11 |
 | shutdown_flatten (day/swing) | bool | true/false | — | EXE-13 |
 | per_trade_risk_pct / _swing | pct | 0.5 / 0.5 | 0.1–2.0 | RSK-01 |
 | max_daily_loss_pct | pct | 2 | 0.5–5 | RSK-01 |

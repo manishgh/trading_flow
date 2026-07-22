@@ -107,7 +107,7 @@ public sealed class RunConfigParsingTests
         Assert.Contains("1m", config.Intervals);
         Assert.Contains("5m", config.Intervals);
         Assert.Equal("1m", config.DerivedTimeframes.Source);
-        Assert.True(config.Execution.ExtendedHours);
+        Assert.False(config.Execution.AllowExtendedHoursTrading);
         Assert.Equal("full", config.Artifacts.RetentionMode);
         Assert.Single(config.Strategies);
         Assert.Contains(config.Strategies, path => path.EndsWith(PaperIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
@@ -130,7 +130,7 @@ public sealed class RunConfigParsingTests
         Assert.Contains("1d", config.Intervals);
         Assert.Equal("1h", config.DerivedTimeframes.Source);
         Assert.True(config.News.Enabled);
-        Assert.True(config.Execution.ExtendedHours);
+        Assert.False(config.Execution.AllowExtendedHoursTrading);
         Assert.Single(config.Strategies);
         Assert.Contains(config.Strategies, path => path.EndsWith(SwingQualityLongStrategyFile, StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(config.Strategies, path => path.EndsWith(SwingOverboughtShortStrategyFile, StringComparison.OrdinalIgnoreCase));
@@ -526,8 +526,8 @@ public sealed class RunConfigParsingTests
                 ["MU", "NVDA"],
                 strategyPath,
                 orderExpiration: "day",
-                entryOrderType: "market",
-                extendedHours: true,
+                entryOrderType: "limit",
+                allowExtendedHoursTrading: true,
                 screenerFilter: "",
                 runName: "paper-news-disabled-test",
                 newsEnabled: false);
@@ -539,9 +539,9 @@ public sealed class RunConfigParsingTests
             Assert.Contains("news:", generatedYaml);
             Assert.Contains("  enabled: false", generatedYaml);
             Assert.False(parsed.News.Enabled);
-            Assert.Equal("market", parsed.Execution.EntryOrderType);
+            Assert.Equal("limit", parsed.Execution.EntryOrderType);
             Assert.Equal("day", parsed.Execution.OrderExpiration);
-            Assert.True(parsed.Execution.ExtendedHours);
+            Assert.True(parsed.Execution.AllowExtendedHoursTrading);
             Assert.Equal(["MU", "NVDA"], parsed.Tickers);
         }
         finally
@@ -558,7 +558,6 @@ public sealed class RunConfigParsingTests
         return TestRepository.FindRoot();
     }
 }
-
 
 
 

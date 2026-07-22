@@ -13,7 +13,7 @@ public sealed record PositionConflictOptions
         if (allowMultiStrategySameSymbol)
         {
             throw new InvalidOperationException(
-                "EXE-10 locks allow_multi_strategy_same_symbol=false for production v1.");
+                "Multiple strategies cannot own the same symbol in the production profile.");
         }
 
         AllowMultiStrategySameSymbol = false;
@@ -93,7 +93,7 @@ public sealed class PositionConflictGuard(
             {
                 logger.LogCritical(
                     exception,
-                    "EXE-10 entry lease release failed for {Symbol}; lease owner {Owner} will expire after {TtlSeconds}s.",
+                    "Entry lease release failed for {Symbol}; lease owner {Owner} will expire after {TtlSeconds}s.",
                     normalizedSymbol,
                     owner,
                     EntryLeaseTtl.TotalSeconds);
@@ -137,7 +137,7 @@ public sealed class PositionConflictGuard(
         string source) =>
         new(
             RejectCode.REJECT_SETUP_INVALID,
-            $"EXE-10 position conflict for {symbol}: strategy '{requestedStrategy}' cannot enter while " +
+            $"Position conflict for {symbol}: strategy '{requestedStrategy}' cannot enter while " +
             $"strategy '{owningStrategy}' owns {source}.");
 
     private static string Require(string value, string parameterName) =>

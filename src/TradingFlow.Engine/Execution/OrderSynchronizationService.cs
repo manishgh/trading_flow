@@ -512,7 +512,7 @@ public sealed class OrderSynchronizationRunner(
             await coordinator.ProcessStreamUpdateAsync(update, cancellationToken);
             if (update.Status is OrderStatus.PartiallyFilled or OrderStatus.Filled)
             {
-                // A fill changes broker exposure. Reconcile immediately so EXE-09 does not
+                // A fill changes broker exposure. Reconcile immediately so protection does not
                 // wait for the periodic REST timer before verifying broker-resting protection.
                 var openOrders = await coordinator.CrossCheckAsync(broker, cancellationToken);
                 await reconciliation.ReconcileAsync(broker, openOrders, cancellationToken);

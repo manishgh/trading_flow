@@ -53,11 +53,12 @@ public sealed class OrderSubmissionServiceTests
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
-        FinalizedOrder? brokerOrder = null;
+        SetupRegularSession(broker);
+        BrokerEntryOrder? brokerOrder = null;
         var brokerAcceptedAt = new DateTimeOffset(2026, 7, 21, 14, 35, 1, TimeSpan.Zero);
         broker
-            .Setup(client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()))
-            .Callback<FinalizedOrder, CancellationToken>((order, _) =>
+            .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
+            .Callback<BrokerEntryOrder, CancellationToken>((order, _) =>
             {
                 Assert.True(repository.ReservationCompleted);
                 Assert.Equal(OrderState.Submitted, events.State);
@@ -76,7 +77,8 @@ public sealed class OrderSubmissionServiceTests
 
         Assert.Equal("broker-order-1", result.BrokerOrderId);
         Assert.Equal(repository.Intent!.ClientOrderId, result.ClientOrderId);
-        Assert.Equal(result.ClientOrderId, brokerOrder!.ClientOrderId);
+        Assert.Equal(result.ClientOrderId, brokerOrder!.Order.ClientOrderId);
+        Assert.False(brokerOrder.SubmitOutsideRegularHours);
         Assert.Equal(brokerAcceptedAt, result.BrokerAcceptedAtUtc);
         Assert.Equal(OrderState.Acked, events.State);
         Assert.Equal([OrderState.Submitted, OrderState.Acked], events.AppliedStates);
@@ -104,7 +106,7 @@ public sealed class OrderSubmissionServiceTests
         Assert.Equal(RejectCode.REJECT_SETUP_INVALID, error.RejectCode);
         Assert.Equal(0, repository.ReservationAttempts);
         broker.Verify(
-            client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()),
+            client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -115,9 +117,10 @@ public sealed class OrderSubmissionServiceTests
         var events = new RecordingEventRepository(repository);
         var submittedClientIds = new List<string>();
         var broker = new Mock<IBrokerClient>();
+        SetupRegularSession(broker);
         broker
-            .Setup(client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()))
-            .Callback<FinalizedOrder, CancellationToken>((order, _) => submittedClientIds.Add(order.ClientOrderId))
+            .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
+            .Callback<BrokerEntryOrder, CancellationToken>((order, _) => submittedClientIds.Add(order.Order.ClientOrderId))
             .ReturnsAsync(new BrokerOrderReceipt("broker-order-1", DateTimeOffset.UtcNow));
         var service = new OrderSubmissionService(
             repository,
@@ -133,7 +136,7 @@ public sealed class OrderSubmissionServiceTests
         Assert.Equal(2, repository.ReservationAttempts);
         Assert.Single(submittedClientIds);
         broker.Verify(
-            client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()),
+            client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -143,8 +146,9 @@ public sealed class OrderSubmissionServiceTests
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        SetupRegularSession(broker);
         broker
-            .Setup(client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()))
+            .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new TimeoutException("Broker response was not received."));
         var service = new OrderSubmissionService(
             repository,
@@ -162,7 +166,7 @@ public sealed class OrderSubmissionServiceTests
         Assert.Equal(OrderState.Submitted, events.State);
         Assert.Contains("must be reconciled", retryError.Message, StringComparison.Ordinal);
         broker.Verify(
-            client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()),
+            client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -194,6 +198,123 @@ public sealed class OrderSubmissionServiceTests
         Assert.Contains("ORDER_STREAM_DISCONNECTED", error.Message, StringComparison.Ordinal);
         Assert.Equal(0, repository.ReservationAttempts);
         broker.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task SubmitBracketOrderAsync_RegularSession_DoesNotMarkOrderAsExtendedWhenPermissionIsEnabled()
+    {
+        var repository = new RecordingIntentRepository();
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        SetupRegularSession(broker);
+        BrokerEntryOrder? submitted = null;
+        broker
+            .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
+            .Callback<BrokerEntryOrder, CancellationToken>((order, _) => submitted = order)
+            .ReturnsAsync(new BrokerOrderReceipt("regular-order", DateTimeOffset.UtcNow));
+        var service = CreateService(repository);
+
+        var result = await service.SubmitBracketOrderAsync(
+            CreateSubmission(Guid.NewGuid()) with { AllowExtendedHoursTrading = true },
+            broker.Object,
+            CancellationToken.None);
+
+        Assert.NotNull(submitted);
+        Assert.False(submitted.SubmitOutsideRegularHours);
+        Assert.False(result.SubmittedOutsideRegularHours);
+        broker.VerifyAll();
+    }
+
+    [Fact]
+    public async Task SubmitBracketOrderAsync_PremarketWithoutPermission_FailsBeforeIntentReservation()
+    {
+        var repository = new RecordingIntentRepository();
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker
+            .Setup(client => client.GetSessionAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DateTimeOffset timestamp, CancellationToken _) =>
+                new TradingSessionSnapshot(
+                    new DateOnly(2026, 7, 21),
+                    EquityTradingSession.Premarket,
+                    timestamp,
+                    timestamp.AddHours(1),
+                    timestamp.AddHours(7.5)));
+        var service = CreateService(repository);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SubmitBracketOrderAsync(
+                CreateSubmission(Guid.NewGuid()),
+                broker.Object,
+                CancellationToken.None));
+
+        Assert.Contains("allow_extended_hours_trading is false", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, repository.ReservationAttempts);
+        broker.VerifyAll();
+    }
+
+    [Fact]
+    public async Task SubmitBracketOrderAsync_OvernightIneligibleAsset_FailsBeforeIntentReservation()
+    {
+        var repository = new RecordingIntentRepository();
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker
+            .Setup(client => client.GetSessionAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DateTimeOffset timestamp, CancellationToken _) =>
+                new TradingSessionSnapshot(
+                    new DateOnly(2026, 7, 22),
+                    EquityTradingSession.Overnight,
+                    timestamp,
+                    timestamp.AddHours(12),
+                    timestamp.AddHours(18.5)));
+        broker
+            .Setup(client => client.GetEligibilityAsync("MSFT", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AssetTradingEligibility(
+                "MSFT", Active: true, Tradable: true, OvernightTradable: false, DateTimeOffset.UtcNow));
+        var service = CreateService(repository);
+        var submission = CreateSubmission(Guid.NewGuid()) with { AllowExtendedHoursTrading = true };
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None));
+
+        Assert.Contains("overnight_tradable=False", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, repository.ReservationAttempts);
+        broker.VerifyAll();
+    }
+
+    [Fact]
+    public async Task SubmitBracketOrderAsync_OvernightEligibleAsset_MarksActualOrderAsExtended()
+    {
+        var repository = new RecordingIntentRepository();
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker
+            .Setup(client => client.GetSessionAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DateTimeOffset timestamp, CancellationToken _) =>
+                new TradingSessionSnapshot(
+                    new DateOnly(2026, 7, 22),
+                    EquityTradingSession.Overnight,
+                    timestamp,
+                    timestamp.AddHours(12),
+                    timestamp.AddHours(18.5)));
+        broker
+            .Setup(client => client.GetEligibilityAsync("MSFT", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AssetTradingEligibility(
+                "MSFT", Active: true, Tradable: true, OvernightTradable: true, DateTimeOffset.UtcNow));
+        BrokerEntryOrder? submitted = null;
+        broker
+            .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
+            .Callback<BrokerEntryOrder, CancellationToken>((order, _) => submitted = order)
+            .ReturnsAsync(new BrokerOrderReceipt("overnight-order", DateTimeOffset.UtcNow));
+        var service = CreateService(repository);
+
+        var result = await service.SubmitBracketOrderAsync(
+            CreateSubmission(Guid.NewGuid()) with { AllowExtendedHoursTrading = true },
+            broker.Object,
+            CancellationToken.None);
+
+        Assert.NotNull(submitted);
+        Assert.True(submitted.SubmitOutsideRegularHours);
+        Assert.True(result.SubmittedOutsideRegularHours);
+        Assert.Contains("\"submitOutsideRegularHours\":true", repository.Intent!.RequestJson, StringComparison.Ordinal);
+        broker.VerifyAll();
     }
 
     [Fact]
@@ -278,6 +399,27 @@ public sealed class OrderSubmissionServiceTests
             new DateTimeOffset(2026, 7, 21, 14, 35, 0, TimeSpan.Zero),
             new FinalizedOrder("MSFT", "Swing A", 10, 100m, 98m, 104m, DateTimeOffset.UtcNow, String.Empty));
     }
+
+    private static void SetupRegularSession(Mock<IBrokerClient> broker)
+    {
+        broker
+            .Setup(client => client.GetSessionAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DateTimeOffset timestamp, CancellationToken _) =>
+                new TradingSessionSnapshot(
+                    DateOnly.FromDateTime(timestamp.UtcDateTime),
+                    EquityTradingSession.Regular,
+                    timestamp,
+                    timestamp.AddHours(-1),
+                    timestamp.AddHours(5)));
+    }
+
+    private static OrderSubmissionService CreateService(RecordingIntentRepository repository) =>
+        new(
+            repository,
+            new RecordingEventRepository(repository),
+            new EntryAdmissionControl(),
+            new PassThroughPositionConflictGuard(),
+            NullLogger<OrderSubmissionService>.Instance);
 
     private sealed class RecordingIntentRepository : IOrderIntentRepository
     {

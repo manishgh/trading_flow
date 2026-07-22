@@ -7,11 +7,10 @@ public sealed record AlpacaOptions(
     ProductionProfile Profile,
     string KeyId,
     string SecretKey,
-    string TimeInForce = "gtc",
-    string EntryOrderType = "limit",
-    bool ExtendedHours = false,
     string MarketDataFeed = "sip",
-    bool AllowIexFallback = false)
+    bool AllowIexFallback = false,
+    int AssetEligibilityCacheSeconds = 3_600,
+    int TradingCalendarCacheSeconds = 3_600)
 {
     public Uri BaseUrl => AlpacaEndpointResolver.Resolve(Profile).TradingRest;
 
@@ -21,11 +20,10 @@ public sealed record AlpacaOptions(
             profile,
             string.Empty, // To be configured
             string.Empty, // To be configured
-            "gtc",
-            "limit",
-            false,
             "sip",
-            false
+            false,
+            3_600,
+            3_600
         );
     }
 

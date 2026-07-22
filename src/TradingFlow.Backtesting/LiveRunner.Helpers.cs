@@ -53,15 +53,13 @@ public sealed partial class LiveRunner
 
     private static StrategyDefinition[] ApplyRunSessionPolicy(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
     {
-        if (!run.Execution.ExtendedHours)
-        {
-            return strategies.ToArray();
-        }
-
         return strategies
             .Select(strategy => strategy with
             {
-                Session = strategy.Session with { UseExtendedHours = true }
+                Session = strategy.Session with
+                {
+                    UseExtendedHours = run.Execution.AllowExtendedHoursTrading
+                }
             })
             .ToArray();
     }

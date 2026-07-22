@@ -15,13 +15,15 @@ public sealed record BracketOrderSubmission(
     string TimeInForce,
     DateOnly SessionDate,
     DateTimeOffset CreatedAtUtc,
-    FinalizedOrder Order);
+    FinalizedOrder Order,
+    bool AllowExtendedHoursTrading = false);
 
 public sealed record OrderSubmissionResult(
     string BrokerOrderId,
     string ClientOrderId,
     Guid IntentId,
-    DateTimeOffset BrokerAcceptedAtUtc);
+    DateTimeOffset BrokerAcceptedAtUtc,
+    bool SubmittedOutsideRegularHours = false);
 
 public sealed record ProtectiveStopSubmission(
     Guid IntentId,
@@ -47,7 +49,7 @@ public interface IOrderSubmissionService
 }
 
 /// <summary>
-/// Implements EXE-01 ordering: reserve and fsync an immutable intent first, then call
+/// Reserves and fsyncs an immutable intent before calling
 /// the broker with the persisted client order ID. A logical retry reuses that ID.
 /// </summary>
 public sealed class OrderSubmissionService : IOrderSubmissionService
@@ -84,13 +86,46 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         return await positionConflict.ExecuteEntryAsync(
             submission.Order.Ticker,
             submission.StrategyId,
-            token => SubmitBracketOrderCoreAsync(submission, brokerClient, token),
+            async token =>
+            {
+                var session = await ValidateTradingSessionAsync(submission, brokerClient, token);
+                return await SubmitBracketOrderCoreAsync(
+                    submission,
+                    brokerClient,
+                    session.Session != EquityTradingSession.Regular,
+                    token);
+            },
             cancellationToken);
+    }
+
+    private static async Task<TradingSessionSnapshot> ValidateTradingSessionAsync(
+        BracketOrderSubmission submission,
+        IBrokerClient brokerClient,
+        CancellationToken cancellationToken)
+    {
+        var session = await brokerClient.GetSessionAsync(submission.CreatedAtUtc, cancellationToken);
+        ExtendedHoursOrderPolicy.Validate(
+            session,
+            submission.OrderType,
+            submission.TimeInForce,
+            submission.AllowExtendedHoursTrading);
+        if (session.Session != EquityTradingSession.Overnight)
+        {
+            return session;
+        }
+
+        var eligibility = await brokerClient.GetEligibilityAsync(
+            submission.Order.Ticker,
+            cancellationToken);
+        ExtendedHoursOrderPolicy.ValidateOvernightAsset(submission.Order.Ticker, eligibility);
+
+        return session;
     }
 
     private async Task<OrderSubmissionResult> SubmitBracketOrderCoreAsync(
         BracketOrderSubmission submission,
         IBrokerClient brokerClient,
+        bool submitOutsideRegularHours,
         CancellationToken cancellationToken)
     {
         var requestJson = JsonSerializer.Serialize(new
@@ -105,6 +140,8 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             limitPrice = submission.Order.LimitPrice,
             stopPrice = submission.Order.StopLossPrice,
             takeProfitPrice = submission.Order.TakeProfitPrice,
+            submission.AllowExtendedHoursTrading,
+            submitOutsideRegularHours,
             submission.SessionDate
         });
         var run = new ProductionRun
@@ -154,7 +191,8 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 current.BrokerOrderId,
                 intent.ClientOrderId,
                 intent.IntentId,
-                current.BrokerTimestampUtc.Value);
+                current.BrokerTimestampUtc.Value,
+                ResolveSubmittedOutsideRegularHours(intent.RequestJson, submitOutsideRegularHours));
         }
 
         if (current.State == OrderState.Submitted)
@@ -191,7 +229,14 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             intent.ClientOrderId,
             intent.Symbol,
             intent.StrategyId);
-        var receipt = await brokerClient.SubmitOrderAsync(persistedOrder, cancellationToken);
+        var receipt = await brokerClient.SubmitOrderAsync(
+            new BrokerEntryOrder(
+                persistedOrder,
+                NormalizeSide(submission.Side),
+                submission.OrderType.Trim().ToLowerInvariant(),
+                submission.TimeInForce.Trim().ToLowerInvariant(),
+                submitOutsideRegularHours),
+            cancellationToken);
         var acknowledged = await eventRepository.TransitionAsync(
             new OrderTransitionRequest(
                 intent.ClientOrderId,
@@ -213,7 +258,8 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             intent.ClientOrderId,
             intent.IntentId,
             acknowledged.Snapshot.BrokerTimestampUtc
-                ?? throw new InvalidOperationException("ACKED order has no broker timestamp."));
+                ?? throw new InvalidOperationException("ACKED order has no broker timestamp."),
+            submitOutsideRegularHours);
     }
 
     public async Task<OrderSubmissionResult> SubmitProtectiveStopAsync(
@@ -380,6 +426,22 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             submission.RunContext.Profile is not ("paper" or "live"))
         {
             throw new InvalidOperationException("Execution run provenance is invalid.");
+        }
+    }
+
+    private static bool ResolveSubmittedOutsideRegularHours(string requestJson, bool fallback)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(requestJson);
+            return document.RootElement.TryGetProperty("submitOutsideRegularHours", out var value) &&
+                value.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? value.GetBoolean()
+                    : fallback;
+        }
+        catch (JsonException)
+        {
+            return fallback;
         }
     }
 

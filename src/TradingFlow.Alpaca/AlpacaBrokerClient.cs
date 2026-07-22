@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Http;
@@ -17,6 +18,9 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 {
     private readonly AlpacaTradingRestClient _tradingClient;
     private readonly AlpacaOptions _options;
+    private readonly ConcurrentDictionary<string, CachedAssetEligibility> assetEligibilityCache =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<DateOnly, CachedCalendarDay> tradingCalendarCache = new();
 
     public AlpacaBrokerClient(
         HttpClient httpClient,
@@ -27,25 +31,28 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
         _tradingClient = new AlpacaTradingRestClient(httpClient, options, rawArchiveWriter);
     }
 
-    public async Task<BrokerOrderReceipt> SubmitOrderAsync(FinalizedOrder order, CancellationToken cancellationToken)
+    public async Task<BrokerOrderReceipt> SubmitOrderAsync(BrokerEntryOrder entryOrder, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(entryOrder);
+        ArgumentNullException.ThrowIfNull(entryOrder.Order);
+        ValidateEntryOrder(entryOrder);
+
         return await ApiProfiler.ProfileAsync("Alpaca", "/v2/orders", "POST", async () =>
         {
-            var entryType = _options.EntryOrderType.ToLowerInvariant();
+            var order = entryOrder.Order;
+            var entryType = entryOrder.OrderType.Trim().ToLowerInvariant();
             object requestBody;
 
-            if (_options.ExtendedHours)
+            if (entryOrder.SubmitOutsideRegularHours)
             {
-                // Industry Standard: Use the exact LimitPrice calculated by the Risk Engine
-                // which adheres strictly to the strategy's configured SlippageBps.
                 requestBody = new
                 {
                     symbol = order.Ticker.ToUpperInvariant(),
-                    qty = order.ShareQuantity.ToString(),
-                    side = "buy",
-                    type = "limit",
-                    time_in_force = "day",
-                    limit_price = order.LimitPrice.ToString("0.00"),
+                    qty = order.ShareQuantity.ToString(CultureInfo.InvariantCulture),
+                    side = entryOrder.Side,
+                    type = entryType,
+                    time_in_force = entryOrder.TimeInForce,
+                    limit_price = FormatOrderPrice(order.LimitPrice),
                     extended_hours = true,
                     client_order_id = order.ClientOrderId
                 };
@@ -55,10 +62,10 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
                 requestBody = new
                 {
                     symbol = order.Ticker.ToUpperInvariant(),
-                    qty = order.ShareQuantity.ToString(),
-                    side = "buy",
+                    qty = order.ShareQuantity.ToString(CultureInfo.InvariantCulture),
+                    side = entryOrder.Side,
                     type = "market",
-                    time_in_force = _options.TimeInForce,
+                    time_in_force = entryOrder.TimeInForce,
                     client_order_id = order.ClientOrderId,
                     order_class = "bracket",
                     take_profit = new
@@ -76,11 +83,11 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
                 requestBody = new
                 {
                     symbol = order.Ticker.ToUpperInvariant(),
-                    qty = order.ShareQuantity.ToString(),
-                    side = "buy",
+                    qty = order.ShareQuantity.ToString(CultureInfo.InvariantCulture),
+                    side = entryOrder.Side,
                     type = "limit",
-                    time_in_force = _options.TimeInForce,
-                    limit_price = order.LimitPrice.ToString("0.00"),
+                    time_in_force = entryOrder.TimeInForce,
+                    limit_price = FormatOrderPrice(order.LimitPrice),
                     client_order_id = order.ClientOrderId,
                     order_class = "bracket",
                     take_profit = new
@@ -96,9 +103,9 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
 
             var json = JsonSerializer.Serialize(requestBody);
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var request = new HttpRequestMessage(HttpMethod.Post, "/v2/orders") { Content = content };
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/v2/orders") { Content = content };
             var response = await _tradingClient.SendAsync(
-                request,
+                httpRequest,
                 "broker-submit-order",
                 correlationId: order.ClientOrderId,
                 cancellationToken: cancellationToken);
@@ -111,6 +118,188 @@ public sealed class AlpacaBrokerClient : IBrokerClient, IDisposable
             using var doc = JsonDocument.Parse(response.Payload);
             return RequireOrderReceipt(doc.RootElement, response, "order submission");
         });
+    }
+
+    public async Task<AssetTradingEligibility?> GetEligibilityAsync(
+        string symbol,
+        CancellationToken cancellationToken)
+    {
+        var normalized = symbol.Trim().ToUpperInvariant();
+        if (String.IsNullOrWhiteSpace(normalized))
+        {
+            throw new ArgumentException("Asset symbol is required.", nameof(symbol));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (assetEligibilityCache.TryGetValue(normalized, out var cached) &&
+            now - cached.CachedAtUtc < TimeSpan.FromSeconds(_options.AssetEligibilityCacheSeconds))
+        {
+            return cached.Eligibility;
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/v2/assets/{Uri.EscapeDataString(normalized)}");
+        var response = await _tradingClient.SendAsync(
+            request,
+            "broker-get-asset-eligibility",
+            providerRecordId: normalized,
+            cancellationToken: cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                AlpacaTradingRestClient.DescribeFailure("asset eligibility", response));
+        }
+
+        using var document = JsonDocument.Parse(response.Payload);
+        var root = document.RootElement;
+        var eligibility = new AssetTradingEligibility(
+            root.GetProperty("symbol").GetString() ?? normalized,
+            String.Equals(root.GetProperty("status").GetString(), "active", StringComparison.OrdinalIgnoreCase),
+            root.GetProperty("tradable").GetBoolean(),
+            root.TryGetProperty("overnight_tradable", out var overnight) && overnight.GetBoolean(),
+            now);
+        assetEligibilityCache[normalized] = new CachedAssetEligibility(eligibility, now);
+        return eligibility;
+    }
+
+    public async Task<TradingSessionSnapshot> GetSessionAsync(
+        DateTimeOffset timestampUtc,
+        CancellationToken cancellationToken)
+    {
+        var easternZone = ResolveEasternTimeZone();
+        var eastern = TimeZoneInfo.ConvertTime(timestampUtc, easternZone);
+        var localDate = DateOnly.FromDateTime(eastern.DateTime);
+        var localTime = TimeOnly.FromDateTime(eastern.DateTime);
+        var tradeDate = localTime >= new TimeOnly(20, 0) ? localDate.AddDays(1) : localDate;
+        var calendarDay = await GetCalendarDayAsync(tradeDate, cancellationToken);
+        if (calendarDay is null)
+        {
+            return new TradingSessionSnapshot(
+                tradeDate,
+                EquityTradingSession.Closed,
+                DateTimeOffset.UtcNow,
+                null,
+                null);
+        }
+
+        var regularOpen = ToUtc(tradeDate, calendarDay.Open, easternZone);
+        var regularClose = ToUtc(tradeDate, calendarDay.Close, easternZone);
+        var session = localTime switch
+        {
+            _ when localTime < new TimeOnly(4, 0) || localTime >= new TimeOnly(20, 0) =>
+                EquityTradingSession.Overnight,
+            _ when timestampUtc < regularOpen => EquityTradingSession.Premarket,
+            _ when timestampUtc < regularClose => EquityTradingSession.Regular,
+            _ => EquityTradingSession.AfterHours
+        };
+        return new TradingSessionSnapshot(
+            tradeDate,
+            session,
+            DateTimeOffset.UtcNow,
+            regularOpen,
+            regularClose);
+    }
+
+    private async Task<AlpacaCalendarDay?> GetCalendarDayAsync(
+        DateOnly tradeDate,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (tradingCalendarCache.TryGetValue(tradeDate, out var cached) &&
+            now - cached.CachedAtUtc < TimeSpan.FromSeconds(_options.TradingCalendarCacheSeconds))
+        {
+            return cached.Day;
+        }
+
+        var date = tradeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/v2/calendar?start={date}&end={date}");
+        var response = await _tradingClient.SendAsync(
+            request,
+            "broker-get-trading-calendar",
+            providerRecordId: date,
+            cancellationToken: cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                AlpacaTradingRestClient.DescribeFailure("trading-calendar lookup", response));
+        }
+
+        using var document = JsonDocument.Parse(response.Payload);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("Alpaca trading-calendar response must be an array.");
+        }
+
+        AlpacaCalendarDay? day = null;
+        if (document.RootElement.GetArrayLength() > 0)
+        {
+            var item = document.RootElement[0];
+            var responseDate = DateOnly.ParseExact(
+                item.GetProperty("date").GetString() ?? String.Empty,
+                "yyyy-MM-dd",
+                CultureInfo.InvariantCulture);
+            if (responseDate != tradeDate)
+            {
+                throw new InvalidOperationException(
+                    $"Alpaca trading-calendar returned {responseDate:yyyy-MM-dd} for requested trade date {tradeDate:yyyy-MM-dd}.");
+            }
+
+            day = new AlpacaCalendarDay(
+                TimeOnly.Parse(item.GetProperty("open").GetString() ?? String.Empty, CultureInfo.InvariantCulture),
+                TimeOnly.Parse(item.GetProperty("close").GetString() ?? String.Empty, CultureInfo.InvariantCulture));
+        }
+
+        tradingCalendarCache[tradeDate] = new CachedCalendarDay(day, now);
+        return day;
+    }
+
+    private static DateTimeOffset ToUtc(DateOnly date, TimeOnly time, TimeZoneInfo zone)
+    {
+        var local = DateTime.SpecifyKind(date.ToDateTime(time), DateTimeKind.Unspecified);
+        return new DateTimeOffset(local, zone.GetUtcOffset(local)).ToUniversalTime();
+    }
+
+    private static TimeZoneInfo ResolveEasternTimeZone()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        }
+    }
+
+    private sealed record AlpacaCalendarDay(TimeOnly Open, TimeOnly Close);
+
+    private sealed record CachedCalendarDay(AlpacaCalendarDay? Day, DateTimeOffset CachedAtUtc);
+
+    private sealed record CachedAssetEligibility(AssetTradingEligibility Eligibility, DateTimeOffset CachedAtUtc);
+
+    private static void ValidateEntryOrder(BrokerEntryOrder request)
+    {
+        var side = request.Side.Trim().ToLowerInvariant();
+        var type = request.OrderType.Trim().ToLowerInvariant();
+        var timeInForce = request.TimeInForce.Trim().ToLowerInvariant();
+        if (side != "buy" || type is not ("market" or "limit") || timeInForce is not ("day" or "gtc"))
+        {
+            throw new InvalidOperationException("Unsupported Alpaca entry contract.");
+        }
+
+        if (request.SubmitOutsideRegularHours && (type != "limit" || timeInForce != "day"))
+        {
+            throw new InvalidOperationException(
+                "Alpaca extended-hours entries require an explicit DAY limit order.");
+        }
     }
 
     public async Task<BrokerOrderReceipt> SubmitProtectiveStopAsync(

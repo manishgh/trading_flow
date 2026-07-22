@@ -141,7 +141,7 @@ public static class ProductionParameterRegistry
             Integer("order_poll_interval_s", 15, 5, 60, ProductionParameterUnit.Seconds, "EXE-03"),
             Decimal("backstop_atr_mult", 1.5m, 1.0m, 3.0m, ProductionParameterUnit.Ratio, "EXE-09"),
             Boolean("allow_multi_strategy_same_symbol", false, "EXE-10", isLockedInLiveV1: true),
-            Boolean("allow_extended_hours", false, "EXE-11", isLockedInLiveV1: true),
+            Boolean("allow_extended_hours_trading", false, "EXE-11"),
             Boolean("shutdown_flatten_day", true, "EXE-13"),
             Boolean("shutdown_flatten_swing", false, "EXE-13"),
 

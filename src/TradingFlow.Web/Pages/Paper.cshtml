@@ -136,7 +136,7 @@
 
             <div class="paper-toggle">
                 <label title="Allows orders and market data decisions during Alpaca-supported pre-market and post-market sessions.">
-                    <input type="checkbox" id="ExtendedHoursCheckbox" name="ExtendedHours" value="true" checked="@Model.ExtendedHours" />
+                    <input type="checkbox" id="AllowExtendedHoursTradingCheckbox" name="AllowExtendedHoursTrading" value="true" checked="@Model.AllowExtendedHoursTrading" />
                     <span>Enable Extended Hours (Pre/Post-Market)</span>
                     <span class="tf-help" title="When checked, paper orders may be submitted in extended hours if the broker and order type support it.">?</span>
                 </label>
@@ -360,7 +360,7 @@
                     if (data.success) {
                         document.getElementById('OrderExpirationDropdown').value = data.orderExpiration || 'gtc';
                         document.getElementById('EntryOrderTypeDropdown').value = data.entryOrderType || 'limit';
-                        document.getElementById('ExtendedHoursCheckbox').checked = Boolean(data.extendedHours);
+                        document.getElementById('AllowExtendedHoursTradingCheckbox').checked = Boolean(data.allowExtendedHoursTrading);
                         currentConfigNewsEnabled = Boolean(data.newsEnabled);
                         updateNewsToggle();
                         document.getElementById('ScreenerFilter').value = data.screenerFilter || '';

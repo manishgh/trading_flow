@@ -1,7 +1,7 @@
 namespace TradingFlow.Domain.Orders;
 
 /// <summary>
-/// Canonical EXE-02 lifecycle for one broker order. Storage uses the exact uppercase
+/// Canonical lifecycle for one broker order. Storage uses the exact uppercase
 /// values from the binding production specification.
 /// </summary>
 public enum OrderState

@@ -187,7 +187,7 @@ execution:
   order_type: bracket
   order_expiration: gtc
   entry_order_type: limit
-  extended_hours: true
+  allow_extended_hours_trading: true
 
 news:
   enabled: false
@@ -286,5 +286,4 @@ parameters:
         }
     }
 }
-
 

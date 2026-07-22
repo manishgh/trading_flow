@@ -38,7 +38,7 @@ public static class BrokerOrderUpdateFactory
 }
 
 /// <summary>
-/// Projects authoritative broker updates into the append-only EXE-02 lifecycle.
+/// Projects authoritative broker updates into the append-only order lifecycle.
 /// </summary>
 public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrderLifecycleService
 {

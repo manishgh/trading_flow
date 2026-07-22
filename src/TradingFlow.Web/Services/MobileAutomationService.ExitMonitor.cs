@@ -228,7 +228,7 @@ public sealed partial class MobileAutomationService
         BrokerPosition position,
         CancellationToken cancellationToken)
     {
-        if (!runConfig.Execution.ExtendedHours || session.ExitSafetyOrdersSubmitted)
+        if (!runConfig.Execution.AllowExtendedHoursTrading || session.ExitSafetyOrdersSubmitted)
         {
             return;
         }
