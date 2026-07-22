@@ -1,74 +1,33 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Wishlists;
-using TradingFlow.Finviz;
 using TradingFlow.Engine.Storage;
-using TradingFlow.Web.Models;
-using TradingFlow.Web.Services;
+using TradingFlow.Finviz;
 
 namespace TradingFlow.Web.Pages;
-
-public sealed record WishlistMarketRow(
-    WishlistItem Item,
-    AlpacaLatestQuote Quote,
-    bool HasQuote)
-{
-    public string Ticker => Item.Ticker;
-
-    public string DisplayName => String.IsNullOrWhiteSpace(Item.DisplayName) ? Item.Ticker : Item.DisplayName!;
-}
 
 public sealed class WishlistsModel : PageModel
 {
     private readonly IWishlistRepository repository;
-    private readonly AlpacaQuoteService quoteService;
-    private readonly AlpacaManualOrderService manualOrders;
-    private readonly ConfigCatalogService catalog;
-    private readonly RunConfigWriter configWriter;
-    private readonly PaperJobService paperJobs;
-    private readonly NewsFeedService newsFeed;
     private readonly IRawArchiveWriter rawArchiveWriter;
 
-    public WishlistsModel(
-        IWishlistRepository repository,
-        AlpacaQuoteService quoteService,
-        AlpacaManualOrderService manualOrders,
-        ConfigCatalogService catalog,
-        RunConfigWriter configWriter,
-        PaperJobService paperJobs,
-        NewsFeedService newsFeed,
-        IRawArchiveWriter rawArchiveWriter)
+    public WishlistsModel(IWishlistRepository repository, IRawArchiveWriter rawArchiveWriter)
     {
         this.repository = repository;
-        this.quoteService = quoteService;
-        this.manualOrders = manualOrders;
-        this.catalog = catalog;
-        this.configWriter = configWriter;
-        this.paperJobs = paperJobs;
-        this.newsFeed = newsFeed;
         this.rawArchiveWriter = rawArchiveWriter;
     }
 
+    [BindProperty(SupportsGet = true)]
+    public Guid? Id { get; set; }
+
     public IReadOnlyList<Wishlist> Wishlists { get; private set; } = [];
-    public IReadOnlyList<WishlistSignal> Signals { get; private set; } = [];
-    public IReadOnlyList<MobileNewsItem> RelatedNews { get; private set; } = [];
-    public IReadOnlyList<WishlistMarketRow> MarketRows { get; private set; } = [];
-    public IReadOnlyList<RunConfigSummary> PaperConfigs { get; private set; } = [];
-    public IReadOnlyList<StrategyOption> Strategies { get; private set; } = [];
     public Wishlist? SelectedWishlist { get; private set; }
-    public string? SelectedPaperConfigPath { get; private set; }
-    public string? SelectedStrategyPath { get; private set; }
+    public IReadOnlyList<WishlistItem> ActiveItems { get; private set; } = [];
 
-    [TempData]
-    public string? StatusMessage { get; set; }
+    [TempData] public string? StatusMessage { get; set; }
+    [TempData] public string? ErrorMessage { get; set; }
 
-    [TempData]
-    public string? ErrorMessage { get; set; }
-
-    public async Task OnGetAsync(Guid? id, string? paperConfigPath, string? strategyPath, CancellationToken cancellationToken)
-    {
-        await LoadAsync(id, paperConfigPath, strategyPath, cancellationToken);
-    }
+    public async Task OnGetAsync(CancellationToken cancellationToken) => await LoadAsync(cancellationToken);
 
     public async Task<IActionResult> OnPostSaveWishlistAsync(
         Guid? wishlistId,
@@ -94,13 +53,11 @@ public sealed class WishlistsModel : PageModel
             IncludeExtendedHours = includeExtendedHours,
             IsObserved = isObserved
         }, cancellationToken);
-        StatusMessage = $"Saved wishlist {wishlistName.Trim()}.";
+        StatusMessage = $"Saved wishlist {saved.Name}.";
         return RedirectToPage("/Wishlists", new { id = saved.Id });
     }
 
-    public async Task<IActionResult> OnPostCreateWishlistAsync(
-        string wishlistName,
-        CancellationToken cancellationToken)
+    public async Task<IActionResult> OnPostCreateWishlistAsync(string wishlistName, CancellationToken cancellationToken)
     {
         if (String.IsNullOrWhiteSpace(wishlistName))
         {
@@ -148,8 +105,15 @@ public sealed class WishlistsModel : PageModel
         }
 
         await repository.AddOrUpdateItemAsync(targetWishlistId, ticker, displayName, notes, cancellationToken);
-        StatusMessage = $"Added {ticker.Trim().ToUpperInvariant()} to wishlist.";
+        StatusMessage = $"Saved {ticker.Trim().ToUpperInvariant()} in the wishlist.";
         return RedirectToPage("/Wishlists", new { id = targetWishlistId });
+    }
+
+    public async Task<IActionResult> OnPostRemoveTickerAsync(Guid wishlistId, string ticker, CancellationToken cancellationToken)
+    {
+        await repository.RemoveItemAsync(wishlistId, ticker, cancellationToken);
+        StatusMessage = $"Removed {ticker.Trim().ToUpperInvariant()} from the wishlist.";
+        return RedirectToPage("/Wishlists", new { id = wishlistId });
     }
 
     public async Task<IActionResult> OnPostImportFinvizAsync(
@@ -181,10 +145,14 @@ public sealed class WishlistsModel : PageModel
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(250)
                 .ToArray();
-
             foreach (var ticker in tickers)
             {
-                await repository.AddOrUpdateItemAsync(targetWishlistId, ticker, displayName: null, notes: "Imported from Finviz", cancellationToken);
+                await repository.AddOrUpdateItemAsync(
+                    targetWishlistId,
+                    ticker,
+                    displayName: null,
+                    notes: "Imported from Finviz",
+                    cancellationToken);
             }
 
             StatusMessage = tickers.Length == 0
@@ -206,179 +174,20 @@ public sealed class WishlistsModel : PageModel
         return RedirectToPage("/Wishlists");
     }
 
-    public async Task<IActionResult> OnPostAcknowledgeSignalAsync(Guid signalId, Guid? wishlistId, CancellationToken cancellationToken)
+    private async Task LoadAsync(CancellationToken cancellationToken)
     {
-        await repository.AcknowledgeSignalAsync(signalId, cancellationToken);
-        return RedirectToPage("/Wishlists", new { id = wishlistId });
-    }
-
-    public async Task<IActionResult> OnPostManualOrderAsync(
-        Guid wishlistId,
-        string ticker,
-        string side,
-        decimal quantity,
-        decimal limitPrice,
-        decimal? stopLossPrice,
-        decimal? takeProfitPrice,
-        string? horizon,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var result = await manualOrders.SubmitLimitOrderAsync(
-                ticker,
-                side,
-                quantity,
-                limitPrice,
-                stopLossPrice,
-                takeProfitPrice,
-                horizon,
-                cancellationToken);
-            StatusMessage = $"{result.Side.ToUpperInvariant()} order submitted for {result.Quantity} {result.Ticker} at {AlpacaLatestQuote.Format(result.LimitPrice)}. Order {result.OrderId}.";
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            ErrorMessage = exception.Message;
-        }
-
-        return RedirectToPage("/Wishlists", new { id = wishlistId });
-    }
-
-    public IActionResult OnPostRunStrategy(
-        Guid wishlistId,
-        string ticker,
-        string paperConfigPath,
-        string strategyPath)
-    {
-        try
-        {
-            var runName = $"wishlist_{ticker.Trim().ToUpperInvariant()}_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}";
-            var strategy = catalog.GetStrategies().FirstOrDefault(x => x.Path.Equals(strategyPath, StringComparison.OrdinalIgnoreCase))?.Definition;
-            var newsEnabled = strategy is not null && StrategyUsesNews(strategy);
-            var configPath = configWriter.SaveTempConfig(
-                paperConfigPath,
-                new[] { ticker },
-                strategyPath,
-                orderExpiration: "day",
-                entryOrderType: "limit",
-                allowExtendedHoursTrading: false,
-                screenerFilter: null,
-                runName: runName,
-                newsEnabled: newsEnabled);
-            var job = paperJobs.Start(runName, configPath);
-            return RedirectToPage("/PaperJob", new { id = job.JobId });
-        }
-        catch (Exception exception)
-        {
-            ErrorMessage = exception.Message;
-            return RedirectToPage("/Wishlists", new { id = wishlistId });
-        }
-    }
-
-    private async Task LoadAsync(Guid? id, string? paperConfigPath, string? strategyPath, CancellationToken cancellationToken)
-    {
-        PaperConfigs = catalog.GetPaperConfigs();
-        Strategies = catalog.GetStrategies();
-        SelectedPaperConfigPath = ResolvePaperConfigPath(paperConfigPath);
-        SelectedStrategyPath = ResolveStrategyPath(strategyPath);
-
         Wishlists = await repository.ListAsync(cancellationToken);
-        SelectedWishlist = id.HasValue
-            ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == id.Value)
+        SelectedWishlist = Id.HasValue
+            ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == Id.Value)
             : Wishlists.FirstOrDefault(wishlist => wishlist.IsDefault) ?? Wishlists.FirstOrDefault();
-
-        var activeItems = SelectedWishlist?.Items
+        Id = SelectedWishlist?.Id;
+        ActiveItems = SelectedWishlist?.Items
             .Where(item => item.Active)
-            .OrderBy(item => item.Ticker)
+            .OrderBy(item => item.Ticker, StringComparer.OrdinalIgnoreCase)
             .ToArray() ?? [];
-        var feed = ResolveQuoteFeed();
-        var quotes = await quoteService.GetLatestQuotesAsync(activeItems.Select(item => item.Ticker).ToArray(), feed, cancellationToken);
-        MarketRows = activeItems
-            .Select(item =>
-            {
-                var quote = quotes.TryGetValue(item.Ticker, out var value) ? value : new AlpacaLatestQuote(item.Ticker, null, null, null, null, null);
-                return new WishlistMarketRow(item, quote, quote.MidPrice is not null);
-            })
-            .ToArray();
-
-        Signals = await repository.GetSignalsAsync(SelectedWishlist?.Id, null, DateTimeOffset.UtcNow.AddMinutes(-20), 30, cancellationToken);
-        RelatedNews = await LoadRelatedNewsAsync(activeItems.Select(item => item.Ticker).ToArray(), cancellationToken);
     }
 
-    private async Task<IReadOnlyList<MobileNewsItem>> LoadRelatedNewsAsync(
-        IReadOnlyCollection<string> tickers,
-        CancellationToken cancellationToken)
-    {
-        var tickerSet = tickers
-            .Select(ticker => ticker.Trim().ToUpperInvariant())
-            .Where(ticker => ticker.Length > 0)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (tickerSet.Count == 0)
-        {
-            return Array.Empty<MobileNewsItem>();
-        }
-
-        var since = DateTimeOffset.UtcNow.AddHours(-4);
-        var feed = await newsFeed.GetRollingAsync(4, null, cancellationToken);
-        return feed.Items
-            .Where(item => SplitTickerDisplay(item.Ticker).Any(tickerSet.Contains))
-            .Where(item => item.Timestamp >= since)
-            .OrderByDescending(item => item.Timestamp)
-            .Take(80)
-            .ToArray();
-    }
-
-    private static IEnumerable<string> SplitTickerDisplay(string tickerDisplay)
-    {
-        return tickerDisplay
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(ticker => ticker.Trim().ToUpperInvariant())
-            .Where(ticker => ticker.Length > 0);
-    }
-
-    private static string? ResolveFinvizToken()
-    {
-        return Environment.GetEnvironmentVariable("FINVIZ_API_KEY")
-            ?? Environment.GetEnvironmentVariable("FINVIZ_API_KEY", EnvironmentVariableTarget.User);
-    }
-
-    private string ResolvePaperConfigPath(string? requested)
-    {
-        if (!String.IsNullOrWhiteSpace(requested) && PaperConfigs.Any(config => config.Path.Equals(requested, StringComparison.OrdinalIgnoreCase)))
-        {
-            return requested;
-        }
-
-        return PaperConfigs.FirstOrDefault(config => config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))?.Path
-            ?? PaperConfigs.FirstOrDefault()?.Path
-            ?? String.Empty;
-    }
-
-    private string ResolveStrategyPath(string? requested)
-    {
-        if (!String.IsNullOrWhiteSpace(requested) && Strategies.Any(strategy => strategy.Path.Equals(requested, StringComparison.OrdinalIgnoreCase)))
-        {
-            return requested;
-        }
-
-        return Strategies.FirstOrDefault(strategy => strategy.Definition.StrategyId.Contains("intraday", StringComparison.OrdinalIgnoreCase))?.Path
-            ?? Strategies.FirstOrDefault()?.Path
-            ?? String.Empty;
-    }
-
-    private string ResolveQuoteFeed()
-    {
-        var selected = PaperConfigs.FirstOrDefault(config => config.Path.Equals(SelectedPaperConfigPath, StringComparison.OrdinalIgnoreCase));
-        return selected?.Config.Providers.Alpaca.DataFeed ?? "sip";
-    }
-
-    private static bool StrategyUsesNews(TradingFlow.Domain.Strategies.StrategyDefinition strategy)
-    {
-        return strategy.EntryRules.RequirePositiveNews ||
-            strategy.EntryRules.MinNewsSentiment is not null ||
-            strategy.EntryRules.VetoNewsSentimentBelow is not null ||
-            strategy.EntryRules.MinCatalystPriceMovePct is not null ||
-            strategy.EntryRules.MaxCatalystPriceMovePct is not null ||
-            strategy.EntryRules.SetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase);
-    }
+    private static string? ResolveFinvizToken() =>
+        Environment.GetEnvironmentVariable("FINVIZ_API_KEY")
+        ?? Environment.GetEnvironmentVariable("FINVIZ_API_KEY", EnvironmentVariableTarget.User);
 }

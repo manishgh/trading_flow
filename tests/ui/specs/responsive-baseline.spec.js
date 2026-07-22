@@ -29,7 +29,7 @@ test.describe("approved UI baseline", () => {
   test("shell exposes skip navigation and the current destination", async ({ page }) => {
     await page.goto("/TradeDesk");
     await expect(page.locator('a[href="#main-content"]')).toHaveCount(1);
-    await expect(page.locator('nav [aria-current="page"]')).toHaveText("Desk");
+    await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Desk");
     await expect(page.locator('a[href="#"]')).toHaveCount(0);
   });
 

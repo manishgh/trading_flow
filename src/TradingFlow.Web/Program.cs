@@ -78,6 +78,7 @@ builder.Services.AddSingleton<WishlistUniverseResolver>();
 builder.Services.AddSingleton<WishlistBreakoutEvaluator>();
 builder.Services.AddSingleton<WishlistMarketMonitor>();
 builder.Services.AddSingleton<WishlistDeskService>();
+builder.Services.AddSingleton<OperationalStatusService>();
 builder.Services.AddSingleton<WishlistObserverService>();
 if (!uiTestMode)
 {

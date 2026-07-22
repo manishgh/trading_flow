@@ -29,3 +29,32 @@ recovery, or database backup services.
 
 Physical-device TalkBack and Android Accessibility Scanner results are manual release gates. A
 successful compile or emulator smoke test must not be reported as completion of those gates.
+
+## Completed checkpoints
+
+### UI0 - executable baseline
+
+- Playwright starts the web application in isolated UI test mode with a temporary SQLite store.
+- The baseline matrix covers desktop, tablet, phone, and 320 px reflow widths.
+- Baseline screenshots and DOM assertions establish repeatable regression evidence.
+
+### UI1 - shared responsive foundation
+
+- Primary navigation, semantic status colors, focus treatment, input sizing, and reflow behavior are
+  covered by Playwright.
+- The Android Release target compiles with generated XAML bindings and no warnings.
+
+### UI2 - web trading workstation
+
+- Desktop visual check completed at 1440 x 900: operational status, controls, market table, and the
+  selected-symbol evidence rail fit without overlap or clipped text.
+- Responsive web visual check completed at 390 x 844: the desktop table is replaced by compact
+  symbol rows, controls remain in bounds, and state is communicated with text as well as color.
+- Wishlist management visual check completed at 390 x 844 with administration isolated from order
+  and strategy actions.
+- Browser console check completed with no warnings or errors on Trade Desk and Wishlist Management.
+- Internal links rendered by both screens are fetched and required to return successful responses.
+- Full verification: 455 .NET tests, Android Release build, and the complete Playwright suite.
+
+Native screen and TalkBack verification remains a UI3 release gate and requires a connected Android
+device or emulator. It is intentionally not inferred from the successful Android build.
