@@ -102,22 +102,22 @@
 
                 <div class="grid three">
                     <div>
-                        <label>Volume spike</label>
-                        <input name="MinVolumeSpike" type="number" step="0.1" value="@entry.MinVolumeSpike" />
+                        <label for="MinVolumeSpike">Volume spike</label>
+                        <input id="MinVolumeSpike" name="MinVolumeSpike" type="number" step="0.1" value="@entry.MinVolumeSpike" />
                     </div>
                     <div>
-                        <label>Min RSI</label>
-                        <input name="MinEntryRsi" type="number" step="0.1" value="@entry.MinEntryRsi" />
+                        <label for="MinEntryRsi">Min RSI</label>
+                        <input id="MinEntryRsi" name="MinEntryRsi" type="number" step="0.1" value="@entry.MinEntryRsi" />
                     </div>
                     <div>
-                        <label>Max RSI</label>
-                        <input name="MaxEntryRsi" type="number" step="0.1" value="@entry.MaxEntryRsi" />
+                        <label for="MaxEntryRsi">Max RSI</label>
+                        <input id="MaxEntryRsi" name="MaxEntryRsi" type="number" step="0.1" value="@entry.MaxEntryRsi" />
                     </div>
                 </div>
                 <div class="grid three">
                     <div>
-                        <label>VWAP ext ATR</label>
-                        <input name="MaxVwapExtensionAtr" type="number" step="0.1" value="@entry.MaxVwapExtensionAtr" />
+                        <label for="MaxVwapExtensionAtr">VWAP ext ATR</label>
+                        <input id="MaxVwapExtensionAtr" name="MaxVwapExtensionAtr" type="number" step="0.1" value="@entry.MaxVwapExtensionAtr" />
                     </div>
                     <div>
                         <label>Confluence</label>
@@ -126,28 +126,28 @@
                         </label>
                     </div>
                     <div>
-                        <label>Confluence TF</label>
-                        <input name="ConfluenceTimeframe" value="@confluence.Timeframe" />
+                        <label for="ConfluenceTimeframe">Confluence TF</label>
+                        <input id="ConfluenceTimeframe" name="ConfluenceTimeframe" value="@confluence.Timeframe" />
                     </div>
                 </div>
                 <div class="grid three">
                     <div>
-                        <label>Confluence EMA</label>
-                        <input name="ConfluenceEmaPeriod" type="number" min="1" value="@confluence.EmaPeriod" />
+                        <label for="ConfluenceEmaPeriod">Confluence EMA</label>
+                        <input id="ConfluenceEmaPeriod" name="ConfluenceEmaPeriod" type="number" min="1" value="@confluence.EmaPeriod" />
                     </div>
                     <div>
-                        <label>Stop ATR</label>
-                        <input name="StopAtrMultiple" type="number" step="0.1" value="@exit.StopAtrMultiple" />
+                        <label for="StopAtrMultiple">Stop ATR</label>
+                        <input id="StopAtrMultiple" name="StopAtrMultiple" type="number" step="0.1" value="@exit.StopAtrMultiple" />
                     </div>
                     <div>
-                        <label>Target R</label>
-                        <input name="TargetRMultiple" type="number" step="0.1" value="@exit.TargetRMultiple" />
+                        <label for="TargetRMultiple">Target R</label>
+                        <input id="TargetRMultiple" name="TargetRMultiple" type="number" step="0.1" value="@exit.TargetRMultiple" />
                     </div>
                 </div>
                 <div class="grid three">
                     <div>
-                        <label>Max hold hours</label>
-                        <input name="MaxHoldHours" type="number" step="1" value="@exit.MaxHoldHours" />
+                        <label for="MaxHoldHours">Max hold hours</label>
+                        <input id="MaxHoldHours" name="MaxHoldHours" type="number" step="1" value="@exit.MaxHoldHours" />
                     </div>
                     <div>
                         <label>Trailing stop</label>
@@ -156,28 +156,28 @@
                         </label>
                     </div>
                     <div>
-                        <label>Trail ATR</label>
-                        <input name="TrailingStopAtrMultiple" type="number" step="0.1" value="@exit.TrailingStopAtrMultiple" />
+                        <label for="TrailingStopAtrMultiple">Trail ATR</label>
+                        <input id="TrailingStopAtrMultiple" name="TrailingStopAtrMultiple" type="number" step="0.1" value="@exit.TrailingStopAtrMultiple" />
                     </div>
                 </div>
                 <div class="grid three">
                     <div>
-                        <label>Trail activation R</label>
-                        <input name="TrailingActivationR" type="number" step="0.1" value="@exit.TrailingActivationR" />
+                        <label for="TrailingActivationR">Trail activation R</label>
+                        <input id="TrailingActivationR" name="TrailingActivationR" type="number" step="0.1" value="@exit.TrailingActivationR" />
                     </div>
                     <div>
-                        <label>Min tech exit bars</label>
-                        <input name="MinHoldBarsBeforeTechnicalExit" type="number" min="0" value="@exit.MinHoldBarsBeforeTechnicalExit" />
+                        <label for="MinHoldBarsBeforeTechnicalExit">Min tech exit bars</label>
+                        <input id="MinHoldBarsBeforeTechnicalExit" name="MinHoldBarsBeforeTechnicalExit" type="number" min="0" value="@exit.MinHoldBarsBeforeTechnicalExit" />
                     </div>
                     <div>
-                        <label>Execution TF</label>
-                        <input name="ExecutionTimeframe" value="@execution.Timeframe" />
+                        <label for="ExecutionTimeframe">Execution TF</label>
+                        <input id="ExecutionTimeframe" name="ExecutionTimeframe" value="@execution.Timeframe" />
                     </div>
                 </div>
                 <div class="grid three">
                     <div>
-                        <label>Slippage bps</label>
-                        <input name="SlippageBps" type="number" step="0.1" value="@execution.SlippageBps" />
+                        <label for="SlippageBps">Slippage bps</label>
+                        <input id="SlippageBps" name="SlippageBps" type="number" step="0.1" value="@execution.SlippageBps" />
                     </div>
                 </div>
             }

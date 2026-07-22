@@ -119,3 +119,24 @@ manual release gates and are not inferred from the successful Android Release bu
 
 Physical-device order-page screenshots, font-scale checks, TalkBack, and Android Accessibility
 Scanner remain manual release gates and are not inferred from the successful Android Release build.
+
+### UI6 - remaining pages and release audit
+
+- Backtests strategy parameters and Paper quick-edit controls now have stable identifiers and explicit
+  labels. The quick editor uses shared responsive tokens instead of a dark inline-only treatment.
+- Audit summary, heading, filters, and table containment reflow at the phone boundary; the decision
+  table scrolls inside its panel without widening the document.
+- The obsolete one-tap manual-order dialog, its unused view model, and its dead CSS were removed. The
+  reviewed order ticket is the only manual buy surface.
+- The browser matrix now covers 11 core and detail routes at 320, 390, 768, 1024, and 1440 px. It
+  asserts no document-level overflow, one page heading, unique element IDs, named visible controls
+  and links, resolved internal links, 44 px mobile shell actions, and no order submission from the
+  read-only audit suite.
+- Implemented web and Android navigation and order-safety boundaries are documented in
+  `docs/architecture.md` and `docs/ui-operator-runbook.md`.
+- Final automated verification completed: web and Android Release builds with 0 warnings and 0
+  errors, 466 .NET tests, and 30 Playwright tests passed.
+
+The structural browser assertions are not a claim of complete WCAG 2.2 AA conformance. Physical
+Android screenshots, 200% font-scale checks, TalkBack walkthrough, and Android Accessibility Scanner
+remain documented manual release gates and must be completed on a connected device before release.

@@ -6,7 +6,12 @@ const coreRoutes = [
   "/Paper",
   "/Wishlists",
   "/Backtests",
-  "/Warmup"
+  "/Warmup",
+  "/OrderTicket?ticker=MSFT&limitPrice=100",
+  "/Audit/ui-release-audit",
+  "/Job/00000000-0000-0000-0000-000000000000",
+  "/PaperJob/00000000-0000-0000-0000-000000000000",
+  "/OptimizationJob/00000000-0000-0000-0000-000000000000"
 ];
 
 const viewports = [
@@ -99,5 +104,37 @@ test.describe("approved UI baseline", () => {
     }
 
     expect(unsafeRequests).toEqual([]);
+  });
+
+  test("core routes expose named controls and unique element ids", async ({ page }) => {
+    for (const route of coreRoutes) {
+      await page.goto(route);
+      const violations = await page.evaluate(() => {
+        const visible = element => {
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        };
+        const ids = [...document.querySelectorAll("[id]")].map(element => element.id);
+        const duplicateIds = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
+        const unnamedControls = [...document.querySelectorAll("input:not([type=hidden]), select, textarea, button")]
+          .filter(visible)
+          .filter(element => {
+            const labelText = [...(element.labels ?? [])].map(label => label.textContent?.trim()).join("");
+            return !(labelText || element.getAttribute("aria-label") || element.getAttribute("aria-labelledby") || element.textContent?.trim());
+          })
+          .map(element => `${element.tagName.toLowerCase()}#${element.id || "(no-id)"}`);
+        const unnamedLinks = [...document.querySelectorAll("a[href]")]
+          .filter(visible)
+          .filter(element => !(element.textContent?.trim() || element.getAttribute("aria-label") || element.getAttribute("aria-labelledby")))
+          .map(element => element.getAttribute("href"));
+        return { duplicateIds, unnamedControls, unnamedLinks, h1Count: document.querySelectorAll("h1").length };
+      });
+
+      expect(violations.duplicateIds, `${route} has duplicate ids`).toEqual([]);
+      expect(violations.unnamedControls, `${route} has unnamed controls`).toEqual([]);
+      expect(violations.unnamedLinks, `${route} has unnamed links`).toEqual([]);
+      expect(violations.h1Count, `${route} should expose one page heading`).toBe(1);
+    }
   });
 });

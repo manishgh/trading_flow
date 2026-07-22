@@ -101,6 +101,44 @@
         accent-color: #22c55e;
         flex: 0 0 auto;
     }
+
+    .audit-page .audit-heading {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 2rem;
+    }
+
+    .audit-page .audit-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .audit-page .audit-table-panel {
+        max-width: 100%;
+        min-width: 0;
+        overflow-x: auto;
+    }
+
+    @@media (max-width: 700px) {
+        .audit-page .audit-heading {
+            align-items: flex-start;
+            flex-direction: column;
+            margin-bottom: 1rem;
+        }
+
+        .audit-page .audit-summary-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.75rem;
+        }
+
+        .audit-page .filter-bar {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
 </style>
 
 @section Scripts {
@@ -257,7 +295,7 @@
 }
 
 <div class="container audit-page" style="max-width: 1400px; margin: 0 auto; padding: 20px;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+    <div class="audit-heading">
         <div>
             <h1 style="margin: 0; color: #fff;">Audit Analyzer: @Model.RunName</h1>
             <p class="muted">Decision tree audit for strategy signal evaluations. Times shown in @Model.LocalTimeZoneLabel. Last refreshed: <span id="auditRefreshedAt">@Model.FormatLocal(DateTimeOffset.UtcNow)</span>.</p>
@@ -270,7 +308,7 @@
         <span class="muted">The run may still be evaluating, or filters may be hiding rows.</span>
     </div>
 
-        <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+        <div class="audit-summary-grid">
             <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
                 <div class="muted">Evaluations</div>
                 <div id="auditEvaluations" class="audit-card-value" style="font-size: 1.8rem; font-weight: 700;">@Model.Records.Count</div>
@@ -335,7 +373,7 @@
             <button id="clearAuditFilters" type="button" class="button secondary">Clear Filters</button>
         </div>
 
-        <div class="audit-panel" style="border-radius: 8px; padding: 1rem; overflow-x: auto;">
+        <div class="audit-panel audit-table-panel" style="border-radius: 8px; padding: 1rem;">
             <table class="table" style="width: 100%; border-collapse: collapse;">
                 <thead>
                     <tr style="border-bottom: 1px solid #444; text-align: left;">

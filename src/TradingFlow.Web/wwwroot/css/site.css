@@ -879,8 +879,36 @@ pre {
   margin-block: 16px;
 }
 
+.strategy-quick-edit {
+  background: var(--accent-soft);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  margin-block: 16px;
+  padding: 16px;
+}
+
+.strategy-quick-edit h3 {
+  color: var(--ink);
+  margin-top: 0;
+}
+
+.strategy-quick-edit-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.strategy-quick-edit-grid > div {
+  display: grid;
+  gap: 6px;
+}
+
 @media (max-width: 640px) {
   .compact-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .strategy-quick-edit-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1325,39 +1353,4 @@ button.danger, .button.danger {
   .workstation-hero h1 {
     font-size: 25px;
   }
-}
-.order-dialog {
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    color: var(--ink);
-    max-width: 520px;
-    padding: 20px;
-    width: calc(100% - 32px);
-}
-
-.order-dialog::backdrop {
-    background: rgb(15 23 42 / 55%);
-}
-
-.order-dialog header h2,
-.order-dialog header p {
-    margin: 0 0 6px;
-}
-
-.order-dialog-grid {
-    display: grid;
-    gap: 12px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin: 18px 0;
-}
-
-.order-dialog-grid label {
-    display: grid;
-    gap: 6px;
-}
-
-@media (max-width: 560px) {
-    .order-dialog-grid {
-        grid-template-columns: 1fr;
-    }
 }

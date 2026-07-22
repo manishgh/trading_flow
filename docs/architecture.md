@@ -73,29 +73,24 @@ Partial exits are not supported yet because `BacktestTrade` currently represents
 
 ## Web UI
 
-`TradingFlow.Web` is an ASP.NET Core Razor Pages app for local research and paper operations:
+`TradingFlow.Web` is an ASP.NET Core Razor Pages app for local research and paper operations. Its
+primary navigation follows the operator's workflow:
 
 ```text
-Dashboard
-  -> recent jobs
-  -> quick navigation
-
-Backtest Lab
-  -> read wishlist universe and strategy YAML
-  -> select wishlist/Finviz universe and strategies
-  -> edit strategy parameters
-  -> generate config under configs/backtest/ui-runs
-  -> run BacktestRunner in background
-  -> preview winner, trades, diagnostics, and analyzer suggestions
-
-Paper Lab
-  -> resolve selected wishlist and paper profile
-  -> validate Alpaca credentials with read-only checks
-  -> launch and monitor paper jobs
-  -> show live market metrics, broker orders/positions, profiler data, and decision audits
+Desk        -> wishlist monitoring, current evidence, news, and explicit symbol selection
+Positions   -> broker positions, protection state, P/L, and reviewed close workflow
+Research    -> backtests, optimization jobs, result details, and decision audits
+Operations  -> paper runs, paper-job details, warm-up, and wishlist administration
 ```
 
-The UI writes config and calls the same engine used by CLI/worker flows.
+Trade Desk rows are read-only. A protected paper buy starts only after explicit symbol selection and
+a server-owned review on the dedicated order ticket. The review token is short-lived and the server
+revalidates broker and market evidence before confirmation. UI code calls application APIs; strategy,
+risk, admission, execution, and orchestration remain outside Razor page logic.
+
+The Android shell uses `Watch`, `Positions`, `Activity`, and `More`. Symbol details and the reviewed
+paper-order ticket are secondary routes, so monitoring stays compact while execution remains
+deliberate. See `docs/ui-operator-runbook.md` for the implemented navigation and safety boundaries.
 
 ## Timeframe Model
 

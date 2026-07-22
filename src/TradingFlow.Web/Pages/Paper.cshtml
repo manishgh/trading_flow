@@ -80,28 +80,28 @@
                 <div class="muted" style="margin-top: 0.4rem;">@AuditLine(selectedStrategy)</div>
             }
 
-            <div style="background: #2a2a2a; border-left: 4px solid #007acc; padding: 1rem; margin-top: 1rem; border-radius: 4px; margin-bottom: 1rem;">
-                <h3 style="margin-top: 0; color: #66b3ff;">Quick Edit</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem;">
+            <div class="strategy-quick-edit">
+                <h3>Quick Edit</h3>
+                <div class="strategy-quick-edit-grid">
                     <div>
-                        <label style="color: #ddd;">Timeframe <span class="tf-help" title="Signal timeframe for the strategy pattern. Example: swing strategies usually evaluate 1d candles; intraday patterns may evaluate 5m while executing on 1m.">?</span></label>
-                        <input type="text" name="QuickEditTimeframe" value="@Model.QuickEditTimeframe" />
+                        <label for="QuickEditTimeframe">Timeframe <span class="tf-help" title="Signal timeframe for the strategy pattern. Example: swing strategies usually evaluate 1d candles; intraday patterns may evaluate 5m while executing on 1m.">?</span></label>
+                        <input id="QuickEditTimeframe" type="text" name="QuickEditTimeframe" value="@Model.QuickEditTimeframe" />
                     </div>
                     <div>
-                        <label style="color: #ddd;">Setup Type <span class="tf-help" title="Names the signal pattern/gate used by the strategy, such as ross_gap_go_bull_flag or swing_reclaim.">?</span></label>
-                        <input type="text" name="QuickEditSetupType" value="@Model.QuickEditSetupType" />
+                        <label for="QuickEditSetupType">Setup Type <span class="tf-help" title="Names the signal pattern/gate used by the strategy, such as ross_gap_go_bull_flag or swing_reclaim.">?</span></label>
+                        <input id="QuickEditSetupType" type="text" name="QuickEditSetupType" value="@Model.QuickEditSetupType" />
                     </div>
                     <div>
-                        <label style="color: #ddd;">Min Volume Spike / RVOL <span class="tf-help" title="Minimum standard relative volume. The engine compares current cumulative session volume against completed prior sessions, closer to Finviz-style attention volume. 1.0 means normal; 2.0 means twice normal.">?</span></label>
-                        <input type="text" name="QuickEditMinVolumeSpike" value="@Model.QuickEditMinVolumeSpike" />
+                        <label for="QuickEditMinVolumeSpike">Min Volume Spike / RVOL <span class="tf-help" title="Minimum standard relative volume. The engine compares current cumulative session volume against completed prior sessions, closer to Finviz-style attention volume. 1.0 means normal; 2.0 means twice normal.">?</span></label>
+                        <input id="QuickEditMinVolumeSpike" type="text" name="QuickEditMinVolumeSpike" value="@Model.QuickEditMinVolumeSpike" />
                     </div>
                     <div>
-                        <label style="color: #ddd;">Stop ATR Multiple <span class="tf-help" title="Stop distance expressed in ATR. Higher values give trades more room but increase risk per share.">?</span></label>
-                        <input type="text" name="QuickEditStopAtr" value="@Model.QuickEditStopAtr" />
+                        <label for="QuickEditStopAtr">Stop ATR Multiple <span class="tf-help" title="Stop distance expressed in ATR. Higher values give trades more room but increase risk per share.">?</span></label>
+                        <input id="QuickEditStopAtr" type="text" name="QuickEditStopAtr" value="@Model.QuickEditStopAtr" />
                     </div>
                     <div>
-                        <label style="color: #ddd;">Target R Multiple <span class="tf-help" title="Profit target measured in R, where 1R equals the initial risk from entry to stop.">?</span></label>
-                        <input type="text" name="QuickEditTargetR" value="@Model.QuickEditTargetR" />
+                        <label for="QuickEditTargetR">Target R Multiple <span class="tf-help" title="Profit target measured in R, where 1R equals the initial risk from entry to stop.">?</span></label>
+                        <input id="QuickEditTargetR" type="text" name="QuickEditTargetR" value="@Model.QuickEditTargetR" />
                     </div>
                 </div>
             </div>
