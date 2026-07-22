@@ -141,30 +141,11 @@
                                        IsVisible="{Binding HasMovement}" />
                             </Grid>
 
-                            <VerticalStackLayout IsVisible="{Binding IsExpanded}" Spacing="5">
-                                <Label Text="TradingFlow decision"
-                                       FontAttributes="Bold"
-                                       FontSize="12" />
-                                <Label Text="{Binding EligibilityReason}"
-                                       FontSize="13"
-                                       TextColor="{StaticResource TextSecondary}"
-                                       LineBreakMode="WordWrap" />
-                                <Label Text="{Binding TradeText}"
-                                       FontSize="13"
-                                       TextColor="{StaticResource TextSecondary}"
-                                       LineBreakMode="WordWrap" />
-                                <Label Text="{Binding NewsText}"
-                                       FontSize="13"
-                                       TextColor="{StaticResource Primary}"
-                                       LineBreakMode="WordWrap"
-                                       MaxLines="3" />
-                            </VerticalStackLayout>
-
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                                 <Button Text="Details"
-                                        Clicked="OnToggleTickerDetails"
-                                        CommandParameter="{Binding .}"
-                                        SemanticProperties.Description="Show or hide market and eligibility details" />
+                                       Clicked="OnToggleTickerDetails"
+                                       CommandParameter="{Binding .}"
+                                        SemanticProperties.Description="Open market, eligibility, and model evidence details" />
                                 <Button Grid.Column="1"
                                         Text="News"
                                         Clicked="OnOpenTickerNews"

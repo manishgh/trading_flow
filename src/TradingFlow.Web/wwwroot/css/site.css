@@ -790,6 +790,65 @@ pre {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+.segmented-links {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 10px 0 12px;
+}
+.segmented-links a {
+  border: 1px solid var(--line);
+  color: var(--muted);
+  min-height: 36px;
+  padding: 8px;
+  text-align: center;
+  text-transform: capitalize;
+}
+.segmented-links a + a {
+  border-left: 0;
+}
+.segmented-links a.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+}
+.evidence-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+.evidence-grid div {
+  min-width: 0;
+}
+.evidence-grid dt {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.evidence-grid dd {
+  font-variant-numeric: tabular-nums;
+  margin: 2px 0 0;
+}
+.truncate-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prediction-view-block {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+  padding-top: 10px;
+}
+.prediction-view-block span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.compact-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
 .symbol-actions {
   display: grid;
   gap: 8px;

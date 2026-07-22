@@ -220,6 +220,87 @@ public sealed record MobileWishlistDeskRowResponse(
     MobileNewsItem? LatestNews,
     MobileRunningTrade? Trade);
 
+public sealed record MobileSymbolIntelligenceResponse(
+    string Ticker,
+    DateTimeOffset FetchedAtUtc,
+    MobileTradingFlowDecisionResponse TradingFlowDecision,
+    MobileModelIntelligenceResponse ModelIntelligence);
+
+public sealed record MobileTradingFlowDecisionResponse(
+    string EligibilityLabel,
+    string EligibilityReason,
+    bool HasOpenTrade,
+    MobileRunningTrade? Trade,
+    MobileWishlistSignalResponse? LatestSignal,
+    decimal? BidPrice,
+    decimal? AskPrice,
+    decimal? MidPrice,
+    DateTimeOffset? QuoteTimestamp);
+
+public sealed record MobileModelIntelligenceResponse(
+    string ContractVersion,
+    string AvailabilityStatus,
+    string? AvailabilityReason,
+    bool IsValidPromotedEvidence,
+    string Mode,
+    string RequestedHorizon,
+    string ResolvedHorizon,
+    string FinalSignal,
+    string ReadinessStatus,
+    IReadOnlyList<string> ReadinessReasons,
+    string? RequestId,
+    string? SnapshotId,
+    DateTimeOffset? GeneratedAtUtc,
+    string? ModelStatus,
+    string? ModelType,
+    string? ModelSchemaVersion,
+    string? ModelTarget,
+    string? ModelArtifactSha256,
+    string? ModelTrainingDataEnd,
+    MobileSwingIntelligenceResponse? Swing,
+    MobileIntradayIntelligenceResponse? Intraday);
+
+public sealed record MobileSwingIntelligenceResponse(
+    decimal? Probability,
+    decimal? DecisionScore,
+    string Signal,
+    int? Rank,
+    decimal? Return1D,
+    decimal? VolumeZ20,
+    MobileCatalystIntelligenceResponse Catalyst,
+    decimal GlobalContextImpact,
+    IReadOnlyList<string> ActiveFlashpoints,
+    string ReadinessStatus,
+    IReadOnlyList<string> ReadinessReasons,
+    string? LatestPriceDate,
+    string PriceFeed);
+
+public sealed record MobileIntradayIntelligenceResponse(
+    decimal? OpportunityProbability,
+    decimal? DownsideProbability,
+    decimal? DecisionScore,
+    string Signal,
+    int? Rank,
+    decimal? RelativeVolume,
+    decimal? Rsi14,
+    decimal? MacdSignalDiff,
+    decimal? EntryStopPct,
+    decimal? EntryTargetPct,
+    MobileCatalystIntelligenceResponse Catalyst,
+    string ReadinessStatus,
+    IReadOnlyList<string> ReadinessReasons,
+    string? LatestPriceDate,
+    string PriceFeed);
+
+public sealed record MobileCatalystIntelligenceResponse(
+    string Status,
+    string Direction,
+    decimal Score,
+    int EventCount,
+    decimal Relevance,
+    decimal? MinutesSinceLatest,
+    IReadOnlyList<string> Reasons);
+
 public sealed record MobileWishlistSaveRequest(
     Guid? Id,
     string Name,

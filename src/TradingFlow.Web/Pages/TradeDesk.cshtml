@@ -10,9 +10,9 @@
     static string PlClass(decimal value) => value > 0 ? "good" : value < 0 ? "bad" : "muted";
     static string StateClass(string value) => value.ToLowerInvariant() switch
     {
-        "connected" or "ready" or "allowed" or "regular" => "status-ok",
-        "delayed" or "attention" or "premarket" or "afterhours" or "after-hours" or "overnight" => "status-warn",
-        "stale" or "disconnected" or "blocked" or "closed" => "status-bad",
+        "connected" or "ready" or "allowed" or "regular" or "available" or "valid" or "promoted" => "status-ok",
+        "delayed" or "attention" or "premarket" or "afterhours" or "after-hours" or "overnight" or "not_configured" or "unavailable" or "warn" => "status-warn",
+        "stale" or "disconnected" or "blocked" or "closed" or "invalid" or "incompatible" => "status-bad",
         _ => "status-neutral"
     };
     static string SourceLabel(string source) => source switch
@@ -22,6 +22,9 @@
         "manual" => "Manual",
         _ => source
     };
+    static string Percent(decimal? value) => value.HasValue ? $"{value.Value:P1}" : "--";
+    static string Number(decimal? value, string format = "0.00") => value.HasValue ? value.Value.ToString(format) : "--";
+    static string ShortId(string? value) => String.IsNullOrWhiteSpace(value) ? "--" : value[..Math.Min(12, value.Length)];
 }
 
 <header class="page-header compact-page-header">
@@ -293,6 +296,78 @@
                     <a class="button secondary" asp-page="/RunningTrades">Open positions</a>
                 </div>
             </section>
+
+            @if (Model.SymbolIntelligence is { } intelligence)
+            {
+                var modelEvidence = intelligence.ModelIntelligence;
+                <section class="panel evidence-block model-intelligence" aria-labelledby="model-intelligence-heading">
+                    <div class="section-heading compact-heading">
+                        <div>
+                            <h3 id="model-intelligence-heading">Model Intelligence</h3>
+                            <p>Read-only prediction evidence. TradingFlow eligibility remains authoritative.</p>
+                        </div>
+                        <span class="signal-badge @StateClass(modelEvidence.AvailabilityStatus)">@modelEvidence.AvailabilityStatus</span>
+                    </div>
+                    <nav class="segmented-links" aria-label="Prediction view">
+                        @foreach (var view in new[] { "unified", "swing", "intraday" })
+                        {
+                            <a class="@(Model.PredictionMode == view ? "active" : null)"
+                               asp-page="/TradeDesk"
+                               asp-route-id="@selectedId"
+                               asp-route-source="@Model.Source"
+                               asp-route-strategyPath="@Model.SelectedStrategyPath"
+                               asp-route-ticker="@selected.Ticker"
+                               asp-route-predictionMode="@view"
+                               asp-route-predictionHorizon="@Model.PredictionHorizon">@view</a>
+                        }
+                    </nav>
+                    @if (modelEvidence.AvailabilityStatus != "available")
+                    {
+                        <p class="empty-copy">@(modelEvidence.AvailabilityReason ?? "Prediction evidence is unavailable.")</p>
+                    }
+                    else
+                    {
+                        <dl class="evidence-grid">
+                            <div><dt>Signal</dt><dd>@modelEvidence.FinalSignal</dd></div>
+                            <div><dt>Readiness</dt><dd>@modelEvidence.ReadinessStatus</dd></div>
+                            <div><dt>Horizon</dt><dd>@modelEvidence.ResolvedHorizon</dd></div>
+                            <div><dt>Generated</dt><dd>@modelEvidence.GeneratedAtUtc?.ToString("HH:mm:ss 'UTC'")</dd></div>
+                            <div><dt>Model</dt><dd>@(modelEvidence.ModelStatus ?? "unknown")</dd></div>
+                            <div><dt>Snapshot</dt><dd class="truncate-value" title="@modelEvidence.SnapshotId">@ShortId(modelEvidence.SnapshotId)</dd></div>
+                        </dl>
+                        @if (modelEvidence.Swing is { } swing)
+                        {
+                            <div class="prediction-view-block">
+                                <strong>Swing · @swing.Signal</strong>
+                                <span>Probability @Percent(swing.Probability) · score @Number(swing.DecisionScore)</span>
+                                <span>Catalyst @swing.Catalyst.Status / @swing.Catalyst.Direction · context @Number(swing.GlobalContextImpact)</span>
+                                <span>@swing.PriceFeed · latest @swing.LatestPriceDate</span>
+                            </div>
+                        }
+                        @if (modelEvidence.Intraday is { } intraday)
+                        {
+                            <div class="prediction-view-block">
+                                <strong>Intraday · @intraday.Signal</strong>
+                                <span>Opportunity @Percent(intraday.OpportunityProbability) · downside @Percent(intraday.DownsideProbability)</span>
+                                <span>RVOL @Number(intraday.RelativeVolume) · RSI @Number(intraday.Rsi14) · MACD @Number(intraday.MacdSignalDiff, "0.0000")</span>
+                                <span>Catalyst @intraday.Catalyst.Status / @intraday.Catalyst.Direction</span>
+                            </div>
+                        }
+                        @if (modelEvidence.ReadinessReasons.Count > 0)
+                        {
+                            <details>
+                                <summary>Readiness evidence</summary>
+                                <ul class="compact-list">
+                                    @foreach (var reason in modelEvidence.ReadinessReasons)
+                                    {
+                                        <li>@reason</li>
+                                    }
+                                </ul>
+                            </details>
+                        }
+                    }
+                </section>
+            }
 
             <section class="panel evidence-block" aria-labelledby="selected-signal-heading">
                 <h3 id="selected-signal-heading">Latest signal</h3>

@@ -77,6 +77,26 @@ test.describe("UI2 web trading workstation", () => {
     await expect(page.locator("[data-selected-news-title]")).toHaveText("Shared catalyst");
   });
 
+  test("model intelligence is explicit, separate, and non-blocking when unconfigured", async ({ page }) => {
+    const targetId = await openSeededDesk(page);
+    await page.goto(`/TradeDesk?id=${targetId}`);
+
+    await expect(page.getByRole("heading", { name: "Model Intelligence" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Wishlist News" })).toBeVisible();
+
+    await page.goto(`/TradeDesk?id=${targetId}&ticker=${testTicker}&predictionMode=invalid-value`);
+    await expect(page.getByRole("heading", { name: "TradingFlow decision" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Model Intelligence" })).toBeVisible();
+    await expect(page.locator(".model-intelligence .signal-badge")).toHaveText("not_configured");
+    await expect(page.locator(".model-intelligence")).toContainText("TradingFlow eligibility remains authoritative");
+    await expect(page.locator('.segmented-links a.active')).toHaveText("unified");
+
+    await page.getByRole("link", { name: "swing", exact: true }).click();
+    await expect(page).toHaveURL(/predictionMode=swing/);
+    await expect(page.locator('.segmented-links a.active')).toHaveText("swing");
+    await expect(page.getByRole("heading", { name: "Wishlist News" })).toBeVisible();
+  });
+
   test("desktop renders the dense table and mobile renders only compact symbol rows", async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await openSeededDesk(page);

@@ -13,23 +13,28 @@ public sealed class TradeDeskModel : PageModel
     private readonly ConfigCatalogService catalog;
     private readonly WishlistDeskService deskService;
     private readonly OperationalStatusService operationalStatus;
+    private readonly SymbolIntelligenceService symbolIntelligence;
 
     public TradeDeskModel(
         IWishlistRepository repository,
         ConfigCatalogService catalog,
         WishlistDeskService deskService,
-        OperationalStatusService operationalStatus)
+        OperationalStatusService operationalStatus,
+        SymbolIntelligenceService symbolIntelligence)
     {
         this.repository = repository;
         this.catalog = catalog;
         this.deskService = deskService;
         this.operationalStatus = operationalStatus;
+        this.symbolIntelligence = symbolIntelligence;
     }
 
     [BindProperty(SupportsGet = true)] public Guid? Id { get; set; }
     [BindProperty(SupportsGet = true)] public string Source { get; set; } = "all";
     [BindProperty(SupportsGet = true)] public string? StrategyPath { get; set; }
     [BindProperty(SupportsGet = true)] public string? Ticker { get; set; }
+    [BindProperty(SupportsGet = true)] public string PredictionMode { get; set; } = "unified";
+    [BindProperty(SupportsGet = true)] public string PredictionHorizon { get; set; } = "auto";
 
     public IReadOnlyList<Wishlist> Wishlists { get; private set; } = [];
     public Wishlist? SelectedWishlist { get; private set; }
@@ -42,6 +47,7 @@ public sealed class TradeDeskModel : PageModel
     public IReadOnlyList<MobileRunningTrade> RunningTrades { get; private set; } = [];
     public decimal TotalPl { get; private set; }
     public WishlistDeskRow? SelectedRow { get; private set; }
+    public MobileSymbolIntelligenceResponse? SymbolIntelligence { get; private set; }
     public OperationalStatusSnapshot OperationalStatus { get; private set; } = new(
         "PAPER", "unknown", "Status has not loaded.", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
         "disconnected", "No quote has been received.", "UNKNOWN", "not connected",
@@ -112,6 +118,17 @@ public sealed class TradeDeskModel : PageModel
             ? null
             : Rows.FirstOrDefault(row => row.Ticker.Equals(Ticker, StringComparison.OrdinalIgnoreCase));
         Ticker = SelectedRow?.Ticker;
+        PredictionMode = MarketPredictorHttpClient.TryNormalizeMode(PredictionMode, out var normalizedMode)
+            ? normalizedMode
+            : "unified";
+        PredictionHorizon = String.IsNullOrWhiteSpace(PredictionHorizon) ? "auto" : PredictionHorizon.Trim().ToLowerInvariant();
+        SymbolIntelligence = SelectedRow is null
+            ? null
+            : await symbolIntelligence.BuildAsync(
+                SelectedRow,
+                PredictionMode,
+                PredictionHorizon,
+                cancellationToken);
         OperationalStatus = await operationalStatus.GetAsync(
             quoteFeed,
             snapshot.Rows.Select(row => row.Quote.Timestamp),

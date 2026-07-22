@@ -79,6 +79,33 @@ builder.Services.AddSingleton<WishlistBreakoutEvaluator>();
 builder.Services.AddSingleton<WishlistMarketMonitor>();
 builder.Services.AddSingleton<WishlistDeskService>();
 builder.Services.AddSingleton<OperationalStatusService>();
+var predictorBaseUrlText = builder.Configuration["MarketPredictor:BaseUrl"]
+    ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MARKET_PREDICTOR_URL");
+var predictorBaseUri = Uri.TryCreate(predictorBaseUrlText, UriKind.Absolute, out var configuredPredictorUri)
+    ? configuredPredictorUri
+    : null;
+var predictorTimeoutSeconds = ParsePositiveInteger(
+    builder.Configuration["MarketPredictor:RequestTimeoutSeconds"]
+        ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MARKET_PREDICTOR_TIMEOUT_SECONDS"),
+    5);
+var predictorMaximumAgeMinutes = ParsePositiveInteger(
+    builder.Configuration["MarketPredictor:MaximumEvidenceAgeMinutes"]
+        ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MARKET_PREDICTOR_MAX_AGE_MINUTES"),
+    15);
+var predictorOptions = new MarketPredictorOptions(
+    predictorBaseUri,
+    TimeSpan.FromSeconds(predictorTimeoutSeconds),
+    TimeSpan.FromMinutes(predictorMaximumAgeMinutes));
+builder.Services.AddSingleton(predictorOptions);
+builder.Services.AddHttpClient<MarketPredictorHttpClient>(client =>
+{
+    if (predictorOptions.BaseUri is not null)
+    {
+        client.BaseAddress = predictorOptions.BaseUri;
+    }
+    client.Timeout = Timeout.InfiniteTimeSpan;
+});
+builder.Services.AddTransient<SymbolIntelligenceService>();
 builder.Services.AddSingleton<WishlistObserverService>();
 if (!uiTestMode)
 {
@@ -573,4 +600,9 @@ static IEnumerable<string> SplitTickerDisplay(string tickerDisplay)
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Select(ticker => ticker.Trim().ToUpperInvariant())
         .Where(ticker => ticker.Length > 0);
+}
+
+static int ParsePositiveInteger(string? value, int defaultValue)
+{
+    return Int32.TryParse(value, out var parsed) && parsed > 0 ? parsed : defaultValue;
 }

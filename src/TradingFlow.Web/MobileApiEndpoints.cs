@@ -65,6 +65,55 @@ public static class MobileApiEndpoints
             return Results.Ok(ToMobileWishlistDesk(wishlist, snapshot));
         });
 
+        group.MapGet("/wishlists/{wishlistId:guid}/symbols/{ticker}/intelligence", async (
+            Guid wishlistId,
+            string ticker,
+            string? mode,
+            string? horizon,
+            string? feed,
+            IWishlistRepository wishlists,
+            WishlistDeskService desk,
+            SymbolIntelligenceService intelligence,
+            CancellationToken cancellationToken) =>
+        {
+            var wishlist = await wishlists.GetByIdAsync(wishlistId, cancellationToken);
+            if (wishlist is null)
+            {
+                return Results.NotFound();
+            }
+
+            string predictionMode;
+            try
+            {
+                predictionMode = MarketPredictorHttpClient.NormalizeMode(mode ?? "unified");
+            }
+            catch (ArgumentOutOfRangeException exception)
+            {
+                return Results.BadRequest(exception.Message);
+            }
+
+            var normalizedTicker = ticker.Trim().ToUpperInvariant();
+            var snapshot = await desk.BuildAsync(
+                wishlist,
+                String.IsNullOrWhiteSpace(feed) ? "sip" : feed,
+                TimeSpan.FromMinutes(20),
+                TimeSpan.FromHours(4),
+                cancellationToken);
+            var row = snapshot.Rows.FirstOrDefault(candidate =>
+                candidate.Ticker.Equals(normalizedTicker, StringComparison.OrdinalIgnoreCase));
+            if (row is null)
+            {
+                return Results.NotFound($"Ticker {normalizedTicker} is not active in wishlist {wishlist.Name}.");
+            }
+
+            var response = await intelligence.BuildAsync(
+                row,
+                predictionMode,
+                String.IsNullOrWhiteSpace(horizon) ? "auto" : horizon,
+                cancellationToken);
+            return Results.Ok(response);
+        });
+
         group.MapPost("/wishlists", async (
             MobileWishlistSaveRequest request,
             IWishlistRepository wishlists,

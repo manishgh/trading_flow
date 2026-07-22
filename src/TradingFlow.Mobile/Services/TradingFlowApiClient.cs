@@ -249,6 +249,20 @@ public sealed class TradingFlowApiClient
             cancellationToken);
     }
 
+    public Task<MobileSymbolIntelligenceResponse?> GetSymbolIntelligenceAsync(
+        Guid wishlistId,
+        string ticker,
+        string mode = "unified",
+        string horizon = "auto",
+        CancellationToken cancellationToken = default)
+    {
+        var symbol = Uri.EscapeDataString(ticker.Trim().ToUpperInvariant());
+        var query = $"mode={Uri.EscapeDataString(mode)}&horizon={Uri.EscapeDataString(horizon)}";
+        return httpClient.GetFromJsonAsync<MobileSymbolIntelligenceResponse>(
+            $"{BaseUrl}/api/mobile/wishlists/{wishlistId}/symbols/{symbol}/intelligence?{query}",
+            cancellationToken);
+    }
+
     public async Task AcknowledgeWishlistSignalAsync(Guid signalId, CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/wishlists/signals/{signalId}/ack", null, cancellationToken);
@@ -769,6 +783,118 @@ public sealed record MobileWishlistDeskRowResponse(
             ? LatestNews.DisplayHeadline
             : Item.DetailText;
 }
+
+public sealed record MobileSymbolIntelligenceResponse(
+    string Ticker,
+    DateTimeOffset FetchedAtUtc,
+    MobileTradingFlowDecisionResponse TradingFlowDecision,
+    MobileModelIntelligenceResponse ModelIntelligence);
+
+public sealed record MobileTradingFlowDecisionResponse(
+    string EligibilityLabel,
+    string EligibilityReason,
+    bool HasOpenTrade,
+    MobileRunningTrade? Trade,
+    MobileWishlistSignalResponse? LatestSignal,
+    decimal? BidPrice,
+    decimal? AskPrice,
+    decimal? MidPrice,
+    DateTimeOffset? QuoteTimestamp)
+{
+    public string QuoteText => $"Bid {Format(BidPrice)} | Mid {Format(MidPrice)} | Ask {Format(AskPrice)}";
+    public string QuoteAgeText => QuoteTimestamp is null
+        ? "Quote timestamp unavailable"
+        : $"Quote {QuoteTimestamp.Value.LocalDateTime:dd/MM HH:mm:ss}";
+
+    private static string Format(decimal? value) => value.HasValue ? value.Value.ToString("C2") : "--";
+}
+
+public sealed record MobileModelIntelligenceResponse(
+    string ContractVersion,
+    string AvailabilityStatus,
+    string? AvailabilityReason,
+    bool IsValidPromotedEvidence,
+    string Mode,
+    string RequestedHorizon,
+    string ResolvedHorizon,
+    string FinalSignal,
+    string ReadinessStatus,
+    IReadOnlyList<string> ReadinessReasons,
+    string? RequestId,
+    string? SnapshotId,
+    DateTimeOffset? GeneratedAtUtc,
+    string? ModelStatus,
+    string? ModelType,
+    string? ModelSchemaVersion,
+    string? ModelTarget,
+    string? ModelArtifactSha256,
+    string? ModelTrainingDataEnd,
+    MobileSwingIntelligenceResponse? Swing,
+    MobileIntradayIntelligenceResponse? Intraday)
+{
+    public string StatusText => AvailabilityStatus == "available"
+        ? $"{ReadinessStatus} | {FinalSignal} | {ResolvedHorizon}"
+        : $"{AvailabilityStatus} | {AvailabilityReason}";
+    public string GeneratedText => GeneratedAtUtc is null
+        ? "No prediction timestamp"
+        : $"Generated {GeneratedAtUtc.Value:dd/MM HH:mm:ss} UTC";
+    public string ModelText => $"Model {ModelStatus ?? "unknown"} | {ModelType ?? "type unavailable"}";
+}
+
+public sealed record MobileSwingIntelligenceResponse(
+    decimal? Probability,
+    decimal? DecisionScore,
+    string Signal,
+    int? Rank,
+    decimal? Return1D,
+    decimal? VolumeZ20,
+    MobileCatalystIntelligenceResponse Catalyst,
+    decimal GlobalContextImpact,
+    IReadOnlyList<string> ActiveFlashpoints,
+    string ReadinessStatus,
+    IReadOnlyList<string> ReadinessReasons,
+    string? LatestPriceDate,
+    string PriceFeed)
+{
+    public string ProbabilityText => $"Probability {FormatPercent(Probability)} | score {Format(DecisionScore)}";
+    public string ContextText => $"Catalyst {Catalyst.Status}/{Catalyst.Direction} | context {GlobalContextImpact:0.00}";
+
+    private static string FormatPercent(decimal? value) => value.HasValue ? value.Value.ToString("P1") : "--";
+    private static string Format(decimal? value) => value.HasValue ? value.Value.ToString("0.00") : "--";
+}
+
+public sealed record MobileIntradayIntelligenceResponse(
+    decimal? OpportunityProbability,
+    decimal? DownsideProbability,
+    decimal? DecisionScore,
+    string Signal,
+    int? Rank,
+    decimal? RelativeVolume,
+    decimal? Rsi14,
+    decimal? MacdSignalDiff,
+    decimal? EntryStopPct,
+    decimal? EntryTargetPct,
+    MobileCatalystIntelligenceResponse Catalyst,
+    string ReadinessStatus,
+    IReadOnlyList<string> ReadinessReasons,
+    string? LatestPriceDate,
+    string PriceFeed)
+{
+    public string ProbabilityText => $"Opportunity {FormatPercent(OpportunityProbability)} | downside {FormatPercent(DownsideProbability)}";
+    public string TechnicalText => $"RVOL {Format(RelativeVolume)} | RSI {Format(Rsi14)} | MACD {Format(MacdSignalDiff, "0.0000")}";
+
+    private static string FormatPercent(decimal? value) => value.HasValue ? value.Value.ToString("P1") : "--";
+    private static string Format(decimal? value, string pattern = "0.00") => value.HasValue ? value.Value.ToString(pattern) : "--";
+}
+
+public sealed record MobileCatalystIntelligenceResponse(
+    string Status,
+    string Direction,
+    decimal Score,
+    int EventCount,
+    decimal Relevance,
+    decimal? MinutesSinceLatest,
+    IReadOnlyList<string> Reasons);
 
 public sealed record MobileWishlistSaveRequest(
     Guid? Id,

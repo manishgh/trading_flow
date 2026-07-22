@@ -452,11 +452,12 @@ public partial class WishlistsPage : ContentPage
         await NewsNavigation.OpenAsync(card.NewsUrl);
     }
 
-    private void OnToggleTickerDetails(object? sender, EventArgs e)
+    private async void OnToggleTickerDetails(object? sender, EventArgs e)
     {
-        if (sender is Button { CommandParameter: WishlistStockCard card })
+        if (selectedWishlist is not null && sender is Button { CommandParameter: WishlistStockCard card })
         {
-            card.IsExpanded = !card.IsExpanded;
+            await Shell.Current.GoToAsync(
+                $"{nameof(SymbolDetailPage)}?wishlistId={selectedWishlist.Id}&ticker={Uri.EscapeDataString(card.Ticker)}");
         }
     }
 
@@ -539,7 +540,6 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
     private string? newsUrl;
     private Color statusColor = Color.FromArgb("#667085");
     private bool hasMovement;
-    private bool isExpanded;
     private bool hasNewsLink;
 
     public WishlistStockCard(MobileWishlistItemResponse item)
@@ -637,12 +637,6 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
     {
         get => hasNewsLink;
         private set => SetField(ref hasNewsLink, value);
-    }
-
-    public bool IsExpanded
-    {
-        get => isExpanded;
-        set => SetField(ref isExpanded, value);
     }
 
     public Color MovementColor => Color.FromArgb("#667085");

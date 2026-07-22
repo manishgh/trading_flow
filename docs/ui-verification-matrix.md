@@ -76,3 +76,24 @@ device or emulator. It is intentionally not inferred from the successful Android
 Physical-device screenshots, font-scale checks, TalkBack, and Android Accessibility Scanner remain
 manual release gates. They require a connected Android device or emulator and are not inferred from
 the successful generated-XAML Release build.
+
+### UI4 - prediction intelligence integration
+
+- TradingFlow eligibility, position state, and risk gates remain authoritative. Market Predictor is
+  exposed only as read-only evidence after the operator explicitly selects a symbol.
+- The prediction adapter has a bounded timeout, no automatic POST retries, explicit contract
+  validation, maximum evidence age, promoted-model validation, and fail-closed states for
+  unconfigured, unavailable, stale, invalid, and incompatible responses.
+- Trade Desk keeps wishlist-wide news visible at all times. Explicit symbol selection adds separate
+  TradingFlow Decision, Model Intelligence, and Selected Symbol News panels without replacing the
+  wishlist news timeline.
+- The mobile Watch Details action opens a dedicated Symbol Detail route that reads the same shared
+  API contract and keeps TradingFlow decision evidence separate from model evidence.
+- Verification completed: web build with 0 warnings and 0 errors, Android Release build with 0
+  warnings and 0 errors, 461 .NET tests, and 23 Playwright tests passed.
+- Live browser checks completed on desktop and 390 x 844 mobile: no implicit selection, no page
+  overflow, correct desktop/mobile market views, all evidence scopes present after selection, and
+  no browser warnings or errors.
+
+Physical-device screenshots, font-scale checks, TalkBack, and Android Accessibility Scanner remain
+manual release gates and are not inferred from the successful Android Release build.

@@ -35,6 +35,7 @@ public sealed class OperationalStatusService : IDisposable
     private readonly IOrderSynchronizationCoordinator synchronization;
     private readonly IAccountReconciliationService reconciliation;
     private readonly IEntryAdmissionControl admission;
+    private readonly MarketPredictorHttpClient marketPredictor;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<OperationalStatusService> logger;
     private readonly SemaphoreSlim providerLock = new(1, 1);
@@ -46,6 +47,7 @@ public sealed class OperationalStatusService : IDisposable
         IOrderSynchronizationCoordinator synchronization,
         IAccountReconciliationService reconciliation,
         IEntryAdmissionControl admission,
+        MarketPredictorHttpClient marketPredictor,
         TimeProvider timeProvider,
         ILogger<OperationalStatusService> logger)
     {
@@ -54,6 +56,7 @@ public sealed class OperationalStatusService : IDisposable
         this.synchronization = synchronization;
         this.reconciliation = reconciliation;
         this.admission = admission;
+        this.marketPredictor = marketPredictor;
         this.timeProvider = timeProvider;
         this.logger = logger;
     }
@@ -75,6 +78,7 @@ public sealed class OperationalStatusService : IDisposable
         var sync = synchronization.GetHealth();
         var reconcile = reconciliation.GetHealth();
         var admissionSnapshot = admission.GetSnapshot();
+        var model = await marketPredictor.GetHealthAsync(cancellationToken);
 
         var brokerReady = sync.StreamConnected && reconcile.InitialReconciliationCompleted &&
             String.Equals(reconcile.Status, "clean", StringComparison.OrdinalIgnoreCase);
@@ -96,7 +100,7 @@ public sealed class OperationalStatusService : IDisposable
             quote.Status,
             quote.Detail,
             String.IsNullOrWhiteSpace(quoteFeed) ? "unknown" : quoteFeed.Trim().ToUpperInvariant(),
-            "not connected",
+            model.Status,
             brokerReady ? "ready" : "attention",
             brokerDetail,
             admissionSnapshot.EntriesAllowed ? "allowed" : "blocked",
