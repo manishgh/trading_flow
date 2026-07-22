@@ -732,6 +732,64 @@ pre {
   color: var(--muted);
   font-size: 12px;
 }
+.compact-heading {
+  align-items: start;
+  margin-bottom: 10px;
+}
+.compact-heading h3,
+.compact-heading p {
+  margin: 0;
+}
+.compact-heading p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.count-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.wishlist-news-list {
+  display: grid;
+  max-height: 480px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.wishlist-news-list article {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
+  padding: 11px 0;
+}
+.wishlist-news-list article:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.wishlist-news-list article > strong,
+.wishlist-news-list article > p,
+.wishlist-news-list article > span {
+  margin: 0;
+}
+.wishlist-news-list article > p,
+.wishlist-news-list article > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.news-timeline-meta {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+.news-timeline-meta strong {
+  color: var(--accent);
+  font-size: 12px;
+}
+.news-timeline-meta time {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 .symbol-actions {
   display: grid;
   gap: 8px;
@@ -1041,6 +1099,10 @@ button.danger, .button.danger {
   }
   .wishlist-safety-panel {
     position: static;
+  }
+  .wishlist-news-list {
+    max-height: none;
+    overflow: visible;
   }
 }
 

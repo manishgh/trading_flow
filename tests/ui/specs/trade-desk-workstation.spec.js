@@ -18,6 +18,7 @@ async function openSeededDesk(page) {
   await page.getByRole("button", { name: "Add Ticker" }).click();
   await page.goto(`/TradeDesk?id=${targetId}&ticker=${testTicker}`);
   await expect(page.locator(`[data-symbol="${testTicker}"]`).first()).toBeAttached();
+  return targetId;
 }
 
 test.describe("UI2 web trading workstation", () => {
@@ -47,6 +48,33 @@ test.describe("UI2 web trading workstation", () => {
     await page.goto("/Wishlists");
     await expect(page.locator("#TickerTop")).toBeVisible();
     await expect(page.locator("#FinvizFilter")).toBeVisible();
+  });
+
+  test("wishlist news remains visible independently of explicit symbol selection", async ({ page }) => {
+    const targetId = await openSeededDesk(page);
+    await page.goto(`/TradeDesk?id=${targetId}`);
+
+    await expect(page.locator("[data-selected-symbol]")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Wishlist News" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Selected Symbol News" })).toHaveCount(0);
+
+    await page.goto(`/TradeDesk?id=${targetId}&ticker=${testTicker}`);
+    await expect(page.getByRole("heading", { name: "Selected Symbol News" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Wishlist News" })).toBeVisible();
+
+    await page.waitForFunction(() => Boolean(window.TradingFlowDesk));
+    await page.evaluate(ticker => window.TradingFlowDesk.applyActivity({
+      signals: [],
+      news: [
+        { ticker, headline: "Shared catalyst", summary: "First source", provider: "alpaca", source: "wire", url: "https://example.com/shared", timestamp: "2026-07-22T10:00:00Z", timestampText: "10:00 UTC" },
+        { ticker: "SECOND", headline: "Shared catalyst", summary: "Duplicate source", provider: "finviz", source: "wire", url: "https://example.com/shared", timestamp: "2026-07-22T10:01:00Z", timestampText: "10:01 UTC" }
+      ]
+    }), testTicker);
+
+    await expect(page.locator("[data-wishlist-news-list] [data-news-item]")).toHaveCount(1);
+    await expect(page.locator("[data-wishlist-news-list] [data-news-tickers]")).toContainText(testTicker);
+    await expect(page.locator("[data-wishlist-news-list] [data-news-tickers]")).toContainText("SECOND");
+    await expect(page.locator("[data-selected-news-title]")).toHaveText("Shared catalyst");
   });
 
   test("desktop renders the dense table and mobile renders only compact symbol rows", async ({ page }) => {

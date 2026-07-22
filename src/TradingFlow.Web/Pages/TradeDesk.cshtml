@@ -251,7 +251,7 @@
         {
             <section class="panel empty-state">
                 <strong>Select a symbol</strong>
-                <span>Quote, signal, news, and position evidence will appear here.</span>
+                <span>Choose a market to inspect its quote, signal, position, and symbol-specific news.</span>
             </section>
         }
         else
@@ -306,7 +306,7 @@
             </section>
 
             <section class="panel evidence-block" aria-labelledby="selected-news-heading">
-                <h3 id="selected-news-heading">Related news</h3>
+                <h3 id="selected-news-heading">Selected Symbol News</h3>
                 <div data-selected-news-state>
                     @if (selected.LatestNews is null)
                     {
@@ -329,6 +329,46 @@
                 </div>
             </section>
         }
+
+        <section class="panel evidence-block wishlist-news-panel" aria-labelledby="wishlist-news-heading">
+            <div class="section-heading compact-heading">
+                <div>
+                    <h3 id="wishlist-news-heading">Wishlist News</h3>
+                    <p>Newest stories across every symbol in @selectedName.</p>
+                </div>
+                <span class="count-label" data-wishlist-news-count>@Model.RelatedNews.Count</span>
+            </div>
+            <p class="empty-copy" data-wishlist-news-empty hidden="@(Model.RelatedNews.Count > 0)">
+                No wishlist news matched the rolling four-hour window.
+            </p>
+            <div class="wishlist-news-list" data-wishlist-news-list aria-label="Wishlist news timeline">
+                @foreach (var news in Model.RelatedNews)
+                {
+                    var hasSafeUrl = Uri.TryCreate(news.Url, UriKind.Absolute, out var articleUri) &&
+                        (articleUri.Scheme == Uri.UriSchemeHttp || articleUri.Scheme == Uri.UriSchemeHttps);
+                    var newsKey = hasSafeUrl ? news.Url : news.Headline + "|" + news.Timestamp.ToString("O");
+                    <article data-news-item
+                             data-news-url="@(hasSafeUrl ? news.Url : null)"
+                             data-news-key="@newsKey"
+                             data-news-timestamp="@news.Timestamp.ToString("O")">
+                        <div class="news-timeline-meta">
+                            <strong data-news-tickers>@news.Ticker</strong>
+                            <time data-news-time datetime="@news.Timestamp.ToString("O")">@news.Timestamp.ToString("HH:mm:ss") UTC</time>
+                        </div>
+                        <strong data-news-headline>@news.Headline</strong>
+                        @if (!String.IsNullOrWhiteSpace(news.Summary))
+                        {
+                            <p data-news-summary>@news.Summary</p>
+                        }
+                        <span data-news-source>@news.Provider @news.Source</span>
+                        @if (hasSafeUrl)
+                        {
+                            <a data-news-link href="@news.Url" target="_blank" rel="noopener noreferrer">Open article</a>
+                        }
+                    </article>
+                }
+            </div>
+        </section>
     </aside>
 </section>
 

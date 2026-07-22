@@ -93,15 +93,43 @@ public sealed class TradeDeskModel : PageModel
         RunningTrades = snapshot.RunningTrades;
         TotalPl = snapshot.TotalPl;
         RecentSignals = snapshot.RecentSignals;
-        RelatedNews = snapshot.RelatedNews;
+        RelatedNews = snapshot.RelatedNews
+            .GroupBy(NewsIdentity, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderByDescending(item => item.Timestamp)
+                .First() with
+                {
+                    Ticker = String.Join(", ", group
+                        .SelectMany(item => SplitTickers(item.Ticker))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(ticker => ticker))
+                })
+            .OrderByDescending(item => item.Timestamp)
+            .Take(20)
+            .ToArray();
         Rows = snapshot.Rows.Where(MatchesFilter).ToArray();
-        SelectedRow = Rows.FirstOrDefault(row => row.Ticker.Equals(Ticker, StringComparison.OrdinalIgnoreCase))
-            ?? Rows.FirstOrDefault();
+        SelectedRow = String.IsNullOrWhiteSpace(Ticker)
+            ? null
+            : Rows.FirstOrDefault(row => row.Ticker.Equals(Ticker, StringComparison.OrdinalIgnoreCase));
         Ticker = SelectedRow?.Ticker;
         OperationalStatus = await operationalStatus.GetAsync(
             quoteFeed,
             snapshot.Rows.Select(row => row.Quote.Timestamp),
             cancellationToken);
+    }
+
+    private static string NewsIdentity(MobileNewsItem item)
+    {
+        return !String.IsNullOrWhiteSpace(item.Url)
+            ? item.Url.Trim()
+            : $"{item.Headline.Trim()}|{item.Timestamp:O}";
+    }
+
+    private static IEnumerable<string> SplitTickers(string? value)
+    {
+        return (value ?? String.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(ticker => ticker.ToUpperInvariant());
     }
 
     private bool MatchesFilter(WishlistDeskRow row)
