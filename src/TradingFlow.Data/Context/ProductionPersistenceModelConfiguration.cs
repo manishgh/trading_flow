@@ -145,6 +145,8 @@ internal static class ProductionPersistenceModelConfiguration
         entity.HasKey(record => record.PositionEventId);
         ConfigureProvenance(entity);
         entity.Property(record => record.Symbol).HasMaxLength(20).IsRequired();
+        entity.Property(record => record.StrategyId).HasMaxLength(120).IsRequired();
+        entity.Property(record => record.ExecutionStrategyId).HasMaxLength(120).IsRequired();
         entity.Property(record => record.Side).HasMaxLength(10).IsRequired();
         entity.Property(record => record.BrokerOrderId).HasMaxLength(100).IsRequired();
         entity.Property(record => record.ClientOrderId).HasMaxLength(100).IsRequired();

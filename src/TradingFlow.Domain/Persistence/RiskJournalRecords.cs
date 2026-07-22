@@ -48,6 +48,8 @@ public sealed class PositionEventRecord : OperationalRecord
 {
     public long PositionEventId { get; set; }
     public string Symbol { get; set; } = string.Empty;
+    public string StrategyId { get; set; } = string.Empty;
+    public string ExecutionStrategyId { get; set; } = string.Empty;
     public decimal QuantityAfter { get; set; }
     public decimal FillQuantity { get; set; }
     public decimal FillPrice { get; set; }

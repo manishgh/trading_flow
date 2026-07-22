@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Engine.Execution;
@@ -28,6 +29,7 @@ public sealed class OrderSubmissionServiceTests
             repository,
             events,
             admission,
+            new PassThroughPositionConflictGuard(),
             NullLogger<OrderSubmissionService>.Instance);
         var context = ExecutionRunContextFactory.Create(
             Guid.NewGuid(), "paper", new { test = true }, DateTimeOffset.UtcNow, typeof(OrderSubmissionServiceTests).Assembly);
@@ -66,6 +68,7 @@ public sealed class OrderSubmissionServiceTests
             repository,
             events,
             new EntryAdmissionControl(),
+            new PassThroughPositionConflictGuard(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -78,6 +81,31 @@ public sealed class OrderSubmissionServiceTests
         Assert.Equal(OrderState.Acked, events.State);
         Assert.Equal([OrderState.Submitted, OrderState.Acked], events.AppliedStates);
         broker.VerifyAll();
+    }
+
+    [Fact]
+    public async Task SubmitBracketOrderAsync_PositionConflict_DoesNotReserveOrCallBroker()
+    {
+        var repository = new RecordingIntentRepository();
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        var service = new OrderSubmissionService(
+            repository,
+            new RecordingEventRepository(repository),
+            new EntryAdmissionControl(),
+            new RejectingPositionConflictGuard(),
+            NullLogger<OrderSubmissionService>.Instance);
+
+        var error = await Assert.ThrowsAsync<PositionConflictException>(() =>
+            service.SubmitBracketOrderAsync(
+                CreateSubmission(Guid.NewGuid()),
+                broker.Object,
+                CancellationToken.None));
+
+        Assert.Equal(RejectCode.REJECT_SETUP_INVALID, error.RejectCode);
+        Assert.Equal(0, repository.ReservationAttempts);
+        broker.Verify(
+            client => client.SubmitOrderAsync(It.IsAny<FinalizedOrder>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
@@ -95,6 +123,7 @@ public sealed class OrderSubmissionServiceTests
             repository,
             events,
             new EntryAdmissionControl(),
+            new PassThroughPositionConflictGuard(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -121,6 +150,7 @@ public sealed class OrderSubmissionServiceTests
             repository,
             events,
             new EntryAdmissionControl(),
+            new PassThroughPositionConflictGuard(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -152,6 +182,7 @@ public sealed class OrderSubmissionServiceTests
             repository,
             events,
             admission,
+            new PassThroughPositionConflictGuard(),
             NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -262,6 +293,11 @@ public sealed class OrderSubmissionServiceTests
             Task.FromResult(
                 Intent?.ClientOrderId == clientOrderId ? Intent : null);
 
+        public Task<IReadOnlyList<ActiveOrderIntent>> ListActiveForSymbolAsync(
+            string symbol,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ActiveOrderIntent>>([]);
+
         public Task<OrderIntentRecord> ReserveAsync(
             ProductionRun run,
             OrderIntentReservation reservation,
@@ -298,6 +334,28 @@ public sealed class OrderSubmissionServiceTests
             ReservationCompleted = true;
             return Task.FromResult(Intent);
         }
+    }
+
+    private sealed class PassThroughPositionConflictGuard : IPositionConflictGuard
+    {
+        public Task<T> ExecuteEntryAsync<T>(
+            string symbol,
+            string strategyId,
+            Func<CancellationToken, Task<T>> submit,
+            CancellationToken cancellationToken = default) =>
+            submit(cancellationToken);
+    }
+
+    private sealed class RejectingPositionConflictGuard : IPositionConflictGuard
+    {
+        public Task<T> ExecuteEntryAsync<T>(
+            string symbol,
+            string strategyId,
+            Func<CancellationToken, Task<T>> submit,
+            CancellationToken cancellationToken = default) =>
+            throw new PositionConflictException(
+                RejectCode.REJECT_SETUP_INVALID,
+                $"Position for {symbol} belongs to another strategy.");
     }
 
     private sealed class RecordingEventRepository(RecordingIntentRepository intents) : IOrderEventRepository

@@ -19,10 +19,67 @@ public sealed class ReconciliationPersistenceTests
         var replay = await repository.AppendFillAsync(request);
 
         Assert.Equal(first.PositionEventId, replay.PositionEventId);
+        Assert.Equal("SWGA", first.StrategyId);
         Assert.Equal(10m, (await repository.GetCurrentAsync("msft"))?.Quantity);
         Assert.Equal(10m, await repository.GetAccountedFillQuantityAsync("broker-1"));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             repository.AppendFillAsync(request with { QuantityAfter = 11m }));
+    }
+
+    [Fact]
+    public async Task PositionLedger_ExitPreservesOwner_UntilFlatThenNewEntryChangesOwner()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        var repository = new SqlitePositionLedgerRepository(database.Factory);
+        var run = CreateRun();
+        var opening = CreatePositionRequest(run, "execution-open", 10m);
+        await repository.AppendFillAsync(opening);
+
+        var partialExit = opening with
+        {
+            ExecutionStrategyId = "BACKSTOP",
+            QuantityAfter = 5m,
+            FillQuantity = 5m,
+            Side = "sell",
+            BrokerOrderId = "broker-exit-1",
+            ClientOrderId = "BACKSTOP-S-MSFT-20260721-001-12345678",
+            ExecutionId = "execution-partial-exit",
+            LocalTimestampUtc = opening.LocalTimestampUtc.AddMinutes(1),
+            BrokerTimestampUtc = opening.BrokerTimestampUtc.AddMinutes(1)
+        };
+        await repository.AppendFillAsync(partialExit);
+        var partiallyExited = await repository.GetCurrentAsync("MSFT");
+
+        Assert.Equal(5m, partiallyExited?.Quantity);
+        Assert.Equal("SWGA", partiallyExited?.StrategyId);
+
+        await repository.AppendFillAsync(partialExit with
+        {
+            QuantityAfter = 0m,
+            BrokerOrderId = "broker-exit-2",
+            ClientOrderId = "BACKSTOP-S-MSFT-20260721-002-12345678",
+            ExecutionId = "execution-flat",
+            LocalTimestampUtc = opening.LocalTimestampUtc.AddMinutes(2),
+            BrokerTimestampUtc = opening.BrokerTimestampUtc.AddMinutes(2)
+        });
+        var flat = await repository.GetCurrentAsync("MSFT");
+        Assert.Equal(0m, flat?.Quantity);
+        Assert.Equal("SWGA", flat?.StrategyId);
+
+        var reopened = await repository.AppendFillAsync(opening with
+        {
+            ExecutionStrategyId = "OTHER",
+            QuantityAfter = 8m,
+            FillQuantity = 8m,
+            BrokerOrderId = "broker-open-2",
+            ClientOrderId = "OTHER-B-MSFT-20260721-001-12345678",
+            ExecutionId = "execution-reopen",
+            LocalTimestampUtc = opening.LocalTimestampUtc.AddMinutes(3),
+            BrokerTimestampUtc = opening.BrokerTimestampUtc.AddMinutes(3)
+        });
+
+        Assert.Equal(8m, reopened.Quantity);
+        Assert.Equal("OTHER", reopened.StrategyId);
     }
 
     [Fact]
@@ -115,6 +172,7 @@ public sealed class ReconciliationPersistenceTests
         decimal quantityAfter) => new(
         run,
         "MSFT",
+        "SWGA",
         quantityAfter,
         10m,
         100.50m,

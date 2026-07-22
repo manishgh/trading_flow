@@ -55,17 +55,20 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
     private readonly IOrderIntentRepository intentRepository;
     private readonly IOrderEventRepository eventRepository;
     private readonly IEntryAdmissionControl entryAdmission;
+    private readonly IPositionConflictGuard positionConflict;
     private readonly ILogger<OrderSubmissionService> logger;
 
     public OrderSubmissionService(
         IOrderIntentRepository intentRepository,
         IOrderEventRepository eventRepository,
         IEntryAdmissionControl entryAdmission,
+        IPositionConflictGuard positionConflict,
         ILogger<OrderSubmissionService> logger)
     {
         this.intentRepository = intentRepository;
         this.eventRepository = eventRepository;
         this.entryAdmission = entryAdmission;
+        this.positionConflict = positionConflict;
         this.logger = logger;
     }
 
@@ -78,7 +81,18 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         ArgumentNullException.ThrowIfNull(brokerClient);
         Validate(submission);
         entryAdmission.EnsureEntriesAllowed();
+        return await positionConflict.ExecuteEntryAsync(
+            submission.Order.Ticker,
+            submission.StrategyId,
+            token => SubmitBracketOrderCoreAsync(submission, brokerClient, token),
+            cancellationToken);
+    }
 
+    private async Task<OrderSubmissionResult> SubmitBracketOrderCoreAsync(
+        BracketOrderSubmission submission,
+        IBrokerClient brokerClient,
+        CancellationToken cancellationToken)
+    {
         var requestJson = JsonSerializer.Serialize(new
         {
             schemaVersion = 1,

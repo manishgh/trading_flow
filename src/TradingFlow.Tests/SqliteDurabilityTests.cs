@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Data.Context;
 using TradingFlow.Data.Orders;
+using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 
 namespace TradingFlow.Tests;
@@ -177,6 +178,50 @@ public sealed class SqliteDurabilityTests
         Assert.Contains("state 'completed'", error.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ListActiveForSymbolAsync_ReturnsOnlyLatestNonterminalEntryIntents()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        var intents = new SqliteOrderIntentRepository(factory);
+        var events = new SqliteOrderEventRepository(factory);
+        var run = CreateRun(Guid.NewGuid());
+
+        await using (var context = new TradingFlowDbContext(options))
+        {
+            await new TradingFlowDatabaseInitializer().InitializeAsync(context);
+        }
+
+        var active = await intents.ReserveAsync(
+            run,
+            CreateReservation(Guid.NewGuid(), "MSFT", "SWGA"));
+        var terminal = await intents.ReserveAsync(
+            run,
+            CreateReservation(Guid.NewGuid(), "MSFT", "OTHER"));
+        await events.TransitionAsync(new OrderTransitionRequest(
+            terminal.ClientOrderId,
+            OrderState.Intent,
+            OrderState.Submitted,
+            "engine",
+            terminal.CreatedAtUtc.AddSeconds(1),
+            PayloadJson: "{\"state\":\"submitted\"}"));
+        await events.TransitionAsync(new OrderTransitionRequest(
+            terminal.ClientOrderId,
+            OrderState.Submitted,
+            OrderState.Rejected,
+            "engine",
+            terminal.CreatedAtUtc.AddSeconds(2),
+            PayloadJson: "{\"reason\":\"test\"}"));
+
+        var result = await intents.ListActiveForSymbolAsync("msft");
+
+        var item = Assert.Single(result);
+        Assert.Equal(active.ClientOrderId, item.ClientOrderId);
+        Assert.Equal("SWGA", item.StrategyId);
+        Assert.Equal(OrderState.Intent, item.State);
+    }
+
     private static ProductionRun CreateRun(Guid runId) => new()
     {
         RunId = runId,
@@ -188,10 +233,13 @@ public sealed class SqliteDurabilityTests
         StartedAtUtc = DateTimeOffset.UtcNow
     };
 
-    private static OrderIntentReservation CreateReservation(Guid intentId, string symbol) => new(
+    private static OrderIntentReservation CreateReservation(
+        Guid intentId,
+        string symbol,
+        string strategyId = "SWGA") => new(
         intentId,
         CandidateId: null,
-        StrategyId: "SWGA",
+        StrategyId: strategyId,
         Symbol: symbol,
         Side: "buy",
         OrderType: "limit",

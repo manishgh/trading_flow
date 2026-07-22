@@ -27,7 +27,10 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     ContentRootPath = webContentRoot,
     WebRootPath = Path.Combine(webContentRoot, "wwwroot")
 });
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
+if (builder.Environment.IsDevelopment())
+{
+    builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
+}
 Environment.SetEnvironmentVariable(
     "TRADINGFLOW_RESULT_OWNER",
     Environment.GetEnvironmentVariable("TRADINGFLOW_RESULT_OWNER") ?? "web");
@@ -129,6 +132,13 @@ var backstopAtrMultiple = productionConfiguration.ResolveParameter<decimal>(
     builder.Configuration["TradingFlow:Production:backstop_atr_mult"]
         ?? Environment.GetEnvironmentVariable("TRADINGFLOW_BACKSTOP_ATR_MULT"));
 builder.Services.AddSingleton(new ProtectiveOrderOptions(backstopAtrMultiple));
+var allowMultiStrategySameSymbol = productionConfiguration.ResolveParameter<bool>(
+    ProductionProfile.Paper,
+    "allow_multi_strategy_same_symbol",
+    builder.Configuration["TradingFlow:Production:allow_multi_strategy_same_symbol"]
+        ?? Environment.GetEnvironmentVariable("TRADINGFLOW_ALLOW_MULTI_STRATEGY_SAME_SYMBOL"));
+builder.Services.AddSingleton(new PositionConflictOptions(allowMultiStrategySameSymbol));
+builder.Services.AddSingleton<IPositionConflictGuard, PositionConflictGuard>();
 builder.Services.AddSingleton<TradingFlow.Engine.Indicators.IndicatorEngine>();
 builder.Services.AddSingleton(serviceProvider => new Lazy<IMarketDataProvider>(() =>
 {

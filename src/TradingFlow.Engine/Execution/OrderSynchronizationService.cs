@@ -61,6 +61,7 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
     internal const string DivergenceBlockSource = "alpaca_order_divergence";
 
     private readonly IOrderEventRepository events;
+    private readonly IOrderIntentRepository intents;
     private readonly IOrderLifecycleService lifecycle;
     private readonly IEntryAdmissionControl admission;
     private readonly IPositionLedgerRepository positions;
@@ -78,6 +79,7 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
 
     public OrderSynchronizationCoordinator(
         IOrderEventRepository events,
+        IOrderIntentRepository intents,
         IOrderLifecycleService lifecycle,
         IEntryAdmissionControl admission,
         IPositionLedgerRepository positions,
@@ -87,6 +89,7 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         ILogger<OrderSynchronizationCoordinator> logger)
     {
         this.events = events;
+        this.intents = intents;
         this.lifecycle = lifecycle;
         this.admission = admission;
         this.positions = positions;
@@ -135,10 +138,14 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
 
         if (update.Status is OrderStatus.PartiallyFilled or OrderStatus.Filled)
         {
+            var executionStrategyId = await ResolveExecutionStrategyIdAsync(
+                update.ClientOrderId,
+                cancellationToken);
             await positions.AppendFillAsync(
                 new PositionFillAppendRequest(
                     runContext.Run,
                     update.Ticker,
+                    executionStrategyId,
                     update.PositionQuantity ?? throw new InvalidOperationException(
                         "A stream fill requires authoritative position_qty."),
                     update.LastFillQuantity,
@@ -351,6 +358,9 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
                 new PositionFillAppendRequest(
                     runContext.Run,
                     brokerOrder.Ticker,
+                    await ResolveExecutionStrategyIdAsync(
+                        brokerOrder.ClientOrderId,
+                        cancellationToken),
                     quantityAfter,
                     fillDelta,
                     brokerOrder.FilledAveragePrice ?? throw new InvalidOperationException(
@@ -367,6 +377,21 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         }
 
         await lifecycle.ApplyBrokerUpdateAsync(update, cancellationToken);
+    }
+
+    private async Task<string> ResolveExecutionStrategyIdAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken)
+    {
+        var intent = await intents.GetByClientOrderIdAsync(clientOrderId, cancellationToken);
+        if (intent is not null)
+        {
+            return intent.StrategyId;
+        }
+
+        return clientOrderId.StartsWith("tf-manual-", StringComparison.OrdinalIgnoreCase)
+            ? "MANUAL"
+            : "EXTERNAL";
     }
 
     private void RegisterImmediateDivergence(string clientOrderId, string detail)

@@ -115,6 +115,7 @@ public sealed class AccountReconciliationServiceTests
         fixture.Positions.Current["MSFT"] = new PositionLedgerSnapshot(
             "MSFT",
             -5m,
+            "SWGA",
             fixture.Time.GetUtcNow(),
             fixture.Time.GetUtcNow(),
             1,
@@ -195,7 +196,7 @@ public sealed class AccountReconciliationServiceTests
         var fixture = new Fixture();
         const string parentClientId = "SWGA-B-MSFT-20260721-001-12345678";
         fixture.Positions.Current["MSFT"] = new PositionLedgerSnapshot(
-            "MSFT", 10m, fixture.Time.GetUtcNow(), fixture.Time.GetUtcNow(), 1,
+            "MSFT", 10m, "SWGA", fixture.Time.GetUtcNow(), fixture.Time.GetUtcNow(), 1,
             parentClientId, 100m, "buy");
         fixture.Broker.Positions = [new BrokerPosition("MSFT", "long", 10m, 100m, 101m, 10m)];
         fixture.Orders.Additional[parentClientId] = new OrderStateSnapshot(

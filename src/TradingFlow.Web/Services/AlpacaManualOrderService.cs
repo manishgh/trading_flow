@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using TradingFlow.Alpaca;
+using TradingFlow.Domain.Execution;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Storage;
@@ -21,15 +22,18 @@ public sealed class AlpacaManualOrderService
     private readonly AlpacaCredentialProvider credentials;
     private readonly IRawArchiveWriter rawArchiveWriter;
     private readonly IEntryAdmissionControl entryAdmission;
+    private readonly IPositionConflictGuard positionConflict;
 
     public AlpacaManualOrderService(
         AlpacaCredentialProvider credentials,
         IRawArchiveWriter rawArchiveWriter,
-        IEntryAdmissionControl entryAdmission)
+        IEntryAdmissionControl entryAdmission,
+        IPositionConflictGuard positionConflict)
     {
         this.credentials = credentials;
         this.rawArchiveWriter = rawArchiveWriter;
         this.entryAdmission = entryAdmission;
+        this.positionConflict = positionConflict;
     }
 
     public async Task<ManualOrderResult> SubmitLimitOrderAsync(
@@ -60,10 +64,39 @@ public sealed class AlpacaManualOrderService
             throw new InvalidOperationException("Alpaca paper credentials are not configured.");
         }
 
+        return normalizedSide == "buy"
+            ? await positionConflict.ExecuteEntryAsync(
+                normalizedTicker,
+                "MANUAL",
+                token => SubmitLimitOrderCoreAsync(
+                    normalizedTicker,
+                    normalizedSide,
+                    quantity,
+                    limitPrice,
+                    token),
+                cancellationToken)
+            : await SubmitLimitOrderCoreAsync(
+                normalizedTicker,
+                normalizedSide,
+                quantity,
+                limitPrice,
+                cancellationToken);
+    }
+
+    private async Task<ManualOrderResult> SubmitLimitOrderCoreAsync(
+        string normalizedTicker,
+        string normalizedSide,
+        decimal quantity,
+        decimal limitPrice,
+        CancellationToken cancellationToken)
+    {
         using var client = CreateClient();
+        var positionQuantity = await GetOpenPositionQuantityAsync(
+            client,
+            normalizedTicker,
+            cancellationToken);
         if (normalizedSide == "sell")
         {
-            var positionQuantity = await GetOpenPositionQuantityAsync(client, normalizedTicker, cancellationToken);
             if (positionQuantity <= 0m)
             {
                 throw new InvalidOperationException($"No open paper position exists for {normalizedTicker}; sell is disabled to avoid accidental shorting.");
@@ -72,6 +105,22 @@ public sealed class AlpacaManualOrderService
             if (quantity > positionQuantity)
             {
                 throw new InvalidOperationException($"Sell quantity {quantity} exceeds open paper position {positionQuantity} for {normalizedTicker}.");
+            }
+        }
+        else
+        {
+            if (positionQuantity != 0m)
+            {
+                throw new PositionConflictException(
+                    RejectCode.REJECT_SETUP_INVALID,
+                    $"EXE-10 position conflict for {normalizedTicker}: the broker already reports quantity {positionQuantity}.");
+            }
+
+            if (await HasOpenBrokerOrderAsync(client, normalizedTicker, cancellationToken))
+            {
+                throw new PositionConflictException(
+                    RejectCode.REJECT_SETUP_INVALID,
+                    $"EXE-10 position conflict for {normalizedTicker}: the broker already has an open order for this symbol.");
             }
         }
 
@@ -113,6 +162,30 @@ public sealed class AlpacaManualOrderService
         }
 
         return new ManualOrderResult(orderId, normalizedTicker, normalizedSide, quantity, limitPrice);
+    }
+
+    private static async Task<bool> HasOpenBrokerOrderAsync(
+        AlpacaTradingRestClient client,
+        string ticker,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/v2/orders?status=open&symbols={Uri.EscapeDataString(ticker)}&limit=500&nested=true");
+        var response = await client.SendAsync(
+            request,
+            "broker-manual-open-order-check",
+            correlationId: ticker,
+            cancellationToken: cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                AlpacaTradingRestClient.DescribeFailure("manual open-order query", response));
+        }
+
+        using var document = JsonDocument.Parse(response.Payload);
+        return document.RootElement.ValueKind == JsonValueKind.Array &&
+            document.RootElement.GetArrayLength() > 0;
     }
 
     private AlpacaTradingRestClient CreateClient()

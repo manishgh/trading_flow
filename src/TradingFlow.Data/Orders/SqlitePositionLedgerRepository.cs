@@ -35,9 +35,16 @@ public sealed class SqlitePositionLedgerRepository(
 
             var symbol = request.Symbol.Trim().ToUpperInvariant();
             await ProductionRunPersistence.EnsureAsync(context, request.Run, cancellationToken);
+            var previous = await context.PositionEvents
+                .AsNoTracking()
+                .Where(item => item.Symbol == symbol)
+                .OrderByDescending(item => item.PositionEventId)
+                .FirstOrDefaultAsync(cancellationToken);
             var record = new PositionEventRecord
             {
                 Symbol = symbol,
+                StrategyId = ResolvePositionStrategy(previous, request),
+                ExecutionStrategyId = request.ExecutionStrategyId.Trim(),
                 QuantityAfter = request.QuantityAfter,
                 FillQuantity = request.FillQuantity,
                 FillPrice = request.FillPrice,
@@ -79,6 +86,7 @@ public sealed class SqlitePositionLedgerRepository(
             .Select(record => new PositionLedgerSnapshot(
                 record.Symbol,
                 record.QuantityAfter,
+                record.StrategyId,
                 record.BrokerTimestampUtc,
                 record.LocalTimestampUtc,
                 record.PositionEventId,
@@ -110,6 +118,7 @@ public sealed class SqlitePositionLedgerRepository(
         }
 
         if (String.IsNullOrWhiteSpace(request.Symbol) ||
+            String.IsNullOrWhiteSpace(request.ExecutionStrategyId) ||
             String.IsNullOrWhiteSpace(request.Side) ||
             String.IsNullOrWhiteSpace(request.BrokerOrderId) ||
             String.IsNullOrWhiteSpace(request.ClientOrderId) ||
@@ -132,6 +141,7 @@ public sealed class SqlitePositionLedgerRepository(
             existing.QuantityAfter != request.QuantityAfter ||
             existing.FillQuantity != request.FillQuantity ||
             existing.FillPrice != request.FillPrice ||
+            !existing.ExecutionStrategyId.Equals(request.ExecutionStrategyId.Trim(), StringComparison.Ordinal) ||
             !existing.BrokerOrderId.Equals(request.BrokerOrderId.Trim(), StringComparison.Ordinal) ||
             !existing.ClientOrderId.Equals(request.ClientOrderId.Trim(), StringComparison.Ordinal))
         {
@@ -159,10 +169,31 @@ public sealed class SqlitePositionLedgerRepository(
     private static PositionLedgerSnapshot ToSnapshot(PositionEventRecord record) => new(
         record.Symbol,
         record.QuantityAfter,
+        record.StrategyId,
         record.BrokerTimestampUtc,
         record.LocalTimestampUtc,
         record.PositionEventId,
         record.ClientOrderId,
         record.FillPrice,
         record.Side);
+
+    private static string ResolvePositionStrategy(
+        PositionEventRecord? previous,
+        PositionFillAppendRequest request)
+    {
+        var executionStrategy = request.ExecutionStrategyId.Trim();
+        if (previous is null || previous.QuantityAfter == 0m)
+        {
+            return executionStrategy;
+        }
+
+        if (request.QuantityAfter == 0m)
+        {
+            return previous.StrategyId;
+        }
+
+        return Math.Sign(previous.QuantityAfter) == Math.Sign(request.QuantityAfter)
+            ? previous.StrategyId
+            : executionStrategy;
+    }
 }

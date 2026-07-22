@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Engine.Execution;
@@ -89,6 +90,49 @@ public sealed class OrderSynchronizationCoordinatorTests
         Assert.True(admission.GetSnapshot().EntriesAllowed);
         Assert.Empty(coordinator.GetHealth().DivergenceCycles);
         Assert.Equal(1, broker.ByClientOrderIdCalls);
+    }
+
+    [Fact]
+    public async Task StreamFill_KnownIntent_AttributesPositionToOpeningStrategy()
+    {
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var repository = new InMemoryEventRepository(CreateSnapshot(OrderState.Submitted, now));
+        var positions = new InMemoryPositionLedgerRepository();
+        var intents = new Mock<IOrderIntentRepository>(MockBehavior.Strict);
+        intents.Setup(store => store.GetByClientOrderIdAsync(
+                repository.Current.ClientOrderId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord
+            {
+                ClientOrderId = repository.Current.ClientOrderId,
+                StrategyId = "SWGA",
+                Symbol = "MSFT"
+            });
+        var coordinator = CreateCoordinator(
+            repository,
+            new EntryAdmissionControl(),
+            new MutableTimeProvider(now),
+            positions,
+            intents.Object);
+
+        await coordinator.ProcessStreamUpdateAsync(
+            new OrderUpdate(
+                "broker-1",
+                repository.Current.ClientOrderId,
+                "MSFT",
+                "buy",
+                OrderStatus.Filled,
+                10m,
+                100.50m,
+                10m,
+                10m,
+                "execution-owned",
+                now.AddSeconds(1),
+                BrokerUpdateSource.TradeStream),
+            CancellationToken.None);
+
+        var position = await positions.GetCurrentAsync("MSFT");
+        Assert.Equal("SWGA", position?.StrategyId);
     }
 
     [Fact]
@@ -214,8 +258,10 @@ public sealed class OrderSynchronizationCoordinatorTests
         InMemoryEventRepository repository,
         EntryAdmissionControl admission,
         TimeProvider timeProvider,
-        InMemoryPositionLedgerRepository? positions = null) => new(
+        InMemoryPositionLedgerRepository? positions = null,
+        IOrderIntentRepository? intents = null) => new(
         repository,
+        intents ?? Mock.Of<IOrderIntentRepository>(),
         new OrderLifecycleService(repository),
         admission,
         positions ?? new InMemoryPositionLedgerRepository(),
@@ -381,6 +427,9 @@ public sealed class OrderSynchronizationCoordinatorTests
             var snapshot = new PositionLedgerSnapshot(
                 request.Symbol,
                 request.QuantityAfter,
+                snapshots.TryGetValue(request.Symbol, out var previous) && previous.Quantity != 0m
+                    ? previous.StrategyId
+                    : request.ExecutionStrategyId,
                 request.BrokerTimestampUtc,
                 request.LocalTimestampUtc,
                 Interlocked.Increment(ref eventId),

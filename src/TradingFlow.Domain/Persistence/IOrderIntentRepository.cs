@@ -1,4 +1,13 @@
+using TradingFlow.Domain.Orders;
+
 namespace TradingFlow.Domain.Persistence;
+
+public sealed record ActiveOrderIntent(
+    string ClientOrderId,
+    string StrategyId,
+    string Symbol,
+    string Side,
+    OrderState State);
 
 /// <summary>
 /// Reserves immutable order intents and their initial lifecycle event before broker submission.
@@ -7,6 +16,10 @@ public interface IOrderIntentRepository
 {
     Task<OrderIntentRecord?> GetByClientOrderIdAsync(
         string clientOrderId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ActiveOrderIntent>> ListActiveForSymbolAsync(
+        string symbol,
         CancellationToken cancellationToken = default);
 
     /// <summary>

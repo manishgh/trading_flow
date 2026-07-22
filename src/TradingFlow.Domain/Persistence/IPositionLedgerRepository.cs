@@ -3,6 +3,7 @@ namespace TradingFlow.Domain.Persistence;
 public sealed record PositionLedgerSnapshot(
     string Symbol,
     decimal Quantity,
+    string StrategyId,
     DateTimeOffset BrokerTimestampUtc,
     DateTimeOffset LocalTimestampUtc,
     long PositionEventId,
@@ -13,6 +14,7 @@ public sealed record PositionLedgerSnapshot(
 public sealed record PositionFillAppendRequest(
     ProductionRun Run,
     string Symbol,
+    string ExecutionStrategyId,
     decimal QuantityAfter,
     decimal FillQuantity,
     decimal FillPrice,

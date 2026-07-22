@@ -269,7 +269,7 @@ public sealed class ProtectiveOrderInvariantServiceTests
         decimal fillPrice,
         string side,
         DateTimeOffset now) =>
-        new(symbol, quantity, now, now, 1, clientOrderId, fillPrice, side);
+        new(symbol, quantity, "SWGA", now, now, 1, clientOrderId, fillPrice, side);
 
     private static ActiveBrokerOrder BrokerOrder(
         string symbol,

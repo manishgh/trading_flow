@@ -31,6 +31,46 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             .SingleOrDefaultAsync(record => record.ClientOrderId == normalized, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ActiveOrderIntent>> ListActiveForSymbolAsync(
+        string symbol,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = !String.IsNullOrWhiteSpace(symbol)
+            ? symbol.Trim().ToUpperInvariant()
+            : throw new ArgumentException("Order-intent symbol is required.", nameof(symbol));
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var latestEventIds = context.OrderEvents
+            .GroupBy(record => record.ClientOrderId)
+            .Select(group => group.Max(record => record.EventId));
+        var rows = await (
+                from intent in context.OrderIntents.AsNoTracking()
+                join orderEvent in context.OrderEvents.AsNoTracking()
+                    on intent.ClientOrderId equals orderEvent.ClientOrderId
+                where intent.Symbol == normalized &&
+                      intent.StrategyId != "BACKSTOP" &&
+                      latestEventIds.Contains(orderEvent.EventId)
+                select new
+                {
+                    intent.ClientOrderId,
+                    intent.StrategyId,
+                    intent.Symbol,
+                    intent.Side,
+                    orderEvent.NewState
+                })
+            .ToArrayAsync(cancellationToken);
+
+        return rows
+            .Select(row => new ActiveOrderIntent(
+                row.ClientOrderId,
+                row.StrategyId,
+                row.Symbol,
+                row.Side,
+                OrderStateMachine.ParseStorageValue(row.NewState)))
+            .Where(intent => !OrderStateMachine.IsTerminal(intent.State))
+            .OrderBy(intent => intent.ClientOrderId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public async Task<OrderIntentRecord> ReserveAsync(
         ProductionRun run,
         OrderIntentReservation reservation,
