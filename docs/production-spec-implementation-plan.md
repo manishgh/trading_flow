@@ -196,6 +196,25 @@ known vulnerable packages. Isolated Production-profile web smoke returned health
 and correctly remained fail-closed at trading-readiness 503 without broker stream or
 startup reconciliation.
 
+**S3.7 checkpoint (2026-07-22):** EXE-10 now enforces one strategy owner for each
+non-flat broker symbol. Every position event stores both the position owner and the
+strategy associated with that fill; partial exits and protective `BACKSTOP` fills
+retain the opening owner, while a new strategy can acquire ownership only after the
+ledger is flat. Entry admission obtains a durable per-symbol SQLite lease before it
+checks the current position and all nonterminal entry intents, closing the race where
+two strategies could both submit before either order filled. A conflicting position
+or intent fails before intent reservation and before broker I/O. Lease contention
+also fails closed. Protective exits remain exempt, and manual buys additionally check
+Alpaca's current position and open orders while holding the same entry lease. Existing
+position rows migrate with owner `UNKNOWN`, intentionally blocking new ownership until
+the broker/account reconciliation reaches a flat state. Production no longer loads
+the ignored developer-only `appsettings.local.json`; deployment credentials must come
+from the production configuration provider. Commit `c7cff89`. Local gate: 418/418
+tests; formatter clean for all changed files; full Release build including Android
+with 0 warnings/errors; current EF model; zero known vulnerable packages. Isolated
+Production smoke returned health 200 and fail-closed trading-readiness 503 with empty
+provider credentials.
+
 IDs: EXE-01..13, DAY-04 (reject enum), parts of TST-03.
 1. Reject-code enum in `TradingFlow.Domain` — Base-Spec §10 set + DAY-04 additions; one enum, used by gates, journal, and tests (CI sync-check vs spec in S12).
 2. Write-ahead intent: `client_order_id` format `{strategy}-{side}-{symbol}-{yyyymmdd}-{seq}-{uuid8}`; persist INTENT (fsync) **before** `SubmitOrderAsync`; retries reuse the persisted ID (EXE-01). Refactor `MobileAutomationService` entry path and `LiveRunner` submission path onto one shared `OrderSubmissionService` (one-brain discipline applies to execution too).
@@ -203,7 +222,7 @@ IDs: EXE-01..13, DAY-04 (reject enum), parts of TST-03.
 4. Fill-source discipline (EXE-03): `AlpacaTradeUpdateStreamer` primary; REST polling cross-check every `order_poll_interval_s`; divergence > 1 cycle → alert + block entries.
 5. Full reconciliation loop (EXE-08): startup + every `reconcile_interval_s`, diff broker positions/orders vs ledger; RECONCILE_MISMATCH blocks new entries globally; auto-resolve only broker-has-fills-we-missed; `ops ack` CLI command clears others. The shared reconciliation service is the production path; no legacy orphan-adoption path is retained.
 6. Protective-order invariant (EXE-09, complete in S3.6): after every fill and every reconcile pass, verify full position quantity has broker-resting opposite-side stop coverage; if absent → auto-place a write-ahead idempotent backstop (`backstop_atr_mult`) + critical alert + RECONCILE_MISMATCH. Nested bracket legs count as coverage even after their parent becomes terminal. Structural strategy stops take precedence over point-in-time ATR fallback; fractional GTC-stop incompatibility fails closed. Redundant backstops are cancelled only after strategy-stop coverage is active for the entire position.
-7. Position-conflict rule (EXE-10): one open position per symbol across strategies, checked in the gate chain against the internal strategy-tagged ledger.
+7. Position-conflict rule (EXE-10, complete in S3.7): one open position per symbol across strategies. A durable per-symbol entry lease serializes checks against both the strategy-tagged position ledger and nonterminal entry intents; conflicts fail before write-ahead reservation or broker I/O. Exit/protection paths remain unblocked.
 8. Gate-chain framework (EXE-04): ordered 12-slot short-circuiting chain; each gate returns pass/fail + reject code; ALL evaluations journaled to `gate_evaluations` (pass included). Slots for not-yet-built gates block (see §3 rule). Wire existing checks (spread, quote fetch, sizing) into their slots.
 9. Sizing floors + caps (EXE-05/06/07) in `RiskEngine`: min stop distance `max(min_stop_spread_mult×spread, min_stop_atr_frac×ATR_ref)` used for sizing when the natural stop is tighter; caps: notional %, `max_pct_adv` of 20-session median volume, day-entry 5-min dollar-volume participation, buying power (gate registers fully in S5); binding cap journaled; zero/sign guards → `REJECT_SETUP_INVALID`.
 10. Graceful shutdown (EXE-13): SIGTERM/host-stop → stop signals → cancel non-protective orders → verify EXE-09 → flush → exit; `shutdown_flatten` per day/swing.
@@ -346,7 +365,7 @@ no eToro behavior; the production-composition test and deployment exclusion land
 | S0 | ✅ 2026-07-21 | `222ad71`, `b257028`, `ca8bd77`, `bd26aff`, `5bfbdfc`, `872ed8f`, `18ac061`, `18eba68` | Governance, secret-store migration, zero known vulnerable packages, clean-checkout CI, strict SIP WebSocket authentication, deterministic tests, and dormant eToro exclusion verified. GitHub Actions run `29809663008` passed; external credential rotation remains operator action U1. |
 | S1 | ✅ 2026-07-21 | `9d77b87`, `610a9ba`, `4510a7e`, `680b7a9` | Appendix-A registry (99 expanded parameters) is bidirectionally enforced; startup loading is typed, range-validated, immutable, canonically SHA-256 hashed, and structured-logged; live-v1 locks and development-only IEX fallback are enforced; all Alpaca trading and stream URLs derive from profile through one resolver. Local gate: 283/283 tests, Release build 0 warnings/errors, Engine dependency audit 0 known vulnerabilities. GitHub Actions run `29811932023` passed. |
 | S2 | ✅ 2026-07-21 | `4bbd5c8`, `eb43cd1`, `54a163e`, `08d6fd3`, `27348a9`, `f6e9810`, `06a4f05`, `a7564b9` | Versioned operational journal, byte-exact provider archives, decimal money audit, WAL/FULL durability, immutable daily backup, fail-closed restore, and recovery drill complete. GitHub Actions run `29839320815` passed. |
-| S3 | 🟨 2026-07-21 | `ca65626`, `963343f`, `6c26801` | In progress. Canonical rejects, write-ahead intent, idempotent submission, EXE-02 lifecycle journal, EXE-03 stream-authoritative fills/REST cross-check, EXE-08 durable account reconciliation, and EXE-09 automatic protective-order invariant are complete. Local gate: 409/409 tests, formatter clean for changed files, full Release build including Android with 0 warnings/errors, current EF model, zero vulnerable packages, and fail-closed Production runtime smoke. EXE-10 position conflict is next. |
+| S3 | 🟨 2026-07-22 | `ca65626`, `963343f`, `6c26801`, `c7cff89` | In progress. Canonical rejects, write-ahead intent, idempotent submission, EXE-02 lifecycle journal, EXE-03 stream-authoritative fills/REST cross-check, EXE-08 durable account reconciliation, EXE-09 automatic protective-order invariant, and EXE-10 cross-strategy position ownership are complete. Local gate: 418/418 tests, formatter clean for changed files, full Release build including Android with 0 warnings/errors, current EF model, zero vulnerable packages, and fail-closed Production runtime smoke. EXE-04 ordered gate chain is next. |
 | S4 | ⬜ | | |
 | S5 | ⬜ | | |
 | S6 | ⬜ | | |

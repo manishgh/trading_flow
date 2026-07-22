@@ -181,6 +181,20 @@ requires operator acknowledgement. A temporary backstop is cancelled only after 
 strategy/bracket stop is active and covers the full position; foreign or manual stops
 are never cancelled by this cleanup path.
 
+Position ownership is strategy-tagged in the append-only ledger. Each fill records
+the strategy that executed the order and the strategy that owns the resulting net
+position. Reductions and protective exits preserve the opening owner; ownership can
+change only after the symbol reaches a flat quantity. Before any entry, EXE-10 obtains
+a durable namespaced ticker lease and checks both the latest position and every
+nonterminal entry intent. This serializes concurrent strategy submissions even before
+the broker reports a fill. A cross-strategy conflict or unavailable lease fails before
+intent reservation and broker I/O. Exits and protective stops do not pass through this
+entry-only guard, so risk reduction cannot be delayed by ownership contention.
+
+`appsettings.local.json` and `launchSettings.json` are developer-machine files and are
+ignored by Git. The local settings file is loaded only in Development. Production
+credentials must be supplied by the deployment configuration and secret provider.
+
 Ticker locks prevent multiple workers from processing the same ticker concurrently. Order state lets paper jobs recover after a web/worker restart.
 
 ## Candle Event Pipeline
