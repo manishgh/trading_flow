@@ -13,46 +13,24 @@
 
     <TabBar>
         <ShellContent
-            Title="Desk"
+            Title="Watch"
             ContentTemplate="{DataTemplate pages:WishlistsPage}"
             Route="WishlistsPage" />
 
         <ShellContent
-            Title="Trades"
+            Title="Positions"
             ContentTemplate="{DataTemplate pages:RunningTradesPage}"
             Route="RunningTradesPage" />
 
         <ShellContent
-            Title="Paper"
-            ContentTemplate="{DataTemplate pages:PaperPage}"
-            Route="PaperPage" />
+            Title="Activity"
+            ContentTemplate="{DataTemplate pages:NotificationsPage}"
+            Route="NotificationsPage" />
 
         <ShellContent
-            Title="News"
-            ContentTemplate="{DataTemplate pages:NewsPage}"
-            Route="NewsPage" />
-
-        <Tab Title="More">
-            <ShellContent
-                Title="Automation"
-                ContentTemplate="{DataTemplate pages:AutomationPage}"
-                Route="AutomationPage" />
-
-            <ShellContent
-                Title="Backtests"
-                ContentTemplate="{DataTemplate pages:BacktestsPage}"
-                Route="BacktestsPage" />
-
-            <ShellContent
-                Title="Alerts"
-                ContentTemplate="{DataTemplate pages:NotificationsPage}"
-                Route="NotificationsPage" />
-
-            <ShellContent
-                Title="Settings"
-                ContentTemplate="{DataTemplate pages:SettingsPage}"
-                Route="SettingsPage" />
-        </Tab>
+            Title="More"
+            ContentTemplate="{DataTemplate pages:MorePage}"
+            Route="MorePage" />
     </TabBar>
 
 </Shell>

@@ -1,167 +1,181 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:TradingFlow.Mobile.Controls"
              x:Class="TradingFlow.Mobile.Pages.WishlistsPage"
-             Title="Wishlists">
+             Title="Watch">
     <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
-        <ScrollView>
-            <VerticalStackLayout Padding="12" Spacing="10">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <VerticalStackLayout Spacing="0">
-                        <Label Text="Desk" Style="{StaticResource Headline}" FontSize="22" />
-                        <Label Text="Watch prices, react to signals, start strategy-managed paper trades." Style="{StaticResource SubHeadline}" FontSize="12" />
-                    </VerticalStackLayout>
-                    <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
-                </Grid>
+        <CollectionView x:Name="ItemsView"
+                        Margin="12,0"
+                        SelectionMode="None"
+                        ItemsUpdatingScrollMode="KeepScrollOffset">
+            <CollectionView.Header>
+                <VerticalStackLayout Padding="0,12,0,10" Spacing="10">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Spacing="2">
+                            <Label Text="Watch" Style="{StaticResource Headline}" />
+                            <Label Text="Scan candidates and inspect current TradingFlow eligibility."
+                                   Style="{StaticResource SubHeadline}" />
+                        </VerticalStackLayout>
+                        <controls:EnvironmentBadgeView Grid.Column="1" />
+                    </Grid>
 
-                <Border Style="{StaticResource CardBorder}" Padding="10">
-                    <VerticalStackLayout Spacing="8">
-                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="12" LineBreakMode="TailTruncation" />
+                    <Border Style="{StaticResource CardBorder}" Padding="10">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <Picker x:Name="WishlistPicker" Title="Wishlist" SelectedIndexChanged="OnWishlistChanged" />
-                            <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
+                            <Label x:Name="StatusLabel"
+                                   Text="Checking backend..."
+                                   FontSize="13"
+                                   LineBreakMode="WordWrap" />
+                            <ActivityIndicator x:Name="BusyIndicator"
+                                               Grid.Column="1"
+                                               IsRunning="False"
+                                               IsVisible="False" />
                         </Grid>
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <Entry x:Name="WishlistNameEntry" Placeholder="Group name" />
-                            <Button Grid.Column="1" Text="Save" Clicked="OnSaveWishlist" Padding="12,6" />
-                        </Grid>
-                    </VerticalStackLayout>
-                </Border>
+                    </Border>
 
-                <Border Style="{StaticResource CardBorder}" Padding="10">
-                    <VerticalStackLayout Spacing="8">
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <VerticalStackLayout Spacing="1">
-                                <Label Text="Selected Group" FontAttributes="Bold" FontSize="14" />
-                                <Label x:Name="WishlistDetailLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
-                            </VerticalStackLayout>
-                            <Button x:Name="ObserveButton" Grid.Column="1" Text="Observe" Clicked="OnToggleObserve" Padding="12,6" BackgroundColor="#067647" />
-                        </Grid>
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <Entry x:Name="TickerEntry" Placeholder="Add ticker: POET" Keyboard="Text" TextChanged="OnTickerSearchChanged" />
-                            <Button Grid.Column="1" Text="+" Clicked="OnAddTicker" Padding="12,6" />
-                        </Grid>
-                        <CollectionView x:Name="SuggestionsView" SelectionMode="Single" SelectionChanged="OnSuggestionSelected" HeightRequest="0">
-                            <CollectionView.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,6" Padding="10">
-                                        <Label Text="{Binding .}" FontAttributes="Bold" FontSize="14" />
-                                    </Border>
-                                </DataTemplate>
-                            </CollectionView.ItemTemplate>
-                        </CollectionView>
-                        <Picker x:Name="StrategyPicker" Title="Strategy for paper runs" />
-                        <Picker x:Name="ConfigPicker" Title="Broker profile" IsVisible="False" />
-                        <Button Text="Run Strategy For Group" Clicked="OnTradeWishlist" />
-                    </VerticalStackLayout>
-                </Border>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <Picker x:Name="WishlistPicker"
+                                Title="Wishlist"
+                                SelectedIndexChanged="OnWishlistChanged"
+                                SemanticProperties.Description="Choose the watchlist to monitor" />
+                        <Button Grid.Column="1"
+                                Text="Refresh"
+                                Clicked="OnRefreshClicked"
+                                SemanticProperties.Description="Refresh watchlist status" />
+                    </Grid>
 
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <Label Text="Stocks" FontAttributes="Bold" FontSize="17" VerticalTextAlignment="Center" />
-                    <Label x:Name="StockCountLabel" Grid.Column="1" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" VerticalTextAlignment="Center" />
-                </Grid>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <VerticalStackLayout Spacing="1">
+                            <Label x:Name="WishlistDetailLabel"
+                                   FontSize="13"
+                                   TextColor="{StaticResource TextSecondary}"
+                                   LineBreakMode="WordWrap" />
+                            <Label x:Name="StockCountLabel"
+                                   FontSize="12"
+                                   TextColor="{StaticResource TextSecondary}" />
+                        </VerticalStackLayout>
+                        <Button x:Name="ObserveButton"
+                                Grid.Column="1"
+                                Text="Observe"
+                                Clicked="OnToggleObserve"
+                                SemanticProperties.Description="Start or pause continuous watchlist observation" />
+                    </Grid>
 
-                <CollectionView x:Name="ItemsView" HeightRequest="420">
-                    <CollectionView.EmptyView>
-                        <Label Text="No stocks yet. Add a ticker above or create a group." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
-                    </CollectionView.EmptyView>
-                    <CollectionView.ItemTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="10">
-                                <VerticalStackLayout Spacing="6">
-                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                        <VerticalStackLayout Spacing="0">
-                                            <Label Text="{Binding DisplayTitle}" FontAttributes="Bold" FontSize="16" />
-                                            <Label Text="{Binding DetailText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="1" />
-                                        </VerticalStackLayout>
-                                        <VerticalStackLayout Grid.Column="1" Spacing="0" HorizontalOptions="End">
-                                            <Label Text="{Binding StatusText}" FontAttributes="Bold" FontSize="12" TextColor="{Binding StatusColor}" HorizontalTextAlignment="End" />
-                                            <Label Text="{Binding PriceText}" FontAttributes="Bold" FontSize="14" HorizontalTextAlignment="End" />
-                                            <Label Text="{Binding BidAskText}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" HorizontalTextAlignment="End" />
-                                            <Label Text="{Binding MovementText}" FontSize="11" TextColor="{Binding MovementColor}" HorizontalTextAlignment="End" IsVisible="{Binding HasMovement}" />
-                                        </VerticalStackLayout>
-                                    </Grid>
-                                    <VerticalStackLayout IsVisible="{Binding IsExpanded}" Spacing="4">
-                                        <Label Text="{Binding EligibilityReason}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" MaxLines="5" />
-                                        <Label Text="{Binding NewsText}" FontSize="12" TextColor="{StaticResource AccentColor}" LineBreakMode="TailTruncation" MaxLines="2" />
-                                        <Label Text="{Binding TradeText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="2" />
-                                    </VerticalStackLayout>
-                                    <Grid ColumnDefinitions="*,*,*,Auto" ColumnSpacing="6">
-                                        <Button Text="Trade" Clicked="OnTradeTicker" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" />
-                                        <Button Grid.Column="1" Text="News" Clicked="OnOpenTickerNews" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" IsEnabled="{Binding HasNewsLink}" />
-                                        <Button Grid.Column="2" Text="Details" Clicked="OnToggleTickerDetails" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" BackgroundColor="#475467" />
-                                        <Button Grid.Column="3" Text="-" Clicked="OnRemoveTicker" CommandParameter="{Binding .}" Padding="10,6" FontSize="12" BackgroundColor="#667085" />
-                                    </Grid>
-                                </VerticalStackLayout>
-                            </Border>
-                        </DataTemplate>
-                    </CollectionView.ItemTemplate>
-                </CollectionView>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <Entry x:Name="TickerEntry"
+                               Placeholder="Add ticker"
+                               Keyboard="Text"
+                               TextChanged="OnTickerSearchChanged"
+                               SemanticProperties.Description="Ticker symbol to add to this watchlist" />
+                        <Button Grid.Column="1"
+                                Text="Add"
+                                Clicked="OnAddTicker"
+                                SemanticProperties.Description="Add ticker to this watchlist" />
+                    </Grid>
 
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <VerticalStackLayout Spacing="0">
-                        <Label Text="Recent Signals" FontAttributes="Bold" FontSize="17" />
-                        <Label Text="Last 20 minutes. Details stay collapsed until tapped." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                    </VerticalStackLayout>
-                    <Button Grid.Column="1" Text="Reload" Clicked="OnRefreshSignals" Padding="12,6" />
-                </Grid>
+                    <Picker x:Name="SuggestionsPicker"
+                            Title="Matching known symbols"
+                            IsVisible="False"
+                            SelectedIndexChanged="OnSuggestionSelected"
+                            SemanticProperties.Description="Matching known ticker symbols" />
 
-                <CollectionView x:Name="SignalsView" HeightRequest="280">
-                    <CollectionView.EmptyView>
-                        <Label Text="No recent wishlist signals." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
-                    </CollectionView.EmptyView>
-                    <CollectionView.ItemTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="10">
-                                <VerticalStackLayout Spacing="6">
-                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                        <VerticalStackLayout Spacing="0">
-                                            <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="16" TextColor="{StaticResource AccentColor}" />
-                                            <Label Text="{Binding HeaderText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
-                                        </VerticalStackLayout>
-                                        <Label Grid.Column="1" Text="{Binding StatusText}" FontSize="12" TextColor="{StaticResource AccentColor}" VerticalTextAlignment="Center" />
-                                    </Grid>
-                                    <Label Text="{Binding CompactReason}" FontSize="12" LineBreakMode="TailTruncation" MaxLines="1" />
-                                    <Label Text="{Binding NewsText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="1" />
-                                    <VerticalStackLayout IsVisible="{Binding IsExpanded}" Spacing="4">
-                                        <Label Text="Technical detail" FontAttributes="Bold" FontSize="12" />
-                                        <Label Text="{Binding Reason}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" MaxLines="6" />
-                                        <Label Text="{Binding SnapshotSummary}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="4" />
-                                    </VerticalStackLayout>
-                                    <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="6">
-                                        <Button Text="Trade" Clicked="OnTradeSignal" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" />
-                                        <Button Grid.Column="1" Text="News" Clicked="OnOpenSignalNews" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" />
-                                        <Button Grid.Column="2" Text="Details" Clicked="OnToggleSignalDetails" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" BackgroundColor="#475467" />
-                                        <Button Grid.Column="3" Text="Done" Clicked="OnAcknowledgeSignal" CommandParameter="{Binding .}" Padding="8,6" FontSize="12" BackgroundColor="#667085" />
-                                    </Grid>
-                                </VerticalStackLayout>
-                            </Border>
-                        </DataTemplate>
-                    </CollectionView.ItemTemplate>
-                </CollectionView>
-
-                <VerticalStackLayout Spacing="0">
-                    <Label Text="Related News" FontAttributes="Bold" FontSize="17" />
-                    <Label x:Name="NewsStatusLabel" Text="Rolling 4-hour window for this group's tickers. Live." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                    <Label Text="Markets"
+                           FontAttributes="Bold"
+                           FontSize="18" />
                 </VerticalStackLayout>
+            </CollectionView.Header>
 
-                <CollectionView x:Name="NewsView" SelectionMode="Single" SelectionChanged="OnNewsSelected" HeightRequest="220">
-                    <CollectionView.EmptyView>
-                        <Label Text="No related news in the last 4 hours." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
-                    </CollectionView.EmptyView>
-                    <CollectionView.ItemTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="10">
-                                <VerticalStackLayout Spacing="4">
-                                    <Label Text="{Binding DisplayHeadline}" FontAttributes="Bold" FontSize="13" LineBreakMode="TailTruncation" MaxLines="2" />
-                                    <Label Text="{Binding DisplaySummary}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="2" IsVisible="{Binding HasSummary}" />
-                                    <Label Text="{Binding SourceLine}" FontSize="11" TextColor="{StaticResource AccentColor}" LineBreakMode="TailTruncation" />
+            <CollectionView.EmptyView>
+                <VerticalStackLayout Padding="12,28" Spacing="6">
+                    <Label Text="No watched symbols"
+                           FontAttributes="Bold"
+                           FontSize="16"
+                           HorizontalTextAlignment="Center" />
+                    <Label Text="Add a ticker above or choose another wishlist."
+                           FontSize="13"
+                           TextColor="{StaticResource TextSecondary}"
+                           HorizontalTextAlignment="Center" />
+                </VerticalStackLayout>
+            </CollectionView.EmptyView>
+
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border Style="{StaticResource CardBorder}"
+                            Margin="0,0,0,8"
+                            Padding="10">
+                        <VerticalStackLayout Spacing="7">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                <VerticalStackLayout Spacing="1">
+                                    <Label Text="{Binding DisplayTitle}"
+                                           FontAttributes="Bold"
+                                           FontSize="16" />
+                                    <Label Text="{Binding DetailText}"
+                                           FontSize="12"
+                                           TextColor="{StaticResource TextSecondary}"
+                                           LineBreakMode="TailTruncation"
+                                           MaxLines="1" />
                                 </VerticalStackLayout>
-                            </Border>
-                        </DataTemplate>
-                    </CollectionView.ItemTemplate>
-                </CollectionView>
-            </VerticalStackLayout>
-        </ScrollView>
+                                <VerticalStackLayout Grid.Column="1" Spacing="1" HorizontalOptions="End">
+                                    <Label Text="{Binding PriceText}"
+                                           FontAttributes="Bold"
+                                           FontSize="16"
+                                           HorizontalTextAlignment="End" />
+                                    <Label Text="{Binding BidAskText}"
+                                           FontSize="12"
+                                           TextColor="{StaticResource TextSecondary}"
+                                           HorizontalTextAlignment="End" />
+                                </VerticalStackLayout>
+                            </Grid>
+
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                <Label Text="{Binding StatusText}"
+                                       FontAttributes="Bold"
+                                       FontSize="12"
+                                       TextColor="{Binding StatusColor}"
+                                       VerticalTextAlignment="Center" />
+                                <Label Grid.Column="1"
+                                       Text="{Binding MovementText}"
+                                       FontSize="12"
+                                       TextColor="{StaticResource TextSecondary}"
+                                       HorizontalTextAlignment="End"
+                                       IsVisible="{Binding HasMovement}" />
+                            </Grid>
+
+                            <VerticalStackLayout IsVisible="{Binding IsExpanded}" Spacing="5">
+                                <Label Text="TradingFlow decision"
+                                       FontAttributes="Bold"
+                                       FontSize="12" />
+                                <Label Text="{Binding EligibilityReason}"
+                                       FontSize="13"
+                                       TextColor="{StaticResource TextSecondary}"
+                                       LineBreakMode="WordWrap" />
+                                <Label Text="{Binding TradeText}"
+                                       FontSize="13"
+                                       TextColor="{StaticResource TextSecondary}"
+                                       LineBreakMode="WordWrap" />
+                                <Label Text="{Binding NewsText}"
+                                       FontSize="13"
+                                       TextColor="{StaticResource Primary}"
+                                       LineBreakMode="WordWrap"
+                                       MaxLines="3" />
+                            </VerticalStackLayout>
+
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                <Button Text="Details"
+                                        Clicked="OnToggleTickerDetails"
+                                        CommandParameter="{Binding .}"
+                                        SemanticProperties.Description="Show or hide market and eligibility details" />
+                                <Button Grid.Column="1"
+                                        Text="News"
+                                        Clicked="OnOpenTickerNews"
+                                        CommandParameter="{Binding .}"
+                                        IsEnabled="{Binding HasNewsLink}"
+                                        SemanticProperties.Description="Open the latest related news article" />
+                            </Grid>
+                        </VerticalStackLayout>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
     </RefreshView>
 </ContentPage>

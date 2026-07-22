@@ -1,41 +1,114 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:TradingFlow.Mobile.Controls"
              x:Class="TradingFlow.Mobile.Pages.NotificationsPage"
-             Title="System">
+             Title="Activity">
     <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
-        <ScrollView>
-            <VerticalStackLayout Padding="16" Spacing="14">
-                <Label Text="System Notifications" Style="{StaticResource Headline}" FontSize="24" />
-                <Label Text="Run status, failures, and completed results from the backend (last 2 days)." Style="{StaticResource SubHeadline}" FontSize="13" />
-                <Border Style="{StaticResource CardBorder}">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
-                        <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+        <CollectionView x:Name="NotificationsView"
+                        Margin="12,0"
+                        SelectionMode="None"
+                        ItemsUpdatingScrollMode="KeepScrollOffset">
+            <CollectionView.Header>
+                <VerticalStackLayout Padding="0,12,0,10" Spacing="10">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Spacing="2">
+                            <Label Text="Activity" Style="{StaticResource Headline}" />
+                            <Label Text="Strategy signals and operational events from the last two days."
+                                   Style="{StaticResource SubHeadline}" />
+                        </VerticalStackLayout>
+                        <controls:EnvironmentBadgeView Grid.Column="1" />
                     </Grid>
-                </Border>
-                <Button Text="Refresh Alerts" Clicked="OnRefreshClicked" />
-                <CollectionView x:Name="NotificationsView">
-                    <CollectionView.EmptyView>
-                        <Label Text="No notifications yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
-                    </CollectionView.EmptyView>
-                    <CollectionView.ItemTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,10">
-                                <VerticalStackLayout Spacing="6">
-                                    <Grid ColumnDefinitions="*,Auto">
-                                        <Label Text="{Binding Title}" FontAttributes="Bold" FontSize="16" />
-                                        <Label Grid.Column="1" Text="{Binding Severity}" FontSize="12" TextColor="{StaticResource AccentColor}" />
-                                    </Grid>
-                                    <Label Text="{Binding Message}" FontSize="13" />
-                                    <Label Text="{Binding RunName}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                                    <Label Text="{Binding Timestamp}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
+
+                    <Border Style="{StaticResource CardBorder}" Padding="10">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <Label x:Name="StatusLabel"
+                                   Text="Checking backend..."
+                                   FontSize="13"
+                                   LineBreakMode="WordWrap" />
+                            <ActivityIndicator x:Name="BusyIndicator"
+                                               Grid.Column="1"
+                                               IsRunning="False"
+                                               IsVisible="False" />
+                        </Grid>
+                    </Border>
+
+                    <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                        <Button x:Name="AllButton"
+                                Text="All"
+                                Clicked="OnFilterSelected"
+                                CommandParameter="all" />
+                        <Button x:Name="SignalsButton"
+                                Grid.Column="1"
+                                Text="Signals"
+                                Clicked="OnFilterSelected"
+                                CommandParameter="signal" />
+                        <Button x:Name="SystemButton"
+                                Grid.Column="2"
+                                Text="System"
+                                Clicked="OnFilterSelected"
+                                CommandParameter="system" />
+                    </Grid>
+
+                    <Button Text="Refresh Activity"
+                            Clicked="OnRefreshClicked"
+                            SemanticProperties.Description="Refresh strategy signals and system activity" />
+                </VerticalStackLayout>
+            </CollectionView.Header>
+
+            <CollectionView.EmptyView>
+                <VerticalStackLayout Padding="12,28" Spacing="6">
+                    <Label Text="No recent activity"
+                           FontAttributes="Bold"
+                           FontSize="16"
+                           HorizontalTextAlignment="Center" />
+                    <Label Text="Signals, order events, and system results will appear here."
+                           FontSize="13"
+                           TextColor="{StaticResource TextSecondary}"
+                           HorizontalTextAlignment="Center" />
+                </VerticalStackLayout>
+            </CollectionView.EmptyView>
+
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border Style="{StaticResource CardBorder}"
+                            Margin="0,0,0,8"
+                            Padding="10">
+                        <VerticalStackLayout Spacing="6">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <VerticalStackLayout Spacing="1">
+                                    <Label Text="{Binding CategoryLabel}"
+                                           FontAttributes="Bold"
+                                           FontSize="12"
+                                           TextColor="{Binding AccentColor}" />
+                                    <Label Text="{Binding Title}"
+                                           FontAttributes="Bold"
+                                           FontSize="16"
+                                           LineBreakMode="WordWrap" />
                                 </VerticalStackLayout>
-                            </Border>
-                        </DataTemplate>
-                    </CollectionView.ItemTemplate>
-                </CollectionView>
-            </VerticalStackLayout>
-        </ScrollView>
+                                <Label Grid.Column="1"
+                                       Text="{Binding DisplayTimestamp}"
+                                       FontSize="12"
+                                       TextColor="{StaticResource TextSecondary}"
+                                       HorizontalTextAlignment="End" />
+                            </Grid>
+                            <Label Text="{Binding Message}"
+                                   FontSize="13"
+                                   LineBreakMode="WordWrap" />
+                            <Label Text="{Binding Context}"
+                                   IsVisible="{Binding HasContext}"
+                                   FontSize="12"
+                                   TextColor="{StaticResource TextSecondary}"
+                                   LineBreakMode="WordWrap" />
+                            <Button Text="Open News"
+                                    IsVisible="{Binding HasNewsLink}"
+                                    Clicked="OnOpenNews"
+                                    CommandParameter="{Binding .}"
+                                    SemanticProperties.Description="Open the news article associated with this signal" />
+                        </VerticalStackLayout>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
     </RefreshView>
 </ContentPage>

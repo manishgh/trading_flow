@@ -1,56 +1,113 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:TradingFlow.Mobile.Controls"
              x:Class="TradingFlow.Mobile.Pages.NewsPage"
              Title="News">
     <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
-            <Grid Padding="16" RowDefinitions="Auto,Auto,*" RowSpacing="12">
-                <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                    <VerticalStackLayout Spacing="2">
-                        <Label Text="News Feed" Style="{StaticResource Headline}" FontSize="24" />
-                        <Label Text="Finviz Elite + Alpaca rolling 4-hour feed." Style="{StaticResource SubHeadline}" FontSize="13" />
-                    </VerticalStackLayout>
-                    <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
-                </Grid>
+        <CollectionView x:Name="NewsView"
+                        Margin="12,0"
+                        SelectionMode="Single"
+                        SelectionChanged="OnNewsSelected"
+                        ItemsUpdatingScrollMode="KeepScrollOffset">
+            <CollectionView.Header>
+                <VerticalStackLayout Padding="0,12,0,10" Spacing="10">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Spacing="2">
+                            <Label Text="News" Style="{StaticResource Headline}" />
+                            <Label Text="Finviz Elite and Alpaca rolling four-hour feed."
+                                   Style="{StaticResource SubHeadline}" />
+                        </VerticalStackLayout>
+                        <controls:EnvironmentBadgeView Grid.Column="1" />
+                    </Grid>
 
-                <Border Grid.Row="1" Style="{StaticResource CardBorder}">
-                    <VerticalStackLayout Spacing="10">
-                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" />
-                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-                            <Entry x:Name="TickerEntry" Placeholder="Ticker filter" Keyboard="Text" TextChanged="OnTickerChanged" />
-                            <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
-                            <Button Grid.Column="2" Text="Fetch" Clicked="OnFetchClicked" Padding="12,6" />
+                    <Border Style="{StaticResource CardBorder}" Padding="10">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <Label x:Name="StatusLabel"
+                                   Text="Checking backend..."
+                                   FontSize="13"
+                                   LineBreakMode="WordWrap" />
+                            <ActivityIndicator x:Name="BusyIndicator"
+                                               Grid.Column="1"
+                                               IsRunning="False"
+                                               IsVisible="False" />
                         </Grid>
-                    </VerticalStackLayout>
-                </Border>
+                    </Border>
 
-                <CollectionView Grid.Row="2"
-                                x:Name="NewsView"
-                                SelectionMode="Single"
-                                SelectionChanged="OnNewsSelected">
-                    <CollectionView.EmptyView>
-                        <Label Text="No rolling news yet. Tap Fetch to pull Finviz and Alpaca now." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
-                    </CollectionView.EmptyView>
-                    <CollectionView.ItemTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8">
-                                <VerticalStackLayout Spacing="6">
-                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
-                                        <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="13" TextColor="{StaticResource AccentColor}" />
-                                        <Label Grid.Column="1" Text="{Binding DisplayProvider}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                                        <Label Grid.Column="2" Text="{Binding SentimentText}" FontSize="12" />
-                                    </Grid>
-                                    <Label Text="{Binding DisplayHeadline}" FontAttributes="Bold" FontSize="15" LineBreakMode="WordWrap" MaxLines="3" />
-                                    <Label Text="{Binding DisplaySummary}" IsVisible="{Binding HasSummary}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" MaxLines="3" />
-                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                        <Label Text="{Binding DisplaySource}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                                        <Label Grid.Column="1" Text="{Binding DisplayTimestamp}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
-                                    </Grid>
-                                </VerticalStackLayout>
-                            </Border>
-                        </DataTemplate>
-                    </CollectionView.ItemTemplate>
-                </CollectionView>
-            </Grid>
+                    <Entry x:Name="TickerEntry"
+                           Placeholder="Filter by ticker"
+                           Keyboard="Text"
+                           TextChanged="OnTickerChanged"
+                           SemanticProperties.Description="Filter rolling news by ticker symbol" />
+
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                        <Button Text="Refresh"
+                                Clicked="OnRefreshClicked"
+                                SemanticProperties.Description="Refresh stored rolling news" />
+                        <Button Grid.Column="1"
+                                Text="Fetch Providers"
+                                Clicked="OnFetchClicked"
+                                SemanticProperties.Description="Fetch current Finviz and Alpaca news" />
+                    </Grid>
+                </VerticalStackLayout>
+            </CollectionView.Header>
+
+            <CollectionView.EmptyView>
+                <VerticalStackLayout Padding="12,28" Spacing="6">
+                    <Label Text="No rolling news"
+                           FontAttributes="Bold"
+                           FontSize="16"
+                           HorizontalTextAlignment="Center" />
+                    <Label Text="Fetch providers or change the ticker filter."
+                           FontSize="13"
+                           TextColor="{StaticResource TextSecondary}"
+                           HorizontalTextAlignment="Center" />
+                </VerticalStackLayout>
+            </CollectionView.EmptyView>
+
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border Style="{StaticResource CardBorder}"
+                            Margin="0,0,0,8"
+                            Padding="10">
+                        <VerticalStackLayout Spacing="6">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                                <Label Text="{Binding Ticker}"
+                                       FontAttributes="Bold"
+                                       FontSize="13"
+                                       TextColor="{StaticResource Primary}" />
+                                <Label Grid.Column="1"
+                                       Text="{Binding DisplayProvider}"
+                                       FontSize="12"
+                                       TextColor="{StaticResource TextSecondary}" />
+                                <Label Grid.Column="2"
+                                       Text="{Binding SentimentText}"
+                                       FontSize="12" />
+                            </Grid>
+                            <Label Text="{Binding DisplayHeadline}"
+                                   FontAttributes="Bold"
+                                   FontSize="15"
+                                   LineBreakMode="WordWrap"
+                                   MaxLines="3" />
+                            <Label Text="{Binding DisplaySummary}"
+                                   IsVisible="{Binding HasSummary}"
+                                   FontSize="13"
+                                   TextColor="{StaticResource TextSecondary}"
+                                   LineBreakMode="WordWrap"
+                                   MaxLines="3" />
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Label Text="{Binding DisplaySource}"
+                                       FontSize="12"
+                                       TextColor="{StaticResource TextSecondary}" />
+                                <Label Grid.Column="1"
+                                       Text="{Binding DisplayTimestamp}"
+                                       FontSize="12"
+                                       TextColor="{StaticResource TextSecondary}" />
+                            </Grid>
+                        </VerticalStackLayout>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
     </RefreshView>
 </ContentPage>

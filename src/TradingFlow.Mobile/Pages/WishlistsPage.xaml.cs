@@ -9,12 +9,9 @@ public partial class WishlistsPage : ContentPage
 {
     private readonly TradingFlowApiClient api = AppServices.Api;
     private readonly ObservableCollection<WishlistStockCard> items = new();
-    private readonly ObservableCollection<WishlistSignalCard> signals = new();
-    private readonly ObservableCollection<MobileNewsItem> newsItems = new();
     private readonly ObservableCollection<string> suggestions = new();
     private readonly HashSet<Guid> seenSignalIds = new();
     private readonly IDispatcherTimer refreshTimer;
-    private MobileCatalogResponse? catalog;
     private IReadOnlyList<MobileWishlistResponse> wishlists = Array.Empty<MobileWishlistResponse>();
     private MobileWishlistResponse? selectedWishlist;
     private CancellationTokenSource? streamCts;
@@ -25,9 +22,7 @@ public partial class WishlistsPage : ContentPage
     {
         InitializeComponent();
         ItemsView.ItemsSource = items;
-        SignalsView.ItemsSource = signals;
-        NewsView.ItemsSource = newsItems;
-        SuggestionsView.ItemsSource = suggestions;
+        SuggestionsPicker.ItemsSource = suggestions;
         refreshTimer = Dispatcher.CreateTimer();
         refreshTimer.Interval = TimeSpan.FromSeconds(12);
         refreshTimer.Tick += async (_, _) => await LoadAsync(showBusy: false);
@@ -60,14 +55,8 @@ public partial class WishlistsPage : ContentPage
         try
         {
             var healthy = await api.CheckHealthAsync();
-            StatusLabel.Text = healthy ? $"Connected: {api.BaseUrl}" : $"Backend unreachable: {api.BaseUrl}";
+            StatusLabel.Text = healthy ? "Connected · live watch data" : "Disconnected · watch data may be stale";
             StatusLabel.TextColor = healthy ? Color.FromArgb("#067647") : Color.FromArgb("#B42318");
-
-            catalog ??= await api.GetCatalogAsync();
-            ConfigPicker.ItemsSource = catalog?.PaperConfigs.ToList();
-            StrategyPicker.ItemsSource = catalog?.Strategies.ToList();
-            ConfigPicker.SelectedIndex = ConfigPicker.SelectedIndex < 0 && ConfigPicker.Items.Count > 0 ? 0 : ConfigPicker.SelectedIndex;
-            StrategyPicker.SelectedIndex = StrategyPicker.SelectedIndex < 0 && StrategyPicker.Items.Count > 0 ? 0 : StrategyPicker.SelectedIndex;
 
             var previousWishlistId = selectedWishlist?.Id;
             wishlists = await api.GetWishlistsAsync() ?? Array.Empty<MobileWishlistResponse>();
@@ -100,8 +89,7 @@ public partial class WishlistsPage : ContentPage
         if (selectedWishlist is null)
         {
             RenderWishlist();
-            MergeSignals([], notifyNew: false);
-            RenderNews([]);
+            ProcessSignals([], notifyNew: false);
             return;
         }
 
@@ -114,36 +102,13 @@ public partial class WishlistsPage : ContentPage
 
         selectedWishlist = desk.Wishlist;
         RenderDesk(desk);
-        MergeSignals(desk.RecentSignals, notifyNewSignals);
-        RenderNews(desk.RelatedNews);
+        ProcessSignals(desk.RecentSignals, notifyNewSignals);
     }
 
-    private async Task LoadSignalsAsync()
+    private void ProcessSignals(IReadOnlyList<MobileWishlistSignalResponse> latest, bool notifyNew)
     {
-        await LoadDeskAsync(notifyNewSignals: false);
-    }
-
-    // Reconcile the signal cards in place so expand/collapse state survives refreshes.
-    private void MergeSignals(IReadOnlyList<MobileWishlistSignalResponse> latest, bool notifyNew)
-    {
-        var desiredIds = latest.Select(signal => signal.Id).ToHashSet();
-        for (var index = signals.Count - 1; index >= 0; index--)
+        foreach (var signal in latest)
         {
-            if (!desiredIds.Contains(signals[index].Id))
-            {
-                signals.RemoveAt(index);
-            }
-        }
-
-        for (var index = 0; index < latest.Count; index++)
-        {
-            var signal = latest[index];
-            var existing = signals.FirstOrDefault(card => card.Id == signal.Id);
-            if (existing is null)
-            {
-                signals.Insert(Math.Min(index, signals.Count), new WishlistSignalCard(signal));
-            }
-
             var isNewSignal = seenSignalIds.Add(signal.Id);
             if (notifyNew && isNewSignal)
             {
@@ -179,11 +144,9 @@ public partial class WishlistsPage : ContentPage
             items.Clear();
             WishlistDetailLabel.Text = "No group";
             StockCountLabel.Text = String.Empty;
-            WishlistNameEntry.Text = string.Empty;
             return;
         }
 
-        WishlistNameEntry.Text = selectedWishlist.Name;
         WishlistDetailLabel.Text = selectedWishlist.DetailText;
         StockCountLabel.Text = $"{selectedWishlist.ActiveItemCount} active";
         ObserveButton.Text = selectedWishlist.IsObserved ? "Pause" : "Observe";
@@ -222,7 +185,6 @@ public partial class WishlistsPage : ContentPage
     private void RenderDesk(MobileWishlistDeskResponse desk)
     {
         selectedWishlist = desk.Wishlist;
-        WishlistNameEntry.Text = selectedWishlist.Name;
         WishlistDetailLabel.Text = selectedWishlist.DetailText;
         StockCountLabel.Text = $"{desk.Rows.Count} active | {desk.TotalText}";
         ObserveButton.Text = selectedWishlist.IsObserved ? "Pause" : "Observe";
@@ -250,19 +212,6 @@ public partial class WishlistsPage : ContentPage
                 existing.UpdateFromDesk(row);
             }
         }
-    }
-
-    private void RenderNews(IReadOnlyList<MobileNewsItem> latest)
-    {
-        newsItems.Clear();
-        foreach (var item in latest.Take(40))
-        {
-            newsItems.Add(item);
-        }
-
-        NewsStatusLabel.Text = newsItems.Count == 0
-            ? "Rolling 4-hour window for this group's tickers. Live."
-            : $"{newsItems.Count} live item(s) in the rolling 4-hour window.";
     }
 
     private void EnsureStreams()
@@ -399,14 +348,10 @@ public partial class WishlistsPage : ContentPage
 
     private void ApplyActivityUpdate(WishlistActivityUpdate update)
     {
-        RenderNews((update.News ?? Array.Empty<WishlistActivityNews>())
-            .Select(ToMobileNewsItem)
-            .ToArray());
-
         var signalResponses = (update.Signals ?? Array.Empty<WishlistActivitySignal>())
             .Select(ToMobileWishlistSignal)
             .ToArray();
-        MergeSignals(signalResponses, notifyNew: true);
+        ProcessSignals(signalResponses, notifyNew: true);
     }
 
     private MobileWishlistSignalResponse ToMobileWishlistSignal(WishlistActivitySignal signal)
@@ -427,34 +372,9 @@ public partial class WishlistsPage : ContentPage
             false);
     }
 
-    private static MobileNewsItem ToMobileNewsItem(WishlistActivityNews item)
-    {
-        return new MobileNewsItem(
-            item.Ticker,
-            item.Timestamp,
-            item.DisplayHeadline,
-            0m,
-            item.Provider,
-            item.Source,
-            item.Url,
-            item.DisplaySummary);
-    }
-
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
 
     private async void OnRefreshClicked(object? sender, EventArgs e) => await LoadAsync();
-
-    private async void OnRefreshSignals(object? sender, EventArgs e)
-    {
-        try
-        {
-            await LoadSignalsAsync();
-        }
-        catch (Exception exception)
-        {
-            await DisplayAlertAsync("Alerts", exception.Message, "OK");
-        }
-    }
 
     private void OnWishlistChanged(object? sender, EventArgs e)
     {
@@ -464,38 +384,10 @@ public partial class WishlistsPage : ContentPage
         }
 
         selectedWishlist = wishlist;
-        newsItems.Clear();
         RenderWishlist();
-        _ = LoadSignalsAsync();
+        _ = LoadDeskAsync(notifyNewSignals: false);
         RefreshSuggestions();
         EnsureStreams();
-    }
-
-    private async void OnSaveWishlist(object? sender, EventArgs e)
-    {
-        var name = WishlistNameEntry.Text?.Trim();
-        if (String.IsNullOrWhiteSpace(name))
-        {
-            await DisplayAlertAsync("Wishlists", "Enter a group name.", "OK");
-            return;
-        }
-
-        try
-        {
-            var saved = await api.SaveWishlistAsync(new MobileWishlistSaveRequest(
-                selectedWishlist?.Id,
-                name,
-                selectedWishlist?.Description,
-                selectedWishlist?.IsDefault,
-                true,
-                selectedWishlist?.IsObserved));
-            selectedWishlist = saved;
-            await LoadAsync();
-        }
-        catch (Exception exception)
-        {
-            await DisplayAlertAsync("Wishlists", exception.Message, "OK");
-        }
     }
 
     private async void OnToggleObserve(object? sender, EventArgs e)
@@ -549,43 +441,6 @@ public partial class WishlistsPage : ContentPage
         }
     }
 
-    private async void OnRemoveTicker(object? sender, EventArgs e)
-    {
-        if (selectedWishlist is null || sender is not Button { CommandParameter: WishlistStockCard card })
-        {
-            return;
-        }
-
-        try
-        {
-            await api.DeleteWishlistTickerAsync(selectedWishlist.Id, card.Ticker);
-            await LoadAsync();
-        }
-        catch (Exception exception)
-        {
-            await DisplayAlertAsync("Wishlists", exception.Message, "OK");
-        }
-    }
-
-    private async void OnTradeWishlist(object? sender, EventArgs e)
-    {
-        if (selectedWishlist is null)
-        {
-            await DisplayAlertAsync("Paper", "Select a wishlist first.", "OK");
-            return;
-        }
-
-        await StartPaperRunAsync(selectedWishlist.Items.Where(item => item.Active).Select(item => item.Ticker).ToArray(), selectedWishlist.Id);
-    }
-
-    private async void OnTradeTicker(object? sender, EventArgs e)
-    {
-        if (sender is Button { CommandParameter: WishlistStockCard card })
-        {
-            await StartPaperRunAsync(new[] { card.Ticker }, selectedWishlist?.Id);
-        }
-    }
-
     private async void OnOpenTickerNews(object? sender, EventArgs e)
     {
         if (sender is not Button { CommandParameter: WishlistStockCard card } || String.IsNullOrWhiteSpace(card.NewsUrl))
@@ -605,121 +460,16 @@ public partial class WishlistsPage : ContentPage
         }
     }
 
-    private async void OnSellTicker(object? sender, EventArgs e)
-    {
-        await DisplayAlertAsync(
-            "Sell",
-            "Sell/short from wishlist needs a broker-side manual exit or short-entry endpoint. Buy/paper-run is wired now; sell will be enabled only after that endpoint exists.",
-            "OK");
-    }
-
-    private async void OnTradeSignal(object? sender, EventArgs e)
-    {
-        if (sender is Button { CommandParameter: WishlistSignalCard signal })
-        {
-            await StartPaperRunAsync(new[] { signal.Ticker }, signal.WishlistId);
-        }
-    }
-
-    private async Task StartPaperRunAsync(IReadOnlyList<string> tickers, Guid? wishlistId)
-    {
-        if (ConfigPicker.SelectedItem is not MobileRunConfigOption config ||
-            StrategyPicker.SelectedItem is not MobileStrategyOption strategy)
-        {
-            await DisplayAlertAsync("Paper", "Select a paper profile and strategy first.", "OK");
-            return;
-        }
-
-        var normalizedTickers = tickers
-            .Select(NormalizeTicker)
-            .Where(ticker => ticker.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (normalizedTickers.Length == 0 && wishlistId is null)
-        {
-            await DisplayAlertAsync("Paper", "Add at least one ticker to trade.", "OK");
-            return;
-        }
-
-        try
-        {
-            var job = await api.StartPaperRunAsync(new MobilePaperRunRequest(
-                config.Path,
-                strategy.Path,
-                $"wishlist_{DateTimeOffset.Now:yyyyMMdd_HHmmss}",
-                normalizedTickers,
-                null,
-                true,
-                strategy.UsesNews,
-                "day",
-                "market",
-                wishlistId));
-
-            await DisplayAlertAsync("Paper", job is null ? "Paper run submitted." : $"Started {job.RunName}.", "OK");
-        }
-        catch (Exception exception)
-        {
-            await DisplayAlertAsync("Paper", exception.Message, "OK");
-        }
-    }
-
-    private async void OnOpenSignalNews(object? sender, EventArgs e)
-    {
-        if (sender is not Button { CommandParameter: WishlistSignalCard signal } || String.IsNullOrWhiteSpace(signal.NewsUrl))
-        {
-            await DisplayAlertAsync("News", "No matched news link is available for this alert.", "OK");
-            return;
-        }
-
-        await NewsNavigation.OpenAsync(signal.NewsUrl);
-    }
-
-    private async void OnNewsSelected(object? sender, SelectionChangedEventArgs e)
-    {
-        if (e.CurrentSelection.FirstOrDefault() is MobileNewsItem news)
-        {
-            NewsView.SelectedItem = null;
-            await NewsNavigation.OpenAsync(news.Url);
-        }
-    }
-
-    private async void OnAcknowledgeSignal(object? sender, EventArgs e)
-    {
-        if (sender is not Button { CommandParameter: WishlistSignalCard signal })
-        {
-            return;
-        }
-
-        try
-        {
-            await api.AcknowledgeWishlistSignalAsync(signal.Id);
-            await LoadSignalsAsync();
-        }
-        catch (Exception exception)
-        {
-            await DisplayAlertAsync("Alerts", exception.Message, "OK");
-        }
-    }
-
-    private void OnToggleSignalDetails(object? sender, EventArgs e)
-    {
-        if (sender is Button { CommandParameter: WishlistSignalCard signal })
-        {
-            signal.IsExpanded = !signal.IsExpanded;
-        }
-    }
-
     private void OnTickerSearchChanged(object? sender, TextChangedEventArgs e)
     {
         RefreshSuggestions();
     }
 
-    private async void OnSuggestionSelected(object? sender, SelectionChangedEventArgs e)
+    private void OnSuggestionSelected(object? sender, EventArgs e)
     {
-        if (e.CurrentSelection.FirstOrDefault() is string ticker)
+        if (SuggestionsPicker.SelectedItem is string ticker)
         {
-            SuggestionsView.SelectedItem = null;
-            await AddTickerAsync(ticker);
+            TickerEntry.Text = ticker;
         }
     }
 
@@ -729,7 +479,7 @@ public partial class WishlistsPage : ContentPage
         suggestions.Clear();
         if (query.Length == 0)
         {
-            SuggestionsView.HeightRequest = 0;
+            SuggestionsPicker.IsVisible = false;
             return;
         }
 
@@ -745,7 +495,8 @@ public partial class WishlistsPage : ContentPage
             suggestions.Add(ticker);
         }
 
-        SuggestionsView.HeightRequest = suggestions.Count == 0 ? 0 : Math.Min(220, suggestions.Count * 48);
+        SuggestionsPicker.IsVisible = suggestions.Count > 0;
+        SuggestionsPicker.SelectedIndex = -1;
     }
 
     private IEnumerable<string> BuildKnownTickerUniverse()
@@ -757,19 +508,6 @@ public partial class WishlistsPage : ContentPage
             {
                 values.Add(item.Ticker);
             }
-        }
-
-        foreach (var config in catalog?.PaperConfigs ?? Array.Empty<MobileRunConfigOption>())
-        {
-            foreach (var ticker in config.Tickers)
-            {
-                values.Add(ticker);
-            }
-        }
-
-        foreach (var signal in signals)
-        {
-            values.Add(signal.Ticker);
         }
 
         return values.OrderBy(ticker => ticker);
@@ -1006,87 +744,6 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
         }
 
         field = value;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
-}
-
-internal sealed class WishlistSignalCard : INotifyPropertyChanged
-{
-    private bool isExpanded;
-
-    public WishlistSignalCard(MobileWishlistSignalResponse signal)
-    {
-        Signal = signal;
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    public MobileWishlistSignalResponse Signal { get; }
-
-    public Guid Id => Signal.Id;
-
-    public Guid WishlistId => Signal.WishlistId;
-
-    public string Ticker => Signal.Ticker;
-
-    public string StatusText => Signal.StatusText;
-
-    public string HeaderText => String.IsNullOrWhiteSpace(Signal.PriceText)
-        ? Signal.DisplayTime
-        : $"{Signal.DisplayTime} | {Signal.PriceText}";
-
-    public string CompactReason => FirstUsefulReason(Signal.Reason);
-
-    public string Reason => Signal.Reason;
-
-    public string SnapshotSummary => CollapseTechnicalJson(Signal.SnapshotJson);
-
-    public string NewsText => Signal.NewsText;
-
-    public string? NewsUrl => Signal.NewsUrl;
-
-    public bool IsExpanded
-    {
-        get => isExpanded;
-        set
-        {
-            if (isExpanded == value)
-            {
-                return;
-            }
-
-            isExpanded = value;
-            OnPropertyChanged();
-        }
-    }
-
-    private static string FirstUsefulReason(string value)
-    {
-        var reason = (value ?? String.Empty).Trim();
-        if (reason.Length == 0)
-        {
-            return "Signal matched.";
-        }
-
-        var line = reason.Split(new[] { '\r', '\n', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault() ?? reason;
-        return line.Length <= 110 ? line : line[..107] + "...";
-    }
-
-    private static string CollapseTechnicalJson(string value)
-    {
-        var snapshot = (value ?? String.Empty).Trim();
-        if (snapshot.Length == 0)
-        {
-            return "No technical snapshot attached.";
-        }
-
-        snapshot = snapshot.Replace("\r", " ").Replace("\n", " ");
-        return snapshot.Length <= 260 ? snapshot : snapshot[..257] + "...";
-    }
-
-    private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 }

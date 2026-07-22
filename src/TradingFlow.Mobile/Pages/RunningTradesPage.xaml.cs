@@ -53,7 +53,7 @@ public partial class RunningTradesPage : ContentPage
         try
         {
             var healthy = await api.CheckHealthAsync();
-            StatusLabel.Text = healthy ? $"Connected: {api.BaseUrl}" : $"Backend unreachable: {api.BaseUrl}";
+            StatusLabel.Text = healthy ? "Connected · broker position state" : "Disconnected · position state may be stale";
             StatusLabel.TextColor = healthy ? ProfitColor : LossColor;
 
             var response = await api.GetRunningTradesAsync(selectedSource);
@@ -110,7 +110,11 @@ public partial class RunningTradesPage : ContentPage
             return;
         }
 
-        var confirmed = await DisplayAlertAsync("Sell", $"Sell {row.Trade.Ticker} now?", "Sell", "Cancel");
+        var confirmed = await DisplayAlertAsync(
+            "Review paper exit",
+            $"Close the tracked {row.Trade.Ticker} paper position? The server will validate and reconcile the request.",
+            "Confirm Exit",
+            "Keep Position");
         if (!confirmed)
         {
             return;
@@ -131,7 +135,7 @@ public partial class RunningTradesPage : ContentPage
         }
         catch (Exception exception)
         {
-            await DisplayAlertAsync("Sell", exception.Message, "OK");
+            await DisplayAlertAsync("Exit rejected", exception.Message, "OK");
         }
     }
 

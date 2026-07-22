@@ -58,3 +58,21 @@ successful compile or emulator smoke test must not be reported as completion of 
 
 Native screen and TalkBack verification remains a UI3 release gate and requires a connected Android
 device or emulator. It is intentionally not inferred from the successful Android build.
+
+### UI3 - mobile operator workflow
+
+- The primary shell is reduced to Watch, Positions, Activity, and More so monitoring and execution
+  states are reachable without duplicating research and administration destinations.
+- Watch, Positions, Activity, and News use one virtualized root collection each; nested page
+  scrolling and fixed-height result lists are removed from the primary mobile workflow.
+- Watch rows remain read-only until the operator opens Details or News. Position exits require an
+  explicit review confirmation instead of executing from an ambiguous row action.
+- Activity combines strategy signals and system notifications with explicit All, Signals, and
+  System filters and a bounded 500-item view.
+- Android Release verification completed for `net10.0-android` with generated XAML bindings:
+  0 warnings and 0 errors.
+- Cross-surface regression verification completed: 455 .NET tests and 22 Playwright tests passed.
+
+Physical-device screenshots, font-scale checks, TalkBack, and Android Accessibility Scanner remain
+manual release gates. They require a connected Android device or emulator and are not inferred from
+the successful generated-XAML Release build.

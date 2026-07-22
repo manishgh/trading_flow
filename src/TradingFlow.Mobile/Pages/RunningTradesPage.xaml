@@ -1,55 +1,121 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:TradingFlow.Mobile.Controls"
              x:Class="TradingFlow.Mobile.Pages.RunningTradesPage"
-             Title="Trades">
+             Title="Positions">
     <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
-        <ScrollView>
-            <VerticalStackLayout Padding="12" Spacing="10">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <Label Text="Running Trades" Style="{StaticResource Headline}" FontSize="22" />
-                    <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
-                </Grid>
+        <CollectionView x:Name="TradesView"
+                        Margin="12,0"
+                        SelectionMode="None"
+                        ItemsUpdatingScrollMode="KeepScrollOffset">
+            <CollectionView.Header>
+                <VerticalStackLayout Padding="0,12,0,10" Spacing="10">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Spacing="2">
+                            <Label Text="Positions" Style="{StaticResource Headline}" />
+                            <Label Text="Open exposure, protection, and unrealized P/L."
+                                   Style="{StaticResource SubHeadline}" />
+                        </VerticalStackLayout>
+                        <controls:EnvironmentBadgeView Grid.Column="1" />
+                    </Grid>
 
-                <Border Style="{StaticResource CardBorder}" Padding="10">
-                    <VerticalStackLayout Spacing="6">
-                        <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="12" LineBreakMode="TailTruncation" />
-                        <Label x:Name="TotalLabel" Text="Total P/L --" FontSize="20" FontAttributes="Bold" />
-                    </VerticalStackLayout>
-                </Border>
+                    <Border Style="{StaticResource CardBorder}" Padding="10">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <VerticalStackLayout Spacing="3">
+                                <Label x:Name="StatusLabel"
+                                       Text="Checking backend..."
+                                       FontSize="13"
+                                       LineBreakMode="WordWrap" />
+                                <Label x:Name="TotalLabel"
+                                       Text="Total P/L --"
+                                       FontSize="20"
+                                       FontAttributes="Bold" />
+                            </VerticalStackLayout>
+                            <ActivityIndicator x:Name="BusyIndicator"
+                                               Grid.Column="1"
+                                               IsRunning="False"
+                                               IsVisible="False" />
+                        </Grid>
+                    </Border>
 
-                <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="6">
-                    <Button x:Name="AllButton" Text="All" Clicked="OnSourceSelected" CommandParameter="all" Padding="6,6" FontSize="12" />
-                    <Button x:Name="WishlistButton" Grid.Column="1" Text="Wishlist" Clicked="OnSourceSelected" CommandParameter="wishlist" Padding="6,6" FontSize="12" />
-                    <Button x:Name="StockPulseButton" Grid.Column="2" Text="Pulse" Clicked="OnSourceSelected" CommandParameter="stockpulse" Padding="6,6" FontSize="12" />
-                    <Button x:Name="ManualButton" Grid.Column="3" Text="Manual" Clicked="OnSourceSelected" CommandParameter="manual" Padding="6,6" FontSize="12" />
-                </Grid>
+                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="8">
+                        <Button x:Name="AllButton"
+                                Text="All"
+                                Clicked="OnSourceSelected"
+                                CommandParameter="all" />
+                        <Button x:Name="WishlistButton"
+                                Grid.Column="1"
+                                Text="Wishlist"
+                                Clicked="OnSourceSelected"
+                                CommandParameter="wishlist" />
+                        <Button x:Name="StockPulseButton"
+                                Grid.Row="1"
+                                Text="Stock Pulse"
+                                Clicked="OnSourceSelected"
+                                CommandParameter="stockpulse" />
+                        <Button x:Name="ManualButton"
+                                Grid.Row="1"
+                                Grid.Column="1"
+                                Text="Manual"
+                                Clicked="OnSourceSelected"
+                                CommandParameter="manual" />
+                    </Grid>
+                </VerticalStackLayout>
+            </CollectionView.Header>
 
-                <CollectionView x:Name="TradesView" HeightRequest="520">
-                    <CollectionView.EmptyView>
-                        <Label Text="No running trades for this source." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
-                    </CollectionView.EmptyView>
-                    <CollectionView.ItemTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="10">
-                                <VerticalStackLayout Spacing="6">
-                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                        <VerticalStackLayout Spacing="0">
-                                            <Label Text="{Binding Trade.HeaderText}" FontAttributes="Bold" FontSize="16" />
-                                            <Label Text="{Binding Trade.DetailText}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" MaxLines="1" />
-                                        </VerticalStackLayout>
-                                        <Label Grid.Column="1" Text="{Binding Trade.PlText}" FontAttributes="Bold" FontSize="15" TextColor="{Binding PlColor}" VerticalTextAlignment="Center" HorizontalTextAlignment="End" />
-                                    </Grid>
-                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                        <Label Text="{Binding Trade.PriceText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" VerticalTextAlignment="Center" />
-                                        <Button Grid.Column="1" Text="Sell" Clicked="OnSell" CommandParameter="{Binding .}" Padding="16,6" BackgroundColor="#B42318" />
-                                    </Grid>
+            <CollectionView.EmptyView>
+                <VerticalStackLayout Padding="12,28" Spacing="6">
+                    <Label Text="No open positions"
+                           FontAttributes="Bold"
+                           FontSize="16"
+                           HorizontalTextAlignment="Center" />
+                    <Label Text="No running trades match this source filter."
+                           FontSize="13"
+                           TextColor="{StaticResource TextSecondary}"
+                           HorizontalTextAlignment="Center" />
+                </VerticalStackLayout>
+            </CollectionView.EmptyView>
+
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border Style="{StaticResource CardBorder}"
+                            Margin="0,0,0,8"
+                            Padding="10">
+                        <VerticalStackLayout Spacing="8">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                <VerticalStackLayout Spacing="1">
+                                    <Label Text="{Binding Trade.HeaderText}"
+                                           FontAttributes="Bold"
+                                           FontSize="16" />
+                                    <Label Text="{Binding Trade.DetailText}"
+                                           FontSize="12"
+                                           TextColor="{StaticResource TextSecondary}"
+                                           LineBreakMode="WordWrap" />
                                 </VerticalStackLayout>
-                            </Border>
-                        </DataTemplate>
-                    </CollectionView.ItemTemplate>
-                </CollectionView>
-            </VerticalStackLayout>
-        </ScrollView>
+                                <Label Grid.Column="1"
+                                       Text="{Binding Trade.PlText}"
+                                       FontAttributes="Bold"
+                                       FontSize="16"
+                                       TextColor="{Binding PlColor}"
+                                       HorizontalTextAlignment="End" />
+                            </Grid>
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Label Text="{Binding Trade.PriceText}"
+                                       FontSize="13"
+                                       TextColor="{StaticResource TextSecondary}"
+                                       VerticalTextAlignment="Center" />
+                                <Button Grid.Column="1"
+                                        Text="Review Exit"
+                                        Clicked="OnSell"
+                                        CommandParameter="{Binding .}"
+                                        BackgroundColor="{StaticResource StateNegative}"
+                                        SemanticProperties.Description="Review closing this paper position" />
+                            </Grid>
+                        </VerticalStackLayout>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
     </RefreshView>
 </ContentPage>
