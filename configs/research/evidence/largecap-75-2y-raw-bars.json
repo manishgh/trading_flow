@@ -1,0 +1,423 @@
+﻿{
+    "createdAtUtc":  "2026-07-25T21:27:35.7167232+00:00",
+    "runId":  "largecap-75-2y-raw-20260725-v2",
+    "configHash":  "0d794b0c645e6ba6c99964aa3bca659cde6891c27730f0e20e897ee14bfb7655",
+    "codeVersion":  "research-pipeline-v1.3",
+    "collectionPolicyVersion":  "alpaca-bounded-http-v1",
+    "partitionPolicyVersion":  "request-v1",
+    "datasetKind":  "MarketBarsAsTraded",
+    "schemaVersion":  1,
+    "normalizerVersion":  "alpaca-market-bars-v1",
+    "outputNamespace":  "normalized/diagnostic/largecap-75-2y-raw-20260725-v2",
+    "requests":  [
+                     {
+                         "requestId":  "largecap-75-2y-raw-bars",
+                         "provider":  "alpaca",
+                         "endpoint":  "/v2/stocks/bars",
+                         "symbols":  [
+                                         "NVDA",
+                                         "AAPL",
+                                         "MSFT",
+                                         "TSM",
+                                         "AVGO",
+                                         "MU",
+                                         "AMD",
+                                         "ASML",
+                                         "INTC",
+                                         "AMAT",
+                                         "CSCO",
+                                         "LRCX",
+                                         "ORCL",
+                                         "KLAC",
+                                         "DELL",
+                                         "BRK.B",
+                                         "JPM",
+                                         "V",
+                                         "MA",
+                                         "BAC",
+                                         "HSBC",
+                                         "MS",
+                                         "GS",
+                                         "RY",
+                                         "WFC",
+                                         "MUFG",
+                                         "AXP",
+                                         "C",
+                                         "TD",
+                                         "SAN",
+                                         "LLY",
+                                         "JNJ",
+                                         "ABBV",
+                                         "UNH",
+                                         "MRK",
+                                         "NVS",
+                                         "TMO",
+                                         "AMGN",
+                                         "ABT",
+                                         "GILD",
+                                         "NVO",
+                                         "AMZN",
+                                         "TSLA",
+                                         "HD",
+                                         "BABA",
+                                         "TM",
+                                         "MCD",
+                                         "TJX",
+                                         "CAT",
+                                         "GE",
+                                         "RTX",
+                                         "UNP",
+                                         "BA",
+                                         "DE",
+                                         "ETN",
+                                         "GOOGL",
+                                         "META",
+                                         "NFLX",
+                                         "TMUS",
+                                         "VZ",
+                                         "DIS",
+                                         "WMT",
+                                         "COST",
+                                         "KO",
+                                         "PG",
+                                         "PM",
+                                         "PEP",
+                                         "XOM",
+                                         "CVX",
+                                         "SHEL",
+                                         "TTE",
+                                         "LIN",
+                                         "BHP",
+                                         "WELL",
+                                         "NEE",
+                                         "SPY"
+                                     ],
+                         "requestedStartUtc":  "2024-07-01T00:00:00+00:00",
+                         "requestedEndUtc":  "2026-07-25T00:00:00+00:00",
+                         "dataFeed":  "sip",
+                         "adjustment":  "raw",
+                         "currency":  "USD",
+                         "asOfDate":  "2026-07-25",
+                         "parameters":  {
+                                            "timeframe":  "1Day",
+                                            "limit":  "10000",
+                                            "sort":  "asc"
+                                        }
+                     }
+                 ],
+    "securities":  [
+                       {
+                           "securityId":  "4ce9353c-66d1-46c2-898f-fce867ab0247",
+                           "symbol":  "NVDA"
+                       },
+                       {
+                           "securityId":  "b0b6dd9d-8b9b-48a9-ba46-b9d54906e415",
+                           "symbol":  "AAPL"
+                       },
+                       {
+                           "securityId":  "b6d1aa75-5c9c-4353-a305-9e2caa1925ab",
+                           "symbol":  "MSFT"
+                       },
+                       {
+                           "securityId":  "626ce11f-1e10-488b-8d75-a3eff18d6d0f",
+                           "symbol":  "TSM"
+                       },
+                       {
+                           "securityId":  "7a8b4fcf-0622-47ef-8541-de7f70ffc0c4",
+                           "symbol":  "AVGO"
+                       },
+                       {
+                           "securityId":  "1ef18995-5094-4f62-a5c5-e00168611152",
+                           "symbol":  "MU"
+                       },
+                       {
+                           "securityId":  "03fb07bb-5db1-4077-8dea-5d711b272625",
+                           "symbol":  "AMD"
+                       },
+                       {
+                           "securityId":  "6082378d-ba94-4bb7-a49e-ebe714131ca8",
+                           "symbol":  "ASML"
+                       },
+                       {
+                           "securityId":  "0cf42aa3-9816-4f1f-aa84-6482ac9303e9",
+                           "symbol":  "INTC"
+                       },
+                       {
+                           "securityId":  "ce4833e1-c561-492a-aace-7eb451d09e02",
+                           "symbol":  "AMAT"
+                       },
+                       {
+                           "securityId":  "9ec078b1-5167-4d3d-908c-a1e49be367f1",
+                           "symbol":  "CSCO"
+                       },
+                       {
+                           "securityId":  "3ae976ac-6d14-4c4f-b02d-e83813f8a829",
+                           "symbol":  "LRCX"
+                       },
+                       {
+                           "securityId":  "27982558-2464-4daf-bb2f-b3b728659884",
+                           "symbol":  "ORCL"
+                       },
+                       {
+                           "securityId":  "c1fe01e7-c9b1-4b92-8c7a-32153021367e",
+                           "symbol":  "KLAC"
+                       },
+                       {
+                           "securityId":  "91ee1b57-f36c-40cf-a8b7-84583daaafc9",
+                           "symbol":  "DELL"
+                       },
+                       {
+                           "securityId":  "71bb19d0-6c5f-4881-9552-33224badd810",
+                           "symbol":  "BRK.B"
+                       },
+                       {
+                           "securityId":  "e3047683-637a-4fb2-b71d-805cd6fec95d",
+                           "symbol":  "JPM"
+                       },
+                       {
+                           "securityId":  "4f5baf1e-0e9b-4d85-b88a-d874dc4a3c42",
+                           "symbol":  "V"
+                       },
+                       {
+                           "securityId":  "2140998d-7f62-46f2-a9b2-e44350bd4807",
+                           "symbol":  "MA"
+                       },
+                       {
+                           "securityId":  "061588a3-d70b-4b9c-a3f6-636aaa16acc4",
+                           "symbol":  "BAC"
+                       },
+                       {
+                           "securityId":  "0480660f-0584-4705-b421-25359177b2c9",
+                           "symbol":  "HSBC"
+                       },
+                       {
+                           "securityId":  "1c2f8701-b8cb-40b6-902a-1e9a6a0c7bcf",
+                           "symbol":  "MS"
+                       },
+                       {
+                           "securityId":  "064dd45f-7a58-452c-93f2-377f9a0cc7f2",
+                           "symbol":  "GS"
+                       },
+                       {
+                           "securityId":  "dc9fe0ac-b777-4c11-a69c-e0f9e989587d",
+                           "symbol":  "RY"
+                       },
+                       {
+                           "securityId":  "f9700a20-b0fe-4516-87c5-9d7b096d5539",
+                           "symbol":  "WFC"
+                       },
+                       {
+                           "securityId":  "4d57b5dc-1a3e-4fd1-aa38-f1a78dbfd4dc",
+                           "symbol":  "MUFG"
+                       },
+                       {
+                           "securityId":  "49b90cdc-f6f5-4a7c-807a-ed172e6017af",
+                           "symbol":  "AXP"
+                       },
+                       {
+                           "securityId":  "36c8d04d-be51-476c-9382-0b6ea3bf1a26",
+                           "symbol":  "C"
+                       },
+                       {
+                           "securityId":  "94feb9d0-bacc-4b3a-9fa7-d372b473c10f",
+                           "symbol":  "TD"
+                       },
+                       {
+                           "securityId":  "480ac4ce-b91e-4a9a-8945-dc514aec0bf8",
+                           "symbol":  "SAN"
+                       },
+                       {
+                           "securityId":  "87266a27-1b34-47bd-b236-bd3a9f59b138",
+                           "symbol":  "LLY"
+                       },
+                       {
+                           "securityId":  "ef9adcc6-6bce-452b-af5f-4a87e7f19131",
+                           "symbol":  "JNJ"
+                       },
+                       {
+                           "securityId":  "09a51104-980a-47b6-ad4d-e4f04059be4a",
+                           "symbol":  "ABBV"
+                       },
+                       {
+                           "securityId":  "943bb7c3-0fb0-4088-9a37-62549b5dc528",
+                           "symbol":  "UNH"
+                       },
+                       {
+                           "securityId":  "0d56791f-7395-40fa-853b-7b852bd9a7bf",
+                           "symbol":  "MRK"
+                       },
+                       {
+                           "securityId":  "0e0a8d50-17fe-44ce-b4ab-839cd5e63c4b",
+                           "symbol":  "NVS"
+                       },
+                       {
+                           "securityId":  "722b2e6d-2b85-4502-8f72-55f199fb3c47",
+                           "symbol":  "TMO"
+                       },
+                       {
+                           "securityId":  "201b268b-cde8-4010-9fe3-41d2ac7f1e9c",
+                           "symbol":  "AMGN"
+                       },
+                       {
+                           "securityId":  "a097c03a-7ebe-4de6-b729-a82370cd2a6e",
+                           "symbol":  "ABT"
+                       },
+                       {
+                           "securityId":  "aa222c8c-5f60-4b88-bc73-7aaadf424628",
+                           "symbol":  "GILD"
+                       },
+                       {
+                           "securityId":  "5b308e57-62f3-47b8-afec-1ea0e3a6e536",
+                           "symbol":  "NVO"
+                       },
+                       {
+                           "securityId":  "f801f835-bfe6-4a9d-a6b1-ccbb84bfd75f",
+                           "symbol":  "AMZN"
+                       },
+                       {
+                           "securityId":  "8ccae427-5dd0-45b3-b5fe-7ba5e422c766",
+                           "symbol":  "TSLA"
+                       },
+                       {
+                           "securityId":  "b6b1ea06-5d71-4146-be77-03f671788940",
+                           "symbol":  "HD"
+                       },
+                       {
+                           "securityId":  "fc9ab435-44e7-45f5-ad53-92d3d76a2962",
+                           "symbol":  "BABA"
+                       },
+                       {
+                           "securityId":  "092cb487-7467-4059-bf67-84ee072f8450",
+                           "symbol":  "TM"
+                       },
+                       {
+                           "securityId":  "e077638f-a5c9-47e4-a7ce-2bfabf5ff698",
+                           "symbol":  "MCD"
+                       },
+                       {
+                           "securityId":  "1168e42c-a598-4ed9-8371-2033a0f6af54",
+                           "symbol":  "TJX"
+                       },
+                       {
+                           "securityId":  "e7535ed9-c182-41ef-80f6-ee08f4166b6c",
+                           "symbol":  "CAT"
+                       },
+                       {
+                           "securityId":  "0116ac5c-90bc-47a2-8bb4-0f4551521dc6",
+                           "symbol":  "GE"
+                       },
+                       {
+                           "securityId":  "4d8f7f83-d998-4839-9134-38473cd13123",
+                           "symbol":  "RTX"
+                       },
+                       {
+                           "securityId":  "e28f2c45-0bb1-45c1-84e0-f8d1a98c4088",
+                           "symbol":  "UNP"
+                       },
+                       {
+                           "securityId":  "3bed4fb2-4093-4433-b887-770ae3defd3a",
+                           "symbol":  "BA"
+                       },
+                       {
+                           "securityId":  "c00df298-9fb1-49e6-b9d9-92e3749ec5be",
+                           "symbol":  "DE"
+                       },
+                       {
+                           "securityId":  "d4806319-2c9c-48d6-bda3-aedb0178e83b",
+                           "symbol":  "ETN"
+                       },
+                       {
+                           "securityId":  "69b15845-7c63-4586-b274-1cfdfe9df3d8",
+                           "symbol":  "GOOGL"
+                       },
+                       {
+                           "securityId":  "fc6a5dcd-4a70-4b8d-b64f-d83a6dae9ba4",
+                           "symbol":  "META"
+                       },
+                       {
+                           "securityId":  "bb2a26c0-4c77-4801-8afc-82e8142ac7b8",
+                           "symbol":  "NFLX"
+                       },
+                       {
+                           "securityId":  "7f9df478-237c-45c8-bc80-c97a53478c37",
+                           "symbol":  "TMUS"
+                       },
+                       {
+                           "securityId":  "a54066ec-ebb0-4d1e-b7cf-cd84298515ec",
+                           "symbol":  "VZ"
+                       },
+                       {
+                           "securityId":  "2f34c0b3-a4aa-4959-b52c-3c41b2c246c4",
+                           "symbol":  "DIS"
+                       },
+                       {
+                           "securityId":  "3f3e0ff9-599f-4fec-8842-6bc53f5129a1",
+                           "symbol":  "WMT"
+                       },
+                       {
+                           "securityId":  "1f888138-e413-4939-b16b-bdd08bb4debd",
+                           "symbol":  "COST"
+                       },
+                       {
+                           "securityId":  "3795cafe-fd54-4f66-a31e-66774be875ca",
+                           "symbol":  "KO"
+                       },
+                       {
+                           "securityId":  "f81a406b-a53c-4ea5-ab05-6fb92bfc6bd7",
+                           "symbol":  "PG"
+                       },
+                       {
+                           "securityId":  "b19c4863-d517-4472-9236-8864e50dfa3e",
+                           "symbol":  "PM"
+                       },
+                       {
+                           "securityId":  "7b7466c4-5066-4e3e-80e6-8da1c835ce56",
+                           "symbol":  "PEP"
+                       },
+                       {
+                           "securityId":  "0dd35bf7-a49c-4068-bce0-8e40b700454d",
+                           "symbol":  "XOM"
+                       },
+                       {
+                           "securityId":  "186997ab-b63c-439b-bf62-72275d1c4c27",
+                           "symbol":  "CVX"
+                       },
+                       {
+                           "securityId":  "ff4cd8aa-2c65-41a8-965e-b6f7d60b2eb9",
+                           "symbol":  "SHEL"
+                       },
+                       {
+                           "securityId":  "18bb7754-1ba4-4e24-8466-459b58589874",
+                           "symbol":  "TTE"
+                       },
+                       {
+                           "securityId":  "cbf869d9-873b-426a-bdea-37e0bc4250f9",
+                           "symbol":  "LIN"
+                       },
+                       {
+                           "securityId":  "4ac5cb04-cfdb-4670-9637-662f8d08d9f8",
+                           "symbol":  "BHP"
+                       },
+                       {
+                           "securityId":  "b94a7925-39e6-4a74-9db6-44888cb57d40",
+                           "symbol":  "WELL"
+                       },
+                       {
+                           "securityId":  "ac20a75d-5bb4-4d10-96e8-f5e58e730139",
+                           "symbol":  "NEE"
+                       },
+                       {
+                           "securityId":  "b28f4066-5c6d-479b-a2af-85dc1a8f16fb",
+                           "symbol":  "SPY"
+                       }
+                   ],
+    "attributes":  {
+                       "purpose":  "two-year-static-universe-diagnostic",
+                       "promotion_eligible":  "false",
+                       "universe_snapshot":  "finviz-100b-2026-07-24",
+                       "survivorship_selection_bias":  "true",
+                       "asset_preflight":  "alpaca-active-tradable-us-equity-2026-07-25",
+                       "corporate_actions_reconciled":  "false",
+                       "terminal_outcomes_reconciled":  "false"
+                   }
+}

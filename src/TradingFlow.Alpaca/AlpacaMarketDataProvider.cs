@@ -51,19 +51,23 @@ public sealed class AlpacaMarketDataProvider : IMarketDataProvider
             else if (timeframe == "15m") timeframe = "15Min";
 
             foreach (var tickerBatch in tickers
-                .Select(x => x.Trim().ToUpperInvariant())
+                .Select(AlpacaSymbolMapper.ToCanonicalSymbol)
                 .Where(x => x.Length > 0)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Chunk(100))
             {
                 var startStr = start.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
                 var endStr = end.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
-                var symbols = String.Join(",", tickerBatch.Select(Uri.EscapeDataString));
+                var symbols = String.Join(
+                    ",",
+                    tickerBatch
+                        .Select(AlpacaSymbolMapper.ToProviderSymbol)
+                        .Select(Uri.EscapeDataString));
                 string? nextPageToken = null;
 
                 do
                 {
-                    var url = $"/v2/stocks/bars?symbols={symbols}&timeframe={timeframe}&start={startStr}&end={endStr}&feed={_marketDataFeed}&limit=10000";
+                    var url = $"/v2/stocks/bars?symbols={symbols}&timeframe={timeframe}&start={startStr}&end={endStr}&feed={_marketDataFeed}&adjustment=all&limit=10000";
                     if (!String.IsNullOrWhiteSpace(nextPageToken))
                     {
                         url += $"&page_token={Uri.EscapeDataString(nextPageToken)}";
@@ -83,7 +87,7 @@ public sealed class AlpacaMarketDataProvider : IMarketDataProvider
                     {
                         foreach (var tickerProperty in barsElement.EnumerateObject())
                         {
-                            var ticker = tickerProperty.Name;
+                            var ticker = AlpacaSymbolMapper.ToCanonicalSymbol(tickerProperty.Name);
                             foreach (var bar in tickerProperty.Value.EnumerateArray())
                             {
                                 yield return new OhlcvBar(

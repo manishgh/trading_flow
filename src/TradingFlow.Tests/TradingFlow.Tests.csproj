@@ -27,6 +27,9 @@
     <ProjectReference Include="..\TradingFlow.Alpaca\TradingFlow.Alpaca.csproj" />
     <ProjectReference Include="..\TradingFlow.Web\TradingFlow.Web.csproj" />
     <ProjectReference Include="..\TradingFlow.WarmupService\TradingFlow.WarmupService.csproj" />
+    <ProjectReference Include="..\TradingFlow.Research\TradingFlow.Research.csproj" />
+    <ProjectReference Include="..\TradingFlow.Research.Orchestration\TradingFlow.Research.Orchestration.csproj" />
+    <ProjectReference Include="..\TradingFlow.Research.Workflows\TradingFlow.Research.Workflows.csproj" />
   </ItemGroup>
 
 </Project>

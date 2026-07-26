@@ -21,8 +21,14 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
     private const int PageLimit = 50;
     private const int MaxPages = 10;
     private const int MaxConcurrentSentimentRequests = 4;
+    private const int MaxConcurrentProviderRequests = 3;
+    private const int ProviderRequestQueueCapacity = 256;
     private static readonly ConcurrentDictionary<string, CachedArticleSentiment> ArticleSentimentCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly ConcurrentDictionary<string, DateTimeOffset> ArticleFirstSeenCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Polly.Bulkhead.AsyncBulkheadPolicy<HttpResponseMessage> ProviderRequestBulkhead =
+        TradingFlow.Domain.Http.RateLimiterFactory.CreateBulkhead(
+            MaxConcurrentProviderRequests,
+            ProviderRequestQueueCapacity);
 
     private readonly HttpClient _httpClient;
     private readonly AlpacaOptions _options;
@@ -30,7 +36,6 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
     private readonly ILogger<AlpacaNewsProvider> _logger;
     private readonly AlpacaRawResponseArchiver _responseArchiver;
     private readonly int _maxArticlesPerTicker;
-    private readonly Polly.Bulkhead.AsyncBulkheadPolicy<HttpResponseMessage> _bulkhead = TradingFlow.Domain.Http.RateLimiterFactory.CreateBulkhead(3, 25);
 
     public AlpacaNewsProvider(
         HttpClient httpClient,
@@ -155,7 +160,7 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         CancellationToken cancellationToken)
     {
         var article = receivedArticle.Article;
-        var cacheKey = $"{ProviderName}:{article.Id}";
+        var cacheKey = BuildSentimentCacheKey(article);
         if (ArticleSentimentCache.TryGetValue(cacheKey, out var cachedSentiment))
         {
             return BuildCatalystEvent(ticker, article, cachedSentiment.Score, receivedArticle.FirstSeenAt);
@@ -193,8 +198,14 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
             article.Summary,
             article.Source,
             article.Url,
-            receivedAt);
+            receivedAt,
+            article.UpdatedAt,
+            CatalystAvailabilityEvidence.ProviderTimestampOnly);
     }
+
+    private string BuildSentimentCacheKey(NewsArticle article) =>
+        $"{ProviderName}:{article.Id}:{article.UpdatedAt?.UtcTicks ?? article.CreatedAt.UtcTicks}";
+
     private void SetHeader(string name, string value)
     {
         if (_httpClient.DefaultRequestHeaders.Contains(name))
@@ -210,7 +221,7 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
 
     private static string BuildNewsUrl(string ticker, string startStr, string endStr, string? pageToken)
     {
-        var symbol = Uri.EscapeDataString(ticker.ToUpperInvariant());
+        var symbol = Uri.EscapeDataString(AlpacaSymbolMapper.ToProviderSymbol(ticker));
         var url = $"/v1beta1/news?symbols={symbol}&start={Uri.EscapeDataString(startStr)}&end={Uri.EscapeDataString(endStr)}&limit={PageLimit}&include_content=false&exclude_contentless=false";
         return String.IsNullOrWhiteSpace(pageToken)
             ? url
@@ -228,7 +239,7 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
                     "Alpaca",
                     url,
                     "GET",
-                    () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
+                    () => ProviderRequestBulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
                 var archivedResponse = await _responseArchiver.ArchiveAsync(
                     response,
                     "news-rest-page",

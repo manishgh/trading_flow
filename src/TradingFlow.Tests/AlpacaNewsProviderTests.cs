@@ -251,6 +251,34 @@ public sealed class AlpacaNewsProviderTests : IDisposable
         Assert.Equal("simulated archive failure", exception.Message);
     }
 
+    [Fact]
+    public async Task GetCatalystsAsync_QueuesAutomaticWorkerBurstWithoutDroppingTickers()
+    {
+        const int tickerCount = 40;
+        var handler = new DelayedEmptyNewsHandler(TimeSpan.FromMilliseconds(500));
+        var provider = new AlpacaNewsProvider(
+            new HttpClient(handler),
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with { KeyId = "key", SecretKey = "secret" },
+            CreateArchiveWriter(),
+            sentimentAnalyzer: new DeterministicSentimentAnalyzer());
+        var windowEnd = DateTimeOffset.Parse("2026-06-09T15:00:00Z");
+
+        var requests = Enumerable.Range(1, tickerCount)
+            .Select(index => provider.GetCatalystsAsync(
+                $"T{index:00}",
+                windowEnd.AddHours(-1),
+                windowEnd,
+                CancellationToken.None))
+            .ToArray();
+
+        var results = await Task.WhenAll(requests);
+
+        Assert.Equal(tickerCount, results.Length);
+        Assert.All(results, Assert.Empty);
+        Assert.Equal(tickerCount, handler.RequestCount);
+        Assert.InRange(handler.MaxConcurrentRequests, 1, 3);
+    }
+
     private static StringContent JsonContent(string json)
     {
         return new StringContent(json, Encoding.UTF8, "application/json");
@@ -290,6 +318,52 @@ public sealed class AlpacaNewsProviderTests : IDisposable
             }
 
             return Task.FromResult(_responses.Dequeue());
+        }
+    }
+
+    private sealed class DelayedEmptyNewsHandler(TimeSpan delay) : HttpMessageHandler
+    {
+        private int activeRequests;
+        private int maxConcurrentRequests;
+        private int requestCount;
+
+        public int MaxConcurrentRequests => Volatile.Read(ref maxConcurrentRequests);
+        public int RequestCount => Volatile.Read(ref requestCount);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref requestCount);
+            var active = Interlocked.Increment(ref activeRequests);
+            UpdateMaximum(active);
+            try
+            {
+                await Task.Delay(delay, cancellationToken);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent("""{"news":[]}""")
+                };
+            }
+            finally
+            {
+                Interlocked.Decrement(ref activeRequests);
+            }
+        }
+
+        private void UpdateMaximum(int candidate)
+        {
+            var observed = Volatile.Read(ref maxConcurrentRequests);
+            while (candidate > observed)
+            {
+                var previous = Interlocked.CompareExchange(ref maxConcurrentRequests, candidate, observed);
+                if (previous == observed)
+                {
+                    return;
+                }
+
+                observed = previous;
+            }
         }
     }
 

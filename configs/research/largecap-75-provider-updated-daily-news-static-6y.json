@@ -1,0 +1,137 @@
+{
+  "researchRunId": "largecap-75-provider-updated-daily-news-static-6y-20260725-v1",
+  "studyName": "swing.provider-updated-daily-news.static-diagnostic.v1",
+  "createdAtUtc": "2026-07-25T23:05:00+00:00",
+  "codeVersion": "research-pipeline-v1.4",
+  "newsDatasetId": "ebd79d6c5e9f9a448a1332b206676b809f7e222d86355a5e0f3272d90b8452c9",
+  "asTradedBarsDatasetId": "4c64597b38b8ce844eb05626dfa24ee0148c0a97ba371bb7a3942a51d0cd7340",
+  "exchangeSessionsDatasetId": "5e055c6fe25ba44bc7d75dfd2d724010d2893826d5632b365a27c2a767c94e2f",
+  "frozenSymbols": [
+    "AAPL",
+    "ABBV",
+    "ABT",
+    "AMAT",
+    "AMD",
+    "AMGN",
+    "AMZN",
+    "ASML",
+    "AVGO",
+    "AXP",
+    "BA",
+    "BABA",
+    "BAC",
+    "BHP",
+    "BRK.B",
+    "C",
+    "CAT",
+    "COST",
+    "CSCO",
+    "CVX",
+    "DE",
+    "DELL",
+    "DIS",
+    "ETN",
+    "GE",
+    "GILD",
+    "GOOGL",
+    "GS",
+    "HD",
+    "HSBC",
+    "INTC",
+    "JNJ",
+    "JPM",
+    "KLAC",
+    "KO",
+    "LIN",
+    "LLY",
+    "LRCX",
+    "MA",
+    "MCD",
+    "META",
+    "MRK",
+    "MS",
+    "MSFT",
+    "MU",
+    "MUFG",
+    "NEE",
+    "NFLX",
+    "NVDA",
+    "NVO",
+    "NVS",
+    "ORCL",
+    "PEP",
+    "PG",
+    "PM",
+    "RTX",
+    "RY",
+    "SAN",
+    "SHEL",
+    "TD",
+    "TJX",
+    "TM",
+    "TMO",
+    "TMUS",
+    "TSLA",
+    "TSM",
+    "TTE",
+    "UNH",
+    "UNP",
+    "V",
+    "VZ",
+    "WELL",
+    "WFC",
+    "WMT",
+    "XOM"
+  ],
+  "survivorshipSelectionBiasWarning": "The candidate list is the current Finviz 100B+ snapshot captured 2026-07-24 and projected backward. Delisted securities and historical market-cap migration are absent; results are diagnostic only.",
+  "options": {
+    "benchmarkSymbol": "SPY",
+    "horizonSessions": [
+      0,
+      1,
+      2,
+      5,
+      10
+    ],
+    "roundTripCostBps": 14.2
+  },
+  "studyPartitions": {
+    "development": {
+      "name": "development",
+      "startUtc": "2020-04-01T00:00:00+00:00",
+      "endUtc": "2024-01-01T00:00:00+00:00"
+    },
+    "validation": {
+      "name": "validation",
+      "startUtc": "2024-01-01T00:00:00+00:00",
+      "endUtc": "2025-07-01T00:00:00+00:00"
+    },
+    "holdout": {
+      "name": "holdout",
+      "startUtc": "2025-07-01T00:00:00+00:00",
+      "endUtc": "2026-07-25T00:00:00+00:00"
+    }
+  },
+  "assumptions": {
+    "cost": {
+      "commissionBps": 0,
+      "regulatoryFeesBps": 0.2
+    },
+    "spread": {
+      "source": "fixed conservative liquid-large-cap estimate",
+      "estimatedFullSpreadBps": 4
+    },
+    "slippage": {
+      "model": "fixed next-open slippage per side",
+      "maximumSlippageBps": 5
+    },
+    "borrow": {
+      "availabilityRequired": false,
+      "annualBorrowBps": 0
+    },
+    "benchmark": {
+      "ticker": "SPY",
+      "returnDefinition": "first legally eligible exchange open to horizon close, net of frozen round-trip execution costs, compared with SPY over the same sessions"
+    }
+  }
+}

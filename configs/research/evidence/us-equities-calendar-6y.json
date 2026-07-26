@@ -1,0 +1,33 @@
+{
+  "createdAtUtc": "2026-07-26T00:40:00+00:00",
+  "runId": "us-equities-calendar-6y-20260726-v1",
+  "configHash": "5cada196d9498de74fdbafba6aa6340a6a60fb7987ebffe386626d5c32559ae6",
+  "codeVersion": "research-pipeline-v1.5-calendar-evidence",
+  "collectionPolicyVersion": "alpaca-bounded-http-v1",
+  "partitionPolicyVersion": "request-v1",
+  "datasetKind": "ExchangeSessions",
+  "schemaVersion": 1,
+  "normalizerVersion": "alpaca-exchange-calendar-v1",
+  "outputNamespace": "normalized/calendar/us-equities-2020-04-01-2026-07-26-v1",
+  "requests": [
+    {
+      "requestId": "us-equities-calendar-6y",
+      "provider": "alpaca",
+      "endpoint": "/v2/calendar",
+      "symbols": [],
+      "requestedStartUtc": "2020-04-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-07-26T00:00:00+00:00",
+      "dataFeed": "alpaca-trading",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-07-26",
+      "parameters": {}
+    }
+  ],
+  "securities": [],
+  "attributes": {
+    "purpose": "official-exchange-session-index-for-daily-event-studies",
+    "exchange": "XNYS",
+    "promotion_eligible": "false"
+  }
+}

@@ -34,6 +34,32 @@ public sealed class CachedCatalystProviderTests
         }
     }
 
+    [Fact]
+    public async Task GetCatalystsAsync_CacheOnlyMissFailsWithoutCallingInnerProvider()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"tradingflow-catalyst-cache-{Guid.NewGuid():N}");
+        var inner = new CountingCatalystProvider();
+        var provider = new CachedCatalystProvider(inner, tempRoot, "cache_only");
+        var start = new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = start.AddDays(1);
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<FileNotFoundException>(() =>
+                provider.GetCatalystsAsync("TEST", start, end, CancellationToken.None));
+
+            Assert.Contains("No cached", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, inner.CallCount);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
     private sealed class CountingCatalystProvider : ICatalystProvider
     {
         public int CallCount { get; private set; }

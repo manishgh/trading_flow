@@ -1,0 +1,161 @@
+﻿{
+    "researchRunId":  "largecap-75-momentum-static-2y-20260725-v1",
+    "createdAtUtc":  "2026-07-25T21:29:46.9588980+00:00",
+    "codeVersion":  "research-pipeline-v1.3",
+    "researchAdjustedBarsDatasetId":  "a83409919663e5872753d85a876c7af9d487c304f46b50988be633d02d02f27c",
+    "asTradedBarsDatasetId":  "415542eceb3c5a7162fd2e3559a3f5c3628889f9d1b85899ecd2e5b027c9edae",
+    "frozenSymbols":  [
+                          "AAPL",
+                          "ABBV",
+                          "ABT",
+                          "AMAT",
+                          "AMD",
+                          "AMGN",
+                          "AMZN",
+                          "ASML",
+                          "AVGO",
+                          "AXP",
+                          "BA",
+                          "BABA",
+                          "BAC",
+                          "BHP",
+                          "BRK.B",
+                          "C",
+                          "CAT",
+                          "COST",
+                          "CSCO",
+                          "CVX",
+                          "DE",
+                          "DELL",
+                          "DIS",
+                          "ETN",
+                          "GE",
+                          "GILD",
+                          "GOOGL",
+                          "GS",
+                          "HD",
+                          "HSBC",
+                          "INTC",
+                          "JNJ",
+                          "JPM",
+                          "KLAC",
+                          "KO",
+                          "LIN",
+                          "LLY",
+                          "LRCX",
+                          "MA",
+                          "MCD",
+                          "META",
+                          "MRK",
+                          "MS",
+                          "MSFT",
+                          "MU",
+                          "MUFG",
+                          "NEE",
+                          "NFLX",
+                          "NVDA",
+                          "NVO",
+                          "NVS",
+                          "ORCL",
+                          "PEP",
+                          "PG",
+                          "PM",
+                          "RTX",
+                          "RY",
+                          "SAN",
+                          "SHEL",
+                          "TD",
+                          "TJX",
+                          "TM",
+                          "TMO",
+                          "TMUS",
+                          "TSLA",
+                          "TSM",
+                          "TTE",
+                          "UNH",
+                          "UNP",
+                          "V",
+                          "VZ",
+                          "WELL",
+                          "WFC",
+                          "WMT",
+                          "XOM"
+                      ],
+    "survivorshipSelectionBiasWarning":  "The candidate list is the current Finviz 100B+ snapshot captured 2026-07-24 and projected backward. Delisted securities and historical market-cap migration are absent; results are diagnostic only.",
+    "definition":  {
+                       "studyName":  "swing.cross-sectional-momentum.static-diagnostic.v1",
+                       "benchmarkTicker":  "SPY",
+                       "universeDescription":  "75 active, tradable, issuer-deduplicated large-cap US-listed equities from the 2026-07-24 Finviz 100B+ snapshot",
+                       "options":  {
+                                       "momentumLookbackBars":  252,
+                                       "skipRecentBars":  21,
+                                       "fastTrendSmaBars":  50,
+                                       "slowTrendSmaBars":  200,
+                                       "averageDollarVolumeBars":  20,
+                                       "minimumAverageDollarVolume":  20000000,
+                                       "formationSchedule":  "month_end",
+                                       "decisionCadenceBars":  21,
+                                       "forwardHorizons":  [
+                                                               5,
+                                                               20,
+                                                               60
+                                                           ],
+                                       "quantileCount":  5,
+                                       "primarySelectionFraction":  0.2,
+                                       "minimumCandidatesPerDate":  30,
+                                       "developmentFraction":  0.5,
+                                       "validationFraction":  0.25,
+                                       "holdoutFraction":  0.25,
+                                       "minimumFormationDates":  9,
+                                       "minimumHoldoutFormationDates":  2,
+                                       "minimumDistinctSelectedTickers":  10,
+                                       "cells":  [
+                                                     "momentum_only",
+                                                     "momentum_stock_trend",
+                                                     "momentum_stock_market_trend"
+                                                 ],
+                                       "exchangeTimezone":  "America/New_York",
+                                       "validationStartDate":  "2026-01-01",
+                                       "holdoutStartDate":  "2026-04-01"
+                                   }
+                   },
+    "studyPartitions":  {
+                            "development":  {
+                                                "name":  "development",
+                                                "startUtc":  "2024-07-01T00:00:00+00:00",
+                                                "endUtc":  "2026-01-01T00:00:00+00:00"
+                                            },
+                            "validation":  {
+                                               "name":  "validation",
+                                               "startUtc":  "2026-01-01T00:00:00+00:00",
+                                               "endUtc":  "2026-04-01T00:00:00+00:00"
+                                           },
+                            "holdout":  {
+                                            "name":  "holdout",
+                                            "startUtc":  "2026-04-01T00:00:00+00:00",
+                                            "endUtc":  "2026-07-25T00:00:00+00:00"
+                                        }
+                        },
+    "assumptions":  {
+                        "cost":  {
+                                     "commissionBps":  0,
+                                     "regulatoryFeesBps":  0.2
+                                 },
+                        "spread":  {
+                                       "source":  "fixed conservative liquid-large-cap estimate",
+                                       "estimatedFullSpreadBps":  4
+                                   },
+                        "slippage":  {
+                                         "model":  "fixed next-open slippage per side",
+                                         "maximumSlippageBps":  5
+                                     },
+                        "borrow":  {
+                                       "availabilityRequired":  false,
+                                       "annualBorrowBps":  0
+                                   },
+                        "benchmark":  {
+                                          "ticker":  "SPY",
+                                          "returnDefinition":  "next-session-open to horizon close, net of frozen round-trip execution costs"
+                                      }
+                    }
+}

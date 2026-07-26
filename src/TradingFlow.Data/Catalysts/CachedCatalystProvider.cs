@@ -40,6 +40,14 @@ public sealed class CachedCatalystProvider(
             {
                 return await ReadAsync(covering, windowStart, windowEnd, cancellationToken);
             }
+
+            if (cachePolicy.Equals("cache_only", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new FileNotFoundException(
+                    $"No cached {ProviderName} catalysts cover {ticker} from " +
+                    $"{windowStart:O} through {windowEnd:O}.",
+                    path);
+            }
         }
 
         var catalysts = await innerProvider.GetCatalystsAsync(ticker, windowStart, windowEnd, cancellationToken);

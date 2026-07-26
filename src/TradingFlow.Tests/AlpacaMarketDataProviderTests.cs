@@ -95,10 +95,51 @@ public class AlpacaMarketDataProviderTests
 
         Assert.Equal(2, handler.RequestUris.Count);
         Assert.DoesNotContain("page_token=", handler.RequestUris[0].Query);
+        Assert.Contains("adjustment=all", handler.RequestUris[0].Query);
         Assert.Contains("page_token=token-2", handler.RequestUris[1].Query);
+        Assert.Contains("adjustment=all", handler.RequestUris[1].Query);
         Assert.Contains("AMD", bars.Select(x => x.Ticker));
         Assert.Contains("MU", bars.Select(x => x.Ticker));
         Assert.Contains("NVDA", bars.Select(x => x.Ticker));
+    }
+
+    [Fact]
+    public async Task GetBarsAsync_MapsClassShareSymbolAtProviderBoundary()
+    {
+        using var handler = new ClassShareBarsHandler();
+        using var httpClient = new HttpClient(handler);
+        var provider = new AlpacaMarketDataProvider(
+            httpClient,
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+            {
+                KeyId = "test-key",
+                SecretKey = "test-secret",
+                MarketDataFeed = "sip"
+            });
+
+        var bars = new List<TradingFlow.Domain.Market.OhlcvBar>();
+        await foreach (var bar in provider.GetBarsAsync(
+                           ["BRK-B"],
+                           ["1d"],
+                           new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero),
+                           new DateTimeOffset(2026, 6, 9, 0, 0, 0, TimeSpan.Zero),
+                           CancellationToken.None))
+        {
+            bars.Add(bar);
+        }
+
+        Assert.Contains("symbols=BRK.B", handler.RequestUri.Query);
+        Assert.Equal("BRK-B", Assert.Single(bars).Ticker);
+    }
+
+    [Theory]
+    [InlineData("BRK-B", "BRK.B")]
+    [InlineData("brk.b", "BRK.B")]
+    [InlineData("MSFT", "MSFT")]
+    public void AlpacaSymbolMapper_UsesProviderDotNotation(string input, string expectedProviderSymbol)
+    {
+        Assert.Equal(expectedProviderSymbol, AlpacaSymbolMapper.ToProviderSymbol(input));
+        Assert.Equal(expectedProviderSymbol.Replace('.', '-'), AlpacaSymbolMapper.ToCanonicalSymbol(expectedProviderSymbol));
     }
 
     private sealed class PagedBarsHandler : HttpMessageHandler, IDisposable
@@ -140,6 +181,31 @@ public class AlpacaMarketDataProviderTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(json)
+            });
+        }
+    }
+
+    private sealed class ClassShareBarsHandler : HttpMessageHandler
+    {
+        public Uri RequestUri { get; private set; } = null!;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestUri = request.RequestUri ?? throw new InvalidOperationException("Request URI is required.");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                {
+                  "bars": {
+                    "BRK.B": [
+                      { "t": "2026-06-08T04:00:00Z", "o": 500.0, "h": 505.0, "l": 499.0, "c": 504.0, "v": 1000 }
+                    ]
+                  },
+                  "next_page_token": null
+                }
+                """)
             });
         }
     }
