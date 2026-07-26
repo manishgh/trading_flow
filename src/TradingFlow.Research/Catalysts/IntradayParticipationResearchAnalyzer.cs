@@ -3,6 +3,7 @@ using TradingFlow.Domain.Research;
 using TradingFlow.Domain.Research.Intraday;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Market;
+using TradingFlow.Research.Statistics;
 
 namespace TradingFlow.Research.Catalysts;
 
@@ -70,7 +71,7 @@ internal sealed class IntradayParticipationResearchAnalyzer
             reportEligibility,
             reportBlockers,
             ordered,
-            BuildHolmReadyPValues(ordered));
+            BuildHolmAdjustedPValues(ordered, request.Options.HolmFamilyWiseAlpha));
     }
 
     private IntradayEventEvidenceObservation BuildObservation(
@@ -86,7 +87,7 @@ internal sealed class IntradayParticipationResearchAnalyzer
             (catalyst.UpdatedAt is not null && catalyst.UpdatedAt > catalyst.Timestamp
                 ? catalyst.UpdatedAt
                 : catalyst.Timestamp);
-        var availableAt = Later(diagnosticClock.Value, classification.InferenceCompletedAtUtc);
+        var availableAt = Later(diagnosticClock.Value, classification.AvailableAtUtc);
         var eligibility = receipt is null
             ? IntradayEvidenceEligibility.DiagnosticOnly
             : IntradayEvidenceEligibility.PromotionEligible;
@@ -244,6 +245,21 @@ internal sealed class IntradayParticipationResearchAnalyzer
             .Cast<DateTimeOffset?>()
             .FirstOrDefault();
         var multiplier = classification.Direction == CatalystDirection.Positive ? 1m : -1m;
+        var morphologyCutoffAt = request.Options.Horizons
+            .Select(horizon => anchorCompletedAt + horizon)
+            .Where(value =>
+                value <= partition.EndUtc &&
+                (nextIndependentEventAt is null || value < nextIndependentEventAt))
+            .DefaultIfEmpty(anchorCompletedAt)
+            .Max();
+        var morphology = BuildMorphologyTimeline(
+            bars,
+            duration,
+            anchorCompletedAt,
+            morphologyCutoffAt,
+            responseSession,
+            multiplier,
+            request.Options.OpeningRange);
         var horizons = request.Options.Horizons
             .Select(horizon => BuildHorizon(
                 request,
@@ -259,15 +275,17 @@ internal sealed class IntradayParticipationResearchAnalyzer
                 nextIndependentEventAt,
                 entryQuote,
                 multiplier,
+                morphology.Timeline,
                 horizon))
             .ToArray();
-        var morphology = BuildMorphologyTimeline(
-            bars,
-            duration,
-            anchorIndex,
-            responseSession,
-            multiplier,
-            request.Options.OpeningRange);
+        var allHorizonsCensored = horizons.Length == 0 ||
+                                  horizons.All(value => value.IsCensored);
+        var observationEligibility = allHorizonsCensored
+            ? IntradayEvidenceEligibility.Rejected
+            : eligibility;
+        var observationReason = allHorizonsCensored
+            ? "all_horizons_censored"
+            : diagnosticReason;
 
         return new IntradayEventEvidenceObservation(
             ticker,
@@ -284,8 +302,8 @@ internal sealed class IntradayParticipationResearchAnalyzer
             classification.Category,
             classification.Direction,
             classification.Materiality,
-            eligibility,
-            diagnosticReason,
+            observationEligibility,
+            observationReason,
             participation.CumulativeRvol,
             participation.ComparableSessionCount,
             participation.RobustLogVolumeZScore,
@@ -311,6 +329,7 @@ internal sealed class IntradayParticipationResearchAnalyzer
         DateTimeOffset? nextIndependentEventAt,
         IntradayQuoteEvidence entryQuote,
         decimal direction,
+        IReadOnlyList<IntradayMorphologyEvidence> morphologyTimeline,
         TimeSpan horizon)
     {
         var targetAt = anchorCompletedAt + horizon;
@@ -366,7 +385,7 @@ internal sealed class IntradayParticipationResearchAnalyzer
         var mae = direction * PercentChange(anchorClose, adverse);
         var executable = direction > 0m
             ? PercentChange(entryQuote.Ask, exitQuote.Bid)
-            : PercentChange(exitQuote.Ask, entryQuote.Bid);
+            : ShortReturn(entryQuote.Bid, exitQuote.Ask);
 
         return new IntradayHorizonEvidence(
             FormatHorizon(horizon),
@@ -377,6 +396,7 @@ internal sealed class IntradayParticipationResearchAnalyzer
             executable,
             Decimal.Round(Math.Max(0m, mfe), 6),
             Decimal.Round(Math.Min(0m, mae), 6),
+            MorphologyAt(morphologyTimeline, targetCompletedAt),
             false,
             null);
     }
@@ -486,7 +506,8 @@ internal sealed class IntradayParticipationResearchAnalyzer
     private MorphologyEvidence BuildMorphologyTimeline(
         IReadOnlyList<OhlcvBar> bars,
         TimeSpan duration,
-        int anchorIndex,
+        DateTimeOffset anchorCompletedAt,
+        DateTimeOffset cutoffCompletedAt,
         ExchangeSessionResolution session,
         decimal direction,
         TimeSpan openingRangeDuration)
@@ -496,67 +517,82 @@ internal sealed class IntradayParticipationResearchAnalyzer
             {
                 var completedAt = value.Timestamp + duration;
                 return completedAt > session.SessionStartUtc &&
-                       completedAt <= session.SessionEndUtc;
+                       completedAt <= session.SessionEndUtc &&
+                       completedAt <= cutoffCompletedAt;
             })
             .OrderBy(value => value.Timestamp)
             .ToArray();
-        var openingBars = sessionBars
-            .Where(value => value.Timestamp + duration <= session.SessionStartUtc + openingRangeDuration)
-            .ToArray();
-        if (openingBars.Length == 0)
+        if (sessionBars.Length == 0)
         {
             return new MorphologyEvidence(IntradayMorphology.None, []);
         }
 
-        var openingHigh = openingBars.Max(value => value.High);
-        var openingLow = openingBars.Min(value => value.Low);
-        var afterOpening = sessionBars
-            .Where(value => value.Timestamp + duration > session.SessionStartUtc + openingRangeDuration)
+        var openingRangeCompletedAt = session.SessionStartUtc + openingRangeDuration;
+        var openingBars = sessionBars
+            .Where(value => value.Timestamp + duration <= openingRangeCompletedAt)
             .ToArray();
         var timeline = new List<IntradayMorphologyEvidence>();
         var state = IntradayMorphology.None;
         var broke = false;
         var failed = false;
-        foreach (var bar in afterOpening)
+        decimal? openingHigh = null;
+        decimal? openingLow = null;
+        if (openingBars.Length != 0 &&
+            sessionBars.Any(value => value.Timestamp + duration >= openingRangeCompletedAt))
         {
-            var directionalBreak = direction > 0m
-                ? bar.Close > openingHigh
-                : bar.Close < openingLow;
-            var backInside = direction > 0m
-                ? bar.Close <= openingHigh
-                : bar.Close >= openingLow;
-            IntradayMorphology? next = null;
-            if (!broke && directionalBreak)
-            {
-                broke = true;
-                next = IntradayMorphology.OpeningRangeContinuation;
-            }
-            else if (broke && !failed && backInside)
-            {
-                failed = true;
-                next = IntradayMorphology.FailedBreak;
-            }
-            else if (failed && directionalBreak)
-            {
-                failed = false;
-                next = IntradayMorphology.PullbackReclaim;
-            }
-
-            if (next is null || next == state)
-            {
-                continue;
-            }
-
-            state = next.Value;
-            timeline.Add(new IntradayMorphologyEvidence(
-                bar.Timestamp + duration,
-                state,
-                bar.Close,
-                SessionVwap(sessionBars, bar.Timestamp + duration, duration)));
+            openingHigh = openingBars.Max(value => value.High);
+            openingLow = openingBars.Min(value => value.Low);
         }
 
-        return new MorphologyEvidence(state, timeline);
+        foreach (var bar in sessionBars)
+        {
+            var completedAt = bar.Timestamp + duration;
+            if (completedAt > openingRangeCompletedAt &&
+                openingHigh is not null &&
+                openingLow is not null)
+            {
+                var directionalBreak = direction > 0m
+                    ? bar.Close > openingHigh.Value
+                    : bar.Close < openingLow.Value;
+                var backInside = direction > 0m
+                    ? bar.Close <= openingHigh.Value
+                    : bar.Close >= openingLow.Value;
+                if (!broke && directionalBreak)
+                {
+                    broke = true;
+                    state = IntradayMorphology.OpeningRangeContinuation;
+                }
+                else if (broke && !failed && backInside)
+                {
+                    failed = true;
+                    state = IntradayMorphology.FailedBreak;
+                }
+                else if (failed && directionalBreak)
+                {
+                    failed = false;
+                    state = IntradayMorphology.PullbackReclaim;
+                }
+            }
+
+            timeline.Add(new IntradayMorphologyEvidence(
+                completedAt,
+                state,
+                bar.Close,
+                SessionVwap(sessionBars, completedAt, duration)));
+        }
+
+        return new MorphologyEvidence(
+            MorphologyAt(timeline, anchorCompletedAt),
+            timeline);
     }
+
+    private static IntradayMorphology MorphologyAt(
+        IReadOnlyList<IntradayMorphologyEvidence> timeline,
+        DateTimeOffset completedAtUtc) =>
+        timeline
+            .Where(value => value.CompletedAtUtc <= completedAtUtc)
+            .Select(value => value.State)
+            .LastOrDefault();
 
     private static decimal? SessionVwap(
         IReadOnlyList<OhlcvBar> sessionBars,
@@ -578,9 +614,11 @@ internal sealed class IntradayParticipationResearchAnalyzer
             6);
     }
 
-    private static IReadOnlyList<IntradayHolmPValue> BuildHolmReadyPValues(
-        IReadOnlyList<IntradayEventEvidenceObservation> observations)
+    private static IReadOnlyList<IntradayHolmPValue> BuildHolmAdjustedPValues(
+        IReadOnlyList<IntradayEventEvidenceObservation> observations,
+        decimal familyWiseAlpha)
     {
+        const string frozenFamily = "track-b-intraday-catalyst-response";
         var hypotheses = observations
             .Where(value => value.Eligibility == IntradayEvidenceEligibility.PromotionEligible)
             .SelectMany(observation => observation.Horizons
@@ -589,46 +627,57 @@ internal sealed class IntradayParticipationResearchAnalyzer
                     horizon.SectorAbnormalReturnPct is not null)
                 .Select(horizon => new
                 {
-                    Family = $"{observation.Partition}|{observation.Category}|{observation.Direction}",
-                    Hypothesis = $"{observation.EventSession}|{observation.Morphology}|{horizon.Horizon}",
+                    Hypothesis =
+                        $"{observation.Partition}|{observation.Category}|" +
+                        $"{observation.Direction}|{observation.EventSession}|" +
+                        $"{observation.Morphology}|{horizon.Horizon}",
                     Cluster = $"{observation.GlobalStoryCluster}|{observation.ResponseAnchorCompletedAtUtc:yyyy-MM-dd}",
                     Value = horizon.SectorAbnormalReturnPct!.Value
                 }))
-            .GroupBy(value => new { value.Family, value.Hypothesis })
+            .GroupBy(value => value.Hypothesis, StringComparer.Ordinal)
             .Select(group => new
             {
-                group.Key.Family,
-                group.Key.Hypothesis,
+                Hypothesis = group.Key,
                 Values = group
                     .GroupBy(value => value.Cluster, StringComparer.Ordinal)
                     .Select(cluster => cluster.Average(value => value.Value))
                     .ToArray()
             })
-            .GroupBy(value => value.Family, StringComparer.Ordinal)
-            .SelectMany(family =>
+            .ToArray();
+        if (hypotheses.Length == 0)
+        {
+            return [];
+        }
+
+        var raw = hypotheses.ToDictionary(
+            value => value.Hypothesis,
+            value => (double)SignTestPValue(value.Values),
+            StringComparer.Ordinal);
+        var adjusted = ResearchInference.HolmAdjust(raw, (double)familyWiseAlpha)
+            .ToDictionary(value => value.HypothesisId, StringComparer.Ordinal);
+        var ranks = raw
+            .OrderBy(value => value.Value)
+            .ThenBy(value => value.Key, StringComparer.Ordinal)
+            .Select((value, index) => new { value.Key, Rank = index + 1 })
+            .ToDictionary(value => value.Key, value => value.Rank, StringComparer.Ordinal);
+
+        return hypotheses
+            .Select(value =>
             {
-                var ranked = family
-                    .Select(value => new
-                    {
-                        value.Hypothesis,
-                        value.Values,
-                        P = SignTestPValue(value.Values)
-                    })
-                    .OrderBy(value => value.P)
-                    .ThenBy(value => value.Hypothesis, StringComparer.Ordinal)
-                    .ToArray();
-                return ranked.Select((value, index) => new IntradayHolmPValue(
-                    family.Key,
+                var result = adjusted[value.Hypothesis];
+                return new IntradayHolmPValue(
+                    frozenFamily,
                     value.Hypothesis,
                     value.Values.Count(item => item != 0m),
-                    value.P,
-                    index + 1,
-                    ranked.Length));
+                    Decimal.Round((decimal)result.RawPValue, 8),
+                    Decimal.Round((decimal)result.AdjustedPValue, 8),
+                    result.Rejected,
+                    ranks[value.Hypothesis],
+                    hypotheses.Length);
             })
-            .OrderBy(value => value.Family, StringComparer.Ordinal)
-            .ThenBy(value => value.HolmRank)
+            .OrderBy(value => value.HolmRank)
+            .ThenBy(value => value.Hypothesis, StringComparer.Ordinal)
             .ToArray();
-        return hypotheses;
     }
 
     private static decimal SignTestPValue(IReadOnlyList<decimal> values)
@@ -709,9 +758,23 @@ internal sealed class IntradayParticipationResearchAnalyzer
     private static List<string> AdmissionBlockers(IntradayEvidenceStudyRequest request)
     {
         var blockers = new List<string>();
-        if (!request.ClassifierValidation.MeetsTrackBMinimum)
+        if (request.B0Evidence is null)
+        {
+            blockers.Add("b0_evidence_readiness_missing");
+        }
+        else
+        {
+            blockers.AddRange(request.B0Evidence.AdmissionBlockers);
+        }
+
+        if (request.ClassifierValidation is null)
+        {
+            blockers.Add("classifier_validation_missing");
+        }
+        else if (!request.ClassifierValidation.MeetsTrackBMinimum)
         {
             blockers.Add("classifier_validation_not_ready");
+            blockers.AddRange(request.ClassifierValidation.ValidationBlockers);
         }
 
         if (request.Classifications.Count == 0)
@@ -798,6 +861,14 @@ internal sealed class IntradayParticipationResearchAnalyzer
         {
             throw new ArgumentException(
                 "Participation requires a target of at least 63 sessions and minimum of 40.");
+        }
+
+        if (request.Options.HolmFamilyWiseAlpha <= 0m ||
+            request.Options.HolmFamilyWiseAlpha >= 1m)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.Options.HolmFamilyWiseAlpha),
+                "Holm family-wise alpha must be between zero and one.");
         }
 
         var partitions = request.Options.Partitions
@@ -911,11 +982,15 @@ internal sealed class IntradayParticipationResearchAnalyzer
         DateTimeOffset anchorCompletedAt,
         DateTimeOffset targetCompletedAt)
     {
-        var anchor = bars.LastOrDefault(value => value.Timestamp + duration <= anchorCompletedAt);
-        var target = bars.FirstOrDefault(value => value.Timestamp + duration >= targetCompletedAt);
-        return anchor is null || target is null
+        var anchors = bars
+            .Where(value => value.Timestamp + duration == anchorCompletedAt)
+            .ToArray();
+        var targets = bars
+            .Where(value => value.Timestamp + duration == targetCompletedAt)
+            .ToArray();
+        return anchors.Length != 1 || targets.Length != 1
             ? null
-            : PercentChange(anchor.Close, target.Close);
+            : PercentChange(anchors[0].Close, targets[0].Close);
     }
 
     private decimal? GapPercent(
@@ -1007,7 +1082,7 @@ internal sealed class IntradayParticipationResearchAnalyzer
              item.Catalyst.UpdatedAt > item.Catalyst.Timestamp
                 ? item.Catalyst.UpdatedAt.Value
                 : item.Catalyst.Timestamp);
-        return Later(receipt.ToUniversalTime(), item.Classification.InferenceCompletedAtUtc);
+        return Later(receipt.ToUniversalTime(), item.Classification.AvailableAtUtc);
     }
 
     private static DateTimeOffset Later(DateTimeOffset first, DateTimeOffset second) =>
@@ -1031,6 +1106,7 @@ internal sealed class IntradayParticipationResearchAnalyzer
             null,
             null,
             null,
+            IntradayMorphology.None,
             true,
             reason);
 
@@ -1077,6 +1153,11 @@ internal sealed class IntradayParticipationResearchAnalyzer
         start == 0m
             ? 0m
             : Decimal.Round((end / start - 1m) * 100m, 6);
+
+    private static decimal ShortReturn(decimal entryBid, decimal exitAsk) =>
+        entryBid == 0m
+            ? 0m
+            : Decimal.Round((entryBid - exitAsk) / entryBid * 100m, 6);
 
     private static string FormatHorizon(TimeSpan horizon) =>
         horizon.TotalMinutes < 60

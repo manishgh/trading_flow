@@ -102,9 +102,12 @@ public sealed record ClassifiedCatalystEvidenceRow : INormalizedEvidenceRow
                 "Classification observation cannot precede inference completion.");
         }
 
-        AvailableAtUtc = NewsAvailableAtUtc > ObservedAtUtc
-            ? NewsAvailableAtUtc
-            : ObservedAtUtc;
+        AvailableAtUtc = new[]
+        {
+            NewsAvailableAtUtc,
+            InferenceCompletedAtUtc,
+            ObservedAtUtc
+        }.Max();
         Sources = EvidenceRowContract.CopySources(sources);
     }
 

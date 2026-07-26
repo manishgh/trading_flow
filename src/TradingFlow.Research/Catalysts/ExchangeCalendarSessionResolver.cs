@@ -70,15 +70,25 @@ public sealed class HistoricalExchangeSessionResolver : IExchangeSessionResolver
         var dayStartUtc = ToUtc(tradeDate, TimeOnly.MinValue);
         var nextDayStartUtc = ToUtc(tradeDate.AddDays(1), TimeOnly.MinValue);
 
-        if (!_calendarByDate.TryGetValue(tradeDate, out var calendar) ||
-            calendar.RegularOpenUtc is null ||
-            calendar.RegularCloseUtc is null)
+        if (!_calendarByDate.TryGetValue(tradeDate, out var calendar))
+        {
+            throw new InvalidDataException(
+                $"Trade date {tradeDate:yyyy-MM-dd} is absent from exchange-calendar evidence.");
+        }
+
+        if (calendar.Session == EquityTradingSession.Closed)
         {
             return new ExchangeSessionResolution(
                 tradeDate,
                 EquityTradingSession.Closed,
                 dayStartUtc,
                 nextDayStartUtc);
+        }
+
+        if (calendar.RegularOpenUtc is null || calendar.RegularCloseUtc is null)
+        {
+            throw new InvalidDataException(
+                $"Trade date {tradeDate:yyyy-MM-dd} has incomplete exchange-calendar bounds.");
         }
 
         var premarketOpenUtc = ToUtc(tradeDate, _premarketOpen);

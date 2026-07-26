@@ -36,7 +36,7 @@ public sealed class IntradayParticipationResearchTests
         {
             ClassifierValidation = fixture.Request.ClassifierValidation with
             {
-                PassedFrozenValidation = false
+                CompositeQualifierPrecision95LowerBound = 0.69m
             },
             Classifications = []
         };
@@ -105,6 +105,7 @@ public sealed class IntradayParticipationResearchTests
         Assert.Equal(1, pValue.SampleCount);
         Assert.Equal(1, pValue.HolmRank);
         Assert.Equal(1, pValue.FamilySize);
+        Assert.Equal(pValue.RawPValue, pValue.AdjustedPValue);
     }
 
     [Fact]
@@ -146,9 +147,13 @@ public sealed class IntradayParticipationResearchTests
 
         var report = fixture.Runner.AnalyzeIntradayEvidence(request);
 
-        var horizon = Assert.Single(Assert.Single(report.Observations).Horizons);
+        var observation = Assert.Single(report.Observations);
+        var horizon = Assert.Single(observation.Horizons);
         Assert.True(horizon.IsCensored);
         Assert.Equal("partition_end_embargo", horizon.CensorReason);
+        Assert.Equal(IntradayEvidenceEligibility.Rejected, observation.Eligibility);
+        Assert.Equal("all_horizons_censored", observation.CensorReason);
+        Assert.Equal(IntradayEvidenceEligibility.DiagnosticOnly, report.Eligibility);
     }
 
     [Fact]
@@ -190,13 +195,203 @@ public sealed class IntradayParticipationResearchTests
         Assert.Equal(1, pValue.SampleCount);
     }
 
+    [Fact]
+    public void AnalyzeIntradayEvidence_UsesClassifierObservedClockForResponseAnchor()
+    {
+        var observedAt = EventOpen.AddMinutes(6).AddSeconds(30);
+        var fixture = Fixture(classifierObservedAt: observedAt);
+
+        var observation = Assert.Single(
+            fixture.Runner.AnalyzeIntradayEvidence(fixture.Request).Observations);
+
+        Assert.Equal(observedAt, observation.AvailableAtUtc);
+        Assert.Equal(EventOpen.AddMinutes(7), observation.ResponseAnchorCompletedAtUtc);
+    }
+
+    [Fact]
+    public void AnalyzeIntradayEvidence_MorphologyIsPointInTimeForAnchorAndEachHorizon()
+    {
+        var fixture = Fixture();
+
+        var observation = Assert.Single(
+            fixture.Runner.AnalyzeIntradayEvidence(fixture.Request).Observations);
+        var horizon = Assert.Single(observation.Horizons);
+
+        Assert.Equal(IntradayMorphology.None, observation.Morphology);
+        Assert.Equal(IntradayMorphology.None, horizon.MorphologyAtTarget);
+        Assert.Equal(
+            EventOpen.AddMinutes(7),
+            observation.MorphologyTimeline.Max(value => value.CompletedAtUtc));
+        Assert.Equal(7, observation.MorphologyTimeline.Count);
+        Assert.All(
+            observation.MorphologyTimeline,
+            value => Assert.Equal(IntradayMorphology.None, value.State));
+    }
+
+    [Fact]
+    public void AnalyzeIntradayEvidence_ComputesShortExecutableReturnFromEntryBid()
+    {
+        var fixture = Fixture(direction: CatalystDirection.Negative);
+        var request = fixture.Request with
+        {
+            QuotesByTicker = new Dictionary<string, IReadOnlyList<IntradayQuoteEvidence>>
+            {
+                ["TEST"] =
+                [
+                    new("TEST", EventOpen.AddMinutes(6).AddSeconds(1), 100m, 101m, "sip"),
+                    new("TEST", EventOpen.AddMinutes(7).AddSeconds(1), 89m, 90m, "sip")
+                ]
+            }
+        };
+
+        var horizon = Assert.Single(
+            Assert.Single(fixture.Runner.AnalyzeIntradayEvidence(request).Observations)
+                .Horizons);
+
+        Assert.Equal(10m, horizon.ExecutableReturnPct);
+    }
+
+    [Fact]
+    public void AnalyzeIntradayEvidence_CensorsWhenBenchmarkTimestampIsNotExact()
+    {
+        var fixture = Fixture();
+        var spy = fixture.Request.BenchmarkBarsByTicker["SPY"]
+            .Where(value => value.Timestamp + TimeSpan.FromMinutes(1) !=
+                            EventOpen.AddMinutes(6))
+            .ToArray();
+        var request = fixture.Request with
+        {
+            BenchmarkBarsByTicker =
+                new Dictionary<string, IReadOnlyList<OhlcvBar>>
+                {
+                    ["SPY"] = spy,
+                    ["XLK"] = fixture.Request.BenchmarkBarsByTicker["XLK"]
+                }
+        };
+
+        var report = fixture.Runner.AnalyzeIntradayEvidence(request);
+        var observation = Assert.Single(report.Observations);
+        var horizon = Assert.Single(observation.Horizons);
+
+        Assert.True(horizon.IsCensored);
+        Assert.Equal("aligned_benchmark_evidence_missing", horizon.CensorReason);
+        Assert.Equal(IntradayEvidenceEligibility.Rejected, observation.Eligibility);
+        Assert.Equal("all_horizons_censored", observation.CensorReason);
+        Assert.Equal(IntradayEvidenceEligibility.DiagnosticOnly, report.Eligibility);
+    }
+
+    [Fact]
+    public void ClassifierValidation_EnforcesEveryFrozenA4AndB1Threshold()
+    {
+        var valid = Fixture().Request.ClassifierValidation;
+        Assert.True(valid.MeetsTrackBMinimum);
+
+        var failures = new IntradayClassifierValidation[]
+        {
+            valid with { CompositeQualifierPrecision = 0.79m },
+            valid with { CompositeQualifierPrecision95LowerBound = 0.69m },
+            valid with { CompositeQualifierRecall = 0.59m },
+            valid with { CategoryMacroF1 = 0.69m },
+            valid with { DirectionMacroF1 = 0.74m },
+            valid with { MaterialityWeightedKappa = 0.59m },
+            valid with { LabeledStoryCount = 499 },
+            valid with { DoubleLabeledStoryCount = 99 },
+            valid with { FrozenPromotableCategories = [] },
+            valid with
+            {
+                UntouchedExamplesByPromotableCategory =
+                    new Dictionary<CatalystNewsCategory, int>
+                    {
+                        [CatalystNewsCategory.MajorCommercialEvent] = 29
+                    }
+            }
+        };
+
+        Assert.All(failures, value => Assert.False(value.MeetsTrackBMinimum));
+        Assert.Contains(
+            "classifier_promotable_class_untouched_count_below_minimum",
+            failures[^1].ValidationBlockers);
+    }
+
+    [Fact]
+    public void AnalyzeIntradayEvidence_FailsClosedForEveryMandatoryB0EvidenceFlag()
+    {
+        var fixture = Fixture();
+        var incomplete = new (IntradayB0EvidenceReadiness Evidence, string Blocker)[]
+        {
+            (fixture.Request.B0Evidence with { SipOneMinuteBarsVerified = false },
+                "sip_one_minute_bars_not_verified"),
+            (fixture.Request.B0Evidence with { SipNbboQuotesVerified = false },
+                "sip_nbbo_quotes_not_verified"),
+            (fixture.Request.B0Evidence with { OpeningAuctionStatusVerified = false },
+                "opening_auction_status_not_verified"),
+            (fixture.Request.B0Evidence with { HaltResumeAndLuldStatusVerified = false },
+                "halt_resume_luld_status_not_verified"),
+            (fixture.Request.B0Evidence with { CorporateActionsVerified = false },
+                "corporate_actions_not_verified"),
+            (fixture.Request.B0Evidence with
+                {
+                    PointInTimeSectorMembershipVerified = false
+                },
+                "point_in_time_sector_membership_not_verified"),
+            (fixture.Request.B0Evidence with { GlobalStoryClustersVerified = false },
+                "global_story_clusters_not_verified")
+        };
+
+        foreach (var (evidence, blocker) in incomplete)
+        {
+            var report = fixture.Runner.AnalyzeIntradayEvidence(
+                fixture.Request with { B0Evidence = evidence });
+            Assert.Equal(IntradayEvidenceEligibility.Rejected, report.Eligibility);
+            Assert.Contains(blocker, report.Blockers);
+            Assert.Empty(report.Observations);
+        }
+    }
+
+    [Fact]
+    public void AnalyzeIntradayEvidence_AppliesHolmAcrossOneFrozenFamily()
+    {
+        var fixture = Fixture(additionalIndependentTickers: 5);
+        var request = fixture.Request with
+        {
+            Options = fixture.Request.Options with
+            {
+                Horizons =
+                [
+                    TimeSpan.FromMinutes(1),
+                    TimeSpan.FromMinutes(5)
+                ]
+            }
+        };
+
+        var pValues = fixture.Runner
+            .AnalyzeIntradayEvidence(request)
+            .HolmReadyPValues;
+
+        Assert.Equal(2, pValues.Count);
+        Assert.Single(pValues.Select(value => value.Family).Distinct());
+        Assert.All(pValues, value =>
+        {
+            Assert.Equal(2, value.FamilySize);
+            Assert.Equal(0.03125m, value.RawPValue);
+            Assert.Equal(0.0625m, value.AdjustedPValue);
+            Assert.False(value.RejectedAtFamilyWiseAlpha);
+        });
+        Assert.Contains(
+            pValues,
+            value => value.AdjustedPValue > value.RawPValue);
+    }
+
     private static ResearchFixture Fixture(
         int priorSessionCount = 45,
         bool observedReceipt = true,
         DateTimeOffset? eventAt = null,
         DateTimeOffset? classifierCompletedAt = null,
+        DateTimeOffset? classifierObservedAt = null,
         bool includeNextSession = false,
-        bool secondTickerSameStory = false)
+        bool secondTickerSameStory = false,
+        CatalystDirection direction = CatalystDirection.Positive,
+        int additionalIndependentTickers = 0)
     {
         var eventTimestamp = eventAt ?? EventOpen.AddMinutes(5).AddSeconds(30);
         var completion = classifierCompletedAt ?? eventTimestamp.AddSeconds(10);
@@ -217,10 +412,11 @@ public sealed class IntradayParticipationResearchTests
             revisionId,
             "global-story-1",
             completion,
-            completion,
+            classifierObservedAt ?? completion,
             observedReceipt
                 ? catalyst.ReceivedAt!.Value
-                : catalyst.UpdatedAt ?? catalyst.Timestamp);
+                : catalyst.UpdatedAt ?? catalyst.Timestamp,
+            direction: direction);
         var catalysts = new Dictionary<string, IReadOnlyList<CatalystEvent>>
         {
             ["TEST"] = [catalyst]
@@ -256,6 +452,26 @@ public sealed class IntradayParticipationResearchTests
             sectors.Add(Sector("SECOND", dates[0]));
         }
 
+        for (var index = 0; index < additionalIndependentTickers; index++)
+        {
+            var ticker = $"INDEPENDENT{index + 1}";
+            var articleId = $"independent-article-{index + 1}";
+            var independent = Catalyst(ticker, eventTimestamp, articleId, observedReceipt);
+            var independentRevision = CatalystAvailability.Resolve(independent).RevisionId;
+            catalysts[ticker] = [independent];
+            barsByTicker[ticker] = Bars(ticker, dates, EventDate, 2m, 0.20m);
+            quotes[ticker] = Quotes(ticker, dates);
+            classifications.Add(Classification(
+                independentRevision,
+                $"global-story-independent-{index + 1}",
+                completion,
+                completion,
+                independent.ReceivedAt!.Value,
+                providerArticleId: articleId,
+                direction: direction));
+            sectors.Add(Sector(ticker, dates[0]));
+        }
+
         var start = new DateTimeOffset(
             EventDate.Year,
             EventDate.Month,
@@ -280,11 +496,24 @@ public sealed class IntradayParticipationResearchTests
                 500,
                 100,
                 0.90m,
+                0.80m,
                 0.90m,
                 0.90m,
                 0.92m,
                 0.85m,
-                true),
+                [CatalystNewsCategory.MajorCommercialEvent],
+                new Dictionary<CatalystNewsCategory, int>
+                {
+                    [CatalystNewsCategory.MajorCommercialEvent] = 30
+                }),
+            new IntradayB0EvidenceReadiness(
+                SipOneMinuteBarsVerified: true,
+                SipNbboQuotesVerified: true,
+                OpeningAuctionStatusVerified: true,
+                HaltResumeAndLuldStatusVerified: true,
+                CorporateActionsVerified: true,
+                PointInTimeSectorMembershipVerified: true,
+                GlobalStoryClustersVerified: true),
             start,
             end,
             "1m",
@@ -334,7 +563,8 @@ public sealed class IntradayParticipationResearchTests
         DateTimeOffset completedAt,
         DateTimeOffset observedAt,
         DateTimeOffset newsAvailableAt,
-        string providerArticleId = "article-1") =>
+        string providerArticleId = "article-1",
+        CatalystDirection direction = CatalystDirection.Positive) =>
         new(
             1,
             "run-1",
@@ -348,7 +578,7 @@ public sealed class IntradayParticipationResearchTests
             new string('b', 64),
             storyCluster,
             CatalystNewsCategory.MajorCommercialEvent,
-            CatalystDirection.Positive,
+            direction,
             CatalystMateriality.High,
             "unit",
             "classifier",

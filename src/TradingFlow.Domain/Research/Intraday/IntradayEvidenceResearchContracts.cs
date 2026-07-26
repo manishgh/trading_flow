@@ -20,17 +20,124 @@ public enum IntradayMorphology
 public sealed record IntradayClassifierValidation(
     int LabeledStoryCount,
     int DoubleLabeledStoryCount,
-    decimal CategoryPrecision,
-    decimal CategoryRecall,
-    decimal CategoryF1,
-    decimal DirectionPrecision,
-    decimal CohenKappa,
-    bool PassedFrozenValidation)
+    decimal CompositeQualifierPrecision,
+    decimal CompositeQualifierPrecision95LowerBound,
+    decimal CompositeQualifierRecall,
+    decimal CategoryMacroF1,
+    decimal DirectionMacroF1,
+    decimal MaterialityWeightedKappa,
+    IReadOnlyList<CatalystNewsCategory> FrozenPromotableCategories,
+    IReadOnlyDictionary<CatalystNewsCategory, int> UntouchedExamplesByPromotableCategory)
 {
-    public bool MeetsTrackBMinimum =>
-        PassedFrozenValidation &&
-        LabeledStoryCount >= 500 &&
-        DoubleLabeledStoryCount >= 100;
+    public IReadOnlyList<string> ValidationBlockers
+    {
+        get
+        {
+            var blockers = new List<string>();
+            if (CompositeQualifierPrecision < 0.80m)
+            {
+                blockers.Add("classifier_composite_precision_below_minimum");
+            }
+
+            if (CompositeQualifierPrecision95LowerBound < 0.70m)
+            {
+                blockers.Add("classifier_composite_precision_lower_bound_below_minimum");
+            }
+
+            if (CompositeQualifierRecall < 0.60m)
+            {
+                blockers.Add("classifier_composite_recall_below_minimum");
+            }
+
+            if (CategoryMacroF1 < 0.70m)
+            {
+                blockers.Add("classifier_category_macro_f1_below_minimum");
+            }
+
+            if (DirectionMacroF1 < 0.75m)
+            {
+                blockers.Add("classifier_direction_macro_f1_below_minimum");
+            }
+
+            if (MaterialityWeightedKappa < 0.60m)
+            {
+                blockers.Add("classifier_materiality_weighted_kappa_below_minimum");
+            }
+
+            if (LabeledStoryCount < 500)
+            {
+                blockers.Add("classifier_resolved_labels_below_minimum");
+            }
+
+            if (DoubleLabeledStoryCount < 100)
+            {
+                blockers.Add("classifier_double_labels_below_minimum");
+            }
+
+            var categories = FrozenPromotableCategories
+                ?.Distinct()
+                .ToArray() ?? [];
+            if (categories.Length == 0 ||
+                categories.Any(category =>
+                    !Enum.IsDefined(category) ||
+                    category is CatalystNewsCategory.PromotionalLowInformation or
+                        CatalystNewsCategory.Unknown))
+            {
+                blockers.Add("classifier_promotable_categories_not_frozen");
+            }
+            else if (categories.Any(category =>
+                         UntouchedExamplesByPromotableCategory is null ||
+                         !UntouchedExamplesByPromotableCategory.TryGetValue(
+                             category,
+                             out var count) ||
+                         count < 30))
+            {
+                blockers.Add("classifier_promotable_class_untouched_count_below_minimum");
+            }
+
+            return blockers;
+        }
+    }
+
+    public bool MeetsTrackBMinimum => ValidationBlockers.Count == 0;
+}
+
+public sealed record IntradayB0EvidenceReadiness(
+    bool SipOneMinuteBarsVerified,
+    bool SipNbboQuotesVerified,
+    bool OpeningAuctionStatusVerified,
+    bool HaltResumeAndLuldStatusVerified,
+    bool CorporateActionsVerified,
+    bool PointInTimeSectorMembershipVerified,
+    bool GlobalStoryClustersVerified)
+{
+    public IReadOnlyList<string> AdmissionBlockers
+    {
+        get
+        {
+            var blockers = new List<string>();
+            AddIfMissing(SipOneMinuteBarsVerified, "sip_one_minute_bars_not_verified");
+            AddIfMissing(SipNbboQuotesVerified, "sip_nbbo_quotes_not_verified");
+            AddIfMissing(OpeningAuctionStatusVerified, "opening_auction_status_not_verified");
+            AddIfMissing(
+                HaltResumeAndLuldStatusVerified,
+                "halt_resume_luld_status_not_verified");
+            AddIfMissing(CorporateActionsVerified, "corporate_actions_not_verified");
+            AddIfMissing(
+                PointInTimeSectorMembershipVerified,
+                "point_in_time_sector_membership_not_verified");
+            AddIfMissing(GlobalStoryClustersVerified, "global_story_clusters_not_verified");
+            return blockers;
+
+            void AddIfMissing(bool verified, string reason)
+            {
+                if (!verified)
+                {
+                    blockers.Add(reason);
+                }
+            }
+        }
+    }
 }
 
 public sealed record IntradayQuoteEvidence(
@@ -60,6 +167,7 @@ public sealed record IntradayEvidenceStudyOptions
     public int PriorSessionTarget { get; init; } = 63;
     public int PriorSessionMinimum { get; init; } = 40;
     public TimeSpan OpeningRange { get; init; } = TimeSpan.FromMinutes(15);
+    public decimal HolmFamilyWiseAlpha { get; init; } = 0.05m;
     public bool AllowProviderTimestampDiagnosticMode { get; init; }
 }
 
@@ -76,6 +184,7 @@ public sealed record IntradayEvidenceStudyRequest(
     IReadOnlyList<PointInTimeSectorEvidence> SectorMembership,
     IReadOnlyList<ClassifiedCatalystEvidenceRow> Classifications,
     IntradayClassifierValidation ClassifierValidation,
+    IntradayB0EvidenceReadiness B0Evidence,
     DateTimeOffset StartUtc,
     DateTimeOffset EndUtc,
     string CandleTimeframe,
@@ -130,6 +239,7 @@ public sealed record IntradayHorizonEvidence(
     decimal? ExecutableReturnPct,
     decimal? MfePct,
     decimal? MaePct,
+    IntradayMorphology MorphologyAtTarget,
     bool IsCensored,
     string? CensorReason);
 
@@ -138,5 +248,7 @@ public sealed record IntradayHolmPValue(
     string Hypothesis,
     int SampleCount,
     decimal RawPValue,
+    decimal AdjustedPValue,
+    bool RejectedAtFamilyWiseAlpha,
     int HolmRank,
     int FamilySize);
