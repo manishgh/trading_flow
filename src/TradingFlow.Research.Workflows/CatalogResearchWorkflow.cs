@@ -5,6 +5,7 @@ using TradingFlow.Data.Evidence.Research;
 using TradingFlow.Domain.Research;
 using TradingFlow.Engine.Research;
 using TradingFlow.Research.Catalysts;
+using TradingFlow.Research.Momentum;
 
 namespace TradingFlow.Research.Workflows;
 
@@ -155,6 +156,11 @@ public sealed partial class CatalogResearchWorkflow
                 "The registered research run differs from the immutable package manifest.");
         }
 
+        phaseState = await CompleteHoldoutPhaseAsync(
+            phaseState,
+            registered,
+            MomentumResultMetrics(result.Report),
+            cancellationToken);
         return new CatalogMomentumWorkflowResult(
             result,
             registered,
@@ -365,6 +371,11 @@ public sealed partial class CatalogResearchWorkflow
                 "The evidence catalog did not return the registered catalyst research run.");
         EnsureManifestMatchesPackage(registered, package.ManifestDraft);
 
+        phaseState = await CompleteHoldoutPhaseAsync(
+            phaseState,
+            registered,
+            CatalystResultMetrics(result),
+            cancellationToken);
         return new CatalogCatalystWorkflowResult(
             result,
             registered,
@@ -484,7 +495,7 @@ public sealed partial class CatalogResearchWorkflow
                 $"Holdout for frozen trial '{trial.ExperimentId}' has already been consumed.");
         }
 
-        var trialConsumption = await trialRegistry.ConsumeHoldoutAsync(
+        var trialConsumption = await trialRegistry.BeginHoldoutEvaluationAsync(
             new ResearchHoldoutConsumptionRecord(
                 trial.ExperimentId,
                 researchRunId,
@@ -515,6 +526,111 @@ public sealed partial class CatalogResearchWorkflow
             ResearchHoldoutState.Consumed,
             true,
             true);
+    }
+
+    private async Task<CatalogResearchPhaseState> CompleteHoldoutPhaseAsync(
+        CatalogResearchPhaseState phaseState,
+        EvidenceResearchRunManifest registeredRun,
+        IReadOnlyDictionary<string, decimal> metrics,
+        CancellationToken cancellationToken)
+    {
+        if (phaseState.Phase != CatalogResearchPhase.Holdout)
+        {
+            return phaseState;
+        }
+
+        if (trialRegistry is null ||
+            String.IsNullOrWhiteSpace(phaseState.ExperimentId) ||
+            String.IsNullOrWhiteSpace(phaseState.TrialDefinitionSha256))
+        {
+            throw new InvalidOperationException(
+                "A holdout result cannot complete without its durable frozen trial identity.");
+        }
+
+        var trial = await trialRegistry.GetTrialAsync(
+            phaseState.ExperimentId,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Frozen research trial '{phaseState.ExperimentId}' is not registered.");
+        if (!metrics.ContainsKey(trial.PrimaryMetric))
+        {
+            throw new InvalidDataException(
+                $"The workflow does not produce frozen primary metric '{trial.PrimaryMetric}'.");
+        }
+
+        var outputHashes = registeredRun.Outputs
+            .Select(output => output.Content.Sha256)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+        var resultId = EvidenceCanonicalJson.ComputeSha256(new
+        {
+            phaseState.ExperimentId,
+            registeredRun.ResearchRunId,
+            Partition = registeredRun.StudyPartitions.Holdout.Name,
+            phaseState.TrialDefinitionSha256,
+            OutputHashes = outputHashes
+        });
+        await trialRegistry.CompleteHoldoutEvaluationAsync(
+            new CanonicalResearchResultManifest(
+                resultId,
+                phaseState.ExperimentId,
+                phaseState.TrialDefinitionSha256,
+                registeredRun.ResearchRunId,
+                registeredRun.CodeVersion,
+                registeredRun.StudyPartitions.Holdout.Name,
+                trial.PrimaryMetric,
+                metrics,
+                outputHashes,
+                registeredRun.CreatedAtUtc),
+            cancellationToken);
+
+        return phaseState with
+        {
+            HoldoutState = ResearchHoldoutState.Completed
+        };
+    }
+
+    private static IReadOnlyDictionary<string, decimal> MomentumResultMetrics(
+        CrossSectionalMomentumReport report)
+    {
+        var holdout = report.FormationLedger
+            .Where(value =>
+                value.Segment.Equals(
+                    MomentumStudySegment.Holdout,
+                    StringComparison.Ordinal) &&
+                value.IsPrimarySelection)
+            .ToArray();
+        return new Dictionary<string, decimal>(StringComparer.Ordinal)
+        {
+            ["net_return_pct"] = holdout.Length == 0
+                ? 0m
+                : holdout.Average(value => value.SlotNetForwardReturnPct),
+            ["observation_count"] = holdout.Length,
+            ["promotion_eligible"] = report.PromotionEligible ? 1m : 0m
+        };
+    }
+
+    private static IReadOnlyDictionary<string, decimal> CatalystResultMetrics(
+        CatalogCatalystStudyResult result)
+    {
+        var executableReturns = result.ExecutableObservations
+            .Select(value => value.Result)
+            .Where(value =>
+                value.Status == CatalystExecutableReturnStatus.NetExecutableEstimate &&
+                value.NetReturnPercent.HasValue)
+            .Select(value => value.NetReturnPercent!.Value)
+            .ToArray();
+        var meanNetReturn = executableReturns.Length == 0
+            ? 0m
+            : executableReturns.Average();
+        return new Dictionary<string, decimal>(StringComparer.Ordinal)
+        {
+            ["net_return_pct"] = meanNetReturn,
+            ["net_expectancy_pct"] = meanNetReturn,
+            ["executable_trade_count"] = executableReturns.Length,
+            ["evidence_ready"] = result.ExecutableEvidenceReady ? 1m : 0m
+        };
     }
 
     private static void ValidateTrialBinding(

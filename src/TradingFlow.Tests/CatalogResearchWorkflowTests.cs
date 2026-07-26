@@ -421,14 +421,14 @@ public sealed class CatalogResearchWorkflowTests : IDisposable
             fixture.Workflow.RunMomentumAsync(fixture.Request));
 
         Assert.Equal(CatalogResearchPhase.Holdout, first.PhaseState.Phase);
-        Assert.Equal(ResearchHoldoutState.Consumed, first.PhaseState.HoldoutState);
+        Assert.Equal(ResearchHoldoutState.Completed, first.PhaseState.HoldoutState);
         Assert.True(first.PhaseState.HoldoutReserved);
         Assert.True(first.PhaseState.HoldoutConsumed);
         Assert.Contains("already been consumed", exception.Message);
         Assert.Equal(1, fixture.HoldoutReservationCount);
         Assert.Equal(readsAfterFirst, fixture.ObservationReadCount);
         Assert.Equal(
-            ResearchHoldoutState.Consumed,
+            ResearchHoldoutState.Completed,
             await fixture.Registry.GetHoldoutStateAsync(
                 fixture.Trial.ExperimentId));
     }
