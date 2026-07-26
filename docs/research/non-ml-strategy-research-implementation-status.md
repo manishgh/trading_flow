@@ -1,8 +1,11 @@
 # Non-ML Strategy Research Implementation Status
 
 **Updated:** 2026-07-26  
-**Binding program:** `non-ml-strategy-research-program.md`  
-**Evidence plan:** `momentum-and-catalyst-evidence-plan.md`
+**Binding program:** [Non-ML Strategy Research Program](non-ml-strategy-research-program.md)
+
+**Evidence plan:** [Momentum And Catalyst Evidence Plan](momentum-and-catalyst-evidence-plan.md)
+
+**System boundary:** [TradingFlow Operating Boundaries](../operating-boundaries.md)
 
 This document separates implemented controls from verified behavior and from
 external evidence that TradingFlow does not yet possess. A missing dataset or

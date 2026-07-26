@@ -152,15 +152,25 @@ The existing static 75-stock dataset remains diagnostic and cannot satisfy A0.
 If historical membership cannot be sourced, collect prospective snapshots and keep
 the promotion gate closed rather than infer historical membership.
 
-The frozen time design is:
+There is no global calendar split containing dates outside the available evidence.
+Each experiment must freeze exact chronological development, validation, embargo,
+and untouched holdout boundaries in the trial registry before outcomes are opened.
 
-- development: 2000-01-01 through 2014-12-31;
-- validation: 2015-01-01 through 2019-12-31;
-- contaminated diagnostic only: 2020-01-01 through 2026-07-31;
-- untouched prospective holdout: 2026-08-01 through 2028-07-31.
+Partition construction must obey all of the following:
 
-The diagnostic period may expose implementation and regime defects, but it cannot
-promote or rescue a hypothesis.
+- no boundary may predate 2016 or the manifest's later first complete
+  point-in-time observation;
+- only real observed membership and market evidence may contribute a session;
+- development precedes validation, and validation precedes the one-use holdout;
+- embargoes are at least as long as the longest outcome and catalyst quiet period;
+- the minimum formation counts in the promotion gate remain mandatory;
+- any interval already inspected during earlier static-universe or parameter
+  research is diagnostic and cannot be relabeled as untouched holdout.
+
+The trial registry, not this document, owns the exact dates for an experiment.
+If the available 2016-onward evidence cannot satisfy the minimum chronological
+counts without reusing inspected outcomes, the experiment remains research-only
+until enough prospective evidence accumulates.
 
 ### A1. Frozen benchmark
 

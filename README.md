@@ -13,6 +13,40 @@
 - Backtests produce portfolio-level results, not isolated ticker wins.
 - Live execution stays disabled until backtests, paper trading, and risk controls are validated.
 
+## Operating Boundaries
+
+TradingFlow currently operates within these hard boundaries:
+
+- **Product:** deterministic non-ML research, backtesting, paper trading, audit,
+  and reviewed operator workflows. Live routing is disabled pending promotion.
+- **Market:** US-listed equities using the New York exchange calendar. Market
+  calculations use New York time; persisted timestamps use UTC.
+- **Providers:** Alpaca SIP is the primary market/news/broker source. Finviz is a
+  current screener and news-enrichment source, not historical membership evidence.
+- **History:** research uses real provider-supported observations beginning no
+  earlier than 2016. Exact observed coverage is recorded per dataset.
+- **New listings:** 2016 is a data boundary, not an issuer-age filter. A later-listed
+  company becomes eligible after its real point-in-time membership date and its own
+  strategy-specific warm-up. Pre-listing history is never synthesized.
+- **Universes:** promotable research requires point-in-time membership and delisting
+  evidence. Current wishlists or Finviz exports may drive today's operation but may
+  not be projected backward.
+- **Research:** only cross-sectional swing momentum and catalyst/participation
+  intraday research are active alpha tracks. ML belongs to the separate Market
+  Predictor project.
+- **Timing:** completed-bar features, later-bar confirmation, next-bar execution,
+  pre-fill stops, point-in-time news, and one-use chronological holdouts are
+  mandatory.
+- **Execution:** costs, quote side, spread, slippage, participation, partial/non-fill,
+  and impact assumptions must be explicit. Extended-hours observation does not
+  authorize extended-hours execution.
+- **Promotion:** missing universe, timing, execution, statistical, or paper evidence
+  fails closed. The current integrated research decision is `RETAIN_RESEARCH`.
+
+See [TradingFlow Operating Boundaries](docs/operating-boundaries.md) for the binding
+contract and [Non-ML Strategy Research Program](docs/research/non-ml-strategy-research-program.md)
+for track-specific evidence and promotion rules.
+
 ## Stack
 
 - C#/.NET 10 for the engine, ASP.NET Core UI, and worker/CLI.
@@ -137,3 +171,7 @@ No live broker routing should be enabled until:
 - paper trading behaves correctly
 - position sizing and risk limits are verified
 - broker writes are idempotent and audited
+
+Research success is not inferred from a profitable run. A strategy remains
+research-only until its preregistered development, validation, untouched holdout,
+cost stress, concentration, execution-calibration, and paper-shadow gates pass.

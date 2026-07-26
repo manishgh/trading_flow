@@ -5,6 +5,11 @@ senior review: what is well-designed, what is over-engineered, and a *safe*
 modularization plan for the large files — done as verified increments so no function
 is ever silently lost.
 
+System scope, provider constraints, the 2016 evidence floor, later-listing
+eligibility, point-in-time timing, execution realism, and promotion limits are
+binding in [TradingFlow Operating Boundaries](operating-boundaries.md). This review
+may recommend structural changes but must not weaken those boundaries.
+
 ---
 
 ## Part 1 — Design and Purpose
@@ -51,6 +56,18 @@ snapshots. This separation is a genuine strength — keep it.
   regulatory costs.
 - **Promotion gate** (`PromotionEvaluator`): min trades, OOS, benchmark, walk-forward,
   ticker-concentration.
+- **Universe evidence gate** (`UniversePromotionEligibilityValidator`): promotion fails
+  closed unless the run carries a point-in-time membership ledger and provider snapshot
+  evidence. A current Finviz export remains diagnostic-only.
+- **Shared order planning** (`SharedOrderRiskPlanner` + `StrategyOrderPlanner`): backtest,
+  paper, and notification automation use the same side-neutral sizing, structural-stop,
+  fee, account-risk, and position-notional rules.
+- **Portfolio admission audit**: full-retention results distinguish signal rejection from
+  universe/regime rejection, slot contention, ticker overlap, liquidity, and order-plan
+  rejection. A no-trade result is therefore attributable instead of opaque.
+- **Unified portfolio simulation**: multiple strategies compete chronologically for one
+  capital pool and one set of position slots. Candidate ranking is explicit in strategy
+  config; ties are deterministic.
 These are already small, single-purpose, tested classes — the target shape for the rest.
 
 ---
@@ -154,3 +171,37 @@ make any future merge provably behavior-preserving — so the option stays open,
 - For the long/short unification (B), write a characterization test that captures current
   trades for a fixed fixture *before* touching the code, and require byte-identical output.
 - Keep public method signatures stable; add optional params rather than reshaping call sites.
+### Repository-relative run paths
+
+Market-data and result roots are repository-relative. Repository discovery uses
+`TradingFlow.sln` as the marker; a nested research directory named `configs` is not a
+repository root. This prevents research bundles from silently creating duplicate candle
+caches or writing results to an unintended nested tree.
+
+### Resolved stop provenance in portfolio admission
+
+Candidate generation resolves the strategy stop before portfolio admission.
+The candidate persists whether that resolved price came from an ATR rule or a
+structural rule. Unified portfolio admission must pass both the resolved price
+and its stop kind to `SharedOrderRiskPlanner`; reconstructing every price as a
+structural stop corrupts audit codes even when the numeric decision is unchanged.
+
+The planner never narrows either stop to force admission. It preserves the
+resolved invalidation price and sizes quantity from the account-equity risk
+budget, subject to the separate maximum position-notional cap.
+
+### Daily swing setup versus intraday execution
+
+A daily structural or multi-ATR stop is commonly wider than 1% of entry price.
+That is valid when quantity is reduced so the planned dollar loss remains within
+the account-equity risk budget. Position notional is constrained independently.
+
+The implemented shared execution contract:
+
+1. form the setup from a completed daily bar,
+2. confirm on a completed 1h or 15m bar,
+3. fill no earlier than the next executable bar,
+4. derive the initial stop only from data known before that fill,
+5. retain daily technical management while continuously honoring the hard
+   broker stop, and
+6. use the same planner and state machine in backtest, paper, and live modes.

@@ -46,6 +46,42 @@ OHLCV candles
 
 The source and sink change by mode. The brain does not.
 
+## Operating Boundary Enforcement
+
+The concise binding boundary is
+[TradingFlow Operating Boundaries](operating-boundaries.md). Architecture enforces
+it at four separate planes:
+
+```mermaid
+flowchart LR
+    E["Immutable Evidence Plane"] --> U["Point-in-Time Universe Plane"]
+    U --> Q["Research And Promotion Plane"]
+    Q --> D["Shared Decision Brain"]
+    D --> X["Mode-Specific Execution Sink"]
+
+    E1["Real bars, quotes, news, calendar, actions"] --> E
+    U1["Membership, issuer identity, listing dates"] --> U
+    Q1["Registry, partitions, inference, holdout"] --> Q
+    X --> B["Backtest"]
+    X --> P["Paper"]
+    X --> L["Live disabled"]
+```
+
+- `TradingFlow.Data/Evidence` stores and catalogs immutable content-addressed
+  evidence and exact observed coverage.
+- `TradingFlow.Engine/Universe` ranks and deduplicates point-in-time candidates and
+  fails promotion closed when membership provenance is incomplete.
+- `TradingFlow.Research` computes the frozen swing and intraday studies without
+  depending on UI or broker adapters.
+- `TradingFlow.Research.Orchestration` and `TradingFlow.Research.Workflows` own trial
+  registration, partition access, immutable output publication, and promotion
+  decisions.
+
+The earliest research observation is provider-supported 2016 evidence, not a minimum
+company age. A later listing enters on its real effective membership date and remains
+cold only until its own required completed-bar history exists. No layer may synthesize
+pre-listing observations.
+
 ## Strategy Catalog Separation
 
 Strategies are separated by evidence level:
@@ -70,6 +106,37 @@ The July 2026 intraday execution spec is implemented as research-only. The share
 - failed-breakout circuit breaker
 
 Partial exits are not supported yet because `BacktestTrade` currently represents one entry and one full-position exit. Supporting partial exits requires trade execution legs and per-leg realized P/L.
+
+## Research Control Plane
+
+Promotable research is restricted to two non-ML families:
+
+```text
+Swing:
+  point-in-time universe
+  -> frozen 12-1 momentum rank
+  -> fixed portfolio slots
+  -> isolated trend, VCP, or classified-catalyst additions
+  -> shared portfolio simulation
+
+Intraday:
+  point-in-time classified catalyst
+  -> executable post-event response study
+  -> cumulative same-minute participation cohorts
+  -> opening/pullback/reclaim morphology
+  -> one preregistered entry rule
+  -> shared execution and paper shadow
+```
+
+Every run is registered before outcomes are read. Exact observed coverage,
+development, validation, embargo, and one-use holdout boundaries are immutable run
+evidence. Dates cannot precede 2016 or the dataset's later complete point-in-time
+coverage. A consumed holdout cannot be reopened under another label.
+
+Research output is one canonical immutable package: report, formation/event ledger,
+audit, statistical evidence, exclusions, effective sample size, cost stresses, and
+promotion decision. Missing evidence produces `RETAIN_RESEARCH` or `REJECT`, never an
+implicit pass.
 
 ## Web UI
 
@@ -110,11 +177,20 @@ Each strategy is tested independently from the configured starting capital. With
 
 ```text
 portfolio.max_concurrent_positions
-portfolio.max_position_value_pct
-portfolio.risk_per_trade_pct
+portfolio.max_position_notional_pct
+portfolio.account_risk_budget_pct
 ```
 
-With `max_concurrent_positions: 5` and `max_position_value_pct: 20.0`, each accepted trade gets at most one fifth of current equity before stop-distance risk sizing is applied.
+With `max_concurrent_positions: 5` and `max_position_notional_pct: 20.0`,
+each accepted trade gets at most one fifth of current equity. The shared order
+planner preserves the strategy's structural or ATR stop and reduces quantity
+until estimated stop loss plus costs fit `account_risk_budget_pct` of current
+account equity. A separate notional cap limits capital concentration. The
+planner never tightens a strategy stop merely to make sizing pass.
+
+The result contains per-strategy research portfolios and a unified portfolio.
+The unified portfolio orders candidates by timestamp, explicit strategy ranking
+score, and ticker, then makes all strategies share the same capital and slots.
 
 ## Data Isolation
 
