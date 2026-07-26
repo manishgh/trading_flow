@@ -14,14 +14,6 @@ namespace TradingFlow.Backtesting;
 // Split into a partial file for readability; behavior is identical to the inline version.
 public sealed partial class BacktestRunner
 {
-    private static decimal? ComputeCloseLocationValue(OhlcvBar bar)
-    {
-        var range = bar.High - bar.Low;
-        return range <= 0m
-            ? null
-            : (bar.Close - bar.Low) / range;
-    }
-
     private static bool AllowsLong(StrategyDefinition strategy)
     {
         return strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase) ||
@@ -61,7 +53,8 @@ public sealed partial class BacktestRunner
         IReadOnlyList<IndicatorSnapshot> snapshots,
         TradingFlow.Engine.Execution.ExecutionAuditor auditor,
         CancellationToken cancellationToken,
-        int? plannedEntryIndex = null)
+        int? plannedEntryIndex = null,
+        int? plannedStopContextIndex = null)
     {
         var signalCloseTimestamp = signal.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
         var entryIndex = plannedEntryIndex ?? FindFirstBarIndexAtOrAfter(bars, signalCloseTimestamp);
@@ -70,35 +63,61 @@ public sealed partial class BacktestRunner
             return null;
         }
 
+        var stopContextIndex = plannedStopContextIndex ?? entryIndex - 1;
+        if (stopContextIndex < 0 ||
+            stopContextIndex >= entryIndex ||
+            stopContextIndex >= snapshots.Count)
+        {
+            return null;
+        }
+
         var entryBar = bars[entryIndex];
-        var entrySnapshot = snapshots[entryIndex];
-        var relativeVolume = entrySnapshot.RelativeVolume ?? 1.0m;
+        var stopContextSnapshot = snapshots[stopContextIndex];
+        var relativeVolume = stopContextSnapshot.RelativeVolume ?? 1.0m;
         if (direction.Equals("short", StringComparison.OrdinalIgnoreCase))
         {
-            return CreateShortCandidate(run, strategy, signal, entryIndex, bars, snapshots, auditor, relativeVolume, cancellationToken);
+            return CreateShortCandidate(
+                run,
+                strategy,
+                signal,
+                entryIndex,
+                stopContextIndex,
+                bars,
+                snapshots,
+                auditor,
+                relativeVolume,
+                cancellationToken);
         }
 
         // Approximate trade amount based on portfolio config
         var approximateTradeAmount = run.Portfolio.StartingCapital / run.Portfolio.MaxConcurrentPositions;
         var entryPrice = TradingFlow.Engine.Risk.DynamicSlippageModel.ApplyLongSlippage(entryBar.Open, relativeVolume, strategy.Execution.SlippageBps, approximateTradeAmount);
 
-        var risk = ResolveInitialRisk(
-            strategy,
-            signal,
-            "long",
-            entryPrice,
-            run.Portfolio.RiskPerTradePct,
-            entryIndex,
-            bars,
-            snapshots);
-        if (risk is null)
+        var stopResult = new StrategyInitialStopResolver().Resolve(
+            new StrategyInitialStopRequest(
+                strategy,
+                signal,
+                PlannedOrderSide.Long,
+                entryPrice,
+                stopContextIndex,
+                bars,
+                snapshots));
+        if (!stopResult.IsResolved ||
+            stopResult.StopPrice is not { } resolvedStopPrice ||
+            stopResult.StopDistance is not { } resolvedStopDistance)
         {
             return null;
         }
 
-        var (initialStopLossPrice, stopDistance) = risk.Value;
+        var initialStopLossPrice = resolvedStopPrice;
+        var stopDistance = resolvedStopDistance;
         var currentStopLossPrice = initialStopLossPrice;
-        var takeProfitPrice = ResolveTakeProfitPrice(strategy, "long", entryPrice, stopDistance, snapshots[entryIndex]);
+        var takeProfitPrice = ResolveTakeProfitPrice(
+            strategy,
+            "long",
+            entryPrice,
+            stopDistance,
+            stopContextSnapshot);
         if (takeProfitPrice <= entryPrice)
         {
             return null;
@@ -111,21 +130,74 @@ public sealed partial class BacktestRunner
 
         var technicalEngine = new TradingFlow.Engine.Execution.TechnicalExecutionEngine();
 
-        // Daily bars and research swing bars do not preserve stop/target sequence inside
-        // the entry bar. Strategies can disable same-bar stop/target handling to
-        // avoid manufacturing fills from unknown intrabar order.
-        var exitStartIndex = IsDailyOrHigher(strategy.Execution.Timeframe) || !strategy.ExitRules.AllowSameBarStopTarget
-            ? entryIndex + 1
-            : entryIndex;
+        var requiresEntryBarSequenceResolution =
+            IsDailyOrHigher(strategy.Execution.Timeframe) ||
+            !strategy.ExitRules.AllowSameBarStopTarget;
+        var exitStartIndex = entryIndex;
         if (exitStartIndex >= bars.Count)
         {
             return null;
         }
 
+        var eligibleBarsHeld = 0;
         for (var i = exitStartIndex; i < bars.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bar = bars[i];
+            if (!_sessionClock.ValidateExecutionWindow(
+                    bar.Timestamp,
+                    strategy.Execution.Timeframe,
+                    strategy.Session))
+            {
+                continue;
+            }
+
+            var barsHeld = eligibleBarsHeld;
+            eligibleBarsHeld++;
+            if (i == entryIndex && requiresEntryBarSequenceResolution)
+            {
+                var entryBarExit = EntryBarExitResolver.Resolve(
+                    "long",
+                    bar.High,
+                    bar.Low,
+                    initialStopLossPrice,
+                    takeProfitPrice);
+                if (entryBarExit.Kind != EntryBarExitKind.None && entryBarExit.ExitPrice is { } rawExitPrice)
+                {
+                    var entryBarExitReason = entryBarExit.Kind == EntryBarExitKind.StopLoss
+                        ? entryBarExit.WasAmbiguous ? "stop_loss_ambiguous_entry_bar" : "stop_loss"
+                        : "take_profit";
+                    var resolvedExitPrice = ApplyLongExitSlippage(
+                        rawExitPrice,
+                        snapshots[i].RelativeVolume ?? relativeVolume,
+                        strategy,
+                        approximateTradeAmount);
+                    auditor.LogEvent(
+                        signal.Ticker,
+                        strategy.StrategyName,
+                        bar.Timestamp,
+                        TradingFlow.Engine.Execution.ExecutionState.PositionClosed,
+                        $"Exit via {entryBarExitReason} at {resolvedExitPrice}");
+                    return (BuildCandidate(
+                        strategy,
+                        signal,
+                        "long",
+                        entryTimestamp,
+                        entryPrice,
+                        initialStopLossPrice,
+                        takeProfitPrice,
+                        bar.Timestamp,
+                        resolvedExitPrice,
+                        entryBarExitReason,
+                        stopDistance,
+                        bars[stopContextIndex].Volume), i);
+                }
+
+                // Technical indicators are only known at this bar's close and therefore
+                // cannot trigger another fill inside the same daily/research bar.
+                continue;
+            }
+
             var exitPriceLogTrend = TradingFlow.Engine.Execution.TechnicalExecutionEngine.ComputeLogTrend(
                 bars,
                 i,
@@ -144,10 +216,9 @@ public sealed partial class BacktestRunner
                 var eodRelativeVolume = snapshots[i].RelativeVolume ?? relativeVolume;
                 var eodExitPrice = ApplyLongExitSlippage(bar.Open, eodRelativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via end_of_day_exit at {eodExitPrice}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, eodExitPrice, "end_of_day_exit", stopDistance, entryBar.Volume), i);
+                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, eodExitPrice, "end_of_day_exit", stopDistance, bars[stopContextIndex].Volume), i);
             }
 
-            var barsHeld = i - entryIndex;
             currentStopLossPrice = technicalEngine.CalculateEffectiveStopLoss(
                 strategy,
                 snapshots[i],
@@ -161,33 +232,47 @@ public sealed partial class BacktestRunner
                 var stopExitReason = currentStopLossPrice > initialStopLossPrice ? "trailing_stop" : "stop_loss";
                 var slippedStopPrice = ApplyLongExitSlippage(currentStopLossPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via {stopExitReason} at {slippedStopPrice}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedStopPrice, stopExitReason, stopDistance, entryBar.Volume), i);
+                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedStopPrice, stopExitReason, stopDistance, bars[stopContextIndex].Volume), i);
             }
 
             if (ShouldExitFailedBreakout(strategy, "long", entryPrice, stopDistance, bar.Close, barsHeld))
             {
                 var failedExitPrice = ApplyLongExitSlippage(bar.Close, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via failed_breakout_circuit_breaker at {failedExitPrice}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, failedExitPrice, "failed_breakout_circuit_breaker", stopDistance, entryBar.Volume), i);
+                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, failedExitPrice, "failed_breakout_circuit_breaker", stopDistance, bars[stopContextIndex].Volume), i);
             }
 
             if (bar.High >= takeProfitPrice)
             {
                 var slippedTakeProfit = ApplyLongExitSlippage(takeProfitPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via take_profit at {slippedTakeProfit}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedTakeProfit, "take_profit", stopDistance, entryBar.Volume), i);
+                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedTakeProfit, "take_profit", stopDistance, bars[stopContextIndex].Volume), i);
             }
 
             if (technicalEngine.ShouldExitLongOnConfirmedVwapFailure(strategy, snapshots, i, entryIndex, entryPrice, stopDistance, Math.Max(highestHighSinceEntry, bar.High), barsHeld))
             {
-                var exitBar = i + 1 < bars.Count ? bars[i + 1] : bar;
-                var exitSnapshot = i + 1 < snapshots.Count ? snapshots[i + 1] : snapshots[i];
-                var exitBasis = i + 1 < bars.Count ? exitBar.Open : exitBar.Close;
+                var nextExitIndex = FindNextValidExecutionBarIndex(
+                    bars,
+                    i + 1,
+                    strategy);
+                var hasNextExitBar = nextExitIndex < bars.Count;
+                if (!hasNextExitBar)
+                {
+                    continue;
+                }
+
+                var exitBar = hasNextExitBar ? bars[nextExitIndex] : bar;
+                var exitSnapshot = hasNextExitBar ? snapshots[nextExitIndex] : snapshots[i];
+                var exitBasis = hasNextExitBar ? exitBar.Open : exitBar.Close;
                 var confirmedExitPrice = ApplyLongExitSlippage(exitBasis, exitSnapshot.RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, exitBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via confirmed_vwap_failure at {confirmedExitPrice}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, exitBar.Timestamp, confirmedExitPrice, "confirmed_vwap_failure", stopDistance, entryBar.Volume), Math.Min(i + 1, bars.Count - 1));
+                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, exitBar.Timestamp, confirmedExitPrice, "confirmed_vwap_failure", stopDistance, bars[stopContextIndex].Volume), hasNextExitBar ? nextExitIndex : i);
             }
 
+            var previousEligibleIndex = FindPreviousValidExecutionBarIndex(
+                bars,
+                i - 1,
+                strategy);
             var (exitPrice, exitReason) = technicalEngine.EvaluateBarForExit(
                 strategy,
                 bar,
@@ -202,31 +287,49 @@ public sealed partial class BacktestRunner
                 ref highestHighSinceEntry,
                 exitPriceLogTrend?.Slope,
                 exitVolumeLogTrend?.Slope,
-                i > 0 ? snapshots[i - 1] : null);
+                previousEligibleIndex >= 0 ? snapshots[previousEligibleIndex] : null);
 
             if (exitPrice.HasValue && exitReason is not null)
             {
                 // In backtest, for technical exit, we exit on next bar open
-                if (exitReason.StartsWith("technical_exit") && i + 1 < bars.Count)
+                if (exitReason.StartsWith("technical_exit"))
                 {
-                    var nextBar = bars[i + 1];
-                    var nextRelativeVolume = snapshots[i + 1].RelativeVolume ?? relativeVolume;
+                    var nextExitIndex = FindNextValidExecutionBarIndex(
+                        bars,
+                        i + 1,
+                        strategy);
+                    if (nextExitIndex >= bars.Count)
+                    {
+                        continue;
+                    }
+
+                    var nextBar = bars[nextExitIndex];
+                    var nextRelativeVolume = snapshots[nextExitIndex].RelativeVolume ?? relativeVolume;
                     var nextExitPrice = ApplyLongExitSlippage(nextBar.Open, nextRelativeVolume, strategy, approximateTradeAmount);
                     auditor.LogEvent(signal.Ticker, strategy.StrategyName, nextBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via {exitReason} at {nextExitPrice}");
-                    return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, nextBar.Timestamp, nextExitPrice, exitReason, stopDistance, entryBar.Volume), i + 1);
+                    return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, nextBar.Timestamp, nextExitPrice, exitReason, stopDistance, bars[stopContextIndex].Volume), nextExitIndex);
                 }
 
                 var slippedExitPrice = ApplyLongExitSlippage(exitPrice.Value, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via {exitReason} at {slippedExitPrice}");
-                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedExitPrice, exitReason, stopDistance, entryBar.Volume), i);
+                return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedExitPrice, exitReason, stopDistance, bars[stopContextIndex].Volume), i);
             }
         }
 
-        var finalBar = bars[^1];
-        var finalRelativeVolume = snapshots[^1].RelativeVolume ?? relativeVolume;
+        var finalIndex = FindPreviousValidExecutionBarIndex(
+            bars,
+            bars.Count - 1,
+            strategy);
+        if (finalIndex < entryIndex)
+        {
+            return null;
+        }
+
+        var finalBar = bars[finalIndex];
+        var finalRelativeVolume = snapshots[finalIndex].RelativeVolume ?? relativeVolume;
         var finalExitPrice = ApplyLongExitSlippage(finalBar.Close, finalRelativeVolume, strategy, approximateTradeAmount);
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, finalBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via end_of_data at {finalExitPrice}");
-        return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, finalBar.Timestamp, finalExitPrice, "end_of_data", stopDistance, entryBar.Volume), bars.Count - 1);
+        return (BuildCandidate(strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, finalBar.Timestamp, finalExitPrice, "end_of_data", stopDistance, bars[stopContextIndex].Volume), finalIndex);
     }
 
     private (BacktestCandidateTrade Candidate, int ExitIndex)? CreateShortCandidate(
@@ -234,6 +337,7 @@ public sealed partial class BacktestRunner
         StrategyDefinition strategy,
         TradeSignal signal,
         int entryIndex,
+        int stopContextIndex,
         IReadOnlyList<OhlcvBar> bars,
         IReadOnlyList<IndicatorSnapshot> snapshots,
         TradingFlow.Engine.Execution.ExecutionAuditor auditor,
@@ -243,23 +347,31 @@ public sealed partial class BacktestRunner
         var entryBar = bars[entryIndex];
         var approximateTradeAmount = run.Portfolio.StartingCapital / run.Portfolio.MaxConcurrentPositions;
         var entryPrice = ApplyShortEntrySlippage(entryBar.Open, relativeVolume, strategy, approximateTradeAmount);
-        var risk = ResolveInitialRisk(
-            strategy,
-            signal,
-            "short",
-            entryPrice,
-            run.Portfolio.RiskPerTradePct,
-            entryIndex,
-            bars,
-            snapshots);
-        if (risk is null)
+        var stopResult = new StrategyInitialStopResolver().Resolve(
+            new StrategyInitialStopRequest(
+                strategy,
+                signal,
+                PlannedOrderSide.Short,
+                entryPrice,
+                stopContextIndex,
+                bars,
+                snapshots));
+        if (!stopResult.IsResolved ||
+            stopResult.StopPrice is not { } resolvedStopPrice ||
+            stopResult.StopDistance is not { } resolvedStopDistance)
         {
             return null;
         }
 
-        var (initialStopLossPrice, stopDistance) = risk.Value;
+        var initialStopLossPrice = resolvedStopPrice;
+        var stopDistance = resolvedStopDistance;
         var currentStopLossPrice = initialStopLossPrice;
-        var takeProfitPrice = ResolveTakeProfitPrice(strategy, "short", entryPrice, stopDistance, snapshots[entryIndex]);
+        var takeProfitPrice = ResolveTakeProfitPrice(
+            strategy,
+            "short",
+            entryPrice,
+            stopDistance,
+            snapshots[stopContextIndex]);
         if (takeProfitPrice <= 0 || takeProfitPrice >= entryPrice)
         {
             return null;
@@ -270,61 +382,127 @@ public sealed partial class BacktestRunner
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"SHORT signal generated at {signal.CurrentPrice}");
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, entryTimestamp, TradingFlow.Engine.Execution.ExecutionState.OrderFilled, $"Simulated short fill at {entryPrice} (Stop: {initialStopLossPrice}, TP: {takeProfitPrice})");
 
-        // Use the same sequence-safety rule as long-side candidate creation.
-        var exitStartIndex = IsDailyOrHigher(strategy.Execution.Timeframe) || !strategy.ExitRules.AllowSameBarStopTarget
-            ? entryIndex + 1
-            : entryIndex;
+        var requiresEntryBarSequenceResolution =
+            IsDailyOrHigher(strategy.Execution.Timeframe) ||
+            !strategy.ExitRules.AllowSameBarStopTarget;
+        var exitStartIndex = entryIndex;
         if (exitStartIndex >= bars.Count)
         {
             return null;
         }
 
+        var eligibleBarsHeld = 0;
         for (var i = exitStartIndex; i < bars.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bar = bars[i];
+            if (!_sessionClock.ValidateExecutionWindow(
+                    bar.Timestamp,
+                    strategy.Execution.Timeframe,
+                    strategy.Session))
+            {
+                continue;
+            }
+
+            var barsHeld = eligibleBarsHeld;
+            eligibleBarsHeld++;
+            if (i == entryIndex && requiresEntryBarSequenceResolution)
+            {
+                var entryBarExit = EntryBarExitResolver.Resolve(
+                    "short",
+                    bar.High,
+                    bar.Low,
+                    initialStopLossPrice,
+                    takeProfitPrice);
+                if (entryBarExit.Kind != EntryBarExitKind.None && entryBarExit.ExitPrice is { } rawExitPrice)
+                {
+                    var entryBarExitReason = entryBarExit.Kind == EntryBarExitKind.StopLoss
+                        ? entryBarExit.WasAmbiguous ? "stop_loss_ambiguous_entry_bar" : "stop_loss"
+                        : "take_profit";
+                    var resolvedExitPrice = ApplyShortExitSlippage(
+                        rawExitPrice,
+                        snapshots[i].RelativeVolume ?? relativeVolume,
+                        strategy,
+                        approximateTradeAmount);
+                    auditor.LogEvent(
+                        signal.Ticker,
+                        strategy.StrategyName,
+                        bar.Timestamp,
+                        TradingFlow.Engine.Execution.ExecutionState.PositionClosed,
+                        $"Short exit via {entryBarExitReason} at {resolvedExitPrice}");
+                    return (BuildCandidate(
+                        strategy,
+                        signal,
+                        "short",
+                        entryTimestamp,
+                        entryPrice,
+                        initialStopLossPrice,
+                        takeProfitPrice,
+                        bar.Timestamp,
+                        resolvedExitPrice,
+                        entryBarExitReason,
+                        stopDistance,
+                        bars[stopContextIndex].Volume), i);
+                }
+
+                continue;
+            }
+
             if (IsIntradayFlatStrategy(strategy) &&
                 _sessionClock.ShouldFlattenBeforeSessionClose(bar.Timestamp, strategy.Execution.Timeframe, strategy.Session))
             {
                 var eodRelativeVolume = snapshots[i].RelativeVolume ?? relativeVolume;
                 var eodExitPrice = ApplyShortExitSlippage(bar.Open, eodRelativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via end_of_day_exit at {eodExitPrice}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, eodExitPrice, "end_of_day_exit", stopDistance, entryBar.Volume), i);
+                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, eodExitPrice, "end_of_day_exit", stopDistance, bars[stopContextIndex].Volume), i);
             }
 
-            var barsHeld = i - entryIndex;
             if (bar.High >= currentStopLossPrice)
             {
                 var stopExitReason = currentStopLossPrice < initialStopLossPrice ? "trailing_stop" : "stop_loss";
                 var slippedStopPrice = ApplyShortExitSlippage(currentStopLossPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via {stopExitReason} at {slippedStopPrice}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedStopPrice, stopExitReason, stopDistance, entryBar.Volume), i);
+                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedStopPrice, stopExitReason, stopDistance, bars[stopContextIndex].Volume), i);
             }
 
             if (ShouldExitFailedBreakout(strategy, "short", entryPrice, stopDistance, bar.Close, barsHeld))
             {
                 var failedExitPrice = ApplyShortExitSlippage(bar.Close, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via failed_breakout_circuit_breaker at {failedExitPrice}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, failedExitPrice, "failed_breakout_circuit_breaker", stopDistance, entryBar.Volume), i);
+                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, failedExitPrice, "failed_breakout_circuit_breaker", stopDistance, bars[stopContextIndex].Volume), i);
             }
 
             if (bar.Low <= takeProfitPrice)
             {
                 var slippedTakeProfit = ApplyShortExitSlippage(takeProfitPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via take_profit at {slippedTakeProfit}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedTakeProfit, "take_profit", stopDistance, entryBar.Volume), i);
+                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedTakeProfit, "take_profit", stopDistance, bars[stopContextIndex].Volume), i);
             }
 
             if (ShouldExitShortOnConfirmedVwapReclaim(strategy, snapshots, i, entryIndex, entryPrice, stopDistance, Math.Min(lowestLowSinceEntry, bar.Low), barsHeld))
             {
-                var exitBar = i + 1 < bars.Count ? bars[i + 1] : bar;
-                var exitSnapshot = i + 1 < snapshots.Count ? snapshots[i + 1] : snapshots[i];
-                var exitBasis = i + 1 < bars.Count ? exitBar.Open : exitBar.Close;
+                var nextExitIndex = FindNextValidExecutionBarIndex(
+                    bars,
+                    i + 1,
+                    strategy);
+                var hasNextExitBar = nextExitIndex < bars.Count;
+                if (!hasNextExitBar)
+                {
+                    continue;
+                }
+
+                var exitBar = hasNextExitBar ? bars[nextExitIndex] : bar;
+                var exitSnapshot = hasNextExitBar ? snapshots[nextExitIndex] : snapshots[i];
+                var exitBasis = hasNextExitBar ? exitBar.Open : exitBar.Close;
                 var confirmedExitPrice = ApplyShortExitSlippage(exitBasis, exitSnapshot.RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, exitBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via confirmed_vwap_reclaim at {confirmedExitPrice}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, exitBar.Timestamp, confirmedExitPrice, "confirmed_vwap_reclaim", stopDistance, entryBar.Volume), Math.Min(i + 1, bars.Count - 1));
+                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, exitBar.Timestamp, confirmedExitPrice, "confirmed_vwap_reclaim", stopDistance, bars[stopContextIndex].Volume), hasNextExitBar ? nextExitIndex : i);
             }
 
+            var previousEligibleIndex = FindPreviousValidExecutionBarIndex(
+                bars,
+                i - 1,
+                strategy);
             var (exitPrice, exitReason) = EvaluateShortBarForExit(
                 strategy,
                 bar,
@@ -337,20 +515,89 @@ public sealed partial class BacktestRunner
                 barsHeld,
                 ref currentStopLossPrice,
                 ref lowestLowSinceEntry,
-                i > 0 ? snapshots[i - 1] : null);
+                previousEligibleIndex >= 0 ? snapshots[previousEligibleIndex] : null);
 
             if (exitPrice.HasValue && exitReason is not null)
             {
-                var slippedExitPrice = ApplyShortExitSlippage(exitPrice.Value, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via {exitReason} at {slippedExitPrice}");
-                return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, slippedExitPrice, exitReason, stopDistance, entryBar.Volume), i);
+                if (exitReason.StartsWith("technical_exit", StringComparison.Ordinal))
+                {
+                    var nextExitIndex = FindNextValidExecutionBarIndex(
+                        bars,
+                        i + 1,
+                        strategy);
+                    if (nextExitIndex >= bars.Count)
+                    {
+                        continue;
+                    }
+
+                    var nextBar = bars[nextExitIndex];
+                    var nextRelativeVolume = snapshots[nextExitIndex].RelativeVolume ?? relativeVolume;
+                    var nextExitPrice = ApplyShortExitSlippage(
+                        nextBar.Open,
+                        nextRelativeVolume,
+                        strategy,
+                        approximateTradeAmount);
+                    auditor.LogEvent(
+                        signal.Ticker,
+                        strategy.StrategyName,
+                        nextBar.Timestamp,
+                        TradingFlow.Engine.Execution.ExecutionState.PositionClosed,
+                        $"Short exit via {exitReason} at {nextExitPrice}");
+                    return (BuildCandidate(
+                        strategy,
+                        signal,
+                        "short",
+                        entryTimestamp,
+                        entryPrice,
+                        initialStopLossPrice,
+                        takeProfitPrice,
+                        nextBar.Timestamp,
+                        nextExitPrice,
+                        exitReason,
+                        stopDistance,
+                        bars[stopContextIndex].Volume), nextExitIndex);
+                }
+
+                var slippedExitPrice = ApplyShortExitSlippage(
+                    exitPrice.Value,
+                    snapshots[i].RelativeVolume ?? relativeVolume,
+                    strategy,
+                    approximateTradeAmount);
+                auditor.LogEvent(
+                    signal.Ticker,
+                    strategy.StrategyName,
+                    bar.Timestamp,
+                    TradingFlow.Engine.Execution.ExecutionState.PositionClosed,
+                    $"Short exit via {exitReason} at {slippedExitPrice}");
+                return (BuildCandidate(
+                    strategy,
+                    signal,
+                    "short",
+                    entryTimestamp,
+                    entryPrice,
+                    initialStopLossPrice,
+                    takeProfitPrice,
+                    bar.Timestamp,
+                    slippedExitPrice,
+                    exitReason,
+                    stopDistance,
+                    bars[stopContextIndex].Volume), i);
             }
         }
 
-        var finalBar = bars[^1];
-        var finalRelativeVolume = snapshots[^1].RelativeVolume ?? relativeVolume;
+        var finalIndex = FindPreviousValidExecutionBarIndex(
+            bars,
+            bars.Count - 1,
+            strategy);
+        if (finalIndex < entryIndex)
+        {
+            return null;
+        }
+
+        var finalBar = bars[finalIndex];
+        var finalRelativeVolume = snapshots[finalIndex].RelativeVolume ?? relativeVolume;
         var finalExitPrice = ApplyShortExitSlippage(finalBar.Close, finalRelativeVolume, strategy, approximateTradeAmount);
-        return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, finalBar.Timestamp, finalExitPrice, "end_of_data", stopDistance, entryBar.Volume), bars.Count - 1);
+        return (BuildCandidate(strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, finalBar.Timestamp, finalExitPrice, "end_of_data", stopDistance, bars[stopContextIndex].Volume), finalIndex);
     }
 
     private static (decimal? ExitPrice, string? ExitReason) EvaluateShortBarForExit(
@@ -411,6 +658,13 @@ public sealed partial class BacktestRunner
             {
                 return (bar.Close, "technical_exit_sma10_cross_above_sma20");
             }
+        }
+
+        if (strategy.ExitRules.MaxHoldBars is { } maxHoldBars &&
+            maxHoldBars > 0 &&
+            barsHeld >= maxHoldBars)
+        {
+            return (bar.Close, "max_hold_bars");
         }
 
         var maxExitTimestamp = entryTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours);
@@ -589,120 +843,28 @@ public sealed partial class BacktestRunner
             Decimal.Round(exitPrice, 4),
             exitReason,
             Decimal.Round(stopDistance, 4),
-            entryBarVolume);
+            entryBarVolume,
+            ResolvePortfolioSelectionScore(strategy, signal),
+            ResolveInitialStopKind(strategy));
     }
 
-    private static decimal ResolvePositionRiskStopDistance(
+    private static string ResolveInitialStopKind(StrategyDefinition strategy) =>
+        NormalizeRuleName(strategy.ExitRules.InitialStopMode) == "atr"
+            ? "atr"
+            : "structural";
+
+    private static decimal ResolvePortfolioSelectionScore(
         StrategyDefinition strategy,
-        decimal atr,
-        decimal entryPrice,
-        decimal maxLossPctOfPosition)
+        TradeSignal signal)
     {
-        var atrStopDistance = strategy.ExitRules.StopAtrMultiple * atr;
-        if (entryPrice <= 0m || maxLossPctOfPosition <= 0m)
+        return strategy.EntryRules.PortfolioRankMode.Trim().ToLowerInvariant() switch
         {
-            return atrStopDistance;
-        }
-
-        var positionRiskStopDistance = entryPrice * (maxLossPctOfPosition / 100m);
-        return Math.Min(atrStopDistance, positionRiskStopDistance);
-    }
-
-    private static (decimal StopLossPrice, decimal StopDistance)? ResolveInitialRisk(
-        StrategyDefinition strategy,
-        TradeSignal signal,
-        string direction,
-        decimal entryPrice,
-        decimal maxLossPctOfPosition,
-        int entryIndex,
-        IReadOnlyList<OhlcvBar> bars,
-        IReadOnlyList<IndicatorSnapshot> snapshots)
-    {
-        var mode = NormalizeRuleName(strategy.ExitRules.InitialStopMode);
-        var isShort = direction.Equals("short", StringComparison.OrdinalIgnoreCase);
-        decimal stopLossPrice;
-
-        switch (mode)
-        {
-            case "vwap_minus_atr" when !isShort:
-                if (snapshots[entryIndex].Vwap is not { } longVwap || snapshots[entryIndex].Atr is not { } longAtr || longAtr <= 0m)
-                {
-                    return null;
-                }
-
-                stopLossPrice = longVwap - (strategy.ExitRules.StopAtrMultiple * longAtr);
-                break;
-
-            case "vwap_plus_atr" when isShort:
-                if (snapshots[entryIndex].Vwap is not { } shortVwap || snapshots[entryIndex].Atr is not { } shortAtr || shortAtr <= 0m)
-                {
-                    return null;
-                }
-
-                stopLossPrice = shortVwap + (strategy.ExitRules.StopAtrMultiple * shortAtr);
-                break;
-
-            case "opening_range_opposite":
-                var openingRange = GetOpeningRange(strategy, bars, snapshots[entryIndex].Timestamp);
-                if (openingRange is null)
-                {
-                    return null;
-                }
-
-                stopLossPrice = isShort ? openingRange.Value.High : openingRange.Value.Low;
-                break;
-
-            case "extreme_shadow":
-                var sessionExtreme = GetSessionExtremeThroughIndex(strategy, bars, snapshots[entryIndex].Timestamp, entryIndex);
-                if (sessionExtreme is null)
-                {
-                    return null;
-                }
-
-                stopLossPrice = isShort
-                    ? sessionExtreme.Value.High + strategy.ExitRules.StopTickBuffer
-                    : sessionExtreme.Value.Low - strategy.ExitRules.StopTickBuffer;
-                break;
-
-            case "swing_low" when !isShort:
-                // Archetype C: stop just below the mean-reversion stretch low (the swing low the reclaim
-                // rejected from). Falls back to the lowest low over the stretch lookback if unset.
-                var swingLow = signal.ReversionStretchLow
-                    ?? LowestLowThroughIndex(bars, entryIndex, Math.Max(1, strategy.EntryRules.ReversionStretchLookbackBars));
-                if (swingLow is not { } swingLowPrice || swingLowPrice <= 0m)
-                {
-                    return null;
-                }
-
-                stopLossPrice = swingLowPrice - strategy.ExitRules.StopTickBuffer;
-                break;
-
-            case "atr":
-            default:
-                var distance = ResolvePositionRiskStopDistance(strategy, signal.CurrentAtr, entryPrice, maxLossPctOfPosition);
-                if (distance <= 0m)
-                {
-                    return null;
-                }
-
-                stopLossPrice = isShort ? entryPrice + distance : entryPrice - distance;
-                break;
-        }
-
-        var stopDistance = isShort ? stopLossPrice - entryPrice : entryPrice - stopLossPrice;
-        return stopDistance <= 0m ? null : (Decimal.Round(stopLossPrice, 4), stopDistance);
-    }
-
-    private static decimal? LowestLowThroughIndex(IReadOnlyList<OhlcvBar> bars, int entryIndex, int lookback)
-    {
-        var start = Math.Max(0, entryIndex - lookback);
-        decimal? low = null;
-        for (var i = start; i <= entryIndex && i < bars.Count; i++)
-        {
-            low = low is { } value ? Math.Min(value, bars[i].Low) : bars[i].Low;
-        }
-
-        return low;
+            "none" => 0m,
+            "rsi2_ascending" => signal.CurrentRsi2 is { } rsi2 ? 100m - rsi2 : 0m,
+            "breakout_volume_descending" => signal.BreakoutVolumeRatio ?? 0m,
+            _ => throw new NotSupportedException(
+                $"Unsupported portfolio_rank_mode: {strategy.EntryRules.PortfolioRankMode}.")
+        };
     }
 
     private static decimal ResolveTakeProfitPrice(
@@ -745,55 +907,31 @@ public sealed partial class BacktestRunner
         return unrealizedR < strategy.ExitRules.FailedBreakoutMinR;
     }
 
-    private static (decimal High, decimal Low)? GetOpeningRange(
-        StrategyDefinition strategy,
-        IReadOnlyList<OhlcvBar> bars,
-        DateTimeOffset timestamp)
-    {
-        if (strategy.EntryRules.OpeningRangeMinutes <= 0)
-        {
-            return null;
-        }
-
-        var exchangeTime = ToExchangeTime(timestamp, strategy.Session.ExchangeTimezone);
-        var sessionOpen = exchangeTime.Date.Add(new TimeSpan(9, 30, 0));
-        var openingRangeEnd = sessionOpen.AddMinutes(strategy.EntryRules.OpeningRangeMinutes);
-        var rangeBars = bars
-            .Where(bar =>
-            {
-                var barExchangeTime = ToExchangeTime(bar.Timestamp, strategy.Session.ExchangeTimezone);
-                return barExchangeTime.Date == exchangeTime.Date &&
-                    barExchangeTime >= sessionOpen &&
-                    barExchangeTime < openingRangeEnd;
-            })
-            .ToArray();
-
-        return rangeBars.Length == 0
-            ? null
-            : (rangeBars.Max(bar => bar.High), rangeBars.Min(bar => bar.Low));
-    }
-
-    private static (decimal High, decimal Low)? GetSessionExtremeThroughIndex(
-        StrategyDefinition strategy,
-        IReadOnlyList<OhlcvBar> bars,
-        DateTimeOffset timestamp,
-        int entryIndex)
-    {
-        var exchangeTime = ToExchangeTime(timestamp, strategy.Session.ExchangeTimezone);
-        var sessionBars = bars
-            .Take(entryIndex + 1)
-            .Where(bar => ToExchangeTime(bar.Timestamp, strategy.Session.ExchangeTimezone).Date == exchangeTime.Date)
-            .ToArray();
-
-        return sessionBars.Length == 0
-            ? null
-            : (sessionBars.Max(bar => bar.High), sessionBars.Min(bar => bar.Low));
-    }
-
     private static string NormalizeRuleName(string? value)
     {
         return String.IsNullOrWhiteSpace(value)
             ? String.Empty
             : value.Trim().Replace("-", "_", StringComparison.Ordinal).ToLowerInvariant();
+    }
+
+    private int FindPreviousValidExecutionBarIndex(
+        IReadOnlyList<OhlcvBar> bars,
+        int startIndex,
+        StrategyDefinition strategy)
+    {
+        for (var index = Math.Min(startIndex, bars.Count - 1);
+             index >= 0;
+             index--)
+        {
+            if (_sessionClock.ValidateExecutionWindow(
+                    bars[index].Timestamp,
+                    strategy.Execution.Timeframe,
+                    strategy.Session))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 }

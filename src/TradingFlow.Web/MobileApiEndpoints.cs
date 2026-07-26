@@ -317,19 +317,28 @@ public static class MobileApiEndpoints
             var runName = String.IsNullOrWhiteSpace(request.RunName)
                 ? $"paper_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}"
                 : request.RunName.Trim();
-            var configPath = configWriter.SaveTempConfig(
-                request.BaseConfigPath,
-                tickers,
-                request.StrategyPath,
-                request.OrderExpiration,
-                request.EntryOrderType,
-                request.AllowExtendedHoursTrading,
-                request.ScreenerFilter,
-                runName,
-                request.NewsEnabled,
-                wishlist?.Id,
-                wishlist?.Name,
-                wishlist is null ? "ephemeral" : "wishlist");
+            string configPath;
+            try
+            {
+                configPath = configWriter.SaveTempConfig(
+                    request.BaseConfigPath,
+                    tickers,
+                    request.StrategyPath,
+                    request.OrderExpiration,
+                    request.EntryOrderType,
+                    request.AllowExtendedHoursTrading,
+                    request.ScreenerFilter,
+                    runName,
+                    request.NewsEnabled,
+                    wishlist?.Id,
+                    wishlist?.Name,
+                    wishlist is null ? "ephemeral" : "wishlist");
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.BadRequest(exception.Message);
+            }
+
             return Results.Ok(paperJobs.Start(runName, configPath));
         });
 
@@ -377,18 +386,26 @@ public static class MobileApiEndpoints
                 return Results.BadRequest("Ticker is required.");
             }
 
-            var generatedConfigPath = configWriter.SaveTempConfig(
-                request.ConfigPath,
-                [request.Ticker.Trim().ToUpperInvariant()],
-                request.StrategyPath,
-                orderExpiration: "day",
-                entryOrderType: request.EntryOrderType,
-                allowExtendedHoursTrading: request.AllowExtendedHoursTrading,
-                screenerFilter: string.Empty,
-                runName: string.IsNullOrWhiteSpace(request.RunName)
-                    ? $"mobile_auto_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}"
-                    : request.RunName.Trim(),
-                newsEnabled: false);
+            string generatedConfigPath;
+            try
+            {
+                generatedConfigPath = configWriter.SaveTempConfig(
+                    request.ConfigPath,
+                    [request.Ticker.Trim().ToUpperInvariant()],
+                    request.StrategyPath,
+                    orderExpiration: "day",
+                    entryOrderType: request.EntryOrderType,
+                    allowExtendedHoursTrading: request.AllowExtendedHoursTrading,
+                    screenerFilter: string.Empty,
+                    runName: string.IsNullOrWhiteSpace(request.RunName)
+                        ? $"mobile_auto_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}"
+                        : request.RunName.Trim(),
+                    newsEnabled: false);
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.BadRequest(exception.Message);
+            }
 
             var started = await automation.StartAsync(
                 request with { ConfigPath = generatedConfigPath },
@@ -480,8 +497,8 @@ public static class MobileApiEndpoints
                 tickers,
                 strategyPaths,
                 request.StartingCapital,
-                request.RiskPerTradePct,
-                request.MaxPositionValuePct,
+                request.AccountRiskBudgetPct,
+                request.MaxPositionNotionalPct,
                 request.MaxConcurrentPositions,
                 request.CachePolicy,
                 Array.Empty<StrategyParameterOverride>()));
@@ -490,8 +507,12 @@ public static class MobileApiEndpoints
 
         group.MapPost("/backtests/jobs/{jobId:guid}/cancel", (Guid jobId, BacktestJobService backtestJobs) =>
         {
-            backtestJobs.CancelJob(jobId);
-            return Results.Accepted($"/api/mobile/backtests/jobs/{jobId}");
+            return backtestJobs.CancelJob(jobId) switch
+            {
+                BacktestCancellationOutcome.Accepted => Results.Accepted($"/api/mobile/backtests/jobs/{jobId}"),
+                BacktestCancellationOutcome.NotFound => Results.NotFound(),
+                _ => Results.Conflict("Backtest is already finished.")
+            };
         });
 
         group.MapGet("/notifications", (

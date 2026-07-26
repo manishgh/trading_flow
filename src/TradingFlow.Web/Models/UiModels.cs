@@ -32,8 +32,8 @@ public sealed record BacktestRunRequest(
     IReadOnlyList<string> Tickers,
     IReadOnlyList<string> StrategyPaths,
     decimal StartingCapital,
-    decimal RiskPerTradePct,
-    decimal MaxPositionValuePct,
+    decimal AccountRiskBudgetPct,
+    decimal MaxPositionNotionalPct,
     int MaxConcurrentPositions,
     string CachePolicy,
     IReadOnlyList<StrategyParameterOverride> StrategyOverrides);
@@ -71,7 +71,8 @@ public sealed record BacktestJobSnapshot(
     int TotalTickerCount,
     IReadOnlyList<string> Events,
     BacktestResult? Result,
-    IReadOnlyList<BacktestStrategyRunGroup>? StrategyGroups = null);
+    IReadOnlyList<BacktestStrategyRunGroup>? StrategyGroups = null,
+    DateTimeOffset? CancellationRequestedAt = null);
 
 public sealed record BacktestStrategyRunGroup(
     string StrategyName,

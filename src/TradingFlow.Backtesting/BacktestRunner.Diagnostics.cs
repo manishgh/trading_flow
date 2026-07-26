@@ -4,6 +4,7 @@ using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Regime;
+using TradingFlow.Engine.Risk;
 
 namespace TradingFlow.Backtesting;
 
@@ -147,6 +148,7 @@ public sealed partial class BacktestRunner
         IReadOnlyCollection<StrategyDefinition> strategies,
         IReadOnlyList<BacktestCandidateTrade> candidates,
         IReadOnlyCollection<OhlcvBar> allBars,
+        IReadOnlyCollection<StrategyCandidateDiagnostics> candidateDiagnostics,
         UniverseMembership? universeMembership = null,
         IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars = null)
     {
@@ -161,7 +163,16 @@ public sealed partial class BacktestRunner
                 var regimeCalendar = regimeCalendars is not null && regimeCalendars.TryGetValue(strategy.StrategyId, out var calendar)
                     ? calendar
                     : null;
-                var trades = BuildPortfolioTrades(portfolio, strategy, strategyCandidates, universeMembership, regimeCalendar);
+                var portfolioOutcome = BuildPortfolioTradesWithAudit(
+                    portfolio,
+                    strategy,
+                    strategyCandidates,
+                    universeMembership,
+                    regimeCalendar);
+                var diagnosticsTarget = candidateDiagnostics.FirstOrDefault(diagnostic =>
+                    diagnostic.StrategyId.Equals(strategy.StrategyId, StringComparison.OrdinalIgnoreCase));
+                diagnosticsTarget?.MergeRejections(portfolioOutcome.AdmissionAudit);
+                var trades = portfolioOutcome.Trades;
                 var netProfit = trades.Sum(x => x.NetProfit);
                 var endingCapital = portfolio.StartingCapital + netProfit;
                 var totalReturnPct = portfolio.StartingCapital == 0 ? 0 : (netProfit / portfolio.StartingCapital) * 100m;
@@ -187,6 +198,42 @@ public sealed partial class BacktestRunner
                     trades);
             })
             .ToArray();
+    }
+
+    private static UnifiedPortfolioBacktestResult BuildUnifiedPortfolioResult(
+        PortfolioConfig portfolio,
+        IReadOnlyCollection<StrategyDefinition> strategies,
+        IReadOnlyList<BacktestCandidateTrade> candidates,
+        UniverseMembership? universeMembership,
+        IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars)
+    {
+        var portfolioOutcome = BuildUnifiedPortfolioTradesWithAudit(
+            portfolio,
+            strategies,
+            candidates,
+            universeMembership,
+            regimeCalendars);
+        var trades = portfolioOutcome.Trades;
+        var netProfit = trades.Sum(trade => trade.NetProfit);
+        var endingCapital = portfolio.StartingCapital + netProfit;
+        var totalReturnPct = portfolio.StartingCapital <= 0m
+            ? 0m
+            : netProfit / portfolio.StartingCapital * 100m;
+
+        return new UnifiedPortfolioBacktestResult(
+            portfolio.StartingCapital,
+            Decimal.Round(endingCapital, 4),
+            Decimal.Round(netProfit, 4),
+            Decimal.Round(totalReturnPct, 4),
+            Decimal.Round(CalculateMaxDrawdown(portfolio.StartingCapital, trades), 4),
+            candidates.Count,
+            trades.Count,
+            Math.Max(0, candidates.Count - trades.Count),
+            trades.Count(trade => trade.NetProfit > 0m),
+            trades.Count(trade => trade.NetProfit < 0m),
+            trades,
+            portfolioOutcome.AdmissionAudit.RejectionCounts,
+            portfolioOutcome.AdmissionAudit.RejectionExamples);
     }
 
     private static IReadOnlyList<StrategyDiagnosticReport> BuildDiagnostics(
@@ -386,10 +433,85 @@ public sealed partial class BacktestRunner
         UniverseMembership? universeMembership = null,
         RegimeCalendar? regimeCalendar = null)
     {
-        var accepted = new List<BacktestTrade>();
+        return BuildPortfolioTradesWithAudit(
+            portfolio,
+            strategy,
+            candidates,
+            universeMembership,
+            regimeCalendar).Trades;
+    }
 
-        foreach (var candidate in candidates)
+    private static PortfolioBuildOutcome BuildPortfolioTradesWithAudit(
+        PortfolioConfig portfolio,
+        StrategyDefinition strategy,
+        IReadOnlyList<BacktestCandidateTrade> candidates,
+        UniverseMembership? universeMembership = null,
+        RegimeCalendar? regimeCalendar = null)
+    {
+        return BuildPortfolioTradesCore(
+            portfolio,
+            candidates,
+            _ => strategy,
+            universeMembership,
+            _ => regimeCalendar);
+    }
+
+    private static IReadOnlyList<BacktestTrade> BuildUnifiedPortfolioTrades(
+        PortfolioConfig portfolio,
+        IReadOnlyCollection<StrategyDefinition> strategies,
+        IReadOnlyList<BacktestCandidateTrade> candidates,
+        UniverseMembership? universeMembership = null,
+        IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars = null)
+    {
+        return BuildUnifiedPortfolioTradesWithAudit(
+            portfolio,
+            strategies,
+            candidates,
+            universeMembership,
+            regimeCalendars).Trades;
+    }
+
+    private static PortfolioBuildOutcome BuildUnifiedPortfolioTradesWithAudit(
+        PortfolioConfig portfolio,
+        IReadOnlyCollection<StrategyDefinition> strategies,
+        IReadOnlyList<BacktestCandidateTrade> candidates,
+        UniverseMembership? universeMembership = null,
+        IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars = null)
+    {
+        var strategiesByName = strategies.ToDictionary(
+            strategy => strategy.StrategyName,
+            StringComparer.OrdinalIgnoreCase);
+        return BuildPortfolioTradesCore(
+            portfolio,
+            candidates,
+            candidate => strategiesByName.TryGetValue(candidate.StrategyName, out var strategy)
+                ? strategy
+                : throw new InvalidOperationException(
+                    $"Candidate references unknown strategy '{candidate.StrategyName}'."),
+            universeMembership,
+            strategy => regimeCalendars is not null &&
+                regimeCalendars.TryGetValue(strategy.StrategyId, out var calendar)
+                    ? calendar
+                    : null);
+    }
+
+    private static PortfolioBuildOutcome BuildPortfolioTradesCore(
+        PortfolioConfig portfolio,
+        IReadOnlyList<BacktestCandidateTrade> candidates,
+        Func<BacktestCandidateTrade, StrategyDefinition> resolveStrategy,
+        UniverseMembership? universeMembership,
+        Func<StrategyDefinition, RegimeCalendar?> resolveRegimeCalendar)
+    {
+        var accepted = new List<BacktestTrade>();
+        var admissionAudit = new PortfolioAdmissionAudit();
+
+        foreach (var candidate in candidates
+                     .OrderBy(candidate => candidate.EntryTimestamp)
+                     .ThenByDescending(candidate => candidate.SelectionScore)
+                     .ThenBy(candidate => candidate.Ticker, StringComparer.OrdinalIgnoreCase))
         {
+            var strategy = resolveStrategy(candidate);
+            var regimeCalendar = resolveRegimeCalendar(strategy);
             var entryDay = DateOnly.FromDateTime(candidate.EntryTimestamp.UtcDateTime);
 
             // Per-day universe gate: a trade is allowed only if its ticker qualified on the
@@ -397,57 +519,131 @@ public sealed partial class BacktestRunner
             // same trading day the no-lookahead membership was computed against.
             if (universeMembership is not null && !universeMembership.IsMember(candidate.Ticker, entryDay))
             {
+                admissionAudit.Reject(candidate, "universe_membership_missing");
                 continue;
             }
 
             // Layer-2 regime gate: no new entries on days the market regime is off.
             if (regimeCalendar is not null && !regimeCalendar.IsOn(entryDay))
             {
+                admissionAudit.Reject(candidate, "market_regime_off_on_entry_day");
                 continue;
             }
 
             var closedProfit = accepted
-                .Where(x => x.ExitTimestamp <= candidate.EntryTimestamp)
+                .Where(x => x.ExitTimestamp < candidate.EntryTimestamp)
                 .Sum(x => x.NetProfit);
             var equity = portfolio.StartingCapital + closedProfit;
             var activePositions = accepted
-                .Where(x => x.EntryTimestamp <= candidate.EntryTimestamp && x.ExitTimestamp > candidate.EntryTimestamp)
+                .Where(x => x.EntryTimestamp <= candidate.EntryTimestamp && x.ExitTimestamp >= candidate.EntryTimestamp)
                 .ToArray();
 
             if (portfolio.PreventOverlappingTickerPositions &&
                 activePositions.Any(x => x.Ticker.Equals(candidate.Ticker, StringComparison.OrdinalIgnoreCase)))
             {
+                admissionAudit.Reject(candidate, "overlapping_ticker_position");
                 continue;
             }
 
             if (activePositions.Length >= portfolio.MaxConcurrentPositions)
             {
+                admissionAudit.Reject(
+                    candidate,
+                    "max_concurrent_positions_reached",
+                    $"Actual: {activePositions.Length}, Allowed: {portfolio.MaxConcurrentPositions}");
                 continue;
             }
 
             if (ShouldBlockForPerTickerDailyLossGuard(strategy, portfolio, candidate, accepted))
             {
+                admissionAudit.Reject(candidate, "per_ticker_daily_loss_guard");
                 continue;
             }
 
-            var riskBudget = equity * (portfolio.RiskPerTradePct / 100m);
-            var riskSizedQuantity = (int)Math.Floor(riskBudget / candidate.StopDistance);
+            if (strategy.EntryRules.MaxEntriesPerTickerPerDay > 0)
+            {
+                var entryExchangeDate = ToExchangeDate(
+                    candidate.EntryTimestamp,
+                    strategy.Session.ExchangeTimezone);
+                var acceptedTickerEntriesToday = accepted.Count(trade =>
+                    trade.Ticker.Equals(candidate.Ticker, StringComparison.OrdinalIgnoreCase) &&
+                    trade.StrategyName.Equals(candidate.StrategyName, StringComparison.OrdinalIgnoreCase) &&
+                    ToExchangeDate(trade.EntryTimestamp, strategy.Session.ExchangeTimezone) == entryExchangeDate);
+                if (acceptedTickerEntriesToday >= strategy.EntryRules.MaxEntriesPerTickerPerDay)
+                {
+                    admissionAudit.Reject(
+                        candidate,
+                        "max_entries_per_ticker_per_day_reached",
+                        $"Actual: {acceptedTickerEntriesToday}, Allowed: {strategy.EntryRules.MaxEntriesPerTickerPerDay}");
+                    continue;
+                }
+            }
+
             var slotPositionValue = equity / portfolio.MaxConcurrentPositions;
-            var configuredPositionValue = equity * (portfolio.MaxPositionValuePct / 100m);
             var reservedPositionValue = activePositions.Sum(x => x.ShareQuantity * x.EntryPrice);
             var availablePositionValue = Math.Max(0, equity - reservedPositionValue);
-            var maxPositionValue = Math.Min(Math.Min(slotPositionValue, configuredPositionValue), availablePositionValue);
-            var capitalSizedQuantity = (int)Math.Floor(maxPositionValue / candidate.EntryPrice);
-            var shareQuantity = Math.Min(riskSizedQuantity, capitalSizedQuantity);
+            var requestedNotional = Math.Min(slotPositionValue, availablePositionValue);
+            var side = candidate.Direction.Equals("short", StringComparison.OrdinalIgnoreCase)
+                ? PlannedOrderSide.Short
+                : PlannedOrderSide.Long;
+            var planningRequest = new OrderPlanningRequest(
+                candidate.Ticker,
+                side,
+                equity,
+                candidate.EntryPrice,
+                PlannedStopRequest.FromResolvedPrice(
+                    candidate.InitialStopKind.Equals("atr", StringComparison.OrdinalIgnoreCase)
+                        ? PlannedStopKind.Atr
+                        : PlannedStopKind.Structural,
+                    candidate.StopLossPrice),
+                new OrderPlanningRiskLimits(
+                    portfolio.AccountRiskBudgetPct,
+                    portfolio.MaxPositionNotionalPct),
+                new EstimatedOrderExecutionCosts(
+                    SlippageBps: 0m,
+                    FixedEntryFee: portfolio.FixedBuyFee,
+                    FixedExitFee: portfolio.FixedSellFee),
+                requestedNotional);
+            var orderPlan = new SharedOrderRiskPlanner().Plan(planningRequest);
+            if (!orderPlan.IsAccepted || orderPlan.Order is null)
+            {
+                admissionAudit.Reject(
+                    candidate,
+                    $"order_plan_{ToSnakeCase(orderPlan.Rejection?.Code.ToString() ?? "unknown")}",
+                    orderPlan.Rejection?.Reason);
+                continue;
+            }
+
+            var shareQuantity = orderPlan.Order.Quantity;
             // Liquidity realism: a real order cannot take more than a small share of the bar's
             // traded volume. Skips the trade entirely when the tradable size collapses to zero.
-            shareQuantity = TradingFlow.Engine.Risk.ExecutionRealismModel.CapQuantityByParticipation(
+            var liquidityCappedQuantity = ExecutionRealismModel.CapQuantityByParticipation(
                 shareQuantity,
                 candidate.EntryBarVolume,
                 portfolio.MaxBarParticipationPct);
-            if (shareQuantity <= 0)
+            if (liquidityCappedQuantity <= 0)
             {
+                admissionAudit.Reject(candidate, "liquidity_quantity_zero");
                 continue;
+            }
+
+            if (liquidityCappedQuantity < shareQuantity)
+            {
+                orderPlan = new SharedOrderRiskPlanner().Plan(
+                    planningRequest with
+                    {
+                        RequestedNotional = liquidityCappedQuantity * candidate.EntryPrice
+                    });
+                if (!orderPlan.IsAccepted || orderPlan.Order is null)
+                {
+                    admissionAudit.Reject(
+                        candidate,
+                        $"liquidity_replan_{ToSnakeCase(orderPlan.Rejection?.Code.ToString() ?? "unknown")}",
+                        orderPlan.Rejection?.Reason);
+                    continue;
+                }
+
+                shareQuantity = orderPlan.Order.Quantity;
             }
 
             var isShort = candidate.Direction.Equals("short", StringComparison.OrdinalIgnoreCase);
@@ -482,7 +678,29 @@ public sealed partial class BacktestRunner
                 Decimal.Round(netProfit, 4)));
         }
 
-        return accepted;
+        return new PortfolioBuildOutcome(accepted, admissionAudit);
+    }
+
+    private static string ToSnakeCase(string value)
+    {
+        if (String.IsNullOrWhiteSpace(value))
+        {
+            return "unknown";
+        }
+
+        var result = new System.Text.StringBuilder(value.Length + 8);
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (Char.IsUpper(character) && index > 0)
+            {
+                result.Append('_');
+            }
+
+            result.Append(Char.ToLowerInvariant(character));
+        }
+
+        return result.ToString();
     }
 
     private static bool ShouldBlockForPerTickerDailyLossGuard(
@@ -502,6 +720,7 @@ public sealed partial class BacktestRunner
             .Where(trade =>
                 trade.ExitTimestamp <= candidate.EntryTimestamp &&
                 trade.Ticker.Equals(candidate.Ticker, StringComparison.OrdinalIgnoreCase) &&
+                trade.StrategyName.Equals(candidate.StrategyName, StringComparison.OrdinalIgnoreCase) &&
                 ToExchangeDate(trade.ExitTimestamp, strategy.Session.ExchangeTimezone) == exchangeDate)
             .ToArray();
 
@@ -614,6 +833,52 @@ public sealed partial class BacktestRunner
         catch (TimeZoneNotFoundException) when (timezoneId.Equals("America/New_York", StringComparison.OrdinalIgnoreCase))
         {
             return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        }
+    }
+}
+
+internal sealed record PortfolioBuildOutcome(
+    IReadOnlyList<BacktestTrade> Trades,
+    PortfolioAdmissionAudit AdmissionAudit);
+
+internal sealed class PortfolioAdmissionAudit
+{
+    private readonly Dictionary<string, int> _rejectionCounts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<string>> _rejectionExamples = new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyDictionary<string, int> RejectionCounts => _rejectionCounts;
+
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> RejectionExamples =>
+        _rejectionExamples.ToDictionary(
+            entry => entry.Key,
+            entry => (IReadOnlyList<string>)entry.Value,
+            StringComparer.OrdinalIgnoreCase);
+
+    public void Reject(BacktestCandidateTrade candidate, string reason, string? detail = null)
+    {
+        var normalizedReason = $"portfolio_{reason.Trim().ToLowerInvariant()}";
+        _rejectionCounts[normalizedReason] = _rejectionCounts.TryGetValue(normalizedReason, out var count)
+            ? count + 1
+            : 1;
+
+        if (!_rejectionExamples.TryGetValue(normalizedReason, out var examples))
+        {
+            examples = [];
+            _rejectionExamples[normalizedReason] = examples;
+        }
+
+        if (examples.Count >= 5)
+        {
+            return;
+        }
+
+        var explanation =
+            $"{normalizedReason} (Ticker: {candidate.Ticker}, Strategy: {candidate.StrategyName}, " +
+            $"Entry: {candidate.EntryTimestamp:O}" +
+            (String.IsNullOrWhiteSpace(detail) ? ")" : $", Detail: {detail})");
+        if (!examples.Contains(explanation, StringComparer.OrdinalIgnoreCase))
+        {
+            examples.Add(explanation);
         }
     }
 }

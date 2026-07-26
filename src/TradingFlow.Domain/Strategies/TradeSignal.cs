@@ -139,4 +139,7 @@ public sealed record TradeSignal(
     decimal? ReversionStretchLow = null,
     // Archetype B (post-catalyst drift): the first technically-confirmed bar inside a catalyst's bounded
     // confirmation window — one shot per catalyst (edge-recovery Phase 1, doctrine §6B).
-    bool IsCatalystDrift = false);
+    bool IsCatalystDrift = false,
+    bool IsConnorsRsi2Oversold = false,
+    decimal? CurrentRsi2 = null,
+    decimal? SetupStructuralStopPrice = null);

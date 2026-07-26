@@ -1,4 +1,5 @@
 @model IReadOnlyList<TradingFlow.Web.Models.BacktestJobSnapshot>
+@using System.Globalization
 
 @if (Model.Count == 0)
 {
@@ -6,12 +7,14 @@
 }
 else
 {
-    <table>
+    <div class="table-scroll" tabindex="0" aria-label="Recent backtest jobs">
+    <table class="data-table">
         <thead>
             <tr>
                 <th>Run</th>
                 <th>Status</th>
                 <th>State</th>
+                <th>Progress</th>
                 <th>Winner</th>
                 <th>Return</th>
                 <th>Trades</th>
@@ -22,16 +25,36 @@ else
         @foreach (var job in Model)
         {
             var winner = job.Result?.Winner;
+            var progressPct = job.TotalTickerCount <= 0
+                ? 0m
+                : Math.Clamp((decimal)job.CompletedTickerCount / job.TotalTickerCount * 100m, 0m, 100m);
             <tr>
                 <td>@job.RunName<br /><span class="muted">@job.CreatedAt.LocalDateTime</span></td>
                 <td><span class="status">@job.Status</span></td>
-                <td>@job.CurrentStage<br /><span class="muted">@job.CompletedTickerCount / @job.TotalTickerCount tickers</span></td>
+                <td>@job.CurrentStage<br /><span class="muted">@job.CompletedTickerCount / @job.TotalTickerCount work items</span></td>
+                <td style="min-width:140px">
+                    <div class="progress-track">
+                        <div class="progress-bar" style="width:@progressPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
+                    </div>
+                    <span class="muted">@progressPct.ToString("0.0")%</span>
+                </td>
                 <td>@(winner?.StrategyName ?? "-")</td>
                 <td class="@(job.Result?.NetProfit >= 0 ? "good" : "bad")">@(job.Result is null ? "-" : $"{job.Result.TotalReturnPct:0.##}%")</td>
                 <td>@(job.Result?.AcceptedTradeCount.ToString() ?? "-")</td>
-                <td><a asp-page="/Job" asp-route-id="@job.JobId">View</a></td>
+                <td>
+                    <div class="actions" style="margin:0">
+                        <a class="button secondary mini-button" asp-page="/Job" asp-route-id="@job.JobId">View</a>
+                        @if (job.Status is "queued" or "running" or "cancelling")
+                        {
+                            <form method="post" asp-page="/Backtests" asp-page-handler="CancelBacktest" asp-route-id="@job.JobId" style="margin:0">
+                                <button type="submit" class="button danger mini-button">Cancel</button>
+                            </form>
+                        }
+                    </div>
+                </td>
             </tr>
         }
         </tbody>
     </table>
+    </div>
 }

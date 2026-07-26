@@ -11,6 +11,7 @@ using TradingFlow.Engine.Storage;
 using TradingFlow.Data.Catalysts;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Engine.Execution;
+using TradingFlow.Engine.Risk;
 
 namespace TradingFlow.Backtesting;
 
@@ -85,9 +86,18 @@ public sealed partial class LiveRunner
             }
         }
 
-        var readonlySnapshotsByTimeframe = snapshotsByTimeframe.ToDictionary(
-            x => x.Key,
-            x => (IReadOnlyList<IndicatorSnapshot>)x.Value,
+        var now = DateTimeOffset.UtcNow;
+        var completedBarsByTimeframe = barsByTimeframe.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value
+                .Where(bar => bar.Timestamp.Add(TimeframeParser.Parse(pair.Key)) <= now)
+                .ToList(),
+            StringComparer.OrdinalIgnoreCase);
+        var completedSnapshotsByTimeframe = snapshotsByTimeframe.ToDictionary(
+            pair => pair.Key,
+            pair => (IReadOnlyList<IndicatorSnapshot>)pair.Value
+                .Where(snapshot => snapshot.Timestamp.Add(TimeframeParser.Parse(pair.Key)) <= now)
+                .ToList(),
             StringComparer.OrdinalIgnoreCase);
 
         var resultsDir = Path.Combine(run.ResultsRoot, "live", run.RunName, ticker);
@@ -96,14 +106,13 @@ public sealed partial class LiveRunner
         // 3. Process Strategies & Write Chart Data
         foreach (var strategy in strategies)
         {
-            if (!readonlySnapshotsByTimeframe.TryGetValue(strategy.Timeframe, out var snapshots) || snapshots.Count == 0)
+            if (!completedSnapshotsByTimeframe.TryGetValue(strategy.Timeframe, out var snapshots) || snapshots.Count == 0)
                 continue;
 
-            if (!barsByTimeframe.TryGetValue(strategy.Timeframe, out var barsList))
+            if (!completedBarsByTimeframe.TryGetValue(strategy.Timeframe, out var barsList) || barsList.Count == 0)
                 continue;
 
             var lastSnapshot = snapshots[^1];
-            var lastBar = barsList[^1];
             var isFinvizRelativeVolume = screenerRelativeVolumeByTicker.TryGetValue(ticker, out var screenerRelativeVolume);
             var configuredRelativeVolume = StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, lastSnapshot);
             var relativeVolumeSource = isFinvizRelativeVolume ? "finviz_screener" : strategy.EntryRules.MinVolumeSpikeSource;
@@ -139,8 +148,8 @@ public sealed partial class LiveRunner
                 run,
                 strategy,
                 ticker,
-                barsByTimeframe,
-                readonlySnapshotsByTimeframe,
+                completedBarsByTimeframe,
+                completedSnapshotsByTimeframe,
                 openOrders,
                 openPositions,
                 cancellationToken,
@@ -236,7 +245,7 @@ public sealed partial class LiveRunner
                 var decisionTimestamp = DateTimeOffset.UtcNow;
 
                 var signalAvailableTimestamp = lastSnapshot.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
-                var confluenceRejection = _signalGenerator.GetConfluenceRejection(strategy, signalAvailableTimestamp, readonlySnapshotsByTimeframe);
+                var confluenceRejection = _signalGenerator.GetConfluenceRejection(strategy, signalAvailableTimestamp, completedSnapshotsByTimeframe);
                 if (confluenceRejection is not null)
                 {
                     if (_auditRepo != null)
@@ -312,10 +321,18 @@ public sealed partial class LiveRunner
                     }
                 }
 
-                var orderSignal = ResolveExecutionOrderSignal(strategy, signal, readonlySnapshotsByTimeframe);
-                if (orderSignal is null)
+                var executionResolution = ResolveExecutionOrderSignal(
+                    strategy,
+                    signal,
+                    completedBarsByTimeframe,
+                    completedSnapshotsByTimeframe);
+                var orderSignal = executionResolution.Signal;
+                if (!executionResolution.Plan.IsReady ||
+                    orderSignal is null ||
+                    executionResolution.Plan.StopContextIndex is not { } stopContextIndex)
                 {
-                    var reason = $"execution_timeframe_missing (ExecutionTimeframe: {strategy.Execution.Timeframe})";
+                    var reason = executionResolution.Plan.RejectionReason ??
+                        $"execution_timeframe_missing (ExecutionTimeframe: {strategy.Execution.Timeframe})";
                     logger.LogWarning(
                         "Skipping {Ticker} {StrategyName}; execution timeframe {ExecutionTimeframe} has no usable snapshot.",
                         ticker,
@@ -370,13 +387,42 @@ public sealed partial class LiveRunner
                 if (_brokerClient != null && !run.Execution.DryRun && run.Execution.AllowLiveOrders)
                 {
                     progress?.Report($"Calculating position size for {ticker}...");
-                    var riskEngine = new TradingFlow.Engine.Risk.RiskEngine();
-                    var order = riskEngine.CreateLongBracketOrderWithPositionRisk(
-                        strategy,
-                        orderSignal,
-                        run.Portfolio.StartingCapital,
-                        run.Portfolio.RiskPerTradePct,
-                        run.Portfolio.MaxPositionValuePct);
+                    if (_brokerClient is not IBrokerAccountProvider accountProvider)
+                    {
+                        throw new InvalidOperationException(
+                            "Broker account equity is unavailable; live sizing fails closed.");
+                    }
+
+                    if (!completedBarsByTimeframe.TryGetValue(
+                            strategy.Execution.Timeframe,
+                            out var executionBars) ||
+                        !completedSnapshotsByTimeframe.TryGetValue(
+                            strategy.Execution.Timeframe,
+                            out var executionSnapshots) ||
+                        executionBars.Count == 0 ||
+                        executionSnapshots.Count == 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"Execution market state {strategy.Execution.Timeframe} is unavailable for risk planning.");
+                    }
+
+                    var account = await accountProvider.GetAccountSnapshotAsync(cancellationToken);
+                    var orderPlan = new StrategyOrderPlanner().Plan(
+                        new StrategyOrderPlanningRequest(
+                            strategy,
+                            signal,
+                            orderSignal,
+                            PlannedOrderSide.Long,
+                            account.Equity,
+                            new OrderPlanningRiskLimits(
+                                run.Portfolio.AccountRiskBudgetPct,
+                                run.Portfolio.MaxPositionNotionalPct),
+                            run.Portfolio.FixedBuyFee,
+                            run.Portfolio.FixedSellFee,
+                            stopContextIndex,
+                            executionBars,
+                            executionSnapshots));
+                    var order = orderPlan.Order;
 
                     if (order != null)
                     {
@@ -467,7 +513,30 @@ public sealed partial class LiveRunner
                     }
                     else
                     {
-                        progress?.Report($"Skipped order for {ticker}: Calculated shares is 0.");
+                        var reason = orderPlan.RiskRejection?.Reason ??
+                            orderPlan.StopRejectionReason ??
+                            "order_risk_plan_rejected";
+                        logger.LogWarning(
+                            "Order risk plan rejected for {Ticker} {StrategyName}: {Reason}",
+                            ticker,
+                            strategy.StrategyName,
+                            reason);
+                        progress?.Report($"Skipped {ticker}: {reason}");
+                        if (_auditRepo != null)
+                        {
+                            await _auditRepo.SaveAuditAsync(
+                                new TradingFlow.Domain.Audit.DecisionAuditRecord
+                                {
+                                    RunName = run.RunName,
+                                    Ticker = ticker,
+                                    StrategyName = strategy.StrategyName,
+                                    Timestamp = decisionTimestamp,
+                                    Decision = "Rejected",
+                                    RejectionReason = reason,
+                                    SignalJson = signalJson
+                                },
+                                cancellationToken);
+                        }
                     }
                 }
             }
@@ -519,45 +588,53 @@ public sealed partial class LiveRunner
         }
     }
 
-    private static TradeSignal? ResolveExecutionOrderSignal(
+    private (TradeSignal? Signal, CompletedBarExecutionPlan Plan) ResolveExecutionOrderSignal(
         StrategyDefinition strategy,
         TradeSignal signal,
+        IReadOnlyDictionary<string, List<OhlcvBar>> barsByTimeframe,
         IReadOnlyDictionary<string, IReadOnlyList<IndicatorSnapshot>> snapshotsByTimeframe)
     {
-        if (strategy.Execution.Timeframe.Equals(strategy.Timeframe, StringComparison.OrdinalIgnoreCase))
-        {
-            return signal;
-        }
-
-        if (!snapshotsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots) ||
+        if (!barsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionBars) ||
+            executionBars.Count == 0 ||
+            !snapshotsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots) ||
             executionSnapshots.Count == 0)
         {
-            return null;
+            return (
+                null,
+                CompletedBarExecutionPlan.Rejected(
+                    $"execution_timeframe_missing (ExecutionTimeframe: {strategy.Execution.Timeframe})"));
         }
 
-        var orderedSnapshots = executionSnapshots
-            .OrderBy(snapshot => snapshot.Timestamp)
-            .ToArray();
-        var signalCloseTimestamp = signal.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
-        var executionSnapshot = orderedSnapshots.FirstOrDefault(snapshot => snapshot.Timestamp >= signalCloseTimestamp)
-            ?? orderedSnapshots.LastOrDefault(snapshot => snapshot.Timestamp >= signal.Timestamp);
-
-        if (executionSnapshot is null)
+        var plan = _executionPlanner.Plan(
+            new CompletedBarExecutionRequest(
+                strategy,
+                signal,
+                PlannedOrderSide.Long,
+                executionBars,
+                executionSnapshots,
+                timestamp => _sessionClock.ValidateExecutionWindow(
+                    timestamp,
+                    strategy.Execution.Timeframe,
+                    strategy.Session),
+                RequireKnownFillBar: false));
+        if (!plan.IsReady || plan.StopContextIndex is not { } contextIndex)
         {
-            return null;
+            return (null, plan);
         }
 
-        return signal with
-        {
-            Timestamp = executionSnapshot.Timestamp,
-            Timeframe = executionSnapshot.Timeframe,
-            CurrentPrice = executionSnapshot.CurrentPrice,
-            CurrentVolume = executionSnapshot.CurrentVolume,
-            CurrentRsi = executionSnapshot.Rsi ?? signal.CurrentRsi,
-            CurrentAtr = signal.CurrentAtr > 0m
-                ? signal.CurrentAtr
-                : executionSnapshot.Atr ?? signal.CurrentAtr
-        };
+        var executionSnapshot = executionSnapshots[contextIndex];
+
+        return (
+            signal with
+            {
+                Timestamp = executionSnapshot.Timestamp,
+                Timeframe = executionSnapshot.Timeframe,
+                CurrentPrice = executionSnapshot.CurrentPrice,
+                CurrentVolume = executionSnapshot.CurrentVolume,
+                CurrentRsi = executionSnapshot.Rsi ?? signal.CurrentRsi,
+                CurrentAtr = executionSnapshot.Atr ?? signal.CurrentAtr
+            },
+            plan);
     }
 
     private static string ResolveEntryOrderType(BacktestRunConfig run) =>

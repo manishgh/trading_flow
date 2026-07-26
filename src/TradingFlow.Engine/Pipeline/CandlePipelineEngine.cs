@@ -35,11 +35,6 @@ public sealed record NormalizedCandleEvent(
     string Timeframe,
     OhlcvBar Bar);
 
-public sealed record IndicatorSnapshotEvent(
-    string Ticker,
-    string Timeframe,
-    IReadOnlyList<IndicatorSnapshot> Snapshots);
-
 public sealed record CandlePipelineMetrics(
     int ReadCount,
     int NormalizedCount,

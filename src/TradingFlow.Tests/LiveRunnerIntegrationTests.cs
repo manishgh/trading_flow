@@ -475,6 +475,21 @@ public class LiveRunnerIntegrationTests
                 .Setup(x => x.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
             broker
+                .As<IBrokerAccountProvider>()
+                .Setup(x => x.GetAccountSnapshotAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new BrokerAccountSnapshot(
+                    "paper-account",
+                    "ACTIVE",
+                    AccountBlocked: false,
+                    TradingBlocked: false,
+                    TradeSuspendedByUser: false,
+                    ShortingEnabled: true,
+                    BuyingPower: 100_000m,
+                    Equity: 100_000m,
+                    LongMarketValue: 0m,
+                    ShortMarketValue: 0m,
+                    DateTimeOffset.UtcNow));
+            broker
                 .Setup(x => x.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
                 .Callback<BrokerEntryOrder, CancellationToken>((order, _) => submittedOrder = order.Order)
                 .ReturnsAsync(new BrokerOrderReceipt("order-1", DateTimeOffset.UtcNow));

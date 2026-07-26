@@ -165,6 +165,34 @@ public sealed class SignalGeneratorStepBreakoutTests
     }
 
     [Fact]
+    public void CreateTradeSignal_Uses252SessionsFor52WeekPosition_NotVcpLookback()
+    {
+        var start = new DateTimeOffset(2025, 1, 2, 5, 0, 0, TimeSpan.Zero);
+        var bars = Enumerable.Range(0, 260)
+            .Select(index =>
+            {
+                var close = index == 8 ? 50m : 100m + (index * 0.04m);
+                return CreateBar(start.AddDays(index), close, close + 1m, close - 1m, close, 1_000_000m);
+            })
+            .ToArray();
+        var snapshots = new IndicatorEngine().Compute(bars);
+        var strategy = CreateStrategy(direction: "long", setupType: "volatility_contraction_pattern") with
+        {
+            EntryRules = CreateStrategy(direction: "long", setupType: "volatility_contraction_pattern").EntryRules with
+            {
+                VolatilityContractionLookbackBars = 25
+            }
+        };
+
+        var signal = new SignalGenerator().CreateTradeSignal(strategy, bars, snapshots, bars.Length - 1);
+
+        Assert.NotNull(signal);
+        Assert.NotNull(signal!.PriceVs52WeekLowPct);
+        Assert.True(signal.PriceVs52WeekLowPct > 100m);
+        Assert.InRange(signal.PriceVs52WeekHighPct!.Value, -2m, 0m);
+    }
+
+    [Fact]
     public void CreateTradeSignal_WhenPriorAdvanceRollsBelowSma10AndSma20_SetsSwingRollover()
     {
         var bars = BuildSwingRolloverBars();

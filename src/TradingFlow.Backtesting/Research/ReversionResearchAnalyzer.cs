@@ -1,4 +1,5 @@
 using TradingFlow.Domain.Market;
+using TradingFlow.Engine.Execution;
 
 namespace TradingFlow.Backtesting.Research;
 
@@ -15,7 +16,8 @@ public sealed class ReversionResearchAnalyzer
 {
     public ReversionResearchReport Analyze(
         IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> dailyBarsByTicker,
-        ReversionResearchOptions? options = null)
+        ReversionResearchOptions? options = null,
+        IReadOnlyDictionary<string, IReadOnlyList<CatalystEvent>>? catalystsByTicker = null)
     {
         ArgumentNullException.ThrowIfNull(dailyBarsByTicker);
         options ??= new ReversionResearchOptions();
@@ -36,6 +38,18 @@ public sealed class ReversionResearchAnalyzer
             tickers.Add(entry.Key.ToUpperInvariant());
             var closes = Array.ConvertAll(bars, bar => bar.Close);
             var rsi = ComputeRsi(closes, options.RsiPeriod);
+            var hasNewsCoverage = false;
+            IReadOnlyList<CatalystEvent> tickerCatalysts = Array.Empty<CatalystEvent>();
+            if (catalystsByTicker is not null &&
+                catalystsByTicker.TryGetValue(entry.Key, out var loadedCatalysts))
+            {
+                hasNewsCoverage = true;
+                tickerCatalysts = loadedCatalysts;
+            }
+
+            var catalysts = tickerCatalysts
+                .OrderBy(catalyst => ResolveAvailableAt(catalyst, options).Timestamp)
+                .ToArray();
 
             for (var i = options.SmaTrendPeriod; i < bars.Length - 1; i++)
             {
@@ -51,6 +65,7 @@ public sealed class ReversionResearchAnalyzer
                 // "buy any dip" look good simply because the market rose.
                 var sma = Sma(closes, i, options.SmaTrendPeriod);
                 var aboveTrend = sma is { } trend && closes[i] > trend;
+                var newsContext = ResolveNewsContext(bars[i], catalysts, hasNewsCoverage, options);
 
                 var forward = new Dictionary<int, decimal>();
                 foreach (var horizon in horizons)
@@ -61,7 +76,13 @@ public sealed class ReversionResearchAnalyzer
                     }
                 }
 
-                observations.Add(new Observation(isConsecutiveDown, isRsiOversold, isBelowLowerBollinger, aboveTrend, forward));
+                observations.Add(new Observation(
+                    isConsecutiveDown,
+                    isRsiOversold,
+                    isBelowLowerBollinger,
+                    aboveTrend,
+                    newsContext,
+                    forward));
             }
         }
 
@@ -79,29 +100,123 @@ public sealed class ReversionResearchAnalyzer
             ("above_trend", o => o.AboveTrend),
             ("below_trend", o => !o.AboveTrend),
         };
+        var newsContexts = new (string Name, Func<Observation, bool> Match)[]
+        {
+            ("all_news_contexts", _ => true),
+            ("fresh_news", o => o.NewsContext == ReversionNewsContext.FreshNews),
+            ("no_identifiable_fresh_news", o => o.NewsContext == ReversionNewsContext.NoIdentifiableFreshNews),
+            ("news_unavailable", o => o.NewsContext == ReversionNewsContext.NewsUnavailable),
+        };
 
         var cohorts = new List<ReversionCohort>();
         foreach (var (triggerName, triggerMatch) in triggers)
         {
             foreach (var (regimeName, regimeMatch) in regimes)
             {
-                var matched = observations.Where(o => triggerMatch(o) && regimeMatch(o)).ToArray();
-                if (matched.Length == 0)
+                foreach (var (newsContextName, newsContextMatch) in newsContexts)
                 {
-                    continue;
-                }
+                    var matched = observations
+                        .Where(o => triggerMatch(o) && regimeMatch(o) && newsContextMatch(o))
+                        .ToArray();
+                    if (matched.Length == 0)
+                    {
+                        continue;
+                    }
 
-                var stats = horizons.Select(horizon => BuildHorizon(horizon, matched)).ToArray();
-                cohorts.Add(new ReversionCohort(triggerName, regimeName, matched.Length, stats));
+                    var stats = horizons.Select(horizon => BuildHorizon(horizon, matched)).ToArray();
+                    cohorts.Add(new ReversionCohort(
+                        triggerName,
+                        regimeName,
+                        newsContextName,
+                        matched.Length,
+                        stats));
+                }
             }
         }
 
+        var suppliedCatalysts = catalystsByTicker?.Values.SelectMany(value => value).ToArray() ?? [];
+        var timingSummary = suppliedCatalysts
+            .Select(catalyst => ResolveAvailableAt(catalyst, options))
+            .GroupBy(resolved => resolved.Basis, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
         return new ReversionResearchReport(
             tickers,
             totalBarsEvaluated,
             observations.Count(IsStretch),
             options,
+            catalystsByTicker is not null,
+            catalystsByTicker?.Count ?? 0,
+            suppliedCatalysts.Length,
+            timingSummary.GetValueOrDefault(ReversionNewsTimingBasis.ReceivedTimestamp),
+            timingSummary.GetValueOrDefault(ReversionNewsTimingBasis.ProviderPublishedProxy),
             cohorts);
+    }
+
+    private static string ResolveNewsContext(
+        OhlcvBar bar,
+        IReadOnlyList<CatalystEvent> catalysts,
+        bool hasNewsCoverage,
+        ReversionResearchOptions options)
+    {
+        if (!hasNewsCoverage)
+        {
+            return ReversionNewsContext.NewsUnavailable;
+        }
+
+        var sessionDate = ExecutionRunContextFactory.ResolveSessionDate(bar.Timestamp, options.ExchangeTimezone);
+        var decisionCutoff = ResolveSessionCloseUtc(sessionDate, options);
+        var windowStart = decisionCutoff.AddHours(-(double)options.FreshNewsLookbackHours);
+        return catalysts.Any(catalyst =>
+        {
+            var availableAt = ResolveAvailableAt(catalyst, options).Timestamp;
+            return availableAt >= windowStart && availableAt <= decisionCutoff;
+        })
+            ? ReversionNewsContext.FreshNews
+            : ReversionNewsContext.NoIdentifiableFreshNews;
+    }
+
+    private static ResolvedNewsAvailability ResolveAvailableAt(
+        CatalystEvent catalyst,
+        ReversionResearchOptions options)
+    {
+        if (catalyst.ReceivedAt is { } receivedAt &&
+            receivedAt >= catalyst.Timestamp &&
+            receivedAt - catalyst.Timestamp <= TimeSpan.FromHours((double)options.MaxTrustedReceivedDelayHours))
+        {
+            return new ResolvedNewsAvailability(
+                receivedAt.ToUniversalTime(),
+                ReversionNewsTimingBasis.ReceivedTimestamp);
+        }
+
+        // Historical provider requests are often fetched months after publication. Their fetch
+        // timestamp is audit evidence, not the time a historical strategy could have acted.
+        return new ResolvedNewsAvailability(
+            catalyst.Timestamp.ToUniversalTime().AddMinutes((double)options.PublishedTimestampLatencyMinutes),
+            ReversionNewsTimingBasis.ProviderPublishedProxy);
+    }
+
+    private static DateTimeOffset ResolveSessionCloseUtc(
+        DateOnly sessionDate,
+        ReversionResearchOptions options)
+    {
+        var timezone = ResolveTimezone(options.ExchangeTimezone);
+        var localClose = sessionDate.ToDateTime(
+            new TimeOnly(options.SessionCloseHour, options.SessionCloseMinute),
+            DateTimeKind.Unspecified);
+        return new DateTimeOffset(localClose, timezone.GetUtcOffset(localClose)).ToUniversalTime();
+    }
+
+    private static TimeZoneInfo ResolveTimezone(string timezoneId)
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(timezoneId);
+        }
+        catch (TimeZoneNotFoundException) when (
+            timezoneId.Equals("America/New_York", StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        }
     }
 
     private static bool IsStretch(Observation observation) =>
@@ -230,7 +345,10 @@ public sealed class ReversionResearchAnalyzer
         bool RsiOversold,
         bool BelowLowerBollinger,
         bool AboveTrend,
+        string NewsContext,
         IReadOnlyDictionary<int, decimal> Forward);
+
+    private sealed record ResolvedNewsAvailability(DateTimeOffset Timestamp, string Basis);
 }
 
 public sealed record ReversionResearchOptions(
@@ -240,10 +358,29 @@ public sealed record ReversionResearchOptions(
     int SmaTrendPeriod = 200,
     int BollingerPeriod = 20,
     decimal BollingerStdDevMultiple = 2.0m,
+    decimal FreshNewsLookbackHours = 48m,
+    decimal MaxTrustedReceivedDelayHours = 6m,
+    decimal PublishedTimestampLatencyMinutes = 1m,
+    string ExchangeTimezone = "America/New_York",
+    int SessionCloseHour = 16,
+    int SessionCloseMinute = 0,
     IReadOnlyList<int>? ForwardHorizons = null)
 {
     public IReadOnlyList<int> Horizons =>
-        ForwardHorizons is { Count: > 0 } ? ForwardHorizons : new[] { 1, 2, 3, 5 };
+        ForwardHorizons is { Count: > 0 } ? ForwardHorizons : new[] { 1, 2, 3, 5, 20 };
+}
+
+public static class ReversionNewsContext
+{
+    public const string FreshNews = "fresh_news";
+    public const string NoIdentifiableFreshNews = "no_identifiable_fresh_news";
+    public const string NewsUnavailable = "news_unavailable";
+}
+
+public static class ReversionNewsTimingBasis
+{
+    public const string ReceivedTimestamp = "received_timestamp";
+    public const string ProviderPublishedProxy = "provider_published_proxy";
 }
 
 public sealed record ReversionHorizonStat(
@@ -256,6 +393,7 @@ public sealed record ReversionHorizonStat(
 public sealed record ReversionCohort(
     string Trigger,
     string Regime,
+    string NewsContext,
     int Events,
     IReadOnlyList<ReversionHorizonStat> Horizons);
 
@@ -264,4 +402,9 @@ public sealed record ReversionResearchReport(
     int TotalBarsEvaluated,
     int TotalStretchEvents,
     ReversionResearchOptions Options,
+    bool NewsConditioningEnabled,
+    int NewsCoverageTickerCount,
+    int NewsEventsSupplied,
+    int NewsEventsWithTrustedReceivedTimestamp,
+    int NewsEventsUsingPublishedProxy,
     IReadOnlyList<ReversionCohort> Cohorts);

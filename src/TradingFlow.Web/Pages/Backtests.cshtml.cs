@@ -120,8 +120,8 @@ public sealed class BacktestsModel : PageModel
             tickers,
             strategyPaths,
             ParseDecimal(form["StartingCapital"].ToString(), 10000m),
-            ParseDecimal(form["RiskPerTradePct"].ToString(), 2m),
-            ParseDecimal(form["MaxPositionValuePct"].ToString(), 25m),
+            ParseDecimal(form["AccountRiskBudgetPct"].ToString(), 1m),
+            ParseDecimal(form["MaxPositionNotionalPct"].ToString(), 25m),
             ParseInt(form["MaxConcurrentPositions"].ToString(), 4),
             form["CachePolicy"].ToString(),
             []);
@@ -129,6 +129,17 @@ public sealed class BacktestsModel : PageModel
         var configPath = configWriter.WriteBacktestConfig(request);
         var job = backtestJobs.Start(request.RunName, configPath);
         return RedirectToPage("/Job", new { id = job.JobId });
+    }
+
+    public IActionResult OnPostCancelBacktest(Guid id)
+    {
+        backtestJobs.CancelJob(id);
+        return RedirectToPage(new
+        {
+            configPath = SelectedConfigPath,
+            strategyPath = SelectedStrategyPath,
+            wishlistId = WishlistId
+        });
     }
 
     private async Task LoadDataAsync(string? configPath, string? strategyPath, Guid? wishlistId, CancellationToken cancellationToken)

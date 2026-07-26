@@ -199,7 +199,7 @@ public sealed class DatabaseMigrationTests
         var assemblies = new[]
         {
             typeof(OperationalRecord).Assembly,
-            typeof(RiskEngine).Assembly,
+            typeof(SharedOrderRiskPlanner).Assembly,
             typeof(BacktestRunner).Assembly,
             typeof(AlpacaBrokerClient).Assembly,
             typeof(AlpacaManualOrderService).Assembly

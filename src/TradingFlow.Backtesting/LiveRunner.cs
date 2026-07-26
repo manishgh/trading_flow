@@ -33,6 +33,8 @@ public sealed partial class LiveRunner(
     private readonly StrategyDecisionBrain _decisionBrain = new();
     private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
     private readonly TechnicalExecutionEngine _technicalExecutionEngine = new();
+    private readonly CompletedBarExecutionPlanner _executionPlanner = new();
+    private readonly TradingFlow.Engine.Sessions.StrategySessionClock _sessionClock = new();
     private readonly ExecutionAuditor _auditor = new();
     private readonly IBrokerClient? _brokerClient = brokerClient;
     private readonly TradingFlow.Domain.Locking.ITickerLockService? _lockService = lockService;

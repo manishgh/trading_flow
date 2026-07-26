@@ -137,8 +137,8 @@ public sealed record AlpacaProviderConfig(
 
 public sealed record PortfolioConfig(
     decimal StartingCapital,
-    decimal RiskPerTradePct,
-    decimal MaxPositionValuePct,
+    decimal AccountRiskBudgetPct,
+    decimal MaxPositionNotionalPct,
     int MaxConcurrentPositions,
     decimal FixedBuyFee,
     decimal FixedSellFee,

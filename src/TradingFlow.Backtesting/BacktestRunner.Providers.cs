@@ -142,6 +142,11 @@ public sealed partial class BacktestRunner
         string? settingsPath,
         string? environmentValue)
     {
+        if (!String.IsNullOrWhiteSpace(environmentValue))
+        {
+            return environmentValue;
+        }
+
         if (settingsPath is not null)
         {
             using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
@@ -157,7 +162,7 @@ public sealed partial class BacktestRunner
 
         }
 
-        return environmentValue ?? String.Empty;
+        return String.Empty;
     }
 
     internal static string ResolveSecretForTesting(

@@ -84,8 +84,8 @@ providers:
 
 portfolio:
   starting_capital: 100000
-  risk_per_trade_pct: 1.0
-  max_position_value_pct: 20.0
+  account_risk_budget_pct: 1.0
+  max_position_notional_pct: 20.0
   max_concurrent_positions: 5
   fixed_buy_fee: 0
   fixed_sell_fee: 0

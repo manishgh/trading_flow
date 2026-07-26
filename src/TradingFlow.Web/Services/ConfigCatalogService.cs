@@ -21,7 +21,7 @@ public sealed class ConfigCatalogService
                 10,
                 60.0m,
                 "12.2 days",
-                "data/backtest/results/shared/portfolio/swing-quality-long-overbought-short-v5-comparison-crdo-msft-app-intc-mu-nvda-180d-0001.json"),
+                null),
             ["minervini-trend-template-vcp.v4-trend-rider.yaml"] = new(
                 13.0165m,
                 2.7407m,

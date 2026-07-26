@@ -1,0 +1,62 @@
+strategy_id: research.swing-connors-rsi2-deep-oversold.bt-v4
+strategy_name: RESEARCH Swing Connors RSI2 Deep Oversold V4
+source: larry_connors_rsi2_completed_daily_bar_deep_oversold_research
+version: 4
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: rsi2_oversold
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: true
+  max_reversion_rsi2: 2.0
+  portfolio_rank_mode: rsi2_ascending
+  max_vwap_extension_atr:
+  opening_range_minutes: 0
+  recent_high_lookback_bars: 20
+  volatility_contraction_lookback_bars: 25
+  max_entries_per_ticker_per_day: 1
+  require_positive_news: false
+regime:
+  benchmark: SPY
+  rule: price_above_sma
+  sma_period: 200
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 2.0
+  target_r_multiple: 2.5
+  max_hold_hours: 10000.0
+  max_hold_bars: 5
+  exit_on_rsi2_above: 70.0
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: atr
+  profit_target_mode: r_multiple
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 10.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

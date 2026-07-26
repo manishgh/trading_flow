@@ -21,8 +21,8 @@ public sealed class AlpacaCredentialProvider
 
     private string GetSecret(string configurationKey, string environmentVariable)
     {
-        return configuration[configurationKey]
-            ?? Environment.GetEnvironmentVariable(environmentVariable)
+        return Environment.GetEnvironmentVariable(environmentVariable)
+            ?? configuration[configurationKey]
             ?? String.Empty;
     }
 }

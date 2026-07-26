@@ -12,7 +12,9 @@ engine:
 time_window:
   type: rolling
   lookback_days: 180
-  warmup_lookback_days: 260
+  # 260 indicator bars are trading sessions, not calendar days. Four hundred
+  # calendar days supplies the required pre-evaluation history with margin.
+  warmup_lookback_days: 400
   start:
   end:
 
@@ -35,12 +37,16 @@ providers:
 
 portfolio:
   starting_capital: 10000
-  risk_per_trade_pct: 1.0
-  max_position_value_pct: 25
+  account_risk_budget_pct: 1.0
+  max_position_notional_pct: 25
   max_concurrent_positions: 4
   fixed_buy_fee: 1.0
   fixed_sell_fee: 1.0
   prevent_overlapping_ticker_positions: true
+  max_bar_participation_pct: 5.0
+  sec_fee_rate: 0.0000278
+  finra_taf_per_share: 0.000166
+  finra_taf_cap: 8.30
 
 signal_source:
   type: internal_candles
@@ -51,14 +57,14 @@ signal_source:
 
 validation:
   out_of_sample:
-    enabled: false
-    percent: 0.0
+    enabled: true
+    percent: 30.0
   walk_forward:
-    enabled: false
-    window_days: 10
-    step_days: 5
+    enabled: true
+    window_days: 30
+    step_days: 15
   benchmark:
-    enabled: false
+    enabled: true
     ticker: SPY
   data_quality:
     enabled: true
@@ -85,6 +91,8 @@ news:
   veto:
     ttl_minutes: 1440
     negative_threshold: -0.55
+  max_articles_per_ticker: 500
+  sentiment_timeout_seconds: 3
 
 artifacts:
   retention_mode: full

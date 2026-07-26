@@ -3,6 +3,7 @@ using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Regime;
 using TradingFlow.Engine.Risk;
 
@@ -21,8 +22,8 @@ public class BacktestRunnerExecutionQualityTests
         var strategy = ConfirmedEntryStrategy();
         var portfolio = new PortfolioConfig(
             StartingCapital: 10_000m,
-            RiskPerTradePct: 1.0m,
-            MaxPositionValuePct: 100m,
+            AccountRiskBudgetPct: 1.0m,
+            MaxPositionNotionalPct: 100m,
             MaxConcurrentPositions: 5,
             FixedBuyFee: 0m,
             FixedSellFee: 0m,
@@ -60,7 +61,7 @@ public class BacktestRunnerExecutionQualityTests
     }
 
     [Fact]
-    public void ResolveSecretForTesting_PrefersLocalAlpacaSettings_OverEnvironment()
+    public void ResolveSecretForTesting_PrefersDeploymentEnvironment_OverLocalSettings()
     {
         var settingsPath = CreateTemporaryAlpacaSettings("local-test-key");
         try
@@ -71,7 +72,7 @@ public class BacktestRunnerExecutionQualityTests
                 settingsPath,
                 "environment-test-key");
 
-            Assert.Equal("local-test-key", key);
+            Assert.Equal("environment-test-key", key);
         }
         finally
         {
@@ -143,12 +144,6 @@ public class BacktestRunnerExecutionQualityTests
     [Fact]
     public void ConfirmedEntryPlan_FillsAfterConfirmationBar_ToAvoidLookAhead()
     {
-        var runner = new BacktestRunner(new SimpleYamlReader());
-        var method = typeof(BacktestRunner).GetMethod(
-            "GetExecutionEntryPlan",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        Assert.NotNull(method);
-
         var signalTime = DateTimeOffset.Parse("2026-06-01T13:30:00Z", System.Globalization.CultureInfo.InvariantCulture);
         var strategy = ConfirmedEntryStrategy();
         var signal = new TradeSignal(
@@ -184,10 +179,26 @@ public class BacktestRunnerExecutionQualityTests
             Bar("2026-06-01T13:40:00Z", 10.80m, 11.20m, 10.70m, 11.00m)
         };
 
-        var plan = (ValueTuple<string?, int>)method.Invoke(runner, [strategy, signal, bars])!;
+        var snapshots = bars
+            .Select(bar => Snapshot(bar.Timestamp.ToString("O")) with
+            {
+                CurrentPrice = bar.Close
+            })
+            .ToArray();
+        var plan = new CompletedBarExecutionPlanner().Plan(
+            new CompletedBarExecutionRequest(
+                strategy,
+                signal,
+                PlannedOrderSide.Long,
+                bars,
+                snapshots,
+                _ => true,
+                RequireKnownFillBar: true));
 
-        Assert.Null(plan.Item1);
-        Assert.Equal(1, plan.Item2);
+        Assert.True(plan.IsReady);
+        Assert.Equal(0, plan.ConfirmationIndex);
+        Assert.Equal(0, plan.StopContextIndex);
+        Assert.Equal(1, plan.EntryIndex);
     }
 
     [Fact]
@@ -246,8 +257,8 @@ public class BacktestRunnerExecutionQualityTests
         };
         var portfolio = new PortfolioConfig(
             StartingCapital: 10_000m,
-            RiskPerTradePct: 1.0m,
-            MaxPositionValuePct: 100m,
+            AccountRiskBudgetPct: 1.0m,
+            MaxPositionNotionalPct: 100m,
             MaxConcurrentPositions: 5,
             FixedBuyFee: 1m,
             FixedSellFee: 1m,
@@ -266,6 +277,164 @@ public class BacktestRunnerExecutionQualityTests
         Assert.Single(trades, trade => trade.Ticker == "LOSS");
         Assert.Single(trades, trade => trade.Ticker == "OKAY");
         Assert.DoesNotContain(trades, trade => trade.Ticker == "LOSS" && trade.NetProfit > 0);
+    }
+
+    [Fact]
+    public void BuildPortfolioTrades_MaxEntriesPerTickerPerDay_CountsAcceptedTradesOnly()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "BuildPortfolioTrades",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var baseStrategy = ConfirmedEntryStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                MaxEntriesPerTickerPerDay = 1
+            }
+        };
+        var portfolio = new PortfolioConfig(
+            StartingCapital: 10_000m,
+            AccountRiskBudgetPct: 1.0m,
+            MaxPositionNotionalPct: 100m,
+            MaxConcurrentPositions: 5,
+            FixedBuyFee: 0m,
+            FixedSellFee: 0m,
+            MaxOpenTradesPerTicker: 1,
+            PreventOverlappingTickerPositions: false);
+        var candidates = new[]
+        {
+            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:32:00Z", 10m, 9m, 12m, "take_profit"),
+            Candidate("AAA", "2026-06-01T13:35:00Z", "2026-06-01T13:36:00Z", 10m, 9m, 12m, "take_profit"),
+            Candidate("AAA", "2026-06-02T13:31:00Z", "2026-06-02T13:32:00Z", 10m, 9m, 12m, "take_profit")
+        };
+
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(
+            null, [portfolio, strategy, candidates, null, null])!;
+
+        Assert.Equal(2, trades.Count);
+        Assert.Single(
+            trades,
+            trade => ToNewYorkDate(trade.EntryTimestamp) == new DateOnly(2026, 6, 1));
+        Assert.Single(
+            trades,
+            trade => ToNewYorkDate(trade.EntryTimestamp) == new DateOnly(2026, 6, 2));
+    }
+
+    [Fact]
+    public void BuildPortfolioTrades_EqualTimestampCandidates_UsesStableTickerOrdering()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "BuildPortfolioTrades",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var strategy = ConfirmedEntryStrategy();
+        var portfolio = new PortfolioConfig(
+            StartingCapital: 10_000m,
+            AccountRiskBudgetPct: 1.0m,
+            MaxPositionNotionalPct: 100m,
+            MaxConcurrentPositions: 1,
+            FixedBuyFee: 0m,
+            FixedSellFee: 0m,
+            MaxOpenTradesPerTicker: 1,
+            PreventOverlappingTickerPositions: true);
+        var candidates = new[]
+        {
+            Candidate("ZZZ", "2026-06-01T13:31:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit"),
+            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit")
+        };
+
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(
+            null, [portfolio, strategy, candidates, null, null])!;
+
+        var trade = Assert.Single(trades);
+        Assert.Equal("AAA", trade.Ticker);
+    }
+
+    [Fact]
+    public void BuildUnifiedPortfolioTrades_CompetingStrategiesShareSlotsAndUseSelectionScore()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "BuildUnifiedPortfolioTrades",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var first = ConfirmedEntryStrategy() with
+        {
+            StrategyId = "strategy.first",
+            StrategyName = "First"
+        };
+        var second = ConfirmedEntryStrategy() with
+        {
+            StrategyId = "strategy.second",
+            StrategyName = "Second"
+        };
+        var portfolio = new PortfolioConfig(
+            StartingCapital: 10_000m,
+            AccountRiskBudgetPct: 1.0m,
+            MaxPositionNotionalPct: 100m,
+            MaxConcurrentPositions: 1,
+            FixedBuyFee: 0m,
+            FixedSellFee: 0m,
+            MaxOpenTradesPerTicker: 1,
+            PreventOverlappingTickerPositions: true);
+        var candidates = new[]
+        {
+            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit", "First", 1m),
+            Candidate("ZZZ", "2026-06-01T13:31:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit", "Second", 2m)
+        };
+
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(
+            null,
+            [portfolio, new[] { first, second }, candidates, null, null])!;
+
+        var trade = Assert.Single(trades);
+        Assert.Equal("ZZZ", trade.Ticker);
+        Assert.Equal("Second", trade.StrategyName);
+    }
+
+    [Fact]
+    public void BuildUnifiedPortfolioTrades_SameTickerAndTimestamp_DoesNotAssumeSameBarExitOrder()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "BuildUnifiedPortfolioTrades",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var first = ConfirmedEntryStrategy() with
+        {
+            StrategyId = "strategy.first",
+            StrategyName = "First"
+        };
+        var second = ConfirmedEntryStrategy() with
+        {
+            StrategyId = "strategy.second",
+            StrategyName = "Second"
+        };
+        var portfolio = new PortfolioConfig(
+            StartingCapital: 10_000m,
+            AccountRiskBudgetPct: 1.0m,
+            MaxPositionNotionalPct: 100m,
+            MaxConcurrentPositions: 4,
+            FixedBuyFee: 0m,
+            FixedSellFee: 0m,
+            MaxOpenTradesPerTicker: 1,
+            PreventOverlappingTickerPositions: true);
+        var candidates = new[]
+        {
+            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:31:00Z", 10m, 9m, 12m, "stop_loss", "First", 2m),
+            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:31:00Z", 10m, 9m, 12m, "stop_loss", "Second", 1m)
+        };
+
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(
+            null,
+            [portfolio, new[] { first, second }, candidates, null, null])!;
+
+        var trade = Assert.Single(trades);
+        Assert.Equal("First", trade.StrategyName);
     }
 
     [Fact]
@@ -344,7 +513,16 @@ public class BacktestRunnerExecutionQualityTests
                 ExtendedBollingerMinEntryBarCloseLocationValue: 0.70m),
             new ConfluenceRules(false, "15m", 50, "none"),
             new ExitRules(3m, 3.5m, 6.5m, true, 3m, 2m, false, false, false, 2),
-            new ExecutionRules("5m", 10m),
+            new ExecutionRules(
+                "5m",
+                10m,
+                new ExecutionConfirmationRules(
+                    true,
+                    3,
+                    "none",
+                    "none",
+                    "none",
+                    MinCloseLocationValue: 0.55m)),
             new SessionRules("America/New_York", 1, 30, 30));
     }
 
@@ -396,11 +574,13 @@ public class BacktestRunnerExecutionQualityTests
         decimal entry,
         decimal stop,
         decimal exit,
-        string exitReason)
+        string exitReason,
+        string strategyName = "Confirmed Entry Test",
+        decimal selectionScore = 0m)
     {
         return new BacktestCandidateTrade(
             ticker,
-            "Confirmed Entry Test",
+            strategyName,
             "long",
             DateTimeOffset.Parse(entryTimestamp, System.Globalization.CultureInfo.InvariantCulture),
             entry,
@@ -409,7 +589,14 @@ public class BacktestRunnerExecutionQualityTests
             DateTimeOffset.Parse(exitTimestamp, System.Globalization.CultureInfo.InvariantCulture),
             exit,
             exitReason,
-            Math.Abs(entry - stop));
+            Math.Abs(entry - stop),
+            SelectionScore: selectionScore);
+    }
+
+    private static DateOnly ToNewYorkDate(DateTimeOffset timestamp)
+    {
+        var timeZone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, timeZone).DateTime);
     }
 
     private static CatalystEvent Catalyst(string timestamp, string headline)

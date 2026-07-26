@@ -1,0 +1,50 @@
+strategy_id: research.swing-mean-reversion-reclaim.tech-only.bt-v1
+strategy_name: RESEARCH Swing Mean Reversion Reclaim - Technical Only BT V1
+source: doctrine_archetype_c_connors_chan
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: mean_reversion_reclaim
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_sma200: true
+  reversion_stretch_lookback_bars: 5
+  min_consecutive_down_closes_for_stretch: 3
+  max_reversion_rsi2: 10.0
+  enable_lower_bollinger_stretch: true
+  max_entries_per_ticker_per_day: 1
+  require_positive_news: false
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 2.0
+  target_r_multiple: 2.5
+  max_hold_hours: 120.0
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: swing_low
+  profit_target_mode: r_multiple
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 10.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

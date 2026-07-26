@@ -54,7 +54,14 @@ public sealed class TechnicalExecutionEngine
             return (bar.Close, technicalExitReason);
         }
 
-        // Check Max Hold Timeout
+        if (strategy.ExitRules.MaxHoldBars is { } maxHoldBars &&
+            maxHoldBars > 0 &&
+            barsHeld >= maxHoldBars)
+        {
+            return (bar.Close, "max_hold_bars");
+        }
+
+        // Calendar-hour timeout remains available for intraday strategies and as a fallback.
         var maxExitTimestamp = entryTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours);
         if (bar.Timestamp >= maxExitTimestamp)
         {
@@ -138,6 +145,13 @@ public sealed class TechnicalExecutionEngine
             snapshot.MacdHistogram.Value < 0)
         {
             return "technical_exit_macd_histogram_negative";
+        }
+
+        if (strategy.ExitRules.ExitOnRsi2Above is { } maxRsi2 &&
+            snapshot.Rsi2 is { } rsi2 &&
+            rsi2 > maxRsi2)
+        {
+            return "technical_exit_rsi2_recovered";
         }
 
         if (strategy.ExitRules.ExitOnSma10NearSma20 &&

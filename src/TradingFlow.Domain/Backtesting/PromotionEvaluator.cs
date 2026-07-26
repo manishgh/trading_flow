@@ -32,7 +32,8 @@ public static class PromotionEvaluator
     public static PromotionAssessment Evaluate(
         StrategyBacktestResult strategy,
         BacktestValidationReport validation,
-        PromotionCriteria? criteria = null)
+        PromotionCriteria? criteria = null,
+        UniversePromotionEligibility? universePromotion = null)
     {
         criteria ??= PromotionCriteria.Default;
         var failed = new List<string>();
@@ -70,6 +71,19 @@ public static class PromotionEvaluator
         if (criteria.MinWalkForwardWindows > 0)
         {
             EvaluateWalkForward(strategy, validation, criteria, failed, passed);
+        }
+
+        if (universePromotion is null)
+        {
+            failed.Add("point_in_time_universe_evidence_missing");
+        }
+        else if (!universePromotion.IsEligible)
+        {
+            failed.AddRange(universePromotion.Failures.Select(failure => $"universe:{failure}"));
+        }
+        else
+        {
+            passed.Add("point_in_time_universe_evidence");
         }
 
         return new PromotionAssessment(strategy.StrategyId, strategy.StrategyName, failed.Count == 0, failed, passed);

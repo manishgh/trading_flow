@@ -1,7 +1,11 @@
 ﻿using System.Text.Json;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Primitives;
 using Moq;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
@@ -31,6 +35,8 @@ public sealed class PaperModelTests
             Path.Combine("configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"),
             model.SelectedStrategyPath,
             StringComparison.OrdinalIgnoreCase);
+        Assert.False(model.SelectedStrategyUsesNews);
+        Assert.False(model.NewsEnabled);
     }
 
     [Fact]
@@ -54,7 +60,7 @@ public sealed class PaperModelTests
     }
 
     [Fact]
-    public void OnGetStrategyDetails_NoNewsSwingStrategyReportsUsesNewsFalse()
+    public void OnGetStrategyDetails_SwingStrategyWithNegativeNewsVetoReportsUsesNewsTrue()
     {
         var repoRoot = FindRepositoryRoot();
         var catalog = CreateCatalog(repoRoot);
@@ -66,10 +72,79 @@ public sealed class PaperModelTests
         using var document = JsonDocument.Parse(json);
 
         Assert.True(document.RootElement.GetProperty("success").GetBoolean());
+        Assert.True(document.RootElement.GetProperty("usesNews").GetBoolean());
+    }
+
+    [Fact]
+    public void OnGetStrategyDetails_NoNewsIntradayStrategyReportsUsesNewsFalse()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var catalog = CreateCatalog(repoRoot);
+        var model = CreateModel(repoRoot, catalog);
+        var strategyPath = Path.Combine(repoRoot, "configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml");
+
+        var result = model.OnGetStrategyDetails(strategyPath);
+        var json = JsonSerializer.Serialize(((JsonResult)result).Value);
+        using var document = JsonDocument.Parse(json);
+
+        Assert.True(document.RootElement.GetProperty("success").GetBoolean());
         Assert.False(document.RootElement.GetProperty("usesNews").GetBoolean());
     }
 
-    private static PaperModel CreateModel(string repoRoot, ConfigCatalogService catalog)
+    [Fact]
+    public async Task OnPostRunLive_InvalidExtendedHoursSelection_ReturnsPageValidationError()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var catalog = CreateCatalog(repoRoot);
+        var wishlist = new Wishlist
+        {
+            Id = Guid.NewGuid(),
+            Name = "paper-validation",
+            IsDefault = true,
+            Items =
+            [
+                new WishlistItem
+                {
+                    Id = Guid.NewGuid(),
+                    Ticker = "MU",
+                    Active = true
+                }
+            ]
+        };
+        var model = CreateModel(repoRoot, catalog, [wishlist]);
+        var context = new DefaultHttpContext();
+        context.Request.Form = new FormCollection(new Dictionary<string, StringValues>
+        {
+            ["RunName"] = $"paper-invalid-extended-{Guid.NewGuid():N}",
+            ["BaseConfigPath"] = Path.Combine(repoRoot, "configs", "paper", "alpaca-paper.yaml"),
+            ["SelectedStrategyPath"] = Path.Combine(repoRoot, "configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"),
+            ["WishlistId"] = wishlist.Id.ToString(),
+            ["OrderExpiration"] = "gtc",
+            ["EntryOrderType"] = "market",
+            ["AllowExtendedHoursTrading"] = "true",
+            ["NewsEnabled"] = "false",
+            ["ScreenerFilter"] = String.Empty
+        });
+        model.PageContext = new PageContext { HttpContext = context };
+
+        var result = await model.OnPostRunLive(CancellationToken.None);
+
+        Assert.IsType<PageResult>(result);
+        Assert.False(model.ModelState.IsValid);
+        Assert.Contains(
+            model.ModelState.Values.SelectMany(value => value.Errors),
+            error => error.ErrorMessage.Equals(
+                "Extended-hours execution requires an explicit limit entry and DAY expiration.",
+                StringComparison.Ordinal));
+        Assert.Equal("gtc", model.OrderExpiration);
+        Assert.Equal("market", model.EntryOrderType);
+        Assert.True(model.AllowExtendedHoursTrading);
+    }
+
+    private static PaperModel CreateModel(
+        string repoRoot,
+        ConfigCatalogService catalog,
+        IReadOnlyList<Wishlist>? wishlists = null)
     {
         var configuration = new ConfigurationBuilder().Build();
         var credentialProvider = new AlpacaCredentialProvider(configuration);
@@ -83,7 +158,7 @@ public sealed class PaperModelTests
         var wishlistRepository = new Mock<IWishlistRepository>();
         wishlistRepository
             .Setup(repository => repository.ListAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Array.Empty<Wishlist>());
+            .ReturnsAsync(wishlists ?? Array.Empty<Wishlist>());
         return new PaperModel(
             catalog,
             new PaperEnvironmentService(catalog, credentialProvider, new Mock<IRawArchiveWriter>().Object),

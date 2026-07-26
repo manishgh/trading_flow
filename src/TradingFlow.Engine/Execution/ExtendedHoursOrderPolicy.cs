@@ -45,6 +45,28 @@ public interface IAssetTradingEligibilityProvider
 /// </summary>
 public static class ExtendedHoursOrderPolicy
 {
+    /// <summary>
+    /// Validates the static order settings required before extended-hours execution can be enabled.
+    /// Runtime session and asset eligibility are validated separately immediately before submission.
+    /// </summary>
+    public static void ValidateConfiguration(
+        string? orderType,
+        string? timeInForce,
+        bool allowExtendedHoursTrading)
+    {
+        if (!allowExtendedHoursTrading)
+        {
+            return;
+        }
+
+        if (!String.Equals(orderType?.Trim(), "limit", StringComparison.OrdinalIgnoreCase) ||
+            !String.Equals(timeInForce?.Trim(), "day", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Extended-hours execution requires an explicit limit entry and DAY expiration.");
+        }
+    }
+
     public static void Validate(
         TradingSessionSnapshot session,
         string orderType,

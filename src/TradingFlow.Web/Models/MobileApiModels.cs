@@ -51,8 +51,8 @@ public sealed record MobileBacktestRunRequest(
     Guid? WishlistId,
     IReadOnlyList<string> StrategyPaths,
     decimal StartingCapital,
-    decimal RiskPerTradePct,
-    decimal MaxPositionValuePct,
+    decimal AccountRiskBudgetPct,
+    decimal MaxPositionNotionalPct,
     int MaxConcurrentPositions,
     string CachePolicy);
 

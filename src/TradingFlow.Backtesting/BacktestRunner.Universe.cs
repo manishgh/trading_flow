@@ -50,33 +50,25 @@ public sealed partial class BacktestRunner
         return tickers;
     }
 
-    private static async Task PersistUniverseSnapshotAsync(
+    private async Task PersistUniverseSnapshotAsync(
         BacktestRunConfig run,
         UniverseResolution resolution,
         CancellationToken cancellationToken)
     {
-        try
+        var directory = Path.Combine(run.ResultsRoot, "universe");
+        var path = Path.Combine(directory, $"{resolution.AsOfDate:yyyyMMdd}-{run.RunName}.json");
+        var payload = new
         {
-            var directory = Path.Combine(run.ResultsRoot, "universe");
-            Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, $"{resolution.AsOfDate:yyyyMMdd}-{run.RunName}.json");
-            var payload = new
-            {
-                runName = run.RunName,
-                asOfDate = resolution.AsOfDate.ToString("yyyy-MM-dd"),
-                source = resolution.Source,
-                rule = run.Universe,
-                selected = resolution.Selected,
-                rejections = resolution.Rejections
-            };
-            await File.WriteAllTextAsync(
-                path,
-                JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }),
-                cancellationToken);
-        }
-        catch
-        {
-            // Snapshot persistence is best-effort audit; never fail a run because of it.
-        }
+            runName = run.RunName,
+            asOfDate = resolution.AsOfDate.ToString("yyyy-MM-dd"),
+            source = resolution.Source,
+            rule = run.Universe,
+            selected = resolution.Selected,
+            rejections = resolution.Rejections
+        };
+        await _artifactWriter.WriteTextAsync(
+            path,
+            JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }),
+            cancellationToken);
     }
 }

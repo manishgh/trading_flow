@@ -35,6 +35,7 @@ var uiTestMode = String.Equals(
 if (builder.Environment.IsDevelopment())
 {
     builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
+    builder.Configuration.AddEnvironmentVariables();
 }
 Environment.SetEnvironmentVariable(
     "TRADINGFLOW_RESULT_OWNER",
@@ -64,6 +65,18 @@ builder.Services.AddSingleton<ICandleStore>(sp =>
 builder.Services.AddSingleton<ConfigCatalogService>();
 builder.Services.AddSingleton<RunConfigWriter>();
 builder.Services.AddSingleton<TradingFlow.Backtesting.BacktestRunner>();
+builder.Services.AddSingleton<IBacktestRunExecutor, BacktestRunExecutor>();
+builder.Services.AddSingleton(new BacktestJobServiceOptions(
+    MaxConcurrentJobs: ParsePositiveInteger(
+        builder.Configuration["Backtests:MaxConcurrentJobs"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MAX_CONCURRENT_BACKTESTS"),
+        BacktestJobServiceOptions.Default.MaxConcurrentJobs),
+    RetainedTerminalJobs: ParseNonNegativeInteger(
+        builder.Configuration["Backtests:RetainedTerminalJobs"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_RETAINED_BACKTEST_JOBS"),
+        BacktestJobServiceOptions.Default.RetainedTerminalJobs),
+    RetainedRecentTrades: BacktestJobServiceOptions.Default.RetainedRecentTrades,
+    RetainedMissedMoves: BacktestJobServiceOptions.Default.RetainedMissedMoves));
 builder.Services.AddSingleton<BacktestJobService>();
 builder.Services.AddSingleton<OptimizationJobService>();
 builder.Services.AddSingleton<AlpacaCredentialProvider>();
@@ -614,4 +627,9 @@ static IEnumerable<string> SplitTickerDisplay(string tickerDisplay)
 static int ParsePositiveInteger(string? value, int defaultValue)
 {
     return Int32.TryParse(value, out var parsed) && parsed > 0 ? parsed : defaultValue;
+}
+
+static int ParseNonNegativeInteger(string? value, int defaultValue)
+{
+    return Int32.TryParse(value, out var parsed) && parsed >= 0 ? parsed : defaultValue;
 }

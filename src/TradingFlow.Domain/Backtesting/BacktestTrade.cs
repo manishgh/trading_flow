@@ -12,7 +12,9 @@ public sealed record BacktestCandidateTrade(
     decimal ExitPrice,
     string ExitReason,
     decimal StopDistance,
-    decimal EntryBarVolume = 0m);
+    decimal EntryBarVolume = 0m,
+    decimal SelectionScore = 0m,
+    string InitialStopKind = "structural");
 
 public sealed record BacktestTrade(
     string Ticker,

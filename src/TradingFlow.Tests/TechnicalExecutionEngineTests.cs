@@ -196,6 +196,55 @@ public sealed class TechnicalExecutionEngineTests
         Assert.Equal("technical_exit_ema10_cross_below_ema20", reason);
     }
 
+    [Fact]
+    public void GetTechnicalExitReason_WhenRsi2RecoversAboveConfiguredLevel_ReturnsRecoveryExit()
+    {
+        var strategy = CreateStrategy() with
+        {
+            ExitRules = CreateStrategy().ExitRules with { ExitOnRsi2Above = 70m }
+        };
+        var snapshot = CreateSnapshot(currentPrice: 10m, vwap: 9m) with { Rsi2 = 74m };
+
+        var reason = new TechnicalExecutionEngine().GetTechnicalExitReason(strategy, snapshot, barsHeld: 6);
+
+        Assert.Equal("technical_exit_rsi2_recovered", reason);
+    }
+
+    [Fact]
+    public void EvaluateBarForExit_WhenTradingBarLimitReached_UsesBarsInsteadOfCalendarHours()
+    {
+        var strategy = CreateStrategy() with
+        {
+            ExitRules = CreateStrategy().ExitRules with
+            {
+                MaxHoldBars = 5,
+                MaxHoldHours = 10_000m,
+                ExitOnLogPriceFade = false,
+                ExitOnMacdHistogramNegative = false
+            }
+        };
+        var snapshot = CreateSnapshot(currentPrice: 10m, vwap: 9m);
+        var bar = new OhlcvBar("TEST", DateTimeOffset.UtcNow, "1d", 10m, 10.2m, 9.8m, 10m, 1000m);
+        var stop = 8m;
+        var highWatermark = 10m;
+
+        var result = new TechnicalExecutionEngine().EvaluateBarForExit(
+            strategy,
+            bar,
+            snapshot,
+            entryPrice: 10m,
+            initialStopLossPrice: 8m,
+            takeProfitPrice: 20m,
+            entryTimestamp: bar.Timestamp.AddDays(-10),
+            stopDistance: 2m,
+            barsHeld: 5,
+            ref stop,
+            ref highWatermark);
+
+        Assert.Equal("max_hold_bars", result.ExitReason);
+        Assert.Equal(10m, result.ExitPrice);
+    }
+
     private static IndicatorSnapshot CreateSnapshot(decimal currentPrice, decimal vwap)
     {
         return new IndicatorSnapshot(

@@ -182,12 +182,20 @@ public sealed class BacktestValidator
     {
         var warnings = new List<string>();
         var staticUniverse = config.Validation.BiasRisk.UniverseSource.Equals("static_config", StringComparison.OrdinalIgnoreCase);
+        var currentScreenerUniverse = config.Validation.BiasRisk.UniverseSource.Contains(
+            "finviz",
+            StringComparison.OrdinalIgnoreCase);
         var missingAsOfDate = config.Validation.BiasRisk.UniverseAsOfDate is null;
         var rawIntradayPolicy = config.Validation.BiasRisk.PriceAdjustmentPolicy.Contains("raw", StringComparison.OrdinalIgnoreCase);
 
         if (staticUniverse)
         {
             warnings.Add("Universe source is static_config; this can introduce survivorship bias unless the ticker list is reconstructed as-of the backtest date.");
+        }
+
+        if (currentScreenerUniverse)
+        {
+            warnings.Add("Finviz supplies a current screener export, not historical membership. The run is diagnostic and cannot be promoted without archived point-in-time provider snapshots.");
         }
 
         if (missingAsOfDate)
@@ -204,7 +212,7 @@ public sealed class BacktestValidator
             config.Validation.BiasRisk.UniverseSource,
             config.Validation.BiasRisk.UniverseAsOfDate,
             config.Validation.BiasRisk.PriceAdjustmentPolicy,
-            staticUniverse || missingAsOfDate,
+            staticUniverse || currentScreenerUniverse || missingAsOfDate,
             rawIntradayPolicy,
             warnings);
     }

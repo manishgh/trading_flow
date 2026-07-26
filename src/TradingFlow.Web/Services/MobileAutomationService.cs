@@ -37,7 +37,6 @@ public sealed partial class MobileAutomationService
     private readonly SignalGenerator signalGenerator = new();
     private readonly BasicStrategyEvaluator strategyEvaluator = new();
     private readonly PositionGuardianEngine positionGuardianEngine = new();
-    private readonly RiskEngine riskEngine = new();
     private readonly IOrderSubmissionService? orderSubmissionService;
     private readonly IOrderLifecycleService? orderLifecycleService;
 
@@ -251,15 +250,44 @@ public sealed partial class MobileAutomationService
             var state = await LoadTickerStateAsync(runConfig, strategy, session.Ticker, marketDataProvider, cancellationToken);
             var execution = PrepareAutomationEntryExecution(runConfig, strategy, session, state, entryMode);
 
-            var order = riskEngine.CreateLongBracketOrderWithPositionRisk(
-                strategy,
-                execution.ExecutionSignal,
-                runConfig.Portfolio.StartingCapital,
-                runConfig.Portfolio.RiskPerTradePct,
-                runConfig.Portfolio.MaxPositionValuePct);
+            if (brokerClient is not IBrokerAccountProvider accountProvider)
+            {
+                throw new InvalidOperationException(
+                    "Broker account equity is unavailable; automation sizing fails closed.");
+            }
+
+            if (!state.BarsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionBars) ||
+                !state.SnapshotsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots) ||
+                executionBars.Count == 0 ||
+                executionSnapshots.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"Execution market state {strategy.Execution.Timeframe} is unavailable for {session.Ticker}.");
+            }
+
+            var account = await accountProvider.GetAccountSnapshotAsync(cancellationToken);
+            var orderPlan = new StrategyOrderPlanner().Plan(
+                new StrategyOrderPlanningRequest(
+                    strategy,
+                    execution.Signal,
+                    execution.ExecutionSignal,
+                    PlannedOrderSide.Long,
+                    account.Equity,
+                    new OrderPlanningRiskLimits(
+                        runConfig.Portfolio.AccountRiskBudgetPct,
+                        runConfig.Portfolio.MaxPositionNotionalPct),
+                    runConfig.Portfolio.FixedBuyFee,
+                    runConfig.Portfolio.FixedSellFee,
+                    executionSnapshots.Count - 1,
+                    executionBars,
+                    executionSnapshots));
+            var order = orderPlan.Order;
             if (order is null)
             {
-                throw new InvalidOperationException($"Unable to size order for {session.Ticker}; ATR or risk budget is invalid.");
+                throw new InvalidOperationException(
+                    orderPlan.RiskRejection?.Reason ??
+                    orderPlan.StopRejectionReason ??
+                    $"Unable to build an order risk plan for {session.Ticker}.");
             }
 
             if (orderSubmissionService is null)

@@ -43,12 +43,12 @@
                             </Grid>
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                                 <VerticalStackLayout Spacing="4">
-                                    <Label Text="Risk per trade %" FontAttributes="Bold" FontSize="12" />
-                                    <Entry x:Name="RiskEntry" Placeholder="Risk %" Text="1" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                    <Label Text="Account risk budget %" FontAttributes="Bold" FontSize="12" />
+                                    <Entry x:Name="RiskEntry" Placeholder="Risk budget %" Text="1" Keyboard="Numeric" TextChanged="OnFormChanged" />
                                 </VerticalStackLayout>
                                 <VerticalStackLayout Grid.Column="1" Spacing="4">
-                                    <Label Text="Max position %" FontAttributes="Bold" FontSize="12" />
-                                    <Entry x:Name="MaxPositionEntry" Placeholder="Max pos %" Text="25" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                    <Label Text="Max position notional %" FontAttributes="Bold" FontSize="12" />
+                                    <Entry x:Name="MaxPositionEntry" Placeholder="Max notional %" Text="25" Keyboard="Numeric" TextChanged="OnFormChanged" />
                                 </VerticalStackLayout>
                             </Grid>
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">

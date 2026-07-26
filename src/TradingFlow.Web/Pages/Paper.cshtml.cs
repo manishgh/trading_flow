@@ -94,7 +94,7 @@ public sealed class PaperModel : PageModel
         ScreenerFilter ??= String.Empty;
 
         var selectedStrategy = Strategies.FirstOrDefault(s => s.Path == SelectedStrategyPath);
-        SelectedStrategyUsesNews = selectedStrategy is not null && StrategyUsesNews(selectedStrategy.Definition);
+        SelectedStrategyUsesNews = selectedStrategy is not null && StrategyCapabilityInspector.UsesNews(selectedStrategy.Definition);
         NewsEnabled = (selectedExecutionConfig?.Config.News.Enabled ?? true) && SelectedStrategyUsesNews;
         if (selectedStrategy != null && string.IsNullOrEmpty(StrategyYaml))
         {
@@ -216,8 +216,16 @@ public sealed class PaperModel : PageModel
         if (String.IsNullOrWhiteSpace(runName))
             runName = "paper_" + DateTimeOffset.UtcNow.ToString("yyyyMMdd_HHmmss");
 
+        OrderExpiration = orderExpiration;
+        EntryOrderType = entryOrderType;
+        AllowExtendedHoursTrading = allowExtendedHoursTrading;
+        NewsEnabled = newsEnabled;
+        ScreenerFilter = screenerFilter;
+        SuggestedRunName = runName;
+
         Load(baseConfigPath, strategyPath);
         await LoadWishlistsAsync(Guid.TryParse(wishlistIdText, out var parsedWishlistId) ? parsedWishlistId : null, cancellationToken);
+        PopulateSelectedStrategyUi();
         var wishlistTickers = SelectedWishlist?.Items
             .Where(item => item.Active)
             .Select(item => item.Ticker)
@@ -229,21 +237,57 @@ public sealed class PaperModel : PageModel
             return Page();
         }
 
-        var tempConfigPath = configWriter.SaveTempConfig(
-            baseConfigPath,
-            wishlistTickers,
-            strategyPath,
-            orderExpiration,
-            entryOrderType,
-            allowExtendedHoursTrading,
-            screenerFilter,
-            runName,
-            newsEnabled,
-            SelectedWishlist?.Id,
-            SelectedWishlist?.Name,
-            SelectedWishlist is null ? "finviz" : "wishlist");
+        string tempConfigPath;
+        try
+        {
+            tempConfigPath = configWriter.SaveTempConfig(
+                baseConfigPath,
+                wishlistTickers,
+                strategyPath,
+                orderExpiration,
+                entryOrderType,
+                allowExtendedHoursTrading,
+                screenerFilter,
+                runName,
+                newsEnabled,
+                SelectedWishlist?.Id,
+                SelectedWishlist?.Name,
+                SelectedWishlist is null ? "finviz" : "wishlist");
+        }
+        catch (InvalidOperationException exception)
+        {
+            logger.LogInformation(
+                "Paper run {RunName} rejected before job creation: {Reason}",
+                runName,
+                exception.Message);
+            ModelState.AddModelError(String.Empty, exception.Message);
+            return Page();
+        }
+
         var job = paperJobs.Start(runName, tempConfigPath);
         return RedirectToPage("/PaperJob", new { id = job.JobId });
+    }
+
+    private void PopulateSelectedStrategyUi()
+    {
+        var selectedStrategy = Strategies.FirstOrDefault(strategy => strategy.Path == SelectedStrategyPath);
+        SelectedStrategyUsesNews = selectedStrategy is not null && StrategyCapabilityInspector.UsesNews(selectedStrategy.Definition);
+        if (selectedStrategy is null || !String.IsNullOrEmpty(StrategyYaml))
+        {
+            return;
+        }
+
+        try
+        {
+            StrategyYaml = System.IO.File.ReadAllText(selectedStrategy.Path);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Failed to read selected strategy YAML from {StrategyPath}.",
+                selectedStrategy.Path);
+        }
     }
 
     private void Load(string? configPath, string? strategyPath)
@@ -287,7 +331,7 @@ public sealed class PaperModel : PageModel
         var stopMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"stop_atr_multiple:\s*([\d\.]+)");
         var targetMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"target_r_multiple:\s*([\d\.]+)");
         var strategy = catalog.GetStrategies().FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase));
-        var usesNews = strategy is not null && StrategyUsesNews(strategy.Definition);
+        var usesNews = strategy is not null && StrategyCapabilityInspector.UsesNews(strategy.Definition);
 
         return new JsonResult(new {
             success = true,
@@ -335,17 +379,6 @@ public sealed class PaperModel : PageModel
 
         var strategy = Strategies.FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase))
             ?? catalog.GetStrategies().FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase));
-        return strategy is not null && StrategyUsesNews(strategy.Definition);
-    }
-
-    private static bool StrategyUsesNews(StrategyDefinition strategy)
-    {
-        return strategy.EntryRules.RequirePositiveNews ||
-            strategy.EntryRules.MaxShortNewsSentiment is not null ||
-            strategy.EntryRules.MinShortCatalystDropPct is not null ||
-            strategy.EntryRules.MinCatalystPriceMovePct is not null ||
-            strategy.EntryRules.MaxCatalystPriceMovePct is not null ||
-            strategy.EntryRules.SetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase) ||
-            strategy.EntryRules.ShortSetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase);
+        return strategy is not null && StrategyCapabilityInspector.UsesNews(strategy.Definition);
     }
 }

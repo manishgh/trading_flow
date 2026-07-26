@@ -181,6 +181,33 @@ public class BasicStrategyEvaluatorTests
     }
 
     [Fact]
+    public void GetLongEntryRejection_Rsi2OversoldSetup_UsesDedicatedSignal()
+    {
+        var baseStrategy = CreateBaseStrategy();
+        var strategy = baseStrategy with
+        {
+            EntryRules = baseStrategy.EntryRules with
+            {
+                SetupType = "rsi2_oversold",
+                MinVolumeSpike = 0m,
+                VolumeConfirmationMode = "none"
+            }
+        };
+
+        var rejected = _evaluator.GetLongEntryRejection(
+            strategy,
+            CreateBaseSignal() with { IsConnorsRsi2Oversold = false, CurrentRsi2 = 8m },
+            relativeVolume: 0m);
+        var accepted = _evaluator.GetLongEntryRejection(
+            strategy,
+            CreateBaseSignal() with { IsConnorsRsi2Oversold = true, CurrentRsi2 = 3m },
+            relativeVolume: 0m);
+
+        Assert.Equal("setup_rsi2_oversold_not_triggered", rejected);
+        Assert.Null(accepted);
+    }
+
+    [Fact]
     public void GetLongEntryRejection_WhenDirectEntryIsTooExtendedFromVwap_ReturnsFormattedString()
     {
         var baseStrategy = CreateBaseStrategy();

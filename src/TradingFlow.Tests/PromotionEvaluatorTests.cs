@@ -14,7 +14,10 @@ public sealed class PromotionEvaluatorTests
             trades: SpreadTrades(("AAA", 300m), ("BBB", 300m), ("CCC", 400m)));
         var validation = Validation(oosReturn: 5m, oosTrades: 12, benchmarkExcess: 6m, walkForward: new[] { 2m, 1m, 3m });
 
-        var assessment = PromotionEvaluator.Evaluate(strategy, validation);
+        var assessment = PromotionEvaluator.Evaluate(
+            strategy,
+            validation,
+            universePromotion: EligibleUniverse());
 
         Assert.True(assessment.Eligible, string.Join("; ", assessment.FailedChecks));
     }
@@ -58,6 +61,25 @@ public sealed class PromotionEvaluatorTests
         Assert.Contains(assessment.FailedChecks, reason => reason.StartsWith("benchmark"));
         Assert.Contains(assessment.FailedChecks, reason => reason.StartsWith("walk_forward_windows"));
     }
+
+    [Fact]
+    public void Evaluate_MissingPointInTimeUniverseEvidence_IsRejected()
+    {
+        var strategy = StrategyResult(
+            returnPct: 12m,
+            drawdownPct: 4m,
+            acceptedTrades: 40,
+            trades: SpreadTrades(("AAA", 300m), ("BBB", 300m), ("CCC", 400m)));
+        var validation = Validation(oosReturn: 5m, oosTrades: 12, benchmarkExcess: 6m, walkForward: new[] { 2m, 1m, 3m });
+
+        var assessment = PromotionEvaluator.Evaluate(strategy, validation);
+
+        Assert.False(assessment.Eligible);
+        Assert.Contains("point_in_time_universe_evidence_missing", assessment.FailedChecks);
+    }
+
+    private static UniversePromotionEligibility EligibleUniverse() =>
+        new(true, Array.Empty<string>());
 
     private static IReadOnlyList<BacktestTrade> SpreadTrades(params (string Ticker, decimal Net)[] tickerNets)
     {

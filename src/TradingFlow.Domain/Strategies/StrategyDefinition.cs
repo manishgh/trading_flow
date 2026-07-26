@@ -218,7 +218,16 @@ public sealed record EntryRules(
     int MinConsecutiveDownClosesForStretch = 0,
     decimal? MaxReversionRsi2 = null,
     bool EnableLowerBollingerStretch = false,
-    decimal? VetoFreshNewsHours = null);
+    decimal? VetoFreshNewsHours = null,
+    int VcpPivotStrengthBars = 2,
+    decimal VcpMaximumDepthRatioToPrevious = 0.90m,
+    decimal VcpMinimumLowRisePct = 0m,
+    decimal VcpMaximumContractionToAdvanceVolumeRatio = 0.70m,
+    bool VcpRequireProgressiveContractionVolume = true,
+    decimal VcpMaximumVolumeRatioToPreviousContraction = 1m,
+    int VcpMinimumVolumeReferenceBars = 1,
+    decimal VcpBreakoutBufferPct = 0m,
+    string PortfolioRankMode = "none");
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,
@@ -257,7 +266,9 @@ public sealed record ExitRules(
     // Doctrine §6A L5: require two consecutive closes below EMA20 before the EMA20 loss exit fires,
     // instead of a single-touch exit that shakes out trend riders on one-bar dips. Default false
     // preserves the existing single-close behaviour for every other strategy.
-    bool RequireConfirmedEma20Exit = false);
+    bool RequireConfirmedEma20Exit = false,
+    int? MaxHoldBars = null,
+    decimal? ExitOnRsi2Above = null);
 
 public sealed record ConfluenceRules(
     bool Enabled,
@@ -268,7 +279,40 @@ public sealed record ConfluenceRules(
 
 public sealed record ExecutionRules(
     string Timeframe,
-    decimal SlippageBps);
+    decimal SlippageBps,
+    ExecutionConfirmationRules? Confirmation = null)
+{
+    public ExecutionConfirmationRules EffectiveConfirmation =>
+        Confirmation ?? ExecutionConfirmationRules.Disabled;
+}
+
+/// <summary>
+/// Defines the completed execution-timeframe evidence required after a setup
+/// becomes available. A confirming bar is evidence only; backtests fill on the
+/// next eligible bar and live trading can route only after this bar has closed.
+/// </summary>
+public sealed record ExecutionConfirmationRules(
+    bool Enabled,
+    int MaxBarsAfterSetup,
+    string PriceFilter,
+    string TrendFilter,
+    string MomentumFilter,
+    decimal? MinCloseLocationValue = null,
+    decimal? MaxCloseLocationValue = null)
+{
+    public static ExecutionConfirmationRules Disabled { get; } =
+        new(false, 0, "none", "none", "none");
+
+    public const string NoFilter = "none";
+    public const string CloseAboveSetupClose = "close_above_setup_close";
+    public const string CloseBelowSetupClose = "close_below_setup_close";
+    public const string CloseAbovePreviousHigh = "close_above_previous_high";
+    public const string CloseBelowPreviousLow = "close_below_previous_low";
+    public const string Ema10AboveEma20 = "ema10_above_ema20";
+    public const string Ema10BelowEma20 = "ema10_below_ema20";
+    public const string MacdHistogramPositive = "macd_histogram_positive";
+    public const string MacdHistogramNegative = "macd_histogram_negative";
+}
 
 public sealed record SessionRules(
     string ExchangeTimezone,

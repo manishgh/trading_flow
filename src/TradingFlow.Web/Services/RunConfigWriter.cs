@@ -1,6 +1,7 @@
 ﻿using System.Globalization;
 using System.Text;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Web.Models;
@@ -24,7 +25,7 @@ public sealed class RunConfigWriter
     {
         var baseConfig = yamlReader.ReadBacktestRun(request.BaseConfigPath);
         var selectedStrategies = request.StrategyPaths.Select(yamlReader.ReadStrategy).ToArray();
-        var generatedConfigNeedsNews = baseConfig.News.Enabled || selectedStrategies.Any(StrategyUsesNews);
+        var generatedConfigNeedsNews = baseConfig.News.Enabled || selectedStrategies.Any(StrategyCapabilityInspector.UsesNews);
         var runName = SanitizeRunName(request.RunName);
         var outputPath = Path.Combine(paths.GeneratedBacktestConfigsRoot, $"{runName}.yaml");
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -79,12 +80,16 @@ public sealed class RunConfigWriter
         yaml.AppendLine();
         yaml.AppendLine("portfolio:");
         yaml.AppendLine($"  starting_capital: {request.StartingCapital.ToString(CultureInfo.InvariantCulture)}");
-        yaml.AppendLine($"  risk_per_trade_pct: {request.RiskPerTradePct.ToString(CultureInfo.InvariantCulture)}");
-        yaml.AppendLine($"  max_position_value_pct: {request.MaxPositionValuePct.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  account_risk_budget_pct: {request.AccountRiskBudgetPct.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  max_position_notional_pct: {request.MaxPositionNotionalPct.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  max_concurrent_positions: {request.MaxConcurrentPositions}");
         yaml.AppendLine($"  fixed_buy_fee: {baseConfig.Portfolio.FixedBuyFee.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  fixed_sell_fee: {baseConfig.Portfolio.FixedSellFee.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  prevent_overlapping_ticker_positions: {baseConfig.Portfolio.PreventOverlappingTickerPositions.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  max_bar_participation_pct: {baseConfig.Portfolio.MaxBarParticipationPct.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  sec_fee_rate: {baseConfig.Portfolio.SecFeeRate.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  finra_taf_per_share: {baseConfig.Portfolio.FinraTafPerShare.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  finra_taf_cap: {baseConfig.Portfolio.FinraTafCap.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine();
         yaml.AppendLine("signal_source:");
         yaml.AppendLine("  type: internal_candles");
@@ -114,6 +119,8 @@ public sealed class RunConfigWriter
             yaml.AppendLine("  veto:");
             yaml.AppendLine($"    ttl_minutes: {baseConfig.News.VetoTtlMinutes}");
             yaml.AppendLine($"    negative_threshold: {baseConfig.News.VetoNegativeThreshold.ToString(CultureInfo.InvariantCulture)}");
+            yaml.AppendLine($"  max_articles_per_ticker: {baseConfig.News.MaxArticlesPerTicker}");
+            yaml.AppendLine($"  sentiment_timeout_seconds: {baseConfig.News.SentimentTimeoutSeconds}");
         }
         yaml.AppendLine();
         yaml.AppendLine("artifacts:");
@@ -128,16 +135,6 @@ public sealed class RunConfigWriter
 
         artifactWriter.WriteText(outputPath, yaml.ToString());
         return outputPath;
-    }
-
-    private static bool StrategyUsesNews(TradingFlow.Domain.Strategies.StrategyDefinition strategy)
-    {
-        return strategy.EntryRules.RequirePositiveNews ||
-            strategy.EntryRules.MinNewsSentiment is not null ||
-            strategy.EntryRules.VetoNewsSentimentBelow is not null ||
-            strategy.EntryRules.MinCatalystPriceMovePct is not null ||
-            strategy.EntryRules.MaxCatalystPriceMovePct is not null ||
-            strategy.EntryRules.SetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase);
     }
 
     private IReadOnlyList<string> WriteStrategyConfigs(BacktestRunRequest request, string outputPath, string runName)
@@ -223,7 +220,10 @@ public sealed class RunConfigWriter
         string? wishlistName = null,
         string universeSource = "ephemeral")
     {
-        ValidateExecutionSelection(entryOrderType, orderExpiration, allowExtendedHoursTrading);
+        ExtendedHoursOrderPolicy.ValidateConfiguration(
+            entryOrderType,
+            orderExpiration,
+            allowExtendedHoursTrading);
         var rawYaml = File.ReadAllText(baseConfigPath);
         var baseConfig = yamlReader.ReadBacktestRun(baseConfigPath);
         var effectiveNewsEnabled = newsEnabled ?? baseConfig.News.Enabled;
@@ -402,24 +402,6 @@ public sealed class RunConfigWriter
         return outputPath;
     }
 
-    private static void ValidateExecutionSelection(
-        string? entryOrderType,
-        string? orderExpiration,
-        bool allowExtendedHoursTrading)
-    {
-        if (!allowExtendedHoursTrading)
-        {
-            return;
-        }
-
-        if (!String.Equals(entryOrderType?.Trim(), "limit", StringComparison.OrdinalIgnoreCase) ||
-            !String.Equals(orderExpiration?.Trim(), "day", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                "Extended-hours execution requires an explicit limit entry and DAY expiration.");
-        }
-    }
-
     public void DeleteTempConfig(string configPath)
     {
         var fullPath = Path.GetFullPath(configPath);
@@ -495,6 +477,15 @@ public sealed class RunConfigWriter
         AppendOptionalDecimal(yaml, "  max_reversion_rsi2", strategy.EntryRules.MaxReversionRsi2);
         yaml.AppendLine($"  enable_lower_bollinger_stretch: {strategy.EntryRules.EnableLowerBollingerStretch.ToString().ToLowerInvariant()}");
         AppendOptionalDecimal(yaml, "  veto_fresh_news_hours", strategy.EntryRules.VetoFreshNewsHours);
+        yaml.AppendLine($"  vcp_pivot_strength_bars: {strategy.EntryRules.VcpPivotStrengthBars}");
+        yaml.AppendLine($"  vcp_maximum_depth_ratio_to_previous: {strategy.EntryRules.VcpMaximumDepthRatioToPrevious.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  vcp_minimum_low_rise_pct: {strategy.EntryRules.VcpMinimumLowRisePct.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  vcp_maximum_contraction_to_advance_volume_ratio: {strategy.EntryRules.VcpMaximumContractionToAdvanceVolumeRatio.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  vcp_require_progressive_contraction_volume: {strategy.EntryRules.VcpRequireProgressiveContractionVolume.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  vcp_maximum_volume_ratio_to_previous_contraction: {strategy.EntryRules.VcpMaximumVolumeRatioToPreviousContraction.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  vcp_minimum_volume_reference_bars: {strategy.EntryRules.VcpMinimumVolumeReferenceBars}");
+        yaml.AppendLine($"  vcp_breakout_buffer_pct: {strategy.EntryRules.VcpBreakoutBufferPct.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"  portfolio_rank_mode: {strategy.EntryRules.PortfolioRankMode}");
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
@@ -580,6 +571,8 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  stop_atr_multiple: {strategy.ExitRules.StopAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  target_r_multiple: {strategy.ExitRules.TargetRMultiple.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  max_hold_hours: {strategy.ExitRules.MaxHoldHours.ToString(CultureInfo.InvariantCulture)}");
+        AppendOptionalInt(yaml, "  max_hold_bars", strategy.ExitRules.MaxHoldBars);
+        AppendOptionalDecimal(yaml, "  exit_on_rsi2_above", strategy.ExitRules.ExitOnRsi2Above);
         yaml.AppendLine($"  enable_atr_trailing_stop: {strategy.ExitRules.EnableAtrTrailingStop.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  trailing_stop_atr_multiple: {strategy.ExitRules.TrailingStopAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  trailing_activation_r: {strategy.ExitRules.TrailingActivationR.ToString(CultureInfo.InvariantCulture)}");
@@ -614,6 +607,15 @@ public sealed class RunConfigWriter
         yaml.AppendLine("execution:");
         yaml.AppendLine($"  timeframe: {strategy.Execution.Timeframe}");
         yaml.AppendLine($"  slippage_bps: {strategy.Execution.SlippageBps.ToString(CultureInfo.InvariantCulture)}");
+        var confirmation = strategy.Execution.EffectiveConfirmation;
+        yaml.AppendLine("  confirmation:");
+        yaml.AppendLine($"    enabled: {confirmation.Enabled.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"    max_bars_after_setup: {confirmation.MaxBarsAfterSetup}");
+        yaml.AppendLine($"    price_filter: {confirmation.PriceFilter}");
+        yaml.AppendLine($"    trend_filter: {confirmation.TrendFilter}");
+        yaml.AppendLine($"    momentum_filter: {confirmation.MomentumFilter}");
+        AppendOptionalDecimal(yaml, "    min_close_location_value", confirmation.MinCloseLocationValue);
+        AppendOptionalDecimal(yaml, "    max_close_location_value", confirmation.MaxCloseLocationValue);
         yaml.AppendLine("session:");
         yaml.AppendLine($"  exchange_timezone: {strategy.Session.ExchangeTimezone}");
         yaml.AppendLine($"  quiet_minutes_after_open: {strategy.Session.QuietMinutesAfterOpen}");

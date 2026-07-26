@@ -8,6 +8,42 @@ namespace TradingFlow.Tests;
 
 public sealed class RunConfigParsingTests
 {
+    [Fact]
+    public void ReadBacktestRun_NestedResearchConfigs_ResolveStorageFromSolutionRoot()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var researchRoot = Path.Combine(
+            repoRoot,
+            "data",
+            "research",
+            $"config-root-test-{Guid.NewGuid():N}");
+        var nestedConfigDirectory = Path.Combine(researchRoot, "configs");
+        Directory.CreateDirectory(nestedConfigDirectory);
+        var sourcePath = Path.Combine(repoRoot, "configs", "backtest", "swing-backtest-profile.yaml");
+        var nestedPath = Path.Combine(nestedConfigDirectory, "run.yaml");
+
+        try
+        {
+            File.Copy(sourcePath, nestedPath);
+
+            var run = new SimpleYamlReader().ReadBacktestRun(nestedPath);
+
+            Assert.Equal(
+                Path.GetFullPath(Path.Combine(repoRoot, "data", "backtest", "normalized")),
+                run.NormalizedRoot);
+            Assert.Equal(
+                Path.GetFullPath(Path.Combine(repoRoot, "data", "backtest", "results")),
+                run.ResultsRoot);
+        }
+        finally
+        {
+            if (Directory.Exists(researchRoot))
+            {
+                Directory.Delete(researchRoot, recursive: true);
+            }
+        }
+    }
+
     // One-brain: a strategy regenerated for paper/live via RunConfigWriter must round-trip losslessly,
     // or paper behaviour silently diverges from backtest (review finding #1).
     [Theory]
@@ -35,6 +71,7 @@ public sealed class RunConfigParsingTests
             var roundTripped = reader.ReadStrategy(tempPath);
             Assert.Equal(original.EntryRules, roundTripped.EntryRules);
             Assert.Equal(original.ExitRules, roundTripped.ExitRules);
+            Assert.Equal(original.Execution, roundTripped.Execution);
             Assert.Equal(original.Regime, roundTripped.Regime);
         }
         finally
@@ -87,6 +124,56 @@ public sealed class RunConfigParsingTests
         Assert.Equal(3.0m, divergence.EntryRules.MinVwapDistanceAtrForDivergence);
         Assert.Equal(20, divergence.EntryRules.DivergenceLookbackBars);
         Assert.Equal(12, divergence.EntryRules.DivergenceStartHour);
+    }
+
+    [Fact]
+    public void ResearchSwingStrategies_ParseDedicatedConnorsAndPivotVcpFields()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var reader = new SimpleYamlReader();
+        var strategyRoot = Path.Combine(repoRoot, "configs", "backtest", "strategies");
+
+        var connors = reader.ReadStrategy(
+            Path.Combine(strategyRoot, "swing-connors-rsi2-oversold.bt-v3.yaml"));
+        Assert.Equal("rsi2_oversold", connors.EntryRules.SetupType);
+        Assert.True(connors.EntryRules.RequirePriceAboveSma200);
+        Assert.Equal(5m, connors.EntryRules.MaxReversionRsi2);
+        Assert.Equal(70m, connors.ExitRules.ExitOnRsi2Above);
+
+        var vcp = reader.ReadStrategy(
+            Path.Combine(strategyRoot, "minervini-trend-template-pivot-vcp.bt-v6.yaml"));
+        Assert.Equal("volatility_contraction_pattern", vcp.EntryRules.SetupType);
+        Assert.Equal(60, vcp.EntryRules.VolatilityContractionLookbackBars);
+        Assert.Equal(2, vcp.EntryRules.VcpPivotStrengthBars);
+        Assert.Equal(0.90m, vcp.EntryRules.VcpMaximumDepthRatioToPrevious);
+        Assert.Equal(0.70m, vcp.EntryRules.VcpMaximumContractionToAdvanceVolumeRatio);
+        Assert.True(vcp.EntryRules.VcpRequireProgressiveContractionVolume);
+        Assert.Equal("swing_low", vcp.ExitRules.InitialStopMode);
+    }
+
+    [Fact]
+    public void ResearchSwingHourlyConfirmation_ParsesCompletedBarExecutionContract()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var strategyPath = Path.Combine(
+            repoRoot,
+            "configs",
+            "backtest",
+            "strategies",
+            "minervini-trend-template-pivot-vcp.bt-v8-hourly-confirmation.yaml");
+
+        var strategy = new SimpleYamlReader().ReadStrategy(strategyPath);
+        var confirmation = strategy.Execution.EffectiveConfirmation;
+
+        Assert.Equal("1d", strategy.Timeframe);
+        Assert.Equal("1h", strategy.Execution.Timeframe);
+        Assert.True(confirmation.Enabled);
+        Assert.Equal(12, confirmation.MaxBarsAfterSetup);
+        Assert.Equal("close_above_setup_close", confirmation.PriceFilter);
+        Assert.Equal("ema10_above_ema20", confirmation.TrendFilter);
+        Assert.Equal("macd_histogram_positive", confirmation.MomentumFilter);
+        Assert.Equal(0.55m, confirmation.MinCloseLocationValue);
+        Assert.Null(confirmation.MaxCloseLocationValue);
     }
 
     [Fact]
@@ -375,8 +462,8 @@ public sealed class RunConfigParsingTests
         Assert.Equal(60, config.TimeWindow.LookbackDays);
         Assert.Equal(90, config.TimeWindow.WarmupLookbackDays);
         Assert.Equal(10000m, config.Portfolio.StartingCapital);
-        Assert.Equal(1.0m, config.Portfolio.RiskPerTradePct);
-        Assert.Equal(25.0m, config.Portfolio.MaxPositionValuePct);
+        Assert.Equal(1.0m, config.Portfolio.AccountRiskBudgetPct);
+        Assert.Equal(25.0m, config.Portfolio.MaxPositionNotionalPct);
         Assert.Equal(4, config.Portfolio.MaxConcurrentPositions);
         Assert.False(config.News.Enabled);
         Assert.Equal("1m", config.DerivedTimeframes.Source);
@@ -395,7 +482,7 @@ public sealed class RunConfigParsingTests
 
         Assert.Equal("swing-backtest-profile", config.RunName);
         Assert.Equal(180, config.TimeWindow.LookbackDays);
-        Assert.Equal(260, config.TimeWindow.WarmupLookbackDays);
+        Assert.Equal(400, config.TimeWindow.WarmupLookbackDays);
         Assert.Equal("alpaca", config.Provider);
         Assert.Equal("sip", config.Providers.Alpaca.DataFeed);
         Assert.Contains("1h", config.Intervals);
@@ -403,10 +490,57 @@ public sealed class RunConfigParsingTests
         Assert.Equal("1h", config.DerivedTimeframes.Source);
         Assert.Equal("full", config.Artifacts.RetentionMode);
         Assert.Equal("wishlist", config.Validation.BiasRisk.UniverseSource);
+        Assert.True(config.Validation.OutOfSample.Enabled);
+        Assert.Equal(30m, config.Validation.OutOfSample.Percent);
+        Assert.True(config.Validation.WalkForward.Enabled);
+        Assert.True(config.Validation.Benchmark.Enabled);
+        Assert.Equal(5m, config.Portfolio.MaxBarParticipationPct);
+        Assert.Equal(0.0000278m, config.Portfolio.SecFeeRate);
+        Assert.Equal(0.000166m, config.Portfolio.FinraTafPerShare);
+        Assert.Equal(8.30m, config.Portfolio.FinraTafCap);
+        Assert.Equal(500, config.News.MaxArticlesPerTicker);
+        Assert.Equal(3, config.News.SentimentTimeoutSeconds);
         Assert.Empty(config.Tickers);
         Assert.Equal(2, config.Strategies.Count);
         Assert.Contains(config.Strategies, path => path.EndsWith(SwingQualityLongStrategyFile, StringComparison.OrdinalIgnoreCase));
         Assert.Contains(config.Strategies, path => path.EndsWith(SwingOverboughtShortStrategyFile, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ResearchMeanReversionV2_UsesTradingBarAndRsi2RecoveryExits()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(
+            repoRoot,
+            "configs",
+            "backtest",
+            "strategies",
+            "swing-mean-reversion-rsi2-recovery.bt-v2.yaml"));
+
+        Assert.Equal("mean_reversion_reclaim", strategy.EntryRules.SetupType);
+        Assert.Equal(5m, strategy.EntryRules.MaxReversionRsi2);
+        Assert.Equal(5, strategy.ExitRules.MaxHoldBars);
+        Assert.Equal(70m, strategy.ExitRules.ExitOnRsi2Above);
+    }
+
+    [Fact]
+    public void ResearchMinerviniProxyV5_UsesTrendTemplateAndYearlyPositionRules()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(
+            repoRoot,
+            "configs",
+            "backtest",
+            "strategies",
+            "minervini-trend-template-breakout-proxy.bt-v5.yaml"));
+
+        Assert.True(strategy.EntryRules.RequirePriceAboveSma150);
+        Assert.True(strategy.EntryRules.RequirePriceAboveSma200);
+        Assert.True(strategy.EntryRules.RequireSma50AboveSma150);
+        Assert.True(strategy.EntryRules.RequireSma150AboveSma200);
+        Assert.Equal(30m, strategy.EntryRules.MinPriceVs52WeekLowPct);
+        Assert.Equal(-25m, strategy.EntryRules.MaxPriceVs52WeekHighPct);
+        Assert.Equal(90, strategy.ExitRules.MaxHoldBars);
     }
 
     [Fact]
@@ -434,8 +568,8 @@ public sealed class RunConfigParsingTests
                 Tickers: ["POET"],
                 StrategyPaths: [strategyPath],
                 StartingCapital: 10000m,
-                RiskPerTradePct: 2m,
-                MaxPositionValuePct: 25m,
+                AccountRiskBudgetPct: 2m,
+                MaxPositionNotionalPct: 25m,
                 MaxConcurrentPositions: 4,
                 CachePolicy: "use_cache",
                 StrategyOverrides: []));
@@ -449,6 +583,59 @@ public sealed class RunConfigParsingTests
             Assert.Contains("  wishlist_name: volatile", generatedYaml);
             Assert.Contains("  - POET", generatedYaml);
             Assert.Contains(RetainedStrategyFile, generatedYaml);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunConfigWriter_PreservesExecutionRealismAndHistoricalNewsBudget()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var tempRoot = Path.Combine(Path.GetTempPath(), "trading-flow-writer-realism-test", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var baseConfigPath = Path.Combine(repoRoot, "configs", "backtest", RetainedSwingBacktestFile);
+            var strategyPath = Path.Combine(repoRoot, "configs", "strategies", "swing-mean-reversion-reclaim.v1.yaml");
+            var writer = new RunConfigWriter(
+                new ProjectPaths(tempRoot),
+                new SimpleYamlReader(),
+                AtomicFileArtifactWriter.Instance);
+
+            var generatedPath = writer.WriteBacktestConfig(new BacktestRunRequest(
+                BaseConfigPath: baseConfigPath,
+                RunName: "writer-realism-test",
+                LookbackDays: 180,
+                WishlistId: Guid.Parse("220939c3-1e91-4c4e-9bca-5d61f9837ebd"),
+                WishlistName: "mega-cap-swing",
+                Tickers: ["MSFT"],
+                StrategyPaths: [strategyPath],
+                StartingCapital: 10000m,
+                AccountRiskBudgetPct: 1m,
+                MaxPositionNotionalPct: 25m,
+                MaxConcurrentPositions: 4,
+                CachePolicy: "use_cache",
+                StrategyOverrides: []));
+
+            var generated = new SimpleYamlReader().ReadBacktestRun(generatedPath);
+
+            Assert.Equal(5m, generated.Portfolio.MaxBarParticipationPct);
+            Assert.Equal(0.0000278m, generated.Portfolio.SecFeeRate);
+            Assert.Equal(0.000166m, generated.Portfolio.FinraTafPerShare);
+            Assert.Equal(8.30m, generated.Portfolio.FinraTafCap);
+            Assert.True(generated.News.Enabled);
+            Assert.Equal(500, generated.News.MaxArticlesPerTicker);
+            Assert.Equal(3, generated.News.SentimentTimeoutSeconds);
+            Assert.True(generated.Validation.OutOfSample.Enabled);
+            Assert.True(generated.Validation.WalkForward.Enabled);
+            Assert.True(generated.Validation.Benchmark.Enabled);
         }
         finally
         {
@@ -484,8 +671,8 @@ public sealed class RunConfigParsingTests
                 Tickers: ["PLUG"],
                 StrategyPaths: [strategyPath],
                 StartingCapital: 10000m,
-                RiskPerTradePct: 2m,
-                MaxPositionValuePct: 25m,
+                AccountRiskBudgetPct: 2m,
+                MaxPositionNotionalPct: 25m,
                 MaxConcurrentPositions: 4,
                 CachePolicy: "use_cache",
                 StrategyOverrides: []));
@@ -558,9 +745,3 @@ public sealed class RunConfigParsingTests
         return TestRepository.FindRoot();
     }
 }
-
-
-
-
-
-

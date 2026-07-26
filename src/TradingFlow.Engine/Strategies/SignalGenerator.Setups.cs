@@ -13,83 +13,69 @@ public sealed partial class SignalGenerator
 {
     private static (
         bool IsBreakout,
-        decimal? PriceVsLowPct,
-        decimal? PriceVsHighPct,
         int? Contractions,
         bool IsVolatilityHalving,
         bool IsVolumeDryUp,
-        decimal? BreakoutVolumeRatio) GetVcpContext(
+        decimal? BreakoutVolumeRatio,
+        decimal? StructuralStopPrice) GetVcpContext(
             StrategyDefinition strategy,
             IReadOnlyList<OhlcvBar> bars,
-            IReadOnlyList<IndicatorSnapshot> snapshots,
             int index)
     {
-        var lookback = Math.Max(10, strategy.EntryRules.VolatilityContractionLookbackBars);
-        if (index < lookback)
+        if (!UsesLongSetup(strategy, "volatility_contraction_pattern"))
         {
-            return (false, null, null, null, false, false, null);
+            return (false, null, false, false, null, null);
         }
 
-        var window = bars.Skip(index - lookback).Take(lookback).ToArray();
-        var high = window.Max(x => x.High);
-        var low = window.Min(x => x.Low);
-        var price = bars[index].Close;
-        var priceVsLowPct = low <= 0m ? (decimal?)null : ((price / low) - 1m) * 100m;
-        var priceVsHighPct = high <= 0m ? (decimal?)null : ((price / high) - 1m) * 100m;
-        var firstHalf = window.Take(window.Length / 2).ToArray();
-        var secondHalf = window.Skip(window.Length / 2).ToArray();
-        var firstRange = firstHalf.Max(x => x.High) - firstHalf.Min(x => x.Low);
-        var secondRange = secondHalf.Max(x => x.High) - secondHalf.Min(x => x.Low);
-        var isVolatilityHalving = firstRange > 0m && secondRange <= firstRange / 2m;
-        var averageFirstVolume = firstHalf.Where(x => x.Volume > 0m).Select(x => x.Volume).DefaultIfEmpty(0m).Average();
-        var averageSecondVolume = secondHalf.Where(x => x.Volume > 0m).Select(x => x.Volume).DefaultIfEmpty(0m).Average();
-        var isVolumeDryUp = averageFirstVolume > 0m && averageSecondVolume <= averageFirstVolume * 0.70m;
-        var breakoutBaseVolume = secondHalf.Where(x => x.Volume > 0m).Select(x => x.Volume).DefaultIfEmpty(0m).Average();
-        var breakoutVolumeRatio = breakoutBaseVolume <= 0m ? (decimal?)null : bars[index].Volume / breakoutBaseVolume;
-        var contractions = CountRangeContractions(window);
-        var minContractions = strategy.EntryRules.MinContractions ?? 0;
-        var maxContractions = strategy.EntryRules.MaxContractions ?? int.MaxValue;
-        var minBreakoutVolumeRatio = strategy.EntryRules.MinBreakoutVolumeRatio ?? 0m;
-        var isBreakout = bars[index].Close >= high &&
-            contractions >= minContractions &&
-            contractions <= maxContractions &&
-            (!strategy.EntryRules.RequireVolatilityHalvingLeftToRight || isVolatilityHalving) &&
-            (!strategy.EntryRules.RequireVolumeDryUpPreBreakout || isVolumeDryUp) &&
-            (breakoutVolumeRatio is null || breakoutVolumeRatio.Value >= minBreakoutVolumeRatio);
+        var rules = strategy.EntryRules;
+        var options = new VcpSwingPivotOptions(
+            LookbackBars: Math.Max(5, rules.VolatilityContractionLookbackBars),
+            PivotStrengthBars: rules.VcpPivotStrengthBars,
+            MinimumContractions: rules.MinContractions ?? 2,
+            MaximumContractions: rules.MaxContractions ?? 4,
+            MaximumDepthRatioToPrevious: rules.VcpMaximumDepthRatioToPrevious,
+            MinimumLowRisePct: rules.VcpMinimumLowRisePct,
+            MaximumContractionToAdvanceVolumeRatio: rules.VcpMaximumContractionToAdvanceVolumeRatio,
+            RequireProgressiveContractionVolume: rules.VcpRequireProgressiveContractionVolume,
+            MaximumVolumeRatioToPreviousContraction: rules.VcpMaximumVolumeRatioToPreviousContraction,
+            MinimumVolumeReferenceBars: rules.VcpMinimumVolumeReferenceBars,
+            BreakoutBufferPct: rules.VcpBreakoutBufferPct);
+        var analysis = new VcpSwingPivotAnalyzer().AnalyzeCompletedBar(bars, index, options);
+        var hasVolumeDryUp = analysis.Contractions.Count > 0 &&
+            analysis.Contractions.All(contraction => contraction.HasVolumeDryUp);
+        var depths = analysis.Contractions.Select(contraction => contraction.DepthPct).ToArray();
+        var isVolatilityHalving = depths.Length >= 2 && depths[^1] <= depths[0] / 2m;
 
-        return (isBreakout, priceVsLowPct, priceVsHighPct, contractions, isVolatilityHalving, isVolumeDryUp, breakoutVolumeRatio);
+        return (
+            analysis.IsBreakout,
+            analysis.Contractions.Count,
+            isVolatilityHalving,
+            hasVolumeDryUp,
+            analysis.BreakoutVolumeRatio,
+            analysis.Contractions.LastOrDefault()?.Low.Price);
     }
 
-    private static int CountRangeContractions(IReadOnlyList<OhlcvBar> bars)
+    private static (decimal? PriceVsLowPct, decimal? PriceVsHighPct) Get52WeekPriceContext(
+        IReadOnlyList<OhlcvBar> bars,
+        int index)
     {
-        if (bars.Count < 4)
+        const int tradingSessions = 252;
+        if (index < tradingSessions - 1)
         {
-            return 0;
+            return (null, null);
         }
 
-        var bucketSize = Math.Max(2, bars.Count / 4);
-        var ranges = new List<decimal>();
-        for (var i = 0; i < bars.Count; i += bucketSize)
-        {
-            var bucket = bars.Skip(i).Take(bucketSize).ToArray();
-            if (bucket.Length == 0)
-            {
-                continue;
-            }
+        var window = bars
+            .Skip(index - tradingSessions + 1)
+            .Take(tradingSessions)
+            .ToArray();
+        var high = window.Max(bar => bar.High);
+        var low = window.Min(bar => bar.Low);
+        var price = bars[index].Close;
 
-            ranges.Add(bucket.Max(x => x.High) - bucket.Min(x => x.Low));
-        }
-
-        var contractions = 0;
-        for (var i = 1; i < ranges.Count; i++)
-        {
-            if (ranges[i] < ranges[i - 1])
-            {
-                contractions++;
-            }
-        }
-
-        return contractions;
+        return (
+            low <= 0m ? null : ((price / low) - 1m) * 100m,
+            high <= 0m ? null : ((price / high) - 1m) * 100m);
     }
 
     private static (

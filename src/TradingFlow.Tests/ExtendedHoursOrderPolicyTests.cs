@@ -5,6 +5,44 @@ namespace TradingFlow.Tests;
 public sealed class ExtendedHoursOrderPolicyTests
 {
     [Fact]
+    public void ValidateConfiguration_ExtendedHoursDisabled_AllowsRegularMarketDefaults()
+    {
+        ExtendedHoursOrderPolicy.ValidateConfiguration(
+            "market",
+            "gtc",
+            allowExtendedHoursTrading: false);
+    }
+
+    [Theory]
+    [InlineData("market", "day")]
+    [InlineData("limit", "gtc")]
+    [InlineData(null, "day")]
+    [InlineData("limit", null)]
+    public void ValidateConfiguration_InvalidExtendedHoursContract_IsRejected(
+        string? orderType,
+        string? timeInForce)
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            ExtendedHoursOrderPolicy.ValidateConfiguration(
+                orderType,
+                timeInForce,
+                allowExtendedHoursTrading: true));
+
+        Assert.Equal(
+            "Extended-hours execution requires an explicit limit entry and DAY expiration.",
+            error.Message);
+    }
+
+    [Fact]
+    public void ValidateConfiguration_DayLimitExtendedHoursContract_IsAccepted()
+    {
+        ExtendedHoursOrderPolicy.ValidateConfiguration(
+            "limit",
+            "day",
+            allowExtendedHoursTrading: true);
+    }
+
+    [Fact]
     public void Validate_RegularMarketOrder_IsAllowedWhenExtendedHoursTradingIsDisabled()
     {
         ExtendedHoursOrderPolicy.Validate(

@@ -27,7 +27,9 @@ public sealed record BacktestResult(
     IReadOnlyList<BacktestTrade> CompletedTrades,
     IReadOnlyList<StrategyDiagnosticReport> Diagnostics,
     IReadOnlyList<MissedMoveAudit> MissedMoves,
-    IReadOnlyList<FinalizedOrder> AcceptedOrders);
+    IReadOnlyList<FinalizedOrder> AcceptedOrders,
+    UnifiedPortfolioBacktestResult? UnifiedPortfolio = null,
+    UniversePromotionEligibility? UniversePromotion = null);
 
 public sealed record WinnerStrategySummary(
     string StrategyId,
@@ -39,6 +41,21 @@ public sealed record WinnerStrategySummary(
     decimal MaxDrawdownPct,
     int AcceptedTradeCount,
     int RejectedTradeCount);
+
+public sealed record UnifiedPortfolioBacktestResult(
+    decimal StartingCapital,
+    decimal EndingCapital,
+    decimal NetProfit,
+    decimal TotalReturnPct,
+    decimal MaxDrawdownPct,
+    int CandidateTradeCount,
+    int AcceptedTradeCount,
+    int RejectedTradeCount,
+    int WinningTradeCount,
+    int LosingTradeCount,
+    IReadOnlyList<BacktestTrade> CompletedTrades,
+    IReadOnlyDictionary<string, int>? AdmissionRejectionCounts = null,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? AdmissionRejectionExamples = null);
 
 
 public sealed record MissedMoveAudit(

@@ -121,6 +121,14 @@ public sealed partial class SignalGenerator
         var reversionContext = UsesLongSetup(strategy, "mean_reversion_reclaim")
             ? GetMeanReversionReclaimContext(strategy, bars, snapshots, index)
             : (IsReclaim: false, StretchLow: (decimal?)null);
+        var connorsRsi2Context = UsesLongSetup(strategy, "rsi2_oversold")
+            ? new ConnorsRsi2SignalAnalyzer().AnalyzeCompletedDailyBar(
+                bar,
+                snapshot,
+                new ConnorsRsi2SignalOptions(
+                    strategy.EntryRules.MaxReversionRsi2 ?? 5m,
+                    strategy.EntryRules.RequirePriceAboveSma200))
+            : null;
         var isCatalystDrift = UsesLongSetup(strategy, "catalyst_drift") &&
             IsCatalystDriftTrigger(strategy, snapshots, index);
         var rolloverContext = UsesShortSetup(strategy, "swing_rollover")
@@ -132,7 +140,8 @@ public sealed partial class SignalGenerator
         var bollingerContext = GetBollingerContext(snapshot);
         var trapContext = GetVwapReclaimTrapContext(strategy, bars, snapshots, index);
         var avwapBounceContext = GetAnchoredVwapBounceContext(strategy, bars, index, anchoredVwap);
-        var vcpContext = GetVcpContext(strategy, bars, snapshots, index);
+        var vcpContext = GetVcpContext(strategy, bars, index);
+        var price52WeekContext = Get52WeekPriceContext(bars, index);
         var volumeSmaTrend = GetVolumeSmaTrend(
             strategy,
             bars,
@@ -259,8 +268,8 @@ public sealed partial class SignalGenerator
             isEpisodicPivotGap,
             gapUpPct,
             vcpContext.IsBreakout,
-            vcpContext.PriceVsLowPct,
-            vcpContext.PriceVsHighPct,
+            price52WeekContext.PriceVsLowPct,
+            price52WeekContext.PriceVsHighPct,
             vcpContext.Contractions,
             vcpContext.IsVolatilityHalving,
             vcpContext.IsVolumeDryUp,
@@ -293,7 +302,10 @@ public sealed partial class SignalGenerator
             vwapDistanceAtr,
             reversionContext.IsReclaim,
             reversionContext.StretchLow,
-            isCatalystDrift);
+            isCatalystDrift,
+            connorsRsi2Context?.IsSignal ?? false,
+            snapshot.Rsi2,
+            vcpContext.StructuralStopPrice);
     }
 
     private static (bool IsRising, decimal? Previous, decimal? Change) GetNullableIndicatorTrend(

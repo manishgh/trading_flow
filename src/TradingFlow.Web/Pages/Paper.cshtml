@@ -21,6 +21,8 @@
     </div>
 </div>
 
+<div asp-validation-summary="ModelOnly" class="paper-validation" role="alert"></div>
+
 <form method="post">
 <div class="grid two">
     <!-- LEFT COLUMN: Environment & Strategy -->
@@ -140,6 +142,9 @@
                     <span>Enable Extended Hours (Pre/Post-Market)</span>
                     <span class="tf-help" title="When checked, paper orders may be submitted in extended hours if the broker and order type support it.">?</span>
                 </label>
+                <div id="ExtendedHoursTradingHint" class="muted small-help">
+                    Extended-hours entries require an explicit limit order with DAY expiration.
+                </div>
             </div>
 
             <div class="paper-toggle">
@@ -289,6 +294,25 @@
         font-size: 0.82rem;
     }
 
+    .paper-page .paper-validation.validation-summary-valid {
+        display: none;
+    }
+
+    .paper-page .paper-validation.validation-summary-errors {
+        background: #fff1f2;
+        border: 1px solid #fda4af;
+        border-left: 4px solid #dc2626;
+        border-radius: 6px;
+        color: #881337;
+        margin: 0 0 1rem;
+        padding: 0.75rem 1rem;
+    }
+
+    .paper-page .paper-validation ul {
+        margin: 0;
+        padding-left: 1.25rem;
+    }
+
     .paper-page .ticker-chip-row {
         display: flex;
         flex-wrap: wrap;
@@ -361,6 +385,7 @@
                         document.getElementById('OrderExpirationDropdown').value = data.orderExpiration || 'gtc';
                         document.getElementById('EntryOrderTypeDropdown').value = data.entryOrderType || 'limit';
                         document.getElementById('AllowExtendedHoursTradingCheckbox').checked = Boolean(data.allowExtendedHoursTrading);
+                        updateExtendedHoursExecution();
                         currentConfigNewsEnabled = Boolean(data.newsEnabled);
                         updateNewsToggle();
                         document.getElementById('ScreenerFilter').value = data.screenerFilter || '';
@@ -368,6 +393,39 @@
                 });
         }
 
+        function updateExtendedHoursExecution() {
+            const checkbox = document.getElementById('AllowExtendedHoursTradingCheckbox');
+            const expiration = document.getElementById('OrderExpirationDropdown');
+            const entryType = document.getElementById('EntryOrderTypeDropdown');
+            const hint = document.getElementById('ExtendedHoursTradingHint');
+            if (!checkbox || !expiration || !entryType) return;
+
+            if (checkbox.checked) {
+                expiration.value = 'day';
+                entryType.value = 'limit';
+            }
+
+            const constrained = checkbox.checked;
+            for (const option of expiration.options) {
+                option.disabled = constrained && option.value !== 'day';
+            }
+            for (const option of entryType.options) {
+                option.disabled = constrained && option.value !== 'limit';
+            }
+            if (hint) {
+                hint.textContent = constrained
+                    ? 'Extended-hours enabled: Limit + DAY is required and selected.'
+                    : 'Extended-hours entries require an explicit limit order with DAY expiration.';
+            }
+        }
+
+        document.getElementById('AllowExtendedHoursTradingCheckbox')
+            ?.addEventListener('change', updateExtendedHoursExecution);
+        document.getElementById('OrderExpirationDropdown')
+            ?.addEventListener('change', updateExtendedHoursExecution);
+        document.getElementById('EntryOrderTypeDropdown')
+            ?.addEventListener('change', updateExtendedHoursExecution);
+        updateExtendedHoursExecution();
         updateNewsToggle();
     </script>
 }

@@ -3,6 +3,7 @@ using TradingFlow.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Risk;
 
 namespace TradingFlow.Tests;
 
@@ -61,14 +62,23 @@ public sealed class BacktestSimulationCharacterizationTests
         OhlcvBar[] bars,
         IndicatorSnapshot[] snapshots)
     {
-        var method = typeof(BacktestRunner).GetMethod(
-            "ResolveInitialRisk",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
+        var side = direction.Equals("short", StringComparison.OrdinalIgnoreCase)
+            ? PlannedOrderSide.Short
+            : PlannedOrderSide.Long;
+        var result = new StrategyInitialStopResolver().Resolve(
+            new StrategyInitialStopRequest(
+                strategy,
+                signal,
+                side,
+                EntryPrice,
+                0,
+                bars,
+                snapshots));
 
-        var raw = method!.Invoke(null, [strategy, signal, direction, EntryPrice, 1m, 0, bars, snapshots]);
-        Assert.NotNull(raw);
-        return ((decimal, decimal))raw!;
+        Assert.True(result.IsResolved, result.RejectionReason);
+        Assert.NotNull(result.StopPrice);
+        Assert.NotNull(result.StopDistance);
+        return (result.StopPrice.Value, result.StopDistance.Value);
     }
 
     private static decimal InvokeResolveTakeProfit(

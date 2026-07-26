@@ -10,6 +10,10 @@ TradingFlow is a config-driven trading research and paper-trading system. The co
 - paper trading
 - future live trading
 
+The binding product, market, provider, historical-data, later-listing, research,
+execution, and promotion limits are in `docs/operating-boundaries.md`. No agent may
+weaken those boundaries through code, config, or experiment design.
+
 The source/sink can change by mode, but the strategy signal, indicator, confluence, risk, portfolio, audit, and execution decision path should remain the same.
 
 ## Non-Negotiable Design Rules
@@ -135,8 +139,8 @@ Paper configs:
 
 Strategy configs:
 
-- `configs/strategies/intraday-ross-gapgo-bullflag.v2-confirmed-entry.yaml`
 - `configs/strategies/intraday-ema10-ema20-macd-volume.v1.yaml`
+- `configs/strategies/minervini-trend-template-vcp.v4-trend-rider.yaml`
 - `configs/strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml`
 - `configs/strategies/swing-overbought-rollover-short-no-news.v5.yaml`
 
@@ -148,7 +152,6 @@ Backtest profiles currently worth keeping:
 Backtest and paper universes must come from database wishlists. Generated
 run files are audit artifacts only; do not reintroduce hand-maintained
 backtest ticker-list configs.
-- `configs/optimization/ui-runs`
 
 ## Data Policy
 
@@ -214,11 +217,11 @@ dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.cspr
 
 Recent verification before this handoff:
 
-- `dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.csproj -p:OutDir=C:\project\trading_flow\.tmp\verify\candle-store-tests-out\`
-- Result: 119 passed, 0 failed.
-- Web health check passed on `http://127.0.0.1:53017/health` from the generated test output.
-
-Because `.tmp` is a cleanup target, rerun tests after deleting it.
+- `dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.csproj --no-restore`
+- Result: 989 passed, 0 failed on 2026-07-26.
+- Clean committed-only boundary suites: 39 passed, 0 failed.
+- The integrated research decision remains `RETAIN_RESEARCH`; no current research
+  strategy is eligible for a new paper-shadow promotion.
 
 ## Current Product Focus
 

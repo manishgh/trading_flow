@@ -198,7 +198,16 @@ public sealed class SimpleYamlReader
                 MinConsecutiveDownClosesForStretch: OptionalInt(map, "entry_rules.min_consecutive_down_closes_for_stretch", 0),
                 MaxReversionRsi2: OptionalDecimal(map, "entry_rules.max_reversion_rsi2"),
                 EnableLowerBollingerStretch: OptionalBool(map, "entry_rules.enable_lower_bollinger_stretch", false),
-                VetoFreshNewsHours: OptionalDecimal(map, "entry_rules.veto_fresh_news_hours")),
+                VetoFreshNewsHours: OptionalDecimal(map, "entry_rules.veto_fresh_news_hours"),
+                VcpPivotStrengthBars: OptionalInt(map, "entry_rules.vcp_pivot_strength_bars", 2),
+                VcpMaximumDepthRatioToPrevious: OptionalDecimal(map, "entry_rules.vcp_maximum_depth_ratio_to_previous") ?? 0.90m,
+                VcpMinimumLowRisePct: OptionalDecimal(map, "entry_rules.vcp_minimum_low_rise_pct") ?? 0m,
+                VcpMaximumContractionToAdvanceVolumeRatio: OptionalDecimal(map, "entry_rules.vcp_maximum_contraction_to_advance_volume_ratio") ?? 0.70m,
+                VcpRequireProgressiveContractionVolume: OptionalBool(map, "entry_rules.vcp_require_progressive_contraction_volume", true),
+                VcpMaximumVolumeRatioToPreviousContraction: OptionalDecimal(map, "entry_rules.vcp_maximum_volume_ratio_to_previous_contraction") ?? 1m,
+                VcpMinimumVolumeReferenceBars: OptionalInt(map, "entry_rules.vcp_minimum_volume_reference_bars", 1),
+                VcpBreakoutBufferPct: OptionalDecimal(map, "entry_rules.vcp_breakout_buffer_pct") ?? 0m,
+                PortfolioRankMode: OptionalString(map, "entry_rules.portfolio_rank_mode", "none")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -238,10 +247,20 @@ public sealed class SimpleYamlReader
                 OptionalInt(map, "exit_rules.failed_breakout_bars", 3),
                 OptionalDecimal(map, "exit_rules.failed_breakout_min_r") ?? 0m,
                 OptionalDecimal(map, "exit_rules.stop_tick_buffer") ?? 0.01m,
-                OptionalBool(map, "exit_rules.require_confirmed_ema20_exit", false)),
+                OptionalBool(map, "exit_rules.require_confirmed_ema20_exit", false),
+                OptionalNullableInt(map, "exit_rules.max_hold_bars"),
+                OptionalDecimal(map, "exit_rules.exit_on_rsi2_above")),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
-                RequireDecimal(map, "execution.slippage_bps")),
+                RequireDecimal(map, "execution.slippage_bps"),
+                new ExecutionConfirmationRules(
+                    OptionalBool(map, "execution.confirmation.enabled", false),
+                    OptionalInt(map, "execution.confirmation.max_bars_after_setup", 6),
+                    OptionalString(map, "execution.confirmation.price_filter", "none"),
+                    OptionalString(map, "execution.confirmation.trend_filter", "none"),
+                    OptionalString(map, "execution.confirmation.momentum_filter", "none"),
+                    OptionalDecimal(map, "execution.confirmation.min_close_location_value"),
+                    OptionalDecimal(map, "execution.confirmation.max_close_location_value"))),
             new SessionRules(
                 RequireString(map, "session.exchange_timezone"),
                 RequireInt(map, "session.quiet_minutes_after_open"),
@@ -322,8 +341,8 @@ public sealed class SimpleYamlReader
                     OptionalString(runMap, "providers.alpaca.data_feed", "sip"))),
             new PortfolioConfig(
                 RequireDecimal(runMap, "portfolio.starting_capital"),
-                RequireDecimal(runMap, "portfolio.risk_per_trade_pct"),
-                RequireDecimal(runMap, "portfolio.max_position_value_pct"),
+                RequireDecimal(runMap, "portfolio.account_risk_budget_pct"),
+                RequireDecimal(runMap, "portfolio.max_position_notional_pct"),
                 OptionalInt(runMap, "portfolio.max_concurrent_positions", 5),
                 RequireDecimal(runMap, "portfolio.fixed_buy_fee"),
                 RequireDecimal(runMap, "portfolio.fixed_sell_fee"),
@@ -627,8 +646,7 @@ public sealed class SimpleYamlReader
         var directory = new DirectoryInfo(startDirectory);
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "TradingFlow.sln")) ||
-                Directory.Exists(Path.Combine(directory.FullName, "configs")))
+            if (File.Exists(Path.Combine(directory.FullName, "TradingFlow.sln")))
             {
                 return directory.FullName;
             }
@@ -639,4 +657,3 @@ public sealed class SimpleYamlReader
         return null;
     }
 }
-

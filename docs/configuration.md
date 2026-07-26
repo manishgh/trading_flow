@@ -169,15 +169,31 @@ artifacts:
 ```yaml
 portfolio:
   starting_capital: 100000
-  risk_per_trade_pct: 1.0
-  max_position_value_pct: 20.0
+  account_risk_budget_pct: 1.0
+  max_position_notional_pct: 20.0
   max_concurrent_positions: 5
   fixed_buy_fee: 1.0
   fixed_sell_fee: 1.0
   prevent_overlapping_ticker_positions: true
 ```
 
-`risk_per_trade_pct` sizes by stop distance. `max_position_value_pct` and `max_concurrent_positions` cap allocation so simultaneous ticker trades share account equity.
+These limits are intentionally separate:
+
+- `account_risk_budget_pct` caps planned loss as a percentage of account equity.
+- `max_position_notional_pct` caps capital deployed into one position.
+- The strategy's structural or ATR invalidation price is preserved. Quantity is
+  reduced until stop loss plus estimated fees and slippage fit the account-risk
+  budget; the engine does not tighten the stop.
+- `max_concurrent_positions` limits shared portfolio slots.
+
+For example, a `$10,000` account with `account_risk_budget_pct: 1.0` has a
+maximum planned account loss of `$100` per trade before portfolio constraints.
+A wider valid stop produces fewer shares. It does not redefine the stop or
+impose a 1% stop distance relative to deployed notional.
+
+Backtests include both an independent portfolio result for each strategy and a
+`UnifiedPortfolio` result where all configured strategies compete chronologically
+for the same capital and slots. The unified result is the deployable comparison.
 
 ## Strategy Families
 

@@ -336,7 +336,16 @@ public partial class PaperPage : ContentPage
         SaveFormState();
     }
 
-    private void OnFormChanged(object? sender, EventArgs e) => SaveFormState();
+    private void OnFormChanged(object? sender, EventArgs e)
+    {
+        if (AllowExtendedHoursTradingCheck.IsChecked)
+        {
+            SelectByValue(OrderExpirationPicker, "day");
+            SelectByValue(EntryOrderTypePicker, "limit");
+        }
+
+        SaveFormState();
+    }
 
     private void RestoreFormState()
     {
@@ -430,7 +439,7 @@ public partial class PaperPage : ContentPage
         }
 
         var index = options.ToList().FindIndex(option => option.Equals(value, StringComparison.OrdinalIgnoreCase));
-        if (index >= 0)
+        if (index >= 0 && picker.SelectedIndex != index)
         {
             picker.SelectedIndex = index;
         }

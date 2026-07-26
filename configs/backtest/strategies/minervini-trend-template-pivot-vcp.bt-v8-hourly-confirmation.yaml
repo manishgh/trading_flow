@@ -1,0 +1,89 @@
+strategy_id: research.minervini-trend-template-pivot-vcp.bt-v8-hourly-confirmation
+strategy_name: RESEARCH Swing Minervini Pivot VCP V8 - 1h Confirmation
+source: mark_minervini_daily_pivot_vcp_completed_hourly_confirmation_research
+version: 8
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: volatility_contraction_pattern
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma50_daily: true
+  require_price_above_sma150: true
+  require_price_above_sma200: true
+  require_sma50_above_sma150: true
+  require_sma150_above_sma200: true
+  min_price_vs_52_week_low_pct: 30.0
+  max_price_vs_52_week_high_pct: -25.0
+  min_contractions: 2
+  max_contractions: 4
+  volatility_contraction_lookback_bars: 60
+  vcp_pivot_strength_bars: 2
+  vcp_maximum_depth_ratio_to_previous: 0.90
+  vcp_minimum_low_rise_pct: 0.0
+  vcp_maximum_contraction_to_advance_volume_ratio: 0.85
+  vcp_require_progressive_contraction_volume: false
+  vcp_maximum_volume_ratio_to_previous_contraction: 1.0
+  vcp_minimum_volume_reference_bars: 3
+  vcp_breakout_buffer_pct: 0.0
+  portfolio_rank_mode: breakout_volume_descending
+  require_volatility_halving_left_to_right: false
+  require_volume_dry_up_pre_breakout: true
+  min_breakout_volume_ratio: 1.0
+  max_vwap_extension_atr:
+  opening_range_minutes: 0
+  recent_high_lookback_bars: 20
+  max_entries_per_ticker_per_day: 1
+  min_close_location_value: 0.55
+  require_positive_news: false
+regime:
+  benchmark: SPY
+  rule: price_above_sma
+  sma_period: 200
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 50
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 2.5
+  target_r_multiple: 10.0
+  max_hold_hours: 10000.0
+  max_hold_bars: 90
+  enable_atr_trailing_stop: true
+  trailing_stop_atr_multiple: 2.5
+  trailing_activation_r: 2.0
+  exit_on_close_below_ema20: true
+  require_confirmed_ema20_exit: true
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: swing_low
+  stop_tick_buffer: 0.01
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1h
+  slippage_bps: 10.0
+  confirmation:
+    enabled: true
+    max_bars_after_setup: 12
+    price_filter: close_above_setup_close
+    trend_filter: ema10_above_ema20
+    momentum_filter: macd_histogram_positive
+    min_close_location_value: 0.55
+    max_close_location_value:
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

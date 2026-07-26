@@ -119,7 +119,11 @@ public sealed partial class LiveRunner
         string? exitReason = null;
         decimal? exitPrice = null;
         DateTimeOffset exitSignalTimestamp = DateTimeOffset.UtcNow;
-        for (var index = entryIndex; index < executionBars.Count; index++)
+        var exitStartIndex = TimeframeParser.IsDailyOrHigher(strategy.Execution.Timeframe) ||
+            !strategy.ExitRules.AllowSameBarStopTarget
+            ? entryIndex + 1
+            : entryIndex;
+        for (var index = exitStartIndex; index < executionBars.Count; index++)
         {
             var exitPriceLogTrend = TechnicalExecutionEngine.ComputeLogTrend(
                 executionBars,

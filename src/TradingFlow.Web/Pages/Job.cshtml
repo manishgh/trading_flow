@@ -3,10 +3,7 @@
 @using System.Globalization
 @{
     ViewData["Title"] = "Backtest Job";
-    if (Model.Job is not null && (Model.Job.Status == "queued" || Model.Job.Status == "running"))
-    {
-        <meta http-equiv="refresh" content="5" />
-    }
+    var isActive = Model.Job?.Status is "queued" or "running" or "cancelling";
 }
 
 @if (Model.Job is null)
@@ -18,15 +15,24 @@
 }
 else
 {
-    <div class="section-title">
+    <header class="page-header backtest-job-header">
         <div>
             <h1>@Model.Job.RunName</h1>
-            <div class="muted">@Model.Job.ConfigPath</div>
+            <div class="muted backtest-config-path" title="@Model.Job.ConfigPath">@Model.Job.ConfigPath</div>
         </div>
-        <span class="status">@Model.Job.Status</span>
-    </div>
+        <div class="actions backtest-job-actions">
+            <span id="backtestStatus" class="status @Model.Job.Status">@Model.Job.Status</span>
+            @if (isActive)
+            {
+                <form id="cancelBacktestForm" method="post" asp-page-handler="Cancel" asp-route-id="@Model.Job.JobId">
+                    <button id="cancelBacktestButton" type="submit" class="button danger">Cancel Run</button>
+                </form>
+            }
+            <a class="button secondary" asp-page="/Backtests">Back to Backtests</a>
+        </div>
+    </header>
 
-    <section class="panel" style="margin-bottom:16px">
+    <section class="panel backtest-live-panel">
         @{
             var started = Model.Job.StartedAt ?? Model.Job.CreatedAt;
             var finished = Model.Job.FinishedAt ?? DateTimeOffset.UtcNow;
@@ -35,29 +41,47 @@ else
                 ? 0
                 : (decimal)Model.Job.CompletedTickerCount / Model.Job.TotalTickerCount * 100m;
         }
-        <div class="section-title">
+        <div class="backtest-operator-grid">
             <div>
-                <h2>Run State</h2>
-                <div class="muted">@Model.Job.CurrentStage · elapsed @elapsed.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture)</div>
+                <div class="section-title">
+                    <div>
+                        <h2>Live Run</h2>
+                        <div class="muted">
+                            <span id="backtestStage">@Model.Job.CurrentStage.Replace('_', ' ')</span>
+                            &middot; elapsed <span id="backtestElapsed">@elapsed.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture)</span>
+                        </div>
+                    </div>
+                    <strong id="backtestProgressText">@Model.Job.CompletedTickerCount / @Model.Job.TotalTickerCount work items</strong>
+                </div>
+                <div id="backtestProgressTrack" class="progress-track backtest-main-progress" role="progressbar" aria-label="Backtest progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@progressPct.ToString("0", CultureInfo.InvariantCulture)">
+                    <div id="backtestProgressBar" class="progress-bar" style="width:@progressPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
+                </div>
+                <div class="backtest-time-grid">
+                    <div><span>Started</span><strong id="backtestStarted">@(Model.Job.StartedAt is null ? "-" : TradingFlow.Web.Services.UiDisplayFormatter.FormatLocalTime(Model.Job.StartedAt.Value))</strong></div>
+                    <div><span>Finished</span><strong id="backtestFinished">@(Model.Job.FinishedAt is null ? "-" : TradingFlow.Web.Services.UiDisplayFormatter.FormatLocalTime(Model.Job.FinishedAt.Value))</strong></div>
+                    <div><span>Progress</span><strong id="backtestProgressPercent">@progressPct.ToString("0.0", CultureInfo.InvariantCulture)%</strong></div>
+                </div>
             </div>
-            <strong>@Model.Job.CompletedTickerCount / @Model.Job.TotalTickerCount work items</strong>
+            <ol id="backtestPhaseRail" class="backtest-phase-rail" aria-label="Backtest phases">
+                <li data-phase="setup"><span>1</span><div><strong>Setup</strong><small>Config and universe</small></div></li>
+                <li data-phase="market"><span>2</span><div><strong>Market data</strong><small>Candles and indicators</small></div></li>
+                <li data-phase="evaluation"><span>3</span><div><strong>Evaluation</strong><small>Strategy matrix</small></div></li>
+                <li data-phase="results"><span>4</span><div><strong>Results</strong><small>Portfolio and audit</small></div></li>
+            </ol>
         </div>
-        <div class="progress-track">
-            <div class="progress-bar" style="width:@progressPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
-        </div>
-        @if (Model.Job.StrategyGroups is { Count: > 0 })
-        {
-            <div class="grid two" style="margin-top:16px">
+        <div id="strategyGroupGrid" class="backtest-strategy-grid">
+            @if (Model.Job.StrategyGroups is { Count: > 0 })
+            {
                 @foreach (var group in Model.Job.StrategyGroups)
                 {
                     var groupPct = group.TotalTickerCount == 0
                         ? 0
                         : (decimal)group.CompletedTickerCount / group.TotalTickerCount * 100m;
-                    <section class="panel" style="box-shadow:none">
+                    <article class="backtest-strategy-card">
                         <div class="section-title">
                             <div>
                                 <h3>@group.StrategyName</h3>
-                                <div class="muted">@group.Status@(String.IsNullOrWhiteSpace(group.CurrentTicker) ? "" : $" · current {group.CurrentTicker}")</div>
+                                <div class="muted">@group.Status@(String.IsNullOrWhiteSpace(group.CurrentTicker) ? "" : $" - current {group.CurrentTicker}")</div>
                             </div>
                             <strong>@group.CompletedTickerCount / @group.TotalTickerCount</strong>
                         </div>
@@ -73,28 +97,42 @@ else
                                 }
                             </ul>
                         }
-                    </section>
+                    </article>
                 }
-            </div>
-        }
-        @if (Model.Job.Events.Count > 0)
-        {
-            <ul class="event-log">
+            }
+        </div>
+        <div class="backtest-activity-header">
+            <h3>Activity</h3>
+            <span class="muted">Newest event first</span>
+        </div>
+        <ul id="backtestEvents" class="event-log backtest-event-stream" aria-live="polite">
+            @if (Model.Job.Events.Count == 0)
+            {
+                <li class="muted">Waiting for the worker...</li>
+            }
+            else
+            {
                 @foreach (var item in Model.Job.Events.Reverse().Take(12))
                 {
                     <li>@item</li>
                 }
-            </ul>
-        }
+            }
+        </ul>
     </section>
 
-    @if (Model.Job.ErrorMessage is not null)
-    {
-        <section class="panel"><strong class="bad">@Model.Job.ErrorMessage</strong></section>
-    }
+    <section id="backtestError" class="panel backtest-error-panel" hidden="@(Model.Job.ErrorMessage is null)">
+        <strong class="bad">@(Model.Job.ErrorMessage ?? String.Empty)</strong>
+    </section>
 
     @if (Model.Job.Result is { } result)
     {
+        var closedTradeCount = result.WinningTradeCount + result.LosingTradeCount;
+        var winPct = closedTradeCount == 0 ? 0m : (decimal)result.WinningTradeCount / closedTradeCount * 100m;
+        var lossPct = closedTradeCount == 0 ? 0m : 100m - winPct;
+        var maxAbsoluteReturn = result.StrategyResults.Count == 0
+            ? 1m
+            : Math.Max(1m, result.StrategyResults.Max(strategy => Math.Abs(strategy.TotalReturnPct)));
+
         <div class="grid four">
             <section class="panel metric">
                 <span class="muted">Winner</span>
@@ -118,9 +156,50 @@ else
             </section>
         </div>
 
+        <div class="backtest-result-visuals">
+            <section class="panel">
+                <div class="section-title">
+                    <div>
+                        <h2>Trade Outcome</h2>
+                        <div class="muted">@closedTradeCount closed trades</div>
+                    </div>
+                    <strong>@winPct.ToString("0.0")% win rate</strong>
+                </div>
+                <div class="outcome-bar" aria-label="@result.WinningTradeCount wins and @result.LosingTradeCount losses">
+                    <span class="wins" style="width:@winPct.ToString("0.##", CultureInfo.InvariantCulture)%"></span>
+                    <span class="losses" style="width:@lossPct.ToString("0.##", CultureInfo.InvariantCulture)%"></span>
+                </div>
+                <div class="outcome-legend">
+                    <span><i class="good-dot"></i>@result.WinningTradeCount wins</span>
+                    <span><i class="bad-dot"></i>@result.LosingTradeCount losses</span>
+                </div>
+            </section>
+            <section class="panel">
+                <div class="section-title">
+                    <div>
+                        <h2>Strategy Comparison</h2>
+                        <div class="muted">Return relative to the strongest absolute result</div>
+                    </div>
+                </div>
+                <div class="strategy-return-bars">
+                    @foreach (var strategy in result.StrategyResults.OrderByDescending(item => item.TotalReturnPct))
+                    {
+                        var magnitude = Math.Abs(strategy.TotalReturnPct) / maxAbsoluteReturn * 100m;
+                        <div class="strategy-return-row">
+                            <div><strong>@strategy.StrategyName</strong><span class="@(strategy.TotalReturnPct >= 0 ? "good" : "bad")">@strategy.TotalReturnPct.ToString("+0.##;-0.##;0")%</span></div>
+                            <div class="strategy-return-track">
+                                <span class="@(strategy.TotalReturnPct >= 0 ? "positive" : "negative")" style="width:@magnitude.ToString("0.##", CultureInfo.InvariantCulture)%"></span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+        </div>
+
         <section class="panel" style="margin-top:16px">
             <h2>Ticker Results</h2>
-            <table>
+            <div class="table-scroll" tabindex="0" aria-label="Ticker backtest results">
+            <table class="data-table">
                 <thead><tr><th>Ticker</th><th>Status</th><th>Bars</th><th>Candidates</th><th>Error</th></tr></thead>
                 <tbody>
                 @foreach (var ticker in result.TickerResults.OrderBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase))
@@ -135,11 +214,13 @@ else
                 }
                 </tbody>
             </table>
+            </div>
         </section>
 
         <section class="panel" style="margin-top:16px">
             <h2>Strategy Results</h2>
-            <table>
+            <div class="table-scroll" tabindex="0" aria-label="Strategy backtest results">
+            <table class="data-table">
                 <thead><tr><th>Strategy</th><th>Return</th><th>Daily Avg</th><th>Net</th><th>Drawdown</th><th>Trades</th><th>Win Rate</th></tr></thead>
                 <tbody>
                 @foreach (var strategy in result.StrategyResults.OrderByDescending(x => x.NetProfit))
@@ -157,11 +238,13 @@ else
                 }
                 </tbody>
             </table>
+            </div>
         </section>
 
         <section class="panel" style="margin-top:16px">
             <h2>Analyzer</h2>
-            <table>
+            <div class="table-scroll" tabindex="0" aria-label="Backtest analyzer">
+            <table class="data-table">
                 <thead><tr><th>Strategy</th><th>Evaluated</th><th>Candidates</th><th>Accepted</th><th>Daily P&L</th><th>Long / Short</th><th>Best / Worst Day</th><th>Top Rejections</th><th>Suggestions</th></tr></thead>
                 <tbody>
                 @foreach (var diagnostic in result.Diagnostics)
@@ -214,11 +297,13 @@ else
                 }
                 </tbody>
             </table>
+            </div>
         </section>
 
         <section class="panel" style="margin-top:16px">
             <h2>Recent Trades</h2>
-            <table>
+            <div class="table-scroll" tabindex="0" aria-label="Recent backtest trades">
+            <table class="data-table">
                 <thead><tr><th>Ticker</th><th>Strategy</th><th>Side</th><th>Entry</th><th>Exit</th><th>Reason</th><th>Net</th></tr></thead>
                 <tbody>
                 @foreach (var trade in result.CompletedTrades.OrderByDescending(x => x.ExitTimestamp).Take(80))
@@ -235,6 +320,163 @@ else
                 }
                 </tbody>
             </table>
+            </div>
         </section>
+    }
+}
+
+@section Scripts {
+    @if (Model.Job is not null)
+    {
+        <script>
+            (() => {
+                const jobId = '@Model.Job.JobId';
+                const initiallyHasResult = @(Model.Job.Result is null ? "false" : "true");
+                const terminalStatuses = new Set(['completed', 'failed', 'cancelled']);
+                const phaseOrder = ['setup', 'market', 'evaluation', 'results'];
+                const stagePhases = {
+                    loading_config: 'setup',
+                    loading_strategies: 'setup',
+                    finviz_candidates: 'setup',
+                    resolving_universe: 'setup',
+                    market_pipeline: 'market',
+                    preparing_ticker_contexts: 'market',
+                    strategy_group_ready: 'evaluation',
+                    running_strategy_matrix: 'evaluation',
+                    running_strategy_ticker: 'evaluation',
+                    finished_strategy_ticker: 'evaluation',
+                    building_results: 'results',
+                    writing_result: 'results',
+                    completed: 'results'
+                };
+
+                const escapeHtml = value => String(value ?? '')
+                    .replaceAll('&', '&amp;')
+                    .replaceAll('<', '&lt;')
+                    .replaceAll('>', '&gt;')
+                    .replaceAll('"', '&quot;')
+                    .replaceAll("'", '&#039;');
+
+                function renderPhases(stage, status) {
+                    const activePhase = stagePhases[stage] ?? 'setup';
+                    const activeIndex = phaseOrder.indexOf(activePhase);
+                    document.querySelectorAll('#backtestPhaseRail [data-phase]').forEach(item => {
+                        const itemIndex = phaseOrder.indexOf(item.dataset.phase);
+                        item.classList.toggle('complete', status === 'completed' || itemIndex < activeIndex);
+                        item.classList.toggle('active', !terminalStatuses.has(status) && itemIndex === activeIndex);
+                        item.classList.toggle('failed', status === 'failed' && itemIndex === activeIndex);
+                        item.classList.toggle('cancelled', status === 'cancelled' && itemIndex === activeIndex);
+                    });
+                }
+
+                function renderStrategyGroups(groups) {
+                    const container = document.getElementById('strategyGroupGrid');
+                    if (!container) return;
+                    container.innerHTML = (groups ?? []).map(group => {
+                        const current = group.currentTicker ? ` - current ${escapeHtml(group.currentTicker)}` : '';
+                        const events = (group.recentEvents ?? []).slice().reverse().map(eventText => `<li>${escapeHtml(eventText)}</li>`).join('');
+                        return `<article class="backtest-strategy-card">
+                            <div class="section-title">
+                                <div>
+                                    <h3>${escapeHtml(group.strategyName)}</h3>
+                                    <div class="muted">${escapeHtml(group.status)}${current}</div>
+                                </div>
+                                <strong>${group.completedTickerCount} / ${group.totalTickerCount}</strong>
+                            </div>
+                            <div class="progress-track">
+                                <div class="progress-bar" style="width:${Number(group.progressPercent ?? 0)}%"></div>
+                            </div>
+                            ${events ? `<ul class="event-log compact">${events}</ul>` : ''}
+                        </article>`;
+                    }).join('');
+                }
+
+                function applySnapshot(data) {
+                    const status = document.getElementById('backtestStatus');
+                    if (status) {
+                        status.textContent = data.status;
+                        status.className = `status ${data.status}`;
+                    }
+
+                    const stage = document.getElementById('backtestStage');
+                    if (stage) stage.textContent = String(data.currentStage ?? '').replaceAll('_', ' ');
+                    document.getElementById('backtestElapsed').textContent = data.elapsed;
+                    document.getElementById('backtestStarted').textContent = data.startedAt;
+                    document.getElementById('backtestFinished').textContent = data.finishedAt;
+                    document.getElementById('backtestProgressText').textContent = `${data.completedTickerCount} / ${data.totalTickerCount} work items`;
+                    document.getElementById('backtestProgressPercent').textContent = `${Number(data.progressPercent ?? 0).toFixed(1)}%`;
+
+                    const progressBar = document.getElementById('backtestProgressBar');
+                    const progressTrack = document.getElementById('backtestProgressTrack');
+                    if (progressBar) progressBar.style.width = `${Number(data.progressPercent ?? 0)}%`;
+                    if (progressTrack) progressTrack.setAttribute('aria-valuenow', String(Math.round(Number(data.progressPercent ?? 0))));
+
+                    renderPhases(data.currentStage, data.status);
+                    renderStrategyGroups(data.strategyGroups);
+
+                    const events = document.getElementById('backtestEvents');
+                    if (events) {
+                        const recent = (data.events ?? []).slice(-20).reverse();
+                        events.innerHTML = recent.length === 0
+                            ? '<li class="muted">Waiting for the worker...</li>'
+                            : recent.map(eventText => `<li>${escapeHtml(eventText)}</li>`).join('');
+                    }
+
+                    const error = document.getElementById('backtestError');
+                    if (error) {
+                        error.hidden = !data.errorMessage;
+                        error.querySelector('strong').textContent = data.errorMessage ?? '';
+                    }
+
+                    const cancelButton = document.getElementById('cancelBacktestButton');
+                    if (cancelButton) {
+                        cancelButton.disabled = !data.canCancel || data.status === 'cancelling';
+                        cancelButton.textContent = data.status === 'cancelling' ? 'Cancelling...' : 'Cancel Run';
+                    }
+                }
+
+                async function refreshSnapshot() {
+                    try {
+                        const response = await fetch(`?handler=Snapshot&id=${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+                        if (!response.ok) return;
+                        const data = await response.json();
+                        applySnapshot(data);
+                        if (terminalStatuses.has(data.status)) {
+                            window.clearInterval(window.tradingFlowBacktestRefresh);
+                            if (data.status === 'completed' && !initiallyHasResult) {
+                                window.location.reload();
+                            }
+                        }
+                    } catch {
+                        // Keep the last known UI state; the next poll can recover.
+                    }
+                }
+
+                const cancelForm = document.getElementById('cancelBacktestForm');
+                cancelForm?.addEventListener('submit', async event => {
+                    event.preventDefault();
+                    const button = document.getElementById('cancelBacktestButton');
+                    if (button) {
+                        button.disabled = true;
+                        button.textContent = 'Cancelling...';
+                    }
+                    try {
+                        await fetch(cancelForm.action, {
+                            method: 'POST',
+                            body: new FormData(cancelForm),
+                            redirect: 'follow'
+                        });
+                    } finally {
+                        await refreshSnapshot();
+                    }
+                });
+
+                renderPhases('@Model.Job.CurrentStage', '@Model.Job.Status');
+                if (!terminalStatuses.has('@Model.Job.Status')) {
+                    window.tradingFlowBacktestRefresh = window.setInterval(refreshSnapshot, 1500);
+                    refreshSnapshot();
+                }
+            })();
+        </script>
     }
 }

@@ -2,7 +2,7 @@
 
 Deep review of `docs/architecture.md`, `docs/strategy-last-runs.md`,
 `docs/strategy-forensics-2026-06-13.md`, `docs/backtesting-bias-controls.md`,
-`docs/candle-news-pipeline-audit.md`, `docs/ml-research-analyzer.md`,
+`docs/candle-news-pipeline-audit.md`, the evidence-catalog research design,
 `docs/backtesting-research-retention.md`, the strategy YAML catalog, and the
 catalyst gate code in `BasicStrategyEvaluator`. Written as a hand-off plan:
 each phase is independently executable and states its acceptance criteria.
@@ -189,8 +189,8 @@ gate; ticker guard demonstrably caps repeated-loss churn in a replay test.*
 
 - No new indicators, and no v11 gate tweak on the existing baskets — forensics
   already concluded "do not add more indicators first".
-- ML remains a research assistant (per ml-research-analyzer.md rules); it does
-  not become a trade executor in this plan.
+- Statistical analysis remains a research assistant; it does not become a
+  trade executor in this plan.
 - No live-money enablement; the live router stays disabled by default.
 
 ## Code Landing Points for Opus
