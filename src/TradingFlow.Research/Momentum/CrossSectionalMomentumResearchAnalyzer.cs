@@ -207,8 +207,19 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
                 !asTradedSeries.TryGetValue(tickerSeries.Ticker, out var asTradedTickerSeries) ||
                 !asTradedTickerSeries.IndexBySessionDate.TryGetValue(
                     decisionDate,
-                    out var asTradedIndex) ||
-                index < minimumHistoryIndex)
+                    out var asTradedIndex))
+            {
+                continue;
+            }
+
+            // A provider-wide research start is not an issuer-age requirement.
+            // Count only this listing's real completed bars and admit it as soon
+            // as both adjusted signals and as-traded liquidity are warm.
+            var historyEligibility = CompletedBarHistoryEligibilityGuard.Evaluate(
+                index,
+                asTradedIndex,
+                minimumHistoryIndex);
+            if (!historyEligibility.IsEligible)
             {
                 continue;
             }

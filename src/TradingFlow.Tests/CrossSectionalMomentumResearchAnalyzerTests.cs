@@ -87,6 +87,75 @@ public sealed class CrossSectionalMomentumResearchAnalyzerTests
     }
 
     [Fact]
+    public void Analyze_LaterListingBecomesEligibleAfterItsOwnCompletedBarWarmup()
+    {
+        var benchmarkBars = BuildBars("SPY", 30, index => 100m + index);
+        var laterListingBars = BuildBars("NEW", 30, index => 10m + (index * 3m))
+            .Skip(10)
+            .ToArray();
+        var bars = new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["SPY"] = benchmarkBars,
+            ["A"] = BuildBars("A", 30, index => 20m + index),
+            ["B"] = BuildBars("B", 30, index => 30m + index),
+            ["C"] = BuildBars("C", 30, index => 40m + index),
+            ["D"] = BuildBars("D", 30, index => 50m + index),
+            ["NEW"] = laterListingBars
+        };
+        var firstListingDate = DateOnly.FromDateTime(
+            laterListingBars[0].Timestamp.UtcDateTime);
+        var eligibleByDate = benchmarkBars.ToDictionary(
+            bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime),
+            bar =>
+            {
+                var date = DateOnly.FromDateTime(bar.Timestamp.UtcDateTime);
+                IReadOnlySet<string> eligible = date < firstListingDate
+                    ? new HashSet<string>(["A", "B", "C", "D"], StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(["A", "B", "C", "D", "NEW"], StringComparer.OrdinalIgnoreCase);
+                return eligible;
+            });
+
+        var report = new CrossSectionalMomentumResearchAnalyzer().Analyze(
+            bars,
+            Definition(),
+            eligibleByDate);
+
+        var requiredCompletedBars = Definition().Options.MomentumLookbackBars + 1;
+        var firstEligibleDate = DateOnly.FromDateTime(
+            laterListingBars[requiredCompletedBars - 1].Timestamp.UtcDateTime);
+        Assert.DoesNotContain(
+            report.RankObservations,
+            observation =>
+                observation.Ticker == "NEW" &&
+                observation.DecisionDate < firstEligibleDate);
+        Assert.Contains(
+            report.RankObservations,
+            observation =>
+                observation.Ticker == "NEW" &&
+                observation.DecisionDate >= firstEligibleDate);
+        Assert.Equal(20, laterListingBars.Length);
+    }
+
+    [Fact]
+    public void CompletedHistoryGuard_RequiresRealAdjustedAndAsTradedBars()
+    {
+        var warming = CompletedBarHistoryEligibilityGuard.Evaluate(
+            adjustedCompletedBarIndex: 6,
+            asTradedCompletedBarIndex: 5,
+            requiredCompletedBarIndex: 6);
+        var warm = CompletedBarHistoryEligibilityGuard.Evaluate(
+            adjustedCompletedBarIndex: 6,
+            asTradedCompletedBarIndex: 6,
+            requiredCompletedBarIndex: 6);
+
+        Assert.False(warming.IsEligible);
+        Assert.Equal(7, warming.RequiredCompletedBars);
+        Assert.Equal(7, warming.AdjustedCompletedBars);
+        Assert.Equal(6, warming.AsTradedCompletedBars);
+        Assert.True(warm.IsEligible);
+    }
+
+    [Fact]
     public void Analyze_ReportsGrossReturnAndDeductsFrozenRoundTripCosts()
     {
         var bars = new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase)

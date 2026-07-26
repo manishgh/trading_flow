@@ -127,12 +127,18 @@ Intraday uses canonical-story/session clustering and a session-date block bootst
 
 Required before promotable research:
 
-- raw inputs beginning no later than 1999-01-01;
+- raw inputs beginning at the earliest provider-supported observation in 2016;
+- every dataset manifest records its exact observed first and last timestamps;
+- no pre-provider or synthetic history is permitted;
+- 2016 is a dataset boundary, not a minimum issuer age: a security listed later
+  enters the point-in-time universe on its actual effective listing/membership
+  date and becomes admissible after its own strategy-specific completed-bar
+  warm-up; absence before listing must never be treated as a defect;
 - authoritative point-in-time S&P 500 membership with effective timestamps;
 - one common-share line per issuer;
 - a formation-date price floor of USD 5 and raw 20-session average dollar volume
   of at least USD 20 million;
-- at least 252 completed sessions per admitted security;
+- at least 252 real completed sessions per security admitted to this swing study;
 - adjusted and as-traded daily bars for every historical member;
 - delisted securities and historical membership changes;
 - corporate-action and terminal/delisting evidence;
@@ -505,7 +511,8 @@ advances to a new holdout or paper shadow from this evidence.
 5. Add or acquire point-in-time historical universe membership.
 6. Package the full momentum audit, formation ledger, portfolio returns, robustness,
    and factor results as immutable named outputs.
-7. Extend swing evidence to at least ten years and run A1 only.
+7. Extend swing evidence across the complete provider-supported 2016 onward
+   interval and run A1 only.
 8. Audit A1; run A2 only if A1 is valid.
 9. Run A3 and A4 as separate paired additions, never together initially.
 10. Complete classifier ground truth and B1.
