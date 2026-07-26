@@ -170,7 +170,7 @@ public sealed partial class CatalogResearchWorkflow
         };
     }
 
-    public async Task<CatalogCatalystWorkflowResult> RunCatalystAsync(
+    public async Task<CatalogCatalystWorkflowResult> RunCatalystDiagnosticAsync(
         CatalogCatalystWorkflowRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -303,7 +303,7 @@ public sealed partial class CatalogResearchWorkflow
                 catalog,
                 phaseReader,
                 resolver)
-            .RunCatalystAsync(study, cancellationToken);
+            .RunCatalystDiagnosticAsync(study, cancellationToken);
 
         var readinessFailures = classifierFailures
             .Concat(result.ReadinessFailures)

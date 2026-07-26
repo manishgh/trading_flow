@@ -259,7 +259,7 @@ public sealed class CatalogResearchWorkflowTests : IDisposable
             new EvidenceResearchRunArtifactPackager(artifactStore));
 
         var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            workflow.RunCatalystAsync(CatalystRequest(
+            workflow.RunCatalystDiagnosticAsync(CatalystRequest(
                 bars,
                 news,
                 sentiment,
@@ -383,7 +383,7 @@ public sealed class CatalogResearchWorkflowTests : IDisposable
             reader.Object,
             new EvidenceResearchRunArtifactPackager(artifactStore));
 
-        var result = await workflow.RunCatalystAsync(CatalystRequest(
+        var result = await workflow.RunCatalystDiagnosticAsync(CatalystRequest(
             bars,
             news,
             sentiment,

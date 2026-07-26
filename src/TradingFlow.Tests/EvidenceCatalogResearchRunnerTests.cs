@@ -72,7 +72,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
             reader);
 
         var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            runner.RunCatalystAsync(new CatalogCatalystStudyRequest(
+            runner.RunCatalystDiagnosticAsync(new CatalogCatalystStudyRequest(
                 barsManifest.DatasetId,
                 newsManifest.DatasetId,
                 "sentiment-dataset-not-read",
@@ -103,7 +103,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
             reader);
 
         var exception = await Assert.ThrowsAsync<KeyNotFoundException>(() =>
-            runner.RunCatalystAsync(new CatalogCatalystStudyRequest(
+            runner.RunCatalystDiagnosticAsync(new CatalogCatalystStudyRequest(
                 barsManifest.DatasetId,
                 newsManifest.DatasetId,
                 "missing-sentiment-dataset",
@@ -260,7 +260,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
                 start,
                 start.AddHours(6.5)));
 
-        var result = await runner.RunCatalystAsync(new CatalogCatalystStudyRequest(
+        var result = await runner.RunCatalystDiagnosticAsync(new CatalogCatalystStudyRequest(
             barsManifest.DatasetId,
             newsManifest.DatasetId,
             sentimentManifest.DatasetId,
@@ -317,7 +317,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
         var fixture = CatalystFixture([]);
 
         var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.Runner.RunCatalystAsync(fixture.Request));
+            fixture.Runner.RunCatalystDiagnosticAsync(fixture.Request));
 
         Assert.Contains("assessment is missing", exception.Message);
     }
@@ -335,7 +335,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
         var fixture = CatalystFixture([first, second], news);
 
         var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            fixture.Runner.RunCatalystAsync(fixture.Request));
+            fixture.Runner.RunCatalystDiagnosticAsync(fixture.Request));
 
         Assert.Contains("assessment is ambiguous", exception.Message);
     }
@@ -355,7 +355,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
         var staleFixture = CatalystFixture([stale], news);
 
         var staleException = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            staleFixture.Runner.RunCatalystAsync(staleFixture.Request));
+            staleFixture.Runner.RunCatalystDiagnosticAsync(staleFixture.Request));
 
         Assert.Contains("input hash does not match", staleException.Message);
 
@@ -367,7 +367,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
         var lineageFixture = CatalystFixture([wrongLineage], news);
 
         var lineageException = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            lineageFixture.Runner.RunCatalystAsync(lineageFixture.Request));
+            lineageFixture.Runner.RunCatalystDiagnosticAsync(lineageFixture.Request));
 
         Assert.Contains("lineage does not exactly match", lineageException.Message);
     }
@@ -383,7 +383,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
             assessmentObservedAt);
         var fixture = CatalystFixture([future], news);
 
-        var result = await fixture.Runner.RunCatalystAsync(fixture.Request with
+        var result = await fixture.Runner.RunCatalystDiagnosticAsync(fixture.Request with
         {
             Options = new CatalystEventStudyOptions
             {
@@ -414,7 +414,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
             news.AvailabilityTimestampUtc.AddSeconds(1));
         var fixture = CatalystFixture([assessment], news);
 
-        var result = await fixture.Runner.RunCatalystAsync(fixture.Request with
+        var result = await fixture.Runner.RunCatalystDiagnosticAsync(fixture.Request with
         {
             Options = new CatalystEventStudyOptions
             {
@@ -447,7 +447,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
                 news.AvailabilityTimestampUtc.AddSeconds(1));
         var fixture = CatalystFixture([assessment], news);
 
-        var result = await fixture.Runner.RunCatalystAsync(fixture.Request with
+        var result = await fixture.Runner.RunCatalystDiagnosticAsync(fixture.Request with
         {
             Options = new CatalystEventStudyOptions
             {
@@ -485,7 +485,7 @@ public sealed class EvidenceCatalogResearchRunnerTests
             news);
         var holdoutStart = news.AvailabilityTimestampUtc.AddMinutes(-10);
 
-        var result = await fixture.Runner.RunCatalystAsync(fixture.Request with
+        var result = await fixture.Runner.RunCatalystDiagnosticAsync(fixture.Request with
         {
             Options = new CatalystEventStudyOptions
             {

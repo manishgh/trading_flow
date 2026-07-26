@@ -159,7 +159,7 @@ public sealed class EvidenceCatalogResearchRunner
             report);
     }
 
-    public async Task<CatalogCatalystStudyResult> RunCatalystAsync(
+    public async Task<CatalogCatalystStudyResult> RunCatalystDiagnosticAsync(
         CatalogCatalystStudyRequest request,
         CancellationToken cancellationToken = default)
     {

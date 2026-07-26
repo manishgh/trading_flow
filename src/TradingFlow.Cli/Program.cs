@@ -1,17 +1,145 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Net.Http.Json;
 using TradingFlow.Backtesting;
 using TradingFlow.Backtesting.Optimization;
 using TradingFlow.Backtesting.Research;
 using TradingFlow.Backtesting.StrategyEvaluation;
+using TradingFlow.Data.Evidence;
+using TradingFlow.Data.Evidence.Collection;
+using TradingFlow.Data.Evidence.Labeling;
+using TradingFlow.Data.Evidence.Normalization;
+using TradingFlow.Data.Evidence.Parquet;
+using TradingFlow.Data.Evidence.Research;
+using TradingFlow.Domain.Research;
 using TradingFlow.Engine.Configuration;
-using TradingFlow.Engine.Indicators;
+using TradingFlow.Engine.Research;
 using TradingFlow.Engine.Storage;
+using TradingFlow.Research;
+using TradingFlow.Research.Momentum;
+using TradingFlow.Research.Orchestration;
+using TradingFlow.Research.Workflows;
 
 var serializerOptions = new JsonSerializerOptions
 {
-    WriteIndented = true
+    WriteIndented = true,
+    PropertyNameCaseInsensitive = true
 };
+serializerOptions.Converters.Add(new JsonStringEnumConverter());
+
+if (args.Length > 0 &&
+    args[0].Equals("evidence-inventory", StringComparison.OrdinalIgnoreCase))
+{
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
+        artifactStore);
+    var datasets = await catalog.FindDatasetsAsync(new EvidenceDatasetQuery());
+    Console.WriteLine(JsonSerializer.Serialize(
+        datasets
+            .OrderBy(dataset => dataset.Kind)
+            .ThenBy(dataset => dataset.CreatedAtUtc)
+            .Select(dataset => new
+            {
+                dataset.DatasetId,
+                dataset.Kind,
+                dataset.CreatedAtUtc,
+                dataset.DataFeed,
+                PartitionCount = dataset.Partitions.Count,
+                RowCount = dataset.Partitions.Sum(partition => partition.RowCount),
+                MinimumSourceTimestampUtc = dataset.Partitions.Min(
+                    partition => partition.MinimumSourceTimestampUtc),
+                MaximumSourceTimestampUtc = dataset.Partitions.Max(
+                    partition => partition.MaximumSourceTimestampUtc),
+                dataset.Attributes
+            })
+            .ToArray(),
+        serializerOptions));
+    return;
+}
+
+if (args.Length > 0 &&
+    args[0].Equals(
+        "evidence-collection-status",
+        StringComparison.OrdinalIgnoreCase))
+{
+    var requestPath = Path.GetFullPath(RequireStringOption(args, "--request"));
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    var request = JsonSerializer.Deserialize<EvidenceDatasetCollectionRequest>(
+                      await File.ReadAllTextAsync(requestPath),
+                      serializerOptions)
+                  ?? throw new InvalidDataException(
+                      "The frozen evidence collection request is empty.");
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
+        artifactStore);
+    var plan = request.CreatePlan();
+    var checkpoint = await catalog.GetCollectionCheckpointAsync(plan.JobId);
+    var cursors = new List<EvidenceRequestCursorCheckpoint?>();
+    foreach (var collectionRequest in plan.Requests)
+    {
+        cursors.Add(await catalog.GetRequestCursorCheckpointAsync(
+            plan.JobId,
+            collectionRequest.RequestId));
+    }
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        plan.JobId,
+        checkpoint,
+        Requests = plan.Requests.Select((collectionRequest, index) => new
+        {
+            collectionRequest.RequestId,
+            PageOrdinal = cursors[index]?.PageOrdinal,
+            AttemptCount = cursors[index]?.AttemptCount,
+            Exhausted = cursors[index]?.Exhausted,
+            UpdatedAtUtc = cursors[index]?.UpdatedAtUtc
+        })
+    }, serializerOptions));
+    return;
+}
+
+if (args.Length > 0 &&
+    args[0].Equals(
+        "evidence-recover-normalization",
+        StringComparison.OrdinalIgnoreCase))
+{
+    var requestPath = Path.GetFullPath(RequireStringOption(args, "--request"));
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    var actor = RequireStringOption(args, "--actor");
+    var reason = RequireStringOption(args, "--reason");
+    var request = JsonSerializer.Deserialize<EvidenceDatasetCollectionRequest>(
+                      await File.ReadAllTextAsync(requestPath),
+                      serializerOptions)
+                  ?? throw new InvalidDataException(
+                      "The frozen evidence collection request is empty.");
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
+        artifactStore);
+    var plan = request.CreatePlan();
+    await catalog.RecoverQuarantinedNormalizationAsync(
+        plan.JobId,
+        actor,
+        reason,
+        DateTimeOffset.UtcNow);
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        plan.JobId,
+        State = EvidenceCollectionState.Normalizing,
+        actor,
+        reason
+    }, serializerOptions));
+    return;
+}
 
 if (args.Length > 1 &&
     args[0].Equals("ops", StringComparison.OrdinalIgnoreCase) &&
@@ -93,6 +221,634 @@ if (args.Length > 0 && args[0].Equals("alpaca-stream-smoke", StringComparison.Or
     using var stream = new TradingFlow.Alpaca.AlpacaStreamClient(options);
     await stream.ConnectAsync(timeout.Token);
     Console.WriteLine("Alpaca SIP market-data stream authentication succeeded.");
+    return;
+}
+
+if (args.Length > 0 &&
+    args[0].Equals("evidence-collect-normalize", StringComparison.OrdinalIgnoreCase))
+{
+    var requestPath = Path.GetFullPath(RequireStringOption(args, "--request"));
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    if (!File.Exists(requestPath))
+    {
+        throw new FileNotFoundException(
+            "The frozen evidence collection request was not found.",
+            requestPath);
+    }
+
+    var request = JsonSerializer.Deserialize<EvidenceDatasetCollectionRequest>(
+                      await File.ReadAllTextAsync(requestPath),
+                      serializerOptions)
+                  ?? throw new InvalidDataException(
+                      "The frozen evidence collection request is empty.");
+    var keyId = ResolveSecret("Alpaca", "KeyId", "ALPACA_KEY_ID");
+    var secretKey = ResolveSecret("Alpaca", "SecretKey", "ALPACA_SECRET_KEY");
+    if (String.IsNullOrWhiteSpace(keyId) || String.IsNullOrWhiteSpace(secretKey))
+    {
+        throw new InvalidOperationException(
+            "Alpaca credentials are not configured. Use ALPACA_KEY_ID and ALPACA_SECRET_KEY or the ignored local development secret store.");
+    }
+
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalogMode = File.Exists(catalogPath)
+        ? EvidenceCatalogOpenMode.OpenExisting
+        : EvidenceCatalogOpenMode.BootstrapNew;
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, catalogMode),
+        artifactStore);
+    var publicationCoordinator = new EvidencePublicationCoordinator(
+        catalog,
+        artifactStore);
+    var endpoints = TradingFlow.Alpaca.AlpacaEndpointResolver.Resolve(
+        ProductionProfile.Paper);
+    using var httpClient = new HttpClient
+    {
+        Timeout = Timeout.InfiniteTimeSpan
+    };
+    httpClient.DefaultRequestHeaders.Add("APCA-API-KEY-ID", keyId);
+    httpClient.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", secretKey);
+    var collector = new EvidenceHttpCollector(
+        httpClient,
+        catalog,
+        publicationCoordinator,
+        [
+            new AlpacaBarsEvidenceRequestAdapter(endpoints.MarketDataRest),
+            new AlpacaQuotesEvidenceRequestAdapter(endpoints.MarketDataRest),
+            new AlpacaNewsEvidenceRequestAdapter(endpoints.MarketDataRest),
+            new AlpacaExchangeCalendarEvidenceRequestAdapter(endpoints.TradingRest)
+        ],
+        new EvidenceHttpCollectionOptions(
+            workerCount: ParseIntOption(args, "--workers") ?? 4,
+            boundedCapacity: ParseIntOption(args, "--capacity") ?? 16,
+            maximumAttempts: ParseIntOption(args, "--maximum-attempts") ?? 4,
+            requestTimeout: TimeSpan.FromSeconds(
+                ParseIntOption(args, "--request-timeout-seconds") ?? 30)));
+    var normalizer = new EvidenceNormalizationOrchestrator(
+        catalog,
+        artifactStore,
+        new EvidenceParquetPartitionPublisher(
+            new EvidenceParquetCodec(),
+            artifactStore));
+    var workflow = new EvidenceDatasetCollectionWorkflow(collector, normalizer);
+    var plan = request.CreatePlan();
+    using var commandCancellation = new CancellationTokenSource();
+    ConsoleCancelEventHandler cancellationHandler = (_, eventArgs) =>
+    {
+        eventArgs.Cancel = true;
+        commandCancellation.Cancel();
+    };
+    Console.CancelKeyPress += cancellationHandler;
+    try
+    {
+        var recovery = await publicationCoordinator.RecoverPendingPublicationsAsync(
+            maximumPublications: 10_000,
+            commandCancellation.Token);
+        if (recovery.Quarantined > 0 || recovery.Failed > 0)
+        {
+            throw new InvalidDataException(
+                "Evidence publication recovery found quarantined or failed entries. " +
+                "Inspect the catalog before starting another collection.");
+        }
+
+        var result = await workflow.RunAsync(
+            plan,
+            request.CreateNormalizationJob(plan),
+            commandCancellation.Token);
+
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            result.JobId,
+            result.DatasetId,
+            result.AlreadyCommitted,
+            result.PartitionCount,
+            result.RowCount,
+            PublicationRecovery = recovery,
+            Catalog = catalogPath,
+            ArtifactRoot = artifactRoot
+        }, serializerOptions));
+    }
+    catch (OperationCanceledException) when (commandCancellation.IsCancellationRequested)
+    {
+        Environment.ExitCode = 130;
+        Console.Error.WriteLine(
+            $"Evidence collection '{plan.JobId}' was interrupted and checkpointed for resume.");
+    }
+    finally
+    {
+        Console.CancelKeyPress -= cancellationHandler;
+    }
+
+    return;
+}
+
+if (args.Length > 0 &&
+    args[0].Equals(
+        "evidence-export-catalyst-label-sample",
+        StringComparison.OrdinalIgnoreCase))
+{
+    var sourceDatasetId = RequireStringOption(args, "--dataset-id");
+    var sampleSize = ParseIntOption(args, "--sample-size") ?? 500;
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    var outputDirectory = Path.GetFullPath(RequireStringOption(args, "--output-dir"));
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
+        artifactStore);
+    var source = await catalog.GetDatasetAsync(sourceDatasetId)
+        ?? throw new InvalidOperationException(
+            $"Committed news dataset '{sourceDatasetId}' was not found.");
+    var partitionReader = new ParquetEvidencePartitionDataReader(
+        new EvidenceParquetCodec(),
+        artifactStore);
+    var news = await partitionReader.ReadNewsRevisionsAsync(source);
+    var sampling = CatalystLabelingSampleDefinition.Stratified(sampleSize);
+    var workItems = CatalystLabelingWorkItemExporter.Export(source, news, sampling);
+    var labelTemplate = CatalystHumanLabelTemplateExporter.Export(workItems);
+    var packageId = $"{source.DatasetId[..12]}-{workItems.Sha256[..12]}";
+    var packageDirectory = Path.Combine(outputDirectory, packageId);
+    var workItemPath = Path.Combine(
+        packageDirectory,
+        $"catalyst-label-work-items.{workItems.Sha256}.ndjson");
+    var labelPath = Path.Combine(
+        packageDirectory,
+        $"catalyst-human-labels.{workItems.Sha256}.json");
+    var manifestPath = Path.Combine(packageDirectory, "labeling-package.json");
+    var packageManifest = JsonSerializer.Serialize(new
+    {
+        FormatVersion = "tradingflow.catalyst-label-package.v1",
+        PackageId = packageId,
+        SourceNewsDatasetId = source.DatasetId,
+        WorkItemFormatVersion = CatalystLabelingWorkItemExporter.FormatVersion,
+        HumanLabelFormatVersion = CatalystHumanLabelImporter.FormatVersion,
+        Sampling = workItems.Sampling,
+        workItems.EligibleCandidateCount,
+        SelectedWorkItemCount = workItems.WorkItems.Count,
+        WorkItemExportSha256 = workItems.Sha256,
+        HumanLabelTemplateSha256 = labelTemplate.Sha256,
+        Files = new
+        {
+            WorkItems = Path.GetFileName(workItemPath),
+            HumanLabels = Path.GetFileName(labelPath)
+        },
+        AllowedValues = new
+        {
+            Categories = Enum.GetNames<CatalystNewsCategory>(),
+            Directions = Enum.GetNames<CatalystDirection>(),
+            Materialities = Enum.GetNames<CatalystMateriality>()
+        },
+        RequiredHumanEvidence = new
+        {
+            MinimumValidLabels = 500,
+            MinimumDoubleLabeledArticles = 100,
+            EveryCategoryRequired = true,
+            Instruction =
+                "Label exact exported revisions only. Do not infer labels automatically. " +
+                "Conflicting double labels require explicit adjudication."
+        }
+    }, serializerOptions);
+
+    await WriteExactOrVerifyAsync(
+        workItemPath,
+        System.Text.Encoding.UTF8.GetString(workItems.Content.Span));
+    await WriteExactOrVerifyAsync(
+        labelPath,
+        System.Text.Encoding.UTF8.GetString(labelTemplate.Content.Span));
+    await WriteExactOrVerifyAsync(manifestPath, packageManifest);
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        PackageId = packageId,
+        PackageDirectory = packageDirectory,
+        WorkItems = workItemPath,
+        HumanLabels = labelPath,
+        Manifest = manifestPath,
+        workItems.EligibleCandidateCount,
+        SelectedWorkItemCount = workItems.WorkItems.Count,
+        WorkItemExportSha256 = workItems.Sha256,
+        HumanLabelTemplateSha256 = labelTemplate.Sha256
+    }, serializerOptions));
+    return;
+}
+
+if (args.Length > 0 &&
+    args[0].Equals(
+        "evidence-import-catalyst-ground-truth",
+        StringComparison.OrdinalIgnoreCase))
+{
+    var sourceDatasetId = RequireStringOption(args, "--dataset-id");
+    var sampleSize = ParseIntOption(args, "--sample-size") ?? 500;
+    var labelDocumentPath = Path.GetFullPath(
+        RequireStringOption(args, "--label-document"));
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    var runId = RequireStringOption(args, "--run-id");
+    var configHash = RequireStringOption(args, "--config-hash");
+    var codeVersion = RequireStringOption(args, "--code-version");
+    var builderVersion = RequireStringOption(args, "--builder-version");
+    var createdAtUtc = DateTimeOffset.Parse(
+        RequireStringOption(args, "--created-at-utc"),
+        System.Globalization.CultureInfo.InvariantCulture,
+        System.Globalization.DateTimeStyles.RoundtripKind);
+    if (!File.Exists(labelDocumentPath))
+    {
+        throw new FileNotFoundException(
+            "The completed human-label document was not found.",
+            labelDocumentPath);
+    }
+
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
+        artifactStore);
+    var codec = new EvidenceParquetCodec();
+    var builder = new CatalystGroundTruthDatasetBuilder(
+        catalog,
+        new ParquetEvidencePartitionDataReader(codec, artifactStore),
+        new EvidenceParquetPartitionPublisher(codec, artifactStore),
+        artifactStore);
+    var result = await builder.BuildAsync(new CatalystGroundTruthBuildRequest(
+        sourceDatasetId,
+        await File.ReadAllBytesAsync(labelDocumentPath),
+        runId,
+        configHash,
+        codeVersion,
+        builderVersion,
+        createdAtUtc,
+        new CatalystGroundTruthReadinessThresholds(),
+        CatalystLabelingSampleDefinition.Stratified(sampleSize)));
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        result.DatasetId,
+        result.AlreadyCommitted,
+        result.RowCount,
+        WorkItemExport = result.WorkItemExportArtifact,
+        HumanLabelDocument = result.HumanLabelDocumentArtifact,
+        result.Readiness.IsReady,
+        result.Readiness.CatalystPromotionAllowed,
+        result.Readiness.ValidLabelCount,
+        result.Readiness.DoubleLabeledArticleCount,
+        result.Readiness.AdjudicatedArticleCount,
+        result.Readiness.UnresolvedConflictCount,
+        result.Readiness.CategoryCounts,
+        result.Readiness.Failures
+    }, serializerOptions));
+    return;
+}
+
+if (args.Length > 0 &&
+    args[0].Equals("research-momentum", StringComparison.OrdinalIgnoreCase))
+{
+    var requestPath = Path.GetFullPath(RequireStringOption(args, "--request"));
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    if (!File.Exists(requestPath))
+    {
+        throw new FileNotFoundException(
+            "The frozen momentum research request was not found.",
+            requestPath);
+    }
+
+    var request = JsonSerializer.Deserialize<CatalogMomentumWorkflowRequest>(
+                      await File.ReadAllTextAsync(requestPath),
+                      new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                  ?? throw new InvalidDataException(
+                      "The frozen momentum research request is empty.");
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
+        artifactStore);
+    var partitionReader = new ParquetEvidencePartitionDataReader(
+        new EvidenceParquetCodec(),
+        artifactStore);
+    var workflow = new CatalogResearchWorkflow(
+        catalog,
+        partitionReader,
+        new EvidenceResearchRunArtifactPackager(artifactStore));
+    var result = await workflow.RunMomentumAsync(request);
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        result.Manifest.ResearchRunId,
+        result.Manifest.StudyId,
+        result.Manifest.EvidenceReady,
+        result.Manifest.ReadinessFailures,
+        result.AlreadyRegistered,
+        result.Study.Report.DataEvidenceReady,
+        result.Study.Report.PromotionEligible,
+        result.Study.Report.PromotionBlockers,
+        result.Study.Report.LoadedTickerCount,
+        result.Study.Report.DecisionDateCount,
+        result.Study.Report.HoldoutDecisionDateCount
+    }, serializerOptions));
+    return;
+}
+
+if (args.Length > 0 &&
+    args[0].Equals(
+        "research-momentum-static-diagnostic",
+        StringComparison.OrdinalIgnoreCase))
+{
+    var requestPath = Path.GetFullPath(RequireStringOption(args, "--request"));
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    if (!File.Exists(requestPath))
+    {
+        throw new FileNotFoundException(
+            "The frozen static-universe momentum diagnostic request was not found.",
+            requestPath);
+    }
+
+    var request = JsonSerializer.Deserialize<CatalogStaticUniverseMomentumRequest>(
+                      await File.ReadAllTextAsync(requestPath),
+                      new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                  ?? throw new InvalidDataException(
+                      "The frozen static-universe momentum diagnostic request is empty.");
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
+        artifactStore);
+    var partitionReader = new ParquetEvidencePartitionDataReader(
+        new EvidenceParquetCodec(),
+        artifactStore);
+    var workflow = new CatalogResearchWorkflow(
+        catalog,
+        partitionReader,
+        new EvidenceResearchRunArtifactPackager(artifactStore));
+    var result = await workflow.RunStaticUniverseMomentumDiagnosticAsync(request);
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        result.Manifest.ResearchRunId,
+        result.Manifest.StudyId,
+        result.Manifest.EvidenceReady,
+        result.Manifest.ReadinessFailures,
+        result.AlreadyRegistered,
+        result.Report.DataEvidenceReady,
+        result.Report.PromotionEligible,
+        result.Report.PromotionBlockers,
+        result.Report.LoadedTickerCount,
+        result.Report.DecisionDateCount,
+        result.Report.HoldoutDecisionDateCount,
+        result.Report.ExecutionCosts,
+        PrimaryQuantileCohorts = result.Report.Cohorts
+            .Where(cohort => cohort.Quantile == 1)
+            .OrderBy(cohort => cohort.Cell, StringComparer.Ordinal)
+            .ThenBy(cohort => cohort.Segment, StringComparer.Ordinal)
+            .ThenBy(cohort => cohort.ForwardHorizonBars)
+            .ToArray(),
+        result.Report.Comparisons,
+        RankObservationCount = result.Report.RankObservations.Count,
+        Robustness = result.Audit.Robustness,
+        TopTickerContributors = result.Audit.Tickers
+            .Where(value =>
+                value.Segment == MomentumStudySegment.Full &&
+                value.ForwardHorizonBars is 20 or 60)
+            .GroupBy(value => new { value.Cell, value.ForwardHorizonBars })
+            .SelectMany(group => group
+                .OrderByDescending(value => value.TotalNetReturnPct)
+                .Take(5))
+            .ToArray(),
+        BottomTickerContributors = result.Audit.Tickers
+            .Where(value =>
+                value.Segment == MomentumStudySegment.Full &&
+                value.ForwardHorizonBars is 20 or 60)
+            .GroupBy(value => new { value.Cell, value.ForwardHorizonBars })
+            .SelectMany(group => group
+                .OrderBy(value => value.TotalNetReturnPct)
+                .Take(5))
+            .ToArray(),
+        result.FrozenSymbols,
+        result.SurvivorshipSelectionBiasWarning
+    }, serializerOptions));
+    return;
+}
+
+if (args.Length > 0 &&
+    args[0].Equals(
+        "research-momentum-audit",
+        StringComparison.OrdinalIgnoreCase))
+{
+    var researchRunId = RequireStringOption(args, "--run-id");
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    var auditCell = ParseStringOption(args, "--cell");
+    var auditSegment = ParseStringOption(args, "--segment")
+        ?? MomentumStudySegment.Full;
+    var auditHorizonText = ParseStringOption(args, "--horizon");
+    var auditHorizon = auditHorizonText is null
+        ? (int?)null
+        : Int32.Parse(
+            auditHorizonText,
+            System.Globalization.CultureInfo.InvariantCulture);
+    var auditSummaryOnly = ParseFlag(args, "--summary-only");
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
+        artifactStore);
+    var manifest = await catalog.GetResearchRunAsync(researchRunId)
+        ?? throw new InvalidDataException(
+            $"Research run '{researchRunId}' is not registered.");
+    var reportReference = manifest.Outputs.SingleOrDefault(output =>
+        output.ObjectNamespace.Value.Equals(
+            "research/reports/momentum-report",
+            StringComparison.Ordinal))
+        ?? throw new InvalidDataException(
+            $"Research run '{researchRunId}' has no momentum-report output.");
+    await using var reportStream = await artifactStore.OpenReadAsync(reportReference);
+    using var reportBuffer = new MemoryStream();
+    await reportStream.CopyToAsync(reportBuffer);
+    var report = EvidenceCanonicalJson.Deserialize<CrossSectionalMomentumReport>(
+        reportBuffer.ToArray());
+    var audit = new MomentumResearchAuditAnalyzer().Analyze(
+        report.RankObservations,
+        report.Options.DecisionCadenceBars);
+    bool MatchesAuditFilter(
+        string cell,
+        string segment,
+        int horizon) =>
+        (auditCell is null ||
+         cell.Equals(auditCell, StringComparison.OrdinalIgnoreCase)) &&
+        (auditSegment.Equals("all", StringComparison.OrdinalIgnoreCase) ||
+         segment.Equals(auditSegment, StringComparison.OrdinalIgnoreCase)) &&
+        (auditHorizon is null || horizon == auditHorizon.Value);
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        manifest.ResearchRunId,
+        manifest.StudyId,
+        manifest.CreatedAtUtc,
+        manifest.EvidenceReady,
+        manifest.ReadinessFailures,
+        report.ExecutionCosts,
+        Filters = new
+        {
+            Cell = auditCell ?? "all",
+            Segment = auditSegment,
+            Horizon = auditHorizonText ?? "all"
+        },
+        Robustness = audit.Robustness
+            .Where(value => MatchesAuditFilter(
+                value.Cell,
+                value.Segment,
+                value.ForwardHorizonBars))
+            .ToArray(),
+        TopTickerContributors = audit.Tickers
+            .Where(value => MatchesAuditFilter(
+                value.Cell,
+                value.Segment,
+                value.ForwardHorizonBars))
+            .GroupBy(value => new { value.Cell, value.ForwardHorizonBars })
+            .SelectMany(group => group
+                .OrderByDescending(value => value.TotalNetReturnPct)
+                .Take(auditSummaryOnly ? 0 : 5))
+            .ToArray(),
+        BottomTickerContributors = audit.Tickers
+            .Where(value => MatchesAuditFilter(
+                value.Cell,
+                value.Segment,
+                value.ForwardHorizonBars))
+            .GroupBy(value => new { value.Cell, value.ForwardHorizonBars })
+            .SelectMany(group => group
+                .OrderBy(value => value.TotalNetReturnPct)
+                .Take(auditSummaryOnly ? 0 : 5))
+            .ToArray(),
+        TopFormations = audit.Formations
+            .Where(value => MatchesAuditFilter(
+                value.Cell,
+                value.Segment,
+                value.ForwardHorizonBars))
+            .GroupBy(value => new { value.Cell, value.ForwardHorizonBars })
+            .SelectMany(group => group
+                .OrderByDescending(value => value.MeanNetReturnPct)
+                .Take(auditSummaryOnly ? 0 : 5))
+            .ToArray(),
+        BottomFormations = audit.Formations
+            .Where(value => MatchesAuditFilter(
+                value.Cell,
+                value.Segment,
+                value.ForwardHorizonBars))
+            .GroupBy(value => new { value.Cell, value.ForwardHorizonBars })
+            .SelectMany(group => group
+                .OrderBy(value => value.MeanNetReturnPct)
+                .Take(auditSummaryOnly ? 0 : 5))
+            .ToArray()
+    }, serializerOptions));
+    return;
+}
+
+if (args.Length > 0 &&
+    args[0].Equals(
+        "research-daily-news-diagnostic",
+        StringComparison.OrdinalIgnoreCase))
+{
+    var requestPath = Path.GetFullPath(RequireStringOption(args, "--request"));
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    if (!File.Exists(requestPath))
+    {
+        throw new FileNotFoundException(
+            "The frozen provider-updated daily-news diagnostic request was not found.",
+            requestPath);
+    }
+
+    var request =
+        JsonSerializer.Deserialize<CatalogProviderUpdatedDailyNewsDiagnosticRequest>(
+            await File.ReadAllTextAsync(requestPath),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+        ?? throw new InvalidDataException(
+            "The frozen provider-updated daily-news diagnostic request is empty.");
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
+        artifactStore);
+    var partitionReader = new ParquetEvidencePartitionDataReader(
+        new EvidenceParquetCodec(),
+        artifactStore);
+    var workflow = new CatalogResearchWorkflow(
+        catalog,
+        partitionReader,
+        new EvidenceResearchRunArtifactPackager(artifactStore));
+    var result =
+        await workflow.RunProviderUpdatedDailyNewsDiagnosticAsync(request);
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        result.Manifest.ResearchRunId,
+        result.Manifest.StudyId,
+        result.Manifest.EvidenceReady,
+        result.Manifest.ReadinessFailures,
+        result.AlreadyRegistered,
+        result.Report.PromotionEligible,
+        result.Report.PromotionBlockers,
+        StoryCount = result.Report.StoryClusters.Count,
+        EventCount = result.Report.EventObservations.Count,
+        IndependentEpisodeCount = result.Report.EventObservations.Count(
+            value => value.IsIndependentEpisodeStart),
+        ReturnCount = result.Report.HorizonReturns.Count,
+        CleanReturnCount = result.Report.HorizonReturns.Count(value => value.IsClean),
+        result.Report.Exclusions,
+        result.Report.Summaries,
+        CategorySummaryCount = result.Report.CategorySummaries.Count,
+        result.FrozenSymbols
+    }, serializerOptions));
+    return;
+}
+
+if (args.Length > 0 &&
+    args[0].Equals("research-catalyst", StringComparison.OrdinalIgnoreCase))
+{
+    var requestPath = Path.GetFullPath(RequireStringOption(args, "--request"));
+    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
+    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
+    if (!File.Exists(requestPath))
+    {
+        throw new FileNotFoundException(
+            "The frozen catalyst research request was not found.",
+            requestPath);
+    }
+
+    var request = JsonSerializer.Deserialize<CatalogCatalystWorkflowRequest>(
+                      await File.ReadAllTextAsync(requestPath),
+                      new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                  ?? throw new InvalidDataException(
+                      "The frozen catalyst research request is empty.");
+    var artifactStore = new FileSystemImmutableArtifactStore(
+        new ImmutableArtifactStoreOptions(artifactRoot));
+    var catalog = new SqliteEvidenceCatalog(
+        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
+        artifactStore);
+    var partitionReader = new ParquetEvidencePartitionDataReader(
+        new EvidenceParquetCodec(),
+        artifactStore);
+    var workflow = new CatalogResearchWorkflow(
+        catalog,
+        partitionReader,
+        new EvidenceResearchRunArtifactPackager(artifactStore));
+    var result = await workflow.RunCatalystDiagnosticAsync(request);
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        result.Manifest.ResearchRunId,
+        result.Manifest.StudyId,
+        result.Manifest.EvidenceReady,
+        result.Manifest.ReadinessFailures,
+        result.AlreadyRegistered,
+        result.ClassifierGroundTruthReady,
+        result.Study.ExecutableEvidenceReady,
+        StudyReadinessFailures = result.Study.ReadinessFailures,
+        ObservationCount = result.Study.Report.Observations.Count,
+        ExecutableObservationCount = result.Study.ExecutableObservations.Count
+    }, serializerOptions));
     return;
 }
 
@@ -250,215 +1006,6 @@ if (args.Length > 0 && args[0].Equals("warm-catalysts", StringComparison.Ordinal
         Failed = warmed.Count(x => !x.Succeeded),
         Tickers = warmed
     }, serializerOptions));
-    return;
-}
-
-if (args.Length > 0 && args[0].Equals("catalyst-trend", StringComparison.OrdinalIgnoreCase))
-{
-    var ticker = (ParseStringOption(args, "--ticker") ?? "POET").Trim().ToUpperInvariant();
-    var days = ParseIntOption(args, "--days") ?? 30;
-    var candleTimeframe = ParseStringOption(args, "--timeframe") ?? "5m";
-    var dailyTimeframe = ParseStringOption(args, "--daily-timeframe") ?? "1d";
-    var end = ParseDateOption(args, "--end") ?? DateTimeOffset.UtcNow;
-    var start = end.AddDays(-days);
-    var outputPath = ParseStringOption(args, "--output") ??
-        Path.Combine(
-            "data",
-            "research",
-            "catalysts",
-            $"{ticker.ToLowerInvariant()}-catalyst-trend-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
-
-    var report = await BuildCatalystTrendReportAsync(
-        ticker,
-        start,
-        end,
-        candleTimeframe,
-        dailyTimeframe,
-        CancellationToken.None);
-
-    var json = JsonSerializer.Serialize(report, serializerOptions);
-    await AtomicFileArtifactWriter.Instance.WriteTextAsync(outputPath, json, CancellationToken.None);
-    Console.WriteLine(json);
-    Console.WriteLine($"ReportPath={Path.GetFullPath(outputPath)}");
-    return;
-}
-
-if (args.Length > 0 && args[0].Equals("catalyst-event-study", StringComparison.OrdinalIgnoreCase))
-{
-    var eventStudyConfigPath = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
-        ? args[1]
-        : throw new ArgumentException("Backtest or research config path required.");
-    var reader = new SimpleYamlReader();
-    var run = reader.ReadBacktestRun(eventStudyConfigPath);
-    var lookbackDays = ParseIntOption(args, "--days") ?? run.TimeWindow.LookbackDays;
-    var candleTimeframe = ParseStringOption(args, "--timeframe") ?? run.Intervals.FirstOrDefault() ?? "5m";
-    var end = ParseDateOption(args, "--end") ?? DateTimeOffset.UtcNow;
-    var start = end.AddDays(-lookbackDays);
-    var tickers = ResolveCsvTickers(ParseStringOption(args, "--tickers"), run.Tickers);
-    var outputPath = ParseStringOption(args, "--output") ??
-        Path.Combine(
-            "data",
-            "research",
-            "catalysts",
-            $"event-study-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
-
-    var report = await BuildCatalystEventStudyReportAsync(
-        run,
-        tickers,
-        start,
-        end,
-        candleTimeframe,
-        CancellationToken.None);
-
-    var json = JsonSerializer.Serialize(report, serializerOptions);
-    await AtomicFileArtifactWriter.Instance.WriteTextAsync(outputPath, json, CancellationToken.None);
-    if (!ParseFlag(args, "--quiet"))
-    {
-        Console.WriteLine(json);
-    }
-
-    Console.WriteLine($"Observations={report.Observations.Count} Buckets={report.Buckets.Count}");
-    Console.WriteLine($"ReportPath={Path.GetFullPath(outputPath)}");
-    return;
-}
-if (args.Length > 0 && args[0].Equals("analyze-swing", StringComparison.OrdinalIgnoreCase))
-{
-    var resultPath = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
-        ? args[1]
-        : throw new ArgumentException("Backtest result JSON path required.");
-    var result = JsonSerializer.Deserialize<TradingFlow.Domain.Backtesting.BacktestResult>(
-        File.ReadAllText(resultPath),
-        new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ??
-        throw new InvalidOperationException($"Could not read backtest result from {resultPath}.");
-    var strategyName = ParseStringOption(args, "--strategy") ?? result.Winner?.StrategyName ??
-        result.StrategyResults.OrderByDescending(x => x.TotalReturnPct).FirstOrDefault()?.StrategyName ??
-        throw new InvalidOperationException("No strategy was available in the backtest result.");
-    var candlesRoot = ParseStringOption(args, "--candles-root") ??
-        Path.Combine("data", "backtest", "normalized", "240d");
-    var minimumMovePct = ParseDecimalOption(args, "--min-move-pct") ?? 10m;
-    var maximumHoldingBars = ParseIntOption(args, "--max-holding-bars") ?? 30;
-    var maxOpportunities = ParseIntOption(args, "--max-opportunities") ?? 5;
-    var tickers = ResolveSwingAnalysisTickers(result, strategyName, ParseStringOption(args, "--tickers"));
-    var dailyBars = tickers
-        .Select(ticker => new
-        {
-            Ticker = ticker,
-            Bars = LoadDailyBars(candlesRoot, ticker)
-        })
-        .Where(x => x.Bars.Count > 0)
-        .ToDictionary(x => x.Ticker, x => (IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar>)x.Bars, StringComparer.OrdinalIgnoreCase);
-    if (dailyBars.Count == 0)
-    {
-        throw new InvalidOperationException($"No daily candle files were found under {Path.GetFullPath(candlesRoot)}.");
-    }
-
-    var report = new SwingResearchAnalyzer().Analyze(
-        result,
-        strategyName,
-        dailyBars,
-        new TradingFlow.Domain.Backtesting.SwingResearchOptions(
-            minimumMovePct,
-            maximumHoldingBars,
-            maxOpportunities));
-    var outputPath = ParseStringOption(args, "--output") ??
-        Path.Combine(
-            "data",
-            "research",
-            "swing",
-            $"{SanitizeFileName(result.RunName)}-{SanitizeFileName(strategyName)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
-    var json = JsonSerializer.Serialize(report, serializerOptions);
-    await AtomicFileArtifactWriter.Instance.WriteTextAsync(outputPath, json, CancellationToken.None);
-    Console.WriteLine(json);
-    Console.WriteLine($"ReportPath={Path.GetFullPath(outputPath)}");
-    return;
-}
-
-if (args.Length > 0 && args[0].Equals("reversion-study", StringComparison.OrdinalIgnoreCase))
-{
-    // C-research (doctrine §8.1): inverted event study for the mean-reversion archetype, fully offline
-    // from cached daily bars. Evidence gate before building Archetype C.
-    var candlesRoot = ParseStringOption(args, "--candles-root") ??
-        Path.Combine("data", "backtest", "normalized", "440d");
-    if (!Directory.Exists(candlesRoot))
-    {
-        throw new InvalidOperationException($"Candles root not found: {Path.GetFullPath(candlesRoot)}.");
-    }
-
-    var availableTickers = Directory.GetDirectories(candlesRoot)
-        .Select(dir => Path.GetFileName(dir)!)
-        .Where(name => !name.StartsWith('_') && File.Exists(Path.Combine(candlesRoot, name, "bars_1d.csv")))
-        .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-        .ToArray();
-    var tickers = ResolveCsvTickers(ParseStringOption(args, "--tickers"), availableTickers);
-
-    var dailyBars = tickers
-        .Select(ticker => new { Ticker = ticker, Bars = LoadDailyBars(candlesRoot, ticker) })
-        .Where(x => x.Bars.Count > 0)
-        .ToDictionary(
-            x => x.Ticker,
-            x => (IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar>)x.Bars,
-            StringComparer.OrdinalIgnoreCase);
-    if (dailyBars.Count == 0)
-    {
-        throw new InvalidOperationException($"No daily candle files were found under {Path.GetFullPath(candlesRoot)}.");
-    }
-
-    var reversionOptions = new ReversionResearchOptions(
-        RsiOversoldThreshold: ParseDecimalOption(args, "--rsi-threshold") ?? 10m,
-        RsiPeriod: ParseIntOption(args, "--rsi-period") ?? 2,
-        ConsecutiveDownDays: ParseIntOption(args, "--down-days") ?? 3,
-        SmaTrendPeriod: ParseIntOption(args, "--trend-sma") ?? 200);
-    var reversionReport = new ReversionResearchAnalyzer().Analyze(dailyBars, reversionOptions);
-
-    var reversionOutputPath = ParseStringOption(args, "--output") ??
-        Path.Combine("data", "research", "reversion", $"reversion-study-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
-    var reversionJson = JsonSerializer.Serialize(reversionReport, serializerOptions);
-    await AtomicFileArtifactWriter.Instance.WriteTextAsync(reversionOutputPath, reversionJson, CancellationToken.None);
-
-    Console.WriteLine($"Reversion study — {dailyBars.Count} tickers, {reversionReport.TotalStretchEvents} stretch events from {reversionReport.TotalBarsEvaluated} evaluated bars.");
-    Console.WriteLine($"Trigger: RSI({reversionOptions.RsiPeriod})<{reversionOptions.RsiOversoldThreshold} OR >={reversionOptions.ConsecutiveDownDays} consecutive down closes OR close<lower Bollinger; trend gate {reversionOptions.SmaTrendPeriod}dma.");
-    Console.WriteLine(new string('-', 92));
-    foreach (var cohort in reversionReport.Cohorts)
-    {
-        var cells = String.Join("  ", cohort.Horizons.Select(h => $"+{h.Days}d {h.MeanReturnPct,6:F2}%/{h.WinRatePct,4:F0}%w"));
-        Console.WriteLine($"{cohort.Trigger,-22} {cohort.Regime,-13} n={cohort.Events,-5} {cells}");
-    }
-
-    Console.WriteLine($"ReportPath={Path.GetFullPath(reversionOutputPath)}");
-    return;
-}
-
-if (args.Length > 0 && args[0].Equals("promotion-check", StringComparison.OrdinalIgnoreCase))
-{
-    var resultPath = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
-        ? args[1]
-        : throw new ArgumentException("Backtest result JSON path required.");
-    var result = JsonSerializer.Deserialize<TradingFlow.Domain.Backtesting.BacktestResult>(
-        File.ReadAllText(resultPath),
-        new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ??
-        throw new InvalidOperationException($"Could not read backtest result from {resultPath}.");
-
-    Console.WriteLine($"Promotion check — {result.RunName} ({result.StrategyResults.Count} strategy result(s))");
-    Console.WriteLine(new string('=', 72));
-    foreach (var strategyResult in result.StrategyResults)
-    {
-        var assessment = TradingFlow.Domain.Backtesting.PromotionEvaluator.Evaluate(strategyResult, result.Validation);
-        Console.WriteLine();
-        Console.WriteLine($"[{(assessment.Eligible ? "ELIGIBLE" : "REJECTED")}] {assessment.StrategyName}");
-        Console.WriteLine(
-            $"  return {strategyResult.TotalReturnPct:F2}%  maxDD {strategyResult.MaxDrawdownPct:F2}%  " +
-            $"accepted {strategyResult.AcceptedTradeCount}  wins {strategyResult.WinningTradeCount}  losses {strategyResult.LosingTradeCount}");
-        foreach (var pass in assessment.PassedChecks)
-        {
-            Console.WriteLine($"    pass: {pass}");
-        }
-
-        foreach (var fail in assessment.FailedChecks)
-        {
-            Console.WriteLine($"    FAIL: {fail}");
-        }
-    }
-
     return;
 }
 
@@ -666,265 +1213,6 @@ static TradingFlow.Engine.Abstractions.ISentimentAnalyzer CreateSentimentAnalyze
     return new TradingFlow.Alpaca.VaderSentimentAnalyzer();
 }
 
-static async Task<CatalystEventStudyReport> BuildCatalystEventStudyReportAsync(
-    TradingFlow.Domain.Backtesting.BacktestRunConfig run,
-    IReadOnlyList<string> tickers,
-    DateTimeOffset start,
-    DateTimeOffset end,
-    string candleTimeframe,
-    CancellationToken cancellationToken)
-{
-    var marketProvider = CreateProvider(run);
-    var catalystProvider = CreateRawNewsProvider(run);
-    var barsByTicker = tickers.ToDictionary(
-        ticker => ticker,
-        _ => (IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar>)Array.Empty<TradingFlow.Domain.Market.OhlcvBar>(),
-        StringComparer.OrdinalIgnoreCase);
-    var loadedBars = new List<TradingFlow.Domain.Market.OhlcvBar>();
-    await foreach (var bar in marketProvider.GetBarsAsync(tickers, [candleTimeframe], start, end, cancellationToken))
-    {
-        loadedBars.Add(bar);
-    }
-
-    barsByTicker = loadedBars
-        .Where(x => x.Timeframe.Equals(candleTimeframe, StringComparison.OrdinalIgnoreCase))
-        .GroupBy(x => x.Ticker.ToUpperInvariant(), StringComparer.OrdinalIgnoreCase)
-        .ToDictionary(
-            x => x.Key,
-            x => (IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar>)x.OrderBy(bar => bar.Timestamp).ToArray(),
-            StringComparer.OrdinalIgnoreCase);
-
-    var catalystsByTicker = new Dictionary<string, IReadOnlyList<TradingFlow.Domain.Market.CatalystEvent>>(StringComparer.OrdinalIgnoreCase);
-    if (catalystProvider is not null)
-    {
-        foreach (var ticker in tickers)
-        {
-            try
-            {
-                var catalysts = await catalystProvider.GetCatalystsAsync(ticker, start, end, cancellationToken);
-                catalystsByTicker[ticker] = catalysts.OrderBy(x => x.Timestamp).ToArray();
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss} catalyst_event_study: {ticker} catalyst load failed: {exception.Message}");
-                catalystsByTicker[ticker] = Array.Empty<TradingFlow.Domain.Market.CatalystEvent>();
-            }
-        }
-    }
-
-    var runner = new CatalystTechnicalEventStudyRunner();
-    return runner.Analyze(
-        barsByTicker,
-        catalystsByTicker,
-        start,
-        end,
-        candleTimeframe,
-        new CatalystEventStudyOptions());
-}
-static async Task<object> BuildCatalystTrendReportAsync(
-    string ticker,
-    DateTimeOffset start,
-    DateTimeOffset end,
-    string candleTimeframe,
-    string dailyTimeframe,
-    CancellationToken cancellationToken)
-{
-    var options = TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
-    {
-        KeyId = ResolveSecret("Alpaca", "KeyId", "ALPACA_KEY_ID"),
-        SecretKey = ResolveSecret("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),
-        MarketDataFeed = ParseStringOption(Environment.GetCommandLineArgs(), "--feed") ?? "sip"
-    };
-
-    var provider = new TradingFlow.Alpaca.AlpacaMarketDataProvider(new HttpClient(), options);
-    var newsProvider = new TradingFlow.Alpaca.AlpacaNewsProvider(
-        new HttpClient(),
-        options,
-        CreateRawArchiveWriter(),
-        sentimentAnalyzer: CreateSentimentAnalyzer());
-
-    var bars = new List<TradingFlow.Domain.Market.OhlcvBar>();
-    await foreach (var bar in provider.GetBarsAsync([ticker], [candleTimeframe, dailyTimeframe], start, end, cancellationToken))
-    {
-        bars.Add(bar);
-    }
-
-    var intradayBars = bars
-        .Where(x => x.Timeframe.Equals(candleTimeframe, StringComparison.OrdinalIgnoreCase))
-        .OrderBy(x => x.Timestamp)
-        .ToArray();
-    var dailyBars = bars
-        .Where(x => x.Timeframe.Equals(dailyTimeframe, StringComparison.OrdinalIgnoreCase))
-        .OrderBy(x => x.Timestamp)
-        .ToArray();
-
-    var indicatorEngine = new IndicatorEngine();
-    var snapshots = indicatorEngine.Compute(intradayBars);
-    var news = (await newsProvider.GetCatalystsAsync(ticker, start, end, cancellationToken))
-        .OrderBy(x => x.Timestamp)
-        .ToArray();
-
-    var catalystMatches = news.Select(item => BuildCatalystMatch(item, intradayBars, snapshots)).ToArray();
-    var oneMonthReturn = intradayBars.Length < 2
-        ? (decimal?)null
-        : PercentChange(intradayBars[0].Close, intradayBars[^1].Close);
-    var fiveDayReturn = ReturnFromTrailingDailyBars(dailyBars, 5);
-    var twentyDayReturn = ReturnFromTrailingDailyBars(dailyBars, 20);
-
-    return new
-    {
-        Ticker = ticker,
-        StartUtc = start,
-        EndUtc = end,
-        CandleTimeframe = candleTimeframe,
-        DailyTimeframe = dailyTimeframe,
-        CandleCount = intradayBars.Length,
-        DailyCandleCount = dailyBars.Length,
-        NewsCount = news.Length,
-        SentimentAnalyzer = CreateSentimentAnalyzer().AnalyzerName,
-        Trend = new
-        {
-            FirstClose = intradayBars.FirstOrDefault()?.Close,
-            LastClose = intradayBars.LastOrDefault()?.Close,
-            OneMonthReturnPct = oneMonthReturn,
-            FiveTradingDayReturnPct = fiveDayReturn,
-            TwentyTradingDayReturnPct = twentyDayReturn,
-            HighestClose = intradayBars.Length == 0 ? (decimal?)null : intradayBars.Max(x => x.Close),
-            LowestClose = intradayBars.Length == 0 ? (decimal?)null : intradayBars.Min(x => x.Close),
-            Label = LabelTrend(oneMonthReturn, fiveDayReturn)
-        },
-        CatalystMatches = catalystMatches,
-        Summary = new
-        {
-            PositiveNews = news.Count(x => x.SentimentScore >= 0.15m),
-            NeutralNews = news.Count(x => x.SentimentScore > -0.15m && x.SentimentScore < 0.15m),
-            NegativeNews = news.Count(x => x.SentimentScore <= -0.15m),
-            AverageSentiment = news.Length == 0 ? 0m : news.Average(x => x.SentimentScore),
-            PositiveCatalystsWithPositive4hFollowThrough = catalystMatches.Count(x => x.SentimentScore >= 0.15m && x.Return4hPct > 0),
-            NegativeCatalystsWithNegative4hFollowThrough = catalystMatches.Count(x => x.SentimentScore <= -0.15m && x.Return4hPct < 0)
-        }
-    };
-}
-
-static CatalystTrendMatch BuildCatalystMatch(
-    TradingFlow.Domain.Market.CatalystEvent catalyst,
-    IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar> bars,
-    IReadOnlyList<TradingFlow.Domain.Market.IndicatorSnapshot> snapshots)
-{
-    var anchorIndex = -1;
-    for (var i = 0; i < bars.Count; i++)
-    {
-        if (bars[i].Timestamp <= catalyst.Timestamp)
-        {
-            anchorIndex = i;
-            continue;
-        }
-
-        break;
-    }
-
-    if (anchorIndex < 0 && bars.Count > 0)
-    {
-        anchorIndex = 0;
-    }
-
-    var anchorBar = anchorIndex >= 0 ? bars[anchorIndex] : null;
-    var snapshot = anchorIndex >= 0 && anchorIndex < snapshots.Count ? snapshots[anchorIndex] : null;
-
-    decimal? return1h = anchorBar is null ? null : ReturnAtOrAfter(bars, anchorIndex, anchorBar.Timestamp.AddHours(1));
-    decimal? return4h = anchorBar is null ? null : ReturnAtOrAfter(bars, anchorIndex, anchorBar.Timestamp.AddHours(4));
-    decimal? return1d = anchorBar is null ? null : ReturnAtOrAfter(bars, anchorIndex, anchorBar.Timestamp.AddDays(1));
-    decimal? return5d = anchorBar is null ? null : ReturnAtOrAfter(bars, anchorIndex, anchorBar.Timestamp.AddDays(5));
-
-    return new CatalystTrendMatch(
-        catalyst.Timestamp,
-        TimeZoneInfo.ConvertTime(catalyst.Timestamp, ResolveCentralEuropeanTime()).ToString("yyyy-MM-dd HH:mm:ss zzz"),
-        catalyst.Headline,
-        catalyst.SentimentScore,
-        catalyst.Source,
-        catalyst.Url,
-        anchorBar?.Timestamp,
-        anchorBar?.Close,
-        anchorBar?.Volume,
-        snapshot?.Rsi,
-        snapshot?.RelativeVolume,
-        snapshot?.Vwap,
-        snapshot?.MacdHistogram,
-        return1h,
-        return4h,
-        return1d,
-        return5d,
-        LabelFollowThrough(catalyst.SentimentScore, return4h, return1d));
-}
-
-static decimal? ReturnAtOrAfter(
-    IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar> bars,
-    int anchorIndex,
-    DateTimeOffset targetTime)
-{
-    var anchorClose = bars[anchorIndex].Close;
-    var target = bars.Skip(anchorIndex + 1).FirstOrDefault(x => x.Timestamp >= targetTime);
-    return target is null ? null : PercentChange(anchorClose, target.Close);
-}
-
-static decimal PercentChange(decimal start, decimal end)
-{
-    return start == 0m ? 0m : ((end / start) - 1m) * 100m;
-}
-
-static decimal? ReturnFromTrailingDailyBars(IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar> dailyBars, int sessions)
-{
-    if (dailyBars.Count <= sessions)
-    {
-        return null;
-    }
-
-    return PercentChange(dailyBars[^sessions].Close, dailyBars[^1].Close);
-}
-
-static string LabelTrend(decimal? oneMonthReturn, decimal? fiveDayReturn)
-{
-    return (oneMonthReturn, fiveDayReturn) switch
-    {
-        ({ } month, { } five) when month > 10m && five > 0m => "uptrend_with_recent_strength",
-        ({ } month, { } five) when month > 10m && five <= 0m => "uptrend_pullback",
-        ({ } month, _) when month < -10m => "downtrend",
-        _ => "mixed"
-    };
-}
-
-static string LabelFollowThrough(decimal sentiment, decimal? return4h, decimal? return1d)
-{
-    if (return4h is null && return1d is null)
-    {
-        return "insufficient_future_candles";
-    }
-
-    var followThrough = return4h ?? return1d!.Value;
-    return sentiment switch
-    {
-        >= 0.15m when followThrough > 0m => "positive_news_positive_follow_through",
-        >= 0.15m when followThrough <= 0m => "positive_news_failed_follow_through",
-        <= -0.15m when followThrough < 0m => "negative_news_negative_follow_through",
-        <= -0.15m when followThrough >= 0m => "negative_news_recovered",
-        _ when followThrough > 0m => "neutral_news_positive_move",
-        _ when followThrough < 0m => "neutral_news_negative_move",
-        _ => "flat"
-    };
-}
-
-static TimeZoneInfo ResolveCentralEuropeanTime()
-{
-    try
-    {
-        return TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin");
-    }
-    catch (TimeZoneNotFoundException)
-    {
-        return TimeZoneInfo.FindSystemTimeZoneById("W. Europe Standard Time");
-    }
-}
-
 static TradingFlow.Engine.Abstractions.IMarketDataProvider CreateProvider(TradingFlow.Domain.Backtesting.BacktestRunConfig run)
 {
     return run.Provider.ToLowerInvariant() switch
@@ -949,12 +1237,6 @@ static int? ParseIntOption(string[] args, string name)
 {
     var value = ParseStringOption(args, name);
     return value is null ? null : Int32.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
-}
-
-static decimal? ParseDecimalOption(string[] args, string name)
-{
-    var value = ParseStringOption(args, name);
-    return value is null ? null : Decimal.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
 }
 
 static DateTimeOffset? ParseDateOption(string[] args, string name)
@@ -985,6 +1267,29 @@ static bool ParseFlag(string[] args, string name)
     return args.Any(arg => arg.Equals(name, StringComparison.OrdinalIgnoreCase));
 }
 
+static async Task WriteExactOrVerifyAsync(
+    string path,
+    string content,
+    CancellationToken cancellationToken = default)
+{
+    if (File.Exists(path))
+    {
+        var existing = await File.ReadAllTextAsync(path, cancellationToken);
+        if (!existing.Equals(content, StringComparison.Ordinal))
+        {
+            throw new IOException(
+                $"Refusing to overwrite non-matching labeling artifact '{path}'.");
+        }
+
+        return;
+    }
+
+    await AtomicFileArtifactWriter.Instance.WriteTextExclusiveAsync(
+        path,
+        content,
+        cancellationToken);
+}
+
 static string ResolveWarmOutputRoot(string normalizedRoot, int lookbackDays)
 {
     var fullRoot = Path.GetFullPath(normalizedRoot);
@@ -1002,86 +1307,6 @@ static string ResolveWarmOutputRoot(string normalizedRoot, int lookbackDays)
     }
 
     return Path.Combine(fullRoot, segment);
-}
-
-static IReadOnlyList<string> ResolveCsvTickers(string? tickersCsv, IReadOnlyList<string> fallbackTickers)
-{
-    var source = String.IsNullOrWhiteSpace(tickersCsv)
-        ? fallbackTickers
-        : tickersCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-    return source
-        .Select(x => x.Trim().ToUpperInvariant())
-        .Where(x => !String.IsNullOrWhiteSpace(x))
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .OrderBy(x => x)
-        .ToArray();
-}
-static IReadOnlyList<string> ResolveSwingAnalysisTickers(
-    TradingFlow.Domain.Backtesting.BacktestResult result,
-    string strategyName,
-    string? tickersCsv)
-{
-    if (!String.IsNullOrWhiteSpace(tickersCsv))
-    {
-        return tickersCsv
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(x => x.ToUpperInvariant())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x)
-            .ToArray();
-    }
-
-    var strategy = result.StrategyResults.FirstOrDefault(x =>
-        x.StrategyName.Equals(strategyName, StringComparison.OrdinalIgnoreCase));
-    return (strategy?.CompletedTrades ?? result.CompletedTrades)
-        .Select(x => x.Ticker.ToUpperInvariant())
-        .Concat(result.TickerResults.Where(x => x.Succeeded).Select(x => x.Ticker.ToUpperInvariant()))
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .OrderBy(x => x)
-        .ToArray();
-}
-
-static IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar> LoadDailyBars(string candlesRoot, string ticker)
-{
-    var path = Path.Combine(candlesRoot, ticker.ToUpperInvariant(), "bars_1d.csv");
-    if (!File.Exists(path))
-    {
-        return Array.Empty<TradingFlow.Domain.Market.OhlcvBar>();
-    }
-
-    return File.ReadLines(path)
-        .Skip(1)
-        .Where(line => !String.IsNullOrWhiteSpace(line))
-        .Select(line => ParseOhlcvCsvLine(ticker, line))
-        .OrderBy(x => x.Timestamp)
-        .ToArray();
-}
-
-static TradingFlow.Domain.Market.OhlcvBar ParseOhlcvCsvLine(string fallbackTicker, string line)
-{
-    var parts = line.Split(',');
-    if (parts.Length < 7)
-    {
-        throw new FormatException($"Invalid OHLCV CSV line: {line}");
-    }
-
-    var culture = System.Globalization.CultureInfo.InvariantCulture;
-    return new TradingFlow.Domain.Market.OhlcvBar(
-        String.IsNullOrWhiteSpace(parts[0]) ? fallbackTicker.ToUpperInvariant() : parts[0].Trim().ToUpperInvariant(),
-        DateTimeOffset.Parse(parts[1], culture),
-        "1d",
-        Decimal.Parse(parts[2], culture),
-        Decimal.Parse(parts[3], culture),
-        Decimal.Parse(parts[4], culture),
-        Decimal.Parse(parts[5], culture),
-        Decimal.Parse(parts[6], culture));
-}
-
-static string SanitizeFileName(string value)
-{
-    var invalid = Path.GetInvalidFileNameChars().ToHashSet();
-    var cleaned = new String(value.Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray());
-    return String.IsNullOrWhiteSpace(cleaned) ? "report" : cleaned.Replace(' ', '-').ToLowerInvariant();
 }
 
 static int ResolveWarmupDataDays(TradingFlow.Domain.Backtesting.BacktestRunConfig run)
@@ -1107,6 +1332,12 @@ static TradingFlow.Alpaca.AlpacaOptions ResolveAlpacaOptions(TradingFlow.Domain.
 
 static string ResolveSecret(string section, string key, string environmentVariable)
 {
+    var environmentValue = Environment.GetEnvironmentVariable(environmentVariable);
+    if (!String.IsNullOrWhiteSpace(environmentValue))
+    {
+        return environmentValue;
+    }
+
     var settingsPath = FindRepositoryFile(Path.Combine("src", "TradingFlow.Web", "appsettings.local.json"));
     if (settingsPath is not null)
     {
@@ -1122,7 +1353,7 @@ static string ResolveSecret(string section, string key, string environmentVariab
         }
     }
 
-    return Environment.GetEnvironmentVariable(environmentVariable) ?? String.Empty;
+    return String.Empty;
 }
 
 static IRawArchiveWriter CreateRawArchiveWriter()
@@ -1158,26 +1389,6 @@ static string? FindRepositoryFile(string relativePath)
 
     return null;
 }
-
-public sealed record CatalystTrendMatch(
-    DateTimeOffset Timestamp,
-    string LocalTime,
-    string Headline,
-    decimal SentimentScore,
-    string? Source,
-    string? Url,
-    DateTimeOffset? AnchorCandleTime,
-    decimal? AnchorClose,
-    decimal? AnchorVolume,
-    decimal? Rsi,
-    decimal? RelativeVolume,
-    decimal? Vwap,
-    decimal? MacdHistogram,
-    decimal? Return1hPct,
-    decimal? Return4hPct,
-    decimal? Return1dPct,
-    decimal? Return5dPct,
-    string FollowThroughLabel);
 
 public sealed record CatalystWarmTickerResult(
     string Ticker,
