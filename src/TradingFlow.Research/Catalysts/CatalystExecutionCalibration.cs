@@ -92,8 +92,8 @@ public sealed record CatalystExecutionCalibrationPolicy
     public CatalystExecutionEvidenceStatus ImpactEvidenceStatus { get; }
 
     /// <summary>
-    /// Backward-compatible research calls remain diagnostic until their latency,
-    /// participation, and impact assumptions are explicitly calibrated.
+    /// Explicit diagnostic assumptions for preregistered studies that intentionally
+    /// lack paper-calibrated latency, participation, and impact evidence.
     /// </summary>
     public static CatalystExecutionCalibrationPolicy DiagnosticDefaults { get; } =
         new(

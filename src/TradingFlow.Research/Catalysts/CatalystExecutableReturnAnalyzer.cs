@@ -146,36 +146,6 @@ public sealed record CatalystExecutableReturnRequest
         TimeSpan maximumQuoteDelay,
         long requestedQuantity,
         SipQuoteEligibilityPolicy quoteEligibilityPolicy,
-        CatalystExecutionCostModel costModel)
-        : this(
-            securityId,
-            symbol,
-            direction,
-            eligibleEntryAtUtc,
-            eligibleExitAtUtc,
-            session,
-            sessionStartUtc,
-            sessionEndUtc,
-            maximumQuoteDelay,
-            requestedQuantity,
-            quoteEligibilityPolicy,
-            costModel,
-            CatalystExecutionCalibrationPolicy.DiagnosticDefaults)
-    {
-    }
-
-    public CatalystExecutableReturnRequest(
-        string securityId,
-        string symbol,
-        ExecutablePositionDirection direction,
-        DateTimeOffset eligibleEntryAtUtc,
-        DateTimeOffset eligibleExitAtUtc,
-        UsEquityTradingSession session,
-        DateTimeOffset sessionStartUtc,
-        DateTimeOffset sessionEndUtc,
-        TimeSpan maximumQuoteDelay,
-        long requestedQuantity,
-        SipQuoteEligibilityPolicy quoteEligibilityPolicy,
         CatalystExecutionCostModel costModel,
         CatalystExecutionCalibrationPolicy calibrationPolicy)
     {
