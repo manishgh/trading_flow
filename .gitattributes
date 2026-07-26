@@ -1,1 +1,2 @@
 src/TradingFlow.Data/Context/Migrations/TradingFlowDbContextModelSnapshot.cs whitespace=cr-at-eol
+*.sln text eol=crlf
