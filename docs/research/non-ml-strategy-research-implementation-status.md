@@ -22,7 +22,10 @@ unvalidated assumption is a blocker, never an implied pass.
 | R7 swing portfolio correction | Verified | Formation-equal weighting, absolute-P&L concentration, leave-one-out audits, and 1x/2x/3x cost stresses are implemented. |
 | R8/R9 atomic holdout result | Verified | Holdout is acquired before reads and completed only by the same run after immutable result registration. A crashed run remains consumed. |
 | R10 one-brain boundary | Verified | Generic sentiment research is explicitly named diagnostic and cannot promote. Evidence-grade Track B is the only promotable intraday analyzer. |
-| Promotion gates | In progress | Swing and intraday evaluators must enforce every criterion and expose unavailable evidence as blockers. |
+| R11/R12 promotion gates | Verified | Swing and intraday evaluators enforce every binding criterion, distinguish failed from unavailable evidence, and require explicit human paper-shadow approval. |
+| R13 later-listing eligibility | Verified | The 2016 dataset boundary is not an issuer-age rule. A later listing is admitted after point-in-time membership and its own real completed-bar warm-up. |
+| R14 canonical swing audit | Verified | Catalog momentum runs publish the report, frozen formation ledger, audit report, and research phase as immutable named outputs. |
+| R15-R18 committed research foundation | Verified | A clean committed-only export restores and builds every production project. The later-listing, point-in-time universe, and swing/intraday promotion suites pass from that export. |
 
 ## Implemented Research Contracts
 
@@ -81,6 +84,8 @@ promotion blocker.
 - That provider boundary does not exclude later listings. Their point-in-time
   membership starts on the real effective date; the completed-history guard then
   admits them once the selected study's adjusted and as-traded warm-up is met.
+  Eligibility is therefore the later of the real membership/listing date and the
+  strategy-specific warm-up date. The system never synthesizes pre-listing bars.
 - A survivorship-safe, point-in-time US equity membership source with delistings,
   symbol changes, issuer identity, sectors, and terminal outcomes is not yet
   available for the complete frozen interval.
@@ -116,3 +121,12 @@ The integrated decision remains `RETAIN_RESEARCH`.
 No swing or intraday configuration is eligible for paper promotion from the current
 evidence. The code now fails closed for the known gaps and provides the machinery to
 evaluate a frozen candidate once the required immutable evidence exists.
+
+## Verification Record
+
+- Clean committed-only export: restore and production-project compilation passed.
+- Completed-history and later-listing analyzer tests: 20 passed.
+- Point-in-time universe plus swing/intraday promotion tests: 19 passed.
+- Full committed-only suite: 903 passed; two unrelated Paper page tests remain
+  blocked by the separate, uncommitted run-config schema migration in the working
+  tree. This does not weaken or bypass the research eligibility controls.
