@@ -15,7 +15,7 @@ public sealed record ResearchRegistryCommitResult(string SubjectId, bool Already
 /// </summary>
 public sealed class SqliteResearchTrialRegistry
 {
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
     private readonly string connectionString;
     private readonly ResearchTrialRegistryOpenMode openMode;
     private readonly SemaphoreSlim initialization = new(1, 1);
@@ -171,73 +171,30 @@ public sealed class SqliteResearchTrialRegistry
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        var bytes = EvidenceCanonicalJson.SerializeToUtf8Bytes(manifest);
-        var canonicalJson = Encoding.UTF8.GetString(bytes);
-        var sha256 = EvidenceCanonicalJson.ComputeSha256(manifest);
         await using var connection = await OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction(
             IsolationLevel.Serializable,
             deferred: false);
 
-        var trialRow = await ReadRowAsync(
+        var trial = await ReadAndValidateTrialForResultAsync(
             connection,
             transaction,
-            "SELECT canonical_json, sha256 FROM research_trials WHERE experiment_id = $id;",
-            cancellationToken,
-            ("$id", manifest.ExperimentId));
-        if (trialRow is null)
+            manifest,
+            cancellationToken);
+        if (IsHoldoutPartition(trial.Trial, manifest.Partition))
         {
             throw new InvalidOperationException(
-                $"Research trial '{manifest.ExperimentId}' does not exist.");
+                "Holdout results must be registered through CompleteHoldoutEvaluationAsync.");
         }
 
-        var trial = EvidenceCanonicalJson.Deserialize<ResearchTrialDefinition>(
-            Encoding.UTF8.GetBytes(trialRow.Value.Json));
-        RequireCanonicalMatch(
-            trialRow.Value.Json,
-            trialRow.Value.Hash,
-            Encoding.UTF8.GetString(EvidenceCanonicalJson.SerializeToUtf8Bytes(trial)),
-            EvidenceCanonicalJson.ComputeSha256(trial),
-            "trial");
-        if (!manifest.TrialDefinitionSha256.Equals(trialRow.Value.Hash, StringComparison.Ordinal) ||
-            !manifest.PrimaryMetric.Equals(trial.PrimaryMetric, StringComparison.Ordinal) ||
-            !trial.Partitions.Any(partition =>
-                partition.Name.Equals(manifest.Partition, StringComparison.Ordinal)) ||
-            !manifest.Metrics.ContainsKey(manifest.PrimaryMetric))
-        {
-            throw new InvalidDataException(
-                "The result manifest does not match its frozen trial definition.");
-        }
-
-        var existing = await ReadRowAsync(
+        var result = await RegisterCanonicalResultAsync(
             connection,
             transaction,
-            "SELECT canonical_json, sha256 FROM research_results WHERE result_id = $id;",
+            manifest,
             cancellationToken,
-            ("$id", manifest.ResultId));
-        if (existing is not null)
-        {
-            RequireCanonicalMatch(existing.Value.Json, existing.Value.Hash, canonicalJson, sha256, "result");
-            transaction.Commit();
-            return new ResearchRegistryCommitResult(manifest.ResultId, true);
-        }
-
-        await ExecuteAsync(
-            connection,
-            transaction,
-            """
-            INSERT INTO research_results(
-                result_id, experiment_id, created_at_utc, sha256, canonical_json)
-            VALUES($id, $experiment, $created, $hash, $json);
-            """,
-            cancellationToken,
-            ("$id", manifest.ResultId),
-            ("$experiment", manifest.ExperimentId),
-            ("$created", Utc(manifest.CreatedAtUtc)),
-            ("$hash", sha256),
-            ("$json", canonicalJson));
+            trial.Trial);
         transaction.Commit();
-        return new ResearchRegistryCommitResult(manifest.ResultId, false);
+        return result;
     }
 
     public async Task<CanonicalResearchResultManifest?> GetResultAsync(
@@ -268,7 +225,11 @@ public sealed class SqliteResearchTrialRegistry
         return manifest;
     }
 
-    public async Task<ResearchRegistryCommitResult> ConsumeHoldoutAsync(
+    /// <summary>
+    /// Permanently assigns a trial's holdout to one run before any holdout data is read.
+    /// An identical replay is idempotent; another run can never acquire the holdout.
+    /// </summary>
+    public async Task<ResearchRegistryCommitResult> BeginHoldoutEvaluationAsync(
         ResearchHoldoutConsumptionRecord consumption,
         CancellationToken cancellationToken = default)
     {
@@ -332,6 +293,65 @@ public sealed class SqliteResearchTrialRegistry
         return new ResearchRegistryCommitResult(consumption.ExperimentId, false);
     }
 
+    /// <summary>
+    /// Registers the only canonical holdout result for the run that previously
+    /// acquired the holdout. This does not reopen or reassign a consumed holdout.
+    /// </summary>
+    public async Task<ResearchRegistryCommitResult> CompleteHoldoutEvaluationAsync(
+        CanonicalResearchResultManifest manifest,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction(
+            IsolationLevel.Serializable,
+            deferred: false);
+
+        var trial = await ReadAndValidateTrialForResultAsync(
+            connection,
+            transaction,
+            manifest,
+            cancellationToken);
+        if (!IsHoldoutPartition(trial.Trial, manifest.Partition))
+        {
+            throw new InvalidOperationException(
+                "CompleteHoldoutEvaluationAsync accepts only the frozen holdout partition.");
+        }
+
+        var consumption = await ReadHoldoutConsumptionAsync(
+            connection,
+            transaction,
+            manifest.ExperimentId,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The holdout must be acquired before its canonical result is registered.");
+        if (!consumption.ResearchRunId.Equals(
+                manifest.ResearchRunId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The holdout result belongs to a different research run than the holdout reservation.");
+        }
+
+        var result = await RegisterCanonicalResultAsync(
+            connection,
+            transaction,
+            manifest,
+            cancellationToken,
+            trial.Trial);
+        transaction.Commit();
+        return result;
+    }
+
+    /// <summary>
+    /// Compatibility bridge for the existing R4 workflow. New workflow code
+    /// should call BeginHoldoutEvaluationAsync to make the state transition explicit.
+    /// </summary>
+    public Task<ResearchRegistryCommitResult> ConsumeHoldoutAsync(
+        ResearchHoldoutConsumptionRecord consumption,
+        CancellationToken cancellationToken = default) =>
+        BeginHoldoutEvaluationAsync(consumption, cancellationToken);
+
     public async Task<ResearchHoldoutState> GetHoldoutStateAsync(
         string experimentId,
         CancellationToken cancellationToken = default)
@@ -372,8 +392,194 @@ public sealed class SqliteResearchTrialRegistry
             Encoding.UTF8.GetString(EvidenceCanonicalJson.SerializeToUtf8Bytes(value)),
             EvidenceCanonicalJson.ComputeSha256(value),
             "holdout consumption");
-        return ResearchHoldoutState.Consumed;
+
+        var result = await ReadRowAsync(
+            connection,
+            null,
+            """
+            SELECT canonical_json, sha256
+            FROM research_results
+            WHERE experiment_id = $id AND lower(partition) = 'holdout';
+            """,
+            cancellationToken,
+            ("$id", experimentId.Trim()));
+        if (result is null)
+        {
+            return ResearchHoldoutState.Consumed;
+        }
+
+        var manifest = EvidenceCanonicalJson.Deserialize<CanonicalResearchResultManifest>(
+            Encoding.UTF8.GetBytes(result.Value.Json));
+        RequireCanonicalMatch(
+            result.Value.Json,
+            result.Value.Hash,
+            Encoding.UTF8.GetString(EvidenceCanonicalJson.SerializeToUtf8Bytes(manifest)),
+            EvidenceCanonicalJson.ComputeSha256(manifest),
+            "holdout result");
+        if (!manifest.ResearchRunId.Equals(value.ResearchRunId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The holdout result does not belong to the run that consumed the holdout.");
+        }
+
+        return ResearchHoldoutState.Completed;
     }
+
+    private static async Task<(ResearchTrialDefinition Trial, string Hash)>
+        ReadAndValidateTrialForResultAsync(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            CanonicalResearchResultManifest manifest,
+            CancellationToken cancellationToken)
+    {
+        var trialRow = await ReadRowAsync(
+            connection,
+            transaction,
+            "SELECT canonical_json, sha256 FROM research_trials WHERE experiment_id = $id;",
+            cancellationToken,
+            ("$id", manifest.ExperimentId));
+        if (trialRow is null)
+        {
+            throw new InvalidOperationException(
+                $"Research trial '{manifest.ExperimentId}' does not exist.");
+        }
+
+        var trial = EvidenceCanonicalJson.Deserialize<ResearchTrialDefinition>(
+            Encoding.UTF8.GetBytes(trialRow.Value.Json));
+        RequireCanonicalMatch(
+            trialRow.Value.Json,
+            trialRow.Value.Hash,
+            Encoding.UTF8.GetString(EvidenceCanonicalJson.SerializeToUtf8Bytes(trial)),
+            EvidenceCanonicalJson.ComputeSha256(trial),
+            "trial");
+        if (!manifest.TrialDefinitionSha256.Equals(
+                trialRow.Value.Hash,
+                StringComparison.Ordinal) ||
+            !manifest.PrimaryMetric.Equals(trial.PrimaryMetric, StringComparison.Ordinal) ||
+            !trial.Partitions.Any(partition =>
+                partition.Name.Equals(manifest.Partition, StringComparison.Ordinal)) ||
+            !manifest.Metrics.ContainsKey(manifest.PrimaryMetric))
+        {
+            throw new InvalidDataException(
+                "The result manifest does not match its frozen trial definition.");
+        }
+
+        return (trial, trialRow.Value.Hash);
+    }
+
+    private static async Task<ResearchRegistryCommitResult> RegisterCanonicalResultAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CanonicalResearchResultManifest manifest,
+        CancellationToken cancellationToken,
+        ResearchTrialDefinition trial)
+    {
+        if (!trial.ExperimentId.Equals(manifest.ExperimentId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The result manifest does not belong to the validated trial.");
+        }
+
+        var canonicalJson = Encoding.UTF8.GetString(
+            EvidenceCanonicalJson.SerializeToUtf8Bytes(manifest));
+        var sha256 = EvidenceCanonicalJson.ComputeSha256(manifest);
+        var partitionResult = await ReadRowAsync(
+            connection,
+            transaction,
+            """
+            SELECT canonical_json, sha256
+            FROM research_results
+            WHERE experiment_id = $experiment AND partition = $partition;
+            """,
+            cancellationToken,
+            ("$experiment", manifest.ExperimentId),
+            ("$partition", manifest.Partition));
+        if (partitionResult is not null)
+        {
+            RequireCanonicalMatch(
+                partitionResult.Value.Json,
+                partitionResult.Value.Hash,
+                canonicalJson,
+                sha256,
+                "canonical experiment partition result");
+            return new ResearchRegistryCommitResult(manifest.ResultId, true);
+        }
+
+        var identifierResult = await ReadRowAsync(
+            connection,
+            transaction,
+            "SELECT canonical_json, sha256 FROM research_results WHERE result_id = $id;",
+            cancellationToken,
+            ("$id", manifest.ResultId));
+        if (identifierResult is not null)
+        {
+            RequireCanonicalMatch(
+                identifierResult.Value.Json,
+                identifierResult.Value.Hash,
+                canonicalJson,
+                sha256,
+                "result");
+            return new ResearchRegistryCommitResult(manifest.ResultId, true);
+        }
+
+        await ExecuteAsync(
+            connection,
+            transaction,
+            """
+            INSERT INTO research_results(
+                result_id, experiment_id, research_run_id, partition,
+                created_at_utc, sha256, canonical_json)
+            VALUES($id, $experiment, $run, $partition, $created, $hash, $json);
+            """,
+            cancellationToken,
+            ("$id", manifest.ResultId),
+            ("$experiment", manifest.ExperimentId),
+            ("$run", manifest.ResearchRunId),
+            ("$partition", manifest.Partition),
+            ("$created", Utc(manifest.CreatedAtUtc)),
+            ("$hash", sha256),
+            ("$json", canonicalJson));
+        return new ResearchRegistryCommitResult(manifest.ResultId, false);
+    }
+
+    private static async Task<ResearchHoldoutConsumptionRecord?> ReadHoldoutConsumptionAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string experimentId,
+        CancellationToken cancellationToken)
+    {
+        var row = await ReadRowAsync(
+            connection,
+            transaction,
+            """
+            SELECT canonical_json, sha256
+            FROM holdout_consumptions
+            WHERE experiment_id = $id;
+            """,
+            cancellationToken,
+            ("$id", experimentId));
+        if (row is null)
+        {
+            return null;
+        }
+
+        var consumption = EvidenceCanonicalJson.Deserialize<ResearchHoldoutConsumptionRecord>(
+            Encoding.UTF8.GetBytes(row.Value.Json));
+        RequireCanonicalMatch(
+            row.Value.Json,
+            row.Value.Hash,
+            Encoding.UTF8.GetString(EvidenceCanonicalJson.SerializeToUtf8Bytes(consumption)),
+            EvidenceCanonicalJson.ComputeSha256(consumption),
+            "holdout consumption");
+        return consumption;
+    }
+
+    private static bool IsHoldoutPartition(
+        ResearchTrialDefinition trial,
+        string partition) =>
+        trial.Partitions.Any(candidate =>
+            candidate.Name.Equals("holdout", StringComparison.OrdinalIgnoreCase) &&
+            candidate.Name.Equals(partition, StringComparison.Ordinal));
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
     {
@@ -558,10 +764,13 @@ public sealed class SqliteResearchTrialRegistry
         CREATE TABLE research_results (
             result_id TEXT NOT NULL PRIMARY KEY,
             experiment_id TEXT NOT NULL,
+            research_run_id TEXT NOT NULL,
+            partition TEXT NOT NULL,
             created_at_utc TEXT NOT NULL,
             sha256 TEXT NOT NULL,
             canonical_json TEXT NOT NULL,
-            FOREIGN KEY(experiment_id) REFERENCES research_trials(experiment_id)
+            FOREIGN KEY(experiment_id) REFERENCES research_trials(experiment_id),
+            UNIQUE(experiment_id, partition)
         );
 
         CREATE TABLE holdout_consumptions (
@@ -572,5 +781,19 @@ public sealed class SqliteResearchTrialRegistry
             canonical_json TEXT NOT NULL,
             FOREIGN KEY(experiment_id) REFERENCES research_trials(experiment_id)
         );
+
+        CREATE TRIGGER require_holdout_reservation_before_result
+        BEFORE INSERT ON research_results
+        WHEN lower(NEW.partition) = 'holdout'
+        BEGIN
+            SELECT CASE
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM holdout_consumptions
+                    WHERE experiment_id = NEW.experiment_id
+                      AND research_run_id = NEW.research_run_id)
+                THEN RAISE(ABORT, 'holdout result requires matching reservation')
+            END;
+        END;
         """;
 }

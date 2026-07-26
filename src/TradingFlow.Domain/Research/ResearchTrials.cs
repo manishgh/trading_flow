@@ -5,7 +5,8 @@ namespace TradingFlow.Domain.Research;
 public enum ResearchHoldoutState
 {
     Unopened = 1,
-    Consumed = 2
+    Consumed = 2,
+    Completed = 3
 }
 
 public sealed record ResearchPartitionDefinition
