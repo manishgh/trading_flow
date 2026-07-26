@@ -116,6 +116,17 @@ public sealed partial class CatalogResearchWorkflow
             readinessFailures = ["momentum_evidence_not_ready"];
         }
 
+        var canonicalMomentumOutputs = MomentumCanonicalArtifactBuilder.Build(
+                result.Report,
+                result.Audit)
+            .Select(artifact => new EvidenceResearchNamedOutput(
+                artifact.Name,
+                new EvidenceResearchJsonPayload(
+                    artifact.GetUtf8Json())))
+            .Append(new EvidenceResearchNamedOutput(
+                "research-phase",
+                Json(phaseState)))
+            .ToArray();
         var package = await packager.PackageAsync(
             new EvidenceResearchRunPackageRequest(
                 request.ResearchRunId,
@@ -129,14 +140,7 @@ public sealed partial class CatalogResearchWorkflow
                 universeLedger,
                 partitionDefinition,
                 Assumptions(request.Assumptions),
-                [
-                    new EvidenceResearchNamedOutput(
-                        "momentum-report",
-                        Json(result.Report)),
-                    new EvidenceResearchNamedOutput(
-                        "research-phase",
-                        Json(phaseState))
-                ],
+                canonicalMomentumOutputs,
                 evidenceReady,
                 readinessFailures),
             cancellationToken);

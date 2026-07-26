@@ -17,7 +17,8 @@ public sealed record CatalogMomentumStudyResult(
     string ResearchAdjustedBarsDatasetId,
     string AsTradedBarsDatasetId,
     string UniverseMembershipDatasetId,
-    CrossSectionalMomentumReport Report);
+    CrossSectionalMomentumReport Report,
+    MomentumResearchAuditReport Audit);
 
 public sealed record CatalogCatalystStudyRequest(
     string MarketBarsDatasetId,
@@ -152,11 +153,16 @@ public sealed class EvidenceCatalogResearchRunner
             eligibleSymbolsByDate,
             evidence.AsTradedBars,
             executionCosts);
+        var audit = new MomentumResearchAuditAnalyzer().Analyze(
+            report.RankObservations,
+            report.Options.DecisionCadenceBars,
+            executionCosts);
         return new CatalogMomentumStudyResult(
             adjustedBarsManifest.DatasetId,
             asTradedBarsManifest.DatasetId,
             universeManifest.DatasetId,
-            report);
+            report,
+            audit);
     }
 
     public async Task<CatalogCatalystStudyResult> RunCatalystDiagnosticAsync(

@@ -139,6 +139,21 @@ public sealed class CatalogResearchWorkflowTests : IDisposable
             EvidenceCanonicalJson.SerializeToUtf8Bytes(replay.Manifest));
         Assert.False(first.Manifest.EvidenceReady);
         Assert.NotEmpty(first.Manifest.ReadinessFailures);
+        Assert.Contains(
+            first.Manifest.Outputs,
+            output => output.ObjectNamespace.Value ==
+                $"research/reports/{MomentumCanonicalArtifactName.Report}");
+        Assert.Contains(
+            first.Manifest.Outputs,
+            output => output.ObjectNamespace.Value ==
+                $"research/reports/{MomentumCanonicalArtifactName.FormationLedger}");
+        Assert.Contains(
+            first.Manifest.Outputs,
+            output => output.ObjectNamespace.Value ==
+                $"research/reports/{MomentumCanonicalArtifactName.AuditReport}");
+        Assert.Contains(
+            first.Manifest.Outputs,
+            output => output.ObjectNamespace.Value == "research/reports/research-phase");
         Assert.Equal(
             CatalogResearchPhase.DevelopmentValidation,
             first.PhaseState.Phase);

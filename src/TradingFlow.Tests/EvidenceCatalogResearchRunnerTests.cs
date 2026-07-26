@@ -50,6 +50,8 @@ public sealed class EvidenceCatalogResearchRunnerTests
         Assert.True(result.Report.PointInTimeUniverseEvidence);
         Assert.True(result.Report.AdjustedPricesConfirmed);
         Assert.NotEmpty(result.Report.RankObservations);
+        Assert.NotEmpty(result.Audit.Formations);
+        Assert.NotEmpty(result.Audit.Robustness);
         Assert.DoesNotContain(
             result.Report.RankObservations,
             observation => observation.Ticker == "EXCLUDED");
