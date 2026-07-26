@@ -47,7 +47,7 @@ public sealed class MomentumResearchAuditAnalyzerTests
             report.Robustness,
             value => value.Segment == MomentumStudySegment.Holdout);
         Assert.Equal(5m, holdout.EqualWeightedFormationMeanNetReturnPct);
-        Assert.Equal(1m, holdout.MeanNetReturnWithoutTopTickerPct);
+        Assert.Equal(0.5m, holdout.MeanNetReturnWithoutTopTickerPct);
         Assert.Equal(0m, holdout.MeanNetReturnWithoutTopFormationPct);
         Assert.Equal(new DateOnly(2025, 1, 1), holdout.TopFormationDate);
     }
@@ -144,6 +144,87 @@ public sealed class MomentumResearchAuditAnalyzerTests
         Assert.Equal(MomentumResearchCell.MomentumOnly, robustness.ParentCell);
         Assert.Equal(50m, robustness.GatePassRatePct);
         Assert.Equal(1, robustness.CashSlotObservationCount);
+    }
+
+    [Fact]
+    public void Analyze_ReportsPnlConcentrationLeaveOneOutAndFrozenCostStress()
+    {
+        var observations = new[]
+        {
+            Observation("validation", new DateOnly(2024, 1, 31), "A", 10m),
+            Observation("validation", new DateOnly(2024, 1, 31), "B", -2m),
+            Observation("validation", new DateOnly(2024, 2, 29), "A", 4m),
+            Observation("validation", new DateOnly(2024, 2, 29), "B", 0m),
+            Observation("validation", new DateOnly(2025, 1, 31), "A", -1m),
+            Observation("validation", new DateOnly(2025, 1, 31), "B", 3m)
+        };
+        var sectors = observations
+            .Select(value => value.DecisionDate)
+            .Distinct()
+            .ToDictionary(
+                date => date,
+                _ => (IReadOnlyDictionary<string, string>)
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["A"] = "technology",
+                        ["B"] = "financials"
+                    });
+        var evidence = new MomentumAdditiveResearchEvidence(
+            new Dictionary<DateOnly, IReadOnlySet<string>>(),
+            sectors)
+        {
+            PointInTimeSectorCoverageConfirmed = true
+        };
+        var costs = new MomentumExecutionCostAssumptions(
+            CommissionPerSideBps: 10m,
+            RegulatoryExitBps: 0m,
+            FullSpreadBps: 40m,
+            SlippagePerSideBps: 20m);
+
+        var report = new MomentumResearchAuditAnalyzer().Analyze(
+            observations,
+            decisionCadenceBars: 21,
+            executionCosts: costs,
+            additiveEvidence: evidence);
+
+        var validation = Assert.Single(
+            report.Robustness,
+            value => value.Segment == MomentumStudySegment.Validation);
+        Assert.Equal(75m, validation.LargestTickerAbsolutePnlContributionPct);
+        Assert.Equal(60m, validation.LargestMonthAbsolutePnlContributionPct);
+        Assert.Equal(60m, validation.LargestFormationAbsolutePnlContributionPct);
+        Assert.Equal("2024-01", validation.BestMonth);
+        Assert.Equal(1.5m, validation.MeanNetReturnWithoutBestMonthPct);
+        Assert.Equal(2, validation.LeaveOneTicker.Count);
+        Assert.Equal(2, validation.LeaveOneSector.Count);
+        Assert.Equal(2, validation.LeaveOneYear.Count);
+        Assert.Equal([1m, 2m, 3m], validation.CostStress.Select(value => value.CostMultiplier));
+        Assert.Equal(
+            [1.333333m, 0.333333m, -0.666667m],
+            validation.CostStress.Select(value =>
+                value.EqualWeightedFormationMeanNetReturnPct));
+        Assert.Empty(validation.RobustnessBlockers);
+    }
+
+    [Fact]
+    public void Analyze_FailsClosedForSectorAndCostAuditsWithoutEvidence()
+    {
+        var report = new MomentumResearchAuditAnalyzer().Analyze(
+        [
+            Observation("development", new DateOnly(2025, 1, 1), "A", 1m)
+        ]);
+
+        var robustness = Assert.Single(
+            report.Robustness,
+            value => value.Segment == MomentumStudySegment.Development);
+        Assert.Empty(robustness.LeaveOneSector);
+        Assert.Empty(robustness.CostStress);
+        Assert.Contains(
+            "point_in_time_sector_evidence_unavailable",
+            robustness.RobustnessBlockers);
+        Assert.Contains(
+            "execution_cost_assumptions_unavailable",
+            robustness.RobustnessBlockers);
     }
 
     private static MomentumRankObservation Observation(

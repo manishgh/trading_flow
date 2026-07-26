@@ -12,6 +12,8 @@ public sealed partial class CatalogResearchWorkflow
 {
     public const string StaticUniversePromotionBlocker =
         "static_universe_survivorship_selection_bias";
+    public const string StaticUniverseHoldoutUnopenedBlocker =
+        "static_universe_diagnostic_holdout_unopened";
 
     /// <summary>
     /// Runs a deliberately non-promotable momentum diagnostic against a frozen symbol list.
@@ -38,10 +40,13 @@ public sealed partial class CatalogResearchWorkflow
         RequireStaticMomentumDataset(adjustedManifest, "all");
         RequireStaticMomentumDataset(asTradedManifest, "raw");
 
-        var adjustedRows = await partitionReader.ReadMarketBarsAsync(
+        var developmentValidationReader = ReaderForPhase(
+            CatalogResearchPhase.DevelopmentValidation,
+            request.StudyPartitions);
+        var adjustedRows = await developmentValidationReader.ReadMarketBarsAsync(
             adjustedManifest,
             cancellationToken);
-        var asTradedRows = await partitionReader.ReadMarketBarsAsync(
+        var asTradedRows = await developmentValidationReader.ReadMarketBarsAsync(
             asTradedManifest,
             cancellationToken);
         var evidence = BuildStaticMomentumEvidence(
@@ -67,23 +72,6 @@ public sealed partial class CatalogResearchWorkflow
         var universeLedgerId =
             $"static-universe-{EvidenceCanonicalJson.ComputeSha256(universeIdentity)}";
         var partitionDefinition = Json(request.StudyPartitions);
-
-        // Reserving the immutable holdout identity is the final action before any
-        // momentum outcomes are evaluated.
-        var holdout = await packager.PrepareHoldoutAsync(
-            request.Definition.StudyName,
-            inputDatasets,
-            universeLedgerId,
-            request.StudyPartitions,
-            universeLedger,
-            partitionDefinition,
-            cancellationToken);
-        await catalog.ReserveHoldoutAsync(
-            new EvidenceHoldoutConsumption(
-                holdout.HoldoutId,
-                request.ResearchRunId,
-                request.CreatedAtUtc),
-            cancellationToken);
 
         var executionCosts = ToMomentumExecutionCosts(request.Assumptions);
         var evidenceDefinition = request.Definition with
@@ -116,6 +104,7 @@ public sealed partial class CatalogResearchWorkflow
             executionCosts);
         var readinessFailures = analyzed.PromotionBlockers
             .Append(StaticUniversePromotionBlocker)
+            .Append(StaticUniverseHoldoutUnopenedBlocker)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(value => value, StringComparer.Ordinal)
             .ToArray();
@@ -128,7 +117,8 @@ public sealed partial class CatalogResearchWorkflow
         };
         var audit = new MomentumResearchAuditAnalyzer().Analyze(
             report.RankObservations,
-            report.Options.DecisionCadenceBars);
+            report.Options.DecisionCadenceBars,
+            executionCosts);
         var canonicalArtifacts = MomentumCanonicalArtifactBuilder.Build(
             report,
             audit);
@@ -136,6 +126,8 @@ public sealed partial class CatalogResearchWorkflow
         var studyConfig = Json(new
         {
             Workflow = "static_universe_momentum_diagnostic",
+            Phase = CatalogResearchPhase.DevelopmentValidation,
+            HoldoutOpened = false,
             request.ResearchAdjustedBarsDatasetId,
             request.AsTradedBarsDatasetId,
             FrozenSymbols = frozenSymbols,

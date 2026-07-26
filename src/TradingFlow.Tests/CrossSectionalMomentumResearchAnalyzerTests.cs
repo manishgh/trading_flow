@@ -648,7 +648,7 @@ public sealed class CrossSectionalMomentumResearchAnalyzerTests
                     MomentumResearchCell.MomentumOnly,
                     MomentumResearchCell.MomentumStockTrend,
                     MomentumResearchCell.MomentumStockTrendVcpV7,
-                    MomentumResearchCell.MomentumStockTrendVcpV7ClassifiedCatalyst
+                    MomentumResearchCell.MomentumStockTrendClassifiedCatalyst
                 ]
             }
         };
@@ -663,11 +663,127 @@ public sealed class CrossSectionalMomentumResearchAnalyzerTests
         Assert.All(
             report.RankObservations.Where(value =>
                 value.Cell ==
-                    MomentumResearchCell.MomentumStockTrendVcpV7ClassifiedCatalyst &&
+                    MomentumResearchCell.MomentumStockTrendClassifiedCatalyst &&
                 value.IsPrimarySelection),
             value => Assert.Equal(
                 MomentumSlotReturnSource.Cash,
                 value.SlotReturnSource));
+        Assert.Equal(
+            MomentumResearchCell.MomentumStockTrend,
+            MomentumResearchCell.ParentOf(
+                MomentumResearchCell.MomentumStockTrendClassifiedCatalyst));
+        Assert.Equal(
+            MomentumResearchCell.MomentumOnly,
+            MomentumResearchCell.ParentOf(
+                MomentumResearchCell.MomentumClassifiedCatalyst));
+        Assert.False(MomentumResearchCell.RequiresVcp(
+            MomentumResearchCell.MomentumStockTrendClassifiedCatalyst));
+    }
+
+    [Fact]
+    public void Analyze_PrimaryComparisonEqualWeightsFormationPortfoliosAndReportsAbsolutePnlConcentration()
+    {
+        var bars = new Dictionary<string, IReadOnlyList<OhlcvBar>>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["SPY"] = BuildBars("SPY", 40, index => 100m + index),
+            ["A"] = BuildBars(
+                "A",
+                40,
+                index => 20m + (index * 4m),
+                index => (20m + (index * 4m)) / 2m),
+            ["B"] = BuildBars("B", 40, index => 40m + (index * 2m)),
+            ["C"] = BuildBars("C", 40, index => 50m + index),
+            ["D"] = BuildBars("D", 40, index => 60m + (index * 0.8m)),
+            ["E"] = BuildBars("E", 40, index => 70m + (index * 0.7m)),
+            ["F"] = BuildBars("F", 40, index => 80m + (index * 0.6m)),
+            ["G"] = BuildBars("G", 40, index => 90m + (index * 0.5m)),
+            ["H"] = BuildBars("H", 40, index => 100m + (index * 0.4m))
+        };
+        var eligible = Enumerable.Range(0, 40)
+            .ToDictionary(
+                index => new DateOnly(2026, 1, 2).AddDays(index),
+                index => (IReadOnlySet<string>)new HashSet<string>(
+                    index < 18
+                        ? ["A", "B", "C", "D"]
+                        : ["A", "B", "C", "D", "E", "F", "G", "H"],
+                    StringComparer.OrdinalIgnoreCase));
+        var baseline = Definition();
+        var definition = baseline with
+        {
+            PointInTimeUniverseEvidence = true,
+            Options = baseline.Options with
+            {
+                ForwardHorizons = [1],
+                Cells = [MomentumResearchCell.MomentumOnly]
+            }
+        };
+
+        var report = new CrossSectionalMomentumResearchAnalyzer().Analyze(
+            bars,
+            definition,
+            eligible);
+        var primary = report.RankObservations
+            .Where(value =>
+                value.Cell == MomentumResearchCell.MomentumOnly &&
+                value.ForwardHorizonBars == 1 &&
+                value.IsPrimarySelection)
+            .ToArray();
+        var slotCounts = primary
+            .GroupBy(value => value.DecisionDate)
+            .Select(group => group.Count())
+            .Distinct()
+            .Order()
+            .ToArray();
+        var expectedFormationMean = decimal.Round(
+            primary.GroupBy(value => value.DecisionDate)
+                .Average(group => group.Average(value => value.ForwardReturnPct)),
+            4);
+        var rawObservationMean = decimal.Round(
+            primary.Average(value => value.ForwardReturnPct),
+            4);
+        var comparison = Assert.Single(
+            report.Comparisons,
+            value =>
+                value.Cell == MomentumResearchCell.MomentumOnly &&
+                value.Segment == MomentumStudySegment.Full &&
+                value.ForwardHorizonBars == 1);
+
+        Assert.Equal([2, 3], slotCounts);
+        Assert.Equal(expectedFormationMean, comparison.PrimaryMeanReturnPct);
+        Assert.NotEqual(rawObservationMean, comparison.PrimaryMeanReturnPct);
+        Assert.InRange(
+            comparison.LargestTickerAbsolutePnlContributionPct,
+            0.0001m,
+            100m);
+        Assert.Equal(
+            75m,
+            comparison.LargestMonthAbsolutePnlContributionPct);
+        Assert.InRange(
+            comparison.LargestFormationAbsolutePnlContributionPct,
+            0.0001m,
+            100m);
+    }
+
+    [Fact]
+    public void Analyze_ClassifiedCatalystCellsArePairedDirectlyWithFrozenA1OrA2Parents()
+    {
+        Assert.Equal(
+            MomentumResearchCell.MomentumOnly,
+            MomentumResearchCell.ParentOf(
+                MomentumResearchCell.MomentumClassifiedCatalyst));
+        Assert.Equal(
+            MomentumResearchCell.MomentumStockTrend,
+            MomentumResearchCell.ParentOf(
+                MomentumResearchCell.MomentumStockTrendClassifiedCatalyst));
+        Assert.NotEqual(
+            MomentumResearchCell.MomentumStockTrendVcpV7,
+            MomentumResearchCell.ParentOf(
+                MomentumResearchCell.MomentumStockTrendClassifiedCatalyst));
+        Assert.False(MomentumResearchCell.RequiresVcp(
+            MomentumResearchCell.MomentumClassifiedCatalyst));
+        Assert.False(MomentumResearchCell.RequiresVcp(
+            MomentumResearchCell.MomentumStockTrendClassifiedCatalyst));
     }
 
     private static CrossSectionalMomentumStudyDefinition Definition() =>

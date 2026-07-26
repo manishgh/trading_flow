@@ -140,6 +140,7 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
             definition,
             partition,
             observations,
+            comparisons,
             additiveEvidence);
 
         var promotionBlockers = new List<string>(blockers);
@@ -266,9 +267,13 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
                 candidate.StockTrendPassed,
             MomentumResearchCell.MomentumStockTrendVcpV7 =>
                 candidate.StockTrendPassed && candidate.FrozenV7VcpPassed,
-            MomentumResearchCell.MomentumStockTrendVcpV7ClassifiedCatalyst =>
+            MomentumResearchCell.MomentumClassifiedCatalyst =>
+                HasPositiveClassifiedCatalyst(
+                    evidence,
+                    decisionDate,
+                    candidate.Ticker),
+            MomentumResearchCell.MomentumStockTrendClassifiedCatalyst =>
                 candidate.StockTrendPassed &&
-                candidate.FrozenV7VcpPassed &&
                 HasPositiveClassifiedCatalyst(evidence, decisionDate, candidate.Ticker),
             MomentumResearchCell.MomentumStockAndMarketTrend =>
                 candidate.StockTrendPassed && marketTrendPassed,
@@ -660,10 +665,13 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
                     var segmentBaselines = FilterSegment(baselines, segment)
                         .Where(item => item.Cell == cell && item.ForwardHorizonBars == horizon)
                         .ToArray();
-                    var primaryMean = Mean(primary.Select(item => item.ForwardReturnPct));
-                    var bottomMean = Mean(bottom.Select(item => item.ForwardReturnPct));
+                    var primaryFormationReturns = FormationWeightedReturns(primary);
+                    var bottomFormationReturns = FormationWeightedReturns(bottom);
+                    var primaryMean = Mean(primaryFormationReturns.Select(item => item.ReturnPct));
+                    var bottomMean = Mean(bottomFormationReturns.Select(item => item.ReturnPct));
                     var universeMean = Mean(segmentBaselines.Select(item => item.EligibleUniverseReturnPct));
                     var benchmarkMean = Mean(segmentBaselines.Select(item => item.BenchmarkReturnPct));
+                    var concentration = AbsolutePnlConcentration(primary);
                     var parentCell = MomentumResearchCell.ParentOf(cell);
                     var parentPrimary = parentCell is null
                         ? []
@@ -675,23 +683,28 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
                             .ToArray();
                     var parentMean = parentCell is null
                         ? (decimal?)null
-                        : Round(Mean(parentPrimary.Select(item => item.ForwardReturnPct)));
+                        : Round(Mean(FormationWeightedReturns(parentPrimary)
+                            .Select(item => item.ReturnPct)));
                     var comparison = new MomentumComparisonResult(
                         cell,
                         segment,
                         horizon,
-                        segmentBaselines.Select(item => item.DecisionDate).Distinct().Count(),
+                        primaryFormationReturns.Count,
                         primary.Length,
                         Round(primaryMean),
-                        Round(Median(primary.Select(item => item.ForwardReturnPct).Order().ToArray())),
+                        Round(Median(primaryFormationReturns
+                            .Select(item => item.ReturnPct)
+                            .Order()
+                            .ToArray())),
                         Round(bottomMean),
                         Round(universeMean),
                         Round(benchmarkMean),
                         Round(primaryMean - bottomMean),
                         Round(primaryMean - universeMean),
                         Round(primaryMean - benchmarkMean),
-                        Round(LargestShare(primary, item => item.Ticker)),
-                        Round(LargestShare(primary, item => item.DecisionDate.ToString("O"))))
+                        concentration.LargestTickerContributionPct,
+                        concentration.LargestMonthContributionPct,
+                        concentration.LargestFormationContributionPct)
                     {
                         ParentCell = parentCell,
                         ParentPrimaryMeanReturnPct = parentMean,
@@ -763,13 +776,15 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
             returns.Length == 0
                 ? 0m
                 : Round((decimal)returns.Count(value => value > 0m) / returns.Length * 100m),
-            Round(LargestShare(observations, item => item.Ticker)));
+            AbsolutePnlConcentration(observations)
+                .LargestTickerContributionPct);
     }
 
     private static List<string> BuildEvidenceBlockers(
         CrossSectionalMomentumStudyDefinition definition,
         PartitionedDecisions partition,
         IReadOnlyList<MomentumRankObservation> observations,
+        IReadOnlyList<MomentumComparisonResult> comparisons,
         MomentumAdditiveResearchEvidence? additiveEvidence)
     {
         var blockers = new List<string>();
@@ -818,8 +833,7 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
             blockers.Add("universe_snapshot_decision_cutoff_not_confirmed");
         }
 
-        if (definition.Options.Cells.Contains(
-                MomentumResearchCell.MomentumStockTrendVcpV7ClassifiedCatalyst) &&
+        if (definition.Options.Cells.Any(MomentumResearchCell.RequiresCatalyst) &&
             additiveEvidence?.ClassifiedCatalystCoverageConfirmed != true)
         {
             blockers.Add("classified_catalyst_evidence_unavailable");
@@ -884,19 +898,37 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
             }
         }
 
-        var primary = observations.Where(item => item.IsPrimarySelection).ToArray();
-        var largestTickerShare = LargestShare(primary, item => item.Ticker);
-        if (largestTickerShare > 10m)
+        var holdoutConcentrations = comparisons
+            .Where(item => item.Segment == MomentumStudySegment.Holdout)
+            .ToArray();
+        var largestTickerContribution = holdoutConcentrations
+            .Select(item => item.LargestTickerAbsolutePnlContributionPct)
+            .DefaultIfEmpty(0m)
+            .Max();
+        if (largestTickerContribution > 10m)
         {
             blockers.Add(
-                $"ticker_concentration_above_limit:{Round(largestTickerShare):0.####}/10");
+                $"ticker_absolute_pnl_concentration_above_limit:{Round(largestTickerContribution):0.####}/10");
         }
 
-        var largestFormationShare = LargestShare(primary, item => item.DecisionDate);
-        if (largestFormationShare > 10m)
+        var largestMonthContribution = holdoutConcentrations
+            .Select(item => item.LargestMonthAbsolutePnlContributionPct)
+            .DefaultIfEmpty(0m)
+            .Max();
+        if (largestMonthContribution > 10m)
         {
             blockers.Add(
-                $"formation_concentration_above_limit:{Round(largestFormationShare):0.####}/10");
+                $"month_absolute_pnl_concentration_above_limit:{Round(largestMonthContribution):0.####}/10");
+        }
+
+        var largestFormationContribution = holdoutConcentrations
+            .Select(item => item.LargestFormationAbsolutePnlContributionPct)
+            .DefaultIfEmpty(0m)
+            .Max();
+        if (largestFormationContribution > 10m)
+        {
+            blockers.Add(
+                $"formation_absolute_pnl_concentration_above_limit:{Round(largestFormationContribution):0.####}/10");
         }
 
         return blockers;
@@ -1042,18 +1074,72 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
         return sum / period;
     }
 
-    private static decimal LargestShare<T, TKey>(
-        IReadOnlyCollection<T> observations,
-        Func<T, TKey> keySelector)
-        where TKey : notnull
+    // A formation date is the independent portfolio observation. Averaging its
+    // complete fixed-slot set first prevents dates with more eligible stocks from
+    // receiving more statistical weight; rejected slots remain represented by cash.
+    private static IReadOnlyList<FormationPortfolioReturn> FormationWeightedReturns(
+        IReadOnlyCollection<MomentumRankObservation> observations) =>
+        observations
+            .GroupBy(item => item.DecisionDate)
+            .Select(group => new FormationPortfolioReturn(
+                group.Key,
+                Mean(group.Select(item => item.ForwardReturnPct))))
+            .OrderBy(item => item.DecisionDate)
+            .ToArray();
+
+    // Attribute absolute P&L after both slot and formation equal-weighting. This is
+    // deliberately not an observation-count share and does not net gains against
+    // losses before measuring concentration.
+    private static AbsolutePnlConcentrationResult AbsolutePnlConcentration(
+        IReadOnlyCollection<MomentumRankObservation> observations)
     {
         if (observations.Count == 0)
         {
-            return 0m;
+            return new AbsolutePnlConcentrationResult(0m, 0m, 0m);
         }
 
-        var largest = observations.GroupBy(keySelector).Max(group => group.Count());
-        return (decimal)largest / observations.Count * 100m;
+        var formationCount = observations
+            .Select(item => item.DecisionDate)
+            .Distinct()
+            .Count();
+        var contributions = observations
+            .GroupBy(item => item.DecisionDate)
+            .SelectMany(formation =>
+            {
+                var slotCount = formation.Count();
+                return formation.Select(item => new WeightedSlotContribution(
+                    item.Ticker,
+                    item.DecisionDate,
+                    item.ForwardReturnPct / slotCount / formationCount));
+            })
+            .ToArray();
+        return new AbsolutePnlConcentrationResult(
+            LargestAbsolutePnlContribution(
+                contributions,
+                item => item.Ticker),
+            LargestAbsolutePnlContribution(
+                contributions,
+                item => $"{item.DecisionDate.Year:D4}-{item.DecisionDate.Month:D2}"),
+            LargestAbsolutePnlContribution(
+                contributions,
+                item => item.DecisionDate));
+    }
+
+    private static decimal LargestAbsolutePnlContribution<TKey>(
+        IReadOnlyCollection<WeightedSlotContribution> contributions,
+        Func<WeightedSlotContribution, TKey> keySelector)
+        where TKey : notnull
+    {
+        var groupedAbsolutePnl = contributions
+            .GroupBy(keySelector)
+            .Select(group => group.Sum(item =>
+                Math.Abs(item.EqualWeightedPnlContributionPct)))
+            .ToArray();
+        var totalAbsolutePnl = groupedAbsolutePnl.Sum();
+        return totalAbsolutePnl == 0m
+            ? 0m
+            : Round(groupedAbsolutePnl.Max() /
+                totalAbsolutePnl * 100m);
     }
 
     private static decimal PercentChange(decimal start, decimal end) =>
@@ -1179,6 +1265,20 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
         IReadOnlyList<MomentumRankObservation> Observations,
         int PurgedOutcomeCount);
 
+    private sealed record FormationPortfolioReturn(
+        DateOnly DecisionDate,
+        decimal ReturnPct);
+
+    private sealed record WeightedSlotContribution(
+        string Ticker,
+        DateOnly DecisionDate,
+        decimal EqualWeightedPnlContributionPct);
+
+    private sealed record AbsolutePnlConcentrationResult(
+        decimal LargestTickerContributionPct,
+        decimal LargestMonthContributionPct,
+        decimal LargestFormationContributionPct);
+
     private static bool OutcomeBelongsToSegment(
         string segment,
         DateOnly targetDate,
@@ -1300,7 +1400,7 @@ public sealed record MomentumCohortResult(
     decimal MeanReturnPct,
     decimal MedianReturnPct,
     decimal WinRatePct,
-    decimal LargestTickerObservationSharePct);
+    decimal LargestTickerAbsolutePnlContributionPct);
 
 public sealed record MomentumComparisonResult(
     string Cell,
@@ -1316,8 +1416,9 @@ public sealed record MomentumComparisonResult(
     decimal PrimaryMinusBottomPct,
     decimal PrimaryMinusUniversePct,
     decimal PrimaryMinusBenchmarkPct,
-    decimal LargestTickerSharePct,
-    decimal LargestFormationDateSharePct)
+    decimal LargestTickerAbsolutePnlContributionPct,
+    decimal LargestMonthAbsolutePnlContributionPct,
+    decimal LargestFormationAbsolutePnlContributionPct)
 {
     public string? ParentCell { get; init; }
 
@@ -1483,15 +1584,18 @@ public static class MomentumResearchCell
     public const string MomentumStockTrend = "momentum_stock_trend";
     public const string MomentumStockAndMarketTrend = "momentum_stock_market_trend";
     public const string MomentumStockTrendVcpV7 = "momentum_stock_trend_vcp_v7";
-    public const string MomentumStockTrendVcpV7ClassifiedCatalyst =
-        "momentum_stock_trend_vcp_v7_classified_catalyst";
+    public const string MomentumClassifiedCatalyst =
+        "momentum_classified_catalyst";
+    public const string MomentumStockTrendClassifiedCatalyst =
+        "momentum_stock_trend_classified_catalyst";
 
     public static IReadOnlySet<string> All { get; } = new HashSet<string>(
         [
             MomentumOnly,
             MomentumStockTrend,
             MomentumStockTrendVcpV7,
-            MomentumStockTrendVcpV7ClassifiedCatalyst,
+            MomentumClassifiedCatalyst,
+            MomentumStockTrendClassifiedCatalyst,
             MomentumStockAndMarketTrend
         ],
         StringComparer.Ordinal);
@@ -1502,16 +1606,19 @@ public static class MomentumResearchCell
             MomentumOnly => null,
             MomentumStockTrend => MomentumOnly,
             MomentumStockTrendVcpV7 => MomentumStockTrend,
-            MomentumStockTrendVcpV7ClassifiedCatalyst =>
-                MomentumStockTrendVcpV7,
+            MomentumClassifiedCatalyst => MomentumOnly,
+            MomentumStockTrendClassifiedCatalyst => MomentumStockTrend,
             MomentumStockAndMarketTrend => MomentumStockTrend,
             _ => throw new InvalidOperationException(
                 $"Unsupported momentum research cell: {cell}.")
         };
 
     public static bool RequiresVcp(string cell) =>
-        cell is MomentumStockTrendVcpV7 or
-            MomentumStockTrendVcpV7ClassifiedCatalyst;
+        cell == MomentumStockTrendVcpV7;
+
+    public static bool RequiresCatalyst(string cell) =>
+        cell is MomentumClassifiedCatalyst or
+            MomentumStockTrendClassifiedCatalyst;
 }
 
 public static class MomentumSlotReturnSource

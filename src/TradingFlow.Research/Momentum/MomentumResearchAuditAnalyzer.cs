@@ -9,7 +9,9 @@ public sealed class MomentumResearchAuditAnalyzer
 {
     public MomentumResearchAuditReport Analyze(
         IReadOnlyList<MomentumRankObservation> observations,
-        int? decisionCadenceBars = null)
+        int? decisionCadenceBars = null,
+        MomentumExecutionCostAssumptions? executionCosts = null,
+        MomentumAdditiveResearchEvidence? additiveEvidence = null)
     {
         ArgumentNullException.ThrowIfNull(observations);
         if (decisionCadenceBars is <= 0)
@@ -104,7 +106,11 @@ public sealed class MomentumResearchAuditAnalyzer
                     observation.Cell,
                     observation.Segment,
                     observation.ForwardHorizonBars))
-            .Select(group => BuildRobustness(group, decisionCadenceBars))
+            .Select(group => BuildRobustness(
+                group,
+                decisionCadenceBars,
+                executionCosts,
+                additiveEvidence))
             .OrderBy(value => value.Cell, StringComparer.Ordinal)
             .ThenBy(value => value.Segment, StringComparer.Ordinal)
             .ThenBy(value => value.ForwardHorizonBars)
@@ -115,16 +121,19 @@ public sealed class MomentumResearchAuditAnalyzer
 
     private static MomentumRobustnessAudit BuildRobustness(
         IGrouping<AuditGroupKey, MomentumRankObservation> group,
-        int? decisionCadenceBars)
+        int? decisionCadenceBars,
+        MomentumExecutionCostAssumptions? executionCosts,
+        MomentumAdditiveResearchEvidence? additiveEvidence)
     {
         var observations = group.ToArray();
         var formationReturns = FormationReturns(observations);
+        var concentration = AbsolutePnlConcentration(observations);
         var tickerTotals = observations
             .GroupBy(value => value.Ticker, StringComparer.OrdinalIgnoreCase)
             .Select(values => new
             {
                 Ticker = values.Key,
-                Total = values.Sum(value => value.ForwardReturnPct)
+                Total = EqualWeightedPnlContribution(values, observations)
             })
             .OrderByDescending(value => value.Total)
             .ThenBy(value => value.Ticker, StringComparer.Ordinal)
@@ -141,9 +150,11 @@ public sealed class MomentumResearchAuditAnalyzer
             .First();
 
         var withoutTopTicker = observations
-            .Where(value => !value.Ticker.Equals(
-                topTicker,
-                StringComparison.OrdinalIgnoreCase))
+            .Select(value => value.Ticker.Equals(
+                    topTicker,
+                    StringComparison.OrdinalIgnoreCase)
+                ? value with { ForwardReturnPct = 0m }
+                : value)
             .ToArray();
         var withoutTopFormation = formationReturns
             .Where(value => value.Date != topFormation.Date)
@@ -164,6 +175,18 @@ public sealed class MomentumResearchAuditAnalyzer
         var portfolioPath = outcomesOverlap == false
             ? BuildPortfolioPath(formationReturns, decisionCadenceBars!.Value)
             : null;
+        var leaveOneTicker = LeaveOneTicker(observations);
+        var leaveOneYear = LeaveOneYear(observations);
+        var monthAudit = LeaveBestMonth(observations);
+        var robustnessBlockers = new List<string>();
+        var leaveOneSector = LeaveOneSector(
+            observations,
+            additiveEvidence,
+            robustnessBlockers);
+        var costStress = BuildCostStress(
+            observations,
+            executionCosts,
+            robustnessBlockers);
 
         return new MomentumRobustnessAudit(
             group.Key.Cell,
@@ -184,10 +207,8 @@ public sealed class MomentumResearchAuditAnalyzer
             topFormation.ReturnPct,
             bottomFormation.Date,
             bottomFormation.ReturnPct,
-            withoutTopTicker.Length == 0
-                ? (decimal?)null
-                : Average(FormationReturns(withoutTopTicker)
-                    .Select(value => value.ReturnPct)),
+            Average(FormationReturns(withoutTopTicker)
+                .Select(value => value.ReturnPct)),
             withoutTopFormation.Length == 0
                 ? (decimal?)null
                 : Average(withoutTopFormation.Select(value => value.ReturnPct)),
@@ -202,8 +223,253 @@ public sealed class MomentumResearchAuditAnalyzer
                 observations.Count(value => value.GatePassed),
                 observations.Length),
             CashSlotObservationCount = observations.Count(value =>
-                value.SlotReturnSource == MomentumSlotReturnSource.Cash)
+                value.SlotReturnSource == MomentumSlotReturnSource.Cash),
+            LargestTickerAbsolutePnlContributionPct =
+                concentration.LargestTickerContributionPct,
+            LargestMonthAbsolutePnlContributionPct =
+                concentration.LargestMonthContributionPct,
+            LargestFormationAbsolutePnlContributionPct =
+                concentration.LargestFormationContributionPct,
+            BestMonth = monthAudit.BestMonth,
+            MeanNetReturnWithoutBestMonthPct =
+                monthAudit.MeanWithoutBestMonthPct,
+            LeaveOneTicker = leaveOneTicker,
+            LeaveOneSector = leaveOneSector,
+            LeaveOneYear = leaveOneYear,
+            CostStress = costStress,
+            RobustnessBlockers = robustnessBlockers
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray()
         };
+    }
+
+    // Leave-one-out audits are counterfactual diagnostics, not parameter searches.
+    // Ticker/sector exclusions turn affected slots into zero-return cash so the
+    // frozen formation slot count and all other selections remain unchanged.
+    private static IReadOnlyList<MomentumLeaveOneOutAudit> LeaveOneTicker(
+        IReadOnlyList<MomentumRankObservation> observations) =>
+        observations
+            .Select(value => value.Ticker)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .Select(ticker =>
+            {
+                var counterfactual = observations
+                    .Select(value => value.Ticker.Equals(
+                            ticker,
+                            StringComparison.OrdinalIgnoreCase)
+                        ? value with { ForwardReturnPct = 0m }
+                        : value)
+                    .ToArray();
+                var returns = FormationReturns(counterfactual);
+                return new MomentumLeaveOneOutAudit(
+                    MomentumRobustnessDimension.Ticker,
+                    ticker,
+                    returns.Length,
+                    Average(returns.Select(value => value.ReturnPct)));
+            })
+            .ToArray();
+
+    private static IReadOnlyList<MomentumLeaveOneOutAudit> LeaveOneSector(
+        IReadOnlyList<MomentumRankObservation> observations,
+        MomentumAdditiveResearchEvidence? evidence,
+        ICollection<string> blockers)
+    {
+        if (evidence?.PointInTimeSectorCoverageConfirmed != true)
+        {
+            blockers.Add("point_in_time_sector_evidence_unavailable");
+            return [];
+        }
+
+        var sectorByObservation = new Dictionary<MomentumRankObservation, string>();
+        foreach (var observation in observations)
+        {
+            if (!evidence.SectorBySymbolByFormationDate.TryGetValue(
+                    observation.DecisionDate,
+                    out var sectors) ||
+                !sectors.TryGetValue(observation.Ticker, out var sector) ||
+                String.IsNullOrWhiteSpace(sector))
+            {
+                blockers.Add(
+                    $"point_in_time_sector_evidence_missing:{observation.DecisionDate:O}:{observation.Ticker}");
+                return [];
+            }
+
+            sectorByObservation[observation] = sector.Trim();
+        }
+
+        return sectorByObservation.Values
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .Select(sector =>
+            {
+                var counterfactual = observations
+                    .Select(value => sectorByObservation[value].Equals(
+                            sector,
+                            StringComparison.OrdinalIgnoreCase)
+                        ? value with { ForwardReturnPct = 0m }
+                        : value)
+                    .ToArray();
+                var returns = FormationReturns(counterfactual);
+                return new MomentumLeaveOneOutAudit(
+                    MomentumRobustnessDimension.Sector,
+                    sector,
+                    returns.Length,
+                    Average(returns.Select(value => value.ReturnPct)));
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<MomentumLeaveOneOutAudit> LeaveOneYear(
+        IReadOnlyList<MomentumRankObservation> observations) =>
+        observations
+            .Select(value => value.DecisionDate.Year)
+            .Distinct()
+            .Order()
+            .Select(year =>
+            {
+                var retained = observations
+                    .Where(value => value.DecisionDate.Year != year)
+                    .ToArray();
+                var returns = FormationReturns(retained);
+                return new MomentumLeaveOneOutAudit(
+                    MomentumRobustnessDimension.Year,
+                    year.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    returns.Length,
+                    Average(returns.Select(value => value.ReturnPct)));
+            })
+            .ToArray();
+
+    private static BestMonthAudit LeaveBestMonth(
+        IReadOnlyList<MomentumRankObservation> observations)
+    {
+        var formationReturns = FormationReturns(observations);
+        var monthly = formationReturns
+            .GroupBy(value => $"{value.Date.Year:D4}-{value.Date.Month:D2}")
+            .Select(group => new
+            {
+                Month = group.Key,
+                Mean = Average(group.Select(value => value.ReturnPct))
+            })
+            .OrderByDescending(value => value.Mean)
+            .ThenBy(value => value.Month, StringComparer.Ordinal)
+            .ToArray();
+        if (monthly.Length == 0)
+        {
+            return new BestMonthAudit(null, null);
+        }
+
+        var bestMonth = monthly[0].Month;
+        var retained = formationReturns
+            .Where(value =>
+                $"{value.Date.Year:D4}-{value.Date.Month:D2}" != bestMonth)
+            .ToArray();
+        return new BestMonthAudit(
+            bestMonth,
+            retained.Length == 0
+                ? null
+                : Average(retained.Select(value => value.ReturnPct)));
+    }
+
+    // The stress family is frozen at exactly 1x, 2x, and 3x the preregistered
+    // round-trip cost. Cash slots are not charged an artificial execution cost.
+    private static IReadOnlyList<MomentumCostStressAudit> BuildCostStress(
+        IReadOnlyList<MomentumRankObservation> observations,
+        MomentumExecutionCostAssumptions? executionCosts,
+        ICollection<string> blockers)
+    {
+        if (executionCosts is null)
+        {
+            blockers.Add("execution_cost_assumptions_unavailable");
+            return [];
+        }
+
+        return new[] { 1m, 2m, 3m }
+            .Select(multiplier =>
+            {
+                var stressed = observations
+                    .Select(value => value with
+                    {
+                        ForwardReturnPct =
+                            value.SlotReturnSource == MomentumSlotReturnSource.Cash
+                                ? value.ForwardReturnPct
+                                : value.GrossForwardReturnPct -
+                                  (executionCosts.RoundTripCostPct * multiplier)
+                    })
+                    .ToArray();
+                var returns = FormationReturns(stressed);
+                return new MomentumCostStressAudit(
+                    multiplier,
+                    returns.Length,
+                    Average(returns.Select(value => value.ReturnPct)));
+            })
+            .ToArray();
+    }
+
+    private static AbsolutePnlConcentrationResult AbsolutePnlConcentration(
+        IReadOnlyList<MomentumRankObservation> observations)
+    {
+        if (observations.Count == 0)
+        {
+            return new AbsolutePnlConcentrationResult(0m, 0m, 0m);
+        }
+
+        var formationCount = observations
+            .Select(value => value.DecisionDate)
+            .Distinct()
+            .Count();
+        var weighted = observations
+            .GroupBy(value => value.DecisionDate)
+            .SelectMany(formation =>
+            {
+                var slots = formation.Count();
+                return formation.Select(value => new WeightedPnlContribution(
+                    value.Ticker,
+                    value.DecisionDate,
+                    value.ForwardReturnPct / slots / formationCount));
+            })
+            .ToArray();
+        return new AbsolutePnlConcentrationResult(
+            LargestAbsolutePnlContribution(weighted, value => value.Ticker),
+            LargestAbsolutePnlContribution(
+                weighted,
+                value => $"{value.DecisionDate.Year:D4}-{value.DecisionDate.Month:D2}"),
+            LargestAbsolutePnlContribution(weighted, value => value.DecisionDate));
+    }
+
+    private static decimal EqualWeightedPnlContribution(
+        IEnumerable<MomentumRankObservation> selected,
+        IReadOnlyList<MomentumRankObservation> all)
+    {
+        var formationCount = all.Select(value => value.DecisionDate).Distinct().Count();
+        var slotsByDate = all
+            .GroupBy(value => value.DecisionDate)
+            .ToDictionary(group => group.Key, group => group.Count());
+        return decimal.Round(
+            selected.Sum(value =>
+                value.ForwardReturnPct /
+                slotsByDate[value.DecisionDate] /
+                formationCount),
+            6);
+    }
+
+    private static decimal LargestAbsolutePnlContribution<TKey>(
+        IReadOnlyList<WeightedPnlContribution> contributions,
+        Func<WeightedPnlContribution, TKey> keySelector)
+        where TKey : notnull
+    {
+        var groupedAbsolutePnl = contributions
+            .GroupBy(keySelector)
+            .Select(group => group.Sum(value =>
+                Math.Abs(value.ContributionPct)))
+            .ToArray();
+        var denominator = groupedAbsolutePnl.Sum();
+        return denominator == 0m
+            ? 0m
+            : decimal.Round(
+                groupedAbsolutePnl.Max() / denominator * 100m,
+                4);
     }
 
     private static MomentumPortfolioPathAudit BuildPortfolioPath(
@@ -306,6 +572,20 @@ public sealed class MomentumResearchAuditAnalyzer
 
     private sealed record FormationReturn(DateOnly Date, decimal ReturnPct);
 
+    private sealed record WeightedPnlContribution(
+        string Ticker,
+        DateOnly DecisionDate,
+        decimal ContributionPct);
+
+    private sealed record AbsolutePnlConcentrationResult(
+        decimal LargestTickerContributionPct,
+        decimal LargestMonthContributionPct,
+        decimal LargestFormationContributionPct);
+
+    private sealed record BestMonthAudit(
+        string? BestMonth,
+        decimal? MeanWithoutBestMonthPct);
+
     private sealed record AuditGroupKey(
         string Cell,
         string Segment,
@@ -361,9 +641,9 @@ public sealed record MomentumRobustnessAudit(
     decimal EqualWeightedFormationMeanNetReturnPct,
     decimal PositiveFormationRatePct,
     string TopTicker,
-    decimal TopTickerTotalNetReturnPct,
+    decimal TopTickerEqualWeightedPnlContributionPct,
     string BottomTicker,
-    decimal BottomTickerTotalNetReturnPct,
+    decimal BottomTickerEqualWeightedPnlContributionPct,
     DateOnly TopFormationDate,
     decimal TopFormationMeanNetReturnPct,
     DateOnly BottomFormationDate,
@@ -381,6 +661,44 @@ public sealed record MomentumRobustnessAudit(
     public decimal GatePassRatePct { get; init; }
 
     public int CashSlotObservationCount { get; init; }
+
+    public decimal LargestTickerAbsolutePnlContributionPct { get; init; }
+
+    public decimal LargestMonthAbsolutePnlContributionPct { get; init; }
+
+    public decimal LargestFormationAbsolutePnlContributionPct { get; init; }
+
+    public string? BestMonth { get; init; }
+
+    public decimal? MeanNetReturnWithoutBestMonthPct { get; init; }
+
+    public IReadOnlyList<MomentumLeaveOneOutAudit> LeaveOneTicker { get; init; } = [];
+
+    public IReadOnlyList<MomentumLeaveOneOutAudit> LeaveOneSector { get; init; } = [];
+
+    public IReadOnlyList<MomentumLeaveOneOutAudit> LeaveOneYear { get; init; } = [];
+
+    public IReadOnlyList<MomentumCostStressAudit> CostStress { get; init; } = [];
+
+    public IReadOnlyList<string> RobustnessBlockers { get; init; } = [];
+}
+
+public sealed record MomentumLeaveOneOutAudit(
+    string Dimension,
+    string ExcludedValue,
+    int FormationDateCount,
+    decimal EqualWeightedFormationMeanNetReturnPct);
+
+public sealed record MomentumCostStressAudit(
+    decimal CostMultiplier,
+    int FormationDateCount,
+    decimal EqualWeightedFormationMeanNetReturnPct);
+
+public static class MomentumRobustnessDimension
+{
+    public const string Ticker = "ticker";
+    public const string Sector = "sector";
+    public const string Year = "year";
 }
 
 public sealed record MomentumPortfolioPathAudit(
