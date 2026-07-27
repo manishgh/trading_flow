@@ -167,7 +167,9 @@ available evidence.
 - Local secrets, paper state, and cached candles are preserved unless explicitly
   removed.
 
-The detailed research rules are in
-[Non-ML Strategy Research Program](research/non-ml-strategy-research-program.md);
-the implementation decision and unresolved evidence are in
-[Research Implementation Status](research/non-ml-strategy-research-implementation-status.md).
+## Related Research Documents
+
+- [Non-ML Strategy Research Program](./research/non-ml-strategy-research-program.md) -
+  binding research rules, evidence requirements, validation, and promotion gates.
+- [Research Implementation Status](./research/non-ml-strategy-research-implementation-status.md) -
+  current implementation decision, verified coverage, and unresolved evidence.
