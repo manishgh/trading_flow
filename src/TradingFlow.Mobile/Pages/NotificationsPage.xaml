@@ -33,7 +33,7 @@
                         </Grid>
                     </Border>
 
-                    <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                    <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="8">
                         <Button x:Name="AllButton"
                                 Text="All"
                                 Clicked="OnFilterSelected"
@@ -44,10 +44,15 @@
                                 Clicked="OnFilterSelected"
                                 CommandParameter="signal" />
                         <Button x:Name="SystemButton"
-                                Grid.Column="2"
-                                Text="System"
+                               Grid.Column="2"
+                               Text="System"
+                               Clicked="OnFilterSelected"
+                               CommandParameter="system" />
+                        <Button x:Name="OrdersButton"
+                                Grid.Column="3"
+                                Text="Orders"
                                 Clicked="OnFilterSelected"
-                                CommandParameter="system" />
+                                CommandParameter="order" />
                     </Grid>
 
                     <Button Text="Refresh Activity"

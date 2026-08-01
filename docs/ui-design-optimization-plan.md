@@ -1,8 +1,12 @@
 # TradingFlow UI Accessibility And Trading-Desk Redesign Plan
 
-Status: approved design plan; implementation not started
+Status: implemented through UI6; re-audited 2026-08-01
 
 Audit date: 2026-07-22
+
+Implementation evidence is maintained in `docs/ui-verification-matrix.md`. Automated completion
+does not replace the physical-device TalkBack, Android Accessibility Scanner, or 200% font-scale
+release gates documented there.
 
 Applies to:
 

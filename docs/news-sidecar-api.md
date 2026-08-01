@@ -4,7 +4,8 @@ The Go news sidecar is used by paper and live modes to provide a fast event/sent
 
 ## Mode Config
 
-Example: `configs/paper/news/manual-webhook.yaml`
+News settings are embedded in the selected paper/live run profile; there is no
+separate news-config file. A manual-webhook profile uses this block:
 
 ```yaml
 enabled: true
@@ -20,7 +21,7 @@ veto:
   negative_threshold: -0.6
 ```
 
-Backtest example: `configs/backtest/news/disabled.yaml`
+Backtests disable news in the run profile:
 
 ```yaml
 enabled: false
@@ -106,4 +107,3 @@ When no active news exists:
   "analyzed_by": "none"
 }
 ```
-

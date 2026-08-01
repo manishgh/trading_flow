@@ -405,9 +405,12 @@ public sealed class RunConfigWriter
     public void DeleteTempConfig(string configPath)
     {
         var fullPath = Path.GetFullPath(configPath);
-        var isSafeToDelete = fullPath.Contains("backtest", StringComparison.OrdinalIgnoreCase)
-            && fullPath.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
-            && !fullPath.EndsWith("finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml", StringComparison.OrdinalIgnoreCase);
+        var tempRoot = Path.GetFullPath(Path.Combine(paths.BacktestConfigsRoot, "temp"));
+        var relativePath = Path.GetRelativePath(tempRoot, fullPath);
+        var isSafeToDelete = !Path.IsPathRooted(relativePath)
+            && !relativePath.Equals("..", StringComparison.Ordinal)
+            && !relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            && fullPath.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase);
 
         if (isSafeToDelete && File.Exists(fullPath))
         {

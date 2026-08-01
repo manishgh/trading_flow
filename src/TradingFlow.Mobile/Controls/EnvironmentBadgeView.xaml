@@ -2,24 +2,39 @@
 <ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="TradingFlow.Mobile.Controls.EnvironmentBadgeView"
-             SemanticProperties.Description="Paper trading environment">
-    <Border Padding="9,5"
+             SemanticProperties.Description="Paper trading environment, New York market time, and device local time">
+    <Border Padding="8,5"
             BackgroundColor="{StaticResource SurfaceSubtle}"
             Stroke="{StaticResource BorderDefault}"
             StrokeShape="RoundRectangle 6"
             HorizontalOptions="End"
             VerticalOptions="Center">
-        <HorizontalStackLayout Spacing="6">
-            <BoxView WidthRequest="8"
-                     HeightRequest="8"
-                     CornerRadius="4"
-                     Color="{StaticResource StateWarning}"
-                     VerticalOptions="Center" />
-            <Label Text="PAPER"
+        <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="1">
+            <HorizontalStackLayout Spacing="5">
+                <BoxView WidthRequest="7"
+                         HeightRequest="7"
+                         CornerRadius="4"
+                         Color="{StaticResource StateWarning}"
+                         VerticalOptions="Center" />
+                <Label Text="PAPER"
+                       FontAttributes="Bold"
+                       FontSize="10"
+                       TextColor="{StaticResource StateWarning}"
+                       VerticalTextAlignment="Center" />
+            </HorizontalStackLayout>
+            <Label x:Name="MarketClockLabel"
+                   Grid.Column="1"
                    FontAttributes="Bold"
-                   FontSize="12"
-                   TextColor="{StaticResource StateWarning}"
-                   VerticalTextAlignment="Center" />
-        </HorizontalStackLayout>
+                   FontSize="10"
+                   HorizontalTextAlignment="End"
+                   LineBreakMode="NoWrap" />
+            <Label x:Name="LocalClockLabel"
+                   Grid.Row="1"
+                   Grid.ColumnSpan="2"
+                   FontSize="10"
+                   TextColor="{StaticResource TextSecondary}"
+                   HorizontalTextAlignment="End"
+                   LineBreakMode="NoWrap" />
+        </Grid>
     </Border>
 </ContentView>

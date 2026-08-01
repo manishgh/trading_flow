@@ -23,6 +23,9 @@
             <a asp-page="/RunningTrades"
                class="@(IsCurrent("/RunningTrades") ? "active" : null)"
                aria-current="@(IsCurrent("/RunningTrades") ? "page" : null)">Positions</a>
+            <a asp-page="/Orders"
+               class="@(IsCurrent("/Orders", "/OrderTicket") ? "active" : null)"
+               aria-current="@(IsCurrent("/Orders", "/OrderTicket") ? "page" : null)">Orders</a>
             <a asp-page="/Backtests"
                class="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "active" : null)"
                aria-current="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "page" : null)">Research</a>
@@ -30,11 +33,18 @@
                class="@(IsCurrent("/Paper", "/PaperJob", "/Warmup", "/Wishlists") ? "active" : null)"
                aria-current="@(IsCurrent("/Paper", "/PaperJob", "/Warmup", "/Wishlists") ? "page" : null)">Operations</a>
         </nav>
+        <div class="topbar-clocks"
+             data-market-time-zone="@TradingFlow.Earnings.EarningsTimeZones.NewYorkClientId"
+             aria-label="Market and local clocks">
+            <span><strong id="market-clock-city">Market</strong><time id="market-clock-time">--:--</time></span>
+            <span><strong id="local-clock-city">Local</strong><time id="local-clock-time">--:--</time></span>
+        </div>
     </header>
-    <main id="main-content" class="shell" tabindex="-1">
+    <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
         @RenderBody()
     </main>
 
+    <script src="~/js/site.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

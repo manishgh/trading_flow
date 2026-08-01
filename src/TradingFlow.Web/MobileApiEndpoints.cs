@@ -438,6 +438,44 @@ public static class MobileApiEndpoints
                 filtered.Count));
         });
 
+        group.MapGet("/orders", async (
+            string? state,
+            int? limit,
+            TradingFlow.Domain.Persistence.IOrderActivityQuery orders,
+            CancellationToken cancellationToken) =>
+        {
+            TradingFlow.Domain.Orders.OrderState? selectedState = null;
+            if (!String.IsNullOrWhiteSpace(state))
+            {
+                if (!Enum.TryParse<TradingFlow.Domain.Orders.OrderState>(state, true, out var parsedState))
+                {
+                    return Results.BadRequest($"Unknown order state '{state}'.");
+                }
+
+                selectedState = parsedState;
+            }
+
+            var snapshots = await orders.ListRecentAsync(selectedState, limit ?? 200, cancellationToken);
+            return Results.Ok(snapshots.Select(snapshot => new MobileOrderActivityResponse(
+                snapshot.RunId,
+                snapshot.ClientOrderId,
+                snapshot.BrokerOrderId,
+                snapshot.StrategyId,
+                snapshot.Symbol,
+                snapshot.Side,
+                snapshot.OrderType,
+                snapshot.TimeInForce,
+                snapshot.RequestedQuantity,
+                snapshot.LimitPrice,
+                snapshot.StopPrice,
+                snapshot.State.ToString(),
+                snapshot.CreatedAtUtc,
+                snapshot.UpdatedAtUtc,
+                snapshot.FilledQuantity,
+                snapshot.FillPrice,
+                snapshot.EventSource)));
+        });
+
         group.MapGet("/backtests/jobs", (BacktestJobService backtestJobs) =>
             Results.Ok(backtestJobs.List()));
 

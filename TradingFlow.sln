@@ -1,4 +1,4 @@
-
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
@@ -32,6 +32,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingFlow.Research.Workflows", "src\TradingFlow.Research.Workflows\TradingFlow.Research.Workflows.csproj", "{66D50619-0482-4320-8EEB-53F48FC76B85}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingFlow.Research.Orchestration", "src\TradingFlow.Research.Orchestration\TradingFlow.Research.Orchestration.csproj", "{9F745906-C63A-40D1-A560-286678FB445D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingFlow.Earnings", "src\TradingFlow.Earnings\TradingFlow.Earnings.csproj", "{D0C14736-3955-4573-BFDC-F070202728F7}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -211,6 +213,18 @@ Global
 		{9F745906-C63A-40D1-A560-286678FB445D}.Release|x64.Build.0 = Release|Any CPU
 		{9F745906-C63A-40D1-A560-286678FB445D}.Release|x86.ActiveCfg = Release|Any CPU
 		{9F745906-C63A-40D1-A560-286678FB445D}.Release|x86.Build.0 = Release|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Debug|x64.Build.0 = Debug|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Debug|x86.Build.0 = Debug|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Release|x64.ActiveCfg = Release|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Release|x64.Build.0 = Release|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Release|x86.ActiveCfg = Release|Any CPU
+		{D0C14736-3955-4573-BFDC-F070202728F7}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -230,5 +244,6 @@ Global
 		{4BDBC1A6-7DD9-418E-8074-AB365F60FCD9} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{66D50619-0482-4320-8EEB-53F48FC76B85} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{9F745906-C63A-40D1-A560-286678FB445D} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{D0C14736-3955-4573-BFDC-F070202728F7} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

@@ -169,10 +169,12 @@ kubectl apply -f deploy/aks/trading-service-job.yaml
 kubectl logs job/trading-flow-backtest -n trading-flow
 ```
 
-The job uses the dedicated `TradingFlow.Worker` host. Set these environment variables in `deploy/aks/trading-service-job.yaml`:
+The job runs the CLI service image. Before applying the template, persist a
+wishlist-resolved run config and replace `REPLACE_WITH_GENERATED_RUN_CONFIG`
+in `deploy/aks/trading-service-job.yaml` with its mounted path:
 
 ```text
-TRADINGFLOW_RUN_CONFIGS=configs/backtest/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml
+TRADINGFLOW_RUN_CONFIGS=REPLACE_WITH_GENERATED_RUN_CONFIG
 TRADINGFLOW_RESULT_OWNER=worker
 TRADINGFLOW_MAX_PARALLEL_RUNS=1
 ```

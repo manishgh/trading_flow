@@ -7,12 +7,17 @@ using TradingFlow.Data.Backups;
 using TradingFlow.Data.Candles;
 using TradingFlow.Data.Context;
 using TradingFlow.Data.News;
+using TradingFlow.Data.Earnings;
 using TradingFlow.Data.Wishlists;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Domain.Wishlists;
+using TradingFlow.Domain.Earnings;
+using TradingFlow.Domain.News;
+using TradingFlow.Earnings;
+using TradingFlow.Finviz;
 using TradingFlow.Web;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Wishlists;
@@ -32,6 +37,11 @@ var uiTestMode = String.Equals(
     Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_MODE"),
     "true",
     StringComparison.OrdinalIgnoreCase);
+var finvizApiKey = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ??
+    (OperatingSystem.IsWindows()
+        ? Environment.GetEnvironmentVariable("FINVIZ_API_KEY", EnvironmentVariableTarget.User)
+        : null) ??
+    String.Empty;
 if (builder.Environment.IsDevelopment())
 {
     builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
@@ -86,8 +96,15 @@ builder.Services.AddSingleton<PaperEnvironmentService>();
 builder.Services.AddSingleton<PaperJobService>();
 builder.Services.AddSingleton<MobileAutomationService>();
 builder.Services.AddSingleton<SqliteNewsFeedRepository>();
+builder.Services.AddSingleton<INewsFeedRepository>(serviceProvider =>
+    serviceProvider.GetRequiredService<SqliteNewsFeedRepository>());
 builder.Services.AddSingleton<TradingFlow.Domain.Wishlists.IWishlistRepository, SqliteWishlistRepository>();
 builder.Services.AddSingleton<ArticleTextFetcher>();
+builder.Services.AddHttpClient<OfficialMarketNewsProvider>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(20);
+    client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "TradingFlow/1.0");
+});
 builder.Services.AddSingleton<NewsFeedService>();
 if (!uiTestMode)
 {
@@ -99,6 +116,22 @@ builder.Services.AddSingleton<WishlistBreakoutEvaluator>();
 builder.Services.AddSingleton<WishlistMarketMonitor>();
 builder.Services.AddSingleton<WishlistDeskService>();
 builder.Services.AddSingleton<OperationalStatusService>();
+builder.Services.AddSingleton<IEarningsRepository, SqliteEarningsRepository>();
+builder.Services.AddSingleton(EarningsMonitorOptions.Default);
+builder.Services.AddSingleton<EarningsAnalyzer>();
+builder.Services.AddSingleton<EarningsMarketStateLoader>();
+builder.Services.AddSingleton(serviceProvider => new FinvizClient(
+    new HttpClient { Timeout = TimeSpan.FromSeconds(30) },
+    FinvizOptions.CreateDefault() with
+    {
+        AuthToken = finvizApiKey
+    },
+    serviceProvider.GetRequiredService<IRawArchiveWriter>()));
+builder.Services.AddSingleton<EarningsMonitor>();
+if (!uiTestMode && !String.IsNullOrWhiteSpace(finvizApiKey))
+{
+    builder.Services.AddHostedService<EarningsMonitorHostedService>();
+}
 var predictorBaseUrlText = builder.Configuration["MarketPredictor:BaseUrl"]
     ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MARKET_PREDICTOR_URL");
 var predictorBaseUri = Uri.TryCreate(predictorBaseUrlText, UriKind.Absolute, out var configuredPredictorUri)
@@ -164,6 +197,7 @@ builder.Services.AddSingleton<TradingFlow.Domain.Locking.ITickerLockService, Tra
 builder.Services.AddSingleton<TradingFlow.Domain.Orders.IOrderStateRepository, TradingFlow.Data.Orders.SqliteOrderStateRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderIntentRepository, TradingFlow.Data.Orders.SqliteOrderIntentRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderEventRepository, TradingFlow.Data.Orders.SqliteOrderEventRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderActivityQuery, TradingFlow.Data.Orders.SqliteOrderActivityQuery>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IPositionLedgerRepository, TradingFlow.Data.Orders.SqlitePositionLedgerRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IReconciliationRepository, TradingFlow.Data.Orders.SqliteReconciliationRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.ICandidateRepository, TradingFlow.Data.Orders.SqliteCandidateRepository>();
@@ -320,6 +354,7 @@ app.UseStaticFiles();
 app.UseRouting();
 app.MapRazorPages();
 app.MapTradingFlowMobileApi();
+app.MapTradingFlowEarningsApi();
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "TradingFlow.Web" }));
 app.MapGet("/health/trading-readiness", (
     IOrderSynchronizationCoordinator synchronization,

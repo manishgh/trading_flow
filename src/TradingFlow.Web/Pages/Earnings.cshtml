@@ -1,0 +1,64 @@
+@page
+@{
+    ViewData["Title"] = "Earnings Calendar";
+    ViewData["MainClass"] = "earnings-shell";
+}
+
+<header class="page-header earnings-page-header">
+    <div>
+        <h1>Earnings Calendar</h1>
+        <p>Upcoming releases, completed-bar confirmation, and the news evidence behind each assessment.</p>
+    </div>
+    <button id="earnings-refresh" class="button secondary" type="button">Refresh</button>
+</header>
+
+<section class="earnings-monitor-strip" aria-live="polite" aria-atomic="true">
+    <strong id="earnings-status">Loading earnings calendar...</strong>
+    <span id="earnings-updated" class="muted">Waiting for the first update.</span>
+</section>
+
+<section class="earnings-filter-bar" aria-label="Earnings filters">
+    <div class="earnings-filter-group">
+        <span class="earnings-filter-label">Release session</span>
+        <div id="earnings-session-filters" class="earnings-filter-options" role="group" aria-label="Release session">
+            <button type="button" class="earnings-filter active" data-filter-value="all">All sessions</button>
+            <button type="button" class="earnings-filter" data-filter-value="beforeMarketOpen">Pre-market</button>
+            <button type="button" class="earnings-filter" data-filter-value="duringMarket">Market hours</button>
+            <button type="button" class="earnings-filter" data-filter-value="afterMarketClose">Post-market</button>
+        </div>
+    </div>
+    <div class="earnings-filter-group">
+        <span class="earnings-filter-label">Market cap</span>
+        <div id="earnings-cap-filters" class="earnings-filter-options" role="group" aria-label="Market capitalization">
+            <button type="button" class="earnings-filter active" data-filter-value="all">All caps</button>
+            <button type="button" class="earnings-filter" data-filter-value="under10b">Under $10B</button>
+            <button type="button" class="earnings-filter" data-filter-value="10bTo50b">$10B-$50B</button>
+            <button type="button" class="earnings-filter" data-filter-value="50bTo100b">$50B-$100B</button>
+            <button type="button" class="earnings-filter" data-filter-value="100bPlus">$100B+</button>
+            <button type="button" class="earnings-filter" data-filter-value="unknown">Cap unknown</button>
+        </div>
+    </div>
+</section>
+
+<div class="earnings-desk-layout">
+    <section id="earnings-feed" class="earnings-chronology" aria-label="Chronological earnings calendar"></section>
+
+    <aside class="earnings-evidence-panel" aria-labelledby="earnings-news-title">
+        <header class="earnings-evidence-header">
+            <div>
+                <h2 id="earnings-news-title">News &amp; Evidence</h2>
+                <p id="earnings-news-window" class="muted">Loading the current evidence window...</p>
+            </div>
+            <span id="earnings-news-count" class="status">0</span>
+        </header>
+        <div id="earnings-news-feed" class="earnings-news-feed" aria-live="polite"></div>
+    </aside>
+</div>
+
+<template id="earnings-empty-template">
+    <div class="earnings-empty muted">No earnings events or evidence are available for this period.</div>
+</template>
+
+@section Scripts {
+    <script src="~/js/earnings.js" asp-append-version="true"></script>
+}

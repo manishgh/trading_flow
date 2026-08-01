@@ -9,7 +9,7 @@ public sealed class IndicatorEngine
     private const int Rsi2Period = 2;
     private const int AtrPeriod = 14;
     private const int BollingerPeriod = 20;
-    private const int RelativeVolumeLookbackSessions = 63;
+    public const int RelativeVolumeLookbackSessions = 63;
     private const int RelativeVolumeMinimumComparableBars = 5;
     private static readonly TimeZoneInfo ExchangeTimeZone = ResolveExchangeTimeZone();
 
@@ -64,7 +64,9 @@ public sealed class IndicatorEngine
                 Ema5: standardIndicators.Ema5[i],
                 Adx: standardIndicators.Adx[i],
                 Obv: standardIndicators.Obv[i],
-                Rsi2: standardIndicators.Rsi2[i]));
+                Rsi2: standardIndicators.Rsi2[i],
+                SlotRelativeVolumeSampleCount: slotVolumeBaseline.SampleCount[i],
+                SessionRelativeVolumeSampleCount: sessionVolumeBaseline.SampleCount[i]));
         }
 
         return snapshots;

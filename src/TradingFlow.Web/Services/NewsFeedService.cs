@@ -3,21 +3,24 @@ using TradingFlow.Alpaca;
 using TradingFlow.Data.News;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.News;
+using TradingFlow.Domain.Earnings;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Earnings;
 using TradingFlow.Finviz;
 using TradingFlow.Web.Models;
+using System.Text.RegularExpressions;
 
 namespace TradingFlow.Web.Services;
 
 /// <summary>
-/// Maintains a small rolling news cache for mobile and operator views. Strategy
+/// Maintains the rolling news cache for mobile and operator views. Strategy
 /// execution still uses the configured catalyst provider directly, while this
 /// service gives us a continuous, low-latency feed to inspect.
 /// </summary>
 public sealed class NewsFeedService : BackgroundService
 {
-    private static readonly TimeSpan RetentionWindow = TimeSpan.FromHours(4);
+    private static readonly TimeSpan RetentionWindow = TimeSpan.FromHours(72);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
 
     private readonly SimpleYamlReader yamlReader;
@@ -27,7 +30,11 @@ public sealed class NewsFeedService : BackgroundService
     private readonly ConfigCatalogService catalog;
     private readonly AlpacaCredentialProvider alpacaCredentials;
     private readonly ArticleTextFetcher articleTextFetcher;
+    private readonly IEarningsRepository earningsRepository;
+    private readonly OfficialMarketNewsProvider officialNews;
+    private readonly TimeProvider clock;
     private readonly ILogger<NewsFeedService> logger;
+    private readonly SemaphoreSlim refreshGate = new(1, 1);
 
     public NewsFeedService(
         SimpleYamlReader yamlReader,
@@ -37,6 +44,9 @@ public sealed class NewsFeedService : BackgroundService
         ConfigCatalogService catalog,
         AlpacaCredentialProvider alpacaCredentials,
         ArticleTextFetcher articleTextFetcher,
+        IEarningsRepository earningsRepository,
+        OfficialMarketNewsProvider officialNews,
+        TimeProvider clock,
         ILogger<NewsFeedService> logger)
     {
         this.yamlReader = yamlReader;
@@ -46,6 +56,9 @@ public sealed class NewsFeedService : BackgroundService
         this.catalog = catalog;
         this.alpacaCredentials = alpacaCredentials;
         this.articleTextFetcher = articleTextFetcher;
+        this.earningsRepository = earningsRepository;
+        this.officialNews = officialNews;
+        this.clock = clock;
         this.logger = logger;
     }
 
@@ -59,7 +72,7 @@ public sealed class NewsFeedService : BackgroundService
         var items = await repository.GetRecentAsync(windowStart, 200, ticker, cancellationToken);
         return new MobileNewsFeedResponse(
             true,
-            "finviz+alpaca",
+            officialNews.IsSecConfigured ? "finviz+alpaca+fed+sec" : "finviz+alpaca+fed",
             $"Rolling {clampedHours}h feed. Items older than {RetentionWindow.TotalHours:F0}h are pruned.",
             items
                 .GroupBy(ArticleDedupeKey, StringComparer.OrdinalIgnoreCase)
@@ -119,24 +132,66 @@ public sealed class NewsFeedService : BackgroundService
 
     public async Task RefreshOnceAsync(CancellationToken cancellationToken)
     {
-        var windowStart = DateTimeOffset.UtcNow.Subtract(RetentionWindow);
-        var events = new List<CatalystEvent>();
-        events.AddRange(await LoadFinvizNewsAsync(cancellationToken));
-        events.AddRange(await LoadAlpacaNewsAsync(cancellationToken));
-        events = events
-            .Where(item => item.Timestamp >= windowStart)
-            .OrderByDescending(item => item.Timestamp)
+        await refreshGate.WaitAsync(cancellationToken);
+        try
+        {
+            var nowUtc = clock.GetUtcNow();
+            var evidenceWindow = EarningsNewsWindowPolicy.Resolve(nowUtc);
+            var retentionStartUtc = nowUtc.Subtract(RetentionWindow);
+            var earningsTickers = await GetCurrentEarningsTickersAsync(nowUtc, cancellationToken);
+            var events = new List<CatalystEvent>();
+            events.AddRange(await LoadFinvizNewsAsync(cancellationToken));
+            events.AddRange(await LoadAlpacaNewsAsync(earningsTickers, evidenceWindow.StartUtc, nowUtc, cancellationToken));
+            events.AddRange(await officialNews.GetEventsAsync(earningsTickers, evidenceWindow.StartUtc, cancellationToken));
+            events = events
+                .Where(item => item.Timestamp >= retentionStartUtc)
+                .OrderByDescending(item => item.Timestamp)
+                .Take(500)
+                .ToList();
+
+            var existing = await repository.GetRecentAsync(retentionStartUtc, 500, null, cancellationToken);
+            var existingKeys = existing
+                .Select(StorageDedupeKey)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var unseenEvents = events
+                .Where(item => !existingKeys.Contains(StorageDedupeKey(item)))
+                .ToArray();
+            var enrichedEvents = await EnrichNewsAsync(unseenEvents, cancellationToken);
+            await repository.UpsertAsync(enrichedEvents, cancellationToken);
+            await repository.PruneOlderThanAsync(retentionStartUtc, cancellationToken);
+
+            logger.LogInformation(
+                "Rolling news feed refresh stored {EventCount} event(s). Providers={Providers}",
+                enrichedEvents.Count,
+                String.Join(",", enrichedEvents.Select(x => x.Provider ?? "unknown").Distinct(StringComparer.OrdinalIgnoreCase)));
+        }
+        finally
+        {
+            refreshGate.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<EarningsNewsEvidenceResponse>> GetEarningsTimelineAsync(
+        IReadOnlyCollection<string> tickers,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        var normalizedTickers = tickers
+            .Select(ticker => ticker.Trim().ToUpperInvariant())
+            .Where(ticker => ticker.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var window = EarningsNewsWindowPolicy.Resolve(nowUtc);
+        var stored = await repository.GetRecentAsync(window.StartUtc, 500, null, cancellationToken);
+
+        return stored
+            .Where(item => normalizedTickers.Contains(item.Ticker) ||
+                (item.Ticker.Equals("MARKET", StringComparison.OrdinalIgnoreCase) && IsRelevantMarketEvidence(item)))
+            .GroupBy(ArticleDedupeKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => ToEarningsEvidence(group, normalizedTickers))
+            .OrderByDescending(item => item.PublishedAtUtc)
+            .ThenBy(item => item.Headline, StringComparer.OrdinalIgnoreCase)
             .Take(120)
-            .ToList();
-
-        var enrichedEvents = await EnrichNewsAsync(events, cancellationToken);
-        await repository.UpsertAsync(enrichedEvents, cancellationToken);
-        await repository.PruneOlderThanAsync(windowStart, cancellationToken);
-
-        logger.LogInformation(
-            "Rolling news feed refresh stored {EventCount} event(s). Providers={Providers}",
-            enrichedEvents.Count,
-            String.Join(",", enrichedEvents.Select(x => x.Provider ?? "unknown").Distinct(StringComparer.OrdinalIgnoreCase)));
+            .ToArray();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -193,7 +248,11 @@ public sealed class NewsFeedService : BackgroundService
             .ToArray();
     }
 
-    private async Task<IReadOnlyList<CatalystEvent>> LoadAlpacaNewsAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<CatalystEvent>> LoadAlpacaNewsAsync(
+        IReadOnlyCollection<string> earningsTickers,
+        DateTimeOffset windowStart,
+        DateTimeOffset windowEnd,
+        CancellationToken cancellationToken)
     {
         if (!alpacaCredentials.IsConfigured)
         {
@@ -203,10 +262,11 @@ public sealed class NewsFeedService : BackgroundService
 
         var tickers = catalog.GetPaperConfigs()
             .SelectMany(config => config.Config.Tickers)
+            .Concat(earningsTickers)
             .Select(ticker => ticker.Trim().ToUpperInvariant())
             .Where(ticker => ticker.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(40)
+            .Take(200)
             .ToArray();
         if (tickers.Length == 0)
         {
@@ -225,8 +285,6 @@ public sealed class NewsFeedService : BackgroundService
             sentimentAnalyzer: new VaderSentimentAnalyzer(),
             maxArticlesPerTicker: 25);
 
-        var windowEnd = DateTimeOffset.UtcNow;
-        var windowStart = windowEnd.Subtract(RetentionWindow);
         var tasks = tickers.Select(ticker => provider.GetCatalystsAsync(ticker, windowStart, windowEnd, cancellationToken));
         return (await Task.WhenAll(tasks))
             .SelectMany(x => x)
@@ -416,12 +474,12 @@ public sealed class NewsFeedService : BackgroundService
 
     private static string ArticleDedupeKey(PersistedNewsItem item)
     {
-        return $"{item.Provider}|{NormalizeArticleIdentity(item.Url, item.Headline)}";
+        return NormalizeHeadlineIdentity(item.Headline);
     }
 
     private static string MobileArticleDedupeKey(MobileNewsItem item)
     {
-        return $"{item.Provider}|{NormalizeArticleIdentity(item.Url, item.Headline)}";
+        return NormalizeHeadlineIdentity(item.Headline);
     }
 
     private static string NormalizeArticleIdentity(string? url, string? headline)
@@ -429,6 +487,101 @@ public sealed class NewsFeedService : BackgroundService
         var identity = !String.IsNullOrWhiteSpace(url) ? url.Trim() : headline?.Trim() ?? "news";
         return identity.ToLowerInvariant();
     }
+
+    private async Task<IReadOnlyList<string>> GetCurrentEarningsTickersAsync(
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        var operatorDate = DateOnly.FromDateTime(
+            TimeZoneInfo.ConvertTime(nowUtc, EarningsTimeZones.OperatorLocal).DateTime);
+        var nextBusinessDate = EarningsCalendarDates.NextWeekday(operatorDate);
+        var calendar = await earningsRepository.GetCalendarAsync(
+            operatorDate,
+            nextBusinessDate,
+            tickers: null,
+            cancellationToken);
+        return calendar
+            .Select(item => item.Ticker.Trim().ToUpperInvariant())
+            .Where(ticker => ticker.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string StorageDedupeKey(CatalystEvent item) =>
+        $"{item.Provider}|{item.Ticker}|{NormalizeArticleIdentity(item.Url, item.Headline)}";
+
+    private static string StorageDedupeKey(PersistedNewsItem item) =>
+        $"{item.Provider}|{item.Ticker}|{NormalizeArticleIdentity(item.Url, item.Headline)}";
+
+    internal static string NormalizeHeadlineIdentity(string? headline)
+    {
+        var normalized = Regex.Replace(headline?.Trim().ToLowerInvariant() ?? "news", @"[^a-z0-9]+", " ");
+        return Regex.Replace(normalized, @"\s+", " ").Trim();
+    }
+
+    private static EarningsNewsEvidenceResponse ToEarningsEvidence(
+        IGrouping<string, PersistedNewsItem> group,
+        IReadOnlySet<string> earningsTickers)
+    {
+        var items = group.OrderByDescending(item => item.Timestamp).ToArray();
+        var first = items[0];
+        var relatedTickers = items
+            .Select(item => item.Ticker)
+            .Where(ticker => earningsTickers.Contains(ticker))
+            .ToArray();
+        var category = ClassifyEvidence(first);
+        return new EarningsNewsEvidenceResponse(
+            first.Timestamp.ToUniversalTime(),
+            FormatRelatedTickers(relatedTickers.Length > 0 ? relatedTickers : new[] { "MARKET" }),
+            category,
+            first.SentimentScore,
+            first.SentimentScore >= 0.15m ? "Bullish" : first.SentimentScore <= -0.15m ? "Bearish" : "Neutral",
+            NormalizeHeadline(first.Headline, first.Summary, first.Source, first.Provider),
+            NormalizeSummary(first.Summary, first.Headline),
+            String.Join(" + ", items.Select(item => item.Provider).Distinct(StringComparer.OrdinalIgnoreCase)),
+            first.Source,
+            first.Url,
+            ExplainEvidence(category));
+    }
+
+    private static string ClassifyEvidence(PersistedNewsItem item)
+    {
+        if (item.Provider.Equals("sec_edgar", StringComparison.OrdinalIgnoreCase)) return "SEC filing";
+        if (item.Provider.Equals("federal_reserve", StringComparison.OrdinalIgnoreCase)) return "Fed";
+        if (!item.Ticker.Equals("MARKET", StringComparison.OrdinalIgnoreCase)) return "Company";
+        return ContainsAny(item.Headline, MacroKeywords) ? "Macro" : "Market";
+    }
+
+    private static string ExplainEvidence(string category) => category switch
+    {
+        "Company" => "Direct company evidence can change earnings expectations, demand, guidance, or risk.",
+        "SEC filing" => "Official filing; verify the form, publication time, and disclosed earnings or guidance changes.",
+        "Fed" => "Federal Reserve policy can change rates, valuation multiples, liquidity, and market risk appetite.",
+        "Macro" => "Macro conditions can affect sector demand, financing costs, currencies, and valuation.",
+        _ => "Broad market context only; it is not a standalone entry signal."
+    };
+
+    private static bool IsRelevantMarketEvidence(PersistedNewsItem item) =>
+        item.Provider.Equals("federal_reserve", StringComparison.OrdinalIgnoreCase) ||
+        ContainsAny($"{item.Headline} {item.Summary}", MarketEvidenceKeywords);
+
+    private static bool ContainsAny(string? text, IReadOnlyCollection<string> keywords)
+    {
+        var value = text ?? String.Empty;
+        return keywords.Any(keyword => value.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static readonly string[] MacroKeywords =
+    [
+        "inflation", "cpi", "ppi", "jobs", "payroll", "unemployment", "gdp", "yield", "treasury",
+        "interest rate", "currency", "dollar", "oil", "energy", "tariff"
+    ];
+
+    private static readonly string[] MarketEvidenceKeywords =
+    [
+        .. MacroKeywords, "federal reserve", "fed ", "fomc", "powell", "sec filing", "earnings",
+        "guidance", "market", "nasdaq", "s&p 500"
+    ];
 
     internal static string FormatRelatedTickers(IEnumerable<string> tickers)
     {

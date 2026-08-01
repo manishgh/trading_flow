@@ -169,7 +169,7 @@ available evidence.
 
 ## Related Research Documents
 
-- [Non-ML Strategy Research Program](./research/non-ml-strategy-research-program.md) -
+- [Non-ML Strategy Research Program](research/non-ml-strategy-research-program.md) -
   binding research rules, evidence requirements, validation, and promotion gates.
-- [Research Implementation Status](./research/non-ml-strategy-research-implementation-status.md) -
+- [Research Implementation Status](research/non-ml-strategy-research-implementation-status.md) -
   current implementation decision, verified coverage, and unresolved evidence.

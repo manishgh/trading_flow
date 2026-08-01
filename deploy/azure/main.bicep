@@ -12,6 +12,9 @@ param webImage string
 @description('Container image for the C# TradingFlow service/CLI worker.')
 param tradingServiceImage string
 
+@description('Mounted path of a persisted, wishlist-resolved backtest run config.')
+param tradingRunConfigPath string
+
 @description('Container image for the Go news sentiment service.')
 param newsImage string
 
@@ -192,7 +195,7 @@ resource tradingJob 'Microsoft.App/jobs@2024-03-01' = {
           name: 'trading-service'
           image: tradingServiceImage
           args: [
-            'configs/backtest/semiconductors-research.yaml'
+            tradingRunConfigPath
           ]
           volumeMounts: [
             { volumeName: 'data', mountPath: '/app/data' }

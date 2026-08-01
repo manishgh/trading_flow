@@ -39,6 +39,7 @@ OHLCV candles
 | `TradingFlow.Backtesting` | Batch simulator (`BacktestRunner`) and `LiveRunner` (paper/live loop) built on the Engine. |
 | `TradingFlow.Data` | Persistence: CSV candles, SQLite (jobs, orders, wishlists, news), catalyst streamer, rolling warm-up cache. |
 | `TradingFlow.Alpaca` / `TradingFlow.Finviz` | Broker + market-data + news + screener providers behind Engine interfaces. |
+| `TradingFlow.Earnings` | Full earnings schedule/result monitoring and completed-bar reaction analysis; advisory only. |
 | `TradingFlow.Web` | ASP.NET Razor pages + `/api/mobile` for the app + SSE streams. Resolves config/credentials and calls Engine APIs; does **not** compute indicators. |
 | `TradingFlow.WarmupService` | Standalone service that maintains the rolling warm-up candle cache. Binds `:53120`. |
 | `TradingFlow.Mobile` | .NET MAUI Android client. |

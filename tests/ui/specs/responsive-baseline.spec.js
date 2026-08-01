@@ -3,6 +3,8 @@ import { expect, test } from "@playwright/test";
 const coreRoutes = [
   "/TradeDesk",
   "/RunningTrades",
+  "/Orders",
+  "/Earnings",
   "/Paper",
   "/Wishlists",
   "/Backtests",
@@ -36,6 +38,22 @@ test.describe("approved UI baseline", () => {
     await expect(page.locator('a[href="#main-content"]')).toHaveCount(1);
     await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Desk");
     await expect(page.locator('a[href="#"]')).toHaveCount(0);
+
+    const primaryLabels = await page.locator(".primary-nav a").evaluateAll(nodes =>
+      nodes.map(node => node.textContent.trim()));
+    expect(primaryLabels).toEqual(["Desk", "Positions", "Orders", "Research", "Operations"]);
+
+    await page.goto("/Orders");
+    await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Orders");
+  });
+
+  test("positions use reviewed exits and never auto-reload the document", async ({ page }) => {
+    await page.goto("/RunningTrades");
+    await expect(page.locator("#ExitReviewDialog")).toHaveCount(1);
+    await expect(page.locator('button[data-review-exit][type="submit"]')).toHaveCount(0);
+    const hasDocumentReloadTimer = await page.evaluate(() =>
+      [...document.scripts].some(script => script.textContent.includes("window.location.reload")));
+    expect(hasDocumentReloadTimer).toBe(false);
   });
 
   for (const viewport of viewports) {

@@ -115,6 +115,7 @@ az deployment group create `
   -p prefix=$prefix `
   -p webImage=$webImage `
   -p tradingServiceImage=$serviceImage `
+  -p tradingRunConfigPath=/app/configs/backtest/ui-runs/backtest-run.yaml `
   -p newsImage=$newsImage
 ```
 
@@ -126,10 +127,11 @@ az containerapp show -g $rg -n "$prefix-web" --query properties.configuration.in
 
 ## Run The C# Trading Job
 
-The job defaults to:
+The job template requires a persisted, wishlist-resolved run config. Replace
+the `tradingRunConfigPath` Bicep parameter before deployment:
 
 ```text
-configs/backtest/finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml
+tradingRunConfigPath=/app/configs/backtest/ui-runs/backtest-run.yaml
 ```
 
 Start it:

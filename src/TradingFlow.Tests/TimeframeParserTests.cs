@@ -32,7 +32,7 @@ public sealed class TimeframeParserTests
         var dailyBars = new BarResampler().Resample(sourceBars, "1d");
 
         Assert.Equal(2, dailyBars.Count);
-        Assert.Equal(new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero), dailyBars[0].Timestamp);
+        Assert.Equal(new DateTimeOffset(2026, 6, 8, 4, 0, 0, TimeSpan.Zero), dailyBars[0].Timestamp);
         Assert.Equal("1d", dailyBars[0].Timeframe);
         Assert.Equal(10m, dailyBars[0].Open);
         Assert.Equal(12m, dailyBars[0].High);

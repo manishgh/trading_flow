@@ -327,7 +327,7 @@ IDs: OPS-01..08, D4 resolution.
 1. Startup orchestrator (OPS-01): strict sequence config → clock → calendar → broker auth+ACC-12 → reconcile → streams+DATA-01 → self-tests (DATA-03, CAL-05) → arm; any failure → exit nonzero, no partial arming. Host-agnostic (generic host); **decide host here (D4)** and add the thin supervision wrapper (systemd unit or Windows service definition).
 2. Environment separation (OPS-02): separate config trees + separate SQLite DBs per profile; live requires `TRADING_LIVE_CONFIRM=YES-I-UNDERSTAND` + banner.
 3. Observability (OPS-05): metrics endpoint (stream ages, REST budget, gate counts by reject code, order latencies, reconcile status, risk vs limits, PDT counter, catalyst latency/budget, kill-switch states); alert channels page/notify — **OPEN Q3: delivery channel** (mobile push exists in this repo; email/other?); weekly synthetic alert test.
-4. Structured JSON logging with correlation IDs, no secrets (OPS-06); runbook `docs/runbook.md` covering startup/shutdown/kill+re-arm/reconcile/stream-outage/broker-outage/DR (OPS-07); deploy discipline + running-SHA on health endpoint (OPS-03); host NTP/UTC (OPS-08).
+4. Structured JSON logging with correlation IDs, no secrets (OPS-06); operator procedures are split between `docs/ui-operator-runbook.md`, `docs/database-backup-restore.md`, and `docs/research/research-operations-runbook.md`; remaining outage and re-arm procedures must be added before OPS-07 is complete; deploy discipline + running-SHA on health endpoint (OPS-03); host NTP/UTC (OPS-08).
 Accept: startup-gate failure tests (each step failing prevents arming); synthetic alert fires; runbook commands exist and work.
 
 ### S12 — TST completion + AUD adherence audit (M)

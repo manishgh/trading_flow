@@ -62,6 +62,195 @@ namespace TradingFlow.Data.Context.Migrations
                     b.ToTable("DecisionAudits");
                 });
 
+            modelBuilder.Entity("TradingFlow.Domain.Earnings.EarningsAnalysisSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("AnalyzedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BreakoutAssessment")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EarningsEventId")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("Ema10")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("Ema20")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("EventReturnPercent")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("LatestClose")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("LatestCompletedBarAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("MacdHistogram")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NewsHeadline")
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NewsProvider")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("NewsSentiment")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NewsUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("PreReleaseReferenceClose")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("PreReleaseReferenceHigh")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResultAssessment")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ResultNewsPublishedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("SlotRelativeVolume")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Ticker")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EarningsEventId", "AnalyzedAtUtc");
+
+                    b.HasIndex("Ticker", "AnalyzedAtUtc");
+
+                    b.ToTable("EarningsAnalysisSnapshots");
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Earnings.EarningsCalendarEvent", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(80)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CompanyName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("EpsActual")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("EpsEstimate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("EpsSurprisePercent")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("FirstSeenAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsScheduleEstimate")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("LastSeenAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("MarketCapMillions")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("OneDayPriceReactionPercent")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ProviderReceivedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ResultFirstSeenAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReleaseWindow")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("ReportDateExchange")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("ReportedEpsActual")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("ReportedEpsEstimate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("ReportedEpsSurprisePercent")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("RevenueActualMillions")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("RevenueEstimateMillions")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("RevenueSurprisePercent")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ScheduledAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceArtifactSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceUrl")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Ticker")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Provider");
+
+                    b.HasIndex("Ticker");
+
+                    b.HasIndex("ReportDateExchange", "ScheduledAtUtc");
+
+                    b.ToTable("EarningsCalendarEvents");
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Jobs.PersistedJob", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1333,6 +1522,15 @@ namespace TradingFlow.Data.Context.Migrations
                     b.HasIndex("WishlistId");
 
                     b.ToTable("WishlistSignals");
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Earnings.EarningsAnalysisSnapshot", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.Earnings.EarningsCalendarEvent", null)
+                        .WithMany()
+                        .HasForeignKey("EarningsEventId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Persistence.CandidateRecord", b =>

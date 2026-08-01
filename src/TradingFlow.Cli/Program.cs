@@ -902,9 +902,7 @@ if (args.Length > 0 && args[0].Equals("optimize", StringComparison.OrdinalIgnore
 
 if (args.Length > 0 && args[0].Equals("warm-candles", StringComparison.OrdinalIgnoreCase))
 {
-    var configPathForWarmup = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
-        ? args[1]
-        : Path.Combine("configs", "backtest", "finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml");
+    var configPathForWarmup = RequireRunConfigArgument(args, "warm-candles");
     var reader = new SimpleYamlReader();
     var run = reader.ReadBacktestRun(configPathForWarmup);
     var lookbackDays = ParseIntOption(args, "--days") ?? ResolveWarmupDataDays(run);
@@ -949,9 +947,7 @@ if (args.Length > 0 && args[0].Equals("warm-candles", StringComparison.OrdinalIg
 
 if (args.Length > 0 && args[0].Equals("warm-catalysts", StringComparison.OrdinalIgnoreCase))
 {
-    var configPathForWarmup = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal)
-        ? args[1]
-        : Path.Combine("configs", "backtest", "finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml");
+    var configPathForWarmup = RequireRunConfigArgument(args, "warm-catalysts");
     var reader = new SimpleYamlReader();
     var run = reader.ReadBacktestRun(configPathForWarmup);
     if (!run.News.Enabled)
@@ -1152,7 +1148,8 @@ static string ResolveRunConfigPath(string[] args)
 {
     if (args.Length == 0)
     {
-        return Path.Combine("configs", "backtest", "finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml");
+        throw new ArgumentException(
+            "A run config path is required. Usage: TradingFlow.Cli backtest <config-path>.");
     }
 
     if (args[0].Equals("backtest", StringComparison.OrdinalIgnoreCase) ||
@@ -1160,10 +1157,22 @@ static string ResolveRunConfigPath(string[] args)
     {
         return args.Length > 1
             ? args[1]
-            : Path.Combine("configs", "backtest", "finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml");
+            : throw new ArgumentException(
+                $"A run config path is required after '{args[0]}'.");
     }
 
     return args[0];
+}
+
+static string RequireRunConfigArgument(string[] args, string commandName)
+{
+    if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
+    {
+        throw new ArgumentException(
+            $"A run config path is required. Usage: TradingFlow.Cli {commandName} <config-path> [options].");
+    }
+
+    return args[1];
 }
 
 static TradingFlow.Engine.Abstractions.ICatalystProvider? CreateNewsProvider(TradingFlow.Domain.Backtesting.BacktestRunConfig run)

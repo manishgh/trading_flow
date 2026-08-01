@@ -140,3 +140,21 @@ Scanner remain manual release gates and are not inferred from the successful And
 The structural browser assertions are not a claim of complete WCAG 2.2 AA conformance. Physical
 Android screenshots, 200% font-scale checks, TalkBack walkthrough, and Android Accessibility Scanner
 remain documented manual release gates and must be completed on a connected device before release.
+
+## 2026-08-01 implementation drift audit
+
+- Restored the approved five-destination web navigation: Desk, Positions, Orders, Research, and
+  Operations. Earnings remains available from Research instead of consuming a primary destination.
+- Added the Orders surface and shared read contract for durable intent/event lifecycle state. Orders
+  are read from the immutable order journal, not reconstructed in Razor or JavaScript.
+- Added the same order lifecycle to Android Activity and restored the approved four-tab native shell:
+  Watch, Positions, Activity, and More. Earnings remains reachable from More.
+- Replaced automatic full-document refresh on Positions with stable keyed updates. Position exits now
+  require an explicit review dialog before the existing paper-exit handler is invoked.
+- Fixed the Earnings page's duplicate `main` landmark discovered by the expanded browser matrix.
+- Final automated verification: the full solution, including Android, builds with 0 warnings and 0
+  errors; 1,033 .NET unit/integration tests and 37 Playwright tests pass. The browser suite covers
+  Orders and Earnings plus the established route matrix at 320, 390, 768, 1024, and 1440 px.
+
+Physical-device screenshots, TalkBack, Accessibility Scanner, and 200% font-scale checks remain
+manual release gates and are not reported as complete by this audit.

@@ -44,8 +44,11 @@ TradingFlow currently operates within these hard boundaries:
   fails closed. The current integrated research decision is `RETAIN_RESEARCH`.
 
 See [TradingFlow Operating Boundaries](docs/operating-boundaries.md) for the binding
-contract and [Non-ML Strategy Research Program](docs/research/non-ml-strategy-research-program.md)
-for track-specific evidence and promotion rules.
+contract, [Non-ML Strategy Research Program](docs/research/non-ml-strategy-research-program.md)
+for track-specific evidence and promotion rules, and
+[Research Implementation Status](docs/research/non-ml-strategy-research-implementation-status.md)
+for the current decision, verified coverage, and unresolved evidence.
+The complete documentation map is in [Documentation Index](docs/README.md).
 
 ## Stack
 
@@ -70,6 +73,21 @@ $env:FINBERT_SENTIMENT_URL = "http://127.0.0.1:8088"
 ```
 
 See `sidecars/finbert-sentiment/README.md` for installation and Docker instructions.
+
+## Earnings Calendar
+
+The `/Earnings` web page and Android `Earnings` tab show every Finviz earnings event available
+for today and tomorrow. Finviz Elite provides schedules and reported EPS/revenue results;
+Alpaca SIP completed 5-minute bars and the shared news feed provide the post-release reaction.
+The API returns UTC, New York, and Amsterdam timestamps and explains every positive, mixed,
+negative, awaiting, insufficient-data, or possible-breakout assessment.
+
+The hosted earnings monitor continues while the UI is closed, re-evaluates every calendar ticker
+once per minute by default, and exposes its active cadence and last-analysis timestamp through the API.
+
+The monitor is advisory and cannot route orders. It archives raw provider JSON before parsing,
+records when results were first observable, excludes incomplete bars, and advances a persisted
+rolling candle cache incrementally. See [Earnings Calendar And Reaction Monitor](docs/earnings-calendar.md).
 
 ## Modes
 
@@ -111,6 +129,7 @@ Pages:
 - `/` dashboard and recent jobs.
 - `/Backtests` wishlist-driven backtest lab with strategy selection, editable strategy parameters, progress, result preview, winner, trades, and diagnostics.
 - `/Paper` paper-mode run launch from wishlists plus optional Finviz, Alpaca credential validation, live metrics, recent decisions, audit links, and broker controls.
+- `/Earnings` complete today/tomorrow earnings schedule, reported results, provider/news timestamps, and completed-bar breakout evidence.
 - `/Audit/{runName}` decision-tree audit for accepted, rejected, and no-signal evaluations.
 
 Backtest and paper universes come from database wishlists. Generated run files are internal audit artifacts only and should not be used as hand-maintained ticker lists.
@@ -120,8 +139,11 @@ Backtest and paper universes come from database wishlists. Generated run files a
 Generate or refresh a rolling normalized candle and indicator cache:
 
 ```powershell
-dotnet run --project src\TradingFlow.Cli -- warm-candles configs\backtest\finviz-reddit-ross-gapgo-bullflag-8-180d-10k-api-v2-confirmed-entry.yaml
+dotnet run --project src\TradingFlow.Cli -- warm-candles REPLACE_WITH_GENERATED_RUN_CONFIG
 ```
+
+The supplied run config must already contain the wishlist-resolved ticker set;
+the base backtest profiles intentionally contain no static tickers.
 
 The command writes atomic CSV replacements under a window-named folder such as `data/backtest/normalized/70d` by default and also writes `_warmup_manifest.json`. Backtests use `time_window.lookback_days` for the scoring window and `time_window.warmup_lookback_days` for data before that scoring window. Example: `lookback_days: 10` plus `warmup_lookback_days: 60` loads 70 days and scores only the last 10.
 

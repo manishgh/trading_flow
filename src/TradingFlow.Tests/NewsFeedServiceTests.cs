@@ -11,4 +11,13 @@ public class NewsFeedServiceTests
 
         Assert.Equal("INFQ, MSFT, MU, MARKET", display);
     }
+
+    [Fact]
+    public void HeadlineIdentity_CollapsesProviderPunctuationDifferences()
+    {
+        var first = NewsFeedService.NormalizeHeadlineIdentity("Fed holds rates: Powell speaks");
+        var second = NewsFeedService.NormalizeHeadlineIdentity("FED holds rates - Powell speaks!");
+
+        Assert.Equal(first, second);
+    }
 }

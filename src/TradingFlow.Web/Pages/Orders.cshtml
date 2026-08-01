@@ -1,0 +1,100 @@
+@page
+@model TradingFlow.Web.Pages.OrdersModel
+@using TradingFlow.Domain.Orders
+@{
+    ViewData["Title"] = "Orders";
+    static string StateLabel(OrderState state) => state switch
+    {
+        OrderState.PartiallyFilled => "Partially filled",
+        OrderState.CancelPending => "Cancel pending",
+        _ => state.ToString()
+    };
+    static string PriceSummary(TradingFlow.Domain.Persistence.OrderActivitySnapshot item) =>
+        item.FillPrice is { } fill ? $"Fill {fill:C2}" :
+        item.LimitPrice is { } limit ? $"Limit {limit:C2}" :
+        item.StopPrice is { } stop ? $"Stop {stop:C2}" : "Market";
+}
+
+<section class="orders-book" data-orders-page data-filter="@Model.Filter">
+    <div class="page-header">
+        <div>
+            <h1>Orders</h1>
+            <p>Durable broker-order lifecycle from intent through terminal state.</p>
+        </div>
+        <div class="actions">
+            <a class="button secondary" asp-page="/RunningTrades">Open positions</a>
+            <button class="button secondary" type="button" data-orders-refresh>Refresh</button>
+        </div>
+    </div>
+
+    <div class="trade-summary-grid" aria-label="Order summary">
+        <div class="summary-card"><span>Working</span><strong>@Model.WorkingCount</strong></div>
+        <div class="summary-card"><span>Filled</span><strong>@Model.FilledCount</strong></div>
+        <div class="summary-card"><span>Rejected</span><strong>@Model.RejectedCount</strong></div>
+        <div class="summary-card"><span>Cancelled / Expired</span><strong>@Model.ClosedCount</strong></div>
+    </div>
+
+    <nav class="source-tabs" aria-label="Order status filters">
+        @foreach (var (key, label) in TradingFlow.Web.Pages.OrdersModel.Filters)
+        {
+            var active = Model.Filter == key;
+            <a asp-page="/Orders" asp-route-filter="@key"
+               class="@(active ? "active" : null)"
+               aria-current="@(active ? "page" : null)">@label</a>
+        }
+    </nav>
+
+    <p id="OrdersConnection" class="muted" role="status" aria-live="polite">
+        Showing the latest persisted state. Checking for updates every 10 seconds.
+    </p>
+
+    @if (Model.Items.Count == 0)
+    {
+        <div class="empty-state" data-orders-empty>No orders match this status.</div>
+    }
+    else
+    {
+        <div class="table-scroll panel" role="region" aria-label="Order lifecycle table" tabindex="0">
+            <table class="trade-table orders-table">
+                <thead>
+                    <tr>
+                        <th>Updated</th>
+                        <th>Symbol</th>
+                        <th>Status</th>
+                        <th class="num">Requested</th>
+                        <th class="num">Filled</th>
+                        <th>Order</th>
+                        <th>Price</th>
+                        <th>Strategy</th>
+                        <th>Client order</th>
+                    </tr>
+                </thead>
+                <tbody data-orders-body>
+                    @foreach (var item in Model.Items)
+                    {
+                        <tr data-client-order-id="@item.ClientOrderId">
+                            <td>
+                                <time data-order-time datetime="@item.UpdatedAtUtc.ToUniversalTime().ToString("O")">
+                                    @item.UpdatedAtUtc.ToUniversalTime().ToString("dd MMM HH:mm:ss") UTC
+                                </time>
+                                <small data-order-local-time></small>
+                            </td>
+                            <td><strong>@item.Symbol</strong><small>@item.Side.ToUpperInvariant()</small></td>
+                            <td><span class="order-state state-@item.State.ToString().ToLowerInvariant()" data-order-state>@StateLabel(item.State)</span></td>
+                            <td class="num">@item.RequestedQuantity.ToString("0.####")</td>
+                            <td class="num" data-order-filled>@((item.FilledQuantity ?? 0m).ToString("0.####"))</td>
+                            <td>@item.OrderType / @item.TimeInForce</td>
+                            <td data-order-price>@PriceSummary(item)</td>
+                            <td>@item.StrategyId</td>
+                            <td class="order-identity">@item.ClientOrderId</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+@section Scripts {
+    <script src="~/js/orders.js" asp-append-version="true"></script>
+}

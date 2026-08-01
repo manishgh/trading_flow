@@ -12,6 +12,7 @@
     <ProjectReference Include="..\TradingFlow.Backtesting\TradingFlow.Backtesting.csproj" />
     <ProjectReference Include="..\TradingFlow.Domain\TradingFlow.Domain.csproj" />
     <ProjectReference Include="..\TradingFlow.Engine\TradingFlow.Engine.csproj" />
+    <ProjectReference Include="..\TradingFlow.Earnings\TradingFlow.Earnings.csproj" />
     <ProjectReference Include="..\TradingFlow.Finviz\TradingFlow.Finviz.csproj" />
     <ProjectReference Include="..\TradingFlow.Alpaca\TradingFlow.Alpaca.csproj" />
     <ProjectReference Include="..\TradingFlow.Data\TradingFlow.Data.csproj" />

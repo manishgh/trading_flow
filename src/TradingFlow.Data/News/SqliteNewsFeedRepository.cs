@@ -5,7 +5,7 @@ using TradingFlow.Domain.News;
 
 namespace TradingFlow.Data.News;
 
-public sealed class SqliteNewsFeedRepository
+public sealed class SqliteNewsFeedRepository : INewsFeedRepository
 {
     private readonly IDbContextFactory<TradingFlowDbContext> dbFactory;
 
@@ -26,6 +26,8 @@ public sealed class SqliteNewsFeedRepository
         foreach (var item in items)
         {
             var id = BuildId(item);
+            var publishedAtUtc = item.Timestamp.ToUniversalTime();
+            var ingestedAtUtc = (item.ReceivedAt ?? now).ToUniversalTime();
             var existing = await db.NewsItems.FindAsync([id], cancellationToken);
             if (existing is null)
             {
@@ -33,14 +35,14 @@ public sealed class SqliteNewsFeedRepository
                 {
                     Id = id,
                     Ticker = item.Ticker.ToUpperInvariant(),
-                    Timestamp = item.Timestamp,
+                    Timestamp = publishedAtUtc,
                     Headline = item.Headline,
                     SentimentScore = item.SentimentScore,
                     Provider = item.Provider ?? "unknown",
                     Source = item.Source,
                     Url = item.Url,
                     Summary = item.Summary,
-                    IngestedAt = item.ReceivedAt ?? now
+                    IngestedAt = ingestedAtUtc
                 });
             }
             else
@@ -49,7 +51,8 @@ public sealed class SqliteNewsFeedRepository
                 existing.Source = item.Source;
                 existing.Url = item.Url;
                 existing.Summary = item.Summary;
-                existing.IngestedAt = item.ReceivedAt ?? now;
+                existing.Timestamp = publishedAtUtc;
+                existing.IngestedAt = ingestedAtUtc;
             }
         }
 
@@ -62,12 +65,11 @@ public sealed class SqliteNewsFeedRepository
         string? ticker,
         CancellationToken cancellationToken)
     {
+        var normalizedWindowStart = windowStart.ToUniversalTime();
         using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var items = await db.NewsItems
+        var query = db.NewsItems
             .AsNoTracking()
-            .ToArrayAsync(cancellationToken);
-        var query = items
-            .Where(item => item.Timestamp >= windowStart);
+            .Where(item => item.Timestamp >= normalizedWindowStart);
 
         if (!String.IsNullOrWhiteSpace(ticker))
         {
@@ -75,21 +77,49 @@ public sealed class SqliteNewsFeedRepository
             query = query.Where(item => item.Ticker == normalizedTicker || item.Ticker == "MARKET");
         }
 
-        return query
+        return await query
             .OrderByDescending(item => item.Timestamp)
             .ThenBy(item => item.Provider)
             .Take(Math.Clamp(limit, 1, 500))
+            .ToArrayAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<PersistedNewsItem>> GetRecentForTickersAsync(
+        DateTimeOffset windowStart,
+        int limit,
+        IReadOnlyCollection<string> tickers,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(tickers);
+        var normalized = tickers
+            .Select(ticker => ticker.Trim().ToUpperInvariant())
+            .Where(ticker => ticker.Length > 0)
+            .Distinct(StringComparer.Ordinal)
             .ToArray();
+        if (normalized.Length == 0)
+        {
+            return Array.Empty<PersistedNewsItem>();
+        }
+
+        var normalizedWindowStart = windowStart.ToUniversalTime();
+        using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        return await db.NewsItems
+            .AsNoTracking()
+            .Where(item => item.Timestamp >= normalizedWindowStart && normalized.Contains(item.Ticker))
+            .OrderByDescending(item => item.Timestamp)
+            .ThenBy(item => item.Provider)
+            .Take(Math.Clamp(limit, 1, 5000))
+            .ToArrayAsync(cancellationToken);
     }
 
     public async Task PruneOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken)
     {
+        var normalizedCutoff = cutoff.ToUniversalTime();
         using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var allItems = await db.NewsItems.ToArrayAsync(cancellationToken);
-        var staleItems = allItems
-            .Where(item => item.Timestamp < cutoff)
+        var staleItems = await db.NewsItems
+            .Where(item => item.Timestamp < normalizedCutoff)
             .Take(1000)
-            .ToArray();
+            .ToArrayAsync(cancellationToken);
         if (staleItems.Length == 0)
         {
             return;

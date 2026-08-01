@@ -54,14 +54,17 @@ public partial class NotificationsPage : ContentPage
             var healthTask = AppServices.Api.CheckHealthAsync();
             var notificationsTask = AppServices.Api.GetNotificationsAsync();
             var signalsTask = AppServices.Api.GetWishlistSignalsAsync(hours: 48);
-            await Task.WhenAll(healthTask, notificationsTask, signalsTask);
+            var ordersTask = AppServices.Api.GetOrderActivityAsync(limit: 200);
+            await Task.WhenAll(healthTask, notificationsTask, signalsTask, ordersTask);
 
             var healthy = await healthTask;
             var notifications = await notificationsTask ?? Array.Empty<MobileNotificationItem>();
             var signals = await signalsTask ?? Array.Empty<MobileWishlistSignalResponse>();
+            var orders = await ordersTask ?? Array.Empty<MobileOrderActivityResponse>();
 
             allRows = notifications.Select(ActivityRow.FromNotification)
                 .Concat(signals.Select(ActivityRow.FromSignal))
+                .Concat(orders.Select(ActivityRow.FromOrder))
                 .OrderByDescending(item => item.Timestamp)
                 .Take(500)
                 .ToArray();
@@ -93,6 +96,7 @@ public partial class NotificationsPage : ContentPage
         {
             "signal" => allRows.Where(item => item.Category == "signal"),
             "system" => allRows.Where(item => item.Category == "system"),
+            "order" => allRows.Where(item => item.Category == "order"),
             _ => allRows
         };
 
@@ -126,6 +130,7 @@ public partial class NotificationsPage : ContentPage
         AllButton.BackgroundColor = selectedFilter == "all" ? NeutralAccentColor : InactiveColor;
         SignalsButton.BackgroundColor = selectedFilter == "signal" ? NeutralAccentColor : InactiveColor;
         SystemButton.BackgroundColor = selectedFilter == "system" ? NeutralAccentColor : InactiveColor;
+        OrdersButton.BackgroundColor = selectedFilter == "order" ? NeutralAccentColor : InactiveColor;
     }
 
     private async void OnOpenNews(object? sender, EventArgs e)
@@ -172,5 +177,26 @@ public partial class NotificationsPage : ContentPage
                 : $"{item.PriceText} · {item.NewsHeadline}".Trim(' ', '·'),
             item.NewsUrl,
             SignalColor);
+
+        public static ActivityRow FromOrder(MobileOrderActivityResponse item)
+        {
+            var isFailure = item.State.Equals("Rejected", StringComparison.OrdinalIgnoreCase) ||
+                            item.State.Equals("Canceled", StringComparison.OrdinalIgnoreCase) ||
+                            item.State.Equals("Expired", StringComparison.OrdinalIgnoreCase);
+            var isFilled = item.State.Equals("Filled", StringComparison.OrdinalIgnoreCase);
+            var filled = item.FilledQuantity is { } quantity
+                ? $"Filled {quantity:0.####}" + (item.FillPrice is { } price ? $" at {price:C2}" : String.Empty)
+                : "No fill reported";
+
+            return new ActivityRow(
+                "order",
+                item.UpdatedAtUtc,
+                "ORDER",
+                $"{item.Symbol} - {item.State}",
+                $"{item.Side.ToUpperInvariant()} {item.RequestedQuantity:0.####} {item.OrderType} / {item.TimeInForce}",
+                $"{filled} - {item.StrategyId}",
+                null,
+                isFailure ? ErrorColor : isFilled ? SignalColor : NeutralAccentColor);
+        }
     }
 }

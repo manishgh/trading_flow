@@ -1,4 +1,5 @@
 using TradingFlow.Domain.Market;
+using TradingFlow.Engine.Market;
 
 namespace TradingFlow.Backtesting;
 
@@ -15,7 +16,7 @@ public static class CatalystSnapshotAttacher
         }
 
         var orderedCatalysts = catalysts
-            .OrderBy(catalyst => catalyst.Timestamp)
+            .OrderBy(catalyst => catalyst.DecisionAvailableAt ?? catalyst.Timestamp)
             .ToArray();
         var catalystIndex = 0;
         CatalystEvent? latestCatalyst = null;
@@ -24,8 +25,10 @@ public static class CatalystSnapshotAttacher
         {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = snapshots[snapshotIndex];
+            var snapshotEndTime = snapshot.Timestamp.Add(TimeframeParser.Parse(snapshot.Timeframe));
+
             while (catalystIndex < orderedCatalysts.Length &&
-                   orderedCatalysts[catalystIndex].Timestamp <= snapshot.Timestamp)
+                   (orderedCatalysts[catalystIndex].DecisionAvailableAt ?? orderedCatalysts[catalystIndex].Timestamp) <= snapshotEndTime)
             {
                 latestCatalyst = orderedCatalysts[catalystIndex];
                 catalystIndex++;

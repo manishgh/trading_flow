@@ -22,7 +22,7 @@ spec:
                 name: trading-flow-demo-secrets
           env:
             - name: TRADINGFLOW_RUN_CONFIGS
-              value: configs/backtest/semiconductors-research.yaml
+              value: REPLACE_WITH_GENERATED_RUN_CONFIG
             - name: TRADINGFLOW_RESULT_OWNER
               value: worker
             - name: TRADINGFLOW_MAX_PARALLEL_RUNS

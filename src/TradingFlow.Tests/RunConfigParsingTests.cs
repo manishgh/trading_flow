@@ -740,6 +740,38 @@ public sealed class RunConfigParsingTests
         }
     }
 
+    [Fact]
+    public void RunConfigWriter_DeleteTempConfig_OnlyDeletesYamlInsideTempDirectory()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "trading-flow-delete-config-test", Guid.NewGuid().ToString("N"));
+        var tempConfig = Path.Combine(tempRoot, "configs", "backtest", "temp", "generated.yaml");
+        var retainedConfig = Path.Combine(tempRoot, "configs", "backtest", "intraday-backtest-profile.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(tempConfig)!);
+        File.WriteAllText(tempConfig, "mode: backtest");
+        File.WriteAllText(retainedConfig, "mode: backtest");
+
+        try
+        {
+            var writer = new RunConfigWriter(
+                new ProjectPaths(tempRoot),
+                new SimpleYamlReader(),
+                AtomicFileArtifactWriter.Instance);
+
+            writer.DeleteTempConfig(tempConfig);
+            writer.DeleteTempConfig(retainedConfig);
+
+            Assert.False(File.Exists(tempConfig));
+            Assert.True(File.Exists(retainedConfig));
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
     private static string FindRepositoryRoot()
     {
         return TestRepository.FindRoot();

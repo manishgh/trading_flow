@@ -18,6 +18,11 @@ flowchart LR
     News["Alpaca / Finviz / Go News Sidecar"] --> V["Event/Sentiment Veto"]
     V --> C
 
+    FE["Finviz Earnings Calendar"] --> EM["Earnings Monitor"]
+    News --> EM
+    S --> EM
+    EM --> EA["Advisory Earnings API"]
+
     C --> R["Risk Engine"]
     R --> O{"Mode Router"}
     O --> B["Backtest Simulator"]
@@ -155,9 +160,14 @@ a server-owned review on the dedicated order ticket. The review token is short-l
 revalidates broker and market evidence before confirmation. UI code calls application APIs; strategy,
 risk, admission, execution, and orchestration remain outside Razor page logic.
 
-The Android shell uses `Watch`, `Positions`, `Activity`, and `More`. Symbol details and the reviewed
+The Android shell uses `Watch`, `Earnings`, `Positions`, `Activity`, and `More`. Symbol details and the reviewed
 paper-order ticket are secondary routes, so monitoring stays compact while execution remains
 deliberate. See `docs/ui-operator-runbook.md` for the implemented navigation and safety boundaries.
+
+The earnings calendar is a separate advisory application module. It combines point-in-time Finviz
+schedule/results, shared news, and completed Alpaca SIP bars, then exposes read models to the web and
+Android clients. It does not call strategy execution or broker routing. See
+[Earnings Calendar And Reaction Monitor](earnings-calendar.md).
 
 ## Timeframe Model
 

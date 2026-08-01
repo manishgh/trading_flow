@@ -8,7 +8,9 @@ incident, kill-switch, or disaster-recovery procedures.
 - **Desk**: monitor the selected wishlist, prices, eligibility, signals, and wishlist-wide news.
   Selecting a symbol adds its decision, model, and news evidence without hiding the wishlist feed.
 - **Positions**: inspect broker positions and protection state. A close is a separate reviewed action.
-- **Research**: run and inspect wishlist-backed backtests, optimization jobs, and decision audits.
+- **Orders**: inspect durable working, filled, rejected, cancelled, and expired order lifecycle state.
+- **Research**: run and inspect wishlist-backed backtests, optimization jobs, decision audits, and the
+  earnings calendar.
 - **Operations**: start and monitor paper runs, inspect paper jobs, warm data, and administer wishlists.
 
 Trade Desk rows do not submit orders. To buy, select a symbol, open **Review protected buy**, review
@@ -20,8 +22,10 @@ the reported condition and create a new review.
 
 - **Watch**: compact wishlist candidates and current state.
 - **Positions**: open positions, P/L, and protection state.
-- **Activity**: strategy signals and system notifications with explicit filters.
-- **More**: secondary research, news, automation, settings, and paper-operation destinations.
+- **Activity**: strategy signals, system notifications, and durable order/fill lifecycle with explicit
+  filters.
+- **More**: secondary research, earnings, news, automation, settings, and paper-operation
+  destinations.
 
 Open a watch item to reach Symbol Detail. Prediction evidence is advisory and separate from the
 TradingFlow decision. A paper buy uses the same reviewed-order API as the web ticket.

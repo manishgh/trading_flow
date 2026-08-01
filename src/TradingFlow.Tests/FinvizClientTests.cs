@@ -173,6 +173,99 @@ No.,Ticker,Company,Rel Volume
         Assert.Equal("Market", item.Summary);
     }
 
+    [Fact]
+    public void ParseEarningsCalendarJson_MapsStructuredProviderDataAndEasternTime()
+    {
+        const string json = """
+{"items":[{"earningsDate":"2026-07-31T08:30:00","isEarningDateEstimate":false,"ticker":"ABBV","company":"AbbVie Inc","marketCap":439224.7,"epsEstimate":3.59,"epsActual":3.72,"epsSurprise":3.62,"epsReportedEstimate":1.80,"epsReportedActual":1.91,"epsReportedSurprise":6.11,"salesEstimate":16780.8,"salesActual":16901.2,"salesSurprise":0.72,"oneDayPriceReaction":2.1}],"page":1,"pageSize":50,"totalItemsCount":1,"totalPages":1}
+""";
+        var received = DateTimeOffset.Parse("2026-07-31T12:31:00Z");
+
+        var page = FinvizClient.ParseEarningsCalendarJson(
+            json,
+            received,
+            new string('a', 64),
+            "https://elite.finviz.com/api/calendar/earnings?dateFrom=2026-07-31&page=1");
+
+        var item = Assert.Single(page.Items);
+        Assert.Equal(1, page.Page);
+        Assert.Equal(1, page.TotalPages);
+        Assert.Equal("ABBV", item.Ticker);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-31T12:30:00Z"), item.ScheduledAtUtc);
+        Assert.Equal(TradingFlow.Domain.Earnings.EarningsReleaseWindow.BeforeMarketOpen, item.ReleaseWindow);
+        Assert.Equal(3.62m, item.EpsSurprisePercent);
+        Assert.Equal(0.72m, item.RevenueSurprisePercent);
+        Assert.Equal(received, item.ResultFirstSeenAtUtc);
+        Assert.Equal(received, item.ProviderReceivedAtUtc);
+        Assert.DoesNotContain("auth=", item.SourceUrl, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetEarningsCalendarAsync_ReadsEveryJsonApiPage()
+    {
+        var handler = new EarningsCalendarHandler();
+        using var client = new FinvizClient(
+            new HttpClient(handler),
+            new FinvizOptions(new Uri("https://elite.finviz.com"), "test-token"),
+            CreateArchiveWriter());
+
+        var items = await client.GetEarningsCalendarAsync(
+            new DateOnly(2026, 7, 31),
+            new DateOnly(2026, 7, 31),
+            CancellationToken.None);
+
+        Assert.Equal(["ABBV", "MSFT"], items.Select(item => item.Ticker).ToArray());
+        Assert.Equal(
+            [
+                "/api/calendar/earnings?dateFrom=2026-07-31&page=1&auth=test-token",
+                "/api/calendar/earnings?dateFrom=2026-07-31&page=2&auth=test-token"
+            ],
+            handler.Requests);
+        Assert.Equal(
+            2,
+            Directory.EnumerateFiles(archiveRoot, "*.json", SearchOption.AllDirectories)
+                .Count(path => !path.EndsWith(".manifest.json", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public async Task GetEarningsCalendarAsync_QueriesEveryRequestedExchangeDate()
+    {
+        var handler = new EarningsCalendarHandler();
+        using var client = new FinvizClient(
+            new HttpClient(handler),
+            new FinvizOptions(new Uri("https://elite.finviz.com"), "test-token"),
+            CreateArchiveWriter());
+
+        var items = await client.GetEarningsCalendarAsync(
+            new DateOnly(2026, 7, 31),
+            new DateOnly(2026, 8, 1),
+            CancellationToken.None);
+
+        Assert.Equal(4, items.Count);
+        Assert.Contains(items, item => item.ReportDateExchange == new DateOnly(2026, 7, 31));
+        Assert.Contains(items, item => item.ReportDateExchange == new DateOnly(2026, 8, 1));
+        Assert.Equal(2, handler.Requests.Count(request => request.Contains("dateFrom=2026-07-31", StringComparison.Ordinal)));
+        Assert.Equal(2, handler.Requests.Count(request => request.Contains("dateFrom=2026-08-01", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task GetEarningsCalendarAsync_AcceptsAProviderDateWithNoEvents()
+    {
+        var handler = new EmptyEarningsCalendarHandler();
+        using var client = new FinvizClient(
+            new HttpClient(handler),
+            new FinvizOptions(new Uri("https://elite.finviz.com"), "test-token"),
+            CreateArchiveWriter());
+
+        var items = await client.GetEarningsCalendarAsync(
+            new DateOnly(2026, 8, 1),
+            new DateOnly(2026, 8, 1),
+            CancellationToken.None);
+
+        Assert.Empty(items);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
     private sealed class CsvHandler(
         string csv,
         HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
@@ -190,6 +283,50 @@ No.,Ticker,Company,Rel Volume
                 {
                     Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/csv") { CharSet = "utf-8" } }
                 }
+            });
+        }
+    }
+
+    private sealed class EarningsCalendarHandler : HttpMessageHandler
+    {
+        public List<string> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var pathAndQuery = request.RequestUri?.PathAndQuery ?? String.Empty;
+            Requests.Add(pathAndQuery);
+            var page = pathAndQuery.Contains("page=2", StringComparison.Ordinal) ? 2 : 1;
+            var requestedDate = pathAndQuery.Contains("dateFrom=2026-08-01", StringComparison.Ordinal)
+                ? "2026-08-01"
+                : "2026-07-31";
+            var ticker = requestedDate == "2026-08-01"
+                ? page == 1 ? "AMZN" : "GOOGL"
+                : page == 1 ? "ABBV" : "MSFT";
+            var json = $$"""
+                {"items":[{"earningsDate":"{{requestedDate}}T08:30:00","isEarningDateEstimate":false,"ticker":"{{ticker}}","company":"{{ticker}} Inc","marketCap":1000}],"page":{{page}},"pageSize":50,"totalItemsCount":2,"totalPages":2}
+                """;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class EmptyEarningsCalendarHandler : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StringContent(
+                    "{\"items\":[],\"page\":1,\"pageSize\":50,\"totalItemsCount\":0,\"totalPages\":0}",
+                    Encoding.UTF8,
+                    "application/json")
             });
         }
     }

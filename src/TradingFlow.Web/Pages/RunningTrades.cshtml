@@ -10,9 +10,11 @@
         "manual" => "Manual",
         _ => source
     };
+    string TradeKey(TradingFlow.Web.Models.MobileRunningTrade trade) =>
+        $"{trade.CloseKind}:{trade.JobId?.ToString() ?? trade.SessionId?.ToString() ?? "none"}:{trade.Ticker}";
 }
 
-<section class="trade-book">
+<section class="trade-book" data-running-trades data-source="@Model.Source">
     <div class="page-header">
         <div>
             <h1>Running Trades</h1>
@@ -21,17 +23,18 @@
         <div class="actions">
             <a class="button secondary" asp-page="/Wishlists">Wishlists</a>
             <a class="button secondary" asp-page="/Paper">Paper Lab</a>
+            <button class="button secondary" type="button" data-trades-refresh>Refresh positions</button>
         </div>
     </div>
 
     <div class="trade-summary-grid">
         <div class="summary-card">
             <span>Total P/L</span>
-            <strong style="color:@PlColor(Model.TotalPl);">@Model.TotalPl.ToString("C2")</strong>
+            <strong data-total-pl style="color:@PlColor(Model.TotalPl);">@Model.TotalPl.ToString("C2")</strong>
         </div>
         <div class="summary-card">
             <span>Open Trades</span>
-            <strong>@Model.Trades.Count</strong>
+            <strong data-trade-count>@Model.Trades.Count</strong>
         </div>
         <div class="summary-card">
             <span>Source Filter</span>
@@ -58,7 +61,7 @@
     }
     else
     {
-        <div class="table-scroll panel">
+        <div class="table-scroll panel" role="region" aria-label="Open positions table" tabindex="0">
         <table class="trade-table">
             <thead>
                 <tr>
@@ -78,28 +81,30 @@
             <tbody>
                 @foreach (var trade in Model.Trades)
                 {
-                    <tr>
+                    <tr data-trade-key="@TradeKey(trade)">
                         <td><strong>@trade.Ticker</strong></td>
                         <td><span class="source-chip">@SourceBadge(trade.Source)</span></td>
                         <td class="num">@trade.Quantity.ToString("0.####")</td>
                         <td class="num">@trade.EntryPrice.ToString("C2")</td>
-                        <td class="num">@trade.CurrentPrice.ToString("C2")</td>
-                        <td class="num" style="font-weight:700;color:@PlColor(trade.UnrealizedPl);">@trade.UnrealizedPl.ToString("C2")</td>
-                        <td class="num" style="color:@PlColor(trade.UnrealizedPl);">@trade.UnrealizedPlPct.ToString("0.00")%</td>
+                        <td class="num" data-trade-current>@trade.CurrentPrice.ToString("C2")</td>
+                        <td class="num" data-trade-pl style="font-weight:700;color:@PlColor(trade.UnrealizedPl);">@trade.UnrealizedPl.ToString("C2")</td>
+                        <td class="num" data-trade-pl-pct style="color:@PlColor(trade.UnrealizedPl);">@trade.UnrealizedPlPct.ToString("0.00")%</td>
                         <td>@trade.StrategyName</td>
-                        <td>@trade.ProtectionSummary</td>
+                        <td data-trade-protection>@trade.ProtectionSummary</td>
                         <td class="muted">@trade.Reference</td>
                         <td class="num">
-                            <form method="post" asp-page-handler="Close" style="margin:0;">
-                                <input type="hidden" name="Source" value="@Model.Source" />
-                                <input type="hidden" name="closeKind" value="@trade.CloseKind" />
-                                <input type="hidden" name="jobId" value="@(trade.JobId?.ToString())" />
-                                <input type="hidden" name="sessionId" value="@(trade.SessionId?.ToString())" />
-                                <input type="hidden" name="ticker" value="@trade.Ticker" />
-                                <button type="submit" class="danger mini-button" onclick="return confirm('Sell @trade.Ticker now?');">
-                                    Sell
-                                </button>
-                            </form>
+                            <button type="button"
+                                    class="danger mini-button"
+                                    data-review-exit
+                                    data-ticker="@trade.Ticker"
+                                    data-close-kind="@trade.CloseKind"
+                                    data-job-id="@(trade.JobId?.ToString())"
+                                    data-session-id="@(trade.SessionId?.ToString())"
+                                    data-quantity="@trade.Quantity.ToString("0.####")"
+                                    data-current-price="@trade.CurrentPrice.ToString("0.####")"
+                                    data-protection="@trade.ProtectionSummary">
+                                Review exit
+                            </button>
                         </td>
                     </tr>
                 }
@@ -107,11 +112,33 @@
         </table>
         </div>
     }
-    <p class="muted" style="font-size:12px;margin-top:16px;">Auto-refreshes every 10 seconds.</p>
+    <p id="TradesConnection" class="muted" role="status" aria-live="polite" style="font-size:12px;margin-top:16px;">
+        Position values update every 10 seconds without replacing focused controls.
+    </p>
 </section>
 
+<dialog id="ExitReviewDialog" class="review-dialog" aria-labelledby="ExitReviewHeading">
+    <form method="post" asp-page-handler="Close">
+        <input type="hidden" name="Source" value="@Model.Source" />
+        <input type="hidden" name="closeKind" data-exit-close-kind />
+        <input type="hidden" name="jobId" data-exit-job-id />
+        <input type="hidden" name="sessionId" data-exit-session-id />
+        <input type="hidden" name="ticker" data-exit-ticker />
+        <h2 id="ExitReviewHeading">Review paper exit</h2>
+        <p data-exit-summary></p>
+        <dl class="review-grid">
+            <div><dt>Environment</dt><dd>PAPER</dd></div>
+            <div><dt>Action</dt><dd>Close the complete position</dd></div>
+            <div><dt>Protection</dt><dd data-exit-protection></dd></div>
+        </dl>
+        <p class="warning-text">The server will re-read the selected run or automation session before requesting the broker exit.</p>
+        <div class="actions">
+            <button type="button" class="button secondary" data-exit-cancel>Keep position</button>
+            <button type="submit" class="button danger">Confirm paper exit</button>
+        </div>
+    </form>
+</dialog>
+
 @section Scripts {
-    <script>
-        setTimeout(function () { window.location.reload(); }, 10000);
-    </script>
+    <script src="~/js/running-trades.js" asp-append-version="true"></script>
 }

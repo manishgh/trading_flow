@@ -39,7 +39,8 @@
                                Text="›"
                                FontSize="24"
                                TextColor="{StaticResource Primary}"
-                               VerticalTextAlignment="Center" />
+                               VerticalTextAlignment="Center"
+                               SemanticProperties.Description="Open tool" />
                     </Grid>
                 </Border>
             </DataTemplate>

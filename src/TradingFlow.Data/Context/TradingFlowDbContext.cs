@@ -3,6 +3,7 @@ using TradingFlow.Domain.Locking;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Wishlists;
+using TradingFlow.Domain.Earnings;
 
 namespace TradingFlow.Data.Context;
 
@@ -31,6 +32,8 @@ public sealed class TradingFlowDbContext : DbContext
     public DbSet<PositionEventRecord> PositionEvents => Set<PositionEventRecord>();
     public DbSet<CandidateRecord> Candidates => Set<CandidateRecord>();
     public DbSet<CatalystResultRecord> CatalystResults => Set<CatalystResultRecord>();
+    public DbSet<EarningsCalendarEvent> EarningsCalendarEvents => Set<EarningsCalendarEvent>();
+    public DbSet<EarningsAnalysisSnapshot> EarningsAnalysisSnapshots => Set<EarningsAnalysisSnapshot>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -92,6 +95,12 @@ public sealed class TradingFlowDbContext : DbContext
             entity.Property(e => e.Provider).HasMaxLength(50).IsRequired();
             entity.Property(e => e.Source).HasMaxLength(200);
             entity.Property(e => e.Url).HasMaxLength(1000);
+            entity.Property(e => e.Timestamp).HasConversion(
+                value => value.UtcDateTime,
+                value => new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc)));
+            entity.Property(e => e.IngestedAt).HasConversion(
+                value => value.UtcDateTime,
+                value => new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc)));
 
             entity.HasIndex(e => e.Timestamp);
             entity.HasIndex(e => e.Ticker);
@@ -138,6 +147,40 @@ public sealed class TradingFlowDbContext : DbContext
             entity.HasOne(e => e.Wishlist)
                 .WithMany()
                 .HasForeignKey(e => e.WishlistId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<EarningsCalendarEvent>(entity =>
+        {
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.Id).HasMaxLength(80);
+            entity.Property(item => item.Ticker).HasMaxLength(20).IsRequired();
+            entity.Property(item => item.CompanyName).HasMaxLength(300).IsRequired();
+            entity.Property(item => item.ReleaseWindow).HasConversion<string>().HasMaxLength(40);
+            entity.Property(item => item.Provider).HasMaxLength(40).IsRequired();
+            entity.Property(item => item.SourceUrl).HasMaxLength(1000).IsRequired();
+            entity.Property(item => item.SourceArtifactSha256).HasMaxLength(64).IsRequired();
+            entity.HasIndex(item => new { item.ReportDateExchange, item.ScheduledAtUtc });
+            entity.HasIndex(item => item.Ticker);
+            entity.HasIndex(item => item.Provider);
+        });
+
+        modelBuilder.Entity<EarningsAnalysisSnapshot>(entity =>
+        {
+            entity.HasKey(snapshot => snapshot.Id);
+            entity.Property(snapshot => snapshot.EarningsEventId).HasMaxLength(80).IsRequired();
+            entity.Property(snapshot => snapshot.Ticker).HasMaxLength(20).IsRequired();
+            entity.Property(snapshot => snapshot.ResultAssessment).HasConversion<string>().HasMaxLength(30);
+            entity.Property(snapshot => snapshot.BreakoutAssessment).HasConversion<string>().HasMaxLength(30);
+            entity.Property(snapshot => snapshot.Reason).HasMaxLength(1500).IsRequired();
+            entity.Property(snapshot => snapshot.NewsHeadline).HasMaxLength(1000);
+            entity.Property(snapshot => snapshot.NewsUrl).HasMaxLength(1000);
+            entity.Property(snapshot => snapshot.NewsProvider).HasMaxLength(100);
+            entity.HasIndex(snapshot => new { snapshot.EarningsEventId, snapshot.AnalyzedAtUtc });
+            entity.HasIndex(snapshot => new { snapshot.Ticker, snapshot.AnalyzedAtUtc });
+            entity.HasOne<EarningsCalendarEvent>()
+                .WithMany()
+                .HasForeignKey(snapshot => snapshot.EarningsEventId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

@@ -189,6 +189,23 @@ public sealed class TradingFlowApiClient
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
+    public Task<MobileEarningsCalendarResponse?> GetTodayAndNextBusinessDayEarningsAsync(
+        string session = "all",
+        string marketCap = "all",
+        CancellationToken cancellationToken = default) =>
+        httpClient.GetFromJsonAsync<MobileEarningsCalendarResponse>(
+            $"{BaseUrl}/api/mobile/earnings/today-next-business-day?session={Uri.EscapeDataString(session)}&marketCap={Uri.EscapeDataString(marketCap)}",
+            cancellationToken);
+
+    public async Task RefreshEarningsAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsync(
+            $"{BaseUrl}/api/mobile/earnings/refresh",
+            null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
     public Task<IReadOnlyList<MobileWishlistResponse>?> GetWishlistsAsync(CancellationToken cancellationToken = default)
     {
         return httpClient.GetFromJsonAsync<IReadOnlyList<MobileWishlistResponse>>($"{BaseUrl}/api/mobile/wishlists", cancellationToken);
@@ -301,6 +318,15 @@ public sealed class TradingFlowApiClient
     {
         return httpClient.GetFromJsonAsync<MobileRunningTradesResponse>(
             $"{BaseUrl}/api/mobile/running-trades?source={Uri.EscapeDataString(source)}",
+            cancellationToken);
+    }
+
+    public Task<IReadOnlyList<MobileOrderActivityResponse>?> GetOrderActivityAsync(
+        int limit = 200,
+        CancellationToken cancellationToken = default)
+    {
+        return httpClient.GetFromJsonAsync<IReadOnlyList<MobileOrderActivityResponse>>(
+            $"{BaseUrl}/api/mobile/orders?limit={Math.Clamp(limit, 1, 500)}",
             cancellationToken);
     }
 
@@ -700,6 +726,111 @@ public sealed record MobileNewsItem(
     }
 }
 
+public sealed record MobileEarningsCalendarResponse(
+    DateTimeOffset GeneratedAtUtc,
+    string OperatorTimeZone,
+    string ExchangeTimeZone,
+    DateOnly NextBusinessDate,
+    string NextBusinessDateLabel,
+    bool MonitoringActive,
+    int MonitoringIntervalSeconds,
+    DateTimeOffset? LastAnalysisUtc,
+    MobileEarningsFilterStateResponse Filters,
+    IReadOnlyList<MobileEarningsCalendarItem> Items);
+
+public sealed record MobileEarningsFilterStateResponse(
+    string Session,
+    string MarketCap,
+    IReadOnlyList<MobileEarningsFilterOptionResponse> Sessions,
+    IReadOnlyList<MobileEarningsFilterOptionResponse> MarketCaps);
+
+public sealed record MobileEarningsFilterOptionResponse(string Value, string Label, int Count);
+
+public sealed record MobileEarningsCalendarItem(
+    string Id,
+    string Ticker,
+    string CompanyName,
+    string DayGroup,
+    DateTimeOffset ScheduledAtUtc,
+    string ScheduledUtcText,
+    string ScheduledNewYorkText,
+    string ReleaseWindow,
+    string ReleaseWindowLabel,
+    bool IsScheduleEstimate,
+    decimal? MarketCapMillions,
+    decimal? EpsEstimate,
+    decimal? EpsActual,
+    decimal? EpsSurprisePercent,
+    string EpsOutcome,
+    string EpsOutcomeLabel,
+    decimal? RevenueEstimateMillions,
+    decimal? RevenueActualMillions,
+    decimal? RevenueSurprisePercent,
+    string Provider,
+    string SourceUrl,
+    DateTimeOffset ProviderReceivedAtUtc,
+    DateTimeOffset? ResultFirstSeenAtUtc,
+    string ResultAssessment,
+    string BreakoutAssessment,
+    string AssessmentLabel,
+    string AnalysisReason,
+    DateTimeOffset? ResultNewsPublishedAtUtc,
+    string? NewsHeadline,
+    string? NewsUrl,
+    string? NewsProvider,
+    decimal? NewsSentiment,
+    DateTimeOffset? LatestCompletedBarAtUtc,
+    string? LatestMarketSession,
+    decimal? PreReleaseReferenceHigh,
+    decimal? PreReleaseReferenceClose,
+    decimal? LatestClose,
+    decimal? EventReturnPercent,
+    decimal? Ema10,
+    decimal? Ema20,
+    decimal? MacdHistogram,
+    decimal? SlotRelativeVolume,
+    MobilePreviousEarningsResultResponse? PreviousEarnings)
+{
+    public string ScheduleText => $"{ScheduledAtUtc.ToLocalTime():yyyy-MM-dd HH:mm zzz} | {ReleaseWindowLabel}{(IsScheduleEstimate ? " | est." : String.Empty)}";
+    public string ResultText => AssessmentLabel;
+    public string PriceText => $"Pre {FormatPrice(PreReleaseReferenceClose)} | Latest {FormatPrice(LatestClose)}";
+    public string SurpriseText => $"{EpsOutcomeLabel} {FormatPercent(EpsSurprisePercent)} | Revenue {FormatPercent(RevenueSurprisePercent)}";
+    public string EpsValuesText => $"Estimate {FormatDecimal(EpsEstimate)} | Actual {FormatDecimal(EpsActual)}";
+    public string PreviousEpsText => PreviousEarnings is null
+        ? "Previous result loading or unavailable"
+        : $"Previous {PreviousEarnings.ReportDateExchange:yyyy-MM-dd} | {PreviousEarnings.EpsOutcomeLabel} {FormatPercent(PreviousEarnings.EpsSurprisePercent)} | Est {FormatDecimal(PreviousEarnings.EpsEstimate)} / Act {FormatDecimal(PreviousEarnings.EpsActual)}";
+    public string MarketCapText => MarketCapMillions.HasValue
+        ? MarketCapMillions.Value >= 1000m
+            ? $"${MarketCapMillions.Value / 1000m:0.#}B market cap"
+            : $"${MarketCapMillions.Value:0}M market cap"
+        : "Market cap unavailable";
+    public string MoveText => EventReturnPercent.HasValue
+        ? $"Move {FormatPercent(EventReturnPercent)} | {LatestMarketSession ?? "session pending"}"
+        : $"Move pending | {LatestMarketSession ?? "session pending"}";
+    public bool HasNews => !String.IsNullOrWhiteSpace(NewsUrl);
+
+    private static string FormatPercent(decimal? value) => value.HasValue ? $"{value.Value:+0.00;-0.00;0.00}%" : "-";
+    private static string FormatDecimal(decimal? value) => value.HasValue ? value.Value.ToString("0.00") : "-";
+    private static string FormatPrice(decimal? value) => value.HasValue ? $"${value.Value:0.00}" : "-";
+}
+
+public sealed record MobilePreviousEarningsResultResponse(
+    DateOnly ReportDateExchange,
+    DateTimeOffset ScheduledAtUtc,
+    string ReleaseWindowLabel,
+    decimal? EpsEstimate,
+    decimal? EpsActual,
+    decimal? EpsSurprisePercent,
+    string EpsOutcome,
+    string EpsOutcomeLabel,
+    decimal? RevenueEstimateMillions,
+    decimal? RevenueActualMillions,
+    decimal? RevenueSurprisePercent,
+    decimal? OneDayPriceReactionPercent,
+    string Provider,
+    string SourceUrl,
+    DateTimeOffset ProviderReceivedAtUtc);
+
 public sealed record MobileWishlistResponse(
     Guid Id,
     string Name,
@@ -997,6 +1128,25 @@ public sealed record MobileRunningTradesResponse(
 
     public bool IsTotalProfit => TotalUnrealizedPl >= 0;
 }
+
+public sealed record MobileOrderActivityResponse(
+    Guid RunId,
+    string ClientOrderId,
+    string? BrokerOrderId,
+    string StrategyId,
+    string Symbol,
+    string Side,
+    string OrderType,
+    string TimeInForce,
+    decimal RequestedQuantity,
+    decimal? LimitPrice,
+    decimal? StopPrice,
+    string State,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc,
+    decimal? FilledQuantity,
+    decimal? FillPrice,
+    string EventSource);
 
 public sealed record MobileRunningTrade(
     string Source,

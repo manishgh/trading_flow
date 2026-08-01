@@ -97,6 +97,25 @@ public sealed record MobileRunningTradesResponse(
     decimal TotalUnrealizedPl,
     int Count);
 
+public sealed record MobileOrderActivityResponse(
+    Guid RunId,
+    string ClientOrderId,
+    string? BrokerOrderId,
+    string StrategyId,
+    string Symbol,
+    string Side,
+    string OrderType,
+    string TimeInForce,
+    decimal RequestedQuantity,
+    decimal? LimitPrice,
+    decimal? StopPrice,
+    string State,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc,
+    decimal? FilledQuantity,
+    decimal? FillPrice,
+    string EventSource);
+
 public sealed record MobileNewsFeedResponse(
     bool Enabled,
     string Provider,

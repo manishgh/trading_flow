@@ -13,7 +13,7 @@ using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Finviz;
 
-public sealed class FinvizClient : IDisposable
+public sealed partial class FinvizClient : IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly FinvizOptions _options;
