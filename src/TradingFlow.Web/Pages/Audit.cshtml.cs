@@ -3,7 +3,11 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using TradingFlow.Domain.Audit;
 using TradingFlow.Web.Services;
@@ -36,6 +40,7 @@ namespace TradingFlow.Web.Pages
             BackUrl = IsSafeLocalUrl(returnUrl) ? returnUrl! : "/Paper";
             Records = await _auditRepo.GetAuditsByRunNameAsync(runName, default);
             BuildViewState();
+            await BuildComparisonAsync(default);
             return Page();
         }
 
@@ -74,6 +79,7 @@ namespace TradingFlow.Web.Pages
                     rawReason = record.RawReason,
                     explanation = record.Explanation,
                     chips = record.Chips,
+                    gateEvidence = record.GateEvidence,
                     signalJson = record.FormattedSignalJson
                 })
             });
@@ -98,6 +104,153 @@ namespace TradingFlow.Web.Pages
                 .ThenBy(x => x.DisplayReason, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             RecordViews = Records.Select(ToView).ToArray();
+            Funnel = BuildFunnel();
+        }
+
+        /// <summary>
+        /// Stages from evaluated candidates down to accepted entries.
+        /// </summary>
+        /// <remarks>
+        /// Answers "why did nothing trade" in one view. Each rejection reason is a
+        /// stage that removed candidates; the survivor count after a stage is what
+        /// reached the next one. Stages are ordered by how many they eliminated, so
+        /// the dominant blocker is first.
+        /// </remarks>
+        public IReadOnlyList<AuditFunnelStage> Funnel { get; private set; } = Array.Empty<AuditFunnelStage>();
+
+        private IReadOnlyList<AuditFunnelStage> BuildFunnel()
+        {
+            if (Records.Count == 0)
+            {
+                return Array.Empty<AuditFunnelStage>();
+            }
+
+            var stages = new List<AuditFunnelStage>
+            {
+                new("Evaluated", Records.Count, Records.Count, 0, null)
+            };
+
+            var remaining = Records.Count;
+            foreach (var reason in TopRejectionReasons)
+            {
+                remaining -= reason.Count;
+                stages.Add(new AuditFunnelStage(
+                    reason.DisplayReason,
+                    Math.Max(remaining, 0),
+                    Records.Count,
+                    reason.Count,
+                    reason.ReasonKey));
+            }
+
+            stages.Add(new AuditFunnelStage("Accepted", AcceptedCount, Records.Count, 0, null));
+            return stages;
+        }
+
+        /// <summary>
+        /// Streams the decision records as CSV so a run can be analysed outside the UI.
+        /// </summary>
+        /// <remarks>
+        /// Read-only: it re-reads the same repository the page renders from and never
+        /// mutates run state.
+        /// </remarks>
+        public async Task<IActionResult> OnGetExportAsync(string runName, CancellationToken cancellationToken)
+        {
+            RunName = runName;
+            Records = await _auditRepo.GetAuditsByRunNameAsync(runName, cancellationToken);
+            BuildViewState();
+
+            var builder = new StringBuilder();
+            builder.AppendLine("LocalTime,Ticker,Strategy,Decision,ReasonKey,Reason,Explanation");
+            foreach (var record in RecordViews)
+            {
+                builder.Append(Csv(record.LocalTime)).Append(',')
+                    .Append(Csv(record.Ticker)).Append(',')
+                    .Append(Csv(record.StrategyName)).Append(',')
+                    .Append(Csv(record.Decision)).Append(',')
+                    .Append(Csv(record.ReasonKey)).Append(',')
+                    .Append(Csv(record.RawReason)).Append(',')
+                    .Append(Csv(record.Explanation)).AppendLine();
+            }
+
+            var safeName = String.Concat((runName ?? "run").Where(character =>
+                Char.IsLetterOrDigit(character) || character is '-' or '_'));
+            return File(
+                Encoding.UTF8.GetBytes(builder.ToString()),
+                "text/csv",
+                $"audit-{(safeName.Length == 0 ? "run" : safeName)}.csv");
+        }
+
+        /// <summary>Quotes a CSV field, doubling any embedded quote.</summary>
+        private static string Csv(string? value)
+        {
+            var text = value ?? String.Empty;
+            return $"\"{text.Replace("\"", "\"\"")}\"";
+        }
+
+        /// <summary>Run this one is compared against, when the operator picks one.</summary>
+        [BindProperty(SupportsGet = true)]
+        public string? CompareWith { get; set; }
+
+        /// <summary>Side-by-side metrics for the two runs, or empty when none is chosen.</summary>
+        public IReadOnlyList<AuditRunComparisonRow> Comparison { get; private set; } =
+            Array.Empty<AuditRunComparisonRow>();
+
+        /// <summary>Name of the run being compared against, once loaded.</summary>
+        public string? ComparisonRunName { get; private set; }
+
+        /// <summary>
+        /// Builds a metric diff between this run and another.
+        /// </summary>
+        /// <remarks>
+        /// Comparison is the question "did the change help", and answering it by opening
+        /// two tabs and reading counts is how subtle regressions get missed. Metrics are
+        /// derived from the same records the page already summarises, so the two sides
+        /// cannot disagree with their own detail views.
+        /// </remarks>
+        private async Task BuildComparisonAsync(CancellationToken cancellationToken)
+        {
+            if (String.IsNullOrWhiteSpace(CompareWith) ||
+                String.Equals(CompareWith, RunName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var other = await _auditRepo.GetAuditsByRunNameAsync(CompareWith.Trim(), cancellationToken);
+            if (other.Count == 0)
+            {
+                return;
+            }
+
+            ComparisonRunName = CompareWith.Trim();
+            Comparison =
+            [
+                Row("Evaluated", Records.Count, other.Count),
+                Row("Accepted", AcceptedCount, CountDecision(other, "Accepted")),
+                Row("Rejected", RejectedCount, CountDecision(other, "Rejected")),
+                Row("Acceptance rate %",
+                    Percent(AcceptedCount, Records.Count),
+                    Percent(CountDecision(other, "Accepted"), other.Count)),
+                Row("Tickers", TickerCount, Distinct(other, record => record.Ticker)),
+                Row("Strategies", StrategyCount, Distinct(other, record => record.StrategyName)),
+                Row("Distinct rejection reasons",
+                    TopRejectionReasons.Count,
+                    other.Where(record => !String.IsNullOrWhiteSpace(record.RejectionReason))
+                        .Select(record => UiDisplayFormatter.NormalizeRejectionReasonKey(record.RejectionReason))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count())
+            ];
+
+            static AuditRunComparisonRow Row(string label, decimal current, decimal other) =>
+                new(label, current, other);
+
+            static int CountDecision(IReadOnlyList<DecisionAuditRecord> source, string decision) =>
+                source.Count(record => record.Decision.Equals(decision, StringComparison.OrdinalIgnoreCase));
+
+            static decimal Percent(int part, int whole) =>
+                whole == 0 ? 0m : Decimal.Round(part * 100m / whole, 1);
+
+            static int Distinct(IReadOnlyList<DecisionAuditRecord> source, Func<DecisionAuditRecord, string> select) =>
+                source.Select(select).Distinct(StringComparer.OrdinalIgnoreCase).Count();
         }
 
         private static bool IsSafeLocalUrl(string? url)
@@ -146,6 +299,7 @@ namespace TradingFlow.Web.Pages
                 record.RejectionReason ?? String.Empty,
                 explanation,
                 chips,
+                ExtractGateEvidence(record.RejectionReason),
                 FormatJson(record.SignalJson));
         }
 
@@ -170,6 +324,53 @@ namespace TradingFlow.Web.Pages
 
             return $"{record.Decision} evaluation recorded by the engine.";
         }
+
+        /// <summary>
+        /// Pulls the matched value and the threshold it was compared against out of a
+        /// rejection reason.
+        /// </summary>
+        /// <remarks>
+        /// `AGENTS.md` requires audit screens to show the exact matched values, not just
+        /// that a gate failed. The engine already writes the comparison into the reason
+        /// text (for example `rvol 0.82 < 1.50`), so this reads what the engine emitted
+        /// rather than re-deriving or guessing a threshold. Reasons that carry no
+        /// comparison simply produce no evidence rows.
+        /// </remarks>
+        internal static IReadOnlyList<AuditGateEvidence> ExtractGateEvidence(string? rawReason)
+        {
+            if (String.IsNullOrWhiteSpace(rawReason))
+            {
+                return Array.Empty<AuditGateEvidence>();
+            }
+
+            var evidence = new List<AuditGateEvidence>();
+            foreach (Match match in GateComparisonPattern.Matches(rawReason))
+            {
+                var label = match.Groups["label"].Value.Trim();
+                var actual = match.Groups["actual"].Value;
+                var op = match.Groups["op"].Value;
+                var threshold = match.Groups["threshold"].Value;
+                if (label.Length == 0)
+                {
+                    label = "value";
+                }
+
+                evidence.Add(new AuditGateEvidence(label, actual, op, threshold));
+            }
+
+            return evidence;
+        }
+
+        /// <summary>
+        /// Matches `label 1.23 &lt; 4.56` and the other comparison operators, allowing an
+        /// optional %, x, or bps suffix on either number.
+        /// </summary>
+        private static readonly Regex GateComparisonPattern = new(
+            @"(?<label>[A-Za-z][A-Za-z0-9_ ./-]{0,40}?)\s*" +
+            @"(?<actual>-?\d+(?:\.\d+)?)\s*(?:%|x|bps)?\s*" +
+            @"(?<op><=|>=|<|>|!=|==|=)\s*" +
+            @"(?<threshold>-?\d+(?:\.\d+)?)\s*(?:%|x|bps)?",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         private static IReadOnlyList<AuditChip> ExtractSignalChips(string signalJson)
         {
@@ -274,7 +475,48 @@ namespace TradingFlow.Web.Pages
         string RawReason,
         string Explanation,
         IReadOnlyList<AuditChip> Chips,
+        IReadOnlyList<AuditGateEvidence> GateEvidence,
         string FormattedSignalJson);
 
     public sealed record AuditChip(string Label, string Value, bool Passed);
+
+    /// <summary>One gate comparison, showing what was measured beside what was required.</summary>
+    /// <param name="Label">Gate or field name as the engine wrote it.</param>
+    /// <param name="Actual">The value the run actually measured.</param>
+    /// <param name="Operator">The comparison the gate applied.</param>
+    /// <param name="Threshold">The configured limit the value was tested against.</param>
+    public sealed record AuditGateEvidence(string Label, string Actual, string Operator, string Threshold);
+
+    /// <summary>One stage of the decision funnel.</summary>
+    /// <param name="Label">Stage name, or the rejection reason that removed candidates.</param>
+    /// <param name="Remaining">Candidates still alive after this stage.</param>
+    /// <param name="Total">Evaluated candidates, used for the bar width.</param>
+    /// <param name="Removed">Candidates this stage eliminated.</param>
+    /// <param name="ReasonKey">Reason key so the stage can drive the record filter.</param>
+    /// <summary>One metric compared across two runs.</summary>
+    /// <param name="Label">Metric name.</param>
+    /// <param name="Current">Value for the run being viewed.</param>
+    /// <param name="Other">Value for the comparison run.</param>
+    public sealed record AuditRunComparisonRow(string Label, decimal Current, decimal Other)
+    {
+        /// <summary>Current minus other.</summary>
+        public decimal Delta => Current - Other;
+
+        /// <summary>Semantic class for the delta, so direction is not colour-only.</summary>
+        public string DeltaClass => Delta > 0m ? "value-good" : Delta < 0m ? "value-bad" : "value-flat";
+
+        /// <summary>Signed delta with an explicit sign so it reads without colour.</summary>
+        public string DeltaText => Delta > 0m ? $"+{Delta:0.##}" : Delta.ToString("0.##");
+    }
+
+    public sealed record AuditFunnelStage(
+        string Label,
+        int Remaining,
+        int Total,
+        int Removed,
+        string? ReasonKey)
+    {
+        /// <summary>Share of evaluated candidates still alive, as a percentage.</summary>
+        public decimal RemainingPercent => Total == 0 ? 0m : Decimal.Round(Remaining * 100m / Total, 1);
+    }
 }

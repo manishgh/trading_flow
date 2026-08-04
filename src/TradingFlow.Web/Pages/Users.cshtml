@@ -1,0 +1,69 @@
+@page
+@model TradingFlow.Web.Pages.UsersModel
+@{
+    ViewData["Title"] = "Users";
+}
+
+<div class="page-heading">
+    <div>
+        <p class="eyebrow">Administration</p>
+        <h1>Users</h1>
+        <p>Create local operator accounts. Passwords are hashed by ASP.NET Core Identity before storage.</p>
+    </div>
+</div>
+
+@if (!String.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="status success" role="status">@Model.StatusMessage</div>
+}
+
+<div class="two-column-layout">
+    <section class="panel" aria-labelledby="create-user-heading">
+        <h2 id="create-user-heading">Add user</h2>
+        <form method="post" class="form-grid">
+            <div asp-validation-summary="ModelOnly" class="validation-summary"></div>
+
+            <label asp-for="Input.UserName"></label>
+            <input asp-for="Input.UserName" autocomplete="off" />
+            <span asp-validation-for="Input.UserName" class="field-validation"></span>
+
+            <label asp-for="Input.DisplayName"></label>
+            <input asp-for="Input.DisplayName" autocomplete="off" />
+
+            <label asp-for="Input.Password"></label>
+            <input asp-for="Input.Password" autocomplete="new-password" />
+            <span asp-validation-for="Input.Password" class="field-validation"></span>
+
+            <label asp-for="Input.ConfirmPassword"></label>
+            <input asp-for="Input.ConfirmPassword" autocomplete="new-password" />
+            <span asp-validation-for="Input.ConfirmPassword" class="field-validation"></span>
+
+            <label class="checkbox-row" asp-for="Input.IsAdministrator">
+                <input asp-for="Input.IsAdministrator" />
+                <span>Administrator</span>
+            </label>
+
+            <button type="submit" class="primary">Create user</button>
+        </form>
+    </section>
+
+    <section class="panel" aria-labelledby="existing-users-heading">
+        <h2 id="existing-users-heading">Existing users</h2>
+        <div class="table-scroll">
+            <table>
+                <thead><tr><th>Username</th><th>Display name</th><th>Role</th><th>Created (UTC)</th></tr></thead>
+                <tbody>
+                @foreach (var user in Model.Users)
+                {
+                    <tr>
+                        <td>@user.UserName</td>
+                        <td>@(user.DisplayName ?? "-")</td>
+                        <td>@(user.IsAdministrator ? "Administrator" : "Operator")</td>
+                        <td>@user.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>

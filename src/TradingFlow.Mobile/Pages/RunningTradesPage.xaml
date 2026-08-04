@@ -72,7 +72,7 @@
                            HorizontalTextAlignment="Center" />
                     <Label Text="No running trades match this source filter."
                            FontSize="13"
-                           TextColor="{StaticResource TextSecondary}"
+                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                            HorizontalTextAlignment="Center" />
                 </VerticalStackLayout>
             </CollectionView.EmptyView>
@@ -90,7 +90,7 @@
                                            FontSize="16" />
                                     <Label Text="{Binding Trade.DetailText}"
                                            FontSize="12"
-                                           TextColor="{StaticResource TextSecondary}"
+                                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                            LineBreakMode="WordWrap" />
                                 </VerticalStackLayout>
                                 <Label Grid.Column="1"
@@ -103,13 +103,13 @@
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                 <Label Text="{Binding Trade.PriceText}"
                                        FontSize="13"
-                                       TextColor="{StaticResource TextSecondary}"
+                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                        VerticalTextAlignment="Center" />
                                 <Button Grid.Column="1"
                                         Text="Review Exit"
                                         Clicked="OnSell"
                                         CommandParameter="{Binding .}"
-                                        BackgroundColor="{StaticResource StateNegative}"
+                                        BackgroundColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}"
                                         SemanticProperties.Description="Review closing this paper position" />
                             </Grid>
                         </VerticalStackLayout>

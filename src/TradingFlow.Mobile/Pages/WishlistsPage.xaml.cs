@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using TradingFlow.Mobile.Services;
+using TradingFlow.Mobile.Resources.Styles;
 
 namespace TradingFlow.Mobile.Pages;
 
@@ -9,6 +10,9 @@ public partial class WishlistsPage : ContentPage
 {
     private readonly TradingFlowApiClient api = AppServices.Api;
     private readonly ObservableCollection<WishlistStockCard> items = new();
+    private readonly ObservableCollection<WishlistStockCard> visibleItems = new();
+    private string watchScope = "all";
+    private string watchSearch = String.Empty;
     private readonly ObservableCollection<string> suggestions = new();
     private readonly HashSet<Guid> seenSignalIds = new();
     private readonly IDispatcherTimer refreshTimer;
@@ -21,7 +25,10 @@ public partial class WishlistsPage : ContentPage
     public WishlistsPage()
     {
         InitializeComponent();
-        ItemsView.ItemsSource = items;
+        // The source collection keeps every card so live quote updates keep
+        // arriving for symbols that a filter is currently hiding. The view is a
+        // projection of it, rebuilt whenever the filter changes.
+        ItemsView.ItemsSource = visibleItems;
         SuggestionsPicker.ItemsSource = suggestions;
         refreshTimer = Dispatcher.CreateTimer();
         refreshTimer.Interval = TimeSpan.FromSeconds(12);
@@ -56,7 +63,7 @@ public partial class WishlistsPage : ContentPage
         {
             var healthy = await api.CheckHealthAsync();
             StatusLabel.Text = healthy ? "Connected · live watch data" : "Disconnected · watch data may be stale";
-            StatusLabel.TextColor = healthy ? Color.FromArgb("#067647") : Color.FromArgb("#B42318");
+            StatusLabel.TextColor = healthy ? ThemePalette.Positive : ThemePalette.Negative;
 
             var previousWishlistId = selectedWishlist?.Id;
             wishlists = await api.GetWishlistsAsync() ?? Array.Empty<MobileWishlistResponse>();
@@ -72,7 +79,7 @@ public partial class WishlistsPage : ContentPage
         catch (Exception exception)
         {
             StatusLabel.Text = $"Wishlist error: {exception.Message}";
-            StatusLabel.TextColor = Color.FromArgb("#B42318");
+            StatusLabel.TextColor = ThemePalette.Negative;
             await DisplayAlertAsync("Wishlists", exception.Message, "OK");
         }
         finally
@@ -137,11 +144,88 @@ public partial class WishlistsPage : ContentPage
         }
     }
 
+    /// <summary>Applies the search box and scope chips to the visible card list.</summary>
+    private void ApplyWatchFilter()
+    {
+        var term = watchSearch.Trim();
+        var matches = items.Where(card =>
+        {
+            if (term.Length > 0 &&
+                !card.Ticker.Contains(term, StringComparison.OrdinalIgnoreCase) &&
+                !card.DisplayTitle.Contains(term, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return watchScope switch
+            {
+                "signal" => card.StatusText.Contains("Eligible", StringComparison.OrdinalIgnoreCase),
+                "trade" => !String.IsNullOrWhiteSpace(card.TradeText),
+                "news" => card.HasNewsLink,
+                _ => true
+            };
+        }).ToList();
+
+        visibleItems.Clear();
+        foreach (var card in matches)
+        {
+            visibleItems.Add(card);
+        }
+
+        if (WatchCountLabel is not null)
+        {
+            WatchCountLabel.Text = matches.Count == items.Count
+                ? $"{items.Count}"
+                : $"{matches.Count} of {items.Count}";
+        }
+
+        UpdateWatchScopeButtons();
+    }
+
+    private void UpdateWatchScopeButtons()
+    {
+        var buttons = new (Button Button, string Scope)[]
+        {
+            (WatchAllButton, "all"),
+            (WatchSignalButton, "signal"),
+            (WatchTradeButton, "trade"),
+            (WatchNewsButton, "news")
+        };
+
+        foreach (var (button, scope) in buttons)
+        {
+            if (button is null)
+            {
+                continue;
+            }
+
+            var selected = watchScope == scope;
+            button.BackgroundColor = selected ? ThemePalette.Accent : ThemePalette.SurfacePanel;
+            button.TextColor = selected ? Colors.White : ThemePalette.TextPrimary;
+        }
+    }
+
+    private void OnWatchFilterChanged(object? sender, TextChangedEventArgs e)
+    {
+        watchSearch = e.NewTextValue ?? String.Empty;
+        ApplyWatchFilter();
+    }
+
+    private void OnWatchScopeSelected(object? sender, EventArgs e)
+    {
+        if (sender is Button { CommandParameter: string scope } && watchScope != scope)
+        {
+            watchScope = scope;
+            ApplyWatchFilter();
+        }
+    }
+
     private void RenderWishlist()
     {
         if (selectedWishlist is null)
         {
             items.Clear();
+            ApplyWatchFilter();
             WishlistDetailLabel.Text = "No group";
             StockCountLabel.Text = String.Empty;
             return;
@@ -150,7 +234,7 @@ public partial class WishlistsPage : ContentPage
         WishlistDetailLabel.Text = selectedWishlist.DetailText;
         StockCountLabel.Text = $"{selectedWishlist.ActiveItemCount} active";
         ObserveButton.Text = selectedWishlist.IsObserved ? "Pause" : "Observe";
-        ObserveButton.BackgroundColor = selectedWishlist.IsObserved ? Color.FromArgb("#B42318") : Color.FromArgb("#067647");
+        ObserveButton.BackgroundColor = selectedWishlist.IsObserved ? ThemePalette.Negative : ThemePalette.Positive;
 
         var desired = selectedWishlist.Items
             .Where(item => item.Active)
@@ -180,6 +264,8 @@ public partial class WishlistsPage : ContentPage
                 existing.UpdateStatic(item);
             }
         }
+
+        ApplyWatchFilter();
     }
 
     private void RenderDesk(MobileWishlistDeskResponse desk)
@@ -188,7 +274,7 @@ public partial class WishlistsPage : ContentPage
         WishlistDetailLabel.Text = selectedWishlist.DetailText;
         StockCountLabel.Text = $"{desk.Rows.Count} active | {desk.TotalText}";
         ObserveButton.Text = selectedWishlist.IsObserved ? "Pause" : "Observe";
-        ObserveButton.BackgroundColor = selectedWishlist.IsObserved ? Color.FromArgb("#B42318") : Color.FromArgb("#067647");
+        ObserveButton.BackgroundColor = selectedWishlist.IsObserved ? ThemePalette.Negative : ThemePalette.Positive;
 
         var desiredTickers = desk.Rows.Select(row => row.Ticker).ToHashSet(StringComparer.OrdinalIgnoreCase);
         for (var index = items.Count - 1; index >= 0; index--)
@@ -212,6 +298,8 @@ public partial class WishlistsPage : ContentPage
                 existing.UpdateFromDesk(row);
             }
         }
+
+        ApplyWatchFilter();
     }
 
     private void EnsureStreams()
@@ -538,7 +626,7 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
     private string newsText = "No related news";
     private string tradeText = "No open trade";
     private string? newsUrl;
-    private Color statusColor = Color.FromArgb("#667085");
+    private Color statusColor = ThemePalette.TextSecondary;
     private bool hasMovement;
     private bool hasNewsLink;
 
@@ -639,7 +727,7 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
         private set => SetField(ref hasNewsLink, value);
     }
 
-    public Color MovementColor => Color.FromArgb("#667085");
+    public Color MovementColor => ThemePalette.TextSecondary;
 
     public void UpdateStatic(MobileWishlistItemResponse item)
     {
@@ -706,10 +794,10 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
             ? "Waiting for VWAP/EMA/MACD/volume conditions."
             : reason;
         StatusColor = StatusText.Equals("Eligible", StringComparison.OrdinalIgnoreCase)
-            ? Color.FromArgb("#067647")
+            ? ThemePalette.Positive
             : StatusText.Equals("In trade", StringComparison.OrdinalIgnoreCase)
-                ? Color.FromArgb("#175CD3")
-                : Color.FromArgb("#667085");
+                ? ThemePalette.AccentStrong
+                : ThemePalette.TextSecondary;
     }
 
     private static string FirstNonEmpty(params string?[] values)

@@ -60,7 +60,10 @@ public sealed class AlpacaManualOrderService : IDisposable
         string? horizon,
         CancellationToken cancellationToken,
         bool allowExtendedHoursTrading = false,
-        Guid? ticketId = null)
+        Guid? ticketId = null,
+        string orderType = "limit",
+        decimal? triggerPrice = null,
+        string timeInForce = "day")
     {
         var normalizedTicker = NormalizeTicker(ticker);
         var normalizedSide = NormalizeSide(side);
@@ -69,9 +72,18 @@ public sealed class AlpacaManualOrderService : IDisposable
             throw new InvalidOperationException("Quantity must be greater than zero.");
         }
 
-        if (limitPrice <= 0m)
+        var normalizedType = (orderType ?? "limit").Trim().ToLowerInvariant();
+        var normalizedTif = (timeInForce ?? "day").Trim().ToLowerInvariant();
+
+        // A market order carries no price, so the bid/ask requirement applies only to
+        // the priced types.
+        if (normalizedType is "limit" or "stop_limit" && limitPrice <= 0m)
         {
             throw new InvalidOperationException("A valid bid/ask price is required before placing an order.");
+        }
+        if (normalizedType is "stop" or "stop_limit" && triggerPrice is not > 0m)
+        {
+            throw new InvalidOperationException("A stop trigger price is required for a stop or stop-limit order.");
         }
 
         if (!credentials.IsConfigured)
@@ -106,7 +118,35 @@ public sealed class AlpacaManualOrderService : IDisposable
                 limitPrice,
                 allowExtendedHoursTrading,
                 cancellationToken,
-                ticketId);
+                ticketId,
+                normalizedType,
+                triggerPrice,
+                normalizedTif);
+    }
+
+    /// <summary>
+    /// Cancels a working broker order.
+    /// </summary>
+    /// <remarks>
+    /// Cancel is the only in-place order mutation offered. Changing price or quantity
+    /// goes through cancel followed by a fresh reviewed ticket rather than a PATCH, so
+    /// an amended order is re-checked against quote age, spread, session, and admission
+    /// exactly like a new one. A silent amend would bypass that boundary.
+    /// </remarks>
+    public async Task<bool> CancelOrderAsync(string brokerOrderId, CancellationToken cancellationToken)
+    {
+        if (String.IsNullOrWhiteSpace(brokerOrderId))
+        {
+            throw new InvalidOperationException("A broker order id is required to cancel.");
+        }
+
+        if (!credentials.IsConfigured)
+        {
+            throw new InvalidOperationException("Alpaca paper credentials are not configured.");
+        }
+
+        var (_, provider) = GetClients();
+        return await provider.CancelOrderAsync(brokerOrderId.Trim(), cancellationToken);
     }
 
     public async Task<ManualBrokerContext> GetBrokerContextAsync(
@@ -240,15 +280,20 @@ public sealed class AlpacaManualOrderService : IDisposable
         decimal limitPrice,
         bool allowExtendedHoursTrading,
         CancellationToken cancellationToken,
-        Guid? ticketId)
+        Guid? ticketId,
+        string orderType = "limit",
+        decimal? triggerPrice = null,
+        string timeInForce = "day")
     {
         var (client, provider) = GetClients();
         var now = DateTimeOffset.UtcNow;
         var session = await provider.GetSessionAsync(now, cancellationToken);
+        // Passing the real settings means the policy refuses an extended-hours market
+        // or stop order rather than silently accepting one described as limit/day.
         ExtendedHoursOrderPolicy.Validate(
             session,
-            orderType: "limit",
-            timeInForce: "day",
+            orderType: orderType == "stop_limit" ? "limit" : orderType,
+            timeInForce: timeInForce,
             allowExtendedHoursTrading);
         if (session.Session == EquityTradingSession.Overnight)
         {
@@ -277,28 +322,33 @@ public sealed class AlpacaManualOrderService : IDisposable
             ? $"tf-manual-{normalizedSide}-{stableTicketId:N}"
             : $"tf-manual-{normalizedSide}-{normalizedTicker}-{now:yyyyMMddHHmmssfff}";
         var submitOutsideRegularHours = session.Session != EquityTradingSession.Regular;
-        object requestBody = submitOutsideRegularHours
-            ? new
-            {
-                symbol = normalizedTicker,
-                qty = quantity.ToString("0.########", CultureInfo.InvariantCulture),
-                side = normalizedSide,
-                type = "limit",
-                time_in_force = "day",
-                limit_price = FormatPrice(limitPrice),
-                extended_hours = true,
-                client_order_id = clientOrderId
-            }
-            : new
-            {
-                symbol = normalizedTicker,
-                qty = quantity.ToString("0.########", CultureInfo.InvariantCulture),
-                side = normalizedSide,
-                type = "limit",
-                time_in_force = "day",
-                limit_price = FormatPrice(limitPrice),
-                client_order_id = clientOrderId
-            };
+
+        // Built as a dictionary rather than two anonymous shapes so price fields are
+        // present only for the types that carry them. Alpaca rejects a market order
+        // that arrives with a limit_price.
+        var payload = new Dictionary<string, object>(StringComparer.Ordinal)
+        {
+            ["symbol"] = normalizedTicker,
+            ["qty"] = quantity.ToString("0.########", CultureInfo.InvariantCulture),
+            ["side"] = normalizedSide,
+            ["type"] = orderType,
+            ["time_in_force"] = timeInForce,
+            ["client_order_id"] = clientOrderId
+        };
+        if (orderType is "limit" or "stop_limit")
+        {
+            payload["limit_price"] = FormatPrice(limitPrice);
+        }
+        if (orderType is "stop" or "stop_limit" && triggerPrice is { } trigger)
+        {
+            payload["stop_price"] = FormatPrice(trigger);
+        }
+        if (submitOutsideRegularHours)
+        {
+            payload["extended_hours"] = true;
+        }
+
+        object requestBody = payload;
 
         using var content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v2/orders") { Content = content };

@@ -20,6 +20,7 @@ public static class EarningsApiEndpoints
         group.MapGet("/today-next-business-day", async (
             string? session,
             string? marketCap,
+            string? scope,
             EarningsMonitor monitor,
             NewsFeedService newsFeed,
             TimeProvider clock,
@@ -28,6 +29,10 @@ public static class EarningsApiEndpoints
             if (!EarningsCalendarFilter.TryParse(session, marketCap, out var filter, out var filterError))
             {
                 return Results.BadRequest(filterError);
+            }
+            if (!TryParseDateScope(scope, out var dateScope, out var scopeError))
+            {
+                return Results.BadRequest(scopeError);
             }
 
             var nowUtc = clock.GetUtcNow();
@@ -49,8 +54,9 @@ public static class EarningsApiEndpoints
                 nextBusinessDate,
                 news,
                 onlyShortHorizon: true,
-                filter));
-        });
+                filter,
+                dateScope));
+        }).AllowAnonymous();
 
         group.MapGet("/calendar", async (
             string from,
@@ -89,10 +95,12 @@ public static class EarningsApiEndpoints
                 EarningsCalendarDates.NextWeekday(operatorToday),
                 news,
                 onlyShortHorizon: false,
-                filter));
-        });
+                filter,
+                "custom"));
+        }).AllowAnonymous();
 
-        group.MapGet("/status", (EarningsMonitor monitor) => Results.Ok(monitor.GetStatus()));
+        group.MapGet("/status", (EarningsMonitor monitor) => Results.Ok(monitor.GetStatus()))
+            .AllowAnonymous();
 
         group.MapPost("/refresh", async (
             EarningsMonitor monitor,
@@ -113,18 +121,19 @@ public static class EarningsApiEndpoints
         DateOnly nextBusinessDate,
         IReadOnlyList<EarningsNewsEvidenceResponse> news,
         bool onlyShortHorizon,
-        EarningsCalendarFilter filter)
+        EarningsCalendarFilter filter,
+        string dateScope)
     {
         var mapped = snapshot.Items
             .Select(item => MapItem(item, operatorToday, nextBusinessDate))
-            .Where(item => !onlyShortHorizon || item.DayGroup is "today" or "nextBusinessDay")
+            .Where(item => !onlyShortHorizon || MatchesDateScope(item, dateScope))
             .ToArray();
         var filtered = mapped.Where(item => MatchesFilter(item, filter)).ToArray();
         var items = filtered
             .Where(item => item.ScheduledAtUtc >= snapshot.GeneratedAtUtc)
             .OrderBy(item => item.ScheduledAtUtc)
             .ThenBy(item => item.Ticker, StringComparer.Ordinal)
-            .Concat(mapped
+            .Concat(filtered
                 .Where(item => item.ScheduledAtUtc < snapshot.GeneratedAtUtc)
                 .OrderByDescending(item => item.ScheduledAtUtc)
                 .ThenBy(item => item.Ticker, StringComparer.Ordinal))
@@ -136,6 +145,7 @@ public static class EarningsApiEndpoints
             EarningsTimeZones.NewYork.Id,
             nextBusinessDate,
             nextBusinessDate.ToString("dddd, MMM d", CultureInfo.InvariantCulture),
+            dateScope,
             monitorStatus.IsRunning,
             (int)monitorStatus.AnalysisInterval.TotalSeconds,
             monitorStatus.LastAnalysisUtc,
@@ -143,7 +153,7 @@ public static class EarningsApiEndpoints
             newsWindow.EndUtc,
             newsWindow.Label,
             BuildFilterState(mapped, filter),
-            news,
+            FilterNews(news, items),
             items);
     }
 
@@ -156,7 +166,14 @@ public static class EarningsApiEndpoints
         var analysis = item.Analysis;
         var resultAssessment = analysis?.ResultAssessment ?? EarningsResultAssessment.Unknown;
         var breakoutAssessment = analysis?.BreakoutAssessment ?? EarningsBreakoutAssessment.InsufficientData;
-        var eps = EarningsEpsOutcomeClassifier.Classify(calendarEvent);
+        var providerEps = EarningsEpsOutcomeClassifier.Classify(calendarEvent);
+        var eps = EarningsEpsOutcomeClassifier.Classify(
+            analysis?.EffectiveEpsEstimate ?? providerEps.Estimate,
+            analysis?.EffectiveEpsActual ?? providerEps.Actual,
+            analysis?.EffectiveEpsSurprisePercent ?? providerEps.SurprisePercent);
+        var revenueEstimate = analysis?.EffectiveRevenueEstimateMillions ?? calendarEvent.RevenueEstimateMillions;
+        var revenueActual = analysis?.EffectiveRevenueActualMillions ?? calendarEvent.RevenueActualMillions;
+        var revenueSurprise = analysis?.EffectiveRevenueSurprisePercent ?? calendarEvent.RevenueSurprisePercent;
         var operatorTime = TimeZoneInfo.ConvertTime(calendarEvent.ScheduledAtUtc, EarningsTimeZones.OperatorLocal);
         var newYork = TimeZoneInfo.ConvertTime(calendarEvent.ScheduledAtUtc, EarningsTimeZones.NewYork);
         var localDate = DateOnly.FromDateTime(operatorTime.DateTime);
@@ -183,9 +200,11 @@ public static class EarningsApiEndpoints
             eps.SurprisePercent,
             eps.Outcome.ToString(),
             EarningsEpsOutcomeClassifier.Format(eps.Outcome),
-            calendarEvent.RevenueEstimateMillions,
-            calendarEvent.RevenueActualMillions,
-            calendarEvent.RevenueSurprisePercent,
+            revenueEstimate,
+            revenueActual,
+            revenueSurprise,
+            analysis?.ResultDataSource ?? calendarEvent.Provider,
+            calendarEvent.OneDayPriceReactionPercent,
             calendarEvent.Provider,
             calendarEvent.SourceUrl,
             calendarEvent.ProviderReceivedAtUtc,
@@ -212,6 +231,38 @@ public static class EarningsApiEndpoints
             analysis?.MacdHistogram,
             analysis?.SlotRelativeVolume,
             MapPreviousEarnings(item.PreviousReportedEvent));
+    }
+
+    private static bool TryParseDateScope(string? value, out string scope, out string? error)
+    {
+        scope = String.IsNullOrWhiteSpace(value) ? "both" : value.Trim();
+        if (scope is "both" or "today" or "nextBusinessDay")
+        {
+            error = null;
+            return true;
+        }
+
+        error = "scope must be one of: both, today, nextBusinessDay.";
+        return false;
+    }
+
+    private static bool MatchesDateScope(EarningsCalendarItemResponse item, string dateScope) => dateScope switch
+    {
+        "today" => item.DayGroup == "today",
+        "nextBusinessDay" => item.DayGroup == "nextBusinessDay",
+        _ => item.DayGroup is "today" or "nextBusinessDay"
+    };
+
+    private static IReadOnlyList<EarningsNewsEvidenceResponse> FilterNews(
+        IReadOnlyList<EarningsNewsEvidenceResponse> news,
+        IReadOnlyList<EarningsCalendarItemResponse> items)
+    {
+        var tickers = items.Select(item => item.Ticker).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return news.Where(item =>
+                item.Tickers.Equals("MARKET", StringComparison.OrdinalIgnoreCase) ||
+                item.Tickers.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                    .Any(tickers.Contains))
+            .ToArray();
     }
 
     private static PreviousEarningsResultResponse? MapPreviousEarnings(EarningsCalendarEvent? previous)
@@ -253,21 +304,32 @@ public static class EarningsApiEndpoints
         IReadOnlyList<EarningsCalendarItemResponse> items,
         EarningsCalendarFilter filter)
     {
+        // For session filter counts, apply the current market cap filter.
+        var itemsForSessions = items
+            .Where(item => EarningsCalendarFilter.MatchesMarketCap(item.MarketCapMillions, filter.MarketCapBand))
+            .ToArray();
+
+        // For market cap filter counts, apply the current session filter.
+        var itemsForCaps = items
+            .Where(item => filter.ReleaseWindow is null || 
+                           item.ReleaseWindow.Equals(filter.ReleaseWindow.ToString(), StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
         var sessions = new[]
         {
-            new EarningsFilterOptionResponse("all", "All sessions", items.Count),
-            SessionOption(items, EarningsReleaseWindow.BeforeMarketOpen, "Pre-market"),
-            SessionOption(items, EarningsReleaseWindow.DuringMarket, "Market hours"),
-            SessionOption(items, EarningsReleaseWindow.AfterMarketClose, "Post-market")
+            new EarningsFilterOptionResponse("all", "All sessions", itemsForSessions.Length),
+            SessionOption(itemsForSessions, EarningsReleaseWindow.BeforeMarketOpen, "Pre-market"),
+            SessionOption(itemsForSessions, EarningsReleaseWindow.DuringMarket, "Market hours"),
+            SessionOption(itemsForSessions, EarningsReleaseWindow.AfterMarketClose, "Post-market")
         };
         var caps = new[]
         {
-            new EarningsFilterOptionResponse("all", "All caps", items.Count),
-            MarketCapOption(items, EarningsMarketCapBand.Under10B, "Under $10B"),
-            MarketCapOption(items, EarningsMarketCapBand.From10BTo50B, "$10B-$50B"),
-            MarketCapOption(items, EarningsMarketCapBand.From50BTo100B, "$50B-$100B"),
-            MarketCapOption(items, EarningsMarketCapBand.AtLeast100B, "$100B+"),
-            MarketCapOption(items, EarningsMarketCapBand.Unknown, "Cap unknown")
+            new EarningsFilterOptionResponse("all", "All caps", itemsForCaps.Length),
+            MarketCapOption(itemsForCaps, EarningsMarketCapBand.Under10B, "Under $10B"),
+            MarketCapOption(itemsForCaps, EarningsMarketCapBand.From10BTo50B, "$10B-$50B"),
+            MarketCapOption(itemsForCaps, EarningsMarketCapBand.From50BTo100B, "$50B-$100B"),
+            MarketCapOption(itemsForCaps, EarningsMarketCapBand.AtLeast100B, "$100B+"),
+            MarketCapOption(itemsForCaps, EarningsMarketCapBand.Unknown, "Cap unknown")
         };
         return new EarningsFilterStateResponse(
             EarningsCalendarFilter.SessionValue(filter.ReleaseWindow),

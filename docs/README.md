@@ -32,6 +32,7 @@ Generated run artifacts and local databases are not documentation.
 
 ## Market Data And Operations
 
+- [Local Authentication](local-authentication.md)
 - [Candle And News Pipeline Audit](candle-news-pipeline-audit.md)
 - [Warm-Up Policy](warmup-policy.md)
 - [Warm-Up Service](warmup-service.md)
@@ -46,6 +47,7 @@ Generated run artifacts and local databases are not documentation.
 - [UI Verification Matrix](ui-verification-matrix.md)
 - [UI Design Optimization Plan](ui-design-optimization-plan.md)
 - [UI Production Trading-Desk Plan](ui-trading-desk-plan.md)
+- [UI Design Review](ui-design-review.md)
 - [Wishlist Architecture Plan](wishlist-architecture-plan.md)
 - [Tooling Choices](tooling.md)
 

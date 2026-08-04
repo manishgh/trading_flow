@@ -25,7 +25,7 @@
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                             <VerticalStackLayout Spacing="0">
                                 <Label Text="Quick Run" FontAttributes="Bold" FontSize="16" />
-                                <Label Text="Wishlist is the trading universe; Finviz can add today's screeners." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                <Label Text="Wishlist is the trading universe; Finviz can add today's screeners." FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                             </VerticalStackLayout>
                             <Button x:Name="RunButton" Grid.Column="1" Text="Start" Clicked="OnStartPaperRun" Padding="14,8" />
                         </Grid>
@@ -34,7 +34,7 @@
                         <Picker x:Name="StrategyPicker" Title="Strategy" SelectedIndexChanged="OnFormChanged" />
                         <Entry x:Name="ScreenerEntry" Placeholder="Optional Finviz query or URL" Keyboard="Url" TextChanged="OnFormChanged" />
 
-                        <Button x:Name="AdvancedToggle" Text="Advanced" Clicked="OnToggleAdvanced" Padding="12,7" BackgroundColor="#475467" />
+                        <Button x:Name="AdvancedToggle" Text="Advanced" Clicked="OnToggleAdvanced" Padding="12,7" BackgroundColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                         <VerticalStackLayout x:Name="AdvancedPanel" Spacing="8" IsVisible="False">
                             <Entry x:Name="RunNameEntry" Placeholder="Run name, optional" TextChanged="OnFormChanged" />
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
@@ -61,10 +61,10 @@
                             <Label Text="News Catalysts" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
                             <Button Grid.Column="1" Text="Test News" Clicked="OnTestNews" Padding="12,6" />
                         </Grid>
-                        <Label x:Name="NewsStatusLabel" Text="Preview catalysts for selected tickers. Paper runs only use news when the News checkbox is on." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label x:Name="NewsStatusLabel" Text="Preview catalysts for selected tickers. Paper runs only use news when the News checkbox is on." FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                         <CollectionView x:Name="NewsView" HeightRequest="240">
                             <CollectionView.EmptyView>
-                                <Label Text="No catalyst news loaded." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                                <Label Text="No catalyst news loaded." FontSize="13" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                             </CollectionView.EmptyView>
                             <CollectionView.ItemTemplate>
                                 <DataTemplate>
@@ -72,10 +72,10 @@
                                         <VerticalStackLayout Spacing="4">
                                             <Grid ColumnDefinitions="*,Auto">
                                                 <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="13" />
-                                                <Label Grid.Column="1" Text="{Binding SentimentText}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                                <Label Grid.Column="1" Text="{Binding SentimentText}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
                                             </Grid>
                                             <Label Text="{Binding DisplayHeadline}" FontSize="12" LineBreakMode="TailTruncation" />
-                                            <Label Text="{Binding DisplaySource}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
+                                            <Label Text="{Binding DisplaySource}" FontSize="11" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                                         </VerticalStackLayout>
                                     </Border>
                                 </DataTemplate>
@@ -89,7 +89,7 @@
                         <VerticalStackLayout Spacing="3">
                             <Label Text="Last Run" FontAttributes="Bold" FontSize="14" />
                             <Label x:Name="LastRunNameLabel" FontSize="13" LineBreakMode="TailTruncation" />
-                            <Label x:Name="LastRunStatusLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                            <Label x:Name="LastRunStatusLabel" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="TailTruncation" />
                         </VerticalStackLayout>
                         <Button Grid.Column="1" Text="Details" Clicked="OnOpenLastRunDetails" Padding="12,6" VerticalOptions="Center" />
                     </Grid>
@@ -98,7 +98,7 @@
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                     <VerticalStackLayout Spacing="0">
                         <Label Text="Active Runs" FontAttributes="Bold" FontSize="17" />
-                        <Label Text="Tap a run for positions, P/L and recent events." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="Tap a run for positions, P/L and recent events." FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                     </VerticalStackLayout>
                     <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
                 </Grid>
@@ -108,7 +108,7 @@
                         <Label Text="Stock Pulse Sessions" FontAttributes="Bold" FontSize="16" />
                         <CollectionView x:Name="AutomationSessionsView" HeightRequest="150">
                             <CollectionView.EmptyView>
-                                <Label Text="No alert-triggered paper sessions." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                                <Label Text="No alert-triggered paper sessions." FontSize="13" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                             </CollectionView.EmptyView>
                             <CollectionView.ItemTemplate>
                                 <DataTemplate>
@@ -116,10 +116,10 @@
                                         <VerticalStackLayout Spacing="4">
                                             <Grid ColumnDefinitions="*,Auto">
                                                 <Label Text="{Binding DisplayTitle}" FontAttributes="Bold" FontSize="14" LineBreakMode="TailTruncation" />
-                                                <Label Grid.Column="1" Text="{Binding Status}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                                <Label Grid.Column="1" Text="{Binding Status}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
                                             </Grid>
-                                            <Label Text="{Binding RunDetail}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
-                                            <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                            <Label Text="{Binding RunDetail}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="TailTruncation" />
+                                            <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="TailTruncation" />
                                         </VerticalStackLayout>
                                     </Border>
                                 </DataTemplate>
@@ -130,7 +130,7 @@
 
                 <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected" HeightRequest="280">
                     <CollectionView.EmptyView>
-                        <Label Text="No active paper runs. Use Last Run for the most recent completed, failed, or cancelled run." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="No active paper runs. Use Last Run for the most recent completed, failed, or cancelled run." FontSize="13" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                     </CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
@@ -138,11 +138,11 @@
                                 <VerticalStackLayout Spacing="6">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <Label Text="{Binding RunName}" FontAttributes="Bold" FontSize="16" LineBreakMode="TailTruncation" />
-                                        <Label Grid.Column="1" Text="{Binding Status}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                        <Label Grid.Column="1" Text="{Binding Status}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
                                     </Grid>
                                     <Label Text="{Binding ProgressText}" FontSize="13" />
-                                    <Label Text="{Binding ResultSummary}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                                    <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                    <Label Text="{Binding ResultSummary}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
+                                    <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="TailTruncation" />
                                     <Button Text="Details" Clicked="OnJobDetailsClicked" CommandParameter="{Binding .}" Padding="12,6" />
                                 </VerticalStackLayout>
                             </Border>
@@ -155,17 +155,17 @@
                         <Label x:Name="DetailTitle" FontAttributes="Bold" FontSize="17" />
                         <Label x:Name="DetailStatus" FontSize="13" />
                         <Label x:Name="ResultLabel" FontSize="13" />
-                        <Button Text="Cancel Run" Clicked="OnCancelSelectedJob" BackgroundColor="#B42318" />
-                        <Button Text="Cancel Broker Orders" Clicked="OnCancelBrokerOrders" BackgroundColor="#7A271A" />
+                        <Button Text="Cancel Run" Clicked="OnCancelSelectedJob" BackgroundColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" />
+                        <Button Text="Cancel Broker Orders" Clicked="OnCancelBrokerOrders" BackgroundColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" />
                         <Label Text="Open Positions" FontAttributes="Bold" FontSize="14" />
-                        <Label x:Name="PositionsEmptyLabel" Text="No open positions for this run." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label x:Name="PositionsEmptyLabel" Text="No open positions for this run." FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                         <CollectionView x:Name="PositionsView" HeightRequest="150">
                             <CollectionView.ItemTemplate>
                                 <DataTemplate>
                                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Padding="0,2">
                                         <VerticalStackLayout Spacing="0">
                                             <Label Text="{Binding HeaderText}" FontAttributes="Bold" FontSize="13" />
-                                            <Label Text="{Binding DetailText}" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" />
+                                            <Label Text="{Binding DetailText}" FontSize="11" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                                         </VerticalStackLayout>
                                         <Label Grid.Column="1" Text="{Binding PnlText}" FontSize="13" VerticalTextAlignment="Center" />
                                     </Grid>

@@ -1,14 +1,15 @@
 using System.Collections.ObjectModel;
 using TradingFlow.Mobile.Services;
+using TradingFlow.Mobile.Resources.Styles;
 
 namespace TradingFlow.Mobile.Pages;
 
 public partial class NotificationsPage : ContentPage
 {
-    private static readonly Color NeutralAccentColor = Color.FromArgb("#176B87");
-    private static readonly Color SignalColor = Color.FromArgb("#116D42");
-    private static readonly Color ErrorColor = Color.FromArgb("#A12A2A");
-    private static readonly Color InactiveColor = Color.FromArgb("#667085");
+    private static readonly Color NeutralAccentColor = ThemePalette.Accent;
+    private static readonly Color SignalColor = ThemePalette.Positive;
+    private static readonly Color ErrorColor = ThemePalette.Negative;
+    private static readonly Color InactiveColor = ThemePalette.TextSecondary;
 
     private readonly ObservableCollection<ActivityRow> visibleRows = new();
     private readonly IDispatcherTimer refreshTimer;

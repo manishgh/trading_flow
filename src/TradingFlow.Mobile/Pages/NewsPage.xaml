@@ -60,7 +60,7 @@
                            HorizontalTextAlignment="Center" />
                     <Label Text="Fetch providers or change the ticker filter."
                            FontSize="13"
-                           TextColor="{StaticResource TextSecondary}"
+                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                            HorizontalTextAlignment="Center" />
                 </VerticalStackLayout>
             </CollectionView.EmptyView>
@@ -79,7 +79,7 @@
                                 <Label Grid.Column="1"
                                        Text="{Binding DisplayProvider}"
                                        FontSize="12"
-                                       TextColor="{StaticResource TextSecondary}" />
+                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                                 <Label Grid.Column="2"
                                        Text="{Binding SentimentText}"
                                        FontSize="12" />
@@ -92,17 +92,17 @@
                             <Label Text="{Binding DisplaySummary}"
                                    IsVisible="{Binding HasSummary}"
                                    FontSize="13"
-                                   TextColor="{StaticResource TextSecondary}"
+                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                    LineBreakMode="WordWrap"
                                    MaxLines="3" />
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                 <Label Text="{Binding DisplaySource}"
                                        FontSize="12"
-                                       TextColor="{StaticResource TextSecondary}" />
+                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                                 <Label Grid.Column="1"
                                        Text="{Binding DisplayTimestamp}"
                                        FontSize="12"
-                                       TextColor="{StaticResource TextSecondary}" />
+                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                             </Grid>
                         </VerticalStackLayout>
                     </Border>

@@ -61,7 +61,7 @@
                 <DataTemplate>
                     <Grid Padding="2,14,2,8" ColumnDefinitions="*,Auto">
                         <Label Text="{Binding Name}" FontSize="18" FontAttributes="Bold" />
-                        <Label Grid.Column="1" Text="{Binding CountText}" TextColor="{StaticResource TextSecondary}" />
+                        <Label Grid.Column="1" Text="{Binding CountText}" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                     </Grid>
                 </DataTemplate>
             </CollectionView.GroupHeaderTemplate>
@@ -74,7 +74,7 @@
                            HorizontalTextAlignment="Center" />
                     <Label Text="No companies report in the monitored window."
                            FontSize="13"
-                           TextColor="{StaticResource TextSecondary}"
+                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                            HorizontalTextAlignment="Center" />
                 </VerticalStackLayout>
             </CollectionView.EmptyView>
@@ -98,10 +98,10 @@
                             </Grid>
                             <Label Text="{Binding Item.MarketCapText}"
                                    FontSize="11"
-                                   TextColor="{StaticResource TextSecondary}" />
+                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                             <Label Text="{Binding Item.ScheduleText}"
                                    FontSize="13"
-                                   TextColor="{StaticResource TextSecondary}" />
+                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                             <Label Text="{Binding Item.PriceText}"
                                    FontSize="13"
                                    FontAttributes="Bold" />
@@ -112,7 +112,7 @@
                             <Label Text="{Binding Item.EpsValuesText}" FontSize="12" />
                             <Label Text="{Binding Item.PreviousEpsText}"
                                    FontSize="12"
-                                   TextColor="{StaticResource TextSecondary}"
+                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                    LineBreakMode="WordWrap" />
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                 <Button Text="Details"
@@ -129,23 +129,23 @@
                                         Clicked="OnOpenNews" />
                             </Grid>
                             <VerticalStackLayout IsVisible="{Binding IsExpanded}" Spacing="5">
-                                <BoxView HeightRequest="1" Color="{StaticResource BorderDefault}" />
+                                <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}" />
                                 <Label Text="{Binding Item.AnalysisReason}"
                                        FontSize="13"
                                        LineBreakMode="WordWrap" />
                                 <Label Text="{Binding TechnicalText}"
                                        FontSize="12"
-                                       TextColor="{StaticResource TextSecondary}"
+                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                        LineBreakMode="WordWrap" />
                                 <Label Text="{Binding Item.ScheduledNewYorkText, StringFormat='New York {0}'}"
                                        FontSize="12"
-                                       TextColor="{StaticResource TextSecondary}" />
+                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                                 <Label Text="{Binding Item.ScheduledUtcText}"
                                        FontSize="12"
-                                       TextColor="{StaticResource TextSecondary}" />
+                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                                 <Label Text="{Binding ResultObservedText}"
                                        FontSize="12"
-                                       TextColor="{StaticResource TextSecondary}"
+                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                        IsVisible="{Binding HasResultObservedTime}" />
                             </VerticalStackLayout>
                         </VerticalStackLayout>

@@ -84,5 +84,25 @@ public sealed class AuditModelTests
             return Task.FromResult<IReadOnlyList<DecisionAuditRecord>>(
                 records.Where(record => record.RunName == runName).ToArray());
         }
+
+        public Task<DecisionAuditPage> GetAuditPageAsync(
+            string runName,
+            string? decision,
+            string? ticker,
+            int skip,
+            int take,
+            CancellationToken cancellationToken)
+        {
+            var matching = records
+                .Where(record => record.RunName == runName)
+                .Where(record => String.IsNullOrWhiteSpace(decision) || record.Decision == decision)
+                .Where(record => String.IsNullOrWhiteSpace(ticker) ||
+                    record.Ticker.Contains(ticker, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(record => record.Timestamp)
+                .ToArray();
+            return Task.FromResult(new DecisionAuditPage(
+                matching.Skip(skip).Take(take).ToArray(),
+                matching.Length));
+        }
     }
 }

@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using TradingFlow.Mobile.Services;
+using TradingFlow.Mobile.Resources.Styles;
 
 namespace TradingFlow.Mobile.Pages;
 
@@ -90,12 +91,12 @@ public partial class EarningsPage : ContentPage
             StatusLabel.Text = response.MonitoringActive
                 ? $"{response.Items.Count} event(s) | monitoring every {cadence} | updated {response.GeneratedAtUtc.LocalDateTime:HH:mm:ss}"
                 : $"{response.Items.Count} event(s) | monitor offline | updated {response.GeneratedAtUtc.LocalDateTime:HH:mm:ss}";
-            StatusLabel.TextColor = Color.FromArgb("#067647");
+            StatusLabel.TextColor = ThemePalette.Positive;
         }
         catch (Exception exception)
         {
             StatusLabel.Text = $"Earnings error: {exception.Message}";
-            StatusLabel.TextColor = Color.FromArgb("#B42318");
+            StatusLabel.TextColor = ThemePalette.Negative;
         }
         finally
         {
@@ -143,7 +144,7 @@ public partial class EarningsPage : ContentPage
         catch (Exception exception)
         {
             StatusLabel.Text = $"Refresh error: {exception.Message}";
-            StatusLabel.TextColor = Color.FromArgb("#B42318");
+            StatusLabel.TextColor = ThemePalette.Negative;
         }
     }
 

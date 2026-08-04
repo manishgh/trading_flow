@@ -1,0 +1,249 @@
+/* Feature workstream. Owned by workstream C; tokens only.
+
+   Two surfaces live here, both built at runtime by wwwroot/js/command-palette.js
+   and wwwroot/js/desk-presets.js and appended to document.body. No Razor page
+   carries this markup, so every selector below is authored against DOM those two
+   scripts create. Colour comes from the shared token set only; visibility is the
+   `hidden` attribute, which site.css already forces to `display: none`. */
+
+/* ---------------------------------------------------------------------------
+   Command palette
+   A modal layer. .signal-toast is the highest content layer at z-index 1000, so
+   the palette takes the next one up and covers it while open.
+   --------------------------------------------------------------------------- */
+
+.tf-palette {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  padding: 8vh 16px 24px;
+}
+
+.tf-palette-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  opacity: 0.8;
+}
+
+.tf-palette-dialog {
+  position: relative;
+  width: min(640px, 100%);
+  max-height: 78vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line-control);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tf-palette-input {
+  min-height: 44px;
+  width: 100%;
+}
+
+.tf-palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.tf-palette-option {
+  align-items: center;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 6px 10px;
+}
+
+.tf-palette-option + .tf-palette-option {
+  border-top: 1px solid var(--line);
+}
+
+.tf-palette-option:hover {
+  background: var(--panel-inset);
+}
+
+/* Selection is the keyboard cursor, so it must outrank a stray hover. */
+.tf-palette-option[aria-selected="true"],
+.tf-palette-option[aria-selected="true"]:hover {
+  background: var(--accent-surface);
+  border-left-color: var(--accent);
+}
+
+.tf-palette-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tf-palette-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.tf-palette-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tf-palette-group {
+  color: var(--muted);
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tf-palette-empty {
+  color: var(--muted);
+  padding: 12px 10px;
+}
+
+.tf-palette-foot {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+@media (max-width: 620px) {
+  .tf-palette {
+    padding: 4vh 8px 16px;
+  }
+  .tf-palette-dialog {
+    max-height: 88vh;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Saved desk views
+   A strip under the desk controls. Applying a preset is a plain navigation to a
+   stored query string, so every control here is a button that ends in a
+   location change or a localStorage write - never a form submission.
+   --------------------------------------------------------------------------- */
+
+.tf-preset-strip {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 16px;
+  padding: 8px 12px;
+}
+
+.tf-preset-heading {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.tf-preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tf-preset-chip {
+  display: inline-flex;
+}
+
+.tf-preset-strip .tf-preset-apply,
+.tf-preset-strip .tf-preset-delete,
+.tf-preset-strip .tf-preset-save,
+.tf-preset-strip .tf-preset-cancel,
+.tf-preset-strip .tf-preset-confirm {
+  min-height: 44px;
+}
+
+.tf-preset-strip .tf-preset-apply {
+  background: var(--panel-inset);
+  border: 1px solid var(--line-control);
+  border-radius: 6px 0 0 6px;
+  color: var(--ink);
+  font-weight: 600;
+  padding: 8px 12px;
+}
+
+.tf-preset-strip .tf-preset-delete {
+  background: var(--panel-inset);
+  border: 1px solid var(--line-control);
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+  color: var(--muted);
+  min-width: 44px;
+  padding: 8px;
+}
+
+.tf-preset-strip .tf-preset-delete:hover {
+  color: var(--bad);
+}
+
+.tf-preset-strip .tf-preset-save,
+.tf-preset-strip .tf-preset-cancel {
+  background: var(--panel);
+  border: 1px solid var(--line-control);
+  color: var(--accent-strong);
+  padding: 8px 12px;
+}
+
+.tf-preset-form {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.tf-preset-form label {
+  margin: 0;
+}
+
+.tf-preset-form input {
+  width: min(260px, 100%);
+}
+
+.tf-preset-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.tf-preset-note[data-preset-tone="error"] {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+/* Neither surface animates. The global prefers-reduced-motion rule in site.css
+   already neutralises transitions; this states the intent locally so a future
+   hover flourish cannot reintroduce motion on a live trading screen. */
+@media (prefers-reduced-motion: reduce) {
+  .tf-palette,
+  .tf-palette *,
+  .tf-preset-strip,
+  .tf-preset-strip * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

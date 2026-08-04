@@ -6,6 +6,7 @@ public partial class MorePage : ContentPage
 {
     private readonly ObservableCollection<MoreToolItem> tools =
     [
+        new("Sign in", "Authenticate for trading, research, and operational APIs.", nameof(LoginPage)),
         new("Earnings", "Upcoming releases, market reaction, and catalyst evidence.", nameof(EarningsPage)),
         new("News", "Rolling Finviz and Alpaca market news.", nameof(NewsPage)),
         new("Automation", "Stock Pulse capture and paper automation sessions.", nameof(AutomationPage)),

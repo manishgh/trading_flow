@@ -40,8 +40,12 @@ public sealed class DatabaseMigrationTests
         Assert.Contains("Wishlists", tables);
         Assert.Contains("EarningsCalendarEvents", tables);
         Assert.Contains("EarningsAnalysisSnapshots", tables);
+        Assert.Contains("AspNetUsers", tables);
+        Assert.Contains("AspNetRoles", tables);
         Assert.All(ProductionTables, table => Assert.Contains(table, tables));
-        Assert.Equal(7, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
+        Assert.Equal(
+            db.Database.GetMigrations().Count(),
+            await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
         Assert.Empty(await db.Database.GetPendingMigrationsAsync());
 
         var requiredProvenance = new[] { "run_id", "schema_version", "config_hash", "code_version" };
@@ -54,6 +58,13 @@ public sealed class DatabaseMigrationTests
         var positionColumns = await ReadColumnsAsync(connection, "position_events");
         Assert.Contains("strategy_id", positionColumns);
         Assert.Contains("execution_strategy_id", positionColumns);
+        var earningsAnalysisColumns = await ReadColumnsAsync(connection, "EarningsAnalysisSnapshots");
+        Assert.Contains("EffectiveEpsActual", earningsAnalysisColumns);
+        Assert.Contains("EffectiveRevenueActualMillions", earningsAnalysisColumns);
+        Assert.Contains("ResultDataSource", earningsAnalysisColumns);
+        var identityColumns = await ReadColumnsAsync(connection, "AspNetUsers");
+        Assert.Contains("PasswordHash", identityColumns);
+        Assert.DoesNotContain("Password", identityColumns);
     }
 
     [Fact]
@@ -93,10 +104,17 @@ public sealed class DatabaseMigrationTests
 
         var tables = await ReadTablesAsync(connection);
         Assert.All(ProductionTables, table => Assert.Contains(table, tables));
-        Assert.Equal(7, await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
+        await using var verificationDb = CreateContext(connection);
+        Assert.Equal(
+            verificationDb.Database.GetMigrations().Count(),
+            await ScalarLongAsync(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\";"));
         var positionColumns = await ReadColumnsAsync(connection, "position_events");
         Assert.Contains("strategy_id", positionColumns);
         Assert.Contains("execution_strategy_id", positionColumns);
+        var earningsAnalysisColumns = await ReadColumnsAsync(connection, "EarningsAnalysisSnapshots");
+        Assert.Contains("EffectiveEpsActual", earningsAnalysisColumns);
+        Assert.Contains("EffectiveRevenueActualMillions", earningsAnalysisColumns);
+        Assert.Contains("ResultDataSource", earningsAnalysisColumns);
     }
 
     [Fact]

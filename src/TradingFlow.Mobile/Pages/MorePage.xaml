@@ -32,7 +32,7 @@
                                    FontSize="16" />
                             <Label Text="{Binding Description}"
                                    FontSize="13"
-                                   TextColor="{StaticResource TextSecondary}"
+                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                    LineBreakMode="WordWrap" />
                         </VerticalStackLayout>
                         <Label Grid.Column="1"

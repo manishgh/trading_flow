@@ -31,7 +31,7 @@
                 <Label x:Name="PositionLabel" Style="{StaticResource Caption}" />
             </VerticalStackLayout>
 
-            <BoxView HeightRequest="1" Color="{StaticResource BorderDefault}" />
+            <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}" />
 
             <VerticalStackLayout Spacing="8">
                 <Label Text="Model Intelligence" FontAttributes="Bold" FontSize="18" />
@@ -49,7 +49,7 @@
                 <Label x:Name="ModelIdentityLabel" Style="{StaticResource Caption}" LineBreakMode="WordWrap" />
                 <Label x:Name="ModelUnavailableLabel"
                        IsVisible="False"
-                       TextColor="{StaticResource StateWarning}"
+                       TextColor="{AppThemeBinding Light={StaticResource StateWarningLight}, Dark={StaticResource StateWarningDark}}"
                        LineBreakMode="WordWrap" />
             </VerticalStackLayout>
 

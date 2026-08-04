@@ -109,6 +109,82 @@ public sealed class WishlistsModel : PageModel
         return RedirectToPage("/Wishlists", new { id = targetWishlistId });
     }
 
+    /// <summary>
+    /// Adds many symbols to a group in one submit.
+    /// </summary>
+    /// <remarks>
+    /// Accepts anything an operator is likely to paste: commas, whitespace, newlines,
+    /// or a mix. Adding is idempotent, so re-pasting a list that overlaps an existing
+    /// group is safe and reports only what was genuinely new.
+    /// </remarks>
+    public async Task<IActionResult> OnPostAddTickersAsync(
+        Guid targetWishlistId,
+        string? tickers,
+        CancellationToken cancellationToken)
+    {
+        var symbols = ParseTickerList(tickers);
+        if (symbols.Count == 0)
+        {
+            ErrorMessage = "Enter at least one ticker.";
+            return RedirectToPage("/Wishlists", new { id = targetWishlistId });
+        }
+
+        var wishlist = await repository.GetByIdAsync(targetWishlistId, cancellationToken);
+        var existing = (wishlist?.Items ?? [])
+            .Select(item => item.Ticker)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var added = 0;
+        foreach (var symbol in symbols)
+        {
+            await repository.AddOrUpdateItemAsync(targetWishlistId, symbol, null, null, cancellationToken);
+            if (existing.Add(symbol))
+            {
+                added += 1;
+            }
+        }
+
+        var alreadyPresent = symbols.Count - added;
+        StatusMessage = alreadyPresent == 0
+            ? $"Added {added} symbol{(added == 1 ? "" : "s")}."
+            : $"Added {added} symbol{(added == 1 ? "" : "s")}; {alreadyPresent} already present.";
+        return RedirectToPage("/Wishlists", new { id = targetWishlistId });
+    }
+
+    /// <summary>Removes many symbols from a group in one submit.</summary>
+    public async Task<IActionResult> OnPostRemoveTickersAsync(
+        Guid wishlistId,
+        string? tickers,
+        CancellationToken cancellationToken)
+    {
+        var symbols = ParseTickerList(tickers);
+        if (symbols.Count == 0)
+        {
+            ErrorMessage = "Select at least one symbol to remove.";
+            return RedirectToPage("/Wishlists", new { id = wishlistId });
+        }
+
+        foreach (var symbol in symbols)
+        {
+            await repository.RemoveItemAsync(wishlistId, symbol, cancellationToken);
+        }
+
+        StatusMessage = $"Removed {symbols.Count} symbol{(symbols.Count == 1 ? "" : "s")}.";
+        return RedirectToPage("/Wishlists", new { id = wishlistId });
+    }
+
+    /// <summary>Splits a pasted or multi-select ticker list into distinct symbols.</summary>
+    internal static IReadOnlyList<string> ParseTickerList(string? value)
+    {
+        return (value ?? String.Empty)
+            .Split([',', ' ', '\t', '\r', '\n', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(symbol => symbol.ToUpperInvariant())
+            .Where(symbol => symbol.Length is > 0 and <= 16 &&
+                symbol.All(character => Char.IsLetterOrDigit(character) || character is '.' or '-'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     public async Task<IActionResult> OnPostRemoveTickerAsync(Guid wishlistId, string ticker, CancellationToken cancellationToken)
     {
         await repository.RemoveItemAsync(wishlistId, ticker, cancellationToken);

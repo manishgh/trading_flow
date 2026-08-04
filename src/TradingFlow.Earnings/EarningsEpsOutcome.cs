@@ -24,6 +24,11 @@ public static class EarningsEpsOutcomeClassifier
         var estimate = calendarEvent.EpsEstimate ?? calendarEvent.ReportedEpsEstimate;
         var actual = calendarEvent.EpsActual ?? calendarEvent.ReportedEpsActual;
         var surprise = calendarEvent.EpsSurprisePercent ?? calendarEvent.ReportedEpsSurprisePercent;
+        return Classify(estimate, actual, surprise);
+    }
+
+    public static EarningsEpsResult Classify(decimal? estimate, decimal? actual, decimal? surprise)
+    {
         var outcome = actual is null
             ? EarningsEpsOutcome.NotReported
             : estimate is null

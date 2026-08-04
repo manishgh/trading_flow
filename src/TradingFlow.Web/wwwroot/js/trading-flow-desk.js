@@ -317,4 +317,71 @@ if (wishlistId) {
     window.setInterval(refreshFreshness, 5000);
 }
 
+
+// News scope. One panel serves both "this group" and "the selected symbol" so the
+// same story is never rendered twice on the same screen.
+const newsPanel = document.querySelector("[data-selected-ticker-scope]");
+if (newsPanel) {
+    const scopeButtons = [...newsPanel.querySelectorAll("[data-news-scope]")];
+    const caption = newsPanel.querySelector("[data-news-scope-caption]");
+    const countLabel = newsPanel.querySelector("[data-wishlist-news-count]");
+    const emptyLabel = newsPanel.querySelector("[data-wishlist-news-empty]");
+    const selectedTicker = (newsPanel.dataset.selectedTickerScope || "").toUpperCase();
+
+    const applyScope = scope => {
+        const items = [...newsPanel.querySelectorAll("[data-news-item]")];
+        let visible = 0;
+        items.forEach(item => {
+            const matches = scope === "group" ||
+                (item.dataset.newsTicker || "").toUpperCase() === selectedTicker;
+            item.hidden = !matches;
+            if (matches) visible += 1;
+        });
+        scopeButtons.forEach(button => {
+            const active = button.dataset.newsScope === scope;
+            button.classList.toggle("active", active);
+            button.setAttribute("aria-pressed", String(active));
+        });
+        if (countLabel) countLabel.textContent = String(visible);
+        if (emptyLabel) emptyLabel.hidden = visible !== 0;
+        if (caption) {
+            caption.textContent = scope === "group"
+                ? "Newest stories across every symbol in this group."
+                : `Newest stories mentioning ${selectedTicker}.`;
+        }
+    };
+
+    scopeButtons.forEach(button =>
+        button.addEventListener("click", () => applyScope(button.dataset.newsScope)));
+}
+
 window.TradingFlowDesk = { applyActivity, applyQuotes, setConnectionState };
+
+// Keyboard entry to the order ticket for the selected symbol.
+// Deliberately opens the reviewed ticket rather than submitting anything: a
+// keystroke must never place an order.
+document.addEventListener("keydown", event => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+    const target = event.target;
+    const typing = target instanceof HTMLElement &&
+        (target.isContentEditable ||
+            ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+    if (typing) return;
+
+    const key = event.key.toLowerCase();
+    if (key !== "b" && key !== "s") return;
+
+    const link = document.querySelector(`[data-order-shortcut="${key === "b" ? "buy" : "sell"}"]`);
+    if (!link) return;
+
+    event.preventDefault();
+    link.click();
+});
+
+// Changing the group or strategy is a navigation, not a filter edit: submit at once
+// rather than making the operator find Apply. Text and numeric inputs still wait for
+// an explicit submit so a half-typed value never triggers a reload.
+document.querySelectorAll("[data-auto-submit]").forEach(control => {
+    control.addEventListener("change", () => control.form?.submit());
+});

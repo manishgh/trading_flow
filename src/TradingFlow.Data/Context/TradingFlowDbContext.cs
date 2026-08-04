@@ -1,13 +1,17 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+using TradingFlow.Data.Identity;
 using TradingFlow.Domain.Locking;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Domain.Earnings;
+using TradingFlow.Domain.Portfolio;
 
 namespace TradingFlow.Data.Context;
 
-public sealed class TradingFlowDbContext : DbContext
+public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, IdentityRole<Guid>, Guid>
 {
     public TradingFlowDbContext(DbContextOptions<TradingFlowDbContext> options) : base(options)
     {
@@ -22,6 +26,9 @@ public sealed class TradingFlowDbContext : DbContext
     public DbSet<Wishlist> Wishlists => Set<Wishlist>();
     public DbSet<WishlistItem> WishlistItems => Set<WishlistItem>();
     public DbSet<WishlistSignal> WishlistSignals => Set<WishlistSignal>();
+    public DbSet<ScreenerPreset> ScreenerPresets => Set<ScreenerPreset>();
+    public DbSet<AdvisoryPortfolio> AdvisoryPortfolios => Set<AdvisoryPortfolio>();
+    public DbSet<AdvisoryPosition> AdvisoryPositions => Set<AdvisoryPosition>();
     public DbSet<ProductionRun> ProductionRuns => Set<ProductionRun>();
     public DbSet<OrderIntentRecord> OrderIntents => Set<OrderIntentRecord>();
     public DbSet<OrderEventRecord> OrderEvents => Set<OrderEventRecord>();
@@ -37,6 +44,14 @@ public sealed class TradingFlowDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<TradingFlowUser>(entity =>
+        {
+            entity.Property(user => user.DisplayName).HasMaxLength(160);
+            entity.HasIndex(user => user.NormalizedUserName).IsUnique();
+        });
+
         modelBuilder.ConfigureProductionPersistence();
 
         modelBuilder.Entity<TickerLockEntity>(entity =>
@@ -117,6 +132,15 @@ public sealed class TradingFlowDbContext : DbContext
             entity.HasIndex(e => e.IsObserved);
         });
 
+        modelBuilder.Entity<ScreenerPreset>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).HasMaxLength(120).IsRequired();
+            entity.Property(e => e.Category).HasMaxLength(50).IsRequired();
+            entity.Property(e => e.FilterQuery).HasMaxLength(500).IsRequired();
+            entity.HasIndex(e => e.Name).IsUnique();
+        });
+
         modelBuilder.Entity<WishlistItem>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -176,12 +200,30 @@ public sealed class TradingFlowDbContext : DbContext
             entity.Property(snapshot => snapshot.NewsHeadline).HasMaxLength(1000);
             entity.Property(snapshot => snapshot.NewsUrl).HasMaxLength(1000);
             entity.Property(snapshot => snapshot.NewsProvider).HasMaxLength(100);
+            entity.Property(snapshot => snapshot.ResultDataSource).HasMaxLength(120);
             entity.HasIndex(snapshot => new { snapshot.EarningsEventId, snapshot.AnalyzedAtUtc });
             entity.HasIndex(snapshot => new { snapshot.Ticker, snapshot.AnalyzedAtUtc });
             entity.HasOne<EarningsCalendarEvent>()
                 .WithMany()
                 .HasForeignKey(snapshot => snapshot.EarningsEventId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<AdvisoryPortfolio>(b =>
+        {
+            b.ToTable("AdvisoryPortfolios");
+            b.HasKey(e => e.Id);
+            
+            b.HasMany(e => e.Positions)
+             .WithOne(e => e.Portfolio)
+             .HasForeignKey(e => e.PortfolioId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AdvisoryPosition>(b =>
+        {
+            b.ToTable("AdvisoryPositions");
+            b.HasKey(e => e.Id);
+            b.HasIndex(e => e.Ticker);
         });
     }
 }

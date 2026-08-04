@@ -36,6 +36,7 @@ public sealed class OperationalStatusService : IDisposable
     private readonly IAccountReconciliationService reconciliation;
     private readonly IEntryAdmissionControl admission;
     private readonly MarketPredictorHttpClient marketPredictor;
+    private readonly TradingEnvironmentService environments;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<OperationalStatusService> logger;
     private readonly SemaphoreSlim providerLock = new(1, 1);
@@ -48,9 +49,11 @@ public sealed class OperationalStatusService : IDisposable
         IAccountReconciliationService reconciliation,
         IEntryAdmissionControl admission,
         MarketPredictorHttpClient marketPredictor,
+        TradingEnvironmentService environments,
         TimeProvider timeProvider,
         ILogger<OperationalStatusService> logger)
     {
+        this.environments = environments;
         this.credentials = credentials;
         this.rawArchiveWriter = rawArchiveWriter;
         this.synchronization = synchronization;
@@ -90,7 +93,7 @@ public sealed class OperationalStatusService : IDisposable
             : String.Join("; ", admissionSnapshot.Blocks.Select(block => $"{block.Code}: {block.Detail}"));
 
         return new OperationalStatusSnapshot(
-            "PAPER",
+            environments.GetState(environments.Default).Label,
             session?.Session.ToString().ToLowerInvariant() ?? "unknown",
             session is null
                 ? "Alpaca calendar unavailable; execution remains fail-closed."

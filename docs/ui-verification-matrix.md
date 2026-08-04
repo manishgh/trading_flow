@@ -158,3 +158,84 @@ remain documented manual release gates and must be completed on a connected devi
 
 Physical-device screenshots, TalkBack, Accessibility Scanner, and 200% font-scale checks remain
 manual release gates and are not reported as complete by this audit.
+
+## TD1 - design system, themes, and haptics (2026-08-01)
+
+- One token vocabulary replaces nine duplicated alias pairs. `--line-control` (>= 3:1) now carries
+  the boundary of interactive controls; `--line` stays subtle for dividers. This closes a WCAG 1.4.11
+  failure that was repeated across 48 border declarations at a measured 1.48:1.
+- Gain and loss previously differed by a contrast ratio of 1.14 - effectively identical lightness.
+  The shipped pairs separate by lightness as well as hue and improve deuteranopia separation from
+  2.73 to 3.16 (dark) and 3.31 (light).
+- Four selectable schemes: dark (default), light, colour-blind, system-follow. Applied before first
+  paint from `wwwroot/js/theme.js`, persisted in `localStorage`.
+- 93 hardcoded colours, 275 static inline `style=` attributes, and three `<style>` blocks removed
+  from the Razor pages. The seven surviving `style=` attributes set a `--progress` custom property
+  for runtime-measured progress-bar widths, which is a deliberate exception.
+- Android reaches parity: same tokens and values, 87 `AppThemeBinding` conversions, and a
+  `ThemePalette` helper so code-behind no longer assigns light-theme colour literals that would be
+  unreadable on the dark surfaces.
+- Haptics added, with the `VIBRATE` permission that was previously absent from the manifest. Five
+  signals only - review ready, order accepted, order rejected, signal arrived, destructive confirm -
+  with nothing bound to frequent interactions, and an operator toggle in Settings.
+- Verification: full solution and `net10.0-android` Release build with 0 warnings and 0 errors,
+  1,051 .NET tests, 37 Playwright tests. The Playwright touch-target assertion caught one regression
+  during implementation (a 32 px theme selector) which was fixed to 44 px.
+
+Haptics are verified only by compilation. Perceived strength, pattern legibility, and the interaction
+with the system haptic setting require a physical Android device and remain a manual gate alongside
+TalkBack, Accessibility Scanner, and 200% font scale.
+
+
+## TD2-TD9 - trading capability work (2026-08-01)
+
+- Environment separation: `TradingEnvironmentService` is the single authority. No hardcoded
+  environment literal remains in the web project. `?env=live` renders a locked surface with the
+  promotion gates named and zero order controls in the DOM; the lock is re-checked inside the
+  preview and confirm POST handlers so an unrendered form cannot be posted.
+- Desk: server-side search, price band, and spread filters; sortable columns carrying `aria-sort`;
+  a spread column; filtered-of-total counts. Filter and sort state round-trips through the URL.
+- Information density: the status strip is three always-on items plus one health disclosure that
+  opens only when degraded; the duplicated decision panels are merged; the two overlapping news
+  panels are one panel with a scope control.
+- Groups: bulk paste, bulk select, bulk remove, and a management table that no longer renders one
+  form per row.
+- News: `/News` exposes window, group, ticker, source, tone, keyword, and link-presence filters.
+- Earnings: the `from`/`to` API parameters are exposed as a date range, plus result-assessment
+  chips, has-news, minimum EPS surprise, and five sort orders.
+- Orders: the sell exit is enabled. An exit carries no bracket by design.
+- Audit: decision funnel and CSV export.
+- Android: Watch gains search and scope chips; the source collection keeps every card so live
+  quotes continue for filtered-out symbols.
+
+Verification: full solution and `net10.0-android` Release build with 0 warnings and 0 errors,
+1,051 .NET tests, and 50 Playwright tests across 12 routes. A new `trading-capabilities.spec.js`
+covers environment locking, desk sort/filter, bulk membership, news filters, earnings controls, and
+the audit funnel.
+
+Three regressions were caught and fixed during this work: a sixth primary navigation destination
+that contradicted the approved five-destination shell; the loss of `#DeskQuoteConnection` and
+`#DeskQuoteFreshness`, which the quote stream patches directly; and author `display` rules
+outranking the user-agent `[hidden]` rule, which left every `hidden` region visible.
+
+Physical-device TalkBack, Accessibility Scanner, 200% font scale, and haptic perception remain
+manual release gates. Android environment locking, News and Earnings filter parity, and sell-exit
+parity are not yet implemented on the phone.
+
+
+## TD7 and TD8 completion (2026-08-01)
+
+- Order types (market, limit, stop, stop-limit) and time in force (day, gtc, ioc, fok) are
+  selectable for exits; a protected entry stays a bracketed limit by design. The real order
+  settings now reach `ExtendedHoursOrderPolicy.Validate`, which previously received a hardcoded
+  limit/day pair and so could not refuse an extended-hours market or stop order.
+- Cancel is available for working orders. Replace is cancel plus a fresh reviewed ticket rather
+  than a broker PATCH, keeping every amendment inside the review boundary.
+- `B` and `S` open the reviewed buy and exit ticket for the selected symbol. Neither submits.
+- Audit shows measured value against required threshold, parsed from what the engine wrote into
+  the reason text. Decision records page and filter in SQL. Two runs can be compared on one screen.
+- Verification: solution and Android Release build 0 warnings / 0 errors, 1,051 .NET tests,
+  56 Playwright tests.
+
+Android still lacks the environment lock, News and Earnings filter parity, and sell-exit parity.
+Physical-device gates remain outstanding.

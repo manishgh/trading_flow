@@ -97,6 +97,7 @@ public sealed class ManualOrderTicketServiceTests
             new ManualEntryOptions(policy),
             new EntryGateOptions(20, 2_000, 100m, 15m, 25m, 100m, 100m, 20, 20),
             admission.Object,
+            new TradingEnvironmentService(),
             new FixedTimeProvider(Now),
             new EphemeralDataProtectionProvider());
     }

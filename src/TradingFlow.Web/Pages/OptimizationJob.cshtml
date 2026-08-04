@@ -89,7 +89,7 @@
                 if (finishedEl) finishedEl.textContent = data.finishedAt;
 
                 if (errorEl) {
-                    errorEl.style.display = data.errorMessage ? 'block' : 'none';
+                    errorEl.hidden = !data.errorMessage;
                     errorEl.textContent = data.errorMessage ?? '';
                 }
 
@@ -100,24 +100,24 @@
 
                 if (currentRunPanel && currentRunTitle && currentRunParameters) {
                     if (data.currentRun) {
-                        currentRunPanel.style.display = 'block';
+                        currentRunPanel.hidden = false;
                         currentRunTitle.textContent = `${data.currentRun.strategyName} (${data.currentRun.permutation}/${data.currentRun.totalPermutations})`;
                         currentRunParameters.innerHTML = renderParameters(data.currentRun.parameterValues);
                     } else {
-                        currentRunPanel.style.display = 'none';
+                        currentRunPanel.hidden = true;
                     }
                 }
 
                 if (resultPanel && resultBody) {
                     const completedRuns = data.completedRuns ?? [];
                     if (completedRuns.length > 0) {
-                        resultPanel.style.display = 'block';
+                        resultPanel.hidden = false;
                         resultBody.innerHTML = completedRuns.map(renderRunRow).join('');
                     }
                 }
 
                 if (data.result && resultPanel && resultMetric && resultBody) {
-                    resultPanel.style.display = 'block';
+                    resultPanel.hidden = false;
                     resultMetric.textContent = data.result.metric;
                     resultBody.innerHTML = (data.result.topRuns ?? []).map(run => `<tr>
                         <td>#${escapeHtml(run.rank)}</td>
@@ -155,7 +155,7 @@
     <div class="actions">
         @if (Model.Job.Status is "queued" or "running" or "cancelling")
         {
-            <form method="post" asp-page-handler="Cancel" asp-route-id="@Model.Job.JobId" style="margin: 0;">
+            <form class="m-0" method="post" asp-page-handler="Cancel" asp-route-id="@Model.Job.JobId">
                 <button id="cancelOptimizationButton" type="submit" class="button secondary">Cancel Run</button>
             </form>
         }
@@ -174,14 +174,14 @@
             <tr><th>Started</th><td id="optimizationStarted">@Model.FormatLocal(Model.Job.StartedAt)</td></tr>
             <tr><th>Finished</th><td id="optimizationFinished">@Model.FormatLocal(Model.Job.FinishedAt)</td></tr>
         </table>
-        <div id="optimizationError" class="error-box" style="display: @(String.IsNullOrWhiteSpace(Model.Job.ErrorMessage) ? "none" : "block")">@Model.Job.ErrorMessage</div>
+        <div id="optimizationError" class="error-box" hidden="@(String.IsNullOrWhiteSpace(Model.Job.ErrorMessage))">@Model.Job.ErrorMessage</div>
 
-        <div id="currentRunPanel" class="panel" style="margin-top: 1rem; display: @(Model.Job.CurrentRun is null ? "none" : "block")">
+        <div id="currentRunPanel" class="panel mt-md" hidden="@(Model.Job.CurrentRun is null)">
             <h3>Running Combination</h3>
-            <div id="currentRunTitle" style="font-weight: 700;">
+            <div class="text-bold" id="currentRunTitle">
                 @(Model.Job.CurrentRun is null ? "" : $"{Model.Job.CurrentRun.StrategyName} ({Model.Job.CurrentRun.Permutation}/{Model.Job.CurrentRun.TotalPermutations})")
             </div>
-            <div id="currentRunParameters" style="margin-top: 0.5rem;">
+            <div class="mt-sm" id="currentRunParameters">
                 @foreach (var p in Model.Job.CurrentRun?.ParameterValues ?? new Dictionary<string, object>())
                 {
                     <span class="pill">@p.Key.Split('.').Last(): <b>@p.Value</b></span>
@@ -190,7 +190,7 @@
         </div>
         
         <h3>Progress Log</h3>
-        <div id="optimizationEvents" class="log-viewer" style="height: 240px; overflow-y: auto;">
+        <div id="optimizationEvents" class="log-viewer scroll-y h-md">
             @foreach (var ev in Model.Job.Events)
             {
                 <div>@ev</div>
@@ -198,7 +198,7 @@
         </div>
     </section>
 
-    <section id="topPermutationsPanel" class="panel" style="display: @(Model.Job.Result is null && Model.Job.CompletedRuns.Count == 0 ? "none" : "block")">
+    <section id="topPermutationsPanel" class="panel" hidden="@(Model.Job.Result is null && Model.Job.CompletedRuns.Count == 0)">
             <h2>Completed Combinations</h2>
             <table class="data-table">
                 <thead>

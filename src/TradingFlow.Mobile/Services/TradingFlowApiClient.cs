@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 
@@ -15,14 +16,25 @@ public sealed class TradingFlowApiClient
         PropertyNameCaseInsensitive = true
     };
 
-    private readonly HttpClient httpClient = CreateHttpClient(TimeSpan.FromSeconds(45));
+    private readonly CookieContainer cookies = new();
+    private readonly HttpClient httpClient;
     // Server-sent-event streams are long-lived, so they need an unbounded timeout and
     // rely on the caller's CancellationToken to stop instead of the request timeout.
-    private readonly HttpClient streamClient = CreateHttpClient(Timeout.InfiniteTimeSpan);
+    private readonly HttpClient streamClient;
 
-    private static HttpClient CreateHttpClient(TimeSpan timeout)
+    public TradingFlowApiClient()
     {
-        var client = new HttpClient
+        httpClient = CreateHttpClient(TimeSpan.FromSeconds(45), cookies);
+        streamClient = CreateHttpClient(Timeout.InfiniteTimeSpan, cookies);
+    }
+
+    private static HttpClient CreateHttpClient(TimeSpan timeout, CookieContainer cookies)
+    {
+        var client = new HttpClient(new HttpClientHandler
+        {
+            CookieContainer = cookies,
+            UseCookies = true
+        })
         {
             Timeout = timeout
         };
@@ -31,6 +43,38 @@ public sealed class TradingFlowApiClient
         client.DefaultRequestHeaders.TryAddWithoutValidation("ngrok-skip-browser-warning", "true");
         client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "TradingFlow.Mobile/1.0");
         return client;
+    }
+
+    public async Task<MobileAuthenticationState?> LoginAsync(
+        string userName,
+        string password,
+        bool rememberMe,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsJsonAsync(
+            $"{BaseUrl}/api/auth/login",
+            new { userName, password, rememberMe },
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await GetAuthenticationStateAsync(cancellationToken);
+    }
+
+    public async Task<MobileAuthenticationState?> GetAuthenticationStateAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.GetAsync($"{BaseUrl}/api/auth/me", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            return null;
+        }
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<MobileAuthenticationState>(cancellationToken);
+    }
+
+    public async Task LogoutAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await httpClient.PostAsync($"{BaseUrl}/api/auth/logout", null, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
     }
 
     public string BaseUrl
@@ -520,6 +564,8 @@ public sealed class TradingFlowApiClient
             : body);
     }
 }
+
+public sealed record MobileAuthenticationState(string UserName, bool IsAdministrator);
 
 public sealed record MobileCatalogResponse(
     IReadOnlyList<MobileRunConfigOption> BacktestConfigs,

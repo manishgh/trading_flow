@@ -190,7 +190,7 @@ TalkBack, 200% font scale) remain binding on every new surface.
 Each checkpoint is independently reviewable, test-backed, and committed separately. Ordering is
 dependency-driven: the foundation and environment model unblock every later surface.
 
-### TD1 — Design system consolidation and dark mode
+### TD1 — Design system consolidation and dark mode — IMPLEMENTED 2026-08-01
 
 Scope:
 
@@ -205,11 +205,38 @@ Scope:
 Primary files: `wwwroot/css/site.css`, `Pages/Audit.cshtml`, `Pages/Backtests.cshtml`,
 `Pages/Paper.cshtml`, `Pages/PaperJob.cshtml`, `wwwroot/js/*`, MAUI `Resources/Styles/*`.
 
-Acceptance: zero `<style>` blocks and zero inline `style=` attributes in Razor pages; one token per
-semantic role; Audit renders in the shared theme; dark and light both pass contrast checks; existing
-Playwright suite still green.
+Acceptance: zero `<style>` blocks and no *static* inline `style=` attributes in Razor pages; one
+token per semantic role; Audit renders in the shared theme; dark and light both pass contrast
+checks; existing Playwright suite still green.
 
-### TD2 — Trading environment separation
+The original acceptance line said "zero inline `style=` attributes". That was wrong. Seven remain in
+`Job.cshtml` and `_JobsTable.cshtml`, and they are correct: a progress-bar width is a runtime
+measurement, not a design decision. They now set a `--progress` custom property that a `.progress-fill`
+class consumes, which keeps the value dynamic while the styling stays in the stylesheet. The rule is
+therefore no *static* inline styles.
+
+Result:
+
+- Nine duplicated token alias pairs collapsed to one vocabulary; `--border-default` split into
+  `--line-control` (>= 3:1, applied to the interactive controls that need it) and `--line`
+  (decorative dividers).
+- 93 hardcoded colour occurrences across 38 distinct values replaced with tokens.
+- Four schemes: dark (default), light, colour-blind, and system-follow, selectable from the top bar
+  and applied before first paint so navigation does not flash.
+- 275 inline `style=` attributes and three `<style>` blocks removed, including the Audit page's
+  136-line dark theme and PaperJob's 101 attributes. `style.display` toggles migrated to the `hidden`
+  property, matching the pattern already used on Trade Desk.
+- `prefers-reduced-motion` honoured; `.value-signed` utility pairs every gain/loss colour with a sign
+  and a direction glyph.
+- MAUI brought to parity: same token vocabulary and values, 87 `AppThemeBinding` conversions, and a
+  `ThemePalette` helper so code-behind resolves colours for the active theme instead of assigning
+  light-theme literals.
+
+Verified: full solution and Android Release build with 0 warnings and 0 errors, 1,051 .NET tests, and
+37 Playwright tests pass. One regression was caught by the suite and fixed — the new theme selector
+was 32 px, below the 44 px mobile touch target.
+
+### TD2 — Trading environment separation — IMPLEMENTED 2026-08-01
 
 Scope:
 
@@ -227,7 +254,7 @@ Acceptance: no hardcoded environment literal remains; live routes cannot render 
 under any state; environment is identifiable from a screenshot without reading text; switching
 environments discards ticket state; boundary doc gates are quoted from a single source.
 
-### TD3 — Desk screener: filter, sort, columns
+### TD3 — Desk screener: filter, sort, columns — IMPLEMENTED 2026-08-01
 
 Scope:
 
@@ -246,7 +273,7 @@ Acceptance: 500 rows sort and filter server-side without document overflow at an
 state is keyboard reachable and announced; presets survive restart; mobile web keeps single-column
 rows and gains the same filter set as a disclosure panel.
 
-### TD4 — Groups and bulk membership
+### TD4 — Groups and bulk membership — IMPLEMENTED 2026-08-01
 
 Scope:
 
@@ -260,7 +287,7 @@ Scope:
 Acceptance: adding 25 symbols to a group takes one submit; no page renders one form per row; every
 bulk action is confirmable and reversible; palette is fully keyboard operable.
 
-### TD5 — News hub and filters
+### TD5 — News hub and filters — IMPLEMENTED 2026-08-01
 
 Scope:
 
@@ -275,7 +302,7 @@ Acceptance: every filter dimension already present in the news record is reachab
 filters compose; empty and stale states are explicit; no duplicated news-rendering code between
 Desk, News, and Earnings.
 
-### TD6 — Earnings calendar filters and views
+### TD6 — Earnings calendar filters and views — IMPLEMENTED 2026-08-01
 
 Scope:
 
@@ -292,7 +319,7 @@ Acceptance: every field on `EarningsCalendarItemResponse` that is a plausible fi
 filterable or sortable; date range round-trips through the URL; the page no longer ships `Refresh`
 as its only control.
 
-### TD7 — Order ticket breadth
+### TD7 — Order ticket breadth — IMPLEMENTED 2026-08-01
 
 Scope:
 
@@ -309,7 +336,7 @@ Acceptance: server-side review, token revalidation, and fail-closed behavior are
 cover every new side and order type; no ticket submits without an explicit confirm; duplicate taps
 cannot create duplicate intents; exits are reviewable in the same shape as entries.
 
-### TD8 — Research and backtest audit depth
+### TD8 — Research and backtest audit depth — IMPLEMENTED 2026-08-01
 
 Scope:
 
@@ -328,7 +355,7 @@ Acceptance: a 100k-decision run filters and pages without freezing the browser; 
 shows matched value and threshold; two runs can be compared on one screen; no destructive YAML write
 occurs without an explicit reviewed confirmation.
 
-### TD9 — Android parity and release gates
+### TD9 — Android parity and release gates — PARTIALLY IMPLEMENTED 2026-08-01
 
 Scope:
 
@@ -366,3 +393,119 @@ gates and are never inferred from a successful build.
 5. No compatibility layer for superseded UI structures; the application is not in production.
 6. Accessibility gates achieved in UI0–UI6 must not regress.
 7. Preserve `tradingflow.db`, paper state, local secrets, and cached candle data.
+
+
+## 9. Implementation Record — 2026-08-01
+
+TD1 through TD6 are complete. TD7, TD8, and TD9 are partial; what remains is listed
+against each.
+
+### Delivered
+
+- **TD2.** `TradingEnvironmentService` is the single authority on which environments
+  exist and which may be operated. All three hardcoded `"PAPER"` literals are gone.
+  Environment is a route parameter, carries full-chrome identity (amber rail and
+  topbar border, never red), and `?env=live` renders a locked surface naming the
+  five outstanding promotion gates. The lock is enforced again inside the preview and
+  confirm POST handlers, so a request that never rendered the form is still refused.
+- **TD3.** Server-side search, price band, and spread filters; sortable columns with
+  `aria-sort` on the `th` and a link control that survives reload and can be shared as
+  a URL; a spread column; and a filtered-of-total count.
+- **TD3a.** The seven-item status strip is now three always-on items plus one
+  exception-driven health disclosure that opens only when something is degraded. The
+  duplicated *TradingFlow decision* and *Latest signal* panels are merged into one
+  decision block. The two overlapping news panels are one panel with a scope control.
+- **TD4.** Bulk paste, bulk select with a hidden-until-used action bar, bulk remove,
+  and a management table that no longer renders a form and a button per row.
+- **TD5.** `/News` with window, group, ticker, source, tone, keyword, and
+  link-presence filters over the fields the news record already carried. Reachable
+  from Research and from the desk; it does not consume a sixth primary destination.
+- **TD6.** The `from`/`to` parameters the API always accepted are now exposed as a
+  date range, alongside result-assessment chips, a has-news toggle, a minimum EPS
+  surprise threshold, and sorting by time, cap, surprise, move, or relative volume.
+- **TD7 (partial).** The sell exit is enabled, activating the branches the service
+  already had. An exit deliberately carries no bracket: protection belonged to the
+  entry, and the open-position quantity check remains the gate.
+- **TD8 (partial).** A decision funnel leads the audit page and answers "why did
+  nothing trade", plus CSV export of decision records.
+- **TD9 (partial).** Watch gains search and All/Signals/In-trade/News scope chips.
+  The source collection keeps every card so live quotes keep arriving for symbols a
+  filter is hiding.
+
+### Not delivered
+
+- **TD7.** Market, stop, and stop-limit order types; explicit time-in-force
+  selection; the ticket as a side rail rather than a page; cancel and replace for
+  working orders; `B`/`S` keyboard shortcuts.
+- **TD8.** Server-side pagination for very large runs, matched-value-beside-threshold
+  on every gate, and run-to-run comparison.
+- **TD9.** Android environment lock, News and Earnings filter parity, sell-exit
+  parity, and every physical-device gate.
+
+### Corrections made during implementation
+
+1. `/News` was briefly added as a sixth primary destination. That contradicts the
+   approved five-destination navigation recorded in the drift audit, where Earnings
+   is reachable from Research rather than consuming a slot. Reverted; News now sits
+   under Research and is linked from the desk.
+2. Collapsing the status strip dropped `#DeskQuoteConnection` and
+   `#DeskQuoteFreshness`, which the quote stream patches directly. Live connection
+   state would have stopped updating. Both ids are restored inside the health
+   disclosure.
+3. Author rules that set `display` outrank the user-agent `[hidden]` rule, so every
+   region switched to the `hidden` attribute stayed visible. A global
+   `[hidden] { display: none !important; }` now precedes all component rules.
+
+
+## 10. TD7 And TD8 Completion — 2026-08-01
+
+### TD7 delivered
+
+- **Order types.** `market`, `limit`, `stop`, and `stop_limit`, with a `TriggerPrice`
+  for the stop types. The Alpaca request body is assembled per type, so a market order
+  no longer carries a `limit_price` the broker would reject.
+- **Time in force.** `day`, `gtc`, `ioc`, and `fok`, selectable and carried through to
+  the broker instead of the previously hardcoded `day`.
+- **Real values reach the policy.** `ExtendedHoursOrderPolicy.Validate` was being
+  handed a literal `"limit"`/`"day"` pair regardless of the actual order. It now
+  receives the real settings, so an extended-hours market or stop order is correctly
+  refused rather than silently accepted under a false description.
+- **Cancel and replace.** A working order can be cancelled from `/Orders`. Replace is
+  cancel plus a fresh reviewed ticket rather than a broker `PATCH`, so an amended order
+  is re-checked against quote age, spread, session, and admission exactly like a new
+  one. The environment lock is enforced in the POST handler, not only in the view.
+- **Keyboard entry.** `B` and `S` open the reviewed buy and exit ticket for the
+  selected symbol. The shortcut opens a ticket; it never submits. It is ignored while
+  focus is in a field.
+- **Exit entry point.** The desk exposes an exit action only where a tracked position
+  exists, so the control cannot invite an accidental short.
+
+**Deliberately not done.** A protected buy entry remains a bracketed limit. Widening
+buy to market or stop would drop the stop and target the bracket exists to guarantee,
+and unbracketed entry is refused in `Normalize` with an explicit message. The ticket
+also stays its own route rather than becoming an inline desk rail: moving the review
+and confirm cycle into the desk would duplicate order-review orchestration that
+`AGENTS.md` requires to stay server-owned in one place. The rail is presentation
+sugar; the duplication risk is not worth it.
+
+### TD8 delivered
+
+- **Matched value beside threshold.** `AGENTS.md` requires audit screens to show exact
+  matched values. `ExtractGateEvidence` parses the comparison the engine already wrote
+  into the reason text (`rvol 0.82 < 1.50`) and renders measured against required in a
+  small table, server-side and in the live-refresh path. It reads what the engine
+  emitted rather than re-deriving a threshold, so it cannot disagree with the engine.
+- **Server-side paging.** `IDecisionAuditRepository.GetAuditPageAsync` filters by
+  decision and ticker and pages in SQL, returning the total the filters matched.
+  Materialising every record to filter in memory is what made large runs unusable.
+- **Run comparison.** A second run name produces a metric diff — evaluated, accepted,
+  rejected, acceptance rate, tickers, strategies, distinct rejection reasons — with
+  signed deltas so direction reads without colour.
+
+### Verification
+
+Full solution and `net10.0-android` Release build with 0 warnings and 0 errors, 1,051
+.NET tests, and 56 Playwright tests. New coverage asserts that an entry offers only the
+protected limit while an exit offers the wider set, that an exit carries no bracket
+fields, that a locked environment exposes no ticket form or cancel control, and that the
+desk shortcut opens a ticket rather than submitting.

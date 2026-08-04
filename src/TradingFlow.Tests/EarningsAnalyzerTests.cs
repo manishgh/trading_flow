@@ -231,6 +231,63 @@ public sealed class EarningsAnalyzerTests
     }
 
     [Fact]
+    public void Analyze_ReconcilesMissingCalendarActualsFromStructuredNewsHeadline()
+    {
+        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var scheduled = DateTimeOffset.Parse("2026-08-03T12:30:00Z");
+        var published = DateTimeOffset.Parse("2026-08-03T10:33:56Z");
+        var calendarEvent = CreateEvent(scheduled, epsSurprise: null, revenueSurprise: null);
+        calendarEvent.EpsEstimate = 0m;
+
+        var result = analyzer.Analyze(
+            calendarEvent,
+            CreateBars(scheduled),
+            [new PersistedNewsItem
+            {
+                Id = "abtc-result",
+                Ticker = "TEST",
+                Timestamp = published,
+                Headline = "American Bitcoin Q2 EPS $(0.80) Misses $0.15 Estimate, Sales $67.015M Miss $70.650M Estimate",
+                Provider = "alpaca"
+            }],
+            DateTimeOffset.Parse("2026-08-03T14:35:00Z"));
+
+        Assert.Equal(EarningsResultAssessment.Negative, result.ResultAssessment);
+        Assert.Equal(-0.80m, result.EffectiveEpsActual);
+        Assert.Equal(0.15m, result.EffectiveEpsEstimate);
+        Assert.Equal(67.015m, result.EffectiveRevenueActualMillions);
+        Assert.Equal(published, result.ResultNewsPublishedAtUtc);
+        Assert.Equal("alpaca structured headline", result.ResultDataSource);
+    }
+
+    [Fact]
+    public void Analyze_DoesNotUseGenericMoverArticleAsResultClock()
+    {
+        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var eventTime = DateTimeOffset.Parse("2026-08-03T12:30:00Z");
+        var calendarEvent = CreateEvent(eventTime, epsSurprise: 24.25m, revenueSurprise: 4.73m);
+        calendarEvent.ResultFirstSeenAtUtc = eventTime;
+
+        var result = analyzer.Analyze(
+            calendarEvent,
+            CreateBars(eventTime),
+            [new PersistedNewsItem
+            {
+                Id = "generic-mover",
+                Ticker = "TEST",
+                Timestamp = eventTime.AddMinutes(90),
+                Headline = "12 Industrials Stocks Moving In Monday's Pre-Market Session",
+                Summary = "Shares rose after earnings and acquisition news.",
+                Provider = "alpaca"
+            }],
+            DateTimeOffset.Parse("2026-08-03T14:35:00Z"));
+
+        Assert.Null(result.ResultNewsPublishedAtUtc);
+        Assert.Null(result.NewsHeadline);
+        Assert.Equal(eventTime, calendarEvent.ResultFirstSeenAtUtc);
+    }
+
+    [Fact]
     public void Analyze_AwaitingReleaseIncludesLatestCompletedPreEarningsPrice()
     {
         var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);

@@ -1,4 +1,6 @@
-﻿namespace TradingFlow.Web.Models;
+namespace TradingFlow.Web.Models;
+
+public sealed record MobileStockPulseRequest(string Ticker, string PulseType, string Message);
 
 public sealed record MobileCatalogResponse(
     IReadOnlyList<MobileRunConfigOption> BacktestConfigs,

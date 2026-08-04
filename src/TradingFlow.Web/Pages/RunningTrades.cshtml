@@ -2,7 +2,7 @@
 @model TradingFlow.Web.Pages.RunningTradesModel
 @{
     ViewData["Title"] = "Running Trades";
-    string PlColor(decimal value) => value > 0 ? "#067647" : value < 0 ? "#B42318" : "#475467";
+    string PlClass(decimal value) => value > 0 ? "value-good" : value < 0 ? "value-bad" : "value-flat";
     string SourceBadge(string source) => source switch
     {
         "wishlist" => "Wishlist",
@@ -12,6 +12,22 @@
     };
     string TradeKey(TradingFlow.Web.Models.MobileRunningTrade trade) =>
         $"{trade.CloseKind}:{trade.JobId?.ToString() ?? trade.SessionId?.ToString() ?? "none"}:{trade.Ticker}";
+
+    // One list drives the header row so the sortable and fixed columns stay in the
+    // same order as the body cells. A null key means the column carries no ordering.
+    var positionColumns = new (string? Key, string Label, string? Class)[]
+    {
+        ("symbol", "Ticker", null),
+        (null, "Source", null),
+        (null, "Qty", "num"),
+        ("entry", "Entry", "num"),
+        (null, "Last", "num"),
+        ("pl", "P/L", "num"),
+        ("plpct", "P/L %", "num"),
+        (null, "Strategy", null),
+        (null, "Protection", null),
+        (null, "Run", null)
+    };
 }
 
 <section class="trade-book" data-running-trades data-source="@Model.Source">
@@ -30,7 +46,7 @@
     <div class="trade-summary-grid">
         <div class="summary-card">
             <span>Total P/L</span>
-            <strong data-total-pl style="color:@PlColor(Model.TotalPl);">@Model.TotalPl.ToString("C2")</strong>
+            <strong data-total-pl class="@PlClass(Model.TotalPl)">@Model.TotalPl.ToString("C2")</strong>
         </div>
         <div class="summary-card">
             <span>Open Trades</span>
@@ -42,12 +58,23 @@
         </div>
     </div>
 
-    <nav class="source-tabs">
+    @if (!String.IsNullOrWhiteSpace(Model.ErrorMessage))
+    {
+        <div class="status-banner error" role="alert" tabindex="-1" data-trades-banner>@Model.ErrorMessage</div>
+    }
+
+    <nav class="source-tabs" aria-label="Position source filters">
         @foreach (var (key, label) in TradingFlow.Web.Pages.RunningTradesModel.Sources)
         {
-            var active = string.Equals(Model.Source, key, StringComparison.OrdinalIgnoreCase);
+            var active = String.Equals(Model.Source, key, StringComparison.OrdinalIgnoreCase);
+            @* Chips carry the sort state so changing source never silently discards
+               the column the operator chose to order by. *@
             <a asp-page="/RunningTrades" asp-route-source="@key"
-               class="@(active ? "active" : null)">
+               asp-route-sort="@Model.Sort"
+               asp-route-dir="@Model.Dir"
+               asp-route-env="@Model.Env"
+               class="@(active ? "active" : null)"
+               aria-current="@(active ? "page" : null)">
                 @label
             </a>
         }
@@ -55,8 +82,19 @@
 
     @if (Model.Trades.Count == 0)
     {
-        <div class="empty-state">
-            No running trades for this source.
+        <div class="empty-state" data-trades-empty>
+            <strong>No position is open for this source.</strong>
+            <span>@Model.EmptyStateHint</span>
+            @if (Model.EmptyStateOffersAllSources)
+            {
+                <a class="button secondary" asp-page="/RunningTrades" asp-route-source="all"
+                   asp-route-sort="@Model.Sort" asp-route-dir="@Model.Dir"
+                   asp-route-env="@Model.Env">Show all sources</a>
+            }
+            else
+            {
+                <a class="button secondary" asp-page="/Paper">Open Paper Lab</a>
+            }
         </div>
     }
     else
@@ -65,17 +103,27 @@
         <table class="trade-table">
             <thead>
                 <tr>
-                    <th>Ticker</th>
-                    <th>Source</th>
-                    <th class="num">Qty</th>
-                    <th class="num">Entry</th>
-                    <th class="num">Last</th>
-                    <th class="num">P/L</th>
-                    <th class="num">P/L %</th>
-                    <th>Strategy</th>
-                    <th>Protection</th>
-                    <th>Run</th>
-                    <th></th>
+                    @foreach (var column in positionColumns)
+                    {
+                        <th scope="col" class="@column.Class" aria-sort="@(column.Key is null ? null : Model.AriaSortFor(column.Key))">
+                            @if (column.Key is null)
+                            {
+                                @column.Label
+                            }
+                            else
+                            {
+                                <a class="column-sort @(Model.AriaSortFor(column.Key) is not null ? "sorted" : null)"
+                                   asp-page="/RunningTrades"
+                                   asp-route-source="@Model.Source"
+                                   asp-route-env="@Model.Env"
+                                   asp-route-sort="@column.Key"
+                                   asp-route-dir="@Model.NextDirectionFor(column.Key)">
+                                    @column.Label<span class="sort-indicator" aria-hidden="true"></span>
+                                </a>
+                            }
+                        </th>
+                    }
+                    <th scope="col"><span class="visually-hidden">Actions</span></th>
                 </tr>
             </thead>
             <tbody>
@@ -87,24 +135,29 @@
                         <td class="num">@trade.Quantity.ToString("0.####")</td>
                         <td class="num">@trade.EntryPrice.ToString("C2")</td>
                         <td class="num" data-trade-current>@trade.CurrentPrice.ToString("C2")</td>
-                        <td class="num" data-trade-pl style="font-weight:700;color:@PlColor(trade.UnrealizedPl);">@trade.UnrealizedPl.ToString("C2")</td>
-                        <td class="num" data-trade-pl-pct style="color:@PlColor(trade.UnrealizedPl);">@trade.UnrealizedPlPct.ToString("0.00")%</td>
+                        <td class="num @PlClass(trade.UnrealizedPl)" data-trade-pl>@trade.UnrealizedPl.ToString("C2")</td>
+                        <td class="num @PlClass(trade.UnrealizedPl)" data-trade-pl-pct>@trade.UnrealizedPlPct.ToString("0.00")%</td>
                         <td>@trade.StrategyName</td>
                         <td data-trade-protection>@trade.ProtectionSummary</td>
                         <td class="muted">@trade.Reference</td>
                         <td class="num">
-                            <button type="button"
-                                    class="danger mini-button"
-                                    data-review-exit
-                                    data-ticker="@trade.Ticker"
-                                    data-close-kind="@trade.CloseKind"
-                                    data-job-id="@(trade.JobId?.ToString())"
-                                    data-session-id="@(trade.SessionId?.ToString())"
-                                    data-quantity="@trade.Quantity.ToString("0.####")"
-                                    data-current-price="@trade.CurrentPrice.ToString("0.####")"
-                                    data-protection="@trade.ProtectionSummary">
-                                Review exit
-                            </button>
+                            @* Fail closed: a locked environment renders no exit control at all,
+                               rather than a disabled one that the client could re-enable. *@
+                            @if (Model.EnvironmentState.IsEnabled)
+                            {
+                                <button type="button"
+                                        class="danger mini-button"
+                                        data-review-exit
+                                        data-ticker="@trade.Ticker"
+                                        data-close-kind="@trade.CloseKind"
+                                        data-job-id="@(trade.JobId?.ToString())"
+                                        data-session-id="@(trade.SessionId?.ToString())"
+                                        data-quantity="@trade.Quantity.ToString("0.####")"
+                                        data-current-price="@trade.CurrentPrice.ToString("0.####")"
+                                        data-protection="@trade.ProtectionSummary">
+                                    Review exit
+                                </button>
+                            }
                         </td>
                     </tr>
                 }
@@ -112,32 +165,38 @@
         </table>
         </div>
     }
-    <p id="TradesConnection" class="muted" role="status" aria-live="polite" style="font-size:12px;margin-top:16px;">
+    <p id="TradesConnection" class="muted text-sm mt-md" role="status" aria-live="polite" data-state="live">
         Position values update every 10 seconds without replacing focused controls.
     </p>
 </section>
 
-<dialog id="ExitReviewDialog" class="review-dialog" aria-labelledby="ExitReviewHeading">
-    <form method="post" asp-page-handler="Close">
-        <input type="hidden" name="Source" value="@Model.Source" />
-        <input type="hidden" name="closeKind" data-exit-close-kind />
-        <input type="hidden" name="jobId" data-exit-job-id />
-        <input type="hidden" name="sessionId" data-exit-session-id />
-        <input type="hidden" name="ticker" data-exit-ticker />
-        <h2 id="ExitReviewHeading">Review paper exit</h2>
-        <p data-exit-summary></p>
-        <dl class="review-grid">
-            <div><dt>Environment</dt><dd>PAPER</dd></div>
-            <div><dt>Action</dt><dd>Close the complete position</dd></div>
-            <div><dt>Protection</dt><dd data-exit-protection></dd></div>
-        </dl>
-        <p class="warning-text">The server will re-read the selected run or automation session before requesting the broker exit.</p>
-        <div class="actions">
-            <button type="button" class="button secondary" data-exit-cancel>Keep position</button>
-            <button type="submit" class="button danger">Confirm paper exit</button>
-        </div>
-    </form>
-</dialog>
+@if (Model.EnvironmentState.IsEnabled)
+{
+    <dialog id="ExitReviewDialog" class="review-dialog" aria-labelledby="ExitReviewHeading">
+        <form method="post" asp-page-handler="Close">
+            <input type="hidden" name="Source" value="@Model.Source" />
+            <input type="hidden" name="Sort" value="@Model.Sort" />
+            <input type="hidden" name="Dir" value="@Model.Dir" />
+            <input type="hidden" name="Env" value="@Model.Env" />
+            <input type="hidden" name="closeKind" data-exit-close-kind />
+            <input type="hidden" name="jobId" data-exit-job-id />
+            <input type="hidden" name="sessionId" data-exit-session-id />
+            <input type="hidden" name="ticker" data-exit-ticker />
+            <h2 id="ExitReviewHeading">Review paper exit</h2>
+            <p data-exit-summary></p>
+            <dl class="review-grid">
+                <div><dt>Environment</dt><dd>@Model.EnvironmentState.Label</dd></div>
+                <div><dt>Action</dt><dd>Close the complete position</dd></div>
+                <div><dt>Protection</dt><dd data-exit-protection></dd></div>
+            </dl>
+            <p class="warning-text">The server will re-read the selected run or automation session before requesting the broker exit.</p>
+            <div class="actions">
+                <button type="button" class="button secondary" data-exit-cancel>Keep position</button>
+                <button type="submit" class="button danger">Confirm paper exit</button>
+            </div>
+        </form>
+    </dialog>
+}
 
 @section Scripts {
     <script src="~/js/running-trades.js" asp-append-version="true"></script>

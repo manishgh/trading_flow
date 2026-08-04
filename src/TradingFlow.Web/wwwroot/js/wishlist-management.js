@@ -32,3 +32,37 @@ document.querySelectorAll("[data-confirm]").forEach(button => {
         }
     });
 });
+
+// Bulk selection. The action bar stays hidden until something is selected so an
+// empty destructive control is never sitting on screen.
+(() => {
+    const form = document.querySelector("[data-bulk-form]");
+    if (!form) return;
+
+    const bar = form.querySelector("[data-bulk-bar]");
+    const count = form.querySelector("[data-bulk-count]");
+    const toggleAll = form.querySelector("[data-bulk-toggle-all]");
+    const clear = form.querySelector("[data-bulk-clear]");
+    const items = () => [...form.querySelectorAll("[data-bulk-item]")];
+
+    const sync = () => {
+        const selected = items().filter(item => item.checked);
+        if (count) count.textContent = String(selected.length);
+        if (bar) bar.hidden = selected.length === 0;
+        if (toggleAll) {
+            toggleAll.checked = selected.length > 0 && selected.length === items().length;
+            toggleAll.indeterminate = selected.length > 0 && selected.length < items().length;
+        }
+    };
+
+    items().forEach(item => item.addEventListener("change", sync));
+    toggleAll?.addEventListener("change", () => {
+        items().forEach(item => { item.checked = toggleAll.checked; });
+        sync();
+    });
+    clear?.addEventListener("click", () => {
+        items().forEach(item => { item.checked = false; });
+        sync();
+    });
+    sync();
+})();

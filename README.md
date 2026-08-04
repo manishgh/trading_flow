@@ -124,6 +124,20 @@ Run the local UI:
 dotnet run --project src\TradingFlow.Web --urls http://127.0.0.1:5088
 ```
 
+Create the first local administrator from an interactive terminal before using
+the protected operator screens:
+
+```powershell
+dotnet run --project src\TradingFlow.Web -- users add --username YOUR_NAME --admin
+```
+
+The command prompts for the password without echoing it or placing it in command
+history. ASP.NET Core Identity persists only its one-way password hash. An
+administrator can create additional operator or administrator accounts from
+`/Users`. Earnings calendar pages and read APIs are public; trading, research,
+wishlist, health, and other operational surfaces require authentication. See
+[Local Authentication](docs/local-authentication.md).
+
 Pages:
 
 - `/` dashboard and recent jobs.

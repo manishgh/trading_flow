@@ -20,7 +20,7 @@ public sealed record EarningsMonitorOptions(
     public static EarningsMonitorOptions Default { get; } = new(
         CalendarRefreshInterval: TimeSpan.FromMinutes(15),
         AnalysisInterval: TimeSpan.FromMinutes(1),
-        RequestTimeout: TimeSpan.FromSeconds(45),
+        RequestTimeout: TimeSpan.FromSeconds(300),
         PriorResultRequestTimeout: TimeSpan.FromMinutes(2),
         PriorResultRefreshInterval: TimeSpan.FromHours(24),
         AnalysisSnapshotHeartbeat: TimeSpan.FromMinutes(15),

@@ -29,7 +29,7 @@
     <div>
         <section class="panel">
             <h2>Universe</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Backtests now run from a wishlist. Ticker lists are not maintained in backtest config files.</div>
+            <div class="muted mb-md">Backtests now run from a wishlist. Ticker lists are not maintained in backtest config files.</div>
 
             <label for="WishlistId">Wishlist</label>
             <select name="WishlistId" id="WishlistId" onchange="window.location='?configPath=' + encodeURIComponent(document.getElementById('BaseConfigPath').value) + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '@Model.SelectedStrategyPath') + '&wishlistId=' + encodeURIComponent(this.value)">
@@ -41,7 +41,7 @@
 
             @if (selectedWishlist is not null)
             {
-                <div class="wishlist-chip-grid" style="margin-top: 0.75rem;">
+                <div class="wishlist-chip-grid mt-sm">
                     @foreach (var item in selectedWishlist.Items.Where(i => i.Active).OrderBy(i => i.Ticker))
                     {
                         <span class="quote-pill">@item.Ticker</span>
@@ -49,7 +49,7 @@
                 </div>
             }
 
-            <label for="BaseConfigPath" style="margin-top: 1rem;">Backtest Profile</label>
+            <label class="mt-md" for="BaseConfigPath">Backtest Profile</label>
             <select name="BaseConfigPath" id="BaseConfigPath" onchange="window.location='?configPath=' + encodeURIComponent(this.value) + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '@Model.SelectedStrategyPath') + '&wishlistId=' + encodeURIComponent(document.getElementById('WishlistId').value)">
                     @foreach (var config in Model.Configs)
                     {
@@ -59,9 +59,9 @@
             </select>
         </section>
 
-        <section class="panel" style="margin-top: 1rem;">
+        <section class="panel mt-md">
             <h2>Strategy Catalog</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Promoted configs remain separate; paper/live should run the same strategy files proven here.</div>
+            <div class="muted mb-md">Promoted configs remain separate; paper/live should run the same strategy files proven here.</div>
             <div class="strategy-card-grid">
                 @foreach (var strategy in Model.Strategies)
                 {
@@ -69,7 +69,7 @@
                     <article class="strategy-card">
                         <div class="strategy-card-title">@definition.StrategyName</div>
                         <div class="muted">@definition.Direction.ToUpperInvariant() · @definition.Timeframe · @definition.EntryRules.SetupType</div>
-                        <div class="muted" style="margin-top: 0.35rem;">@AuditLine(strategy)</div>
+                        <div class="muted mt-xs">@AuditLine(strategy)</div>
                         <dl class="mini-metrics">
                             <div><dt>Stop</dt><dd>@definition.ExitRules.StopAtrMultiple ATR</dd></div>
                             <div><dt>Target</dt><dd>@definition.ExitRules.TargetRMultiple R</dd></div>
@@ -80,16 +80,16 @@
             </div>
         </section>
 
-        <details class="panel" style="margin-top: 1rem;">
+        <details class="panel mt-md">
             <summary><strong>Advanced Strategy Editor</strong></summary>
-            <form method="post" asp-page-handler="SaveStrategy" style="margin-top: 1rem;">
-            <div class="muted" style="margin-bottom: 1rem;">Permanent YAML edits are intentionally behind this expander.</div>
+            <form class="mt-md" method="post" asp-page-handler="SaveStrategy">
+            <div class="muted mb-md">Permanent YAML edits are intentionally behind this expander.</div>
 
             <input type="hidden" name="SelectedConfigPath" id="SelectedConfigPath_Hidden" value="@Model.SelectedConfigPath" />
             <input type="hidden" name="SaveStrategyPath" value="@Model.SelectedStrategyPath" />
 
             <label for="SelectedStrategyDropdown">Strategy</label>
-            <select id="SelectedStrategyDropdown" onchange="window.location='?configPath=' + encodeURIComponent(document.getElementById('SelectedConfigPath_Hidden').value) + '&strategyPath=' + encodeURIComponent(this.value) + '&wishlistId=' + encodeURIComponent(document.getElementById('WishlistId')?.value || '')" style="margin-bottom: 1rem;">
+            <select class="mb-md" id="SelectedStrategyDropdown" onchange="window.location='?configPath=' + encodeURIComponent(document.getElementById('SelectedConfigPath_Hidden').value) + '&strategyPath=' + encodeURIComponent(this.value) + '&wishlistId=' + encodeURIComponent(document.getElementById('WishlistId')?.value || '')">
                 @foreach (var strategy in Model.Strategies)
                 {
                     <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.Definition.StrategyName v@(strategy.Definition.Version) - @AuditLine(strategy)</option>
@@ -185,8 +185,8 @@
                 </div>
             }
 
-                <div class="actions" style="margin-top: 1rem;">
-                    <button type="submit" class="button" style="background: #0056b3;" onclick="return confirm('Overwrite strategy YAML permanently?');">Save Strategy</button>
+                <div class="actions mt-md">
+                    <button type="submit" class="button" onclick="return confirm('Overwrite strategy YAML permanently?');">Save Strategy</button>
                 </div>
             </form>
         </details>
@@ -196,7 +196,7 @@
     <div>
         <form method="post" asp-page-handler="RunBacktest" class="panel highlight-border">
             <h2>Backtest Runner</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Run selected promoted strategies against the selected universe. Generated configs use summary retention by default.</div>
+            <div class="muted mb-md">Run selected promoted strategies against the selected universe. Generated configs use summary retention by default.</div>
 
             <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
             <input type="hidden" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
@@ -254,12 +254,12 @@
                 }
             </div>
 
-            <div class="actions" style="margin-top: 1rem;">
-                <button type="submit" class="button" style="background: #28a745;">Run Backtest</button>
+            <div class="actions mt-md">
+                <button type="submit" class="button go">Run Backtest</button>
             </div>
         </form>
 
-        <section class="panel" style="margin-top: 1rem;">
+        <section class="panel mt-md">
             <div class="section-title">
                 <h2>Research Snapshots</h2>
             </div>
@@ -297,11 +297,11 @@
             }
         </section>
 
-        <details class="panel" style="margin-top: 1rem;">
+        <details class="panel mt-md">
             <summary><strong>Optimization Runner</strong></summary>
-            <form method="post" asp-page-handler="Optimize" style="margin-top: 1rem;">
+            <form class="mt-md" method="post" asp-page-handler="Optimize">
             <h2>Optimization Runner</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Run grid search over parameter ranges for the selected strategy and environment.</div>
+            <div class="muted mb-md">Run grid search over parameter ranges for the selected strategy and environment.</div>
             
             <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
             <input type="hidden" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
@@ -336,13 +336,13 @@
                 <input type="text" name="MinVolumeSpikeCsv" id="MinVolumeSpikeCsv" placeholder="e.g. 1.5, 2.0, 3.0" value="1.5, 2.0, 2.5, 3.0" />
             </div>
 
-            <div class="actions" style="margin-top: 1rem;">
-                <button type="submit" class="button" style="background: #28a745;">Launch Optimizer</button>
+            <div class="actions mt-md">
+                <button type="submit" class="button go">Launch Optimizer</button>
             </div>
             </form>
         </details>
 
-        <section class="panel" style="margin-top: 1rem;">
+        <section class="panel mt-md">
             <div class="section-title">
                 <h2>Optimization Jobs</h2>
                 <a class="button secondary" asp-page="/Backtests" asp-route-configPath="@Model.SelectedConfigPath" asp-route-strategyPath="@Model.SelectedStrategyPath">Refresh</a>
@@ -380,7 +380,7 @@
             }
         </section>
         
-        <section class="panel" style="margin-top: 1rem;">
+        <section class="panel mt-md">
             <div class="section-title">
                 <h2>Recent Backtests</h2>
             </div>
@@ -388,57 +388,3 @@
         </section>
     </div>
 </div>
-
-<style>
-    .highlight-border {
-        border: 2px solid #0056b3;
-    }
-
-    .strategy-card-grid {
-        display: grid;
-        gap: 0.75rem;
-    }
-
-    .strategy-card {
-        border: 1px solid #d9e2ef;
-        border-radius: 8px;
-        padding: 0.85rem;
-        background: #fff;
-    }
-
-    .strategy-card-title {
-        font-weight: 700;
-        margin-bottom: 0.25rem;
-    }
-
-    .mini-metrics {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.5rem;
-        margin: 0.75rem 0 0;
-    }
-
-    .mini-metrics dt {
-        color: #64748b;
-        font-size: 0.75rem;
-    }
-
-    .mini-metrics dd {
-        margin: 0;
-        font-weight: 700;
-    }
-
-    .strategy-checks {
-        margin-top: 1rem;
-    }
-
-    .strategy-checks .check {
-        display: block;
-        margin-top: 0.5rem;
-    }
-
-    .compact-table td,
-    .compact-table th {
-        font-size: 0.85rem;
-    }
-</style>

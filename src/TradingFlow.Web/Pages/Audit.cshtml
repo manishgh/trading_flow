@@ -3,144 +3,6 @@
 @{
     ViewData["Title"] = "Decision Tree Audit - " + Model.RunName;
 }
-
-<style>
-    .audit-page {
-        color: #f8fafc;
-    }
-
-    .audit-page .muted {
-        color: #aebcd0;
-    }
-
-    .audit-page .audit-panel,
-    .audit-page .audit-card {
-        background: #1e1e1e;
-        color: #f8fafc;
-    }
-
-    .audit-page .audit-card-value,
-    .audit-page h1,
-    .audit-page h2,
-    .audit-page h3,
-    .audit-page th,
-    .audit-page td {
-        color: #f8fafc;
-    }
-
-    .audit-page .audit-reason-card {
-        background: #252525;
-        color: #f8fafc;
-        border-left: 4px solid #f44336;
-    }
-
-    .audit-page code {
-        display: inline-block;
-        color: #dbeafe;
-        background: #111827;
-        border: 1px solid #273449;
-        border-radius: 4px;
-        padding: 2px 5px;
-        margin-top: 4px;
-        line-height: 1.4;
-        white-space: normal;
-    }
-
-    .audit-page pre {
-        color: #e5e7eb;
-        background: #0f172a;
-        border: 1px solid #263244;
-    }
-
-    .audit-page details summary {
-        color: #67d9ff;
-        font-weight: 600;
-    }
-
-    .audit-page .audit-table-row {
-        border-bottom: 1px solid #4b5563;
-    }
-
-    .audit-page .filter-bar {
-        display: grid;
-        grid-template-columns: minmax(160px, 220px) minmax(220px, 1fr) minmax(160px, 220px);
-        gap: 0.75rem;
-        margin-bottom: 1rem;
-    }
-
-    .audit-page .audit-chip {
-        display: inline-block;
-        border-radius: 999px;
-        padding: 3px 8px;
-        margin: 3px 4px 0 0;
-        font-size: 0.78rem;
-        border: 1px solid #374151;
-        background: #111827;
-        color: #dbeafe;
-    }
-
-    .audit-page .audit-chip.fail {
-        color: #fecaca;
-        border-color: #7f1d1d;
-        background: #2a1111;
-    }
-
-    .audit-page .audit-chip.bool {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 3px 7px;
-    }
-
-    .audit-page .audit-chip.bool input {
-        width: 12px;
-        height: 12px;
-        min-height: 12px;
-        margin: 0;
-        padding: 0;
-        accent-color: #22c55e;
-        flex: 0 0 auto;
-    }
-
-    .audit-page .audit-heading {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 1rem;
-        margin-bottom: 2rem;
-    }
-
-    .audit-page .audit-summary-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 1rem;
-        margin-bottom: 1rem;
-    }
-
-    .audit-page .audit-table-panel {
-        max-width: 100%;
-        min-width: 0;
-        overflow-x: auto;
-    }
-
-    @@media (max-width: 700px) {
-        .audit-page .audit-heading {
-            align-items: flex-start;
-            flex-direction: column;
-            margin-bottom: 1rem;
-        }
-
-        .audit-page .audit-summary-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 0.75rem;
-        }
-
-        .audit-page .filter-bar {
-            grid-template-columns: minmax(0, 1fr);
-        }
-    }
-</style>
-
 @section Scripts {
     <script>
         (function () {
@@ -167,20 +29,20 @@
                     .replaceAll("'", '&#039;');
             }
 
-            function decisionColor(decision) {
+            function decisionClass(decision) {
                 const normalized = String(decision ?? '').toLowerCase();
-                if (normalized === 'accepted' || normalized === 'exitsubmitted') return '#4caf50';
-                if (normalized === 'rejected' || normalized === 'exitrejected') return '#f44336';
-                return '#f59e0b';
+                if (normalized === 'accepted' || normalized === 'exitsubmitted') return 'accepted';
+                if (normalized === 'rejected' || normalized === 'exitrejected') return 'rejected';
+                return 'pending';
             }
 
             function renderReasonCards(reasons) {
                 if (!reasonPanelEl || !reasonCardsEl) return;
-                reasonPanelEl.style.display = reasons.length === 0 ? 'none' : 'block';
-                reasonCardsEl.innerHTML = reasons.map(reason => `<button type="button" class="audit-reason-card" data-reason-card="${escapeHtml(reason.reasonKey)}" style="text-align:left; border-radius: 6px; padding: 0.75rem; cursor: pointer;">
-                    <div style="font-weight: 700;">${escapeHtml(reason.displayReason)}</div>
+                reasonPanelEl.hidden = reasons.length === 0;
+                reasonCardsEl.innerHTML = reasons.map(reason => `<button type="button" class="audit-reason-card" data-reason-card="${escapeHtml(reason.reasonKey)}">
+                    <div class="audit-reason-title">${escapeHtml(reason.displayReason)}</div>
                     <div class="muted">${escapeHtml(reason.count)} rejected (${Number(reason.percentOfRejected ?? 0).toFixed(1)}%)</div>
-                    <code style="font-size: 0.8rem;">${escapeHtml(reason.exampleReason)}</code>
+                    <code>${escapeHtml(reason.exampleReason)}</code>
                 </button>`).join('');
                 reasonCardsEl.querySelectorAll('[data-reason-card]').forEach(card => {
                     card.addEventListener('click', () => {
@@ -204,22 +66,29 @@
                 if (!recordsBodyEl) return;
                 recordsBodyEl.innerHTML = records.map(record => {
                     const chips = (record.chips ?? []).map(renderChip).join('');
-                    const rawReason = record.rawReason ? `<code style="font-size: 0.8rem;">${escapeHtml(record.rawReason)}</code>` : '';
-                    return `<tr class="audit-table-row" data-decision="${escapeHtml(String(record.decision ?? '').toLowerCase())}" data-reason="${escapeHtml(record.reasonKey)}" data-ticker="${escapeHtml(record.ticker)}" style="vertical-align: top;">
-                        <td style="white-space: nowrap; padding-top: 10px;">${escapeHtml(record.localTime)}</td>
-                        <td style="font-weight: bold; padding-top: 10px;">${escapeHtml(record.ticker)}</td>
-                        <td style="padding-top: 10px;">${escapeHtml(record.strategy)}</td>
-                        <td style="padding-top: 10px; font-weight: bold; color: ${decisionColor(record.decision)}">${escapeHtml(record.decision)}</td>
-                        <td style="padding-top: 10px;">
+                    const rawReason = record.rawReason ? `<code>${escapeHtml(record.rawReason)}</code>` : '';
+                    const gates = (record.gateEvidence ?? []).length === 0 ? '' :
+                        `<table class="gate-evidence"><thead><tr><th>Gate</th><th>Measured</th><th>Required</th></tr></thead><tbody>` +
+                        record.gateEvidence.map(gate => `<tr><td>${escapeHtml(gate.label)}</td>`+
+                            `<td class="num">${escapeHtml(gate.actual)}</td>`+
+                            `<td class="num">${escapeHtml(gate.operator)} ${escapeHtml(gate.threshold)}</td></tr>`).join('') +
+                        `</tbody></table>`;
+                    return `<tr class="audit-table-row" data-decision="${escapeHtml(String(record.decision ?? '').toLowerCase())}" data-reason="${escapeHtml(record.reasonKey)}" data-ticker="${escapeHtml(record.ticker)}">
+                        <td class="audit-cell nowrap">${escapeHtml(record.localTime)}</td>
+                        <td class="audit-cell strong">${escapeHtml(record.ticker)}</td>
+                        <td class="audit-cell">${escapeHtml(record.strategy)}</td>
+                        <td class="audit-decision ${decisionClass(record.decision)}">${escapeHtml(record.decision)}</td>
+                        <td class="audit-cell">
                             <div>${escapeHtml(record.reason)}</div>
                             ${rawReason}
-                            <div class="muted" style="margin-top: 0.4rem;">${escapeHtml(record.explanation)}</div>
+                            ${gates}
+                            <div class="muted audit-note">${escapeHtml(record.explanation)}</div>
                             <div>${chips}</div>
                         </td>
-                        <td style="padding-top: 10px; max-width: 500px;">
+                        <td class="audit-cell wide">
                             <details>
-                                <summary style="cursor: pointer;">View Signal Evaluation</summary>
-                                <pre style="padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-top: 5px; overflow-x: auto;">${escapeHtml(record.signalJson)}</pre>
+                                <summary>View Signal Evaluation</summary>
+                                <pre class="audit-json">${escapeHtml(record.signalJson)}</pre>
                             </details>
                         </td>
                     </tr>`;
@@ -247,11 +116,11 @@
                     const matchesReason = !reason || row.dataset.reason === reason;
                     const matchesTicker = !ticker || String(row.dataset.ticker ?? '').toUpperCase().includes(ticker);
                     const show = matchesDecision && matchesReason && matchesTicker;
-                    row.style.display = show ? '' : 'none';
+                    row.hidden = !show;
                     if (show) visible++;
                 });
                 if (emptyEl) {
-                    emptyEl.style.display = visible === 0 ? 'block' : 'none';
+                    emptyEl.hidden = visible !== 0;
                 }
             }
 
@@ -294,55 +163,130 @@
     </script>
 }
 
-<div class="container audit-page" style="max-width: 1400px; margin: 0 auto; padding: 20px;">
+<div class="container audit-page audit-container">
     <div class="audit-heading">
         <div>
-            <h1 style="margin: 0; color: #fff;">Audit Analyzer: @Model.RunName</h1>
+            <h1>Audit Analyzer: @Model.RunName</h1>
             <p class="muted">Decision tree audit for strategy signal evaluations. Times shown in @Model.LocalTimeZoneLabel. Last refreshed: <span id="auditRefreshedAt">@Model.FormatLocal(DateTimeOffset.UtcNow)</span>.</p>
         </div>
-        <a href="@Model.BackUrl" class="button secondary" style="background: #1f6feb; color: #fff; border-color: #2f81f7;">Back</a>
+        <div class="actions">
+                <a href="@Url.Page("/Audit", "Export", new { runName = Model.RunName })" class="button secondary">Export CSV</a>
+                <a href="@Model.BackUrl" class="button">Back</a>
+            </div>
     </div>
 
-    <div id="auditEmpty" class="audit-panel" style="padding: 1rem; border-radius: 8px; margin-bottom: 1rem; display: @(Model.Records.Count == 0 ? "block" : "none");">
+    <div id="auditEmpty" class="audit-panel audit-stack" hidden="@(Model.Records.Count != 0)">
         <strong>No matching audit records found.</strong>
         <span class="muted">The run may still be evaluating, or filters may be hiding rows.</span>
     </div>
 
         <div class="audit-summary-grid">
-            <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
+            <div class="audit-card">
                 <div class="muted">Evaluations</div>
-                <div id="auditEvaluations" class="audit-card-value" style="font-size: 1.8rem; font-weight: 700;">@Model.Records.Count</div>
+                <div id="auditEvaluations" class="audit-card-value">@Model.Records.Count</div>
             </div>
-            <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
+            <div class="audit-card">
                 <div class="muted">Accepted</div>
-                <div id="auditAccepted" style="font-size: 1.8rem; font-weight: 700; color: #4caf50;">@Model.AcceptedCount</div>
+                <div id="auditAccepted" class="audit-card-value good">@Model.AcceptedCount</div>
             </div>
-            <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
+            <div class="audit-card">
                 <div class="muted">Rejected</div>
-                <div id="auditRejected" style="font-size: 1.8rem; font-weight: 700; color: #f44336;">@Model.RejectedCount</div>
+                <div id="auditRejected" class="audit-card-value bad">@Model.RejectedCount</div>
             </div>
-            <div class="audit-card" style="border-radius: 8px; padding: 1rem;">
+            <div class="audit-card">
                 <div class="muted">Coverage</div>
-                <div id="auditCoverage" class="audit-card-value" style="font-size: 1.1rem; font-weight: 700;">@Model.TickerCount tickers / @Model.StrategyCount strategies</div>
+                <div id="auditCoverage" class="audit-card-value compact">@Model.TickerCount tickers / @Model.StrategyCount strategies</div>
             </div>
         </div>
 
-            <div id="auditReasonPanel" class="audit-panel" style="border-radius: 8px; padding: 1rem; margin-bottom: 1rem; display: @(Model.TopRejectionReasons.Count > 0 ? "block" : "none");">
-                <h2 style="margin-top: 0;">Top Rejection Reasons</h2>
-                <div id="auditReasonCards" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem;">
+            <div class="audit-panel audit-stack">
+                <h2>Compare runs</h2>
+                <form method="get" class="audit-compare-form">
+                    <label for="CompareWith">Compare against run</label>
+                    <input id="CompareWith" name="compareWith" value="@Model.CompareWith"
+                           placeholder="another run name" autocomplete="off" />
+                    <button type="submit">Compare</button>
+                    @if (Model.Comparison.Count > 0)
+                    {
+                        <a class="button secondary" href="@Url.Page("/Audit", new { runName = Model.RunName })">Clear</a>
+                    }
+                </form>
+                @if (Model.Comparison.Count > 0)
+                {
+                    <table class="data-grid-table mt-md">
+                        <thead>
+                            <tr>
+                                <th scope="col">Metric</th>
+                                <th scope="col" class="num">@Model.RunName</th>
+                                <th scope="col" class="num">@Model.ComparisonRunName</th>
+                                <th scope="col" class="num">Delta</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        @foreach (var row in Model.Comparison)
+                        {
+                            <tr>
+                                <td>@row.Label</td>
+                                <td class="num">@row.Current.ToString("0.##")</td>
+                                <td class="num">@row.Other.ToString("0.##")</td>
+                                <td class="num @row.DeltaClass">@row.DeltaText</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                }
+                else if (!String.IsNullOrWhiteSpace(Model.CompareWith))
+                {
+                    <p class="muted">No decisions found for that run name.</p>
+                }
+            </div>
+
+            @if (Model.Funnel.Count > 0)
+            {
+                <div class="audit-panel audit-stack">
+                    <h2>Decision funnel</h2>
+                    <p class="muted">
+                        Candidates surviving each stage. The widest drop is the reason most
+                        entries never happened.
+                    </p>
+                    <ol class="audit-funnel">
+                        @foreach (var stage in Model.Funnel)
+                        {
+                            <li>
+                                <div class="audit-funnel-head">
+                                    <span>@stage.Label</span>
+                                    <strong>@stage.Remaining<span class="muted"> / @stage.Total</span></strong>
+                                </div>
+                                <div class="audit-funnel-track">
+                                    <div class="audit-funnel-fill progress-fill"
+                                         style="--progress:@stage.RemainingPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                                </div>
+                                @if (stage.Removed > 0)
+                                {
+                                    <small class="muted">Removed @stage.Removed here</small>
+                                }
+                            </li>
+                        }
+                    </ol>
+                </div>
+            }
+
+            <div id="auditReasonPanel" class="audit-panel audit-stack" hidden="@(Model.TopRejectionReasons.Count == 0)">
+                <h2>Top Rejection Reasons</h2>
+                <div id="auditReasonCards" class="audit-reason-grid">
                     @foreach (var reason in Model.TopRejectionReasons)
                     {
-                        <button type="button" class="audit-reason-card" data-reason-card="@reason.ReasonKey" style="text-align:left; border-radius: 6px; padding: 0.75rem; cursor: pointer;">
-                            <div style="font-weight: 700;">@reason.DisplayReason</div>
+                        <button type="button" class="audit-reason-card" data-reason-card="@reason.ReasonKey">
+                            <div class="audit-reason-title">@reason.DisplayReason</div>
                             <div class="muted">@reason.Count rejected (@reason.PercentOfRejected.ToString("0.0")%)</div>
-                            <code style="font-size: 0.8rem;">@reason.ExampleReason</code>
+                            <code>@reason.ExampleReason</code>
                         </button>
                     }
                 </div>
             </div>
 
-        <div class="audit-panel" style="border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
-            <div class="filter-bar">
+        <div class="audit-panel audit-stack">
+            <div class="audit-filter-bar">
                 <div>
                     <label for="decisionFilter">Decision</label>
                     <select id="decisionFilter">
@@ -373,10 +317,10 @@
             <button id="clearAuditFilters" type="button" class="button secondary">Clear Filters</button>
         </div>
 
-        <div class="audit-panel audit-table-panel" style="border-radius: 8px; padding: 1rem;">
-            <table class="table" style="width: 100%; border-collapse: collapse;">
+        <div class="audit-panel audit-table-panel">
+            <table class="table audit-records-table">
                 <thead>
-                    <tr style="border-bottom: 1px solid #444; text-align: left;">
+                    <tr>
                         <th>Local Time</th>
                         <th>Ticker</th>
                         <th>Strategy</th>
@@ -388,20 +332,39 @@
                 <tbody id="auditRecordsBody">
                 @foreach (var view in Model.RecordViews)
                 {
-                    <tr class="audit-table-row" data-decision="@view.Decision.ToLowerInvariant()" data-reason="@view.ReasonKey" data-ticker="@view.Ticker" style="vertical-align: top;">
-                        <td style="white-space: nowrap; padding-top: 10px;">@view.LocalTime</td>
-                        <td style="font-weight: bold; padding-top: 10px;">@view.Ticker</td>
-                        <td style="padding-top: 10px;">@view.StrategyName</td>
-                        <td style="padding-top: 10px; font-weight: bold; color: @(view.Decision == "Accepted" || view.Decision == "ExitSubmitted" ? "#4caf50" : (view.Decision == "Rejected" || view.Decision == "ExitRejected" ? "#f44336" : "#f59e0b"))">
+                    <tr class="audit-table-row" data-decision="@view.Decision.ToLowerInvariant()" data-reason="@view.ReasonKey" data-ticker="@view.Ticker">
+                        <td class="audit-cell nowrap">@view.LocalTime</td>
+                        <td class="audit-cell strong">@view.Ticker</td>
+                        <td class="audit-cell">@view.StrategyName</td>
+                        <td class="audit-decision @(view.Decision is "Accepted" or "ExitSubmitted" ? "accepted" : view.Decision is "Rejected" or "ExitRejected" ? "rejected" : "pending")">
                             @view.Decision
                         </td>
-                        <td style="padding-top: 10px;">
+                        <td class="audit-cell">
                             <div>@view.DisplayReason</div>
                             @if (!String.IsNullOrWhiteSpace(view.RawReason))
                             {
-                                <code style="font-size: 0.8rem;">@view.RawReason</code>
+                                <code>@view.RawReason</code>
                             }
-                            <div class="muted" style="margin-top: 0.4rem;">@view.Explanation</div>
+                            @if (view.GateEvidence.Count > 0)
+                            {
+                                <table class="gate-evidence">
+                                    <caption class="visually-hidden">Matched values against thresholds</caption>
+                                    <thead>
+                                        <tr><th scope="col">Gate</th><th scope="col">Measured</th><th scope="col">Required</th></tr>
+                                    </thead>
+                                    <tbody>
+                                    @foreach (var gate in view.GateEvidence)
+                                    {
+                                        <tr>
+                                            <td>@gate.Label</td>
+                                            <td class="num">@gate.Actual</td>
+                                            <td class="num">@gate.Operator @gate.Threshold</td>
+                                        </tr>
+                                    }
+                                    </tbody>
+                                </table>
+                            }
+                            <div class="muted audit-note">@view.Explanation</div>
                             <div>
                                 @foreach (var chip in view.Chips)
                                 {
@@ -420,10 +383,10 @@
                                 }
                             </div>
                         </td>
-                        <td style="padding-top: 10px; max-width: 500px;">
+                        <td class="audit-cell wide">
                             <details>
-                                <summary style="cursor: pointer;">View Signal Evaluation</summary>
-                                <pre style="padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-top: 5px; overflow-x: auto;">
+                                <summary>View Signal Evaluation</summary>
+                                <pre class="audit-json">
 @view.FormattedSignalJson
                                 </pre>
                             </details>

@@ -290,6 +290,12 @@ public sealed record MarketPredictorResult(
         ReadinessStatus.Equals("valid", StringComparison.OrdinalIgnoreCase) &&
         String.Equals(Model?.Status, "promoted", StringComparison.OrdinalIgnoreCase);
 
+    public bool IsValidPaperEvidence =>
+        AvailabilityStatus == "available" &&
+        ReadinessStatus.Equals("valid", StringComparison.OrdinalIgnoreCase) &&
+        (String.Equals(Model?.Status, "promoted", StringComparison.OrdinalIgnoreCase) ||
+         String.Equals(Model?.Status, "candidate", StringComparison.OrdinalIgnoreCase));
+
     public static MarketPredictorResult Unavailable(
         string ticker,
         string mode,

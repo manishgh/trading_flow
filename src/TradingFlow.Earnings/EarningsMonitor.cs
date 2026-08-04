@@ -127,7 +127,7 @@ public sealed class EarningsMonitor
                 .Select(item => item.Ticker)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            var barsByTicker = await marketState.LoadAsync(symbols, nowUtc, timeout.Token);
+            var barsByTicker = await marketState.LoadAsync(symbols, nowUtc, cancellationToken);
 
             var recentNews = await news.GetRecentForTickersAsync(
                 nowUtc.AddDays(-3),
@@ -274,8 +274,21 @@ public sealed class EarningsMonitor
     {
         return previous.ResultAssessment != current.ResultAssessment ||
             previous.BreakoutAssessment != current.BreakoutAssessment ||
+            previous.ResultDataSource != current.ResultDataSource ||
+            previous.EffectiveEpsEstimate != current.EffectiveEpsEstimate ||
+            previous.EffectiveEpsActual != current.EffectiveEpsActual ||
+            previous.EffectiveEpsSurprisePercent != current.EffectiveEpsSurprisePercent ||
+            previous.EffectiveRevenueEstimateMillions != current.EffectiveRevenueEstimateMillions ||
+            previous.EffectiveRevenueActualMillions != current.EffectiveRevenueActualMillions ||
+            previous.EffectiveRevenueSurprisePercent != current.EffectiveRevenueSurprisePercent ||
             previous.LatestCompletedBarAtUtc != current.LatestCompletedBarAtUtc ||
             previous.ResultNewsPublishedAtUtc != current.ResultNewsPublishedAtUtc ||
+            previous.NewsHeadline != current.NewsHeadline ||
+            previous.EventReturnPercent != current.EventReturnPercent ||
+            previous.Reason != current.Reason ||
+            previous.NewsUrl != current.NewsUrl ||
+            previous.NewsProvider != current.NewsProvider ||
+            previous.NewsSentiment != current.NewsSentiment ||
             current.AnalyzedAtUtc - previous.AnalyzedAtUtc >= heartbeat;
     }
 }

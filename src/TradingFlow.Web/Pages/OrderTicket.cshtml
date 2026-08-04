@@ -6,11 +6,20 @@
 
 <header class="page-header compact-page-header">
     <div>
-        <h1>Review Protected Buy</h1>
-        <p>Paper environment. The server revalidates quote, spread, session, account, exposure, and duplicate controls before submission.</p>
+        <h1>@(Model.IsExit ? "Review Exit" : "Review Protected Buy")</h1>
+        <p>
+            <span class="environment-badge">@Model.EnvironmentState.Label</span>
+            The server revalidates quote, spread, session, account, exposure, and duplicate controls before submission.
+        </p>
     </div>
-    <a class="button secondary" asp-page="/TradeDesk" asp-route-id="@Model.WishlistId" asp-route-ticker="@Model.Ticker">Back to Desk</a>
+    <a class="button secondary" asp-page="/TradeDesk" asp-route-id="@Model.WishlistId" asp-route-ticker="@Model.Ticker" asp-route-env="@Model.Env">Back to Desk</a>
 </header>
+
+@if (!Model.EnvironmentState.IsEnabled)
+{
+    <partial name="_EnvironmentLock" model="Model.EnvironmentState" />
+    return;
+}
 
 @if (!String.IsNullOrWhiteSpace(Model.ErrorMessage))
 {
@@ -19,7 +28,7 @@
 @if (Model.Confirmation is { } confirmation)
 {
     <section class="panel order-confirmation" role="status">
-        <span class="environment-badge">PAPER</span>
+        <span class="environment-badge">@Model.EnvironmentState.Label</span>
         <h2>Order accepted</h2>
         <p>@confirmation.Quantity.ToString("0.####") shares of @confirmation.Ticker at limit @confirmation.LimitPrice.ToString("C2").</p>
         <dl class="evidence-grid">
@@ -47,6 +56,8 @@ else if (Model.Preview is { } preview)
             <div><dt>Quote age</dt><dd>@(preview.QuoteAgeMilliseconds?.ToString() ?? "--") ms</dd></div>
             <div><dt>Spread</dt><dd>@preview.SpreadBps?.ToString("0.##") bps</dd></div>
             <div><dt>Session</dt><dd>@preview.Session</dd></div>
+            <div><dt>Order type</dt><dd>@preview.OrderType</dd></div>
+            <div><dt>Stop trigger</dt><dd>@(preview.TriggerPrice?.ToString("C2") ?? "--")</dd></div>
             <div><dt>Time in force</dt><dd>@preview.TimeInForce</dd></div>
             <div><dt>Stop</dt><dd>@preview.StopLossPrice?.ToString("C2")</dd></div>
             <div><dt>Target</dt><dd>@preview.TakeProfitPrice?.ToString("C2")</dd></div>
@@ -63,14 +74,18 @@ else if (Model.Preview is { } preview)
             </div>
         }
         <div class="actions">
-            <a class="button secondary" asp-page="/OrderTicket" asp-route-wishlistId="@Model.WishlistId" asp-route-ticker="@preview.Ticker" asp-route-limitPrice="@preview.LimitPrice">Edit order</a>
+            <a class="button secondary" asp-page="/OrderTicket" asp-route-wishlistId="@Model.WishlistId" asp-route-ticker="@preview.Ticker" asp-route-limitPrice="@preview.LimitPrice" asp-route-side="@Model.Side" asp-route-env="@Model.Env">Edit order</a>
             @if (preview.CanSubmit)
             {
                 <form method="post" asp-page-handler="Confirm">
                     <input type="hidden" asp-for="WishlistId" />
                     <input type="hidden" asp-for="Ticker" />
+                    <input type="hidden" asp-for="Env" />
+                    <input type="hidden" asp-for="Side" />
                     <input type="hidden" asp-for="TicketToken" />
-                    <button class="button buy" type="submit">Confirm paper order</button>
+                    <button class="button @(Model.IsExit ? "danger" : "buy")" type="submit">
+                    Confirm @Model.EnvironmentState.Label.ToLowerInvariant() @(Model.IsExit ? "exit" : "order")
+                </button>
                 </form>
             }
         </div>
@@ -81,15 +96,53 @@ else
     <section class="panel order-entry-panel">
         <form method="post" asp-page-handler="Preview" class="form-grid compact-form-grid">
             <input type="hidden" asp-for="WishlistId" />
+            <input type="hidden" asp-for="Env" />
+            <input type="hidden" asp-for="Side" />
             <label asp-for="Ticker">Ticker<input asp-for="Ticker" readonly /></label>
             <label asp-for="Quantity">Quantity<input asp-for="Quantity" type="number" min="1" step="1" required /></label>
-            <label asp-for="LimitPrice">Limit price<input asp-for="LimitPrice" type="number" min="0.0001" step="0.0001" required /></label>
-            <label asp-for="StopLossPrice">Stop price<input asp-for="StopLossPrice" type="number" min="0.0001" step="0.0001" required /></label>
-            <label asp-for="TakeProfitPrice">Take-profit price<input asp-for="TakeProfitPrice" type="number" min="0.0001" step="0.0001" required /></label>
+            <label asp-for="OrderType">
+                Order type
+                <select asp-for="OrderType">
+                    @foreach (var (key, label) in Model.OrderTypes)
+                    {
+                        <option value="@key" selected="@(Model.OrderType == key)">@label</option>
+                    }
+                </select>
+            </label>
+            <label asp-for="TimeInForce">
+                Time in force
+                <select asp-for="TimeInForce">
+                    @foreach (var (key, label) in TradingFlow.Web.Pages.OrderTicketModel.TimesInForce)
+                    {
+                        <option value="@key" selected="@(Model.TimeInForce == key)">@label</option>
+                    }
+                </select>
+            </label>
+            <label asp-for="LimitPrice">Limit price<input asp-for="LimitPrice" type="number" min="0" step="0.0001" /></label>
+            @if (Model.IsExit)
+            {
+                <label asp-for="TriggerPrice">Stop trigger<input asp-for="TriggerPrice" type="number" min="0" step="0.0001" /></label>
+                <p class="field-help">
+                    A market order needs no prices. A stop or stop-limit needs a trigger; a limit or
+                    stop-limit needs a limit. Extended hours still requires limit and DAY.
+                </p>
+            }
+            @if (!Model.IsExit)
+            {
+                <label asp-for="StopLossPrice">Stop price<input asp-for="StopLossPrice" type="number" min="0.0001" step="0.0001" required /></label>
+                <label asp-for="TakeProfitPrice">Take-profit price<input asp-for="TakeProfitPrice" type="number" min="0.0001" step="0.0001" required /></label>
+            }
+            else
+            {
+                <p class="field-help">
+                    An exit carries no stop or target. Protection belonged to the entry that opened the
+                    position; the server checks the exit quantity against the open position.
+                </p>
+            }
             <label asp-for="Horizon">Horizon<select asp-for="Horizon"><option value="intraday">Intraday</option><option value="swing">Swing</option></select></label>
             <label class="checkbox-field"><input asp-for="AllowExtendedHoursTrading" />Allow extended-hours trading</label>
             <p class="field-help">Extended-hours requests fail closed unless the session, asset, order type, and broker protection are eligible.</p>
-            <button class="button" type="submit">Review order</button>
+            <button class="button" type="submit">Review @(Model.IsExit ? "exit" : "order")</button>
         </form>
     </section>
 }

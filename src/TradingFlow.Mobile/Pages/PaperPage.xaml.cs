@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using TradingFlow.Mobile.Services;
+using TradingFlow.Mobile.Resources.Styles;
 
 namespace TradingFlow.Mobile.Pages;
 
@@ -66,7 +67,7 @@ public partial class PaperPage : ContentPage
             StatusLabel.Text = healthy
                 ? $"Connected: {api.BaseUrl}"
                 : $"Backend unreachable: {api.BaseUrl}";
-            StatusLabel.TextColor = healthy ? Color.FromArgb("#067647") : Color.FromArgb("#B42318");
+            StatusLabel.TextColor = healthy ? ThemePalette.Positive : ThemePalette.Negative;
 
             catalog ??= await api.GetCatalogAsync();
             ConfigPicker.ItemsSource = catalog?.PaperConfigs.ToList();
@@ -111,7 +112,7 @@ public partial class PaperPage : ContentPage
         catch (Exception exception)
         {
             StatusLabel.Text = $"Error: {exception.Message}";
-            StatusLabel.TextColor = Color.FromArgb("#B42318");
+            StatusLabel.TextColor = ThemePalette.Negative;
             await DisplayAlertAsync("Paper", exception.Message, "OK");
         }
         finally
@@ -268,7 +269,7 @@ public partial class PaperPage : ContentPage
             {
                 Text = item,
                 FontSize = 12,
-                TextColor = Color.FromArgb("#475467")
+                TextColor = ThemePalette.TextSecondary
             });
         }
 

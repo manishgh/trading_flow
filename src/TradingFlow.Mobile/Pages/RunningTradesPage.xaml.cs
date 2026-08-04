@@ -1,15 +1,16 @@
 using System.Collections.ObjectModel;
 using TradingFlow.Mobile.Services;
+using TradingFlow.Mobile.Resources.Styles;
 
 namespace TradingFlow.Mobile.Pages;
 
 public partial class RunningTradesPage : ContentPage
 {
-    private static readonly Color ProfitColor = Color.FromArgb("#067647");
-    private static readonly Color LossColor = Color.FromArgb("#B42318");
-    private static readonly Color NeutralColor = Color.FromArgb("#475467");
-    private static readonly Color AccentColor = Color.FromArgb("#007ACC");
-    private static readonly Color InactiveColor = Color.FromArgb("#667085");
+    private static readonly Color ProfitColor = ThemePalette.Positive;
+    private static readonly Color LossColor = ThemePalette.Negative;
+    private static readonly Color NeutralColor = ThemePalette.TextSecondary;
+    private static readonly Color AccentColor = ThemePalette.AccentStrong;
+    private static readonly Color InactiveColor = ThemePalette.TextSecondary;
 
     private readonly TradingFlowApiClient api = AppServices.Api;
     private readonly ObservableCollection<RunningTradeRow> rows = new();
@@ -110,6 +111,7 @@ public partial class RunningTradesPage : ContentPage
             return;
         }
 
+        await AppServices.Haptics.SignalAsync(HapticSignal.DestructiveConfirm);
         var confirmed = await DisplayAlertAsync(
             "Review paper exit",
             $"Close the tracked {row.Trade.Ticker} paper position? The server will validate and reconcile the request.",
@@ -131,10 +133,12 @@ public partial class RunningTradesPage : ContentPage
                 await api.CloseAutomationPositionAsync(sessionId);
             }
 
+            await AppServices.Haptics.SignalAsync(HapticSignal.OrderAccepted);
             await LoadAsync();
         }
         catch (Exception exception)
         {
+            await AppServices.Haptics.SignalAsync(HapticSignal.OrderRejected);
             await DisplayAlertAsync("Exit rejected", exception.Message, "OK");
         }
     }

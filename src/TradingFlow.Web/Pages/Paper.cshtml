@@ -29,7 +29,7 @@
     <div>
         <div class="panel">
             <h2>Wishlist + Finviz</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Paper trading universe is the selected wishlist plus optional Finviz screener results.</div>
+            <div class="muted mb-md">Paper trading universe is the selected wishlist plus optional Finviz screener results.</div>
             <input type="hidden" name="BaseConfigPath" id="BaseConfigPath" value="@Model.ConfigPath" />
 
             <label for="WishlistId">Wishlist <span class="tf-help" title="Named ticker group stored in the database. This replaces the old paper-config ticker list.">?</span></label>
@@ -40,7 +40,7 @@
                 }
             </select>
 
-            <div style="margin-top: 1rem;">
+            <div class="mt-md">
                 <label>Active Tickers</label>
                 <div class="ticker-chip-row">
                     @if (Model.SelectedWishlist is null || String.IsNullOrWhiteSpace(Model.WishlistTickersCsv))
@@ -57,18 +57,18 @@
                 </div>
             </div>
 
-            <label for="ScreenerFilter" style="margin-top: 1rem;">Finviz Screener <span class="tf-help" title="Optional Finviz Elite query or URL. Paper run uses wishlist tickers plus symbols returned by this screener.">?</span></label>
+            <label class="mt-md" for="ScreenerFilter">Finviz Screener <span class="tf-help" title="Optional Finviz Elite query or URL. Paper run uses wishlist tickers plus symbols returned by this screener.">?</span></label>
             <input type="text" name="ScreenerFilter" id="ScreenerFilter" value="@Model.ScreenerFilter" placeholder="v=111&f=cap_smallover,sh_relvol_o2,ta_change_u" />
-            <div class="muted" style="margin-top: 0.35rem;">Optional. Use a Finviz query string or URL to add today's screeners to this paper run.</div>
+            <div class="muted mt-xs">Optional. Use a Finviz query string or URL to add today's screeners to this paper run.</div>
 
-            <div class="actions" style="margin-top: 1rem;">
+            <div class="actions mt-md">
                 <a class="button secondary" asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Manage Wishlist</a>
             </div>
         </div>
 
-        <div class="panel" style="margin-top: 1.5rem;">
+        <div class="panel mt-lg">
             <h2>Strategy Configuration</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Select a strategy and optionally edit its parameters directly in YAML format.</div>
+            <div class="muted mb-md">Select a strategy and optionally edit its parameters directly in YAML format.</div>
 
             <label for="SelectedStrategyDropdown">Strategy Config <span class="tf-help" title="The YAML strategy definition used by the shared signal engine. Backtest and paper trading use the same strategy fields.">?</span></label>
             <select name="SelectedStrategyPath" id="SelectedStrategyDropdown" onchange="loadStrategyDetails(this.value)">
@@ -79,7 +79,7 @@
             </select>
             @if (selectedStrategy is not null)
             {
-                <div class="muted" style="margin-top: 0.4rem;">@AuditLine(selectedStrategy)</div>
+                <div class="muted mt-xs">@AuditLine(selectedStrategy)</div>
             }
 
             <div class="strategy-quick-edit">
@@ -109,9 +109,9 @@
             </div>
 
             <label for="StrategyYaml">Raw Strategy YAML <span class="tf-help" title="Full strategy source. Quick Edit changes selected common fields, while advanced rules can be edited directly here. Save Strategy persists this file.">?</span></label>
-            <textarea name="StrategyYaml" id="StrategyYaml" rows="12" style="font-family: monospace; font-size: 0.9em;">@Model.StrategyYaml</textarea>
+            <textarea class="mono" name="StrategyYaml" id="StrategyYaml" rows="12">@Model.StrategyYaml</textarea>
 
-            <div class="actions" style="margin-top: 1rem;">
+            <div class="actions mt-md">
                 <button type="submit" asp-page-handler="SaveStrategy" class="button secondary" title="Persists edits to the selected strategy YAML file. Required for changed strategy parameters like RVOL or ATR stop.">Save Strategy</button>
             </div>
         </div>
@@ -121,17 +121,17 @@
     <div>
         <div class="panel highlight-border">
             <h2>Paper Runner</h2>
-            <div class="muted" style="margin-bottom: 1rem;">Run the selected strategy on the wishlist plus optional Finviz screener universe.</div>
+            <div class="muted mb-md">Run the selected strategy on the wishlist plus optional Finviz screener universe.</div>
 
             <label for="OrderExpirationDropdown">Order Expiration Strategy <span class="tf-help" title="Controls how long submitted broker orders remain active: GTC, day-only, or active cancellation behavior.">?</span></label>
-            <select id="OrderExpirationDropdown" name="OrderExpiration" style="margin-bottom: 1rem;">
+            <select class="mb-md" id="OrderExpirationDropdown" name="OrderExpiration">
                 <option value="gtc" selected="@(Model.OrderExpiration == "gtc")">Good 'Til Canceled (GTC)</option>
                 <option value="day" selected="@(Model.OrderExpiration == "day")">Day Orders (Cancel at Market Close)</option>
                 <option value="active_cancel" selected="@(Model.OrderExpiration == "active_cancel")">Active Cancellation (GTC + 30-min Auto-Cancel)</option>
             </select>
 
             <label for="EntryOrderTypeDropdown">Entry Order Type <span class="tf-help" title="Limit waits for a controlled fill price; market enters immediately but may slip. Low-float/intraday strategies usually prefer limit.">?</span></label>
-            <select id="EntryOrderTypeDropdown" name="EntryOrderType" style="margin-bottom: 1rem;">
+            <select class="mb-md" id="EntryOrderTypeDropdown" name="EntryOrderType">
                 <option value="limit" selected="@(Model.EntryOrderType == "limit")">Limit Order (Waits for pullback/discount)</option>
                 <option value="market" selected="@(Model.EntryOrderType == "market")">Market Order (Enters immediately at current price)</option>
             </select>
@@ -159,13 +159,13 @@
             <label for="RunName">Run Name <span class="tf-help" title="Unique name for this paper run. It scopes logs, audits, profiler metrics, results, and run-specific broker order tags.">?</span></label>
             <input name="RunName" id="RunName" value="@Model.SuggestedRunName" />
 
-            <div class="actions" style="margin-top: 1rem;">
-                <button type="submit" asp-page-handler="RunLive" class="button" style="background: #28a745;" title="Starts a paper LiveRunner job using the selected strategy and generated run configuration.">Start Paper Trading</button>
+            <div class="actions mt-md">
+                <button type="submit" asp-page-handler="RunLive" class="button go" title="Starts a paper LiveRunner job using the selected strategy and generated run configuration.">Start Paper Trading</button>
             </div>
         </div>
         </form>
 
-        <section class="panel" style="margin-top: 1rem;">
+        <section class="panel mt-md">
             <div class="section-title">
                 <h2>Paper Jobs</h2>
                 <a class="button secondary" asp-page="/Paper" asp-route-wishlistId="@Model.SelectedWishlist?.Id" asp-route-strategyPath="@Model.SelectedStrategyPath" title="Reloads the paper lab and job list without starting a new run.">Refresh</a>
@@ -202,7 +202,7 @@
     </div>
 </div>
 
-<section class="panel" style="margin-top:16px">
+<section class="panel mt-md">
     <div class="section-title">
         <h2>Environment Check <span class="tf-help" title="Validates paper credentials and read-only broker dependencies without placing orders.">?</span></h2>
         @if (Model.PaperSnapshot is not null)
@@ -243,94 +243,6 @@
     }
 </section>
 </div>
-
-<style>
-    .highlight-border {
-        border: 2px solid #28a745;
-    }
-
-    .paper-page .tf-help {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 16px;
-        height: 16px;
-        margin-left: 4px;
-        border-radius: 50%;
-        border: 1px solid #7da7d9;
-        color: #66b3ff;
-        font-size: 11px;
-        line-height: 1;
-        cursor: help;
-        vertical-align: middle;
-    }
-
-    .paper-page input[type="checkbox"] {
-        width: 16px !important;
-        height: 16px !important;
-        min-width: 16px;
-        margin: 0;
-        accent-color: #1f6feb;
-    }
-
-    .paper-page .paper-toggle {
-        margin-bottom: 1rem;
-    }
-
-    .paper-page .paper-toggle label {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        line-height: 1.3;
-        cursor: pointer;
-    }
-
-    .paper-page .paper-toggle input:disabled + span {
-        opacity: 0.65;
-    }
-
-    .paper-page .small-help {
-        margin-top: 0.25rem;
-        font-size: 0.82rem;
-    }
-
-    .paper-page .paper-validation.validation-summary-valid {
-        display: none;
-    }
-
-    .paper-page .paper-validation.validation-summary-errors {
-        background: #fff1f2;
-        border: 1px solid #fda4af;
-        border-left: 4px solid #dc2626;
-        border-radius: 6px;
-        color: #881337;
-        margin: 0 0 1rem;
-        padding: 0.75rem 1rem;
-    }
-
-    .paper-page .paper-validation ul {
-        margin: 0;
-        padding-left: 1.25rem;
-    }
-
-    .paper-page .ticker-chip-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem;
-        margin-top: 0.35rem;
-    }
-
-    .paper-page .ticker-chip {
-        background: #eef6ff;
-        border: 1px solid #b6dcff;
-        border-radius: 999px;
-        color: #075985;
-        display: inline-flex;
-        font-weight: 700;
-        padding: 0.35rem 0.7rem;
-    }
-</style>
-
 @section Scripts {
     <script>
         let currentStrategyUsesNews = @Model.SelectedStrategyUsesNews.ToString().ToLowerInvariant();

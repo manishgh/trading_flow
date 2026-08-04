@@ -7,6 +7,15 @@
     const filter = page.dataset.filter || "all";
     let loading = false;
 
+    // The cancel handler re-renders the page in place rather than redirecting, so
+    // without this the caret is left on <body> and the outcome is never reached by
+    // keyboard. The banner only exists after a cancel round-trip, so its presence is
+    // the signal; nothing steals focus on an ordinary page load.
+    const banner = page.querySelector("[data-orders-banner]");
+    if (banner) {
+        banner.focus();
+    }
+
     const isWorking = state => ["Intent", "Submitted", "Acked", "PartiallyFilled", "CancelPending"].includes(state);
     const matchesFilter = state => filter === "all" ||
         (filter === "working" && isWorking(state)) ||
@@ -20,6 +29,16 @@
     const priceText = item => item.fillPrice != null ? `Fill ${formatMoney(item.fillPrice)}` :
         item.limitPrice != null ? `Limit ${formatMoney(item.limitPrice)}` :
         item.stopPrice != null ? `Stop ${formatMoney(item.stopPrice)}` : "Market";
+
+    // Stale is a state, not a sentence. It reuses the shared status-banner classes so
+    // a lost connection looks the same here as it does on every other route.
+    function setConnectionState(state, message) {
+        status.textContent = message;
+        status.dataset.state = state;
+        status.classList.toggle("status-banner", state === "stale");
+        status.classList.toggle("error", state === "stale");
+        status.classList.toggle("muted", state !== "stale");
+    }
 
     function updateLocalTimes() {
         page.querySelectorAll("[data-order-time]").forEach(time => {
@@ -57,12 +76,18 @@
 
             const changed = items.some(item => !rows.has(item.clientOrderId)) ||
                 [...rows.keys()].some(key => !incoming.has(key));
-            status.textContent = changed
-                ? "Order membership changed. Use Refresh to reconcile the list without an automatic focus reset."
-                : `Order states checked at ${new Date().toLocaleTimeString()}.`;
+            if (changed) {
+                setConnectionState(
+                    "changed",
+                    "Order membership changed. Use Refresh to reconcile the list without an automatic focus reset.");
+            } else {
+                setConnectionState("live", `Order states checked at ${new Date().toLocaleTimeString()}.`);
+            }
             updateLocalTimes();
         } catch (error) {
-            status.textContent = `Order updates disconnected: ${error.message}. Persisted values remain visible and may be stale.`;
+            setConnectionState(
+                "stale",
+                `Order updates disconnected: ${error.message}. Persisted values remain visible and may be stale.`);
         } finally {
             loading = false;
         }

@@ -77,8 +77,8 @@
 
                 if (metricsBody && metricsTable && metricsEmpty) {
                     const metrics = data.metrics ?? [];
-                    metricsEmpty.style.display = metrics.length === 0 ? 'block' : 'none';
-                    metricsTable.style.display = metrics.length === 0 ? 'none' : 'table';
+                    metricsEmpty.hidden = metrics.length !== 0;
+                    metricsTable.hidden = metrics.length === 0;
                     metricsBody.innerHTML = metrics.map(point => `<tr>
                         <td>${escapeHtml(point.time)}</td>
                         <td><strong>${escapeHtml(point.ticker)}</strong></td>
@@ -97,18 +97,18 @@
 
                 if (auditsBody && auditsTable && auditsEmpty) {
                     const audits = data.audits ?? [];
-                    auditsEmpty.style.display = audits.length === 0 ? 'block' : 'none';
-                    auditsTable.style.display = audits.length === 0 ? 'none' : 'table';
+                    auditsEmpty.hidden = audits.length !== 0;
+                    auditsTable.hidden = audits.length === 0;
                     auditsBody.innerHTML = audits.map(audit => {
-                        const color = audit.decision === 'Accepted'
-                            ? '#4caf50'
-                            : (audit.decision === 'Rejected' ? '#f44336' : '#aaa');
+                        const decisionClass = audit.decision === 'Accepted'
+                            ? 'value-good'
+                            : (audit.decision === 'Rejected' ? 'value-bad' : 'value-flat');
                         const raw = audit.rawReason ? `<br /><code>${escapeHtml(audit.rawReason)}</code>` : '';
-                        return `<tr style="border-bottom: 1px solid #333;">
-                            <td style="white-space: nowrap;">${escapeHtml(audit.time)}</td>
-                            <td style="font-weight: bold;">${escapeHtml(audit.ticker)}</td>
-                            <td style="color: ${color}; font-weight: bold;">${escapeHtml(audit.decision)}</td>
-                            <td style="color: #aaa; font-size: 0.9em;">${escapeHtml(audit.reason)}${raw}</td>
+                        return `<tr>
+                            <td class="nowrap">${escapeHtml(audit.time)}</td>
+                            <td class="text-bold">${escapeHtml(audit.ticker)}</td>
+                            <td class="${decisionClass}">${escapeHtml(audit.decision)}</td>
+                            <td class="muted-sm">${escapeHtml(audit.reason)}${raw}</td>
                         </tr>`;
                     }).join('');
                 }
@@ -150,40 +150,40 @@
                 }
 
                 profilerTitle.textContent = `${escapeHtml(profile.name)} Latency & Performance Profiler`;
-                const endpointRows = (profile.endpoints ?? []).map(endpoint => `<tr style="border-bottom: 1px solid #333;">
-                    <td style="font-family: monospace; color: #66b3ff;">${escapeHtml(endpoint.route)}</td>
+                const endpointRows = (profile.endpoints ?? []).map(endpoint => `<tr>
+                    <td class="route-cell">${escapeHtml(endpoint.route)}</td>
                     <td>${formatWholeNumber(endpoint.count)}</td>
                     <td>${formatDecimal(endpoint.avgDurationMs)} ms</td>
                     <td>${formatDecimal(endpoint.minDurationMs)} ms</td>
                     <td>${formatDecimal(endpoint.maxDurationMs)} ms</td>
-                    <td style="color: ${Number(endpoint.successRate) >= 99 ? '#4caf50' : '#ff5722'}">${formatDecimal(endpoint.successRate)}%</td>
+                    <td class="${Number(endpoint.successRate) >= 99 ? 'value-good' : 'value-bad'}">${formatDecimal(endpoint.successRate)}%</td>
                 </tr>`).join('');
 
                 profilerBody.innerHTML = `
-                    <div class="muted" style="margin-bottom: 1rem;">Started at: ${escapeHtml(profile.appStartTime)}</div>
-                    <div style="background: #222; padding: 1rem; border-radius: 4px; margin-top: 1rem;">
-                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem; text-align: center;">
-                            <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
-                                <div class="muted" style="font-size: 0.8rem;">Total Requests</div>
-                                <div style="font-size: 1.5rem; font-weight: bold; color: #4caf50;">${formatWholeNumber(profile.totalRequests)}</div>
+                    <div class="muted mb-md">Started at: ${escapeHtml(profile.appStartTime)}</div>
+                    <div class="metric-panel">
+                        <div class="metric-row">
+                            <div class="code-block">
+                                <div class="muted text-sm">Total Requests</div>
+                                <div class="metric-value good">${formatWholeNumber(profile.totalRequests)}</div>
                             </div>
-                            <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
-                                <div class="muted" style="font-size: 0.8rem;">Avg Duration</div>
-                                <div style="font-size: 1.5rem; font-weight: bold; color: #00bcd4;">${formatDecimal(profile.avgDurationMs)} ms</div>
+                            <div class="code-block">
+                                <div class="muted text-sm">Avg Duration</div>
+                                <div class="metric-value info">${formatDecimal(profile.avgDurationMs)} ms</div>
                             </div>
-                            <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
-                                <div class="muted" style="font-size: 0.8rem;">Max Duration</div>
-                                <div style="font-size: 1.5rem; font-weight: bold; color: #ff9800;">${formatDecimal(profile.maxDurationMs)} ms</div>
+                            <div class="code-block">
+                                <div class="muted text-sm">Max Duration</div>
+                                <div class="metric-value warn">${formatDecimal(profile.maxDurationMs)} ms</div>
                             </div>
-                            <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
-                                <div class="muted" style="font-size: 0.8rem;">Success Rate</div>
-                                <div style="font-size: 1.5rem; font-weight: bold; color: ${Number(profile.successRate) >= 99 ? '#4caf50' : '#ff5722'};">${formatDecimal(profile.successRate)}%</div>
+                            <div class="code-block">
+                                <div class="muted text-sm">Success Rate</div>
+                                <div class="metric-value ${Number(profile.successRate) >= 99 ? 'good' : 'bad'}">${formatDecimal(profile.successRate)}%</div>
                             </div>
                         </div>
-                        <div style="max-height: 260px; overflow-y: auto;">
-                            <table class="table" style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
-                                <thead style="position: sticky; top: 0; background: #222; z-index: 1;">
-                                    <tr style="border-bottom: 1px solid #444; text-align: left;">
+                        <div class="scroll-y h-sm">
+                            <table class="table data-grid-table">
+                                <thead class="sticky">
+                                    <tr>
                                         <th>Endpoint Route</th>
                                         <th>Count</th>
                                         <th>Avg Latency</th>
@@ -199,48 +199,48 @@
             }
 
             function updateOpenOrders(orders) {
-                ordersEmpty.style.display = orders.length === 0 ? 'block' : 'none';
-                ordersTable.style.display = orders.length === 0 ? 'none' : 'table';
+                ordersEmpty.hidden = orders.length !== 0;
+                ordersTable.hidden = orders.length === 0;
                 ordersBody.innerHTML = orders.map(order => {
                     const side = String(order.side ?? '').toLowerCase();
-                    const sideColor = side === 'buy' ? '#4caf50' : '#f44336';
+                    const sideClass = side === 'buy' ? 'value-good' : 'value-bad';
                     const distance = order.distancePct === null || order.distancePct === undefined
                         ? '-'
                         : `${Number(order.distancePct).toFixed(2)}%`;
-                    const distanceColor = Number(order.distancePct ?? 0) < 0 ? '#4caf50' : '#aaa';
-                    return `<tr style="border-bottom: 1px solid #333;">
-                        <td style="font-weight: bold;">${escapeHtml(order.ticker)}</td>
-                        <td style="color: ${sideColor}">${escapeHtml(side.toUpperCase())}</td>
+                    const distanceClass = Number(order.distancePct ?? 0) < 0 ? 'value-good' : 'muted';
+                    return `<tr>
+                        <td class="text-bold">${escapeHtml(order.ticker)}</td>
+                        <td class="${sideClass}">${escapeHtml(side.toUpperCase())}</td>
                         <td>${escapeHtml(String(order.orderType || '-').toUpperCase())}</td>
                         <td>${formatDecimal(order.qty)}</td>
                         <td>${formatCurrency(order.limitPrice)}</td>
                         <td>${formatCurrency(order.currentPrice)}</td>
-                        <td style="color: ${distanceColor}">${escapeHtml(distance)}</td>
+                        <td class="${distanceClass}">${escapeHtml(distance)}</td>
                         <td>${escapeHtml(order.status)}</td>
                     </tr>`;
                 }).join('');
             }
 
             function updateOpenPositions(positions) {
-                positionsEmpty.style.display = positions.length === 0 ? 'block' : 'none';
-                positionsTable.style.display = positions.length === 0 ? 'none' : 'table';
+                positionsEmpty.hidden = positions.length !== 0;
+                positionsTable.hidden = positions.length === 0;
                 positionsBody.innerHTML = positions.map(position => {
                     const pl = Number(position.unrealizedPl ?? 0);
-                    const plColor = pl > 0 ? '#4caf50' : (pl < 0 ? '#f44336' : '#aaa');
+                    const plClass = pl > 0 ? 'value-good' : (pl < 0 ? 'value-bad' : 'value-flat');
                     const plText = `${pl > 0 ? '+' : ''}${formatCurrency(pl)}`;
                     const ticker = String(position.ticker ?? '');
                     const closeAction = `?handler=ClosePosition&id=${encodeURIComponent(jobId)}&ticker=${encodeURIComponent(ticker)}`;
-                    return `<tr style="border-bottom: 1px solid #333;">
-                        <td style="font-weight: bold;">${escapeHtml(ticker)}</td>
+                    return `<tr>
+                        <td class="text-bold">${escapeHtml(ticker)}</td>
                         <td>${escapeHtml(String(position.side || '').toUpperCase())}</td>
                         <td>${formatDecimal(position.qty)}</td>
                         <td>${formatCurrency(position.entryPrice)}</td>
                         <td>${formatCurrency(position.currentPrice)}</td>
-                        <td style="color: ${plColor}; font-weight: bold;">${escapeHtml(plText)}</td>
+                        <td class="${plClass}">${escapeHtml(plText)}</td>
                         <td>
-                            <form method="post" action="${closeAction}" style="margin: 0;">
+                            <form class="m-0" method="post" action="${closeAction}">
                                 <input name="__RequestVerificationToken" type="hidden" value="${escapeHtml(antiforgeryToken)}" />
-                                <button type="submit" class="button secondary" style="background: #3a1a1a; color: #ff6666; border-color: #662222;" onclick="return confirm('Market sell your entire position in ${escapeHtml(ticker)}?');">Close Position</button>
+                                <button type="submit" class="button danger-soft" onclick="return confirm('Market sell your entire position in ${escapeHtml(ticker)}?');">Close Position</button>
                             </form>
                         </td>
                     </tr>`;
@@ -258,14 +258,14 @@
         <h1>Paper Run: @Model.Job?.RunName</h1>
         <div class="muted">Live execution metrics and signals</div>
     </div>
-    <div style="display: flex; gap: 1rem; align-items: center;">
+    <div class="inline-row">
         @if (Model.Job?.Status is "queued" or "running")
         {
-            <form method="post" asp-page-handler="CancelRun" asp-route-id="@Model.Job.JobId" style="margin: 0;">
+            <form class="m-0" method="post" asp-page-handler="CancelRun" asp-route-id="@Model.Job.JobId">
                 <button type="submit" class="button secondary">Cancel Runner</button>
             </form>
         }
-        <form method="post" asp-page-handler="CancelOrders" asp-route-id="@Model.Job?.JobId" style="margin: 0;">
+        <form class="m-0" method="post" asp-page-handler="CancelOrders" asp-route-id="@Model.Job?.JobId">
             <button type="submit" class="button secondary">Cancel All Broker Orders</button>
         </form>
         <a class="button secondary" asp-page="/Paper">Back to Lab</a>
@@ -283,20 +283,20 @@ else
             <h2>Status: <span id="jobStatus" class="status @Model.Job.Status">@Model.Job.Status</span></h2>
             @if (!string.IsNullOrEmpty(Model.Job.ErrorMessage))
             {
-                <div class="alert alert-danger" style="background: #f8d7da; color: #721c24; padding: 1rem; border-radius: 4px; margin-bottom: 1rem;">
+                <div class="alert alert-danger">
                     <strong>Error:</strong> @Model.Job.ErrorMessage
                 </div>
             }
             <p><strong>Config:</strong> @Model.Job.ConfigPath</p>
             <p><strong>Started:</strong> <span id="startedAt">@(Model.Job.StartedAt is null ? "Queued" : Model.FormatLocal(Model.Job.StartedAt.Value))</span> <span class="muted">@Model.LocalTimeZoneLabel</span></p>
-            <div style="margin-top: 1rem; margin-bottom: 1rem;">
-                <a asp-page="/Audit" asp-route-runName="@Model.Job.RunName" asp-route-returnUrl="@($"/PaperJob/{Model.Job.JobId}")" class="button" style="background: #007acc; color: white;">Open Audit Analyzer</a>
+            <div class="mt-md mb-md">
+                <a asp-page="/Audit" asp-route-runName="@Model.Job.RunName" asp-route-returnUrl="@($"/PaperJob/{Model.Job.JobId}")" class="button">Open Audit Analyzer</a>
             </div>
             @if (Model.Strategy != null)
             {
-                <div style="background: #2a2a2a; border-left: 4px solid #007acc; padding: 1rem; margin-top: 1rem; border-radius: 4px;">
-                    <h3 style="margin-top: 0; color: #66b3ff;">@Model.Strategy.StrategyName v@(Model.Strategy.Version)</h3>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem;">
+                <div class="info-callout">
+                    <h3 class="callout-title">@Model.Strategy.StrategyName v@(Model.Strategy.Version)</h3>
+                    <div class="pair-grid">
                         <div><strong>Timeframe:</strong> @Model.Strategy.Timeframe</div>
                         <div><strong>Direction:</strong> @Model.Strategy.Direction</div>
                         @if (Model.Strategy.ExitRules != null)
@@ -308,8 +308,8 @@ else
                 </div>
             }
 
-            <h3 style="margin-top: 1rem;">Recent Events</h3>
-            <div id="recentEvents" class="log-viewer" style="height: 300px; overflow-y: auto; background: #1e1e1e; color: #fff; padding: 1rem; border-radius: 4px; font-family: monospace;">
+            <h3 class="mt-md">Recent Events</h3>
+            <div id="recentEvents" class="log-viewer">
                 @foreach (var ev in Model.Job.Events.Reverse())
                 {
                     <div>@ev</div>
@@ -327,10 +327,10 @@ else
         <section class="panel">
             <h2>Live Stock Metrics</h2>
             <div class="muted">Most recent values calculated by the engine for the latest bar. <span id="marketDataFeed">@Model.MarketDataFeedLabel</span>. Last refreshed: <span id="metricsLastRefresh">@Model.FormatLocal(DateTimeOffset.UtcNow)</span>.</div>
-            <p id="liveMetricsEmpty" class="muted" style="display: @(Model.ChartDataList.Count == 0 ? "block" : "none");">No data generated yet. Waiting for market data...</p>
-            <table id="liveMetricsTable" class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse; display: @(Model.ChartDataList.Count == 0 ? "none" : "table");">
+            <p id="liveMetricsEmpty" class="muted" hidden="@(!(Model.ChartDataList.Count == 0))">No data generated yet. Waiting for market data...</p>
+            <table id="liveMetricsTable" class="table data-grid-table mt-md" hidden="@(Model.ChartDataList.Count == 0)">
                 <thead>
-                    <tr style="border-bottom: 1px solid #444; text-align: left;">
+                    <tr>
                         <th>Bar Time</th>
                         <th>Ticker</th>
                         <th>Candle</th>
@@ -366,12 +366,12 @@ else
                 </tbody>
             </table>
 
-            <h3 style="margin-top: 2rem;">Recent Strategy Evaluations</h3>
-            <p id="recentAuditsEmpty" class="muted" style="display: @(Model.RecentAudits == null || Model.RecentAudits.Count == 0 ? "block" : "none")">No recent strategy evaluations.</p>
-            <div style="max-height: 300px; overflow-y: auto;">
-                <table id="recentAuditsTable" class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse; display: @(Model.RecentAudits == null || Model.RecentAudits.Count == 0 ? "none" : "table")">
-                    <thead style="position: sticky; top: 0; background: #1e1e1e; z-index: 1;">
-                        <tr style="border-bottom: 1px solid #444; text-align: left;">
+            <h3 class="mt-xl">Recent Strategy Evaluations</h3>
+            <p id="recentAuditsEmpty" class="muted" hidden="@(!(Model.RecentAudits == null || Model.RecentAudits.Count == 0))">No recent strategy evaluations.</p>
+            <div class="scroll-y h-lg">
+                <table id="recentAuditsTable" class="table data-grid-table mt-md" hidden="@(Model.RecentAudits == null || Model.RecentAudits.Count == 0)">
+                    <thead>
+                        <tr>
                             <th>Local Time</th>
                             <th>Ticker</th>
                             <th>Decision</th>
@@ -381,12 +381,12 @@ else
                     <tbody id="recentAuditsBody">
                     @foreach (var audit in Model.RecentAudits ?? Enumerable.Empty<TradingFlow.Domain.Audit.DecisionAuditRecord>())
                     {
-                        var color = audit.Decision == "Accepted" ? "#4caf50" : (audit.Decision == "Rejected" ? "#f44336" : "#aaa");
-                        <tr style="border-bottom: 1px solid #333;">
-                            <td style="white-space: nowrap;">@Model.FormatLocalTime(audit.Timestamp)</td>
-                            <td style="font-weight: bold;">@audit.Ticker</td>
-                            <td style="color: @color; font-weight: bold;">@audit.Decision</td>
-                            <td style="color: #aaa; font-size: 0.9em;">
+                        var decisionClass = audit.Decision == "Accepted" ? "value-good" : (audit.Decision == "Rejected" ? "value-bad" : "value-flat");
+                        <tr>
+                            <td class="nowrap">@Model.FormatLocalTime(audit.Timestamp)</td>
+                            <td class="text-bold">@audit.Ticker</td>
+                            <td class="@decisionClass">@audit.Decision</td>
+                            <td class="muted-sm">
                                 @Model.FormatRejectionReason(audit.RejectionReason)
                                 @if (!String.IsNullOrWhiteSpace(audit.RejectionReason))
                                 {
@@ -399,11 +399,11 @@ else
                 </table>
             </div>
 
-            <h3 style="margin-top: 2rem;">Live Broker Orders</h3>
-            <p id="openOrdersEmpty" class="muted" style="display: @(Model.OpenOrders == null || Model.OpenOrders.Count == 0 ? "block" : "none");">No open orders found.</p>
-            <table id="openOrdersTable" class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse; display: @(Model.OpenOrders == null || Model.OpenOrders.Count == 0 ? "none" : "table");">
+            <h3 class="mt-xl">Live Broker Orders</h3>
+            <p id="openOrdersEmpty" class="muted" hidden="@(!(Model.OpenOrders == null || Model.OpenOrders.Count == 0))">No open orders found.</p>
+            <table id="openOrdersTable" class="table data-grid-table mt-md" hidden="@(Model.OpenOrders == null || Model.OpenOrders.Count == 0)">
                 <thead>
-                    <tr style="border-bottom: 1px solid #444; text-align: left;">
+                    <tr>
                         <th>Ticker</th>
                         <th>Side</th>
                         <th>Type</th>
@@ -418,14 +418,14 @@ else
                 @foreach (var display in Model.OpenOrders ?? Array.Empty<OrderDisplayViewModel>())
                 {
                     var order = display.Order;
-                    <tr style="border-bottom: 1px solid #333;">
-                        <td style="font-weight: bold;">@order.Ticker</td>
-                        <td style="color: @(order.Side == "buy" ? "#4caf50" : "#f44336")">@order.Side.ToUpper()</td>
+                    <tr>
+                        <td class="text-bold">@order.Ticker</td>
+                        <td class="@(order.Side == "buy" ? "value-good" : "value-bad")">@order.Side.ToUpper()</td>
                         <td>@(string.IsNullOrEmpty(order.OrderType) ? "-" : order.OrderType.ToUpper())</td>
                         <td>@order.Qty</td>
                         <td>@(order.LimitPrice?.ToString("C2") ?? "-")</td>
                         <td>@(display.CurrentPrice?.ToString("C2") ?? "-")</td>
-                        <td style="color: @(display.DistancePct < 0 ? "#4caf50" : "#aaa")">
+                        <td class="@(display.DistancePct < 0 ? "value-good" : "muted")">
                             @(display.DistancePct?.ToString("0.00") + "%" ?? "-")
                         </td>
                         <td>@order.Status</td>
@@ -434,11 +434,11 @@ else
                 </tbody>
             </table>
 
-            <h3 style="margin-top: 2rem;">Live Portfolio (Positions)</h3>
-            <p id="openPositionsEmpty" class="muted" style="display: @(Model.OpenPositions == null || Model.OpenPositions.Count == 0 ? "block" : "none");">No open positions found.</p>
-            <table id="openPositionsTable" class="table" style="width: 100%; margin-top: 1rem; border-collapse: collapse; display: @(Model.OpenPositions == null || Model.OpenPositions.Count == 0 ? "none" : "table");">
+            <h3 class="mt-xl">Live Portfolio (Positions)</h3>
+            <p id="openPositionsEmpty" class="muted" hidden="@(!(Model.OpenPositions == null || Model.OpenPositions.Count == 0))">No open positions found.</p>
+            <table id="openPositionsTable" class="table data-grid-table mt-md" hidden="@(Model.OpenPositions == null || Model.OpenPositions.Count == 0)">
                 <thead>
-                    <tr style="border-bottom: 1px solid #444; text-align: left;">
+                    <tr>
                         <th>Ticker</th>
                         <th>Side</th>
                         <th>Qty</th>
@@ -452,19 +452,19 @@ else
                 @foreach (var pos in Model.OpenPositions ?? Array.Empty<TradingFlow.Domain.Orders.BrokerPosition>())
                 {
                     var isProfit = pos.UnrealizedPl > 0;
-                    var color = isProfit ? "#4caf50" : (pos.UnrealizedPl < 0 ? "#f44336" : "#aaa");
-                    <tr style="border-bottom: 1px solid #333;">
-                        <td style="font-weight: bold;">@pos.Ticker</td>
+                    var plClass = isProfit ? "value-good" : (pos.UnrealizedPl < 0 ? "value-bad" : "value-flat");
+                    <tr>
+                        <td class="text-bold">@pos.Ticker</td>
                         <td>@pos.Side.ToUpper()</td>
                         <td>@pos.Qty</td>
                         <td>@pos.EntryPrice.ToString("C2")</td>
                         <td>@pos.CurrentPrice.ToString("C2")</td>
-                        <td style="color: @color; font-weight: bold;">
+                        <td class="@plClass">
                             @(pos.UnrealizedPl > 0 ? "+" : "")@pos.UnrealizedPl.ToString("C2")
                         </td>
                         <td>
-                            <form method="post" asp-page-handler="ClosePosition" asp-route-id="@Model.Job?.JobId" asp-route-ticker="@pos.Ticker" style="margin: 0;">
-                                <button type="submit" class="button secondary" style="background: #3a1a1a; color: #ff6666; border-color: #662222;" onclick="return confirm('Market sell your entire position in @pos.Ticker?');">Close Position</button>
+                            <form class="m-0" method="post" asp-page-handler="ClosePosition" asp-route-id="@Model.Job?.JobId" asp-route-ticker="@pos.Ticker">
+                                <button type="submit" class="button danger-soft" onclick="return confirm('Market sell your entire position in @pos.Ticker?');">Close Position</button>
                             </form>
                         </td>
                     </tr>
@@ -472,7 +472,7 @@ else
                 </tbody>
             </table>
 
-            <h3 id="profilerTitle" style="margin-top: 2rem;">@(Model.LatencyProfile?.Name ?? "Alpaca API Profiler") Latency & Performance Profiler</h3>
+            <h3 class="mt-xl" id="profilerTitle">@(Model.LatencyProfile?.Name ?? "Alpaca API Profiler") Latency & Performance Profiler</h3>
             <div id="profilerBody">
             @if (Model.LatencyProfile == null || Model.LatencyProfile.TotalRequests == 0)
             {
@@ -480,31 +480,31 @@ else
             }
             else
             {
-                <div class="muted" style="margin-bottom: 1rem;">Started at: @Model.LatencyProfile.AppStartTime.ToString("yyyy-MM-dd HH:mm:ss")</div>
-                <div style="background: #222; padding: 1rem; border-radius: 4px; margin-top: 1rem;">
-                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem; text-align: center;">
-                        <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
-                            <div class="muted" style="font-size: 0.8rem;">Total Requests</div>
-                            <div style="font-size: 1.5rem; font-weight: bold; color: #4caf50;">@Model.LatencyProfile.TotalRequests</div>
+                <div class="muted mb-md">Started at: @Model.LatencyProfile.AppStartTime.ToString("yyyy-MM-dd HH:mm:ss")</div>
+                <div class="metric-panel">
+                    <div class="metric-row">
+                        <div class="code-block">
+                            <div class="muted text-sm">Total Requests</div>
+                            <div class="metric-value good">@Model.LatencyProfile.TotalRequests</div>
                         </div>
-                        <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
-                            <div class="muted" style="font-size: 0.8rem;">Avg Duration</div>
-                            <div style="font-size: 1.5rem; font-weight: bold; color: #00bcd4;">@Model.LatencyProfile.AvgDurationMs.ToString("F1") ms</div>
+                        <div class="code-block">
+                            <div class="muted text-sm">Avg Duration</div>
+                            <div class="metric-value info">@Model.LatencyProfile.AvgDurationMs.ToString("F1") ms</div>
                         </div>
-                        <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
-                            <div class="muted" style="font-size: 0.8rem;">Max Duration</div>
-                            <div style="font-size: 1.5rem; font-weight: bold; color: #ff9800;">@Model.LatencyProfile.MaxDurationMs.ToString("F1") ms</div>
+                        <div class="code-block">
+                            <div class="muted text-sm">Max Duration</div>
+                            <div class="metric-value warn">@Model.LatencyProfile.MaxDurationMs.ToString("F1") ms</div>
                         </div>
-                        <div style="background: #2b2b2b; padding: 0.5rem; border-radius: 4px;">
-                            <div class="muted" style="font-size: 0.8rem;">Success Rate</div>
-                            <div style="font-size: 1.5rem; font-weight: bold; color: @(Model.LatencyProfile.SuccessRate >= 99.0 ? "#4caf50" : "#ff5722");">@Model.LatencyProfile.SuccessRate.ToString("F1")%</div>
+                        <div class="code-block">
+                            <div class="muted text-sm">Success Rate</div>
+                            <div class="metric-value @(Model.LatencyProfile.SuccessRate >= 99.0 ? "good" : "bad")">@Model.LatencyProfile.SuccessRate.ToString("F1")%</div>
                         </div>
                     </div>
 
-                    <div style="max-height: 260px; overflow-y: auto;">
-                        <table class="table" style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
-                            <thead style="position: sticky; top: 0; background: #222; z-index: 1;">
-                                <tr style="border-bottom: 1px solid #444; text-align: left;">
+                    <div class="scroll-y h-sm">
+                        <table class="table data-grid-table">
+                            <thead class="sticky">
+                                <tr>
                                     <th>Endpoint Route</th>
                                     <th>Count</th>
                                     <th>Avg Latency</th>
@@ -516,13 +516,13 @@ else
                             <tbody>
                             @foreach (var endpoint in Model.LatencyProfile.Endpoints)
                             {
-                                <tr style="border-bottom: 1px solid #333;">
-                                    <td style="font-family: monospace; color: #66b3ff;">@endpoint.Route</td>
+                                <tr>
+                                    <td class="route-cell">@endpoint.Route</td>
                                     <td>@endpoint.Count</td>
                                     <td>@endpoint.AvgDurationMs.ToString("F1") ms</td>
                                     <td>@endpoint.MinDurationMs.ToString("F1") ms</td>
                                     <td>@endpoint.MaxDurationMs.ToString("F1") ms</td>
-                                    <td style="color: @(endpoint.SuccessRate >= 99.0 ? "#4caf50" : "#ff5722")">@endpoint.SuccessRate.ToString("F1")%</td>
+                                    <td class="@(endpoint.SuccessRate >= 99.0 ? "value-good" : "value-bad")">@endpoint.SuccessRate.ToString("F1")%</td>
                                 </tr>
                             }
                             </tbody>

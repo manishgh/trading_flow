@@ -6,6 +6,10 @@
     var selectedName = Model.SelectedWishlist?.Name ?? "No wishlist";
     var status = Model.OperationalStatus;
     var selected = Model.SelectedRow;
+    // Read by the market panel's filter disclosure and by the Clear control in the
+    // context panel, so it has to outlive either block.
+    var hasRangeFilter = Model.MinPrice is not null || Model.MaxPrice is not null ||
+        Model.MaxSpreadBps is not null;
 
     static string PlClass(decimal value) => value > 0 ? "good" : value < 0 ? "bad" : "muted";
     static string StateClass(string value) => value.ToLowerInvariant() switch
@@ -25,6 +29,16 @@
     static string Percent(decimal? value) => value.HasValue ? $"{value.Value:P1}" : "--";
     static string Number(decimal? value, string format = "0.00") => value.HasValue ? value.Value.ToString(format) : "--";
     static string ShortId(string? value) => String.IsNullOrWhiteSpace(value) ? "--" : value[..Math.Min(12, value.Length)];
+    static string Size(decimal? value) => value.HasValue ? value.Value.ToString("#,##0.###") : "--";
+    static string Clock(DateTimeOffset? value) => value is null ? "--" : $"{value.Value:HH:mm:ss} UTC";
+
+    // The server renders every column and marks the ones that start hidden. The
+    // chooser then reconciles the operator's stored preference over that baseline,
+    // so a first paint without JavaScript still shows a sensible default grid.
+    var startsHidden = TradeDeskModel.Columns
+        .Where(column => !column.VisibleByDefault)
+        .Select(column => column.Key)
+        .ToHashSet(StringComparer.Ordinal);
 }
 
 <header class="page-header compact-page-header">
@@ -34,6 +48,7 @@
     </div>
     <div class="actions">
         <a class="button secondary" asp-page="/Wishlists" asp-route-id="@selectedId">Manage Wishlist</a>
+        <a class="button secondary" asp-page="/News" asp-route-groupId="@selectedId">News</a>
         <button class="secondary" type="button" id="EnableDeskAlertsButton">Enable Alerts</button>
     </div>
 </header>
@@ -47,13 +62,19 @@
     <div class="status-banner error" role="alert">@Model.ErrorMessage</div>
 }
 
+@if (!Model.EnvironmentState.IsEnabled)
+{
+    <partial name="_EnvironmentLock" model="Model.EnvironmentState" />
+    return;
+}
+
 <div id="DeskConnectionAnnouncement" class="visually-hidden" role="status" aria-live="polite"></div>
 <div id="SignalToast" class="signal-toast" role="status" aria-live="polite"></div>
 
 <section class="operational-strip" aria-label="Trading operational status">
     <div class="operational-item">
         <span>Environment</span>
-        <strong class="environment-badge">@status.Environment</strong>
+        <strong class="environment-badge env-@Model.EnvironmentState.Slug">@status.Environment</strong>
     </div>
     <div class="operational-item">
         <span>Market</span>
@@ -61,62 +82,102 @@
     </div>
     <div class="operational-item operational-clock">
         <span>Market time</span>
-        <strong>@status.NewYorkTime.ToString("yyyy-MM-dd HH:mm:ss") NY</strong>
+        <strong>@status.NewYorkTime.ToString("HH:mm:ss") NY</strong>
         <small>@status.ObservedAtUtc.ToString("HH:mm:ss") UTC</small>
     </div>
-    <div class="operational-item">
-        <span>Quotes</span>
-        <strong id="DeskQuoteConnection" class="@StateClass(status.QuoteStatus)" title="@status.QuoteDetail">@status.QuoteStatus</strong>
-        <small id="DeskQuoteFreshness">@status.QuoteDetail · @status.QuoteFeed</small>
-    </div>
-    <div class="operational-item">
-        <span>Model</span>
-        <strong class="status-neutral">@status.ModelStatus</strong>
-    </div>
-    <div class="operational-item">
-        <span>Broker sync</span>
-        <strong class="@StateClass(status.BrokerStatus)" title="@status.BrokerDetail">@status.BrokerStatus</strong>
-    </div>
-    <div class="operational-item">
-        <span>Entry gate</span>
-        <strong class="@StateClass(status.AdmissionStatus)" title="@status.AdmissionDetail">@status.AdmissionStatus</strong>
-    </div>
+    @{
+        // Quotes, model, broker sync, and entry gate are steady-state almost always.
+        // A row of four green chips carries no information, so they collapse into one
+        // health control that only opens when something is actually degraded.
+        var health = new (string Label, string Value, string Detail)[]
+        {
+            ("Quotes", status.QuoteStatus, $"{status.QuoteDetail} · {status.QuoteFeed}"),
+            ("Model", status.ModelStatus, "Prediction service availability."),
+            ("Broker sync", status.BrokerStatus, status.BrokerDetail),
+            ("Entry gate", status.AdmissionStatus, status.AdmissionDetail)
+        };
+        var degraded = health.Where(item => StateClass(item.Value) != "status-ok").ToList();
+    }
+    <details class="operational-health" open="@(degraded.Count > 0)">
+        <summary>
+            <span>System</span>
+            <strong class="@(degraded.Count == 0 ? "status-ok" : "status-warn")">
+                @(degraded.Count == 0 ? "All nominal" : $"{degraded.Count} need attention")
+            </strong>
+        </summary>
+        <dl class="operational-health-detail">
+            @* Quote state keeps its stable ids: the stream patches these nodes directly.
+               Collapsing the strip must not cost the operator live connection state. *@
+            <div>
+                <dt>Quotes</dt>
+                <dd>
+                    <strong id="DeskQuoteConnection" class="@StateClass(status.QuoteStatus)"
+                            title="@status.QuoteDetail">@status.QuoteStatus</strong>
+                    <small id="DeskQuoteFreshness">@status.QuoteDetail · @status.QuoteFeed</small>
+                </dd>
+            </div>
+            @foreach (var item in health.Skip(1))
+            {
+                <div>
+                    <dt>@item.Label</dt>
+                    <dd class="@StateClass(item.Value)" title="@item.Detail">@item.Value</dd>
+                </div>
+            }
+        </dl>
+    </details>
 </section>
 
 <section class="panel desk-controls">
-    <form method="get" class="trade-desk-toolbar">
-        <div>
-            <label for="WishlistSelect">Wishlist</label>
-            <select id="WishlistSelect" name="id">
-                @foreach (var wishlist in Model.Wishlists)
-                {
-                    <option value="@wishlist.Id" selected="@(Model.SelectedWishlist?.Id == wishlist.Id)">@wishlist.Name</option>
-                }
-            </select>
+    @* Context and filters are separate concerns. Mixing the price range into the
+       wishlist picker meant choosing a group and narrowing a list looked like the
+       same control, and the numeric fields sat on screen even when unused. *@
+    <form method="get" class="desk-context-row" id="DeskFilterForm">
+        <div class="desk-context">
+            <div>
+                <label for="WishlistSelect">Wishlist</label>
+                <select id="WishlistSelect" name="id" data-auto-submit>
+                    @foreach (var wishlist in Model.Wishlists)
+                    {
+                        <option value="@wishlist.Id" selected="@(Model.SelectedWishlist?.Id == wishlist.Id)">@wishlist.Name</option>
+                    }
+                </select>
+            </div>
+            <div>
+                <label for="StrategyId">Strategy context</label>
+                <select id="StrategyId" name="strategyId" data-auto-submit>
+                    @foreach (var strategy in Model.Strategies)
+                    {
+                        <option value="@strategy.Definition.StrategyId" selected="@(Model.SelectedStrategyId == strategy.Definition.StrategyId)">@strategy.Definition.StrategyName</option>
+                    }
+                </select>
+            </div>
+            <div class="desk-search">
+                <label for="Search">Search</label>
+                <input id="Search" name="search" type="search" value="@Model.Search"
+                       placeholder="Ticker or name" autocomplete="off" />
+            </div>
         </div>
-        <div>
-            <label for="StrategyId">Strategy context</label>
-            <select id="StrategyId" name="strategyId">
-                @foreach (var strategy in Model.Strategies)
-                {
-                    <option value="@strategy.Definition.StrategyId" selected="@(Model.SelectedStrategyId == strategy.Definition.StrategyId)">@strategy.Definition.StrategyName</option>
-                }
-            </select>
+
+
+
+        <input type="hidden" name="source" value="@Model.Source" />
+        <input type="hidden" name="sort" value="@Model.Sort" />
+        <input type="hidden" name="dir" value="@Model.Dir" />
+        <input type="hidden" name="env" value="@Model.Env" />
+        <div class="desk-context-actions">
+            <button type="submit">Apply</button>
+            @if (hasRangeFilter || !String.IsNullOrWhiteSpace(Model.Search))
+            {
+                <a class="button secondary" asp-page="/TradeDesk" asp-route-id="@selectedId"
+                   asp-route-strategyId="@Model.SelectedStrategyId" asp-route-source="@Model.Source"
+                   asp-route-env="@Model.Env">Clear filters</a>
+            }
         </div>
-        <div>
-            <label for="Source">View</label>
-            <select id="Source" name="source">
-                @foreach (var (key, label) in TradeDeskModel.Filters)
-                {
-                    <option value="@key" selected="@(Model.Source.Equals(key, StringComparison.OrdinalIgnoreCase))">@label</option>
-                }
-            </select>
-        </div>
-        <button type="submit">Apply</button>
     </form>
+
     <div class="desk-summary" aria-label="Desk summary">
         <span><strong>@selectedName</strong></span>
-        <span>@Model.Rows.Count symbol@(Model.Rows.Count == 1 ? "" : "s")</span>
+        <span>@Model.Rows.Count of @Model.UnfilteredCount symbol@(Model.UnfilteredCount == 1 ? "" : "s")</span>
         <span>Open P/L <strong class="@PlClass(Model.TotalPl)">@Model.TotalPl.ToString("C2")</strong></span>
         @if (Model.SelectedWishlist is not null)
         {
@@ -141,6 +202,13 @@
            asp-route-source="@key"
            asp-route-strategyId="@Model.SelectedStrategyId"
            asp-route-ticker="@Model.Ticker"
+           asp-route-search="@Model.Search"
+           asp-route-minPrice="@Model.MinPrice"
+           asp-route-maxPrice="@Model.MaxPrice"
+           asp-route-maxSpreadBps="@Model.MaxSpreadBps"
+           asp-route-sort="@Model.Sort"
+           asp-route-dir="@Model.Dir"
+           asp-route-env="@Model.Env"
            class="@(active ? "active" : null)"
            aria-current="@(active ? "page" : null)">@label</a>
     }
@@ -152,10 +220,64 @@
             <div class="panel-header compact">
                 <div>
                     <h2 id="market-list-heading">Markets</h2>
-                    <p>Rows are read-only. Select a symbol to inspect it before taking action.</p>
+                    <p>Rows are read-only. Use <kbd>&#8593;</kbd><kbd>&#8595;</kbd> to move and <kbd>Enter</kbd> to inspect.</p>
                 </div>
-                <a class="text-link" asp-page="/Wishlists" asp-route-id="@selectedId">Edit symbols</a>
+                <div class="desk-grid-controls">
+                    @* Density and columns shape the desktop grid only, so they are not
+                       offered at widths where the card list replaces the table. *@
+                    <div class="desk-density-toggle" role="group" aria-label="Row density" data-desk-density-group>
+                        <button type="button" class="chip" data-desk-density="comfortable" aria-pressed="true">Comfortable</button>
+                        <button type="button" class="chip" data-desk-density="compact" aria-pressed="false">Compact</button>
+                    </div>
+                    <div class="desk-column-chooser" data-desk-column-chooser>
+                        <button type="button" class="chip" id="DeskColumnsButton" data-desk-columns-toggle
+                                aria-expanded="false" aria-controls="DeskColumnsPopover">
+                            <span class="desk-gear-glyph" aria-hidden="true">&#9881;</span>Columns
+                        </button>
+                        <div class="desk-columns-popover" id="DeskColumnsPopover" data-desk-columns-popover
+                             role="group" aria-labelledby="DeskColumnsButton" hidden>
+                            <p class="desk-columns-title">Optional columns</p>
+                            @foreach (var column in TradeDeskModel.OptionalColumns)
+                            {
+                                <label class="desk-column-option" for="DeskColumn_@column.Key">
+                                    <input type="checkbox" id="DeskColumn_@column.Key"
+                                           data-desk-column-toggle value="@column.Key"
+                                           checked="@column.VisibleByDefault" />
+                                    <span>
+                                        <strong>@column.Label</strong>
+                                        <small>@column.Description</small>
+                                    </span>
+                                </label>
+                            }
+                        </div>
+                    </div>
+                    <a class="text-link" asp-page="/Wishlists" asp-route-id="@selectedId">Edit symbols</a>
+                </div>
             </div>
+
+    <details class="desk-advanced" open="@hasRangeFilter">
+                <summary>
+                    Price and spread
+                    @if (hasRangeFilter)
+                    {
+                        <span class="filter-badge">on</span>
+                    }
+                </summary>
+                <div class="desk-range-grid">
+                    <div>
+                        <label for="MinPrice">Min price</label>
+                        <input id="MinPrice" form="DeskFilterForm" name="minPrice" type="number" step="0.01" min="0" value="@Model.MinPrice" />
+                    </div>
+                    <div>
+                        <label for="MaxPrice">Max price</label>
+                        <input id="MaxPrice" form="DeskFilterForm" name="maxPrice" type="number" step="0.01" min="0" value="@Model.MaxPrice" />
+                    </div>
+                    <div>
+                        <label for="MaxSpreadBps">Max spread (bps)</label>
+                        <input id="MaxSpreadBps" form="DeskFilterForm" name="maxSpreadBps" type="number" step="1" min="0" value="@Model.MaxSpreadBps" />
+                    </div>
+                </div>
+            </details>
 
             @if (Model.Rows.Count == 0)
             {
@@ -166,22 +288,38 @@
             }
             else
             {
-                <div class="desk-desktop-table table-scroll" role="region" aria-label="Watchlist markets" tabindex="0">
+                @* No colgroup: under table-layout:fixed a <col> keeps reserving its
+                   track even when its cells are hidden, which would leave a gap where
+                   a switched-off column used to be. Widths ride on the header cells,
+                   so hiding a header and its cells removes the column outright. *@
+                <div class="desk-desktop-table table-scroll" role="region" aria-label="Watchlist markets"
+                     tabindex="0" data-desk-table>
                     <table class="trade-desk-table">
-                        <colgroup>
-                            <col class="market-column" />
-                            <col class="quote-column" />
-                            <col class="eligibility-column" />
-                            <col class="position-column" />
-                            <col class="action-column" />
-                        </colgroup>
                         <thead>
                             <tr>
-                                <th scope="col">Market</th>
-                                <th scope="col">Bid / Ask</th>
-                                <th scope="col">Eligibility</th>
-                                <th scope="col">Position</th>
-                                <th scope="col"><span class="visually-hidden">Select</span></th>
+                                @foreach (var column in TradeDeskModel.Columns)
+                                {
+                                    <th scope="col" class="@column.CssClass" data-column="@column.Key"
+                                        hidden="@startsHidden.Contains(column.Key)"
+                                        aria-sort="@Model.AriaSortFor(column.Key)">
+                                        <a class="column-sort @(Model.AriaSortFor(column.Key) is not null ? "sorted" : null)"
+                                           asp-page="/TradeDesk"
+                                           asp-route-id="@selectedId"
+                                           asp-route-source="@Model.Source"
+                                           asp-route-strategyId="@Model.SelectedStrategyId"
+                                           asp-route-ticker="@Model.Ticker"
+                                           asp-route-search="@Model.Search"
+                                           asp-route-minPrice="@Model.MinPrice"
+                                           asp-route-maxPrice="@Model.MaxPrice"
+                                           asp-route-maxSpreadBps="@Model.MaxSpreadBps"
+                                           asp-route-env="@Model.Env"
+                                           asp-route-sort="@column.Key"
+                                           asp-route-dir="@Model.NextDirectionFor(column.Key)">
+                                            @column.Label<span class="sort-indicator" aria-hidden="true"></span>
+                                        </a>
+                                    </th>
+                                }
+                                <th scope="col" class="action-column"><span class="visually-hidden">Select</span></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -189,20 +327,38 @@
                         {
                             var isSelected = selected?.Ticker.Equals(row.Ticker, StringComparison.OrdinalIgnoreCase) == true;
                             <tr data-symbol-row data-symbol="@row.Ticker.ToUpperInvariant()" data-quote-row="@row.Ticker.ToUpperInvariant()" class="operator-row @(isSelected ? "selected-row" : null)">
-                                <td class="market-cell">
+                                <td class="market-cell" data-column="ticker">
                                     <strong class="market-symbol">@row.Ticker</strong>
                                     <span class="market-name">@row.DisplayName</span>
                                 </td>
-                                <td class="quote-cell">
+                                <td class="last-cell num" data-column="price" hidden="@startsHidden.Contains("price")">
+                                    <strong data-quote-field="mid">@row.DisplayLast</strong>
+                                </td>
+                                <td class="quote-cell" data-column="bidask">
                                     <span><small>Bid</small><strong data-quote-field="bid">@row.Quote.DisplayBid</strong></span>
                                     <span><small>Ask</small><strong data-quote-field="ask">@row.Quote.DisplayAsk</strong></span>
-                                    <small data-quote-age>@(row.Quote.Timestamp is null ? "No quote" : "Quote received")</small>
                                 </td>
-                                <td class="eligibility-cell">
+                                <td class="size-cell" data-column="size" hidden="@startsHidden.Contains("size")">
+                                    <span><small>Bid</small><strong>@Size(row.BidSize)</strong></span>
+                                    <span><small>Ask</small><strong>@Size(row.AskSize)</strong></span>
+                                </td>
+                                <td class="spread-cell num" data-column="spread" data-spread-cell>
+                                    @(row.SpreadBps is null ? "--" : row.SpreadBps.Value.ToString("0.#") + " bps")
+                                </td>
+                                <td class="quoteage-cell num" data-column="quoteage" hidden="@startsHidden.Contains("quoteage")">
+                                    @* The quote stream replaces this with a live age; the exchange
+                                       clock is what the server can state truthfully at render time. *@
+                                    <span data-quote-age>@(row.QuoteTimestamp is null ? "No quote" : Clock(row.QuoteTimestamp))</span>
+                                </td>
+                                <td class="eligibility-cell" data-column="eligibility">
                                     <span class="signal-badge @(row.HasSignal ? "eligible" : "watching")" data-signal-badge>@row.EligibilityLabel</span>
                                     <span class="cell-detail eligibility-summary" data-signal-status title="@row.EligibilityReason">@row.EligibilityReason</span>
                                 </td>
-                                <td class="position-cell">
+                                <td class="setup-cell" data-column="setup" hidden="@startsHidden.Contains("setup")">
+                                    <strong>@row.SetupLabel</strong>
+                                    <span class="cell-detail">@Clock(row.SetupDetectedAtUtc)</span>
+                                </td>
+                                <td class="position-cell" data-column="pl">
                                     @if (row.Trade is null)
                                     {
                                         <span class="muted">No open trade</span>
@@ -214,8 +370,13 @@
                                         <span class="@PlClass(row.Trade.UnrealizedPl)">@row.Trade.UnrealizedPl.ToString("C2")</span>
                                     }
                                 </td>
+                                <td class="news-cell" data-column="news" hidden="@startsHidden.Contains("news")">
+                                    <span class="news-headline" title="@row.NewsHeadline">@row.NewsHeadline</span>
+                                    <span class="cell-detail">@Clock(row.NewsTimestamp)</span>
+                                </td>
                                 <td class="action-cell">
                                     <a class="button secondary compact-command"
+                                       data-desk-inspect
                                        asp-page="/TradeDesk"
                                        asp-route-id="@selectedId"
                                        asp-route-source="@Model.Source"
@@ -281,10 +442,24 @@
                     <div><span>Mid</span><strong data-selected-quote="mid">@selected.Quote.DisplayPrice</strong></div>
                     <div><span>Ask</span><strong data-selected-quote="ask">@selected.Quote.DisplayAsk</strong></div>
                 </div>
-                <div class="evidence-block">
+                <div class="evidence-block decision-block">
                     <h3>TradingFlow decision</h3>
+                    <strong class="decision-verdict" data-selected-signal-badge-text>@selected.EligibilityLabel</strong>
                     <p data-selected-signal-reason>@selected.EligibilityReason</p>
-                    <strong data-selected-signal-type>@(selected.LatestSignal?.SignalType ?? "No active setup")</strong>
+                    <dl class="decision-detail">
+                        <div>
+                            <dt>Setup</dt>
+                            <dd data-selected-signal-type>@(selected.LatestSignal?.SignalType ?? "No active setup")</dd>
+                        </div>
+                        <div>
+                            <dt>Detected</dt>
+                            <dd>
+                                <time data-selected-signal-time datetime="@selected.LatestSignal?.DetectedAtUtc.ToString("O")">
+                                    @(selected.LatestSignal is null ? "--" : $"{selected.LatestSignal.DetectedAtUtc:HH:mm:ss} UTC")
+                                </time>
+                            </dd>
+                        </div>
+                    </dl>
                 </div>
                 <div class="evidence-block">
                     <h3>Position</h3>
@@ -301,10 +476,26 @@
                 </div>
                 <div class="symbol-actions">
                     <a class="button buy"
+                       data-order-shortcut="buy"
                        asp-page="/OrderTicket"
                        asp-route-wishlistId="@selectedId"
                        asp-route-ticker="@selected.Ticker"
-                       asp-route-limitPrice="@selected.Quote.AskPrice">Review protected buy</a>
+                       asp-route-side="buy"
+                       asp-route-env="@Model.Env"
+                       asp-route-limitPrice="@selected.Quote.AskPrice">Review protected buy <kbd>B</kbd></a>
+                    @if (selected.Trade is not null)
+                    {
+                        @* Exit is offered only where a tracked position exists, so the
+                           control cannot invite an accidental short. *@
+                        <a class="button danger"
+                           data-order-shortcut="sell"
+                           asp-page="/OrderTicket"
+                           asp-route-wishlistId="@selectedId"
+                           asp-route-ticker="@selected.Ticker"
+                           asp-route-side="sell"
+                           asp-route-env="@Model.Env"
+                           asp-route-limitPrice="@selected.Quote.BidPrice">Review exit <kbd>S</kbd></a>
+                    }
                     <a class="button" asp-page="/Paper" asp-route-wishlistId="@selectedId">Review strategy run</a>
                     <a class="button secondary" asp-page="/RunningTrades">Open positions</a>
                 </div>
@@ -381,50 +572,21 @@
                     }
                 </section>
             }
+}
 
-            <section class="panel evidence-block" aria-labelledby="selected-signal-heading">
-                <h3 id="selected-signal-heading">Latest signal</h3>
-                <div data-selected-signal-state>
-                    <strong data-selected-signal-title>@(selected.LatestSignal?.SignalType ?? "No recent signal")</strong>
-                    <p data-selected-signal-summary>@(selected.LatestSignal?.Reason ?? "The observer has not emitted a signal for this symbol in the current window.")</p>
-                    <time data-selected-signal-time datetime="@selected.LatestSignal?.DetectedAtUtc.ToString("O")">
-                        @(selected.LatestSignal is null ? "No timestamp" : $"{selected.LatestSignal.DetectedAtUtc:HH:mm:ss} UTC")
-                    </time>
-                </div>
-            </section>
-
-            <section class="panel evidence-block" aria-labelledby="selected-news-heading">
-                <h3 id="selected-news-heading">Selected Symbol News</h3>
-                <div data-selected-news-state>
-                    @if (selected.LatestNews is null)
-                    {
-                        <strong data-selected-news-title>No recent related news</strong>
-                        <p data-selected-news-summary>Nothing matched this symbol in the rolling four-hour feed.</p>
-                        <span data-selected-news-source></span>
-                        <a data-selected-news-link hidden>Open article</a>
-                    }
-                    else
-                    {
-                        <strong data-selected-news-title>@selected.LatestNews.Headline</strong>
-                        <p data-selected-news-summary>@selected.LatestNews.Summary</p>
-                        <span data-selected-news-source>@selected.LatestNews.Provider @selected.LatestNews.Source · @selected.LatestNews.Timestamp.ToString("HH:mm:ss") UTC</span>
-                        <a data-selected-news-link
-                           href="@selected.LatestNews.Url"
-                           hidden="@(String.IsNullOrWhiteSpace(selected.LatestNews.Url))"
-                           target="_blank"
-                           rel="noopener noreferrer">Open article</a>
-                    }
-                </div>
-            </section>
-        }
-
-        <section class="panel evidence-block wishlist-news-panel" aria-labelledby="wishlist-news-heading">
+        <section class="panel evidence-block wishlist-news-panel" aria-labelledby="wishlist-news-heading"
+                 data-selected-ticker-scope="@(selected?.Ticker.ToUpperInvariant())">
             <div class="section-heading compact-heading">
                 <div>
-                    <h3 id="wishlist-news-heading">Wishlist News</h3>
-                    <p>Newest stories across every symbol in @selectedName.</p>
+                    <h3 id="wishlist-news-heading">News</h3>
+                    <p data-news-scope-caption>Newest stories across every symbol in @selectedName.</p>
                 </div>
                 <span class="count-label" data-wishlist-news-count>@Model.RelatedNews.Count</span>
+            </div>
+            <div class="news-scope" role="group" aria-label="News scope">
+                <button type="button" class="chip active" data-news-scope="group" aria-pressed="true">This group</button>
+                <button type="button" class="chip" data-news-scope="symbol" aria-pressed="false"
+                        @(selected is null ? "disabled" : null)>Selected symbol</button>
             </div>
             <p class="empty-copy" data-wishlist-news-empty hidden="@(Model.RelatedNews.Count > 0)">
                 No wishlist news matched the rolling four-hour window.
@@ -436,6 +598,7 @@
                         (articleUri.Scheme == Uri.UriSchemeHttp || articleUri.Scheme == Uri.UriSchemeHttps);
                     var newsKey = hasSafeUrl ? news.Url : news.Headline + "|" + news.Timestamp.ToString("O");
                     <article data-news-item
+                             data-news-ticker="@news.Ticker.ToUpperInvariant()"
                              data-news-url="@(hasSafeUrl ? news.Url : null)"
                              data-news-key="@newsKey"
                              data-news-timestamp="@news.Timestamp.ToString("O")">

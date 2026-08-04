@@ -1,0 +1,26 @@
+@model TradingFlow.Web.Services.TradingEnvironmentState
+@*
+    Rendered in place of any order-capable surface when the environment is locked.
+
+    This partial is the whole body of a locked screen, not an overlay on top of a
+    working one. Order controls are absent from the DOM rather than disabled, so
+    there is nothing to re-enable from the client.
+*@
+<section class="panel environment-lock" role="note" aria-labelledby="environment-lock-heading">
+    <h2 id="environment-lock-heading">@Model.Label environment is locked</h2>
+    <p>@Model.LockReason</p>
+    @if (Model.OutstandingGates.Count > 0)
+    {
+        <p><strong>Outstanding gates</strong></p>
+        <ul class="gate-list">
+            @foreach (var gate in Model.OutstandingGates)
+            {
+                <li>@gate</li>
+            }
+        </ul>
+    }
+    <p class="muted mt-md">
+        Switch to PAPER to place reviewed orders. Promotion is a deliberate decision recorded in
+        <code>docs/operating-boundaries.md</code>; it is not something this screen can grant.
+    </p>
+</section>

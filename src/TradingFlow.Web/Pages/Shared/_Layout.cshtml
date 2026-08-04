@@ -1,37 +1,79 @@
+@inject TradingFlow.Web.Services.TradingEnvironmentService Environments
 @{
     var currentPage = ViewContext.RouteData.Values["page"]?.ToString() ?? String.Empty;
     bool IsCurrent(params string[] pages) => pages.Any(page =>
         String.Equals(page, currentPage, StringComparison.OrdinalIgnoreCase));
+
+    // The environment must be identifiable from the chrome alone, without reading
+    // text. A live surface carries a full-width accent bar, not just a badge.
+    var envSlug = Context.Request.Query["env"].ToString();
+    var environment = Environments.GetState(Environments.Parse(envSlug));
 }
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-environment="@environment.Slug">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"] - TradingFlow</title>
     <link rel="icon" type="image/svg+xml" href="~/favicon.svg" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/desk-grid.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/polish.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/features.css" asp-append-version="true" />
+    <script src="~/js/theme.js" asp-append-version="true"></script>
 </head>
 <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
+    <div class="environment-rail" aria-hidden="true"></div>
     <header class="topbar">
-        <a class="brand" asp-page="/TradeDesk" aria-label="TradingFlow operator desk">TradingFlow</a>
+        <a class="brand" asp-page="@(User.Identity?.IsAuthenticated == true ? "/TradeDesk" : "/Earnings")"
+           aria-label="TradingFlow">TradingFlow</a>
+        @if (User.Identity?.IsAuthenticated == true)
+        {
+            <div class="environment-switch" role="group" aria-label="Trading environment">
+                @foreach (var candidate in Environments.All)
+                {
+                    var isCurrent = candidate.Environment == environment.Environment;
+                    <a class="environment-option env-@candidate.Slug @(isCurrent ? "active" : null)"
+                       href="@($"{Context.Request.Path}?env={candidate.Slug}")"
+                       aria-current="@(isCurrent ? "true" : null)"
+                       title="@(candidate.IsEnabled ? $"{candidate.Label} environment" : candidate.LockReason)">
+                        @candidate.Label@(candidate.IsEnabled ? null : " \U0001F512")
+                    </a>
+                }
+            </div>
+        }
         <nav class="primary-nav" aria-label="Primary navigation">
-            <a asp-page="/TradeDesk"
-               class="@(IsCurrent("/TradeDesk", "/Index") ? "active" : null)"
-               aria-current="@(IsCurrent("/TradeDesk", "/Index") ? "page" : null)">Desk</a>
-            <a asp-page="/RunningTrades"
-               class="@(IsCurrent("/RunningTrades") ? "active" : null)"
-               aria-current="@(IsCurrent("/RunningTrades") ? "page" : null)">Positions</a>
-            <a asp-page="/Orders"
-               class="@(IsCurrent("/Orders", "/OrderTicket") ? "active" : null)"
-               aria-current="@(IsCurrent("/Orders", "/OrderTicket") ? "page" : null)">Orders</a>
-            <a asp-page="/Backtests"
-               class="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "active" : null)"
-               aria-current="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "page" : null)">Research</a>
-            <a asp-page="/Paper"
-               class="@(IsCurrent("/Paper", "/PaperJob", "/Warmup", "/Wishlists") ? "active" : null)"
-               aria-current="@(IsCurrent("/Paper", "/PaperJob", "/Warmup", "/Wishlists") ? "page" : null)">Operations</a>
+            <a asp-page="/Earnings"
+               class="@(IsCurrent("/Earnings") ? "active" : null)"
+               aria-current="@(IsCurrent("/Earnings") ? "page" : null)">Earnings</a>
+            @if (User.Identity?.IsAuthenticated == true)
+            {
+                <a asp-page="/TradeDesk"
+                   class="@(IsCurrent("/TradeDesk", "/Index") ? "active" : null)"
+                   aria-current="@(IsCurrent("/TradeDesk", "/Index") ? "page" : null)">Desk</a>
+                <a asp-page="/RunningTrades"
+                   class="@(IsCurrent("/RunningTrades") ? "active" : null)"
+                   aria-current="@(IsCurrent("/RunningTrades") ? "page" : null)">Positions</a>
+                <a asp-page="/Orders"
+                   class="@(IsCurrent("/Orders", "/OrderTicket") ? "active" : null)"
+                   aria-current="@(IsCurrent("/Orders", "/OrderTicket") ? "page" : null)">Orders</a>
+                <a asp-page="/News"
+                   class="@(IsCurrent("/News") ? "active" : null)"
+                   aria-current="@(IsCurrent("/News") ? "page" : null)">News</a>
+                <a asp-page="/Backtests"
+                   class="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "active" : null)"
+                   aria-current="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "page" : null)">Research</a>
+                <a asp-page="/Paper"
+                   class="@(IsCurrent("/Paper", "/PaperJob", "/Warmup", "/Wishlists") ? "active" : null)"
+                   aria-current="@(IsCurrent("/Paper", "/PaperJob", "/Warmup", "/Wishlists") ? "page" : null)">Operations</a>
+                @if (User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator))
+                {
+                    <a asp-page="/Users"
+                       class="@(IsCurrent("/Users") ? "active" : null)"
+                       aria-current="@(IsCurrent("/Users") ? "page" : null)">Users</a>
+                }
+            }
         </nav>
         <div class="topbar-clocks"
              data-market-time-zone="@TradingFlow.Earnings.EarningsTimeZones.NewYorkClientId"
@@ -39,12 +81,36 @@
             <span><strong id="market-clock-city">Market</strong><time id="market-clock-time">--:--</time></span>
             <span><strong id="local-clock-city">Local</strong><time id="local-clock-time">--:--</time></span>
         </div>
+        <div class="theme-control">
+            <label for="ThemeSelect">Theme</label>
+            <select id="ThemeSelect">
+                <option value="system">System</option>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+                <option value="cvd">Colour-blind</option>
+            </select>
+        </div>
+        <div class="identity-control">
+            @if (User.Identity?.IsAuthenticated == true)
+            {
+                <span title="Signed-in user">@User.Identity.Name</span>
+                <form method="post" asp-page="/Login" asp-page-handler="Logout">
+                    <button type="submit" class="button secondary">Sign out</button>
+                </form>
+            }
+            else
+            {
+                <a class="button secondary" asp-page="/Login">Sign in</a>
+            }
+        </div>
     </header>
     <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
         @RenderBody()
     </main>
 
     <script src="~/js/site.js" asp-append-version="true"></script>
+    <script src="~/js/command-palette.js" asp-append-version="true" defer></script>
+    <script src="~/js/desk-presets.js" asp-append-version="true" defer></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

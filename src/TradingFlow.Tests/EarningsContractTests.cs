@@ -5,6 +5,29 @@ namespace TradingFlow.Tests;
 
 public sealed class EarningsContractTests
 {
+    [Fact]
+    public void NewsResultExtractor_ParsesAccountingLossAndScaledRevenue()
+    {
+        const string headline = "American Bitcoin Q2 EPS $(0.80) Misses $0.15 Estimate, Sales $67.015M Miss $70.650M Estimate";
+
+        var parsed = EarningsNewsResultExtractor.TryExtract(headline, out var result);
+
+        Assert.True(parsed);
+        Assert.Equal(-0.80m, result.EpsActual);
+        Assert.Equal(0.15m, result.EpsEstimate);
+        Assert.InRange(result.EpsSurprisePercent!.Value, -633.334m, -633.333m);
+        Assert.Equal(67.015m, result.RevenueActualMillions);
+        Assert.Equal(70.650m, result.RevenueEstimateMillions);
+    }
+
+    [Fact]
+    public void NewsResultExtractor_RejectsGenericMoverHeadline()
+    {
+        Assert.False(EarningsNewsResultExtractor.TryExtract(
+            "12 Industrials Stocks Moving In Monday's Pre-Market Session",
+            out _));
+    }
+
     [Theory]
     [InlineData(-0.10, -0.20, EarningsEpsOutcome.Beat)]
     [InlineData(-0.30, -0.20, EarningsEpsOutcome.Miss)]

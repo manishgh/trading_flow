@@ -28,6 +28,54 @@
         </div>
     </div>
     <div class="earnings-filter-group">
+        <span class="earnings-filter-label">Dates</span>
+        <div class="earnings-date-controls">
+            <div id="earnings-date-scope" class="earnings-filter-options" role="group" aria-label="Earnings date scope">
+                <button type="button" class="earnings-filter active" data-scope-value="both">Today &amp; next reporting day</button>
+                <button type="button" class="earnings-filter" data-scope-value="today">Today</button>
+                <button type="button" class="earnings-filter" data-scope-value="nextBusinessDay">Next reporting day</button>
+            </div>
+            <div class="earnings-filter-options earnings-date-range">
+                <label class="visually-hidden" for="earnings-from">From date</label>
+                <input id="earnings-from" type="date" aria-label="From date" />
+                <span aria-hidden="true">to</span>
+                <label class="visually-hidden" for="earnings-to">To date</label>
+                <input id="earnings-to" type="date" aria-label="To date" />
+                <button type="button" class="earnings-filter" id="earnings-range-clear">Clear custom range</button>
+            </div>
+        </div>
+    </div>
+    <div class="earnings-filter-group">
+        <span class="earnings-filter-label">Result</span>
+        <div id="earnings-assessment-filters" class="earnings-filter-options" role="group" aria-label="Result assessment">
+            <button type="button" class="earnings-filter active" data-assessment-value="all">All results</button>
+            <button type="button" class="earnings-filter" data-assessment-value="beat">Beat</button>
+            <button type="button" class="earnings-filter" data-assessment-value="miss">Miss</button>
+            <button type="button" class="earnings-filter" data-assessment-value="inline">In line</button>
+            <button type="button" class="earnings-filter" data-assessment-value="pending">Pending</button>
+        </div>
+    </div>
+    <div class="earnings-filter-group">
+        <span class="earnings-filter-label">Refine</span>
+        <div class="earnings-filter-options">
+            <label class="checkbox-field"><input type="checkbox" id="earnings-has-news" /> Has news</label>
+            <label class="checkbox-field earnings-inline-field">
+                <span>Min |EPS surprise| %</span>
+                <input type="number" id="earnings-min-surprise" min="0" step="1" inputmode="decimal" />
+            </label>
+            <label class="checkbox-field earnings-inline-field">
+                <span>Sort</span>
+                <select id="earnings-sort">
+                    <option value="time">Scheduled time</option>
+                    <option value="cap">Market cap</option>
+                    <option value="surprise">EPS surprise</option>
+                    <option value="move">Event move</option>
+                    <option value="rvol">Relative volume</option>
+                </select>
+            </label>
+        </div>
+    </div>
+    <div class="earnings-filter-group">
         <span class="earnings-filter-label">Market cap</span>
         <div id="earnings-cap-filters" class="earnings-filter-options" role="group" aria-label="Market capitalization">
             <button type="button" class="earnings-filter active" data-filter-value="all">All caps</button>

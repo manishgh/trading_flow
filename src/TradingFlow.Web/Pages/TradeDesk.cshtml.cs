@@ -20,8 +20,10 @@ public sealed class TradeDeskModel : PageModel
         ConfigCatalogService catalog,
         WishlistDeskService deskService,
         OperationalStatusService operationalStatus,
-        SymbolIntelligenceService symbolIntelligence)
+        SymbolIntelligenceService symbolIntelligence,
+        TradingEnvironmentService environments)
     {
+        this.environments = environments;
         this.repository = repository;
         this.catalog = catalog;
         this.deskService = deskService;
@@ -29,10 +31,23 @@ public sealed class TradeDeskModel : PageModel
         this.symbolIntelligence = symbolIntelligence;
     }
 
+    private readonly TradingEnvironmentService environments;
+
+    /// <summary>Environment this screen is operating against, from the route segment.</summary>
+    [BindProperty(SupportsGet = true)] public string? Env { get; set; }
+
+    public TradingEnvironmentState EnvironmentState => environments.GetState(environments.Parse(Env));
+
     [BindProperty(SupportsGet = true)] public Guid? Id { get; set; }
     [BindProperty(SupportsGet = true)] public string Source { get; set; } = "all";
     [BindProperty(SupportsGet = true)] public string? StrategyId { get; set; }
     [BindProperty(SupportsGet = true)] public string? Ticker { get; set; }
+    [BindProperty(SupportsGet = true)] public string? Search { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MinPrice { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MaxPrice { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MaxSpreadBps { get; set; }
+    [BindProperty(SupportsGet = true)] public string? Sort { get; set; }
+    [BindProperty(SupportsGet = true)] public string? Dir { get; set; }
     [BindProperty(SupportsGet = true)] public string PredictionMode { get; set; } = "unified";
     [BindProperty(SupportsGet = true)] public string PredictionHorizon { get; set; } = "auto";
 
@@ -49,7 +64,7 @@ public sealed class TradeDeskModel : PageModel
     public WishlistDeskRow? SelectedRow { get; private set; }
     public MobileSymbolIntelligenceResponse? SymbolIntelligence { get; private set; }
     public OperationalStatusSnapshot OperationalStatus { get; private set; } = new(
-        "PAPER", "unknown", "Status has not loaded.", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+        "UNKNOWN", "unknown", "Status has not loaded.", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
         "disconnected", "No quote has been received.", "UNKNOWN", "not connected",
         "attention", "Broker state has not loaded.", "blocked", "Admission state has not loaded.");
 
@@ -113,7 +128,8 @@ public sealed class TradeDeskModel : PageModel
             .OrderByDescending(item => item.Timestamp)
             .Take(20)
             .ToArray();
-        Rows = snapshot.Rows.Where(MatchesFilter).ToArray();
+        Rows = SortRows(snapshot.Rows.Where(MatchesFilter).Where(MatchesQuery)).ToArray();
+        UnfilteredCount = snapshot.Rows.Count;
         SelectedRow = String.IsNullOrWhiteSpace(Ticker)
             ? null
             : Rows.FirstOrDefault(row => row.Ticker.Equals(Ticker, StringComparison.OrdinalIgnoreCase));
@@ -155,6 +171,137 @@ public sealed class TradeDeskModel : PageModel
         return (value ?? String.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(ticker => ticker.ToUpperInvariant());
+    }
+
+    /// <summary>Row count before search, price, and spread filters are applied.</summary>
+    public int UnfilteredCount { get; private set; }
+
+    /// <summary>
+    /// One market-grid column. <paramref name="Optional"/> columns are offered in the
+    /// column chooser and may be switched off by the operator; the rest always render
+    /// so the grid can never be reduced to nothing. Every column sorts through the
+    /// same URL round-trip, so a sorted view survives reload and can be shared.
+    /// </summary>
+    /// <param name="Key">Sort key carried in the query string.</param>
+    /// <param name="Label">Visible header text.</param>
+    /// <param name="CssClass">Width class shared by the header and its cells.</param>
+    /// <param name="Description">Sentence shown beside the chooser checkbox.</param>
+    /// <param name="Optional">Whether the chooser can hide this column.</param>
+    /// <param name="VisibleByDefault">Server-rendered state before a stored preference applies.</param>
+    public sealed record DeskColumn(
+        string Key,
+        string Label,
+        string CssClass,
+        string Description,
+        bool Optional,
+        bool VisibleByDefault);
+
+    /// <summary>
+    /// Columns the market table renders, in display order. Each one is backed by a
+    /// value the desk snapshot already carries; see <see cref="WishlistDeskRow"/> for
+    /// the two TradingView columns that were investigated and rejected for having no
+    /// server-side source.
+    /// </summary>
+    public static IReadOnlyList<DeskColumn> Columns { get; } =
+    [
+        new("ticker", "Market", "market-column", "Symbol and display name.", false, true),
+        new("price", "Last", "last-column", "Mid of the inside quote.", true, true),
+        new("bidask", "Bid / Ask", "quote-column", "Inside bid and ask with quote state.", false, true),
+        new("size", "Size", "size-column", "Quoted size at the inside bid and ask.", true, false),
+        new("spread", "Spread", "spread-column", "Inside spread in basis points.", false, true),
+        new("quoteage", "Updated", "quoteage-column", "Exchange time of the latest quote.", true, true),
+        new("eligibility", "Eligibility", "eligibility-column", "TradingFlow verdict and its reason.", false, true),
+        new("setup", "Setup", "setup-column", "Name and time of the latest persisted setup.", true, false),
+        new("pl", "Position", "position-column", "Tracked position and open P/L.", false, true),
+        new("news", "News", "news-column", "Most recent story matched to the symbol.", true, false)
+    ];
+
+    /// <summary>Columns the chooser can switch off, in display order.</summary>
+    public static IReadOnlyList<DeskColumn> OptionalColumns { get; } =
+        Columns.Where(column => column.Optional).ToArray();
+
+    /// <summary>Current sort direction, defaulting to ascending.</summary>
+    public bool SortDescending => String.Equals(Dir, "desc", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The <c>aria-sort</c> value for <paramref name="key"/>, or null when unsorted.</summary>
+    public string? AriaSortFor(string key) =>
+        String.Equals(Sort, key, StringComparison.OrdinalIgnoreCase)
+            ? (SortDescending ? "descending" : "ascending")
+            : null;
+
+    /// <summary>Direction a header link should request so clicking it toggles.</summary>
+    public string NextDirectionFor(string key) =>
+        String.Equals(Sort, key, StringComparison.OrdinalIgnoreCase) && !SortDescending ? "desc" : "asc";
+
+    private bool MatchesQuery(WishlistDeskRow row)
+    {
+        if (!String.IsNullOrWhiteSpace(Search))
+        {
+            var term = Search.Trim();
+            var matches = row.Ticker.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                row.DisplayName.Contains(term, StringComparison.OrdinalIgnoreCase);
+            if (!matches)
+            {
+                return false;
+            }
+        }
+
+        // A row with no quote cannot satisfy a price or spread bound. Excluding it is
+        // deliberate: a numeric filter should not silently pass unknown values.
+        var mid = row.Quote.MidPrice;
+        if (MinPrice is { } min && (mid is null || mid < min))
+        {
+            return false;
+        }
+        if (MaxPrice is { } max && (mid is null || mid > max))
+        {
+            return false;
+        }
+        if (MaxSpreadBps is { } maxSpread)
+        {
+            var spread = row.SpreadBps;
+            if (spread is null || spread > maxSpread)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private IEnumerable<WishlistDeskRow> SortRows(IEnumerable<WishlistDeskRow> rows)
+    {
+        // Rows without a value sort to the far end rather than mixing into the middle,
+        // so "no quote yet" never looks like a real reading of zero.
+        var descending = SortDescending;
+        return (Sort?.ToLowerInvariant()) switch
+        {
+            "price" => Order(rows, row => row.LastPrice ?? Decimal.MinValue, descending),
+            "bidask" => Order(rows, row => row.Quote.BidPrice ?? Decimal.MinValue, descending),
+            "size" => Order(rows, row => row.TopOfBookSize ?? Decimal.MinValue, descending),
+            "spread" => Order(rows, row => row.SpreadBps ?? Decimal.MaxValue, descending),
+            "quoteage" => Order(rows, row => row.QuoteTimestamp ?? DateTimeOffset.MinValue, descending),
+            "eligibility" => Order(rows, row => row.HasSignal ? 1m : 0m, descending),
+            "setup" => Order(rows, row => row.SetupDetectedAtUtc ?? DateTimeOffset.MinValue, descending),
+            "pl" => Order(rows, row => row.Trade?.UnrealizedPl ?? Decimal.MinValue, descending),
+            "news" => Order(rows, row => row.NewsTimestamp ?? DateTimeOffset.MinValue, descending),
+            "ticker" => descending
+                ? rows.OrderByDescending(row => row.Ticker, StringComparer.OrdinalIgnoreCase)
+                : rows.OrderBy(row => row.Ticker, StringComparer.OrdinalIgnoreCase),
+            _ => rows
+        };
+    }
+
+    private static IEnumerable<WishlistDeskRow> Order<TKey>(
+        IEnumerable<WishlistDeskRow> rows,
+        Func<WishlistDeskRow, TKey> key,
+        bool descending)
+    {
+        // Ticker is the tiebreaker so equal values keep a stable, predictable order
+        // instead of shuffling between requests.
+        return descending
+            ? rows.OrderByDescending(key).ThenBy(row => row.Ticker, StringComparer.OrdinalIgnoreCase)
+            : rows.OrderBy(key).ThenBy(row => row.Ticker, StringComparer.OrdinalIgnoreCase);
     }
 
     private bool MatchesFilter(WishlistDeskRow row)

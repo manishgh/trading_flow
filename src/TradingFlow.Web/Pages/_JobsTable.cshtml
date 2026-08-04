@@ -32,9 +32,9 @@ else
                 <td>@job.RunName<br /><span class="muted">@job.CreatedAt.LocalDateTime</span></td>
                 <td><span class="status">@job.Status</span></td>
                 <td>@job.CurrentStage<br /><span class="muted">@job.CompletedTickerCount / @job.TotalTickerCount work items</span></td>
-                <td style="min-width:140px">
+                <td>
                     <div class="progress-track">
-                        <div class="progress-bar" style="width:@progressPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
+                        <div class="progress-bar progress-fill" style="--progress:@progressPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
                     </div>
                     <span class="muted">@progressPct.ToString("0.0")%</span>
                 </td>
@@ -42,11 +42,11 @@ else
                 <td class="@(job.Result?.NetProfit >= 0 ? "good" : "bad")">@(job.Result is null ? "-" : $"{job.Result.TotalReturnPct:0.##}%")</td>
                 <td>@(job.Result?.AcceptedTradeCount.ToString() ?? "-")</td>
                 <td>
-                    <div class="actions" style="margin:0">
+                    <div class="actions m-0">
                         <a class="button secondary mini-button" asp-page="/Job" asp-route-id="@job.JobId">View</a>
                         @if (job.Status is "queued" or "running" or "cancelling")
                         {
-                            <form method="post" asp-page="/Backtests" asp-page-handler="CancelBacktest" asp-route-id="@job.JobId" style="margin:0">
+                            <form class="m-0" method="post" asp-page="/Backtests" asp-page-handler="CancelBacktest" asp-route-id="@job.JobId">
                                 <button type="submit" class="button danger mini-button">Cancel</button>
                             </form>
                         }

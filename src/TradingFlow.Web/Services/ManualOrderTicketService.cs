@@ -4,6 +4,9 @@ using TradingFlow.Engine.Execution;
 
 namespace TradingFlow.Web.Services;
 
+/// <param name="OrderType">market, limit, stop, or stop_limit.</param>
+/// <param name="TriggerPrice">Stop trigger for a stop or stop-limit exit.</param>
+/// <param name="TimeInForce">day, gtc, ioc, or fok.</param>
 public sealed record ManualOrderDraft(
     string Ticker,
     string Side,
@@ -13,7 +16,10 @@ public sealed record ManualOrderDraft(
     decimal? TakeProfitPrice,
     string Horizon,
     bool AllowExtendedHoursTrading,
-    string Feed = "sip");
+    string Feed = "sip",
+    string OrderType = "limit",
+    decimal? TriggerPrice = null,
+    string TimeInForce = "day");
 
 public sealed record ManualOrderTicketPreview(
     bool CanSubmit,
@@ -35,6 +41,8 @@ public sealed record ManualOrderTicketPreview(
     long? QuoteAgeMilliseconds,
     decimal? SpreadBps,
     string Session,
+    string OrderType,
+    decimal? TriggerPrice,
     string TimeInForce,
     bool AllowExtendedHoursTrading,
     string Policy,
@@ -85,7 +93,10 @@ public sealed class AlpacaManualOrderMarketGateway(
             draft.Horizon,
             cancellationToken,
             draft.AllowExtendedHoursTrading,
-            ticketId);
+            ticketId,
+            draft.OrderType,
+            draft.TriggerPrice,
+            draft.TimeInForce);
 }
 
 /// <summary>
@@ -100,6 +111,7 @@ public sealed class ManualOrderTicketService
     private readonly ManualEntryOptions manualEntry;
     private readonly EntryGateOptions entryOptions;
     private readonly IEntryAdmissionControl admission;
+    private readonly TradingEnvironmentService environments;
     private readonly TimeProvider timeProvider;
     private readonly IDataProtector protector;
 
@@ -108,9 +120,11 @@ public sealed class ManualOrderTicketService
         ManualEntryOptions manualEntry,
         EntryGateOptions entryOptions,
         IEntryAdmissionControl admission,
+        TradingEnvironmentService environments,
         TimeProvider timeProvider,
         IDataProtectionProvider dataProtection)
     {
+        this.environments = environments;
         this.market = market;
         this.manualEntry = manualEntry;
         this.entryOptions = entryOptions;
@@ -218,10 +232,12 @@ public sealed class ManualOrderTicketService
         try
         {
             broker = await market.GetBrokerContextAsync(ticket.Draft.Ticker, cancellationToken);
+            // The real order settings are validated, not a hardcoded limit/day pair.
+            // The policy correctly refuses a market or stop order in an extended session.
             ExtendedHoursOrderPolicy.Validate(
                 new TradingSessionSnapshot(broker.TradeDate, broker.Session, now, null, null),
-                "limit",
-                "day",
+                ticket.Draft.OrderType == "stop_limit" ? "limit" : ticket.Draft.OrderType,
+                ticket.Draft.TimeInForce,
                 ticket.Draft.AllowExtendedHoursTrading);
             if (!broker.AssetActive || !broker.AssetTradable)
             {
@@ -253,7 +269,7 @@ public sealed class ManualOrderTicketService
             ticket.TicketId,
             ticket.CreatedAtUtc,
             ticket.CreatedAtUtc + TicketLifetime,
-            "PAPER",
+            environments.GetState(environments.Default).Label,
             ticket.Draft.Ticker,
             ticket.Draft.Side,
             ticket.Draft.Quantity,
@@ -267,7 +283,9 @@ public sealed class ManualOrderTicketService
             quoteAge is null ? null : (long)quoteAge.Value.TotalMilliseconds,
             spreadBps,
             broker?.Session.ToString().ToLowerInvariant() ?? "unknown",
-            "DAY",
+            ticket.Draft.OrderType,
+            ticket.Draft.TriggerPrice,
+            ticket.Draft.TimeInForce.ToUpperInvariant(),
             ticket.Draft.AllowExtendedHoursTrading,
             manualEntry.Policy == ManualEntryPolicy.OperatorDirect ? "operator_direct" : "strategy_gated",
             rejections);
@@ -282,28 +300,79 @@ public sealed class ManualOrderTicketService
         {
             throw new InvalidOperationException("Ticker is invalid.");
         }
-        if (side != "buy")
+        if (side is not ("buy" or "sell"))
         {
-            throw new InvalidOperationException("Reviewed manual tickets support protected buy entries only. Close an open position from the position workflow.");
+            throw new InvalidOperationException("Reviewed manual tickets support a protected buy entry or a sell exit.");
         }
         if (horizon is not ("intraday" or "swing"))
         {
             throw new InvalidOperationException("Horizon must be intraday or swing.");
         }
-        if (draft.Quantity <= 0m || draft.LimitPrice <= 0m)
+        var orderType = (draft.OrderType ?? "limit").Trim().ToLowerInvariant();
+        var timeInForce = (draft.TimeInForce ?? "day").Trim().ToLowerInvariant();
+        if (orderType is not ("market" or "limit" or "stop" or "stop_limit"))
         {
-            throw new InvalidOperationException("Quantity and limit price must be greater than zero.");
+            throw new InvalidOperationException("Order type must be market, limit, stop, or stop_limit.");
+        }
+        if (timeInForce is not ("day" or "gtc" or "ioc" or "fok"))
+        {
+            throw new InvalidOperationException("Time in force must be day, gtc, ioc, or fok.");
+        }
+
+        // A protected entry is always a bracketed limit. Widening buy to market or
+        // stop would remove the stop/target the bracket exists to guarantee, so the
+        // extra order types are exits only.
+        if (side == "buy" && orderType != "limit")
+        {
+            throw new InvalidOperationException(
+                "A protected buy entry is always a limit order so the bracket stop and target stay attached.");
+        }
+
+        if (draft.Quantity <= 0m)
+        {
+            throw new InvalidOperationException("Quantity must be greater than zero.");
+        }
+        if (orderType is "limit" or "stop_limit" && draft.LimitPrice <= 0m)
+        {
+            throw new InvalidOperationException("A limit price is required for a limit or stop-limit order.");
+        }
+        if (orderType is "stop" or "stop_limit" && draft.TriggerPrice is not > 0m)
+        {
+            throw new InvalidOperationException("A stop trigger price is required for a stop or stop-limit order.");
         }
         if (draft.Quantity != Decimal.Truncate(draft.Quantity) || draft.Quantity > Int32.MaxValue)
         {
-            throw new InvalidOperationException("Protected buy quantity must be a positive whole-share value.");
+            throw new InvalidOperationException("Order quantity must be a positive whole-share value.");
         }
         if (side == "buy" && (draft.StopLossPrice is not > 0m || draft.StopLossPrice >= draft.LimitPrice ||
             draft.TakeProfitPrice is not > 0m || draft.TakeProfitPrice <= draft.LimitPrice))
         {
             throw new InvalidOperationException("Buy orders require a stop below entry and a target above entry.");
         }
-        return draft with { Ticker = ticker, Side = side, Horizon = horizon, Feed = "sip" };
+
+        // A sell here is an exit that flattens part or all of an existing position.
+        // Bracket levels belong to the entry that opened it, so carrying a stop or
+        // target onto the exit would create a second, contradictory protection
+        // intent. The open-position quantity check in ReviewAsync remains the gate.
+        if (side == "sell")
+        {
+            draft = draft with { StopLossPrice = null, TakeProfitPrice = null };
+        }
+        else
+        {
+            // A trigger price has no meaning on a bracketed entry.
+            draft = draft with { TriggerPrice = null };
+        }
+
+        return draft with
+        {
+            Ticker = ticker,
+            Side = side,
+            Horizon = horizon,
+            Feed = "sip",
+            OrderType = orderType,
+            TimeInForce = timeInForce
+        };
     }
 
     private sealed record TicketPayload(

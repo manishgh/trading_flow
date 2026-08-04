@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using TradingFlow.Mobile.Services;
+using TradingFlow.Mobile.Resources.Styles;
 
 namespace TradingFlow.Mobile.Pages;
 
@@ -38,7 +39,7 @@ public partial class WarmupPage : ContentPage
         {
             var healthy = await api.CheckHealthAsync();
             StatusLabel.Text = healthy ? $"Connected: {api.BaseUrl}" : $"Backend unreachable: {api.BaseUrl}";
-            StatusLabel.TextColor = healthy ? Color.FromArgb("#067647") : Color.FromArgb("#B42318");
+            StatusLabel.TextColor = healthy ? ThemePalette.Positive : ThemePalette.Negative;
 
             var latestWatchlist = await api.GetWarmupWatchlistAsync() ?? Array.Empty<WarmupTickerIntent>();
             watchlist.Clear();
@@ -62,7 +63,7 @@ public partial class WarmupPage : ContentPage
         catch (Exception exception)
         {
             StatusLabel.Text = $"Warmup error: {exception.Message}";
-            StatusLabel.TextColor = Color.FromArgb("#B42318");
+            StatusLabel.TextColor = ThemePalette.Negative;
             await DisplayAlertAsync("Warmup", exception.Message, "OK");
         }
         finally

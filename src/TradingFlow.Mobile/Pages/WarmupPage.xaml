@@ -56,7 +56,7 @@
 
                 <CollectionView x:Name="WatchlistView" SelectionMode="Single" SelectionChanged="OnWatchlistSelected">
                     <CollectionView.EmptyView>
-                        <Label Text="No warmup stocks yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="No warmup stocks yet." FontSize="13" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                     </CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
@@ -64,10 +64,10 @@
                                 <VerticalStackLayout Spacing="5">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="16" />
-                                        <Label Grid.Column="1" Text="{Binding LastStatus}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                        <Label Grid.Column="1" Text="{Binding LastStatus}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
                                     </Grid>
-                                    <Label Text="{Binding DetailText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                                    <Label Text="{Binding LastWarmText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                    <Label Text="{Binding DetailText}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
+                                    <Label Text="{Binding LastWarmText}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                                     <Label Text="{Binding Reason}" FontSize="12" LineBreakMode="TailTruncation" />
                                 </VerticalStackLayout>
                             </Border>
@@ -81,7 +81,7 @@
                         <Label x:Name="SelectedDetail" FontSize="13" />
                         <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                             <Button Text="Run Ticker" Clicked="OnRunSelected" />
-                            <Button Grid.Column="1" Text="Remove" Clicked="OnRemoveSelected" BackgroundColor="#B42318" />
+                            <Button Grid.Column="1" Text="Remove" Clicked="OnRemoveSelected" BackgroundColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" />
                         </Grid>
                     </VerticalStackLayout>
                 </Border>
@@ -89,7 +89,7 @@
                 <Label Text="Recent Runs" FontAttributes="Bold" FontSize="18" />
                 <CollectionView x:Name="RunsView" HeightRequest="240">
                     <CollectionView.EmptyView>
-                        <Label Text="No warmup runs yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="No warmup runs yet." FontSize="13" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                     </CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
@@ -97,7 +97,7 @@
                                 <VerticalStackLayout Spacing="4">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <Label Text="{Binding Reason}" FontAttributes="Bold" FontSize="13" />
-                                        <Label Grid.Column="1" Text="{Binding StartedText}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                        <Label Grid.Column="1" Text="{Binding StartedText}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                                     </Grid>
                                     <Label Text="{Binding SummaryText}" FontSize="12" />
                                 </VerticalStackLayout>

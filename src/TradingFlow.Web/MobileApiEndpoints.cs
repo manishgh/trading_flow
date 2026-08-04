@@ -1,4 +1,4 @@
-﻿using TradingFlow.Domain.Strategies;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
@@ -13,6 +13,15 @@ public static class MobileApiEndpoints
     public static IEndpointRouteBuilder MapTradingFlowMobileApi(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/api/mobile");
+
+        group.MapPost("/pulse", (MobileStockPulseRequest request, StockPulseReceiverService pulseReceiver) =>
+        {
+            if (!string.IsNullOrWhiteSpace(request.Ticker))
+            {
+                pulseReceiver.RegisterPulse(request.Ticker);
+            }
+            return Results.Ok();
+        });
 
         group.MapGet("/catalog", (ConfigCatalogService catalog) =>
         {

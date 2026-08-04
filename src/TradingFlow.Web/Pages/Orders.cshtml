@@ -13,6 +13,21 @@
         item.FillPrice is { } fill ? $"Fill {fill:C2}" :
         item.LimitPrice is { } limit ? $"Limit {limit:C2}" :
         item.StopPrice is { } stop ? $"Stop {stop:C2}" : "Market";
+
+    // One list drives the header row so the sortable and fixed columns stay in the
+    // same order as the body cells. A null key means the column carries no ordering.
+    var orderColumns = new (string? Key, string Label, string? Class)[]
+    {
+        ("updated", "Updated", null),
+        ("symbol", "Symbol", null),
+        ("status", "Status", null),
+        ("requested", "Requested", "num"),
+        ("filled", "Filled", "num"),
+        (null, "Order", null),
+        (null, "Price", null),
+        (null, "Strategy", null),
+        (null, "Client order", null)
+    };
 }
 
 <section class="orders-book" data-orders-page data-filter="@Model.Filter">
@@ -34,23 +49,52 @@
         <div class="summary-card"><span>Cancelled / Expired</span><strong>@Model.ClosedCount</strong></div>
     </div>
 
+    @* The banner is the outcome of a cancel round-trip. It carries tabindex="-1" so
+       orders.js can move focus here instead of leaving it on <body> after the POST. *@
+    @if (!String.IsNullOrWhiteSpace(Model.StatusMessage))
+    {
+        <div class="status-banner" role="status" tabindex="-1" data-orders-banner>@Model.StatusMessage</div>
+    }
+    @if (!String.IsNullOrWhiteSpace(Model.ErrorMessage))
+    {
+        <div class="status-banner error" role="alert" tabindex="-1" data-orders-banner>@Model.ErrorMessage</div>
+    }
+
     <nav class="source-tabs" aria-label="Order status filters">
         @foreach (var (key, label) in TradingFlow.Web.Pages.OrdersModel.Filters)
         {
             var active = Model.Filter == key;
+            @* Tabs carry the sort state so narrowing the status never silently
+               discards the column the operator chose to order by. *@
             <a asp-page="/Orders" asp-route-filter="@key"
+               asp-route-sort="@Model.Sort"
+               asp-route-dir="@Model.Dir"
+               asp-route-env="@Model.Env"
                class="@(active ? "active" : null)"
                aria-current="@(active ? "page" : null)">@label</a>
         }
     </nav>
 
-    <p id="OrdersConnection" class="muted" role="status" aria-live="polite">
+    <p id="OrdersConnection" class="muted" role="status" aria-live="polite" data-state="live">
         Showing the latest persisted state. Checking for updates every 10 seconds.
     </p>
 
     @if (Model.Items.Count == 0)
     {
-        <div class="empty-state" data-orders-empty>No orders match this status.</div>
+        <div class="empty-state" data-orders-empty>
+            <strong>@Model.EmptyStateTitle</strong>
+            <span>@Model.EmptyStateHint</span>
+            @if (Model.EmptyStateOffersAllFilter)
+            {
+                <a class="button secondary" asp-page="/Orders" asp-route-filter="all"
+                   asp-route-sort="@Model.Sort" asp-route-dir="@Model.Dir"
+                   asp-route-env="@Model.Env">Show all orders</a>
+            }
+            else
+            {
+                <a class="button secondary" asp-page="/TradeDesk" asp-route-env="@Model.Env">Open the Trade Desk</a>
+            }
+        </div>
     }
     else
     {
@@ -58,15 +102,27 @@
             <table class="trade-table orders-table">
                 <thead>
                     <tr>
-                        <th>Updated</th>
-                        <th>Symbol</th>
-                        <th>Status</th>
-                        <th class="num">Requested</th>
-                        <th class="num">Filled</th>
-                        <th>Order</th>
-                        <th>Price</th>
-                        <th>Strategy</th>
-                        <th>Client order</th>
+                        @foreach (var column in orderColumns)
+                        {
+                            <th scope="col" class="@column.Class" aria-sort="@(column.Key is null ? null : Model.AriaSortFor(column.Key))">
+                                @if (column.Key is null)
+                                {
+                                    @column.Label
+                                }
+                                else
+                                {
+                                    <a class="column-sort @(Model.AriaSortFor(column.Key) is not null ? "sorted" : null)"
+                                       asp-page="/Orders"
+                                       asp-route-filter="@Model.Filter"
+                                       asp-route-env="@Model.Env"
+                                       asp-route-sort="@column.Key"
+                                       asp-route-dir="@Model.NextDirectionFor(column.Key)">
+                                        @column.Label<span class="sort-indicator" aria-hidden="true"></span>
+                                    </a>
+                                }
+                            </th>
+                        }
+                        <th scope="col"><span class="visually-hidden">Actions</span></th>
                     </tr>
                 </thead>
                 <tbody data-orders-body>
@@ -87,6 +143,32 @@
                             <td data-order-price>@PriceSummary(item)</td>
                             <td>@item.StrategyId</td>
                             <td class="order-identity">@item.ClientOrderId</td>
+                            <td class="order-actions">
+                                @if (TradingFlow.Web.Pages.OrdersModel.CanCancel(item) && Model.EnvironmentState.IsEnabled)
+                                {
+                                    @* The handler posts back to the page, so the view state the operator
+                                       chose has to travel with the request; without these the re-render
+                                       dropped back to the unsorted All tab. Plain name/value pairs, not
+                                       asp-for: a tag helper would stamp one id onto every row. *@
+                                    <form method="post" asp-page-handler="Cancel">
+                                        <input type="hidden" name="brokerOrderId" value="@item.BrokerOrderId" />
+                                        <input type="hidden" name="Env" value="@Model.Env" />
+                                        <input type="hidden" name="Filter" value="@Model.Filter" />
+                                        <input type="hidden" name="Sort" value="@Model.Sort" />
+                                        <input type="hidden" name="Dir" value="@Model.Dir" />
+                                        <button class="danger compact-command" type="submit"
+                                                data-confirm="Cancel the working @item.Symbol order?">Cancel</button>
+                                    </form>
+                                    @* Replace is cancel plus a fresh reviewed ticket, so an amended
+                                       order is re-checked against quote, spread, and session. *@
+                                    <a class="button secondary compact-command"
+                                       asp-page="/OrderTicket"
+                                       asp-route-ticker="@item.Symbol"
+                                       asp-route-side="@item.Side.ToLowerInvariant()"
+                                       asp-route-limitPrice="@item.LimitPrice"
+                                       asp-route-env="@Model.Env">Replace</a>
+                                }
+                            </td>
                         </tr>
                     }
                 </tbody>

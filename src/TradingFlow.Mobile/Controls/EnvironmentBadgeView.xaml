@@ -4,8 +4,8 @@
              x:Class="TradingFlow.Mobile.Controls.EnvironmentBadgeView"
              SemanticProperties.Description="Paper trading environment, New York market time, and device local time">
     <Border Padding="8,5"
-            BackgroundColor="{StaticResource SurfaceSubtle}"
-            Stroke="{StaticResource BorderDefault}"
+            BackgroundColor="{AppThemeBinding Light={StaticResource SurfaceSubtleLight}, Dark={StaticResource SurfaceSubtleDark}}"
+            Stroke="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}"
             StrokeShape="RoundRectangle 6"
             HorizontalOptions="End"
             VerticalOptions="Center">
@@ -14,12 +14,12 @@
                 <BoxView WidthRequest="7"
                          HeightRequest="7"
                          CornerRadius="4"
-                         Color="{StaticResource StateWarning}"
+                         Color="{AppThemeBinding Light={StaticResource StateWarningLight}, Dark={StaticResource StateWarningDark}}"
                          VerticalOptions="Center" />
                 <Label Text="PAPER"
                        FontAttributes="Bold"
                        FontSize="10"
-                       TextColor="{StaticResource StateWarning}"
+                       TextColor="{AppThemeBinding Light={StaticResource StateWarningLight}, Dark={StaticResource StateWarningDark}}"
                        VerticalTextAlignment="Center" />
             </HorizontalStackLayout>
             <Label x:Name="MarketClockLabel"
@@ -32,7 +32,7 @@
                    Grid.Row="1"
                    Grid.ColumnSpan="2"
                    FontSize="10"
-                   TextColor="{StaticResource TextSecondary}"
+                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                    HorizontalTextAlignment="End"
                    LineBreakMode="NoWrap" />
         </Grid>

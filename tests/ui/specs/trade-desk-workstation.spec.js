@@ -41,7 +41,11 @@ test.describe("UI2 web trading workstation", () => {
     await openSeededDesk(page);
 
     await expect(page.locator(".operational-strip")).toBeVisible();
-    await expect(page.locator(".operational-strip .operational-item")).toHaveCount(7);
+    await expect(page.locator(".operational-strip .operational-item")).toHaveCount(3);
+    // Quotes, model, broker sync, and entry gate collapse into one health control
+    // so a row of steady-state green chips no longer occupies the viewport.
+    await expect(page.locator(".operational-health")).toHaveCount(1);
+    await expect(page.locator(".operational-health #DeskQuoteConnection")).toHaveCount(1);
     await expect(page.locator('form[action*="AddTicker"], input[name="Ticker"]:not([type="hidden"]), input[name="FinvizFilter"]')).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Manage Wishlist" })).toHaveAttribute("href", /Wishlists/);
 
@@ -55,12 +59,13 @@ test.describe("UI2 web trading workstation", () => {
     await page.goto(`/TradeDesk?id=${targetId}`);
 
     await expect(page.locator("[data-selected-symbol]")).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "Wishlist News" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "News", exact: true })).toBeVisible();
+    // The symbol-scoped duplicate panel is gone; one panel now carries a scope control.
     await expect(page.getByRole("heading", { name: "Selected Symbol News" })).toHaveCount(0);
 
     await page.goto(`/TradeDesk?id=${targetId}&ticker=${testTicker}`);
-    await expect(page.getByRole("heading", { name: "Selected Symbol News" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Wishlist News" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "News", exact: true })).toBeVisible();
+    await expect(page.locator('[data-news-scope="symbol"]')).toBeEnabled();
 
     await page.waitForFunction(() => Boolean(window.TradingFlowDesk));
     await page.evaluate(ticker => window.TradingFlowDesk.applyActivity({
@@ -74,7 +79,6 @@ test.describe("UI2 web trading workstation", () => {
     await expect(page.locator("[data-wishlist-news-list] [data-news-item]")).toHaveCount(1);
     await expect(page.locator("[data-wishlist-news-list] [data-news-tickers]")).toContainText(testTicker);
     await expect(page.locator("[data-wishlist-news-list] [data-news-tickers]")).toContainText("SECOND");
-    await expect(page.locator("[data-selected-news-title]")).toHaveText("Shared catalyst");
   });
 
   test("model intelligence is explicit, separate, and non-blocking when unconfigured", async ({ page }) => {
@@ -82,7 +86,7 @@ test.describe("UI2 web trading workstation", () => {
     await page.goto(`/TradeDesk?id=${targetId}`);
 
     await expect(page.getByRole("heading", { name: "Model Intelligence" })).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "Wishlist News" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "News", exact: true })).toBeVisible();
 
     await page.goto(`/TradeDesk?id=${targetId}&ticker=${testTicker}&predictionMode=invalid-value`);
     await expect(page.getByRole("heading", { name: "TradingFlow decision" })).toBeVisible();
@@ -94,7 +98,7 @@ test.describe("UI2 web trading workstation", () => {
     await page.getByRole("link", { name: "swing", exact: true }).click();
     await expect(page).toHaveURL(/predictionMode=swing/);
     await expect(page.locator('.segmented-links a.active')).toHaveText("swing");
-    await expect(page.getByRole("heading", { name: "Wishlist News" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "News", exact: true })).toBeVisible();
   });
 
   test("desktop renders the dense table and mobile renders only compact symbol rows", async ({ page }) => {

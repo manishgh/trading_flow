@@ -41,7 +41,11 @@ test.describe("approved UI baseline", () => {
 
     const primaryLabels = await page.locator(".primary-nav a").evaluateAll(nodes =>
       nodes.map(node => node.textContent.trim()));
-    expect(primaryLabels).toEqual(["Desk", "Positions", "Orders", "Research", "Operations"]);
+    // News and Earnings are primary destinations: they are checked constantly during a
+    // session, and burying them under Research cost a click on every visit.
+    expect(primaryLabels).toEqual([
+      "Desk", "Positions", "Orders", "News", "Earnings", "Research", "Operations"
+    ]);
 
     await page.goto("/Orders");
     await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Orders");

@@ -12,7 +12,7 @@ public sealed class CatalystStreamer
 {
     private readonly ICatalystProvider? _provider;
 
-    public CatalystStreamer(ICatalystProvider? provider)
+    public CatalystStreamer(ICatalystProvider? provider = null)
     {
         _provider = provider;
     }

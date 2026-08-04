@@ -12,7 +12,7 @@
                 <VerticalStackLayout Spacing="10">
                     <Label Text="Backend URL" FontAttributes="Bold" FontSize="18" />
                     <Entry x:Name="BackendUrlEntry" Placeholder="https://your-ngrok-url.ngrok-free.app" Keyboard="Url" />
-                    <Label Text="Use ngrok for phone testing. If calls time out, restart the tunnel and tap Use Ngrok URL, then Save &amp; Test." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                    <Label Text="Use ngrok for phone testing. If calls time out, restart the tunnel and tap Use Ngrok URL, then Save &amp; Test." FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                     <Button Text="Use Ngrok URL" Clicked="OnUseNgrokUrl" />
                     <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
                         <Button Text="Use LAN URL" Clicked="OnUsePhoneUrl" />
@@ -20,6 +20,26 @@
                     </Grid>
                     <Button Text="Save &amp; Test" Clicked="OnSaveAndTest" />
                     <Label x:Name="HealthLabel" FontSize="13" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="Feedback" FontAttributes="Bold" FontSize="18" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Spacing="2">
+                            <Label Text="Haptic feedback" FontSize="14" />
+                            <Label Text="Short vibration when an order is accepted, rejected, or ready to confirm."
+                                   FontSize="12"
+                                   LineBreakMode="WordWrap"
+                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
+                        </VerticalStackLayout>
+                        <Switch x:Name="HapticsSwitch"
+                                Grid.Column="1"
+                                Toggled="OnHapticsToggled"
+                                VerticalOptions="Center"
+                                SemanticProperties.Description="Enable haptic feedback for order and position events" />
+                    </Grid>
                 </VerticalStackLayout>
             </Border>
         </VerticalStackLayout>

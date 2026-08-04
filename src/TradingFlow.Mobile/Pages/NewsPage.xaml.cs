@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using TradingFlow.Mobile.Services;
+using TradingFlow.Mobile.Resources.Styles;
 
 namespace TradingFlow.Mobile.Pages;
 
@@ -50,7 +51,7 @@ public partial class NewsPage : ContentPage
             StatusLabel.Text = feed.Enabled
                 ? $"{feed.Provider}: {feed.Items.Count} item(s). {feed.Message}"
                 : feed.Message ?? "News feed disabled.";
-            StatusLabel.TextColor = feed.Enabled ? Color.FromArgb("#067647") : Color.FromArgb("#B42318");
+            StatusLabel.TextColor = feed.Enabled ? ThemePalette.Positive : ThemePalette.Negative;
 
             newsItems.Clear();
             foreach (var item in feed.Items)
@@ -61,7 +62,7 @@ public partial class NewsPage : ContentPage
         catch (Exception exception)
         {
             StatusLabel.Text = $"News error: {exception.Message}";
-            StatusLabel.TextColor = Color.FromArgb("#B42318");
+            StatusLabel.TextColor = ThemePalette.Negative;
         }
         finally
         {
@@ -94,7 +95,7 @@ public partial class NewsPage : ContentPage
         catch (Exception exception)
         {
             StatusLabel.Text = $"Fetch error: {exception.Message}";
-            StatusLabel.TextColor = Color.FromArgb("#B42318");
+            StatusLabel.TextColor = ThemePalette.Negative;
         }
         finally
         {

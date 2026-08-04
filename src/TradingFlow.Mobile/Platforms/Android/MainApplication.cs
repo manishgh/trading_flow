@@ -1,6 +1,10 @@
 using Android.App;
 using Android.Runtime;
 
+// Required for HapticFeedback. Without it the platform silently ignores every
+// haptic request, so order confirmations would land with no tactile signal.
+[assembly: UsesPermission(Android.Manifest.Permission.Vibrate)]
+
 namespace TradingFlow.Mobile;
 
 [Application]

@@ -97,6 +97,16 @@ else
                     <div><label for="NotesTop">Notes</label><input id="NotesTop" name="Notes" placeholder="Catalyst, setup, risk" /></div>
                     <button type="submit">Add Ticker</button>
                 </form>
+                <form method="post" asp-page-handler="AddTickers" class="bulk-add-strip">
+                    <input type="hidden" name="TargetWishlistId" value="@selected.Id" />
+                    <div>
+                        <label for="BulkTickers">Paste many symbols</label>
+                        <textarea id="BulkTickers" name="Tickers" rows="2"
+                                  placeholder="AAPL, MSFT, NVDA"></textarea>
+                        <small>Separate with commas, spaces, or new lines. Adding is idempotent.</small>
+                    </div>
+                    <button type="submit">Add All</button>
+                </form>
                 <form method="post" asp-page-handler="ImportFinviz" class="finviz-import-strip">
                     <input type="hidden" name="TargetWishlistId" value="@selected.Id" />
                     <div>
@@ -109,40 +119,74 @@ else
             </section>
 
             <section class="panel">
-                <div class="panel-header compact"><div><h2>Symbols</h2><p>Edit context or remove inactive ideas.</p></div></div>
+                <div class="panel-header compact">
+                    <div>
+                        <h2>Symbols</h2>
+                        <p>Select rows to act on many at once, or edit context inline.</p>
+                    </div>
+                </div>
                 @if (Model.ActiveItems.Count == 0)
                 {
                     <div class="empty-state"><strong>No active symbols.</strong><span>Add one above or import a Finviz screen.</span></div>
                 }
                 else
                 {
-                    <div class="table-scroll" role="region" aria-label="Wishlist symbol management" tabindex="0">
-                        <table class="management-table">
-                            <thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Notes</th><th scope="col">Actions</th></tr></thead>
-                            <tbody>
-                            @foreach (var item in Model.ActiveItems)
-                            {
-                                var formId = $"edit_{item.Id:N}";
-                                <tr>
-                                    <td><strong>@item.Ticker</strong><input form="@formId" type="hidden" name="Ticker" value="@item.Ticker" /></td>
-                                    <td><input form="@formId" name="DisplayName" value="@item.DisplayName" aria-label="@item.Ticker display name" /></td>
-                                    <td><input form="@formId" name="Notes" value="@item.Notes" aria-label="@item.Ticker notes" /></td>
-                                    <td class="management-actions">
-                                        <form id="@formId" method="post" asp-page-handler="AddTicker">
-                                            <input type="hidden" name="TargetWishlistId" value="@selected.Id" />
-                                            <button class="secondary compact-command" type="submit">Save</button>
-                                        </form>
-                                        <form method="post" asp-page-handler="RemoveTicker">
-                                            <input type="hidden" name="WishlistId" value="@selected.Id" />
-                                            <input type="hidden" name="Ticker" value="@item.Ticker" />
-                                            <button class="danger compact-command" type="submit" data-confirm="Remove @item.Ticker from this wishlist?">Remove</button>
-                                        </form>
-                                    </td>
-                                </tr>
-                            }
-                            </tbody>
-                        </table>
-                    </div>
+                    @* One form for the whole table. The previous markup rendered a form
+                       and a button per row, which made bulk work impossible and produced
+                       57 controls on a 28-symbol group. *@
+                    <form method="post" asp-page-handler="RemoveTickers" data-bulk-form>
+                        <input type="hidden" name="WishlistId" value="@selected.Id" />
+                        <div class="bulk-action-bar" data-bulk-bar hidden>
+                            <strong><span data-bulk-count>0</span> selected</strong>
+                            <button class="danger compact-command" type="submit"
+                                    data-confirm="Remove the selected symbols from this wishlist?">Remove selected</button>
+                            <button class="secondary compact-command" type="button" data-bulk-clear>Clear selection</button>
+                        </div>
+                        <div class="table-scroll" role="region" aria-label="Wishlist symbol management" tabindex="0">
+                            <table class="management-table">
+                                <thead>
+                                    <tr>
+                                        <th scope="col" class="select-column">
+                                            <input type="checkbox" data-bulk-toggle-all aria-label="Select all symbols" />
+                                        </th>
+                                        <th scope="col">Ticker</th>
+                                        <th scope="col">Name</th>
+                                        <th scope="col">Notes</th>
+                                        <th scope="col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                @foreach (var item in Model.ActiveItems)
+                                {
+                                    var formId = $"edit_{item.Id:N}";
+                                    <tr>
+                                        <td class="select-column">
+                                            <input type="checkbox" name="Tickers" value="@item.Ticker"
+                                                   data-bulk-item aria-label="Select @item.Ticker" />
+                                        </td>
+                                        <td>
+                                            <strong>@item.Ticker</strong>
+                                            <input form="@formId" type="hidden" name="Ticker" value="@item.Ticker" />
+                                        </td>
+                                        <td><input form="@formId" name="DisplayName" value="@item.DisplayName" aria-label="@item.Ticker display name" /></td>
+                                        <td><input form="@formId" name="Notes" value="@item.Notes" aria-label="@item.Ticker notes" /></td>
+                                        <td class="management-actions">
+                                            <button class="secondary compact-command" form="@formId" type="submit">Save</button>
+                                        </td>
+                                    </tr>
+                                }
+                                </tbody>
+                            </table>
+                        </div>
+                    </form>
+
+                    @* Row edit posts live outside the bulk form: HTML forbids nesting. *@
+                    @foreach (var item in Model.ActiveItems)
+                    {
+                        <form id="edit_@item.Id.ToString("N")" method="post" asp-page-handler="AddTicker" hidden>
+                            <input type="hidden" name="TargetWishlistId" value="@selected.Id" />
+                        </form>
+                    }
                 }
             </section>
         </div>

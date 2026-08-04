@@ -54,7 +54,7 @@ else
                     <strong id="backtestProgressText">@Model.Job.CompletedTickerCount / @Model.Job.TotalTickerCount work items</strong>
                 </div>
                 <div id="backtestProgressTrack" class="progress-track backtest-main-progress" role="progressbar" aria-label="Backtest progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@progressPct.ToString("0", CultureInfo.InvariantCulture)">
-                    <div id="backtestProgressBar" class="progress-bar" style="width:@progressPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
+                    <div id="backtestProgressBar" class="progress-bar progress-fill" style="--progress:@progressPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
                 </div>
                 <div class="backtest-time-grid">
                     <div><span>Started</span><strong id="backtestStarted">@(Model.Job.StartedAt is null ? "-" : TradingFlow.Web.Services.UiDisplayFormatter.FormatLocalTime(Model.Job.StartedAt.Value))</strong></div>
@@ -86,7 +86,7 @@ else
                             <strong>@group.CompletedTickerCount / @group.TotalTickerCount</strong>
                         </div>
                         <div class="progress-track">
-                            <div class="progress-bar" style="width:@groupPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
+                            <div class="progress-bar progress-fill" style="--progress:@groupPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
                         </div>
                         @if (group.RecentEvents.Count > 0)
                         {
@@ -166,8 +166,8 @@ else
                     <strong>@winPct.ToString("0.0")% win rate</strong>
                 </div>
                 <div class="outcome-bar" aria-label="@result.WinningTradeCount wins and @result.LosingTradeCount losses">
-                    <span class="wins" style="width:@winPct.ToString("0.##", CultureInfo.InvariantCulture)%"></span>
-                    <span class="losses" style="width:@lossPct.ToString("0.##", CultureInfo.InvariantCulture)%"></span>
+                    <span class="wins progress-fill" style="--progress:@winPct.ToString("0.##", CultureInfo.InvariantCulture)%"></span>
+                    <span class="losses progress-fill" style="--progress:@lossPct.ToString("0.##", CultureInfo.InvariantCulture)%"></span>
                 </div>
                 <div class="outcome-legend">
                     <span><i class="good-dot"></i>@result.WinningTradeCount wins</span>
@@ -188,7 +188,7 @@ else
                         <div class="strategy-return-row">
                             <div><strong>@strategy.StrategyName</strong><span class="@(strategy.TotalReturnPct >= 0 ? "good" : "bad")">@strategy.TotalReturnPct.ToString("+0.##;-0.##;0")%</span></div>
                             <div class="strategy-return-track">
-                                <span class="@(strategy.TotalReturnPct >= 0 ? "positive" : "negative")" style="width:@magnitude.ToString("0.##", CultureInfo.InvariantCulture)%"></span>
+                                <span class="progress-fill @(strategy.TotalReturnPct >= 0 ? "positive" : "negative")" style="--progress:@magnitude.ToString("0.##", CultureInfo.InvariantCulture)%"></span>
                             </div>
                         </div>
                     }
@@ -196,7 +196,7 @@ else
             </section>
         </div>
 
-        <section class="panel" style="margin-top:16px">
+        <section class="panel mt-md">
             <h2>Ticker Results</h2>
             <div class="table-scroll" tabindex="0" aria-label="Ticker backtest results">
             <table class="data-table">
@@ -217,7 +217,7 @@ else
             </div>
         </section>
 
-        <section class="panel" style="margin-top:16px">
+        <section class="panel mt-md">
             <h2>Strategy Results</h2>
             <div class="table-scroll" tabindex="0" aria-label="Strategy backtest results">
             <table class="data-table">
@@ -241,7 +241,7 @@ else
             </div>
         </section>
 
-        <section class="panel" style="margin-top:16px">
+        <section class="panel mt-md">
             <h2>Analyzer</h2>
             <div class="table-scroll" tabindex="0" aria-label="Backtest analyzer">
             <table class="data-table">
@@ -300,7 +300,7 @@ else
             </div>
         </section>
 
-        <section class="panel" style="margin-top:16px">
+        <section class="panel mt-md">
             <h2>Recent Trades</h2>
             <div class="table-scroll" tabindex="0" aria-label="Recent backtest trades">
             <table class="data-table">
@@ -384,7 +384,7 @@ else
                                 <strong>${group.completedTickerCount} / ${group.totalTickerCount}</strong>
                             </div>
                             <div class="progress-track">
-                                <div class="progress-bar" style="width:${Number(group.progressPercent ?? 0)}%"></div>
+                                <div class="progress-bar progress-fill" style="--progress:${Number(group.progressPercent ?? 0)}%"></div>
                             </div>
                             ${events ? `<ul class="event-log compact">${events}</ul>` : ''}
                         </article>`;

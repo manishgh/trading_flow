@@ -9,7 +9,18 @@
     const emptyTemplate = document.getElementById("earnings-empty-template");
     const sessionFilters = document.getElementById("earnings-session-filters");
     const capFilters = document.getElementById("earnings-cap-filters");
-    const activeFilters = { session: "all", marketCap: "all" };
+    const assessmentFilters = document.getElementById("earnings-assessment-filters");
+    const fromInput = document.getElementById("earnings-from");
+    const toInput = document.getElementById("earnings-to");
+    const rangeClear = document.getElementById("earnings-range-clear");
+    const dateScope = document.getElementById("earnings-date-scope");
+    const hasNewsInput = document.getElementById("earnings-has-news");
+    const minSurpriseInput = document.getElementById("earnings-min-surprise");
+    const sortInput = document.getElementById("earnings-sort");
+    const activeFilters = { session: "all", marketCap: "all", dateScope: "both" };
+    // Session and market cap are filtered server-side. The rest are applied here
+    // because the payload is already fully materialised for the chosen date range.
+    const clientFilters = { assessment: "all", hasNews: false, minSurprise: null, sort: "time" };
     let loading = false;
 
     function text(tag, value, className) {
@@ -141,13 +152,15 @@
         schedule.append(text("span", `${item.scheduledNewYorkText} | ${item.scheduledUtcText}`, "muted"));
         if (item.isScheduleEstimate) schedule.append(text("span", "Release time is estimated", "warn"));
 
-        const moveClass = item.eventReturnPercent > 0 ? "good" : item.eventReturnPercent < 0 ? "bad" : "";
+        const reactionClass = item.providerOneDayPriceReactionPercent > 0 ? "good" : item.providerOneDayPriceReactionPercent < 0 ? "bad" : "";
+        const evidenceMoveClass = item.eventReturnPercent > 0 ? "good" : item.eventReturnPercent < 0 ? "bad" : "";
         const metrics = document.createElement("div");
         metrics.className = "earnings-event-metrics";
         metrics.append(
             metric("Pre-release", formatPrice(item.preReleaseReferenceClose)),
             metric("Latest", formatPrice(item.latestClose)),
-            metric("Move", formatPercent(item.eventReturnPercent), moveClass),
+            metric("Provider 1D reaction", formatPercent(item.providerOneDayPriceReactionPercent), reactionClass),
+            metric("Since evidence", formatPercent(item.eventReturnPercent), evidenceMoveClass),
             metric("Slot RVOL", item.slotRelativeVolume == null ? "-" : `${formatNumber(item.slotRelativeVolume)}x`)
         );
 
@@ -176,6 +189,7 @@
         const body = document.createElement("div");
         body.className = "earnings-event-detail-body";
         body.append(text("p", item.analysisReason));
+        body.append(text("p", `Result values: ${item.resultDataSource || item.provider}`, "muted"));
         body.append(text("p", `EMA10/20 ${formatNumber(item.ema10)}/${formatNumber(item.ema20)} | MACD histogram ${formatNumber(item.macdHistogram, 4)}`, "muted"));
         if (item.latestCompletedBarAtUtc) {
             body.append(text("p", `Latest completed 5m bar: ${localDateTime(item.latestCompletedBarAtUtc, true)} (${item.latestMarketSession || "session unknown"})`, "muted"));
@@ -268,6 +282,48 @@
         });
     }
 
+    function assessmentOf(item) {
+        return String(item.resultAssessment || "").toLowerCase();
+    }
+
+    function applyClientFilters(items) {
+        let result = items.filter(item => {
+            if (clientFilters.assessment !== "all") {
+                const assessment = assessmentOf(item);
+                const matches = clientFilters.assessment === "pending"
+                    ? assessment === "" || assessment === "pending" || assessment === "awaiting"
+                    : assessment.includes(clientFilters.assessment);
+                if (!matches) return false;
+            }
+            if (clientFilters.hasNews && !item.newsHeadline) return false;
+            if (clientFilters.minSurprise !== null) {
+                const surprise = item.epsSurprisePercent;
+                if (surprise === null || surprise === undefined) return false;
+                if (Math.abs(Number(surprise)) < clientFilters.minSurprise) return false;
+            }
+            return true;
+        });
+
+        // Descending for magnitude-style sorts; ascending for the schedule, which
+        // reads as a timeline.
+        const numeric = key => item => {
+            const value = item[key];
+            return value === null || value === undefined ? Number.NEGATIVE_INFINITY : Number(value);
+        };
+        const bySurprise = item => {
+            const value = item.epsSurprisePercent;
+            return value === null || value === undefined ? Number.NEGATIVE_INFINITY : Math.abs(Number(value));
+        };
+        switch (clientFilters.sort) {
+            case "cap": result = [...result].sort((a, b) => numeric("marketCapMillions")(b) - numeric("marketCapMillions")(a)); break;
+            case "surprise": result = [...result].sort((a, b) => bySurprise(b) - bySurprise(a)); break;
+            case "move": result = [...result].sort((a, b) => numeric("eventReturnPercent")(b) - numeric("eventReturnPercent")(a)); break;
+            case "rvol": result = [...result].sort((a, b) => numeric("slotRelativeVolume")(b) - numeric("slotRelativeVolume")(a)); break;
+            default: result = [...result].sort((a, b) => new Date(a.scheduledAtUtc) - new Date(b.scheduledAtUtc));
+        }
+        return result;
+    }
+
     function updateFilterControls(container, options, activeValue) {
         const byValue = new Map((options || []).map(option => [option.value, option]));
         container.querySelectorAll("button[data-filter-value]").forEach(button => {
@@ -312,9 +368,19 @@
 
             const query = new URLSearchParams({
                 session: activeFilters.session,
-                marketCap: activeFilters.marketCap
+                marketCap: activeFilters.marketCap,
+                scope: activeFilters.dateScope
             });
-            const response = await fetch(`/api/earnings/today-next-business-day?${query}`, {
+            // The API has always accepted an explicit range; it simply had no control.
+            const from = fromInput?.value;
+            const to = toInput?.value;
+            const useRange = Boolean(from && to && from <= to);
+            if (useRange) {
+                query.set("from", from);
+                query.set("to", to);
+            }
+            const endpoint = useRange ? "calendar" : "today-next-business-day";
+            const response = await fetch(`/api/earnings/${endpoint}?${query}`, {
                 headers: { Accept: "application/json" },
                 cache: "no-store"
             });
@@ -324,15 +390,19 @@
             activeFilters.marketCap = payload.filters?.marketCap || activeFilters.marketCap;
             updateFilterControls(sessionFilters, payload.filters?.sessions, activeFilters.session);
             updateFilterControls(capFilters, payload.filters?.marketCaps, activeFilters.marketCap);
-            renderEvents(payload.items || [], payload);
+            const filteredItems = applyClientFilters(payload.items || []);
+            renderEvents(filteredItems, payload);
             renderNews(payload.news || []);
             newsWindow.textContent = `${payload.newsWindowLabel}. Times display in your device timezone; stored timestamps remain UTC.`;
             const cadence = payload.monitoringIntervalSeconds >= 60 && payload.monitoringIntervalSeconds % 60 === 0
                 ? `${payload.monitoringIntervalSeconds / 60} min`
                 : `${payload.monitoringIntervalSeconds} sec`;
+            const shown = filteredItems.length;
+            const total = (payload.items || []).length;
+            const scope = shown === total ? `${total} events` : `${shown} of ${total} events`;
             status.textContent = payload.monitoringActive
-                ? `${payload.items.length} events | monitoring every ${cadence}`
-                : `${payload.items.length} events | monitor offline`;
+                ? `${scope} | monitoring every ${cadence}`
+                : `${scope} | monitor offline`;
             updated.textContent = `Updated ${localDateTime(payload.generatedAtUtc, true)}`;
         } catch (error) {
             status.textContent = error instanceof Error ? error.message : "Unable to load earnings data.";
@@ -344,6 +414,60 @@
     }
 
     refreshButton.addEventListener("click", () => loadCalendar(true));
+    if (assessmentFilters) {
+        assessmentFilters.addEventListener("click", event => {
+            const button = event.target.closest("button[data-assessment-value]");
+            if (!button || clientFilters.assessment === button.dataset.assessmentValue) return;
+            clientFilters.assessment = button.dataset.assessmentValue;
+            assessmentFilters.querySelectorAll("button[data-assessment-value]").forEach(other => {
+                const selected = other === button;
+                other.classList.toggle("active", selected);
+                other.setAttribute("aria-pressed", String(selected));
+            });
+            loadCalendar(false);
+        });
+    }
+    hasNewsInput?.addEventListener("change", () => {
+        clientFilters.hasNews = hasNewsInput.checked;
+        loadCalendar(false);
+    });
+    minSurpriseInput?.addEventListener("change", () => {
+        const value = Number(minSurpriseInput.value);
+        clientFilters.minSurprise = minSurpriseInput.value === "" || Number.isNaN(value) ? null : value;
+        loadCalendar(false);
+    });
+    sortInput?.addEventListener("change", () => {
+        clientFilters.sort = sortInput.value;
+        loadCalendar(false);
+    });
+    fromInput?.addEventListener("change", () => loadCalendar(false));
+    toInput?.addEventListener("change", () => loadCalendar(false));
+    rangeClear?.addEventListener("click", () => {
+        if (fromInput) fromInput.value = "";
+        if (toInput) toInput.value = "";
+        activeFilters.dateScope = "both";
+        dateScope?.querySelectorAll("button[data-scope-value]").forEach(button => {
+            const selected = button.dataset.scopeValue === "both";
+            button.classList.toggle("active", selected);
+            button.setAttribute("aria-pressed", String(selected));
+        });
+        loadCalendar(false);
+    });
+
+    dateScope?.addEventListener("click", event => {
+        const button = event.target.closest("button[data-scope-value]");
+        if (!button) return;
+        activeFilters.dateScope = button.dataset.scopeValue;
+        if (fromInput) fromInput.value = "";
+        if (toInput) toInput.value = "";
+        dateScope.querySelectorAll("button[data-scope-value]").forEach(other => {
+            const selected = other === button;
+            other.classList.toggle("active", selected);
+            other.setAttribute("aria-pressed", String(selected));
+        });
+        loadCalendar(false);
+    });
+
     bindFilterGroup(sessionFilters, "session");
     bindFilterGroup(capFilters, "marketCap");
     loadCalendar();

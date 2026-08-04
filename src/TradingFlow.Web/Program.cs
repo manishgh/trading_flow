@@ -115,6 +115,7 @@ builder.Services.AddSingleton<WishlistUniverseResolver>();
 builder.Services.AddSingleton<WishlistBreakoutEvaluator>();
 builder.Services.AddSingleton<WishlistMarketMonitor>();
 builder.Services.AddSingleton<WishlistDeskService>();
+builder.Services.AddSingleton<TradingEnvironmentService>();
 builder.Services.AddSingleton<OperationalStatusService>();
 builder.Services.AddSingleton<IEarningsRepository, SqliteEarningsRepository>();
 builder.Services.AddSingleton(EarningsMonitorOptions.Default);
@@ -158,6 +159,31 @@ builder.Services.AddHttpClient<MarketPredictorHttpClient>(client =>
     }
     client.Timeout = Timeout.InfiniteTimeSpan;
 });
+builder.Services.AddTransient<TradingFlow.Web.Services.Wishlists.ScreenerVerificationService>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Wishlists.StockPulseReceiverService>();
+
+builder.Services.AddSingleton<TradingFlow.Engine.Execution.IBrokerClient>(serviceProvider =>
+{
+    var credentials = serviceProvider.GetRequiredService<TradingFlow.Web.Services.AlpacaCredentialProvider>();
+    var rawArchiveWriter = serviceProvider.GetRequiredService<TradingFlow.Engine.Storage.IRawArchiveWriter>();
+    var alpacaOptions = TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+    {
+        KeyId = credentials.KeyId,
+        SecretKey = credentials.SecretKey
+    };
+    return new TradingFlow.Alpaca.AlpacaBrokerClient(
+        new HttpClient(),
+        new HttpClient(),
+        alpacaOptions,
+        rawArchiveWriter);
+});
+
+builder.Services.AddTransient<TradingFlow.Web.Services.Workflows.SwingDailyJob>();
+builder.Services.AddTransient<TradingFlow.Web.Services.Workflows.IntradayPremarketJob>();
+builder.Services.AddTransient<TradingFlow.Data.Catalysts.CatalystStreamer>();
+builder.Services.AddHostedService<TradingFlow.Web.Services.Workflows.IntradayCatalystExecutionService>();
+builder.Services.AddHostedService<TradingFlow.Web.Services.Workflows.PortfolioAdvisorService>();
+builder.Services.AddHostedService<TradingFlow.Web.Services.Workflows.SectorNewsWatcherService>();
 builder.Services.AddTransient<SymbolIntelligenceService>();
 builder.Services.AddSingleton<WishlistObserverService>();
 if (!uiTestMode)

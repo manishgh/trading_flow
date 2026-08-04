@@ -1,4 +1,5 @@
 using TradingFlow.Mobile.Services;
+using TradingFlow.Mobile.Resources.Styles;
 
 namespace TradingFlow.Mobile.Pages;
 
@@ -134,8 +135,8 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
 
     private void UpdateModeButtons()
     {
-        var active = Color.FromArgb("#176B87");
-        var inactive = Color.FromArgb("#667085");
+        var active = ThemePalette.Accent;
+        var inactive = ThemePalette.TextSecondary;
         UnifiedButton.BackgroundColor = mode == "unified" ? active : inactive;
         SwingButton.BackgroundColor = mode == "swing" ? active : inactive;
         IntradayButton.BackgroundColor = mode == "intraday" ? active : inactive;

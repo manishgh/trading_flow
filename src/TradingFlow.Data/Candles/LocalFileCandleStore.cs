@@ -321,19 +321,25 @@ public sealed class LocalFileCandleStore : ICandleStore
 
     private static void ReplaceOrMove(string temporaryPath, string destinationPath)
     {
-        if (File.Exists(destinationPath))
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            File.Replace(temporaryPath, destinationPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
-            return;
-        }
-
-        try
-        {
-            File.Move(temporaryPath, destinationPath, overwrite: false);
-        }
-        catch (IOException) when (File.Exists(destinationPath))
-        {
-            File.Replace(temporaryPath, destinationPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            try
+            {
+                if (File.Exists(destinationPath))
+                {
+                    File.Replace(temporaryPath, destinationPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(temporaryPath, destinationPath, overwrite: false);
+                }
+                return;
+            }
+            catch (IOException)
+            {
+                if (attempt == 2) throw;
+                Thread.Sleep(50);
+            }
         }
     }
 

@@ -17,7 +17,7 @@
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
                         <Label Text="Run Setup" FontAttributes="Bold" FontSize="18" />
-                        <Label Text="Pick a wishlist, choose a strategy, then run. The wishlist is the backtest universe." FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="Pick a wishlist, choose a strategy, then run. The wishlist is the backtest universe." FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                         <Label Text="Wishlist" FontAttributes="Bold" FontSize="12" />
                         <Picker x:Name="WishlistPicker" Title="Wishlist" SelectedIndexChanged="OnWishlistPicked" />
                         <Label Text="Backtest profile" FontAttributes="Bold" FontSize="12" />
@@ -25,7 +25,7 @@
                         <Label Text="Strategy" FontAttributes="Bold" FontSize="12" />
                         <Picker x:Name="StrategyPicker" Title="Strategy" SelectedIndexChanged="OnFormChanged" />
 
-                        <Button x:Name="AdvancedToggle" Text="Show advanced parameters" Clicked="OnToggleAdvanced" Padding="12,8" BackgroundColor="#475467" />
+                        <Button x:Name="AdvancedToggle" Text="Show advanced parameters" Clicked="OnToggleAdvanced" Padding="12,8" BackgroundColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                         <VerticalStackLayout x:Name="AdvancedPanel" Spacing="10" IsVisible="False">
                             <HorizontalStackLayout Spacing="8">
                                 <CheckBox x:Name="RunAllStrategiesCheck" Scale="0.78" CheckedChanged="OnFormChanged" />
@@ -73,7 +73,7 @@
 
                 <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected" HeightRequest="340">
                     <CollectionView.EmptyView>
-                        <Label Text="No backtests yet." FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                        <Label Text="No backtests yet." FontSize="13" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                     </CollectionView.EmptyView>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
@@ -81,11 +81,11 @@
                                 <VerticalStackLayout Spacing="6">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <Label Text="{Binding RunName}" FontAttributes="Bold" FontSize="16" LineBreakMode="TailTruncation" />
-                                        <Label Grid.Column="1" Text="{Binding Status}" FontSize="12" TextColor="{StaticResource AccentColor}" />
+                                        <Label Grid.Column="1" Text="{Binding Status}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
                                     </Grid>
                                     <Label Text="{Binding ProgressText}" FontSize="13" />
-                                    <Label Text="{Binding ResultSummary}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
-                                    <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="TailTruncation" />
+                                    <Label Text="{Binding ResultSummary}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
+                                    <Label Text="{Binding LatestEvent}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="TailTruncation" />
                                 </VerticalStackLayout>
                             </Border>
                         </DataTemplate>
@@ -98,7 +98,7 @@
                         <Label x:Name="DetailStatus" FontSize="13" />
                         <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
                             <Button Text="Refresh Detail" Clicked="OnRefreshClicked" />
-                            <Button Grid.Column="1" Text="Cancel Backtest" Clicked="OnCancelSelectedJob" BackgroundColor="#B42318" />
+                            <Button Grid.Column="1" Text="Cancel Backtest" Clicked="OnCancelSelectedJob" BackgroundColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" />
                         </Grid>
                         <Label x:Name="ResultLabel" FontSize="13" />
                         <Label Text="Strategy Groups" FontAttributes="Bold" FontSize="14" />

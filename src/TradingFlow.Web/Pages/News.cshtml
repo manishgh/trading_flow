@@ -1,0 +1,123 @@
+@page
+@model TradingFlow.Web.Pages.NewsModel
+@{
+    ViewData["Title"] = "News";
+}
+
+<header class="page-header compact-page-header">
+    <div>
+        <h1>News</h1>
+        <p>Catalyst timeline across every tracked symbol, filtered by window, scope, source, and tone.</p>
+    </div>
+    <div class="actions">
+        <a class="button secondary" asp-page="/TradeDesk">Open Desk</a>
+    </div>
+</header>
+
+<section class="panel">
+    <form method="get" class="news-filter-bar">
+        <div>
+            <label for="Hours">Window</label>
+            <select id="Hours" name="hours">
+                @foreach (var (hours, label) in TradingFlow.Web.Pages.NewsModel.Windows)
+                {
+                    <option value="@hours" selected="@(Model.Hours == hours)">@label</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="GroupId">Group</label>
+            <select id="GroupId" name="groupId">
+                <option value="">All symbols</option>
+                @foreach (var group in Model.Groups)
+                {
+                    <option value="@group.Id" selected="@(Model.GroupId == group.Id)">@group.Name</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="Ticker">Ticker</label>
+            <input id="Ticker" name="ticker" value="@Model.Ticker" placeholder="NVDA" autocomplete="off" />
+        </div>
+        <div>
+            <label for="Provider">Source</label>
+            <select id="Provider" name="provider">
+                <option value="">All sources</option>
+                @foreach (var provider in Model.Providers)
+                {
+                    <option value="@provider" selected="@(String.Equals(Model.Provider, provider, StringComparison.OrdinalIgnoreCase))">@provider</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="Sentiment">Tone</label>
+            <select id="Sentiment" name="sentiment">
+                @foreach (var (key, label) in TradingFlow.Web.Pages.NewsModel.SentimentBands)
+                {
+                    <option value="@key" selected="@(String.Equals(Model.Sentiment, key, StringComparison.OrdinalIgnoreCase))">@label</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="Search">Search</label>
+            <input id="Search" name="search" type="search" value="@Model.Search" placeholder="Keyword" autocomplete="off" />
+        </div>
+        <label class="checkbox-field">
+            <input type="checkbox" name="linkedOnly" value="true" checked="@Model.LinkedOnly" />
+            Only stories with an article link
+        </label>
+        <div class="news-filter-actions">
+            <button type="submit">Apply</button>
+            <a class="button secondary" asp-page="/News">Clear</a>
+        </div>
+    </form>
+</section>
+
+<section class="panel" aria-labelledby="news-results-heading">
+    <div class="section-heading compact-heading">
+        <div>
+            <h2 id="news-results-heading">Timeline</h2>
+            <p>@Model.FeedDescription</p>
+        </div>
+        <span class="count-label">@Model.Items.Count of @Model.TotalBeforeFilters</span>
+    </div>
+
+    @if (Model.Items.Count == 0)
+    {
+        <div class="empty-state">
+            <strong>No stories match these filters.</strong>
+            <span>Widen the window or clear a filter.</span>
+        </div>
+    }
+    else
+    {
+        <div class="news-timeline">
+            @foreach (var item in Model.Items)
+            {
+                var hasSafeUrl = Uri.TryCreate(item.Url, UriKind.Absolute, out var articleUri) &&
+                    (articleUri.Scheme == Uri.UriSchemeHttp || articleUri.Scheme == Uri.UriSchemeHttps);
+                <article class="news-entry" data-news-item>
+                    <div class="news-timeline-meta">
+                        <strong>@item.Ticker</strong>
+                        <time datetime="@item.Timestamp.ToString("O")">@item.Timestamp.ToString("dd MMM HH:mm") UTC</time>
+                        <span class="@TradingFlow.Web.Pages.NewsModel.SentimentClass(item.SentimentScore)">
+                            @TradingFlow.Web.Pages.NewsModel.SentimentLabel(item.SentimentScore)
+                        </span>
+                    </div>
+                    <strong class="news-headline">@item.Headline</strong>
+                    @if (!String.IsNullOrWhiteSpace(item.Summary))
+                    {
+                        <p>@item.Summary</p>
+                    }
+                    <div class="news-entry-footer">
+                        <span class="muted">@item.Provider @item.Source</span>
+                        @if (hasSafeUrl)
+                        {
+                            <a href="@item.Url" target="_blank" rel="noopener noreferrer">Open article</a>
+                        }
+                    </div>
+                </article>
+            }
+        </div>
+    }
+</section>

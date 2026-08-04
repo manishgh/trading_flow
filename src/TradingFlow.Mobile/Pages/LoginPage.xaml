@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TradingFlow.Mobile.Pages.LoginPage"
+             Title="Sign in">
+    <ScrollView>
+        <VerticalStackLayout Padding="18" Spacing="14" MaximumWidthRequest="520">
+            <Label Text="TradingFlow access" Style="{StaticResource Headline}" />
+            <Label Text="Sign in to use trading, research, wishlists, and operations. Earnings remains public."
+                   Style="{StaticResource SubHeadline}" />
+
+            <Border Style="{StaticResource CardBorder}" Padding="16">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="Username" />
+                    <Entry x:Name="UserNameEntry"
+                           Placeholder="Username"
+                           ReturnType="Next" />
+                    <Label Text="Password" />
+                    <Entry x:Name="PasswordEntry"
+                           Placeholder="Password"
+                           IsPassword="True"
+                           ReturnType="Done" />
+                    <HorizontalStackLayout Spacing="8">
+                        <CheckBox x:Name="RememberMeCheckBox" />
+                        <Label Text="Keep me signed in for this app session" VerticalTextAlignment="Center" />
+                    </HorizontalStackLayout>
+                    <Label x:Name="StatusLabel" Style="{StaticResource SubHeadline}" />
+                    <Button Text="Sign in" Clicked="OnSignInClicked" />
+                </VerticalStackLayout>
+            </Border>
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

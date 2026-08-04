@@ -82,6 +82,7 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
             ReviewSection.IsVisible = false;
             ConfirmationSection.IsVisible = true;
             ConfirmationLabel.Text = $"{confirmation.Quantity:0.####} {confirmation.Ticker} at limit {confirmation.LimitPrice:C2}\nOrder {confirmation.OrderId}";
+            await AppServices.Haptics.SignalAsync(HapticSignal.OrderAccepted);
         });
     }
 
@@ -106,6 +107,11 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
         RejectionsLabel.IsVisible = preview.Rejections.Count > 0;
         ConfirmButton.IsVisible = preview.CanSubmit;
         ConfirmButton.IsEnabled = preview.CanSubmit;
+
+        // The pulse marks the transition into a state where a real order can be
+        // sent, so the operator feels the gate open without watching the screen.
+        _ = AppServices.Haptics.SignalAsync(
+            preview.CanSubmit ? HapticSignal.ReviewReady : HapticSignal.OrderRejected);
     }
 
     private async Task RunAsync(Func<Task> action)

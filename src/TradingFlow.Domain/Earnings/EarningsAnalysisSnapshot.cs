@@ -18,6 +18,13 @@ public sealed class EarningsAnalysisSnapshot
     public string? NewsUrl { get; set; }
     public string? NewsProvider { get; set; }
     public decimal? NewsSentiment { get; set; }
+    public string? ResultDataSource { get; set; }
+    public decimal? EffectiveEpsEstimate { get; set; }
+    public decimal? EffectiveEpsActual { get; set; }
+    public decimal? EffectiveEpsSurprisePercent { get; set; }
+    public decimal? EffectiveRevenueEstimateMillions { get; set; }
+    public decimal? EffectiveRevenueActualMillions { get; set; }
+    public decimal? EffectiveRevenueSurprisePercent { get; set; }
     public DateTimeOffset? LatestCompletedBarAtUtc { get; set; }
     public decimal? PreReleaseReferenceHigh { get; set; }
     public decimal? PreReleaseReferenceClose { get; set; }

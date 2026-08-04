@@ -48,11 +48,11 @@
                         <VerticalStackLayout Spacing="1">
                             <Label x:Name="WishlistDetailLabel"
                                    FontSize="13"
-                                   TextColor="{StaticResource TextSecondary}"
+                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                    LineBreakMode="WordWrap" />
                             <Label x:Name="StockCountLabel"
                                    FontSize="12"
-                                   TextColor="{StaticResource TextSecondary}" />
+                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                         </VerticalStackLayout>
                         <Button x:Name="ObserveButton"
                                 Grid.Column="1"
@@ -79,9 +79,48 @@
                             SelectedIndexChanged="OnSuggestionSelected"
                             SemanticProperties.Description="Matching known ticker symbols" />
 
-                    <Label Text="Markets"
-                           FontAttributes="Bold"
-                           FontSize="18" />
+                    <SearchBar x:Name="WatchSearchBar"
+                               Placeholder="Filter by ticker or name"
+                               TextChanged="OnWatchFilterChanged"
+                               SemanticProperties.Description="Filter the watched markets" />
+
+                    <ScrollView Orientation="Horizontal"
+                                HorizontalScrollBarVisibility="Never">
+                        <HorizontalStackLayout Spacing="8">
+                            <Button x:Name="WatchAllButton"
+                                    Text="All"
+                                    Clicked="OnWatchScopeSelected"
+                                    CommandParameter="all"
+                                    SemanticProperties.Description="Show all watched markets" />
+                            <Button x:Name="WatchSignalButton"
+                                    Text="Signals"
+                                    Clicked="OnWatchScopeSelected"
+                                    CommandParameter="signal"
+                                    SemanticProperties.Description="Show only markets with an active signal" />
+                            <Button x:Name="WatchTradeButton"
+                                    Text="In trade"
+                                    Clicked="OnWatchScopeSelected"
+                                    CommandParameter="trade"
+                                    SemanticProperties.Description="Show only markets with an open position" />
+                            <Button x:Name="WatchNewsButton"
+                                    Text="News"
+                                    Clicked="OnWatchScopeSelected"
+                                    CommandParameter="news"
+                                    SemanticProperties.Description="Show only markets with related news" />
+                        </HorizontalStackLayout>
+                    </ScrollView>
+
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <Label Text="Markets"
+                               FontAttributes="Bold"
+                               FontSize="18"
+                               VerticalTextAlignment="Center" />
+                        <Label x:Name="WatchCountLabel"
+                               Grid.Column="1"
+                               FontSize="12"
+                               VerticalTextAlignment="Center"
+                               TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
+                    </Grid>
                 </VerticalStackLayout>
             </CollectionView.Header>
 
@@ -93,7 +132,7 @@
                            HorizontalTextAlignment="Center" />
                     <Label Text="Add a ticker above or choose another wishlist."
                            FontSize="13"
-                           TextColor="{StaticResource TextSecondary}"
+                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                            HorizontalTextAlignment="Center" />
                 </VerticalStackLayout>
             </CollectionView.EmptyView>
@@ -111,7 +150,7 @@
                                            FontSize="16" />
                                     <Label Text="{Binding DetailText}"
                                            FontSize="12"
-                                           TextColor="{StaticResource TextSecondary}"
+                                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                            LineBreakMode="TailTruncation"
                                            MaxLines="1" />
                                 </VerticalStackLayout>
@@ -122,7 +161,7 @@
                                            HorizontalTextAlignment="End" />
                                     <Label Text="{Binding BidAskText}"
                                            FontSize="12"
-                                           TextColor="{StaticResource TextSecondary}"
+                                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                            HorizontalTextAlignment="End" />
                                 </VerticalStackLayout>
                             </Grid>
@@ -136,7 +175,7 @@
                                 <Label Grid.Column="1"
                                        Text="{Binding MovementText}"
                                        FontSize="12"
-                                       TextColor="{StaticResource TextSecondary}"
+                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                        HorizontalTextAlignment="End"
                                        IsVisible="{Binding HasMovement}" />
                             </Grid>

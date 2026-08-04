@@ -38,11 +38,31 @@ public sealed class EarningsAnalyzer
     {
         ArgumentNullException.ThrowIfNull(calendarEvent);
         var normalizedNow = nowUtc.ToUniversalTime();
-        var result = AssessResult(calendarEvent);
         var resultNews = FindResultNews(calendarEvent, news, normalizedNow);
+        var resolvedResult = ResolveResult(calendarEvent, resultNews);
+        var result = AssessResult(resolvedResult);
         var effectivePublicationTime = resultNews?.Timestamp ??
             calendarEvent.ResultFirstSeenAtUtc ??
             calendarEvent.ProviderReceivedAtUtc;
+
+        var nyDate = calendarEvent.ReportDateExchange.ToDateTime(TimeOnly.MinValue);
+        if (calendarEvent.ReleaseWindow == EarningsReleaseWindow.AfterMarketClose)
+        {
+            var marketClose = TimeZoneInfo.ConvertTimeToUtc(nyDate.AddHours(16), EarningsTimeZones.NewYork);
+            if (effectivePublicationTime > marketClose)
+            {
+                effectivePublicationTime = marketClose;
+            }
+        }
+        else if (calendarEvent.ReleaseWindow == EarningsReleaseWindow.BeforeMarketOpen)
+        {
+            var premarketOpen = TimeZoneInfo.ConvertTimeToUtc(nyDate.AddHours(4), EarningsTimeZones.NewYork);
+            if (effectivePublicationTime > premarketOpen)
+            {
+                effectivePublicationTime = premarketOpen;
+            }
+        }
+
         var completedBars = bars
             .Where(bar => bar.Ticker.Equals(calendarEvent.Ticker, StringComparison.OrdinalIgnoreCase))
             .Where(bar => bar.Timeframe.Equals("5m", StringComparison.OrdinalIgnoreCase))
@@ -71,6 +91,7 @@ public sealed class EarningsAnalyzer
                 EarningsBreakoutAssessment.AwaitingRelease,
                 "Scheduled earnings have not been released.",
                 resultNews,
+                resolvedResult,
                 latestCompletedBar,
                 availableReferenceHigh,
                 availableReferenceClose);
@@ -85,6 +106,7 @@ public sealed class EarningsAnalyzer
                 EarningsBreakoutAssessment.InsufficientData,
                 $"Only {completedBars.Length} completed 5-minute bars are available; at least 35 are required.",
                 resultNews,
+                resolvedResult,
                 latestCompletedBar,
                 availableReferenceHigh,
                 availableReferenceClose);
@@ -106,6 +128,7 @@ public sealed class EarningsAnalyzer
                 EarningsBreakoutAssessment.InsufficientData,
                 "Completed pre-release and post-release bars are both required.",
                 resultNews,
+                resolvedResult,
                 completedBars[^1],
                 availableReferenceHigh,
                 availableReferenceClose);
@@ -161,6 +184,7 @@ public sealed class EarningsAnalyzer
             assessment,
             $"{resultText}; {String.Join("; ", evidence)}.",
             resultNews,
+            resolvedResult,
             completedBars[^1],
             referenceHigh,
             referenceClose,
@@ -172,10 +196,9 @@ public sealed class EarningsAnalyzer
             latest.SlotRelativeVolume);
     }
 
-    private static EarningsResultAssessment AssessResult(EarningsCalendarEvent calendarEvent)
+    private static EarningsResultAssessment AssessResult(ResolvedEarningsResult result)
     {
-        var epsSurprise = calendarEvent.EpsSurprisePercent ?? calendarEvent.ReportedEpsSurprisePercent;
-        var surprises = new[] { epsSurprise, calendarEvent.RevenueSurprisePercent }
+        var surprises = new[] { result.EpsSurprisePercent, result.RevenueSurprisePercent }
             .Where(value => value.HasValue)
             .Select(value => value!.Value)
             .ToArray();
@@ -203,17 +226,87 @@ public sealed class EarningsAnalyzer
         DateTimeOffset nowUtc)
     {
         var earliest = calendarEvent.ScheduledAtUtc.AddHours(-2);
-        return news
+        var candidates = news
             .Where(item => item.Ticker.Equals(calendarEvent.Ticker, StringComparison.OrdinalIgnoreCase))
             .Where(item => item.Timestamp >= earliest && item.Timestamp <= nowUtc)
             .Where(item => ResultTerms.Any(term =>
-                item.Headline.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-                (item.Summary?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)))
+                item.Headline.Contains(term, StringComparison.OrdinalIgnoreCase)))
+            .Where(item => EarningsNewsResultExtractor.TryExtract(item.Headline, out _) ||
+                HeadlineNamesEvent(calendarEvent, item.Headline))
             .Where(item => !PreviewTerms.Any(term =>
                 item.Headline.Contains(term, StringComparison.OrdinalIgnoreCase) ||
                 (item.Summary?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)))
             .OrderBy(item => item.Timestamp)
-            .FirstOrDefault();
+            .ToArray();
+
+        return candidates.FirstOrDefault(item => EarningsNewsResultExtractor.TryExtract(item.Headline, out _)) ??
+            candidates.FirstOrDefault();
+    }
+
+    private static bool HeadlineNamesEvent(EarningsCalendarEvent calendarEvent, string headline)
+    {
+        var words = headline.Split(
+            [' ', '\t', '\r', '\n', ',', '.', ':', ';', '(', ')', '[', ']', '/', '\\', '-'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (words.Any(word => word.Equals(calendarEvent.Ticker, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        var company = calendarEvent.CompanyName.Trim();
+        string[] suffixes = [" Corporation", " Corp", " Incorporated", " Inc", " Holdings", " Holding", " Limited", " Ltd", " Plc", " Company", " Co"];
+        foreach (var suffix in suffixes)
+        {
+            if (company.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                company = company[..^suffix.Length].TrimEnd('.', ',', ' ');
+                break;
+            }
+        }
+
+        if (company.Length >= 4 && headline.Contains(company, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var firstSignificantWord = company.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault(w => w.Length >= 4 && !w.Equals("The", StringComparison.OrdinalIgnoreCase));
+
+        if (firstSignificantWord != null && headline.Contains(firstSignificantWord, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static ResolvedEarningsResult ResolveResult(
+        EarningsCalendarEvent calendarEvent,
+        PersistedNewsItem? resultNews)
+    {
+        var providerEpsActual = calendarEvent.EpsActual ?? calendarEvent.ReportedEpsActual;
+        var providerRevenueActual = calendarEvent.RevenueActualMillions;
+        var extracted = resultNews is not null &&
+            EarningsNewsResultExtractor.TryExtract(resultNews.Headline, out var newsResult)
+                ? newsResult
+                : EarningsNewsResult.Empty;
+        var useNewsEps = providerEpsActual is null && extracted.EpsActual.HasValue;
+        var useNewsRevenue = providerRevenueActual is null && extracted.RevenueActualMillions.HasValue;
+
+        return new ResolvedEarningsResult(
+            useNewsEps
+                ? extracted.EpsEstimate
+                : calendarEvent.EpsEstimate ?? calendarEvent.ReportedEpsEstimate,
+            useNewsEps ? extracted.EpsActual : providerEpsActual,
+            useNewsEps
+                ? extracted.EpsSurprisePercent
+                : calendarEvent.EpsSurprisePercent ?? calendarEvent.ReportedEpsSurprisePercent,
+            useNewsRevenue ? extracted.RevenueEstimateMillions : calendarEvent.RevenueEstimateMillions,
+            useNewsRevenue ? extracted.RevenueActualMillions : providerRevenueActual,
+            useNewsRevenue ? extracted.RevenueSurprisePercent : calendarEvent.RevenueSurprisePercent,
+            useNewsEps || useNewsRevenue
+                ? $"{resultNews!.Provider} structured headline"
+                : calendarEvent.Provider);
     }
 
     private static EarningsAnalysisSnapshot CreateSnapshot(
@@ -223,6 +316,7 @@ public sealed class EarningsAnalyzer
         EarningsBreakoutAssessment breakout,
         string reason,
         PersistedNewsItem? news,
+        ResolvedEarningsResult resolvedResult,
         OhlcvBar? latestBar,
         decimal? referenceHigh,
         decimal? referenceClose,
@@ -245,6 +339,13 @@ public sealed class EarningsAnalyzer
         NewsUrl = news?.Url,
         NewsProvider = news?.Provider,
         NewsSentiment = news?.SentimentScore,
+        ResultDataSource = resolvedResult.Source,
+        EffectiveEpsEstimate = resolvedResult.EpsEstimate,
+        EffectiveEpsActual = resolvedResult.EpsActual,
+        EffectiveEpsSurprisePercent = resolvedResult.EpsSurprisePercent,
+        EffectiveRevenueEstimateMillions = resolvedResult.RevenueEstimateMillions,
+        EffectiveRevenueActualMillions = resolvedResult.RevenueActualMillions,
+        EffectiveRevenueSurprisePercent = resolvedResult.RevenueSurprisePercent,
         LatestCompletedBarAtUtc = latestBar?.Timestamp,
         PreReleaseReferenceHigh = referenceHigh,
         PreReleaseReferenceClose = referenceClose,
@@ -255,4 +356,13 @@ public sealed class EarningsAnalyzer
         MacdHistogram = macdHistogram,
         SlotRelativeVolume = slotRelativeVolume
     };
+
+    private sealed record ResolvedEarningsResult(
+        decimal? EpsEstimate,
+        decimal? EpsActual,
+        decimal? EpsSurprisePercent,
+        decimal? RevenueEstimateMillions,
+        decimal? RevenueActualMillions,
+        decimal? RevenueSurprisePercent,
+        string Source);
 }

@@ -17,6 +17,204 @@ namespace TradingFlow.Data.Context.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
 
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ConcurrencyStamp")
+                        .IsConcurrencyToken()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedName")
+                        .IsUnique()
+                        .HasDatabaseName("RoleNameIndex");
+
+                    b.ToTable("AspNetRoles", (string)null);
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ClaimType")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClaimValue")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("RoleId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RoleId");
+
+                    b.ToTable("AspNetRoleClaims", (string)null);
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserClaim<System.Guid>", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ClaimType")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClaimValue")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("AspNetUserClaims", (string)null);
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserLogin<System.Guid>", b =>
+                {
+                    b.Property<string>("LoginProvider")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderKey")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderDisplayName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("LoginProvider", "ProviderKey");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("AspNetUserLogins", (string)null);
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserRole<System.Guid>", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("RoleId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("UserId", "RoleId");
+
+                    b.HasIndex("RoleId");
+
+                    b.ToTable("AspNetUserRoles", (string)null);
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserToken<System.Guid>", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LoginProvider")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Value")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("UserId", "LoginProvider", "Name");
+
+                    b.ToTable("AspNetUserTokens", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Data.Identity.TradingFlowUser", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("AccessFailedCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ConcurrencyStamp")
+                        .IsConcurrencyToken()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(160)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("EmailConfirmed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("LockoutEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("LockoutEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedEmail")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedUserName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PasswordHash")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PhoneNumber")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("PhoneNumberConfirmed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SecurityStamp")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("TwoFactorEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("UserName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedEmail")
+                        .HasDatabaseName("EmailIndex");
+
+                    b.HasIndex("NormalizedUserName")
+                        .IsUnique()
+                        .HasDatabaseName("UserNameIndex");
+
+                    b.ToTable("AspNetUsers", (string)null);
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Audit.DecisionAuditRecord", b =>
                 {
                     b.Property<long>("Id")
@@ -81,6 +279,24 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasMaxLength(80)
                         .HasColumnType("TEXT");
 
+                    b.Property<decimal?>("EffectiveEpsActual")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("EffectiveEpsEstimate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("EffectiveEpsSurprisePercent")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("EffectiveRevenueActualMillions")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("EffectiveRevenueEstimateMillions")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("EffectiveRevenueSurprisePercent")
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal?>("Ema10")
                         .HasColumnType("TEXT");
 
@@ -128,6 +344,10 @@ namespace TradingFlow.Data.Context.Migrations
                     b.Property<string>("ResultAssessment")
                         .IsRequired()
                         .HasMaxLength(30)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResultDataSource")
+                        .HasMaxLength(120)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTimeOffset?>("ResultNewsPublishedAtUtc")
@@ -193,9 +413,6 @@ namespace TradingFlow.Data.Context.Migrations
                     b.Property<DateTimeOffset>("ProviderReceivedAtUtc")
                         .HasColumnType("TEXT");
 
-                    b.Property<DateTimeOffset?>("ResultFirstSeenAtUtc")
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("ReleaseWindow")
                         .IsRequired()
                         .HasMaxLength(40)
@@ -211,6 +428,9 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<decimal?>("ReportedEpsSurprisePercent")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ResultFirstSeenAtUtc")
                         .HasColumnType("TEXT");
 
                     b.Property<decimal?>("RevenueActualMillions")
@@ -329,7 +549,7 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("TEXT");
 
-                    b.Property<DateTimeOffset>("IngestedAt")
+                    b.Property<DateTime>("IngestedAt")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Provider")
@@ -352,7 +572,7 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("TEXT");
 
-                    b.Property<DateTimeOffset>("Timestamp")
+                    b.Property<DateTime>("Timestamp")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Url")
@@ -1379,6 +1599,108 @@ namespace TradingFlow.Data.Context.Migrations
                     b.ToTable("risk_events", (string)null);
                 });
 
+            modelBuilder.Entity("TradingFlow.Domain.Portfolio.AdvisoryPortfolio", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("AdvisoryPortfolios", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Portfolio.AdvisoryPosition", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("AcquiredAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("LastMlScore")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LastRecommendation")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("LastScoredAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("PortfolioId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PurchasePrice")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Shares")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Ticker")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PortfolioId");
+
+                    b.HasIndex("Ticker");
+
+                    b.ToTable("AdvisoryPositions", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Wishlists.ScreenerPreset", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("AverageMlScore")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FilterQuery")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsVerified")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("ScreenerPresets");
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Wishlists.Wishlist", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1524,6 +1846,57 @@ namespace TradingFlow.Data.Context.Migrations
                     b.ToTable("WishlistSignals");
                 });
 
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>
+                {
+                    b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", null)
+                        .WithMany()
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserClaim<System.Guid>", b =>
+                {
+                    b.HasOne("TradingFlow.Data.Identity.TradingFlowUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserLogin<System.Guid>", b =>
+                {
+                    b.HasOne("TradingFlow.Data.Identity.TradingFlowUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserRole<System.Guid>", b =>
+                {
+                    b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", null)
+                        .WithMany()
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TradingFlow.Data.Identity.TradingFlowUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserToken<System.Guid>", b =>
+                {
+                    b.HasOne("TradingFlow.Data.Identity.TradingFlowUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Earnings.EarningsAnalysisSnapshot", b =>
                 {
                     b.HasOne("TradingFlow.Domain.Earnings.EarningsCalendarEvent", null)
@@ -1614,6 +1987,17 @@ namespace TradingFlow.Data.Context.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("TradingFlow.Domain.Portfolio.AdvisoryPosition", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.Portfolio.AdvisoryPortfolio", "Portfolio")
+                        .WithMany("Positions")
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Portfolio");
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Wishlists.WishlistItem", b =>
                 {
                     b.HasOne("TradingFlow.Domain.Wishlists.Wishlist", "Wishlist")
@@ -1634,6 +2018,11 @@ namespace TradingFlow.Data.Context.Migrations
                         .IsRequired();
 
                     b.Navigation("Wishlist");
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Portfolio.AdvisoryPortfolio", b =>
+                {
+                    b.Navigation("Positions");
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Wishlists.Wishlist", b =>
