@@ -1,12 +1,24 @@
+/* The earnings monitor.
+
+   Everything rendered here comes from EarningsCalendarResponse. The three
+   attention lanes are derivations over fields the API already returns plus the
+   operator's open positions; nothing on this screen invents a value.
+
+   The monitor runs server-side whether or not the page is open, so Refresh is a
+   read and never a trigger. */
 (() => {
     const refreshButton = document.getElementById("earnings-refresh");
     const status = document.getElementById("earnings-status");
     const updated = document.getElementById("earnings-updated");
+    const nextDay = document.getElementById("earnings-next-day");
+    const countLabel = document.getElementById("earnings-count");
     const feed = document.getElementById("earnings-feed");
     const newsFeed = document.getElementById("earnings-news-feed");
     const newsCount = document.getElementById("earnings-news-count");
-    const newsWindow = document.getElementById("earnings-news-window");
+    const newsCaption = document.getElementById("earnings-news-caption");
+    const newsScopeClear = document.getElementById("earnings-news-scope-clear");
     const emptyTemplate = document.getElementById("earnings-empty-template");
+    const lanesRoot = document.getElementById("earnings-lanes");
     const sessionFilters = document.getElementById("earnings-session-filters");
     const capFilters = document.getElementById("earnings-cap-filters");
     const assessmentFilters = document.getElementById("earnings-assessment-filters");
@@ -14,14 +26,24 @@
     const toInput = document.getElementById("earnings-to");
     const rangeClear = document.getElementById("earnings-range-clear");
     const dateScope = document.getElementById("earnings-date-scope");
-    const hasNewsInput = document.getElementById("earnings-has-news");
+    const onlyHeldToggle = document.getElementById("earnings-only-held");
+    const hasNewsToggle = document.getElementById("earnings-has-news");
     const minSurpriseInput = document.getElementById("earnings-min-surprise");
     const sortInput = document.getElementById("earnings-sort");
-    const activeFilters = { session: "all", marketCap: "all", dateScope: "both" };
-    // Session and market cap are filtered server-side. The rest are applied here
-    // because the payload is already fully materialised for the chosen date range.
-    const clientFilters = { assessment: "all", hasNews: false, minSurprise: null, sort: "time" };
+
+    const held = new Set((lanesRoot?.dataset.heldTickers || "")
+        .split(",").map(value => value.trim().toUpperCase()).filter(Boolean));
+
+    const serverFilters = { session: "all", marketCap: "all", dateScope: "today" };
+    // The rest are applied here because the payload is already fully
+    // materialised for the chosen date range.
+    const clientFilters = { assessment: "all", onlyHeld: false, hasNews: false, minSurprise: null, sort: "time" };
+    let activeLane = null;
+    let newsScopeTicker = null;
+    let latestPayload = null;
     let loading = false;
+
+    /* --- formatting ------------------------------------------------------- */
 
     function text(tag, value, className) {
         const element = document.createElement(tag);
@@ -30,47 +52,44 @@
         return element;
     }
 
-    function formatNumber(value, digits = 2) {
-        if (value === null || value === undefined) return "-";
-        return Number(value).toLocaleString(undefined, {
-            minimumFractionDigits: digits,
-            maximumFractionDigits: digits
-        });
+    function number(value, digits = 2) {
+        if (value === null || value === undefined) return "—";
+        return Number(value).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
     }
 
-    function formatPrice(value) {
-        return value === null || value === undefined ? "-" : `$${formatNumber(value)}`;
+    function price(value) {
+        return value === null || value === undefined ? "—" : `$${number(value)}`;
     }
 
-    function formatMarketCap(value) {
-        if (value === null || value === undefined) return "Cap unavailable";
+    // Direction is glyph, sign and colour together. U+2212 keeps figures aligned
+    // in tabular numerals.
+    function signedPercent(value) {
+        if (value === null || value === undefined) return "—";
+        const amount = Number(value);
+        const sign = amount > 0 ? "+" : amount < 0 ? "−" : "";
+        return `${sign}${number(Math.abs(amount))}%`;
+    }
+
+    function signedClass(value) {
+        if (value === null || value === undefined) return "value-signed flat";
+        const amount = Number(value);
+        return amount > 0 ? "value-signed up" : amount < 0 ? "value-signed down" : "value-signed flat";
+    }
+
+    function marketCap(value) {
+        if (value === null || value === undefined) return "cap unknown";
         const millions = Number(value);
-        return millions >= 1000
-            ? `$${formatNumber(millions / 1000, millions >= 100000 ? 0 : 1)}B cap`
-            : `$${formatNumber(millions, 0)}M cap`;
-    }
-
-    function formatPercent(value) {
-        if (value === null || value === undefined) return "-";
-        const number = Number(value);
-        return `${number > 0 ? "+" : ""}${formatNumber(number)}%`;
+        if (millions >= 1_000_000) return `$${number(millions / 1_000_000)}T cap`;
+        return millions >= 1000 ? `$${number(millions / 1000, 1)}B cap` : `$${number(millions, 0)}M cap`;
     }
 
     function localDateTime(value, includeSeconds = false) {
-        if (!value) return "-";
+        if (!value) return "—";
         return new Date(value).toLocaleString(undefined, {
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
+            weekday: "short", month: "short", day: "numeric",
+            hour: "2-digit", minute: "2-digit",
             ...(includeSeconds ? { second: "2-digit" } : {})
         });
-    }
-
-    function localDateKey(value) {
-        const date = new Date(value);
-        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
     }
 
     function safeLink(url, label, className) {
@@ -88,144 +107,223 @@
         }
     }
 
-    function assessmentClass(item) {
-        if (item.breakoutAssessment === "PossibleBreakout") return "positive";
-        if (item.resultAssessment === "Negative") return "negative";
-        if (item.resultAssessment === "Mixed" || item.breakoutAssessment === "BreakoutNotConfirmed") return "warning";
-        return "neutral";
+    /* --- lanes ------------------------------------------------------------
+       Recomputed on every render and on the one-second tick, because two of the
+       three depend on wall clock. The tick never re-fetches. */
+
+    function minutesUntil(value) {
+        if (!value) return null;
+        return (new Date(value).getTime() - Date.now()) / 60000;
     }
 
-    function metric(label, value, valueClass) {
-        const container = document.createElement("div");
-        container.className = "earnings-metric";
-        container.append(text("span", label, "earnings-metric-label"));
-        container.append(text("strong", value, valueClass));
-        return container;
+    function isBreakoutLane(item) {
+        return String(item.epsOutcome || "").toLowerCase() === "beat" &&
+            String(item.breakoutAssessment || "").toLowerCase().includes("confirm") &&
+            !String(item.breakoutAssessment || "").toLowerCase().includes("not");
     }
 
-    function outcomeClass(outcome) {
-        if (outcome === "Beat") return "good";
-        if (outcome === "Miss") return "bad";
-        return "";
+    function isImminentLane(item) {
+        if (item.epsActual !== null && item.epsActual !== undefined) return false;
+        const minutes = minutesUntil(item.scheduledAtUtc);
+        return minutes !== null && minutes > 0 && minutes <= 30;
     }
 
-    function resultComparison(title, result, emptyText) {
-        const row = document.createElement("div");
-        row.className = "earnings-result-row";
-        row.append(text("strong", title, "earnings-result-title"));
-        if (!result) {
-            row.append(text("span", emptyText, "muted earnings-result-empty"));
-            return row;
+    function isHeldLane(item) {
+        return held.has(String(item.ticker || "").toUpperCase());
+    }
+
+    const laneTests = { breakout: isBreakoutLane, imminent: isImminentLane, held: isHeldLane };
+
+    function renderLanes(items) {
+        for (const button of lanesRoot.querySelectorAll("[data-lane]")) {
+            const lane = button.dataset.lane;
+            const matches = items.filter(laneTests[lane]);
+            button.querySelector("[data-lane-count]").textContent = String(matches.length);
+            button.querySelector("[data-lane-tickers]").textContent =
+                matches.length ? matches.map(item => item.ticker).join(" · ") : "None";
+            button.classList.toggle("is-active", activeLane === lane);
+            button.classList.toggle("is-live", matches.length > 0);
+            button.setAttribute("aria-pressed", String(activeLane === lane));
         }
+    }
 
-        const values = document.createElement("div");
-        values.className = "earnings-result-values";
-        values.append(
-            text("span", `Estimate ${result.epsEstimate == null ? "-" : formatNumber(result.epsEstimate)}`),
-            text("span", `Actual ${result.epsActual == null ? "-" : formatNumber(result.epsActual)}`),
-            text("span", `${result.epsOutcomeLabel}${result.epsSurprisePercent == null ? "" : ` ${formatPercent(result.epsSurprisePercent)}`}`, `earnings-outcome ${outcomeClass(result.epsOutcome)}`)
-        );
-        row.append(values);
-        return row;
+    /* --- event card -------------------------------------------------------- */
+
+    // The left rule states the server's own assessment. Awaiting and
+    // insufficient-data are their own state, not a muted negative.
+    function ruleClass(item) {
+        switch (String(item.resultAssessment || "").toLowerCase()) {
+            case "positive": return "is-positive";
+            case "negative": return "is-negative";
+            case "mixed": return "is-mixed";
+            default: return "is-awaiting";
+        }
+    }
+
+    function cellStrip(cells) {
+        const strip = document.createElement("div");
+        strip.className = "cell-strip earnings-strip";
+        for (const [label, value, className] of cells) {
+            const cell = document.createElement("div");
+            cell.append(text("span", label, "cell-label"));
+            cell.append(text("span", value, `cell-value ${className || ""}`.trim()));
+            strip.append(cell);
+        }
+        return strip;
+    }
+
+    function badge(label, className) {
+        return text("span", label, `tag ${className}`);
     }
 
     function renderEvent(item) {
         const card = document.createElement("article");
-        card.className = `earnings-event ${assessmentClass(item)}`;
+        card.className = `earnings-event ${ruleClass(item)}`;
 
-        const heading = document.createElement("header");
-        heading.className = "earnings-event-header";
+        const header = document.createElement("header");
+        header.className = "earnings-event-head";
+
         const identity = document.createElement("div");
-        identity.className = "earnings-event-identity";
-        identity.append(text("h3", item.ticker));
-        identity.append(text("span", item.companyName, "muted"));
-        identity.append(text("span", formatMarketCap(item.marketCapMillions), "muted earnings-market-cap"));
+        identity.className = "earnings-identity";
+        const line = document.createElement("div");
+        line.className = "earnings-identity-line";
+        line.append(text("h3", item.ticker));
+        line.append(text("span", item.companyName, "earnings-company"));
+        line.append(text("span", marketCap(item.marketCapMillions), "earnings-cap"));
+        identity.append(line);
+        identity.append(text("div", [
+            item.releaseWindowLabel,
+            item.scheduledNewYorkText,
+            item.scheduledUtcText,
+            item.isScheduleEstimate ? "Provider-estimated slot" : "Confirmed slot"
+        ].join("   ·   "), "earnings-meta"));
+
         const badges = document.createElement("div");
-        badges.className = "earnings-event-badges";
-        badges.append(text("span", item.releaseWindowLabel, `status release-${item.releaseWindow.toLowerCase()}`));
-        badges.append(text("span", item.assessmentLabel, `status ${assessmentClass(item)}`));
-        heading.append(identity, badges);
-
-        const schedule = document.createElement("div");
-        schedule.className = "earnings-event-schedule";
-        schedule.append(text("strong", localDateTime(item.scheduledAtUtc)));
-        schedule.append(text("span", `${item.scheduledNewYorkText} | ${item.scheduledUtcText}`, "muted"));
-        if (item.isScheduleEstimate) schedule.append(text("span", "Release time is estimated", "warn"));
-
-        const reactionClass = item.providerOneDayPriceReactionPercent > 0 ? "good" : item.providerOneDayPriceReactionPercent < 0 ? "bad" : "";
-        const evidenceMoveClass = item.eventReturnPercent > 0 ? "good" : item.eventReturnPercent < 0 ? "bad" : "";
-        const metrics = document.createElement("div");
-        metrics.className = "earnings-event-metrics";
-        metrics.append(
-            metric("Pre-release", formatPrice(item.preReleaseReferenceClose)),
-            metric("Latest", formatPrice(item.latestClose)),
-            metric("Provider 1D reaction", formatPercent(item.providerOneDayPriceReactionPercent), reactionClass),
-            metric("Since evidence", formatPercent(item.eventReturnPercent), evidenceMoveClass),
-            metric("Slot RVOL", item.slotRelativeVolume == null ? "-" : `${formatNumber(item.slotRelativeVolume)}x`)
-        );
-
-        const results = document.createElement("div");
-        results.className = "earnings-result-comparison";
-        results.append(
-            resultComparison("This report", item, "Result pending"),
-            resultComparison(
-                item.previousEarnings ? `Previous | ${item.previousEarnings.reportDateExchange}` : "Previous report",
-                item.previousEarnings,
-                "Historical result is loading or unavailable")
-        );
-
-        const surprises = document.createElement("div");
-        surprises.className = "earnings-surprises";
-        surprises.append(
-            text("span", `Revenue ${formatPercent(item.revenueSurprisePercent)}`),
-            text("span", item.latestMarketSession || "Price pending", "muted")
-        );
-
-        const footer = document.createElement("footer");
-        footer.className = "earnings-event-footer";
-        const details = document.createElement("details");
-        details.className = "earnings-event-details";
-        details.append(text("summary", "View evidence"));
-        const body = document.createElement("div");
-        body.className = "earnings-event-detail-body";
-        body.append(text("p", item.analysisReason));
-        body.append(text("p", `Result values: ${item.resultDataSource || item.provider}`, "muted"));
-        body.append(text("p", `EMA10/20 ${formatNumber(item.ema10)}/${formatNumber(item.ema20)} | MACD histogram ${formatNumber(item.macdHistogram, 4)}`, "muted"));
-        if (item.latestCompletedBarAtUtc) {
-            body.append(text("p", `Latest completed 5m bar: ${localDateTime(item.latestCompletedBarAtUtc, true)} (${item.latestMarketSession || "session unknown"})`, "muted"));
+        badges.className = "earnings-badges";
+        if (isHeldLane(item)) badges.append(badge("HELD", "tag-accent"));
+        const minutes = minutesUntil(item.scheduledAtUtc);
+        if (isImminentLane(item)) badges.append(badge(`IN ${Math.max(1, Math.round(minutes))} MIN`, "tag-accent"));
+        badges.append(badge(item.releaseWindowLabel, "tag-neutral"));
+        badges.append(badge(item.epsOutcomeLabel || "AWAITING",
+            String(item.epsOutcome || "").toLowerCase() === "beat" ? "tag-accent" : "tag-neutral"));
+        if (item.breakoutAssessment) {
+            badges.append(badge(
+                item.breakoutAssessment.replace(/([a-z])([A-Z])/g, "$1 $2").toUpperCase(),
+                isBreakoutLane(item) ? "tag-accent" : "tag-outline"));
         }
-        if (item.newsHeadline) {
-            body.append(safeLink(item.newsUrl, item.newsHeadline, "news-inline-link") || text("p", item.newsHeadline));
-            if (item.resultNewsPublishedAtUtc) {
-                body.append(text("p", `Provider publication: ${localDateTime(item.resultNewsPublishedAtUtc, true)} | ${item.newsProvider || "unknown"}`, "muted"));
-            }
-        }
-        const source = safeLink(item.sourceUrl, "Open source record", "news-inline-link");
-        if (source) body.append(source);
-        details.append(body);
-        footer.append(details);
+        header.append(identity, badges);
 
-        if (item.breakoutAssessment === "PossibleBreakout" && item.latestClose) {
-            const action = text("a", "Review paper order", "button buy compact-action");
-            action.href = `/OrderTicket?ticker=${encodeURIComponent(item.ticker)}&limitPrice=${encodeURIComponent(item.latestClose)}`;
-            footer.append(action);
+        // Unreported actuals read "awaiting", never 0 and never a bare dash: the
+        // two say different things and only one of them is true here.
+        const awaiting = value => (value === null || value === undefined ? "awaiting" : null);
+        const results = cellStrip([
+            ["EPS est", number(item.epsEstimate)],
+            ["EPS actual", awaiting(item.epsActual) || number(item.epsActual), awaiting(item.epsActual) ? "unknown" : null],
+            ["Surprise", signedPercent(item.epsSurprisePercent), signedClass(item.epsSurprisePercent)],
+            ["Rev est", number(item.revenueEstimateMillions, 0)],
+            ["Rev actual", awaiting(item.revenueActualMillions) || number(item.revenueActualMillions, 0), awaiting(item.revenueActualMillions) ? "unknown" : null],
+            ["Rev surprise", signedPercent(item.revenueSurprisePercent), signedClass(item.revenueSurprisePercent)]
+        ]);
+
+        const reaction = cellStrip([
+            ["Pre-release high", price(item.preReleaseReferenceHigh)],
+            ["Latest close", price(item.latestClose)],
+            ["Event move", signedPercent(item.eventReturnPercent), signedClass(item.eventReturnPercent)],
+            ["Slot RVOL", item.slotRelativeVolume == null ? "—" : `${number(item.slotRelativeVolume)}x`],
+            ["EMA 10 / 20", `${number(item.ema10)} / ${number(item.ema20)}`],
+            ["MACD hist", number(item.macdHistogram, 4)]
+        ]);
+        reaction.classList.add("is-butted");
+
+        // The server's own explanation of its assessment. Rendered verbatim.
+        const analysis = text("p", item.analysisReason, "earnings-analysis");
+
+        card.append(header, results, reaction, analysis);
+
+        if (isHeldLane(item)) {
+            card.append(text("p",
+                `You hold ${item.ticker}. Confirm the protection on this position predates the print.`,
+                "callout earnings-held-note"));
         }
 
-        card.append(heading, schedule, metrics, results, surprises, footer);
+        card.append(renderProvenance(item));
+        card.append(renderActions(item));
         return card;
     }
 
-    function dayLabel(item, payload) {
-        if (item.dayGroup === "today") return "Today";
-        if (item.dayGroup === "nextBusinessDay") return `Next reporting day | ${payload.nextBusinessDateLabel}`;
-        return new Date(item.scheduledAtUtc).toLocaleDateString(undefined, {
-            weekday: "long",
-            month: "long",
-            day: "numeric"
-        });
+    function factList(pairs) {
+        const list = document.createElement("dl");
+        list.className = "fact-list";
+        for (const [term, value] of pairs) {
+            list.append(text("dt", term));
+            list.append(text("dd", value));
+        }
+        return list;
     }
 
-    function renderEvents(items, payload) {
+    function renderProvenance(item) {
+        const details = document.createElement("details");
+        details.className = "earnings-provenance";
+        details.append(text("summary", "Provenance and previous quarter"));
+
+        const body = document.createElement("div");
+        body.className = "earnings-provenance-body";
+        body.append(factList([
+            ["Provider", `${item.provider} · reaction from Alpaca SIP completed bars`],
+            ["Received", localDateTime(item.providerReceivedAtUtc, true)],
+            ["Result first seen", item.resultFirstSeenAtUtc ? localDateTime(item.resultFirstSeenAtUtc, true) : "Not yet observable"],
+            ["Latest completed bar", localDateTime(item.latestCompletedBarAtUtc, true)],
+            ["Bar session", item.latestMarketSession || "session unknown"]
+        ]));
+
+        const previous = item.previousEarnings;
+        body.append(previous
+            ? factList([
+                ["Prior quarter", String(previous.reportDateExchange)],
+                ["Prior EPS", `${number(previous.epsActual)} vs ${number(previous.epsEstimate)} est`],
+                ["Prior surprise", signedPercent(previous.epsSurprisePercent)],
+                ["Prior 1-day move", signedPercent(previous.oneDayPriceReactionPercent)],
+                ["Outcome then", previous.epsOutcomeLabel]
+            ])
+            : text("p", "No previous quarter is on file for this symbol.", "note"));
+
+        details.append(body);
+        return details;
+    }
+
+    function renderActions(item) {
+        const actions = document.createElement("div");
+        actions.className = "earnings-actions";
+
+        const inspect = text("a", "Inspect on desk", "btn btn-secondary btn-md");
+        inspect.href = `/TradeDesk?ticker=${encodeURIComponent(item.ticker)}`;
+        actions.append(inspect);
+
+        const evidence = text("button", "Show evidence", "btn btn-secondary btn-md");
+        evidence.type = "button";
+        evidence.addEventListener("click", () => {
+            newsScopeTicker = item.ticker.toUpperCase();
+            render();
+        });
+        actions.append(evidence);
+
+        // No order control. This surface is advisory and cannot route.
+        return actions;
+    }
+
+    /* --- timeline ---------------------------------------------------------- */
+
+    function dayTitle(item, payload) {
+        if (item.dayGroup === "today") {
+            return `Today · ${new Date(item.scheduledAtUtc).toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short", year: "numeric" })}`;
+        }
+        if (item.dayGroup === "nextBusinessDay") {
+            return `Next reporting day · ${payload.nextBusinessDateLabel}`;
+        }
+        return new Date(item.scheduledAtUtc).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+    }
+
+    function renderTimeline(items, payload, totalForGroup) {
         feed.replaceChildren();
         if (!items.length) {
             feed.append(emptyTemplate.content.cloneNode(true));
@@ -233,68 +331,89 @@
         }
 
         const groups = new Map();
-        items.forEach(item => {
-            const key = localDateKey(item.scheduledAtUtc);
+        for (const item of items) {
+            const key = item.dayGroup || new Date(item.scheduledAtUtc).toDateString();
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key).push(item);
-        });
+        }
 
-        groups.forEach(groupItems => {
+        for (const [key, groupItems] of groups) {
             const section = document.createElement("section");
-            section.className = "earnings-day-group";
+            section.className = "earnings-day";
             const header = document.createElement("header");
-            header.className = "earnings-day-header";
-            header.append(text("h2", dayLabel(groupItems[0], payload)));
-            header.append(text("span", `${groupItems.length} event${groupItems.length === 1 ? "" : "s"}`, "muted"));
-            const cards = document.createElement("div");
-            cards.className = "earnings-event-list";
-            groupItems.forEach(item => cards.append(renderEvent(item)));
-            section.append(header, cards);
+            header.className = "earnings-day-head";
+            header.append(text("h2", dayTitle(groupItems[0], payload)));
+            const reported = groupItems.filter(item => item.epsActual !== null && item.epsActual !== undefined).length;
+            header.append(text("span",
+                `${groupItems.length} of ${totalForGroup.get(key) ?? groupItems.length} events · ${reported} reported`,
+                "earnings-day-summary"));
+            section.append(header);
+            for (const item of groupItems) section.append(renderEvent(item));
             feed.append(section);
-        });
+        }
     }
 
-    function renderNews(items) {
+    /* --- evidence rail ------------------------------------------------------ */
+
+    function renderNews(items, visibleItems) {
+        let scoped = items;
+        if (newsScopeTicker) {
+            scoped = items.filter(item => String(item.tickers || "").toUpperCase().includes(newsScopeTicker));
+        } else if (visibleItems) {
+            const visibleTickers = new Set(visibleItems.map(i => i.ticker.toUpperCase()));
+            scoped = items.filter(item => {
+                if (!item.tickers) return false;
+                const newsTickers = String(item.tickers).toUpperCase().split(',').map(t => t.trim());
+                return newsTickers.some(t => visibleTickers.has(t));
+            });
+        }
+
         newsFeed.replaceChildren();
-        newsCount.textContent = String(items.length);
-        if (!items.length) {
+        newsCount.textContent = String(scoped.length);
+        newsScopeClear.hidden = !newsScopeTicker;
+        if (!scoped.length) {
             newsFeed.append(emptyTemplate.content.cloneNode(true));
             return;
         }
 
-        items.forEach(item => {
+        for (const item of scoped) {
             const article = document.createElement("article");
-            const sentiment = item.sentimentLabel === "Bullish" ? "positive" : item.sentimentLabel === "Bearish" ? "negative" : "neutral";
-            article.className = `earnings-news-item ${sentiment}`;
+            const score = Number(item.sentimentScore);
+            article.className = `news-item earnings-news-item ${score > 0.25 ? "is-positive" : score < -0.25 ? "is-negative" : ""}`.trim();
+
             const meta = document.createElement("div");
-            meta.className = "earnings-news-meta";
+            meta.className = "news-meta";
             meta.append(text("strong", item.tickers || "Market"));
             meta.append(text("time", localDateTime(item.publishedAtUtc, true)));
-            const headline = safeLink(item.url, item.headline, "earnings-news-headline") || text("strong", item.headline);
+
+            const headline = safeLink(item.url, item.headline, "news-headline") || text("span", item.headline, "news-headline");
             article.append(meta, headline);
-            if (item.summary) article.append(text("p", item.summary));
+
+            // WhyItMatters is the reason this rail is worth the space. Always rendered.
+            if (item.whyItMatters) article.append(text("p", item.whyItMatters, "news-why"));
+
             const footer = document.createElement("div");
-            footer.className = "earnings-news-footer";
-            footer.append(text("span", `${item.category} | ${item.sentimentLabel} ${formatNumber(item.sentimentScore)}`));
-            footer.append(text("span", item.source || item.provider));
+            footer.className = "news-meta";
+            footer.append(text("span", `${item.provider}${item.category ? ` · ${item.category}` : ""}`));
+            footer.append(text("span", `sentiment ${score >= 0 ? "+" : "−"}${number(Math.abs(score))} · ${item.sentimentLabel}`));
             article.append(footer);
             newsFeed.append(article);
-        });
+        }
     }
 
-    function assessmentOf(item) {
-        return String(item.resultAssessment || "").toLowerCase();
-    }
+    /* --- filtering --------------------------------------------------------- */
 
     function applyClientFilters(items) {
         let result = items.filter(item => {
+            if (activeLane && !laneTests[activeLane](item)) return false;
             if (clientFilters.assessment !== "all") {
-                const assessment = assessmentOf(item);
+                const outcome = String(item.epsOutcome || "").toLowerCase();
                 const matches = clientFilters.assessment === "pending"
-                    ? assessment === "" || assessment === "pending" || assessment === "awaiting"
-                    : assessment.includes(clientFilters.assessment);
+                    ? outcome === "" || outcome === "pending" || outcome === "awaiting"
+                    : outcome.includes(clientFilters.assessment);
                 if (!matches) return false;
             }
+            if (clientFilters.onlyHeld && !isHeldLane(item)) return false;
             if (clientFilters.hasNews && !item.newsHeadline) return false;
             if (clientFilters.minSurprise !== null) {
                 const surprise = item.epsSurprisePercent;
@@ -324,31 +443,61 @@
         return result;
     }
 
-    function updateFilterControls(container, options, activeValue) {
-        const byValue = new Map((options || []).map(option => [option.value, option]));
-        container.querySelectorAll("button[data-filter-value]").forEach(button => {
-            const value = button.dataset.filterValue;
-            const option = byValue.get(value);
-            if (option) button.textContent = `${option.label} (${option.count})`;
-            const selected = value === activeValue;
-            button.classList.toggle("active", selected);
-            button.setAttribute("aria-pressed", String(selected));
-        });
+    function render() {
+        if (!latestPayload) return;
+        const all = latestPayload.items || [];
+        const filtered = applyClientFilters(all);
+
+        // Client-side fade transition
+        const bodyContainer = document.querySelector(".earnings-body");
+        if (bodyContainer) bodyContainer.style.opacity = "0.3";
+        const spinner = document.getElementById("earnings-spinner");
+        if (spinner) spinner.style.display = "flex";
+
+        setTimeout(() => {
+            const totals = new Map();
+            for (const item of all) {
+                const key = item.dayGroup || new Date(item.scheduledAtUtc).toDateString();
+                totals.set(key, (totals.get(key) ?? 0) + 1);
+            }
+
+            renderLanes(all);
+            renderTimeline(filtered, latestPayload, totals);
+            renderNews(latestPayload.news || [], filtered);
+            countLabel.textContent = `${filtered.length} of ${all.length} events`;
+            
+            if (bodyContainer) bodyContainer.style.opacity = "1";
+            if (spinner && !loading) spinner.style.display = "none";
+        }, 150);
     }
 
-    function bindFilterGroup(container, key) {
-        container.addEventListener("click", event => {
-            const button = event.target.closest("button[data-filter-value]");
-            if (!button || activeFilters[key] === button.dataset.filterValue) return;
-            activeFilters[key] = button.dataset.filterValue;
-            loadCalendar(false);
-        });
+    function markStrip(container, attribute, value) {
+        for (const button of container.querySelectorAll(`button[${attribute}]`)) {
+            const selected = button.getAttribute(attribute) === value;
+            if (selected) {
+                button.setAttribute("aria-current", "page");
+            } else {
+                button.removeAttribute("aria-current");
+            }
+        }
     }
+
+    function updateCounts(container, options) {
+        const byValue = new Map((options || []).map(option => [option.value, option]));
+        for (const button of container.querySelectorAll("button[data-filter-value]")) {
+            const option = byValue.get(button.dataset.filterValue);
+            if (!option) continue;
+            button.replaceChildren(
+                document.createTextNode(option.label),
+                text("span", String(option.count), "count"));
+        }
+    }
+
+    /* --- loading ------------------------------------------------------------ */
 
     async function readError(response, fallback) {
         try {
-            const message = await response.text();
-            return message || fallback;
+            return (await response.text()) || fallback;
         } catch {
             return fallback;
         }
@@ -357,9 +506,12 @@
     async function loadCalendar(forceRefresh = false) {
         if (loading) return;
         loading = true;
+        const bodyContainer = document.querySelector(".earnings-body");
+        if (bodyContainer) bodyContainer.classList.add("is-loading");
+        const spinner = document.getElementById("earnings-spinner");
+        if (spinner) spinner.style.display = "flex";
         refreshButton.disabled = true;
-        status.className = "";
-        status.textContent = forceRefresh ? "Refreshing provider data and analysis..." : "Loading earnings calendar...";
+        status.classList.remove("accent-note");
         try {
             if (forceRefresh) {
                 const refreshResponse = await fetch("/api/earnings/refresh", { method: "POST" });
@@ -367,11 +519,10 @@
             }
 
             const query = new URLSearchParams({
-                session: activeFilters.session,
-                marketCap: activeFilters.marketCap,
-                scope: activeFilters.dateScope
+                session: serverFilters.session,
+                marketCap: serverFilters.marketCap,
+                scope: serverFilters.dateScope
             });
-            // The API has always accepted an explicit range; it simply had no control.
             const from = fromInput?.value;
             const to = toInput?.value;
             const useRange = Boolean(from && to && from <= to);
@@ -385,91 +536,138 @@
                 cache: "no-store"
             });
             if (!response.ok) throw new Error(await readError(response, `Calendar request failed (${response.status}).`));
-            const payload = await response.json();
-            activeFilters.session = payload.filters?.session || activeFilters.session;
-            activeFilters.marketCap = payload.filters?.marketCap || activeFilters.marketCap;
-            updateFilterControls(sessionFilters, payload.filters?.sessions, activeFilters.session);
-            updateFilterControls(capFilters, payload.filters?.marketCaps, activeFilters.marketCap);
-            const filteredItems = applyClientFilters(payload.items || []);
-            renderEvents(filteredItems, payload);
-            renderNews(payload.news || []);
-            newsWindow.textContent = `${payload.newsWindowLabel}. Times display in your device timezone; stored timestamps remain UTC.`;
-            const cadence = payload.monitoringIntervalSeconds >= 60 && payload.monitoringIntervalSeconds % 60 === 0
-                ? `${payload.monitoringIntervalSeconds / 60} min`
-                : `${payload.monitoringIntervalSeconds} sec`;
-            const shown = filteredItems.length;
-            const total = (payload.items || []).length;
-            const scope = shown === total ? `${total} events` : `${shown} of ${total} events`;
-            status.textContent = payload.monitoringActive
-                ? `${scope} | monitoring every ${cadence}`
-                : `${scope} | monitor offline`;
-            updated.textContent = `Updated ${localDateTime(payload.generatedAtUtc, true)}`;
+
+            latestPayload = await response.json();
+            serverFilters.session = latestPayload.filters?.session || serverFilters.session;
+            serverFilters.marketCap = latestPayload.filters?.marketCap || serverFilters.marketCap;
+            updateCounts(sessionFilters, latestPayload.filters?.sessions);
+            markStrip(sessionFilters, "data-filter-value", serverFilters.session);
+            updateCounts(capFilters, latestPayload.filters?.marketCaps);
+            markStrip(capFilters, "data-filter-value", serverFilters.marketCap);
+
+            const seconds = latestPayload.monitoringIntervalSeconds;
+            const cadence = seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;
+            status.textContent = latestPayload.monitoringActive ? `Running · every ${cadence}` : "Offline";
+            if (!latestPayload.monitoringActive) status.classList.add("accent-note");
+            updated.textContent = latestPayload.lastAnalysisUtc ? localDateTime(latestPayload.lastAnalysisUtc, true) : "never";
+            newsCaption.textContent = `${latestPayload.newsWindowLabel}. Times display in your device timezone; stored timestamps remain UTC.`;
+            document.getElementById("earnings-news-window").textContent = latestPayload.newsWindowLabel;
+            nextDay.textContent = latestPayload.nextBusinessDateLabel;
+
+            render();
         } catch (error) {
             status.textContent = error instanceof Error ? error.message : "Unable to load earnings data.";
-            status.className = "bad";
+            status.classList.add("accent-note");
         } finally {
             loading = false;
+            const bodyContainer = document.querySelector(".earnings-body");
+            if (bodyContainer) bodyContainer.classList.remove("is-loading");
             refreshButton.disabled = false;
+            const spinner = document.getElementById("earnings-spinner");
+            if (spinner) spinner.style.display = "none";
         }
     }
 
+    /* --- wiring ------------------------------------------------------------- */
+
     refreshButton.addEventListener("click", () => loadCalendar(true));
-    if (assessmentFilters) {
-        assessmentFilters.addEventListener("click", event => {
-            const button = event.target.closest("button[data-assessment-value]");
-            if (!button || clientFilters.assessment === button.dataset.assessmentValue) return;
-            clientFilters.assessment = button.dataset.assessmentValue;
-            assessmentFilters.querySelectorAll("button[data-assessment-value]").forEach(other => {
-                const selected = other === button;
-                other.classList.toggle("active", selected);
-                other.setAttribute("aria-pressed", String(selected));
-            });
-            loadCalendar(false);
-        });
-    }
-    hasNewsInput?.addEventListener("change", () => {
-        clientFilters.hasNews = hasNewsInput.checked;
+
+    lanesRoot.addEventListener("click", event => {
+        const button = event.target.closest("[data-lane]");
+        if (!button) return;
+        // A lane intersects with the other filters rather than replacing them.
+        activeLane = activeLane === button.dataset.lane ? null : button.dataset.lane;
+        render();
+    });
+
+    sessionFilters.addEventListener("click", event => {
+        const button = event.target.closest("button[data-filter-value]");
+        if (!button || serverFilters.session === button.dataset.filterValue) return;
+        serverFilters.session = button.dataset.filterValue;
+        markStrip(sessionFilters, "data-filter-value", serverFilters.session);
         loadCalendar(false);
     });
+
+    capFilters?.addEventListener("click", event => {
+        const button = event.target.closest("button[data-filter-value]");
+        if (!button || serverFilters.marketCap === button.dataset.filterValue) return;
+        serverFilters.marketCap = button.dataset.filterValue;
+        markStrip(capFilters, "data-filter-value", serverFilters.marketCap);
+        loadCalendar(false);
+    });
+
+    assessmentFilters.addEventListener("click", event => {
+        const button = event.target.closest("button[data-assessment-value]");
+        if (!button) return;
+        clientFilters.assessment = button.dataset.assessmentValue;
+        markStrip(assessmentFilters, "data-assessment-value", clientFilters.assessment);
+        render();
+    });
+
+    dateScope.addEventListener("click", event => {
+        const button = event.target.closest("button[data-scope-value]");
+        if (!button) return;
+        serverFilters.dateScope = button.dataset.scopeValue;
+        if (fromInput) fromInput.value = "";
+        if (toInput) toInput.value = "";
+        markStrip(dateScope, "data-scope-value", serverFilters.dateScope);
+        loadCalendar(false);
+    });
+
+    function bindToggle(button, key) {
+        button?.addEventListener("click", () => {
+            clientFilters[key] = !clientFilters[key];
+            button.setAttribute("aria-pressed", String(clientFilters[key]));
+            render();
+        });
+    }
+    bindToggle(onlyHeldToggle, "onlyHeld");
+    bindToggle(hasNewsToggle, "hasNews");
+
     minSurpriseInput?.addEventListener("change", () => {
         const value = Number(minSurpriseInput.value);
         clientFilters.minSurprise = minSurpriseInput.value === "" || Number.isNaN(value) ? null : value;
-        loadCalendar(false);
+        render();
     });
     sortInput?.addEventListener("change", () => {
         clientFilters.sort = sortInput.value;
-        loadCalendar(false);
+        render();
     });
-    fromInput?.addEventListener("change", () => loadCalendar(false));
-    toInput?.addEventListener("change", () => loadCalendar(false));
+    const rangeApply = document.getElementById("earnings-range-apply");
+    rangeApply?.addEventListener("click", () => {
+        if (fromInput?.value && toInput?.value) {
+            markStrip(dateScope, "data-scope-value", ""); // Clear preset tab highlighting
+            loadCalendar(false);
+        }
+    });
     rangeClear?.addEventListener("click", () => {
         if (fromInput) fromInput.value = "";
         if (toInput) toInput.value = "";
-        activeFilters.dateScope = "both";
-        dateScope?.querySelectorAll("button[data-scope-value]").forEach(button => {
-            const selected = button.dataset.scopeValue === "both";
-            button.classList.toggle("active", selected);
-            button.setAttribute("aria-pressed", String(selected));
-        });
+        serverFilters.dateScope = "today";
+        markStrip(dateScope, "data-scope-value", "today");
         loadCalendar(false);
     });
-
-    dateScope?.addEventListener("click", event => {
-        const button = event.target.closest("button[data-scope-value]");
-        if (!button) return;
-        activeFilters.dateScope = button.dataset.scopeValue;
-        if (fromInput) fromInput.value = "";
-        if (toInput) toInput.value = "";
-        dateScope.querySelectorAll("button[data-scope-value]").forEach(other => {
-            const selected = other === button;
-            other.classList.toggle("active", selected);
-            other.setAttribute("aria-pressed", String(selected));
-        });
-        loadCalendar(false);
+    newsScopeClear?.addEventListener("click", () => {
+        newsScopeTicker = null;
+        render();
     });
 
-    bindFilterGroup(sessionFilters, "session");
-    bindFilterGroup(capFilters, "marketCap");
+    /* The countdown badge and the imminent lane both depend on wall clock, so
+       they are recomputed on a one-second tick rather than re-fetched. Only
+       those two things are touched: a full re-render every second would close an
+       open provenance disclosure and take focus out of the rail. */
+    function tick() {
+        if (!latestPayload) return;
+        renderLanes(latestPayload.items || []);
+        for (const badgeNode of feed.querySelectorAll("[data-countdown-for]")) {
+            const minutes = minutesUntil(badgeNode.dataset.countdownFor);
+            badgeNode.textContent = minutes !== null && minutes > 0
+                ? `IN ${Math.max(1, Math.round(minutes))} MIN`
+                : "REPORTING NOW";
+        }
+    }
+
     loadCalendar();
-    window.setInterval(() => loadCalendar(false), 60000);
+    window.setInterval(tick, 1000);
+    window.setInterval(() => loadCalendar(false), 10000);
 })();

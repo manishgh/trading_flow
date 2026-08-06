@@ -1,0 +1,489 @@
+/* Modernist component layer.
+
+   The design system's own classes, authored against the tokens in site.css.
+   Source of truth for the intended look: design/tokens/modernist.styles.css and
+   design/tokens/README-tokens.md. This file is the app's copy of that vocabulary
+   with two deliberate differences:
+
+     - control sizes follow the screen specs (28/32/38px), not the marketing-page
+       defaults in the source file, because these are operator screens
+     - colours resolve through --color-* so the dark and CVD schemes keep working
+
+   Nothing page-specific belongs here. Page rules live in site.css. */
+
+/* ---------------------------------------------------------------------------
+   Buttons
+   Labels are flush left everywhere, including .btn-block: a column of buttons
+   whose text starts at different x positions is harder to scan than one whose
+   text does not.
+   --------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.btn svg { display: block; flex: none; }
+.btn:disabled,
+.btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+
+.btn-primary { background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); }
+.btn-primary:hover { background: var(--color-accent-600); border-color: var(--color-accent-600); }
+.btn-primary:active { background: var(--color-accent-700); border-color: var(--color-accent-700); }
+
+.btn-secondary { border-color: var(--color-divider); }
+.btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+.btn-secondary:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
+
+/* The destructive variant of the secondary button. Used for Cancel order,
+   Remove selected and Delete wishlist - actions that are reversible only by
+   doing more work, so they read as attention without becoming the page's
+   primary action. */
+.btn-danger { border-color: var(--color-accent); color: var(--color-accent-700); }
+.btn-danger:hover { background: var(--color-accent-100); }
+
+.btn-ghost { color: var(--color-accent-700); padding-inline: var(--space-1); }
+.btn-ghost:hover { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+
+.btn-block { width: 100%; }
+.btn-sm { min-height: 26px; padding: 3px 10px; font-size: 11px; }
+.btn-md { min-height: 28px; padding: 4px 11px; font-size: 11.5px; }
+.btn-lg { min-height: 38px; padding: 9px 14px; font-size: 13.5px; }
+.btn-xl { min-height: 40px; padding: 10px 14px; font-size: 13.5px; }
+
+/* ---------------------------------------------------------------------------
+   Fields
+   --------------------------------------------------------------------------- */
+
+.field { min-width: 0; }
+.field > label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+.input {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-divider);
+  background: var(--color-bg);
+  color: var(--color-text);
+  caret-color: var(--color-accent);
+  font: inherit;
+  font-size: 13px;
+}
+.input:hover { border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
+.input:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
+.input-mono { font-family: var(--font-mono); font-size: 11.5px; }
+textarea.input { min-height: 56px; resize: vertical; }
+select.input { padding-right: 4px; }
+
+/* A scope select butted against its query input so the pair reads as one
+   control: used by the desk screener bar and the wishlist import, which must
+   stay identical. */
+.input-group { display: flex; min-width: 0; }
+.input-group > .input:not(:last-child) { border-right: 0; }
+
+/* Independent booleans are square. A round dot is a radio, and a radio means
+   "pick exactly one" - using one for a toggle teaches the wrong rule. */
+.check-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 4px 11px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.check-chip svg { opacity: 0.28; flex: none; }
+.check-chip[aria-pressed="true"] svg,
+.check-chip:has(input:checked) svg { opacity: 1; }
+.check-chip + .check-chip { border-left: 1px solid var(--color-divider); }
+.check-strip { display: inline-flex; border: 1px solid var(--color-divider); width: max-content; max-width: 100%; }
+/* Narrow enough that the chips cannot sit side by side, the strip stacks rather
+   than scrolling. Unlike a tab strip, these are settings: one you have to
+   scroll sideways to reach is one you will not find. */
+@media (max-width: 480px) {
+  .check-strip { flex-direction: column; width: 100%; }
+  .check-chip + .check-chip { border-left: 0; border-top: 1px solid var(--color-divider); }
+}
+
+input[type="checkbox"] { accent-color: var(--color-accent); width: 16px; height: 16px; }
+
+/* ---------------------------------------------------------------------------
+   Segmented control
+   One bordered group, no radius, no gaps. Selection is a fill, not a border,
+   so it survives the CVD scheme where hue carries less.
+   --------------------------------------------------------------------------- */
+
+.seg { display: inline-flex; border: 1px solid var(--color-divider); width: max-content; }
+.seg-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 11px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.seg-opt + .seg-opt { border-left: 1px solid var(--color-divider); }
+.seg-opt input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+.seg-opt[aria-pressed="true"],
+.seg-opt[aria-current="true"],
+.seg-opt:has(input:checked) { background: var(--color-text); color: var(--color-bg); }
+.seg-opt:not([aria-pressed="true"]):not([aria-current="true"]):not(:has(input:checked)):hover {
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+}
+.seg-opt:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+/* A locked option renders as locked rather than disappearing: an operator has
+   to be able to see that a live environment exists and why it is unavailable. */
+.seg-opt[data-locked] { opacity: 0.45; cursor: not-allowed; }
+
+/* A tab strip is a segmented control whose options carry counts. It stays one
+   bordered group at every width and scrolls inside itself rather than wrapping
+   into two rows or widening the document - the same rule tables follow. */
+.tab-strip {
+  display: flex;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border: 1px solid var(--color-divider);
+}
+.tab-strip::-webkit-scrollbar { display: none; }
+.tab-strip > * { flex: none; }
+.tab-strip > * {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 12px;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab-strip > * + * { border-left: 1px solid var(--color-neutral-300); }
+.tab-strip > *:hover { background: var(--color-neutral-200); }
+.tab-strip > [aria-current] { background: var(--color-text); color: var(--color-bg); font-weight: 700; }
+.tab-strip .count { opacity: 0.65; font-variant-numeric: tabular-nums; }
+.tab-strip > [aria-current] .count { opacity: 0.7; }
+
+/* ---------------------------------------------------------------------------
+   Tags
+   --------------------------------------------------------------------------- */
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.tag-accent { background: var(--color-accent-100); color: var(--color-accent-800); }
+.tag-neutral { background: var(--color-neutral-200); color: var(--color-neutral-800); }
+.tag-outline { border: 1px solid var(--color-accent); color: var(--color-accent-700); }
+
+/* ---------------------------------------------------------------------------
+   Structural patterns shared by every screen
+   --------------------------------------------------------------------------- */
+
+/* A strip of equal-width cells bounded by 2px rules with 1px rules between.
+   Used for the desk operational strip, the earnings monitor strip, and every
+   summary band. Cells are equal width so the eye can compare positions between
+   loads rather than re-finding each label. */
+.metric-strip {
+  display: grid;
+  background: var(--color-neutral-100);
+  border-top: var(--rule-section);
+  border-bottom: var(--rule-section);
+}
+.metric-strip > * {
+  min-width: 0;
+  padding: 8px 14px;
+  border-right: var(--rule-row);
+}
+.metric-strip > *:last-child { border-right: 0; }
+.metric-strip .metric-label,
+.micro-label {
+  display: block;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-neutral-700);
+}
+.metric-strip .metric-value { display: block; font-size: 13px; }
+.metric-strip .metric-detail { display: block; font-size: 11.5px; color: var(--color-neutral-700); }
+.metric-strip.metric-strip-lg .metric-value { font-size: 22px; font-weight: 800; }
+/* A cell in a bad state is filled, not just recoloured: on a strip of seven the
+   fill is what the eye finds without reading. */
+.metric-strip > .is-attention { background: var(--color-accent-100); }
+.metric-strip > .is-attention .metric-value { color: var(--color-accent-700); }
+
+/* A bordered strip inside a panel - Bid / Ask / Spread / RVOL, or the ticket's
+   Notional / Risk / R multiple. Bounded by its own 1px border, not the page. */
+.cell-strip { display: grid; border: 1px solid var(--color-divider); }
+.cell-strip > * { min-width: 0; padding: 5px 9px; border-right: var(--rule-row); }
+.cell-strip > *:last-child { border-right: 0; }
+.cell-strip .cell-label {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-neutral-700);
+}
+.cell-strip .cell-value { display: block; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+
+/* Section headings. Three sizes, all uppercase and tracked. */
+.section-heading {
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.sub-heading {
+  font-family: var(--font-heading);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.eyebrow {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+}
+
+/* A callout carries a rule on its leading edge rather than a full border, so it
+   reads as an annotation on the block above it rather than a separate card. */
+.callout {
+  padding: 8px 10px;
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-accent-100);
+  color: var(--color-accent-900);
+  font-size: 12px;
+}
+
+.note { font-size: 11.5px; color: var(--color-neutral-700); }
+.mono { font-family: var(--font-mono); font-size: 11px; }
+
+/* ---------------------------------------------------------------------------
+   Agreement flag - TradingFlow eligibility vs Market Predictor
+   Glyph and label both render. The model is read-only evidence, so a CONFLICT
+   is shown as a disagreement to read, never as a block that overrides the
+   eligibility verdict.
+   --------------------------------------------------------------------------- */
+
+.agreement { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; }
+.agreement::before { font-size: 0.9em; }
+.agreement-agree { color: var(--color-text); }
+.agreement-agree::before { content: "\25CF"; }
+.agreement-conflict { color: var(--color-accent-700); }
+.agreement-conflict::before { content: "\25C6"; }
+.agreement-partial { color: var(--color-neutral-700); }
+.agreement-partial::before { content: "\25CB"; }
+
+.agreement-band { padding: 12px 20px; background: var(--color-neutral-200); }
+.agreement-band .agreement-headline {
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.agreement-band .agreement-note { font-size: 12.5px; }
+.agreement-band.is-conflict { background: var(--color-accent-100); color: var(--color-accent-900); }
+.agreement-band.is-conflict .agreement-headline { color: var(--color-accent-700); }
+
+/* ---------------------------------------------------------------------------
+   Check list - the ticket's gate checklist and the promotion gates
+   A failed check states which check failed on the same screen as the action it
+   blocks. It is never collapsed or summarised.
+   --------------------------------------------------------------------------- */
+
+.check-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--color-divider); }
+.check-list li {
+  display: grid;
+  grid-template-columns: 13px 104px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.check-list li + li { border-top: var(--rule-row); }
+.check-list .check-glyph { font-size: 13px; line-height: 1; }
+.check-list .check-label { color: var(--color-neutral-700); }
+.check-list .is-pass { color: var(--color-text); }
+.check-list .is-fail,
+.check-list .is-fail .check-label { color: var(--color-accent-700); }
+/* Not evaluated is its own state. A gate with no evaluator renders as unknown
+   rather than borrowing the pass or fail glyph. */
+.check-list .is-unknown,
+.check-list .is-unknown .check-label { color: var(--color-neutral-700); }
+.check-list.check-list-wide li { grid-template-columns: 13px 132px minmax(0, 1fr); padding: 7px 11px; }
+
+/* ---------------------------------------------------------------------------
+   Tables
+   Shared by the desk grid, positions, orders, wishlists and operations. Any
+   table whose min-content width can exceed its column must sit inside
+   .table-scroll (declared in site.css).
+   --------------------------------------------------------------------------- */
+
+.grid-table { width: 100%; border-collapse: collapse; }
+.grid-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 7px 10px;
+  background: var(--color-bg);
+  border-bottom: var(--rule-section);
+  color: var(--color-neutral-700);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  white-space: nowrap;
+}
+.grid-table td {
+  padding: 8px 10px;
+  border-bottom: var(--rule-row);
+  vertical-align: middle;
+}
+.grid-table .num { text-align: right; }
+.grid-table th.num { text-align: right; }
+.grid-table tbody tr:hover { background: var(--color-neutral-200); }
+.grid-table tbody tr[aria-selected="true"] {
+  background: var(--color-accent-100);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+.grid-table .cell-sub {
+  display: block;
+  font-size: 10.5px;
+  color: var(--color-neutral-700);
+}
+/* Compact density drops the sub-lines rather than shrinking them below the
+   11px floor. */
+.grid-table[data-density="compact"] th { padding: 5px 10px; }
+.grid-table[data-density="compact"] td { padding: 3px 10px; font-size: 12px; }
+.grid-table[data-density="compact"] .cell-sub { display: none; }
+
+/* Sorting is a round trip through the URL so a sorted view survives reload and
+   can be shared. The caret is a suffix, never a replacement for the label. */
+.sort-header {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+}
+.sort-header::after { content: ""; font-size: 0.9em; }
+th[aria-sort="ascending"] .sort-header::after { content: "\25B4"; }
+th[aria-sort="descending"] .sort-header::after { content: "\25BE"; }
+
+/* ---------------------------------------------------------------------------
+   Dialog and toast - the only two surfaces that carry a shadow
+   --------------------------------------------------------------------------- */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+.dialog {
+  width: min(520px, 100%);
+  padding: 18px 20px;
+  background: var(--color-bg);
+  border: 2px solid var(--color-text);
+  box-shadow: var(--shadow-lg);
+}
+.dialog-title { font-family: var(--font-heading); font-size: 17px; font-weight: 800; margin: 0 0 8px; }
+.dialog-body { font-size: 13px; }
+.dialog-actions { display: flex; gap: 8px; margin-top: 14px; }
+
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 1000;
+  max-width: 380px;
+  padding: 12px 16px;
+  background: var(--color-text);
+  color: var(--color-bg);
+  box-shadow: var(--shadow-lg);
+}
+.toast-title {
+  display: block;
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.toast-body { display: block; font-size: 12.5px; }
+
+/* ---------------------------------------------------------------------------
+   News item - shared by the desk rail, the earnings evidence rail and mobile
+   Sentiment is a leading rule, so the list scans as a column of marks before
+   any headline is read.
+   --------------------------------------------------------------------------- */
+
+.news-item {
+  padding: 9px 0 9px 10px;
+  border-top: var(--rule-row);
+  border-left: 3px solid var(--color-neutral-400);
+}
+.news-item.is-positive { border-left-color: var(--color-text); }
+.news-item.is-negative { border-left-color: var(--color-accent); }
+.news-item .news-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 10.5px;
+  color: var(--color-neutral-700);
+}
+.news-item .news-headline { font-size: 12.5px; font-weight: 600; }
+.news-item .news-why { font-size: 11.5px; color: var(--color-neutral-800); }

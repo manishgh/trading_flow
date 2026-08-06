@@ -1,390 +1,274 @@
 @page "/Backtests"
+@using TradingFlow.Domain.Backtesting
+@using TradingFlow.Web.Pages.Shared
 @model TradingFlow.Web.Pages.BacktestsModel
 @{
-    ViewData["Title"] = "Quant Workstation";
-    var selectedConfig = Model.Configs.FirstOrDefault(c => c.Path == Model.SelectedConfigPath);
-    var selectedStrategy = Model.Strategies.FirstOrDefault(s => s.Path == Model.SelectedStrategyPath);
-    var selectedWishlist = Model.SelectedWishlist;
-    string AuditLine(TradingFlow.Web.Models.StrategyOption strategy)
-    {
-        var audit = strategy.Audit;
-        return audit is null
-            ? "Audit: not available"
-            : $"Audit: {audit.ReturnPct:+0.##;-0.##;0}% / DD {audit.MaxDrawdownPct:0.##}% / {audit.Trades} trades / win {audit.WinRatePct:0.#}% / avg hold {audit.AverageHold}";
-    }
+    ViewData["Title"] = "Strategy Lab";
+    ViewData["MainClass"] = "shell-flush lab-page";
+    var job = Model.SelectedJob;
+    var result = job?.Result;
+    var drilled = Model.DrilledStrategy;
+    var gates = Model.Gates;
+    var promotedRoot = System.IO.Path.Combine("configs", "strategies");
 }
 
-<div class="section-title">
+@functions {
+    static string Signed(decimal value, string suffix = "%", string format = "0.00") =>
+        (value > 0 ? "+" : value < 0 ? "−" : String.Empty) + Math.Abs(value).ToString(format) + suffix;
+
+    static string SignedClass(decimal value) =>
+        value > 0 ? "value-signed up" : value < 0 ? "value-signed down" : "value-signed flat";
+}
+
+<div class="page-head lab-head">
     <div>
-        <h1>Quant Workstation</h1>
-        <div class="muted">Build backtest runs, compare promoted strategies, and keep research evidence small.</div>
+        <span class="eyebrow">Backtesting research</span>
+        <h1>Strategy Lab</h1>
+        <p class="standfirst">
+            Select strategies, run them against one wishlist universe, and compare portfolio-level
+            results. A profitable run is not a promotion — the preregistered gates below decide that.
+        </p>
     </div>
-    <div class="actions">
-        <a class="button secondary" asp-page="/Earnings">Earnings calendar</a>
+    <div class="lab-head-tail">
+        @* The integrated decision, not a summary of the return. *@
+        <span class="tag tag-outline">Research decision · @(gates?.Decision ?? ResearchPromotionAssessment.RetainResearch)</span>
+        <div class="seg lab-phases" role="group" aria-label="Run phase">
+            <a class="seg-opt" asp-page="/Backtests" asp-route-wishlistId="@Model.WishlistId"
+               aria-current="@(Model.Phase == "configure" ? "true" : null)">Configure</a>
+            <span class="seg-opt" aria-current="@(Model.Phase == "running" ? "true" : null)">Running</span>
+            <span class="seg-opt" aria-current="@(Model.Phase == "results" ? "true" : null)">Results</span>
+        </div>
     </div>
 </div>
 
-<div class="grid two">
-    <!-- LEFT COLUMN: Environment & Strategy Editor -->
-    <div>
-        <section class="panel">
-            <h2>Universe</h2>
-            <div class="muted mb-md">Backtests now run from a wishlist. Ticker lists are not maintained in backtest config files.</div>
+<div class="lab-shell">
+    @* =======================================================================
+       Left rail - configuration
+       ======================================================================= *@
+    <form class="lab-rail" method="post" asp-page-handler="RunBacktest">
+        <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
 
-            <label for="WishlistId">Wishlist</label>
-            <select name="WishlistId" id="WishlistId" onchange="window.location='?configPath=' + encodeURIComponent(document.getElementById('BaseConfigPath').value) + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '@Model.SelectedStrategyPath') + '&wishlistId=' + encodeURIComponent(this.value)">
-                @foreach (var wishlist in Model.Wishlists)
-                {
-                    <option value="@wishlist.Id" selected="@(wishlist.Id == Model.WishlistId)">@wishlist.Name (@wishlist.Items.Count(i => i.Active) active)</option>
-                }
-            </select>
-
-            @if (selectedWishlist is not null)
-            {
-                <div class="wishlist-chip-grid mt-sm">
-                    @foreach (var item in selectedWishlist.Items.Where(i => i.Active).OrderBy(i => i.Ticker))
+        <section class="lab-block">
+            <h2 class="section-heading">
+                <partial name="_Icon" model='new IconModel("layers", 15)' />Universe
+            </h2>
+            <div class="field">
+                <label for="WishlistId">Wishlist</label>
+                <select class="input" id="WishlistId" name="WishlistId">
+                    @foreach (var wishlist in Model.Wishlists)
                     {
-                        <span class="quote-pill">@item.Ticker</span>
+                        <option value="@wishlist.Id" selected="@(Model.WishlistId == wishlist.Id)">
+                            @wishlist.Name · @wishlist.Items.Count(item => item.Active) active
+                        </option>
+                    }
+                </select>
+            </div>
+            @if (Model.SelectedWishlist is { } selectedWishlist)
+            {
+                <div class="lab-symbols">
+                    @foreach (var item in selectedWishlist.Items.Where(entry => entry.Active).Take(40))
+                    {
+                        <span class="tag tag-neutral">@item.Ticker</span>
                     }
                 </div>
             }
-
-            <label class="mt-md" for="BaseConfigPath">Backtest Profile</label>
-            <select name="BaseConfigPath" id="BaseConfigPath" onchange="window.location='?configPath=' + encodeURIComponent(this.value) + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '@Model.SelectedStrategyPath') + '&wishlistId=' + encodeURIComponent(document.getElementById('WishlistId').value)">
-                    @foreach (var config in Model.Configs)
-                    {
-                        var label = config.Config.RunName.Replace('-', ' ');
-                        <option value="@config.Path" selected="@(config.Path == Model.SelectedConfigPath)">@label</option>
-                    }
-            </select>
+            @* The single most important sentence on this screen: it is why the
+               promotion gate fails, and it must not be dropped. *@
+            <p class="note">
+                Point-in-time membership is required for a promotable run. This wishlist is a current
+                list, so the run is marked research-only.
+            </p>
         </section>
 
-        <section class="panel mt-md">
-            <h2>Strategy Catalog</h2>
-            <div class="muted mb-md">Promoted configs remain separate; paper/live should run the same strategy files proven here.</div>
-            <div class="strategy-card-grid">
+        <section class="lab-block">
+            <h2 class="section-heading">Strategies</h2>
+            <div class="lab-strategy-list">
                 @foreach (var strategy in Model.Strategies)
                 {
-                    var definition = strategy.Definition;
-                    <article class="strategy-card">
-                        <div class="strategy-card-title">@definition.StrategyName</div>
-                        <div class="muted">@definition.Direction.ToUpperInvariant() · @definition.Timeframe · @definition.EntryRules.SetupType</div>
-                        <div class="muted mt-xs">@AuditLine(strategy)</div>
-                        <dl class="mini-metrics">
-                            <div><dt>Stop</dt><dd>@definition.ExitRules.StopAtrMultiple ATR</dd></div>
-                            <div><dt>Target</dt><dd>@definition.ExitRules.TargetRMultiple R</dd></div>
-                            <div><dt>Trail</dt><dd>@(definition.ExitRules.EnableAtrTrailingStop ? $"{definition.ExitRules.TrailingStopAtrMultiple} ATR" : "off")</dd></div>
-                        </dl>
-                    </article>
-                }
-            </div>
-        </section>
-
-        <details class="panel mt-md">
-            <summary><strong>Advanced Strategy Editor</strong></summary>
-            <form class="mt-md" method="post" asp-page-handler="SaveStrategy">
-            <div class="muted mb-md">Permanent YAML edits are intentionally behind this expander.</div>
-
-            <input type="hidden" name="SelectedConfigPath" id="SelectedConfigPath_Hidden" value="@Model.SelectedConfigPath" />
-            <input type="hidden" name="SaveStrategyPath" value="@Model.SelectedStrategyPath" />
-
-            <label for="SelectedStrategyDropdown">Strategy</label>
-            <select class="mb-md" id="SelectedStrategyDropdown" onchange="window.location='?configPath=' + encodeURIComponent(document.getElementById('SelectedConfigPath_Hidden').value) + '&strategyPath=' + encodeURIComponent(this.value) + '&wishlistId=' + encodeURIComponent(document.getElementById('WishlistId')?.value || '')">
-                @foreach (var strategy in Model.Strategies)
-                {
-                    <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.Definition.StrategyName v@(strategy.Definition.Version) - @AuditLine(strategy)</option>
-                }
-            </select>
-
-            @if (selectedStrategy != null)
-            {
-                var entry = selectedStrategy.Definition.EntryRules;
-                var confluence = selectedStrategy.Definition.Confluence;
-                var exit = selectedStrategy.Definition.ExitRules;
-                var execution = selectedStrategy.Definition.Execution;
-
-                <div class="grid three">
-                    <div>
-                        <label for="MinVolumeSpike">Volume spike</label>
-                        <input id="MinVolumeSpike" name="MinVolumeSpike" type="number" step="0.1" value="@entry.MinVolumeSpike" />
-                    </div>
-                    <div>
-                        <label for="MinEntryRsi">Min RSI</label>
-                        <input id="MinEntryRsi" name="MinEntryRsi" type="number" step="0.1" value="@entry.MinEntryRsi" />
-                    </div>
-                    <div>
-                        <label for="MaxEntryRsi">Max RSI</label>
-                        <input id="MaxEntryRsi" name="MaxEntryRsi" type="number" step="0.1" value="@entry.MaxEntryRsi" />
-                    </div>
-                </div>
-                <div class="grid three">
-                    <div>
-                        <label for="MaxVwapExtensionAtr">VWAP ext ATR</label>
-                        <input id="MaxVwapExtensionAtr" name="MaxVwapExtensionAtr" type="number" step="0.1" value="@entry.MaxVwapExtensionAtr" />
-                    </div>
-                    <div>
-                        <label>Confluence</label>
-                        <label class="check inline-check">
-                            <input name="ConfluenceEnabled" type="checkbox" checked="@confluence.Enabled" /> Enabled
-                        </label>
-                    </div>
-                    <div>
-                        <label for="ConfluenceTimeframe">Confluence TF</label>
-                        <input id="ConfluenceTimeframe" name="ConfluenceTimeframe" value="@confluence.Timeframe" />
-                    </div>
-                </div>
-                <div class="grid three">
-                    <div>
-                        <label for="ConfluenceEmaPeriod">Confluence EMA</label>
-                        <input id="ConfluenceEmaPeriod" name="ConfluenceEmaPeriod" type="number" min="1" value="@confluence.EmaPeriod" />
-                    </div>
-                    <div>
-                        <label for="StopAtrMultiple">Stop ATR</label>
-                        <input id="StopAtrMultiple" name="StopAtrMultiple" type="number" step="0.1" value="@exit.StopAtrMultiple" />
-                    </div>
-                    <div>
-                        <label for="TargetRMultiple">Target R</label>
-                        <input id="TargetRMultiple" name="TargetRMultiple" type="number" step="0.1" value="@exit.TargetRMultiple" />
-                    </div>
-                </div>
-                <div class="grid three">
-                    <div>
-                        <label for="MaxHoldHours">Max hold hours</label>
-                        <input id="MaxHoldHours" name="MaxHoldHours" type="number" step="1" value="@exit.MaxHoldHours" />
-                    </div>
-                    <div>
-                        <label>Trailing stop</label>
-                        <label class="check inline-check">
-                            <input name="EnableAtrTrailingStop" type="checkbox" checked="@exit.EnableAtrTrailingStop" /> Enabled
-                        </label>
-                    </div>
-                    <div>
-                        <label for="TrailingStopAtrMultiple">Trail ATR</label>
-                        <input id="TrailingStopAtrMultiple" name="TrailingStopAtrMultiple" type="number" step="0.1" value="@exit.TrailingStopAtrMultiple" />
-                    </div>
-                </div>
-                <div class="grid three">
-                    <div>
-                        <label for="TrailingActivationR">Trail activation R</label>
-                        <input id="TrailingActivationR" name="TrailingActivationR" type="number" step="0.1" value="@exit.TrailingActivationR" />
-                    </div>
-                    <div>
-                        <label for="MinHoldBarsBeforeTechnicalExit">Min tech exit bars</label>
-                        <input id="MinHoldBarsBeforeTechnicalExit" name="MinHoldBarsBeforeTechnicalExit" type="number" min="0" value="@exit.MinHoldBarsBeforeTechnicalExit" />
-                    </div>
-                    <div>
-                        <label for="ExecutionTimeframe">Execution TF</label>
-                        <input id="ExecutionTimeframe" name="ExecutionTimeframe" value="@execution.Timeframe" />
-                    </div>
-                </div>
-                <div class="grid three">
-                    <div>
-                        <label for="SlippageBps">Slippage bps</label>
-                        <input id="SlippageBps" name="SlippageBps" type="number" step="0.1" value="@execution.SlippageBps" />
-                    </div>
-                </div>
-            }
-
-                <div class="actions mt-md">
-                    <button type="submit" class="button" onclick="return confirm('Overwrite strategy YAML permanently?');">Save Strategy</button>
-                </div>
-            </form>
-        </details>
-    </div>
-
-    <!-- RIGHT COLUMN: Optimization Runner & Jobs -->
-    <div>
-        <form method="post" asp-page-handler="RunBacktest" class="panel highlight-border">
-            <h2>Backtest Runner</h2>
-            <div class="muted mb-md">Run selected promoted strategies against the selected universe. Generated configs use summary retention by default.</div>
-
-            <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
-            <input type="hidden" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
-            <input type="hidden" name="WishlistId" value="@Model.WishlistId" />
-
-            <div class="grid two">
-                <div>
-                    <label for="BacktestRunName">Run Name</label>
-                    <input name="RunName" id="BacktestRunName" value="backtest-lab" />
-                </div>
-                <div>
-                    <label for="LookbackDays">Lookback Days</label>
-                    <input name="LookbackDays" id="LookbackDays" type="number" min="5" max="1825" value="180" />
-                </div>
-            </div>
-            <div class="grid two">
-                <div>
-                    <label for="StartingCapital">Starting Capital</label>
-                    <input name="StartingCapital" id="StartingCapital" type="number" step="100" value="10000" />
-                </div>
-                <div>
-                    <label for="AccountRiskBudgetPct">Account Risk Budget %</label>
-                    <input name="AccountRiskBudgetPct" id="AccountRiskBudgetPct" type="number" step="0.1" value="1.0" />
-                </div>
-            </div>
-            <div class="grid two">
-                <div>
-                    <label for="MaxPositionNotionalPct">Max Position Notional %</label>
-                    <input name="MaxPositionNotionalPct" id="MaxPositionNotionalPct" type="number" step="1" value="25" />
-                </div>
-                <div>
-                    <label for="MaxConcurrentPositions">Max Positions</label>
-                    <input name="MaxConcurrentPositions" id="MaxConcurrentPositions" type="number" min="1" value="4" />
-                </div>
-            </div>
-            <label for="CachePolicy">Market Data</label>
-            <select name="CachePolicy" id="CachePolicy">
-                <option value="use_cache">Use cached candles</option>
-                <option value="refresh">Refresh provider data</option>
-            </select>
-
-            <div class="strategy-checks">
-                <label>Strategies</label>
-                @{
-                    var configuredStrategyPaths = selectedConfig?.Strategies.Select(s => s.Path).ToHashSet(StringComparer.OrdinalIgnoreCase) ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                }
-                @foreach (var strategy in Model.Strategies)
-                {
-                    var isChecked = configuredStrategyPaths.Contains(strategy.Path) || strategy.Path == Model.SelectedStrategyPath;
-                    <label class="check">
-                        <input type="checkbox" name="StrategyPaths" value="@strategy.Path" checked="@isChecked" />
-                        <span>@strategy.Definition.StrategyName</span>
-                        <span class="muted"> @AuditLine(strategy)</span>
+                    var isPromoted = strategy.Path.Contains(promotedRoot, StringComparison.OrdinalIgnoreCase);
+                    <label class="lab-strategy">
+                        @* Square, because these are independent multi-select. *@
+                        <input type="checkbox" name="StrategyPaths" value="@strategy.Path"
+                               checked="@(Model.SelectedStrategyPath == strategy.Path)" />
+                        <span class="lab-strategy-body">
+                            <span class="lab-strategy-name">@strategy.Definition.StrategyName v@strategy.Definition.Version</span>
+                            <span class="lab-strategy-meta">
+                                @strategy.Definition.Direction · @strategy.Definition.Timeframe / @strategy.Definition.Execution.Timeframe
+                            </span>
+                            @if (strategy.Audit is { } audit)
+                            {
+                                <span class="lab-strategy-audit">
+                                    Audit @Signed(audit.ReturnPct) / DD @audit.MaxDrawdownPct.ToString("0.00")% /
+                                    @audit.Trades trades / win @audit.WinRatePct.ToString("0.0")%
+                                </span>
+                            }
+                            @* Research-only strategies must never reach paper or live.
+                               Labelling the distinction here is how the operator learns it. *@
+                            <span class="tag @(isPromoted ? "tag-accent" : "tag-neutral")">
+                                @(isPromoted ? "PROMOTED" : "RESEARCH ONLY")
+                            </span>
+                        </span>
                     </label>
                 }
             </div>
-
-            <div class="actions mt-md">
-                <button type="submit" class="button go">Run Backtest</button>
-            </div>
-        </form>
-
-        <section class="panel mt-md">
-            <div class="section-title">
-                <h2>Research Snapshots</h2>
-            </div>
-            @if (Model.ResearchSnapshots.Count == 0)
-            {
-                <div class="muted">No curated research snapshots yet.</div>
-            }
-            else
-            {
-                <div class="table-scroll" tabindex="0" aria-label="Research snapshot results">
-                <table class="data-table compact-table">
-                    <thead>
-                        <tr>
-                            <th>Run</th>
-                            <th>Best Strategy</th>
-                            <th>Return</th>
-                            <th>DD</th>
-                            <th>Trades</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var snapshot in Model.ResearchSnapshots)
-                        {
-                            <tr>
-                                <td>@snapshot.RunId</td>
-                                <td>@snapshot.BestStrategyName</td>
-                                <td>@snapshot.TotalReturnPct.ToString("0.00")%</td>
-                                <td>@snapshot.MaxDrawdownPct.ToString("0.00")%</td>
-                                <td>@snapshot.AcceptedTradeCount</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-                </div>
-            }
+            <p class="note">
+                Select at least one strategy. A run with no strategy produces no evidence.
+            </p>
         </section>
 
-        <details class="panel mt-md">
-            <summary><strong>Optimization Runner</strong></summary>
-            <form class="mt-md" method="post" asp-page-handler="Optimize">
-            <h2>Optimization Runner</h2>
-            <div class="muted mb-md">Run grid search over parameter ranges for the selected strategy and environment.</div>
-            
-            <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
-            <input type="hidden" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
-
-            <div class="grid two">
-                <div>
-                    <label for="RunName">Run Name</label>
-                    <input name="RunName" id="RunName" value="opt-run" />
+        <section class="lab-block">
+            <h2 class="section-heading">Run parameters</h2>
+            <div class="lab-parameters">
+                <div class="field">
+                    <label for="RunName">Run name</label>
+                    <input class="input" id="RunName" name="RunName" value="lab-run" />
                 </div>
-                <div>
-                    <label for="Metric">Target Metric</label>
-                    <select name="Metric" id="Metric">
-                        <option value="TotalReturnPct">Total Return %</option>
-                        <option value="AverageDailyReturnPct">Avg Daily Return %</option>
-                        <option value="NetProfit">Net Profit</option>
-                        <option value="MaxDrawdownPct">Max Drawdown %</option>
-                        <option value="WinRate">Win Rate %</option>
+                <div class="field">
+                    <label for="LookbackDays">Lookback days</label>
+                    <input class="input" id="LookbackDays" name="LookbackDays" type="number" min="5" max="1825" value="180" />
+                </div>
+                <div class="field">
+                    <label for="StartingCapital">Starting capital</label>
+                    <input class="input" id="StartingCapital" name="StartingCapital" type="number" step="100" value="10000" />
+                </div>
+                <div class="field">
+                    <label for="AccountRiskBudgetPct">Account risk %</label>
+                    <input class="input" id="AccountRiskBudgetPct" name="AccountRiskBudgetPct" type="number" step="0.1" value="1" />
+                </div>
+                <div class="field">
+                    <label for="MaxPositionNotionalPct">Max position notional %</label>
+                    <input class="input" id="MaxPositionNotionalPct" name="MaxPositionNotionalPct" type="number" step="1" value="25" />
+                </div>
+                <div class="field">
+                    <label for="MaxConcurrentPositions">Max positions</label>
+                    <input class="input" id="MaxConcurrentPositions" name="MaxConcurrentPositions" type="number" min="1" value="4" />
+                </div>
+                <div class="field">
+                    <label for="CachePolicy">Market data</label>
+                    <select class="input" id="CachePolicy" name="CachePolicy">
+                        <option value="use_cache">Use cache</option>
+                        <option value="refresh">Refresh</option>
                     </select>
                 </div>
             </div>
+            <p class="note">
+                Completed-bar features, later-bar confirmation and next-bar execution are mandatory
+                and not configurable.
+            </p>
+        </section>
 
-            <div>
-                <label for="TargetRMultipleCsv">Target R Multiple (CSV)</label>
-                <input type="text" name="TargetRMultipleCsv" id="TargetRMultipleCsv" placeholder="e.g. 2.0, 3.0" value="1.5, 2.0, 3.0" />
-            </div>
-            <div>
-                <label for="StopAtrMultipleCsv">Stop ATR Multiple (CSV)</label>
-                <input type="text" name="StopAtrMultipleCsv" id="StopAtrMultipleCsv" placeholder="e.g. 1.5, 2.0" value="1.5, 2.0, 2.5" />
-            </div>
-            <div>
-                <label for="MinVolumeSpikeCsv">Min Volume Spike (CSV)</label>
-                <input type="text" name="MinVolumeSpikeCsv" id="MinVolumeSpikeCsv" placeholder="e.g. 1.5, 2.0, 3.0" value="1.5, 2.0, 2.5, 3.0" />
-            </div>
-
-            <div class="actions mt-md">
-                <button type="submit" class="button go">Launch Optimizer</button>
-            </div>
-            </form>
-        </details>
-
-        <section class="panel mt-md">
-            <div class="section-title">
-                <h2>Optimization Jobs</h2>
-                <a class="button secondary" asp-page="/Backtests" asp-route-configPath="@Model.SelectedConfigPath" asp-route-strategyPath="@Model.SelectedStrategyPath">Refresh</a>
-            </div>
-            
-            @if (Model.OptimizationJobs.Count == 0)
+        <section class="lab-block lab-run">
+            @if (Model.Phase == "running" && job is not null)
             {
-                <div class="muted">No optimization jobs.</div>
+                <button class="btn btn-secondary btn-block btn-xl" type="submit"
+                        asp-page-handler="CancelBacktest" asp-route-id="@job.JobId">
+                    <partial name="_Icon" model='new IconModel("square", 15)' />Cancel run
+                </button>
             }
             else
             {
-                <div class="table-scroll" tabindex="0" aria-label="Optimization jobs">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Run Name</th>
-                            <th>Status</th>
-                            <th>Started</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var job in Model.OptimizationJobs)
-                        {
-                            <tr>
-                                <td>@job.RunName</td>
-                                <td><span class="status @job.Status">@job.Status</span></td>
-                                <td>@(job.StartedAt?.ToString("HH:mm") ?? "-")</td>
-                                <td><a asp-page="/OptimizationJob" asp-route-id="@job.JobId">View</a></td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-                </div>
+                <button class="btn btn-primary btn-block btn-xl" type="submit">
+                    <partial name="_Icon" model='new IconModel("play", 15)' />Run backtest
+                </button>
             }
+            <p class="note">
+                Generated run configs are audit artifacts. They are not hand-maintained ticker lists.
+            </p>
         </section>
-        
-        <section class="panel mt-md">
-            <div class="section-title">
-                <h2>Recent Backtests</h2>
-            </div>
-            <partial name="_JobsTable" model="Model.BacktestJobs" />
-        </section>
+    </form>
+
+    @* =======================================================================
+       Main column - one of three phases
+       ======================================================================= *@
+    <div class="lab-main">
+        @if (Model.Phase == "configure")
+        {
+            <section class="lab-panel">
+                <h2 class="section-heading">Research snapshots</h2>
+                @if (Model.ResearchSnapshots.Count == 0)
+                {
+                    <p class="empty-state">No research snapshot has been written yet.</p>
+                }
+                else
+                {
+                    <div class="table-scroll">
+                        <table class="grid-table">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Run</th>
+                                    <th scope="col">Best strategy</th>
+                                    <th scope="col">Universe</th>
+                                    <th scope="col" class="num">Return</th>
+                                    <th scope="col" class="num">Max DD</th>
+                                    <th scope="col" class="num">Trades</th>
+                                    <th scope="col">Decision</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var snapshot in Model.ResearchSnapshots)
+                                {
+                                    <tr>
+                                        <td class="mono">@snapshot.RunId</td>
+                                        <td>@snapshot.BestStrategyName</td>
+                                        <td>@snapshot.UniverseSource</td>
+                                        <td class="num @SignedClass(snapshot.TotalReturnPct)">@Signed(snapshot.TotalReturnPct)</td>
+                                        <td class="num">@snapshot.MaxDrawdownPct.ToString("0.00")%</td>
+                                        <td class="num">@snapshot.AcceptedTradeCount</td>
+                                        <td>
+                                            <span class="tag @(snapshot.Decision == "PROMOTED" ? "tag-promoted" : "tag-research")">@snapshot.Decision</span>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                <p class="note">
+                    Partial exits are not modelled. A backtest supports one entry and one full-position
+                    exit, so strategies that scale out will read differently here than in paper.
+                </p>
+            </section>
+
+            <section class="lab-panel">
+                <h2 class="section-heading">Recent runs</h2>
+                @if (Model.BacktestJobs.Count == 0)
+                {
+                    <p class="empty-state">No backtest has been started in this session.</p>
+                }
+                else
+                {
+                    <ul class="lab-run-list">
+                        @foreach (var recent in Model.BacktestJobs)
+                        {
+                            <li>
+                                <a asp-page="/Backtests" asp-route-jobId="@recent.JobId" asp-route-wishlistId="@Model.WishlistId">
+                                    <strong>@recent.RunName</strong>
+                                    <span class="tag @(recent.Status == "completed" ? "tag-neutral" : "tag-accent")">@recent.Status</span>
+                                </a>
+                            </li>
+                        }
+                    </ul>
+                }
+            </section>
+        }
+        else if (job is not null && Model.Phase == "running")
+        {
+            <partial name="_LabRunning" model="job" />
+        }
+        else if (job is not null && result is not null && drilled is not null && gates is not null)
+        {
+            <partial name="_LabResults" model="new LabResultsModel(Model, job, result, drilled, gates)" />
+        }
+        else
+        {
+            <p class="empty-state">This run completed without a result payload.</p>
+        }
     </div>
 </div>
+
+@section Scripts {
+    @if (Model.Phase == "running" && job is not null)
+    {
+        <script src="~/js/lab-progress.js" asp-append-version="true" data-job-id="@job.JobId" defer></script>
+    }
+}

@@ -18,6 +18,13 @@ public sealed record MarketPredictorOptions(
 /// </summary>
 public sealed class MarketPredictorHttpClient
 {
+    /// <summary>
+    /// The service caps a request at 100 symbols (PredictionRequest.tickers).
+    /// Batching to that cap keeps a full universe to as few round trips as the
+    /// contract allows; exceeding it is a 422, not a truncation.
+    /// </summary>
+    internal const int MaximumTickersPerRequest = 100;
+
     private readonly HttpClient httpClient;
     private readonly MarketPredictorOptions options;
     private readonly TimeProvider timeProvider;
@@ -113,6 +120,132 @@ public sealed class MarketPredictorHttpClient
                 normalizedHorizon,
                 "incompatible",
                 "Market Predictor response did not match the supported contract.");
+        }
+    }
+
+    /// <summary>
+    /// Scores a whole candidate universe in as few calls as the service allows.
+    ///
+    /// The desk ranks a universe, not a symbol, so asking per ticker would turn
+    /// one screen load into N round trips against a service that already accepts
+    /// a batch. Every ticker in <paramref name="tickers"/> comes back in the
+    /// result: one that the service did not answer for is present as an
+    /// unavailable result rather than absent, so a caller cannot mistake a
+    /// missing answer for a negative one.
+    /// </summary>
+    /// <param name="tickers">Candidate symbols. Order is not significant.</param>
+    /// <param name="mode">swing, intraday or unified.</param>
+    /// <param name="horizon">Requested horizon, or auto.</param>
+    public async Task<IReadOnlyDictionary<string, MarketPredictorResult>> GetBatchAsync(
+        IReadOnlyCollection<string> tickers,
+        string mode,
+        string horizon,
+        CancellationToken cancellationToken)
+    {
+        var normalizedMode = NormalizeMode(mode);
+        var normalizedHorizon = String.IsNullOrWhiteSpace(horizon) ? "auto" : horizon.Trim().ToLowerInvariant();
+        var results = new Dictionary<string, MarketPredictorResult>(StringComparer.OrdinalIgnoreCase);
+
+        // A symbol the adapter cannot even normalise never reaches the service.
+        // It is recorded as invalid here so the caller still sees a row for it.
+        var normalized = new List<string>(tickers.Count);
+        foreach (var ticker in tickers)
+        {
+            string candidate;
+            try
+            {
+                candidate = NormalizeTicker(ticker);
+            }
+            catch (ArgumentException)
+            {
+                var raw = (ticker ?? String.Empty).Trim().ToUpperInvariant();
+                results[raw] = MarketPredictorResult.Unavailable(
+                    raw, normalizedMode, normalizedHorizon, "invalid", "Ticker is not a canonical US symbol.");
+                continue;
+            }
+
+            if (!results.ContainsKey(candidate) && !normalized.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+            {
+                normalized.Add(candidate);
+            }
+        }
+
+        if (normalized.Count == 0)
+        {
+            return results;
+        }
+
+        if (!options.IsConfigured)
+        {
+            foreach (var ticker in normalized)
+            {
+                results[ticker] = MarketPredictorResult.Unavailable(
+                    ticker, normalizedMode, normalizedHorizon, "not_configured",
+                    "Market Predictor endpoint is not configured.");
+            }
+            return results;
+        }
+
+        foreach (var batch in normalized.Chunk(MaximumTickersPerRequest))
+        {
+            var requestTime = timeProvider.GetUtcNow();
+            var response = await PostBatchAsync(batch, normalizedMode, normalizedHorizon, requestTime, cancellationToken);
+            foreach (var ticker in batch)
+            {
+                results[ticker] = response is null
+                    ? MarketPredictorResult.Unavailable(
+                        ticker, normalizedMode, normalizedHorizon, "unavailable", "Market Predictor is unavailable.")
+                    : Validate(response, ticker, normalizedMode, normalizedHorizon, requestTime);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Sends one batch and returns the payload, or null when the call could not
+    /// be completed. Failure is not thrown: one unreachable batch must degrade
+    /// that batch to unavailable evidence, not fail the whole screen.
+    /// </summary>
+    private async Task<PredictorResponse?> PostBatchAsync(
+        IReadOnlyList<string> tickers,
+        string mode,
+        string horizon,
+        DateTimeOffset requestTime,
+        CancellationToken cancellationToken)
+    {
+        var request = new PredictorRequest(tickers, mode, horizon, requestTime);
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(options.RequestTimeout);
+            using var response = await httpClient.PostAsJsonAsync(
+                $"v1/predictions/{mode}",
+                request,
+                PredictorJsonContext.Default.PredictorRequest,
+                timeout.Token);
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogWarning(
+                    "Market Predictor batch of {Count} symbols returned HTTP {StatusCode}.",
+                    tickers.Count,
+                    (int)response.StatusCode);
+                return null;
+            }
+
+            return await response.Content.ReadFromJsonAsync(
+                PredictorJsonContext.Default.PredictorResponse,
+                timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning("Market Predictor batch of {Count} symbols timed out.", tickers.Count);
+            return null;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or JsonException)
+        {
+            logger.LogWarning(exception, "Market Predictor batch of {Count} symbols failed.", tickers.Count);
+            return null;
         }
     }
 

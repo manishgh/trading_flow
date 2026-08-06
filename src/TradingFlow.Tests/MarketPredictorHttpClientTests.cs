@@ -90,6 +90,71 @@ public sealed class MarketPredictorHttpClientTests
         Assert.Equal("not configured", notConfigured.Status);
     }
 
+    [Fact]
+    public async Task GetBatchAsync_ScoresEveryRequestedSymbolFromOneRequest()
+    {
+        var handler = new StubHandler(_ => JsonResponse(ValidUnifiedPayload(Now.AddSeconds(-5), "MU", "NVDA")));
+        var client = CreateClient(handler);
+
+        var results = await client.GetBatchAsync(["mu", "NVDA"], "unified", "auto", CancellationToken.None);
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal("available", results["MU"].AvailabilityStatus);
+        Assert.Equal("available", results["NVDA"].AvailabilityStatus);
+    }
+
+    [Fact]
+    public async Task GetBatchAsync_ReturnsUnavailableForASymbolTheServiceOmitted()
+    {
+        // A symbol the service did not answer for must come back as unavailable
+        // evidence, not be missing: an absent row would read as "no signal"
+        // rather than "no answer".
+        var handler = new StubHandler(_ => JsonResponse(ValidUnifiedPayload(Now.AddSeconds(-5), "MU")));
+        var client = CreateClient(handler);
+
+        var results = await client.GetBatchAsync(["MU", "NVDA"], "unified", "auto", CancellationToken.None);
+
+        Assert.Equal("available", results["MU"].AvailabilityStatus);
+        Assert.Equal("invalid", results["NVDA"].AvailabilityStatus);
+        Assert.Contains("No prediction", results["NVDA"].AvailabilityReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetBatchAsync_ChunksToTheServiceTickerCap()
+    {
+        var tickers = Enumerable.Range(0, 150).Select(index => $"AA{index:D3}").ToArray();
+        var handler = new StubHandler(_ => JsonResponse(ValidUnifiedPayload(Now.AddSeconds(-5), "AA000")));
+        var client = CreateClient(handler);
+
+        var results = await client.GetBatchAsync(tickers, "unified", "auto", CancellationToken.None);
+
+        Assert.Equal(2, handler.RequestCount);
+        Assert.Equal(150, results.Count);
+    }
+
+    [Fact]
+    public async Task GetBatchAsync_WhenABatchFails_DegradesThatBatchRatherThanThrowing()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        var client = CreateClient(handler);
+
+        var results = await client.GetBatchAsync(["MU", "NVDA"], "unified", "auto", CancellationToken.None);
+
+        Assert.All(results.Values, result => Assert.Equal("unavailable", result.AvailabilityStatus));
+    }
+
+    [Fact]
+    public async Task GetBatchAsync_RecordsAnUnusableSymbolWithoutCallingTheService()
+    {
+        var handler = new StubHandler(_ => JsonResponse(ValidUnifiedPayload(Now.AddSeconds(-5), "MU")));
+        var client = CreateClient(handler);
+
+        var results = await client.GetBatchAsync(["MU", "not a ticker"], "unified", "auto", CancellationToken.None);
+
+        Assert.Equal("available", results["MU"].AvailabilityStatus);
+        Assert.Equal("invalid", results["NOT A TICKER"].AvailabilityStatus);
+    }
+
     private static MarketPredictorHttpClient CreateClient(StubHandler handler, bool configured = true)
     {
         var resolvedBaseUri = new Uri("http://predictor.test/");
@@ -109,16 +174,27 @@ public sealed class MarketPredictorHttpClientTests
         Content = new StringContent(payload, Encoding.UTF8, "application/json")
     };
 
-    private static string ValidUnifiedPayload(DateTimeOffset generatedAtUtc) => $$$"""
+    private static string ValidUnifiedPayload(DateTimeOffset generatedAtUtc, params string[] tickers)
     {
-      "request_id": "req-1",
-      "generated_at_utc": "{{{generatedAtUtc:O}}}",
-      "mode": "unified",
-      "horizon": "auto",
-      "resolved_horizons": {"swing":"5d","intraday":"30m"},
-      "models": {"swing":{"status":"promoted","model_type":"lightgbm","schema_version":"1","target":"return_5d"}},
-      "predictions": [{
-        "ticker": "MU",
+        var predictions = String.Join(",", (tickers.Length == 0 ? ["MU"] : tickers).Select(PredictionFor));
+        return $$$"""
+        {
+          "request_id": "req-1",
+          "generated_at_utc": "{{{generatedAtUtc:O}}}",
+          "mode": "unified",
+          "horizon": "auto",
+          "resolved_horizons": {"swing":"5d","intraday":"30m"},
+          "models": {"swing":{"status":"promoted","model_type":"lightgbm","schema_version":"1","target":"return_5d"}},
+          "predictions": [{{{predictions}}}],
+          "errors": [],
+          "snapshot_id": "snapshot-1"
+        }
+        """;
+    }
+
+    private static string PredictionFor(string ticker) => $$"""
+      {
+        "ticker": "{{ticker}}",
         "final_signal": "watch",
         "readiness_status": "valid",
         "errors": [],
@@ -136,11 +212,8 @@ public sealed class MarketPredictorHttpClientTests
           "catalyst": {"status":"confirmed","direction":"positive","score":0.7,"event_count":1,"relevance":0.9,"minutes_since_latest":12,"reasons":[]},
           "readiness": {"status":"valid","reasons":[],"latest_price_date":"2026-07-22","price_feed":"sip","benchmark_status":"valid","market_context_status":"valid","model_status":"promoted","source_status":"valid"}
         }
-      }],
-      "errors": [],
-      "snapshot_id": "snapshot-1"
-    }
-    """;
+      }
+      """;
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
     {

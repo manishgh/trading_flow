@@ -141,7 +141,6 @@ public sealed class NewsFeedService : BackgroundService
             var earningsTickers = await GetCurrentEarningsTickersAsync(nowUtc, cancellationToken);
             var events = new List<CatalystEvent>();
             events.AddRange(await LoadFinvizNewsAsync(cancellationToken));
-            events.AddRange(await LoadAlpacaNewsAsync(earningsTickers, evidenceWindow.StartUtc, nowUtc, cancellationToken));
             events.AddRange(await officialNews.GetEventsAsync(earningsTickers, evidenceWindow.StartUtc, cancellationToken));
             events = events
                 .Where(item => item.Timestamp >= retentionStartUtc)
@@ -186,8 +185,7 @@ public sealed class NewsFeedService : BackgroundService
         return stored
             .Where(item => normalizedTickers.Contains(item.Ticker) ||
                 (item.Ticker.Equals("MARKET", StringComparison.OrdinalIgnoreCase) && IsRelevantMarketEvidence(item)))
-            .GroupBy(ArticleDedupeKey, StringComparer.OrdinalIgnoreCase)
-            .Select(group => ToEarningsEvidence(group, normalizedTickers))
+            .Select(item => ToEarningsEvidence(item, normalizedTickers))
             .OrderByDescending(item => item.PublishedAtUtc)
             .ThenBy(item => item.Headline, StringComparer.OrdinalIgnoreCase)
             .Take(120)
@@ -520,13 +518,10 @@ public sealed class NewsFeedService : BackgroundService
     }
 
     private static EarningsNewsEvidenceResponse ToEarningsEvidence(
-        IGrouping<string, PersistedNewsItem> group,
+        PersistedNewsItem first,
         IReadOnlySet<string> earningsTickers)
     {
-        var items = group.OrderByDescending(item => item.Timestamp).ToArray();
-        var first = items[0];
-        var relatedTickers = items
-            .Select(item => item.Ticker)
+        var relatedTickers = new[] { first.Ticker }
             .Where(ticker => earningsTickers.Contains(ticker))
             .ToArray();
         var category = ClassifyEvidence(first);
@@ -538,7 +533,7 @@ public sealed class NewsFeedService : BackgroundService
             first.SentimentScore >= 0.15m ? "Bullish" : first.SentimentScore <= -0.15m ? "Bearish" : "Neutral",
             NormalizeHeadline(first.Headline, first.Summary, first.Source, first.Provider),
             NormalizeSummary(first.Summary, first.Headline),
-            String.Join(" + ", items.Select(item => item.Provider).Distinct(StringComparer.OrdinalIgnoreCase)),
+            first.Provider ?? "system",
             first.Source,
             first.Url,
             ExplainEvidence(category));

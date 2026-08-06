@@ -18,7 +18,15 @@ public sealed record OperationalStatusSnapshot(
     string BrokerStatus,
     string BrokerDetail,
     string AdmissionStatus,
-    string AdmissionDetail);
+    string AdmissionDetail,
+    /// <summary>
+    /// Broker buying power and equity, or null when the account could not be
+    /// read. Null renders as unknown on screen; a trading surface must never
+    /// show a placeholder figure where an operator expects an account balance.
+    /// </summary>
+    decimal? BuyingPower = null,
+    decimal? Equity = null,
+    string AccountDetail = "Account has not been read.");
 
 /// <summary>
 /// Produces the operator-facing status summary from authoritative server state.
@@ -82,6 +90,7 @@ public sealed class OperationalStatusService : IDisposable
         var reconcile = reconciliation.GetHealth();
         var admissionSnapshot = admission.GetSnapshot();
         var model = await marketPredictor.GetHealthAsync(cancellationToken);
+        var account = await GetAccountAsync(cancellationToken);
 
         var brokerReady = sync.StreamConnected && reconcile.InitialReconciliationCompleted &&
             String.Equals(reconcile.Status, "clean", StringComparison.OrdinalIgnoreCase);
@@ -107,7 +116,59 @@ public sealed class OperationalStatusService : IDisposable
             brokerReady ? "ready" : "attention",
             brokerDetail,
             admissionSnapshot.EntriesAllowed ? "allowed" : "blocked",
-            admissionDetail);
+            admissionDetail,
+            account.Snapshot?.BuyingPower,
+            account.Snapshot?.Equity,
+            account.Detail);
+    }
+
+    /// <summary>
+    /// Read-only account observation. Used for the buying-power cell and the
+    /// Alpaca credential row on the operations screen; it places no order and
+    /// changes nothing at the broker.
+    /// </summary>
+    public async Task<(BrokerAccountSnapshot? Snapshot, string Detail)> GetAccountAsync(
+        CancellationToken cancellationToken)
+    {
+        if (!credentials.IsConfigured)
+        {
+            return (null, "Alpaca credentials are not configured.");
+        }
+
+        try
+        {
+            var client = await GetProviderAsync(cancellationToken);
+            var snapshot = await client.GetAccountSnapshotAsync(cancellationToken);
+            return (snapshot, $"Account {snapshot.Status.ToLowerInvariant()}; read-only check succeeded.");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Unable to read the Alpaca account snapshot.");
+            return (null, "Account could not be read; buying power is unknown.");
+        }
+    }
+
+    /// <summary>Trading calendar read exposed for the operations screen.</summary>
+    public Task<TradingSessionSnapshot?> GetTradingSessionAsync(CancellationToken cancellationToken) =>
+        GetSessionAsync(timeProvider.GetUtcNow(), cancellationToken);
+
+    /// <summary>
+    /// Quote-age thresholds, stated on screen so "delayed" and "stale" are
+    /// readable as the constants they are rather than as adjectives.
+    /// </summary>
+    public static TimeSpan FreshQuoteThreshold => FreshQuoteAge;
+
+    public static TimeSpan StaleQuoteThreshold => StaleQuoteAge;
+
+    /// <summary>Quote state for an arbitrary set of observations.</summary>
+    public (string Status, string Detail) DescribeQuoteAge(IEnumerable<DateTimeOffset?> quoteTimestamps)
+    {
+        var newest = quoteTimestamps
+            .Where(timestamp => timestamp.HasValue)
+            .Select(timestamp => timestamp!.Value.ToUniversalTime())
+            .DefaultIfEmpty()
+            .Max();
+        return DescribeQuote(timeProvider.GetUtcNow(), newest == default ? null : newest);
     }
 
     public void Dispose()

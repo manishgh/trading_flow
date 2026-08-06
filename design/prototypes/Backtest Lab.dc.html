@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/modernist-4f4a56b3-a32f-4519-b155-938ba199102d/styles.css">
+<script src="_ds/modernist-4f4a56b3-a32f-4519-b155-938ba199102d/_ds_bundle.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=swap">
+<style>
+  html, body { margin: 0; padding: 0; background: var(--color-bg); }
+  a { color: var(--color-accent-700); text-decoration: none; }
+  a:hover { color: var(--color-accent); text-decoration: underline; }
+  .tf-scroll { overflow: auto; }
+  .tf-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+  .tf-scroll::-webkit-scrollbar-thumb { background: var(--color-neutral-400); }
+  .tf-chip { all: unset; cursor: pointer; white-space: nowrap; }
+  .tf-chip:hover { background: var(--color-neutral-200) !important; }
+  table.tf-grid { width: 100%; border-collapse: collapse; }
+  table.tf-grid th {
+    text-align: left; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    font-weight: 700; color: var(--color-neutral-700); padding: 7px 10px;
+    border-bottom: 2px solid var(--color-divider); background: var(--color-bg);
+    position: sticky; top: 0; z-index: 2; white-space: nowrap;
+  }
+  table.tf-grid td { padding: 7px 10px; border-bottom: 1px solid var(--color-neutral-300); vertical-align: middle; }
+  table.tf-grid tbody tr:hover { background: var(--color-neutral-200); }
+  table.tf-grid tbody tr[data-win="1"] { background: var(--color-accent-100); box-shadow: inset 3px 0 0 var(--color-accent); }
+  .tf-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tf-pick { all: unset; cursor: pointer; display: block; width: 100%; }
+  .tf-pick:hover { background: var(--color-neutral-200); }
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body);font-size:13px;-webkit-font-smoothing:antialiased">
+
+  <header style="display:flex;align-items:center;gap:24px;padding:0 20px;height:52px;border-bottom:2px solid var(--color-divider);background:var(--color-bg);position:sticky;top:0;z-index:20">
+    <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;letter-spacing:-0.01em;white-space:nowrap">TRADINGFLOW</span>
+    <nav style="display:flex;gap:2px;align-items:center">
+      <a href="Trading Desk.dc.html" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Desk</a>
+      <a href="Trading Desk.dc.html#positions" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Positions</a>
+      <a href="Trading Desk.dc.html#orders" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Orders</a>
+      <a href="Trading Desk.dc.html#news" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">News</a>
+      <a href="Earnings.dc.html" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Earnings</a>
+      <span style="padding:6px 10px;font-size:13px;font-weight:700;color:var(--color-accent);border-bottom:2px solid var(--color-accent)">Research</span>
+      <a href="#ops" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Operations</a>
+    </nav>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:14px">
+      <span class="tag tag-outline" style="font-weight:700;letter-spacing:0.05em">RESEARCH DECISION · RETAIN_RESEARCH</span>
+      <span style="font-size:12px;color:var(--color-neutral-700)">operator</span>
+    </div>
+  </header>
+
+  <section style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:16px 20px 13px;border-bottom:2px solid var(--color-divider)">
+    <div>
+      <small style="display:block;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent);font-weight:700">Backtesting research</small>
+      <h1 style="font-family:var(--font-heading);font-weight:800;font-size:30px;line-height:1.05;letter-spacing:-0.02em;margin:5px 0 0">Strategy Lab</h1>
+      <p style="margin:6px 0 0;font-size:13.5px;color:var(--color-neutral-800);max-width:78ch;line-height:1.45;text-wrap:pretty">Select strategies, run them against one wishlist universe, and compare portfolio-level results. A profitable run is not a promotion — the preregistered gates below decide that.</p>
+    </div>
+    <div style="display:flex;gap:0;border:1px solid var(--color-divider)">
+      <sc-for list="{{ phases }}" as="ph" hint-placeholder-count="3">
+        <button class="tf-chip" style="padding:7px 14px;font-size:12px;border-left:{{ ph.border }};font-weight:{{ ph.weight }};background:{{ ph.bg }};color:{{ ph.fg }}" onClick="{{ ph.apply }}">{{ ph.label }}</button>
+      </sc-for>
+    </div>
+  </section>
+
+  <div style="display:grid;grid-template-columns:404px minmax(0,1fr);align-items:start">
+
+    <aside class="tf-scroll" style="border-right:2px solid var(--color-divider);max-height:calc(100vh - 190px);position:sticky;top:0">
+
+      <div style="padding:14px 18px;border-bottom:2px solid var(--color-divider)">
+        <h2 style="display:flex;align-items:center;gap:7px;font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 11px">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"></path><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"></path><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"></path></svg>Universe</h2>
+        <div class="field">
+          <label for="bt-wl">Wishlist</label>
+          <select class="input" id="bt-wl" style="height:32px;min-height:32px;padding:4px 8px" value="{{ wishlist }}" onChange="{{ setWishlist }}">
+            <option value="swing">Swing quality · 22 active</option>
+            <option value="intraday">Intraday catalyst · 14 active</option>
+            <option value="earnings">Earnings reaction · 9 active</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:10px">
+          <sc-for list="{{ universe }}" as="sym" hint-placeholder-count="14">
+            <span class="tag tag-neutral" style="font-weight:700;font-size:10.5px;letter-spacing:0.03em">{{ sym }}</span>
+          </sc-for>
+        </div>
+        <p style="margin:10px 0 0;font-size:11.5px;color:var(--color-neutral-700);line-height:1.4">Point-in-time membership is required for a promotable run. This wishlist is a current list, so the run is marked research-only.</p>
+      </div>
+
+      <div style="padding:14px 18px;border-bottom:2px solid var(--color-divider)">
+        <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 11px">Strategies</h2>
+        <div style="border:1px solid var(--color-divider)">
+          <sc-for list="{{ catalog }}" as="st" hint-placeholder-count="7">
+            <label style="display:grid;grid-template-columns:18px minmax(0,1fr);gap:9px;padding:9px 11px;border-top:{{ st.border }};cursor:pointer;background:{{ st.bg }}">
+              <input type="checkbox" style="width:16px;height:16px;margin:2px 0 0;accent-color:var(--color-accent)" checked="{{ st.on }}" onChange="{{ st.toggle }}" />
+              <span style="min-width:0">
+                <strong style="display:block;font-size:12.5px;line-height:1.25">{{ st.name }}</strong>
+                <small style="display:block;font-size:10.5px;color:var(--color-neutral-700);margin-top:2px">{{ st.meta }}</small>
+                <small style="display:block;font-size:10.5px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums;margin-top:1px">{{ st.audit }}</small>
+                <span class="tag {{ st.tagCls }}" style="margin-top:5px;font-weight:700;font-size:9.5px;letter-spacing:0.06em">{{ st.status }}</span>
+              </span>
+            </label>
+          </sc-for>
+        </div>
+        <p style="margin:9px 0 0;font-size:11.5px;color:var(--color-neutral-700);line-height:1.4">{{ selectedCountText }}</p>
+      </div>
+
+      <div style="padding:14px 18px;border-bottom:2px solid var(--color-divider)">
+        <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 11px">Run parameters</h2>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+          <div class="field"><label for="bt-name">Run name</label><input class="input" id="bt-name" style="height:32px;min-height:32px;padding:4px 8px" value="{{ runName }}" onChange="{{ setRunName }}" /></div>
+          <div class="field"><label for="bt-look">Lookback days</label><input class="input" id="bt-look" type="number" min="5" max="1825" style="height:32px;min-height:32px;padding:4px 8px;font-variant-numeric:tabular-nums" value="{{ lookback }}" onChange="{{ setLookback }}" /></div>
+          <div class="field"><label for="bt-cap">Starting capital</label><input class="input" id="bt-cap" type="number" step="100" style="height:32px;min-height:32px;padding:4px 8px;font-variant-numeric:tabular-nums" value="{{ capital }}" onChange="{{ setCapital }}" /></div>
+          <div class="field"><label for="bt-risk">Account risk %</label><input class="input" id="bt-risk" type="number" step="0.1" style="height:32px;min-height:32px;padding:4px 8px;font-variant-numeric:tabular-nums" value="{{ risk }}" onChange="{{ setRisk }}" /></div>
+          <div class="field"><label for="bt-notional">Max position notional %</label><input class="input" id="bt-notional" type="number" step="1" style="height:32px;min-height:32px;padding:4px 8px;font-variant-numeric:tabular-nums" value="{{ notional }}" onChange="{{ setNotional }}" /></div>
+          <div class="field"><label for="bt-slots">Max positions</label><input class="input" id="bt-slots" type="number" min="1" style="height:32px;min-height:32px;padding:4px 8px;font-variant-numeric:tabular-nums" value="{{ slots }}" onChange="{{ setSlots }}" /></div>
+        </div>
+        <div class="field" style="margin-top:10px">
+          <label for="bt-cache">Market data</label>
+          <select class="input" id="bt-cache" style="height:32px;min-height:32px;padding:4px 8px" value="{{ cache }}" onChange="{{ setCache }}">
+            <option value="use_cache">Use cached candles</option>
+            <option value="refresh">Refresh provider data</option>
+          </select>
+        </div>
+        <p style="margin:9px 0 0;font-size:11.5px;color:var(--color-neutral-700);line-height:1.4">Scoring window {{ lookback }} d plus 60 d warm-up. Completed-bar features, later-bar confirmation and next-bar execution are mandatory and not configurable.</p>
+      </div>
+
+      <div style="padding:14px 18px">
+        <sc-if value="{{ notRunning }}" hint-placeholder-val="{{ true }}">
+          <button class="btn btn-primary btn-block" style="min-height:40px;padding:8px 14px;font-size:13.5px;margin-top:0" onClick="{{ start }}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>{{ startLabel }}</button>
+        </sc-if>
+        <sc-if value="{{ running }}" hint-placeholder-val="{{ false }}">
+          <button class="btn btn-secondary btn-block" style="min-height:40px;padding:8px 14px;font-size:13.5px;margin-top:0" onClick="{{ cancel }}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="0"></rect></svg>Cancel run</button>
+        </sc-if>
+        <p style="margin:9px 0 0;font-size:11.5px;color:var(--color-neutral-700);line-height:1.4">Generated run configs are audit artifacts. They are not hand-maintained ticker lists.</p>
+      </div>
+    </aside>
+
+    <main class="tf-scroll" style="max-height:calc(100vh - 190px)">
+
+      <sc-if value="{{ showProgress }}" hint-placeholder-val="{{ false }}">
+        <section aria-label="Run progress" style="border-bottom:2px solid var(--color-divider)">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:15px 20px 12px">
+            <div>
+              <div style="display:flex;align-items:baseline;gap:10px">
+                <h2 style="font-family:var(--font-heading);font-weight:800;font-size:20px;letter-spacing:-0.01em;margin:0">{{ runName }}</h2>
+                <span class="tag {{ statusTag }}" style="font-weight:700;letter-spacing:0.06em">{{ statusLabel }}</span>
+              </div>
+              <p style="margin:5px 0 0;font-size:12.5px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ stageText }} · elapsed {{ elapsed }}</p>
+            </div>
+            <div style="text-align:right">
+              <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:26px;line-height:1;font-variant-numeric:tabular-nums">{{ progressText }}</strong>
+              <small style="font-size:11.5px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ progressPctText }} of work items</small>
+            </div>
+          </div>
+          <div style="height:6px;background:var(--color-neutral-300);margin:0 20px">
+            <div style="height:6px;background:var(--color-accent);width:{{ progressWidth }}"></div>
+          </div>
+          <ol style="list-style:none;margin:14px 20px 0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--color-divider)">
+            <sc-for list="{{ phaseRail }}" as="p" hint-placeholder-count="4">
+              <li style="padding:9px 12px;border-left:{{ p.border }};background:{{ p.bg }}">
+                <span style="display:flex;align-items:baseline;gap:8px">
+                  <strong style="font-family:var(--font-heading);font-weight:800;font-size:15px;color:{{ p.fg }}">{{ p.n }}</strong>
+                  <strong style="font-size:12.5px;color:{{ p.fg }}">{{ p.title }}</strong>
+                </span>
+                <small style="display:block;margin-top:2px;font-size:11px;color:{{ p.sub }}">{{ p.detail }}</small>
+              </li>
+            </sc-for>
+          </ol>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;margin:14px 20px 18px;border:1px solid var(--color-divider)">
+            <sc-for list="{{ groupCards }}" as="g" hint-placeholder-count="4">
+              <article style="padding:10px 12px;border-top:{{ g.border }};border-right:{{ g.rightBorder }}">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                  <strong style="font-size:12.5px;line-height:1.25;min-width:0">{{ g.name }}</strong>
+                  <span style="font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--color-neutral-700)">{{ g.count }}</span>
+                </div>
+                <p style="margin:3px 0 6px;font-size:11px;color:var(--color-neutral-700)">{{ g.status }}</p>
+                <div style="height:4px;background:var(--color-neutral-300)">
+                  <div style="height:4px;background:{{ g.barColor }};width:{{ g.width }}"></div>
+                </div>
+                <ul style="list-style:none;margin:7px 0 0;padding:0;display:grid;gap:2px">
+                  <sc-for list="{{ g.events }}" as="ev" hint-placeholder-count="3">
+                    <li style="font-size:10.5px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ ev }}</li>
+                  </sc-for>
+                </ul>
+              </article>
+            </sc-for>
+          </div>
+          <div style="padding:0 20px 18px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:7px">
+              <h3 style="font-family:var(--font-heading);font-weight:800;font-size:11px;letter-spacing:0.07em;text-transform:uppercase;margin:0">Activity</h3>
+              <small style="font-size:11px;color:var(--color-neutral-700)">Newest first</small>
+            </div>
+            <ul style="list-style:none;margin:0;padding:0;border-top:1px solid var(--color-neutral-300)">
+              <sc-for list="{{ activity }}" as="ev" hint-placeholder-count="6">
+                <li style="padding:5px 0;border-bottom:1px solid var(--color-neutral-300);font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--color-neutral-800)">{{ ev }}</li>
+              </sc-for>
+            </ul>
+          </div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{ showResults }}" hint-placeholder-val="{{ false }}">
+        <section aria-label="Results">
+          <div style="display:grid;grid-template-columns:1.5fr repeat(3,minmax(0,1fr));border-bottom:2px solid var(--color-divider)">
+            <div style="padding:14px 20px;border-right:1px solid var(--color-neutral-300);background:var(--color-accent-100)">
+              <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-accent-800);font-weight:700">Winner</small>
+              <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:18px;line-height:1.15;margin-top:3px">{{ winner.name }}</strong>
+              <span style="display:block;margin-top:4px;font-size:12.5px;color:var(--color-accent-900);font-variant-numeric:tabular-nums">{{ winner.summary }}</span>
+            </div>
+            <div style="padding:14px 20px;border-right:1px solid var(--color-neutral-300)">
+              <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Ending capital</small>
+              <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums;margin-top:3px">{{ endingCapital }}</strong>
+              <span style="font-size:12px;font-variant-numeric:tabular-nums;color:{{ netColor }}">{{ netProfit }} net</span>
+            </div>
+            <div style="padding:14px 20px;border-right:1px solid var(--color-neutral-300)">
+              <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Accepted trades</small>
+              <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums;margin-top:3px">{{ tradeCount }}</strong>
+              <span style="font-size:12px;font-variant-numeric:tabular-nums;color:var(--color-neutral-700)">{{ winLossText }}</span>
+            </div>
+            <div style="padding:14px 20px">
+              <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Daily average</small>
+              <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums;margin-top:3px">{{ dailyAvg }}</strong>
+              <span style="font-size:12px;font-variant-numeric:tabular-nums;color:var(--color-neutral-700)">{{ tradingDays }} trading days</span>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);border-bottom:2px solid var(--color-divider)">
+            <div style="padding:15px 20px;border-right:1px solid var(--color-neutral-300)">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:11px">
+                <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">Equity curves</h2>
+                <small style="font-size:11px;color:var(--color-neutral-700)">Portfolio equity, {{ lookback }} sessions, all selected strategies</small>
+              </div>
+              <div style="position:relative">{{ chart }}</div>
+              <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px">
+                <sc-for list="{{ legend }}" as="l" hint-placeholder-count="4">
+                  <span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px">
+                    <span style="width:16px;height:0;border-top:{{ l.stroke }}"></span>
+                    <span style="color:var(--color-neutral-800)">{{ l.name }}</span>
+                    <strong style="font-variant-numeric:tabular-nums;color:{{ l.color }}">{{ l.ret }}</strong>
+                  </span>
+                </sc-for>
+              </div>
+            </div>
+            <div style="padding:15px 20px">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:11px">
+                <h2 style="display:flex;align-items:center;gap:7px;font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 7h6v6"></path><path d="m22 7-8.5 8.5-5-5L2 17"></path></svg>Leaderboard</h2>
+                <select class="input" style="width:170px;height:28px;min-height:28px;padding:3px 7px;font-size:12px" value="{{ metric }}" onChange="{{ setMetric }}">
+                  <option value="ret">Total return %</option>
+                  <option value="daily">Avg daily return %</option>
+                  <option value="net">Net profit</option>
+                  <option value="dd">Max drawdown %</option>
+                  <option value="win">Win rate %</option>
+                </select>
+              </div>
+              <div style="display:grid;gap:0;border-top:1px solid var(--color-neutral-300)">
+                <sc-for list="{{ leaderboard }}" as="row" hint-placeholder-count="4">
+                  <div style="padding:9px 0;border-bottom:1px solid var(--color-neutral-300)">
+                    <div style="display:flex;align-items:baseline;gap:9px">
+                      <strong style="font-family:var(--font-heading);font-weight:800;font-size:14px;width:20px;color:{{ row.rankColor }};font-variant-numeric:tabular-nums">{{ row.rank }}</strong>
+                      <strong style="flex:1;min-width:0;font-size:12.5px;line-height:1.25">{{ row.name }}</strong>
+                      <strong style="font-variant-numeric:tabular-nums;font-size:13px;white-space:nowrap;color:{{ row.color }}">{{ row.value }}</strong>
+                    </div>
+                    <div style="height:4px;background:var(--color-neutral-300);margin:6px 0 0 29px">
+                      <div style="height:4px;background:{{ row.barColor }};width:{{ row.width }}"></div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <div style="padding:15px 20px;border-bottom:2px solid var(--color-divider)">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:11px">
+              <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">Strategy × metric matrix</h2>
+              <small style="font-size:11px;color:var(--color-neutral-700)">Cell tint is the strategy's rank on that metric, best to worst. Click a row to drill into its trades.</small>
+            </div>
+            <table class="tf-grid">
+              <thead>
+                <tr>
+                  <th style="min-width:230px">Strategy</th>
+                  <th class="tf-num">Return</th>
+                  <th class="tf-num">Daily avg</th>
+                  <th class="tf-num">Net</th>
+                  <th class="tf-num">Max DD</th>
+                  <th class="tf-num">Trades</th>
+                  <th class="tf-num">Win rate</th>
+                  <th class="tf-num">Avg hold</th>
+                  <th class="tf-num">Profit factor</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ matrix }}" as="m" hint-placeholder-count="4">
+                  <tr data-win="{{ m.winFlag }}" style="cursor:pointer" onClick="{{ m.drill }}">
+                    <td><strong style="font-size:12.5px">{{ m.name }}</strong><small style="display:block;font-size:10.5px;color:var(--color-neutral-700)">{{ m.meta }}</small></td>
+                    <sc-for list="{{ m.cells }}" as="c" hint-placeholder-count="8">
+                      <td class="tf-num" style="background:{{ c.bg }};color:{{ c.fg }};font-weight:{{ c.weight }}">{{ c.text }}</td>
+                    </sc-for>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+
+          <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);border-bottom:2px solid var(--color-divider)">
+            <div style="padding:15px 20px;border-right:1px solid var(--color-neutral-300)">
+              <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 4px">Promotion gates</h2>
+              <p style="margin:0 0 11px;font-size:11.5px;color:var(--color-neutral-700);line-height:1.4">A missing gate fails closed. The integrated decision stays RETAIN_RESEARCH until every one passes.</p>
+              <ul style="list-style:none;margin:0;padding:0;border:1px solid var(--color-divider)">
+                <sc-for list="{{ gates }}" as="g" hint-placeholder-count="7">
+                  <li style="display:flex;align-items:baseline;gap:9px;padding:7px 11px;border-top:{{ g.border }};font-size:12px">
+                    <strong style="flex:none;width:13px;color:{{ g.color }};font-weight:800">{{ g.glyph }}</strong>
+                    <span style="flex:none;width:132px;color:var(--color-neutral-800)">{{ g.label }}</span>
+                    <span style="min-width:0;color:{{ g.color }};line-height:1.35">{{ g.note }}</span>
+                  </li>
+                </sc-for>
+              </ul>
+            </div>
+            <div style="padding:15px 20px">
+              <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 4px">Analyzer — {{ drillName }}</h2>
+              <p style="margin:0 0 11px;font-size:11.5px;color:var(--color-neutral-700);line-height:1.4">Why candidates were refused, and what the diagnostics suggest.</p>
+              <dl style="margin:0 0 11px;display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px">
+                <dt style="color:var(--color-neutral-700)">Evaluated bars</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ drill.evaluated }}</dd>
+                <dt style="color:var(--color-neutral-700)">Candidates</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ drill.candidates }}</dd>
+                <dt style="color:var(--color-neutral-700)">Accepted</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ drill.accepted }}</dd>
+                <dt style="color:var(--color-neutral-700)">Per trading day</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ drill.perDay }}</dd>
+                <dt style="color:var(--color-neutral-700)">Best / worst day</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ drill.bestWorst }}</dd>
+                <dt style="color:var(--color-neutral-700)">Long / short</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ drill.direction }}</dd>
+              </dl>
+              <h3 style="font-family:var(--font-heading);font-weight:800;font-size:11px;letter-spacing:0.07em;text-transform:uppercase;margin:0 0 6px">Top rejections</h3>
+              <ul style="list-style:none;margin:0 0 11px;padding:0;display:grid;gap:5px">
+                <sc-for list="{{ drill.rejections }}" as="r" hint-placeholder-count="4">
+                  <li>
+                    <span style="display:flex;justify-content:space-between;gap:10px;font-size:12px">
+                      <span>{{ r.label }}</span>
+                      <strong style="font-variant-numeric:tabular-nums">{{ r.count }}</strong>
+                    </span>
+                    <span style="display:block;height:4px;background:var(--color-neutral-300);margin-top:3px">
+                      <span style="display:block;height:4px;background:var(--color-neutral-600);width:{{ r.width }}"></span>
+                    </span>
+                  </li>
+                </sc-for>
+              </ul>
+              <p style="margin:0;padding:8px 10px;border-left:3px solid var(--color-accent);background:var(--color-accent-100);font-size:12px;color:var(--color-accent-900);line-height:1.45">{{ drill.suggestion }}</p>
+            </div>
+          </div>
+
+          <div style="padding:15px 20px 28px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:11px">
+              <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">Trades — {{ drillName }}</h2>
+              <small style="font-size:11px;color:var(--color-neutral-700)">{{ tradesCaption }}</small>
+            </div>
+            <table class="tf-grid">
+              <thead>
+                <tr>
+                  <th style="width:70px">Ticker</th>
+                  <th style="width:60px">Side</th>
+                  <th class="tf-num" style="width:118px">Entry</th>
+                  <th class="tf-num" style="width:118px">Exit</th>
+                  <th style="min-width:150px">Exit reason</th>
+                  <th class="tf-num" style="width:70px">Hold</th>
+                  <th class="tf-num" style="width:74px">R</th>
+                  <th class="tf-num" style="width:92px">Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ trades }}" as="t" hint-placeholder-count="10">
+                  <tr>
+                    <td><strong>{{ t.ticker }}</strong></td>
+                    <td style="font-size:11.5px;letter-spacing:0.04em">{{ t.side }}</td>
+                    <td class="tf-num" style="font-size:11.5px">{{ t.entry }}</td>
+                    <td class="tf-num" style="font-size:11.5px">{{ t.exit }}</td>
+                    <td style="font-size:12px;color:var(--color-neutral-800)">{{ t.reason }}</td>
+                    <td class="tf-num" style="font-size:11.5px">{{ t.hold }}</td>
+                    <td class="tf-num" style="color:{{ t.color }}">{{ t.r }}</td>
+                    <td class="tf-num" style="font-weight:700;color:{{ t.color }}">{{ t.net }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{ showIdle }}" hint-placeholder-val="{{ true }}">
+        <section style="padding:15px 20px 28px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:11px">
+            <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">Research snapshots</h2>
+            <small style="font-size:11px;color:var(--color-neutral-700)">Curated evidence retained under the research retention policy</small>
+          </div>
+          <table class="tf-grid">
+            <thead>
+              <tr>
+                <th style="min-width:180px">Run</th>
+                <th style="min-width:220px">Best strategy</th>
+                <th style="width:120px">Universe</th>
+                <th class="tf-num" style="width:86px">Return</th>
+                <th class="tf-num" style="width:86px">Max DD</th>
+                <th class="tf-num" style="width:74px">Trades</th>
+                <th class="tf-num" style="width:88px">Win rate</th>
+                <th style="width:150px">Decision</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ snapshots }}" as="sn" hint-placeholder-count="6">
+                <tr>
+                  <td><strong style="font-size:12.5px">{{ sn.run }}</strong><small style="display:block;font-size:10.5px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ sn.when }}</small></td>
+                  <td style="font-size:12.5px">{{ sn.best }}</td>
+                  <td style="font-size:12px;color:var(--color-neutral-800)">{{ sn.universe }}</td>
+                  <td class="tf-num" style="font-variant-numeric:tabular-nums;color:{{ sn.retColor }}">{{ sn.ret }}</td>
+                  <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ sn.dd }}</td>
+                  <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ sn.trades }}</td>
+                  <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ sn.win }}</td>
+                  <td><span class="tag {{ sn.tagCls }}" style="font-weight:700;font-size:9.5px;letter-spacing:0.06em">{{ sn.decision }}</span></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+          <p style="margin:14px 0 0;padding:9px 12px;border-left:3px solid var(--color-accent);background:var(--color-accent-100);font-size:12.5px;color:var(--color-accent-900);line-height:1.45;max-width:96ch">Partial exits are not modelled. A backtest supports one entry and one full-position exit, so strategies that scale out will read differently here than in paper.</p>
+        </section>
+      </sc-if>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1600,&quot;height&quot;:1000}}">
+const GAIN = 'var(--color-text)';
+const LOSS = 'var(--color-accent-700)';
+const FLAT = 'var(--color-neutral-700)';
+
+const UNIVERSES = {
+  swing: ['AAPL','ANET','AVGO','CRWD','DKNG','GOOGL','JPM','LIN','LRCX','META','MSFT','MU','NFLX','NOW','NVDA','ORCL','PANW','SHOP','TSM','UBER','V','WMT'],
+  intraday: ['AMD','COIN','DKNG','HOOD','MARA','MRVL','MU','NVDA','PLTR','RIVN','SMCI','SOFI','TSLA','UBER'],
+  earnings: ['AMD','ANET','AVGO','COIN','DKNG','ETSY','MU','RIVN','SMCI']
+};
+
+const STRATEGIES = [
+  { id: 's1', name: 'intraday-ema10-ema20-macd-volume', v: 'v1', promoted: true,
+    meta: 'LONG · 5m signal / 5m exec · continuation',
+    audit: 'Audit +14.62% / DD 8.91% / 214 trades / win 47.2% / avg hold 1h 42m',
+    ret: 14.62, daily: 0.0812, net: 1462, dd: 8.91, trades: 214, win: 47.2, hold: '1h 42m', pf: 1.42,
+    curve: [0,0.6,1.4,2.1,1.7,2.9,3.8,4.4,3.9,5.1,6.2,7.0,6.4,7.8,8.9,9.6,9.1,10.4,11.6,12.4,11.9,13.1,14.0,14.62] },
+  { id: 's2', name: 'minervini-trend-template-vcp', v: 'v4-trend-rider', promoted: true,
+    meta: 'LONG · 1d signal / 1d exec · trend template',
+    audit: 'Audit +22.18% / DD 12.40% / 61 trades / win 54.1% / avg hold 11d 4h',
+    ret: 22.18, daily: 0.1232, net: 2218, dd: 12.4, trades: 61, win: 54.1, hold: '11d 4h', pf: 1.88,
+    curve: [0,1.1,2.4,1.9,3.6,5.2,4.4,6.8,8.4,7.6,9.9,11.8,10.9,13.4,15.1,14.2,16.8,18.4,17.6,19.6,20.8,21.2,21.9,22.18] },
+  { id: 's3', name: 'swing-reversal-reclaim-bull-quality-no-news', v: 'v1', promoted: true,
+    meta: 'LONG · 1d signal / 1d exec · reclaim',
+    audit: 'Audit +9.04% / DD 7.12% / 88 trades / win 51.1% / avg hold 6d 2h',
+    ret: 9.04, daily: 0.0502, net: 904, dd: 7.12, trades: 88, win: 51.1, hold: '6d 2h', pf: 1.24,
+    curve: [0,0.4,1.1,0.7,1.6,2.2,1.8,2.8,3.4,3.0,4.1,4.8,4.3,5.4,6.1,5.7,6.6,7.2,6.9,7.8,8.3,8.6,8.9,9.04] },
+  { id: 's4', name: 'swing-overbought-rollover-short-no-news', v: 'v5', promoted: true,
+    meta: 'SHORT · 1d signal / 1d exec · rollover',
+    audit: 'Audit −3.41% / DD 9.86% / 47 trades / win 38.3% / avg hold 4d 8h',
+    ret: -3.41, daily: -0.0189, net: -341, dd: 9.86, trades: 47, win: 38.3, hold: '4d 8h', pf: 0.86,
+    curve: [0,-0.3,0.4,-0.6,-1.2,-0.4,-1.6,-2.4,-1.8,-2.9,-2.2,-3.4,-4.1,-3.2,-4.4,-3.8,-2.9,-3.9,-4.6,-4.0,-3.2,-3.8,-3.6,-3.41] },
+  { id: 's5', name: 'intraday-vwap-momentum-pullback', v: 'bt-v1', promoted: false,
+    meta: 'LONG · 5m signal / 1m exec · VWAP pullback',
+    audit: 'Audit +18.90% / DD 15.22% / 302 trades / win 44.7% / avg hold 58m',
+    ret: 18.9, daily: 0.105, net: 1890, dd: 15.22, trades: 302, win: 44.7, hold: '58m', pf: 1.31,
+    curve: [0,1.4,2.8,1.9,3.9,5.6,4.2,6.8,8.9,7.1,9.8,12.1,10.4,13.2,15.4,13.8,16.2,18.1,16.4,18.2,19.4,18.1,19.2,18.9] },
+  { id: 's6', name: 'intraday-atr-compression-breakout', v: 'bt-v1', promoted: false,
+    meta: 'LONG · 5m signal / 5m exec · compression',
+    audit: 'Audit +6.72% / DD 11.04% / 178 trades / win 42.1% / avg hold 1h 12m',
+    ret: 6.72, daily: 0.0373, net: 672, dd: 11.04, trades: 178, win: 42.1, hold: '1h 12m', pf: 1.11,
+    curve: [0,0.8,1.6,0.9,2.2,3.1,2.2,3.8,4.6,3.6,4.9,5.8,4.6,5.9,6.8,5.9,6.9,7.6,6.8,7.4,7.1,6.4,6.9,6.72] },
+  { id: 's7', name: 'intraday-macd-divergence-fade', v: 'bt-v1', promoted: false,
+    meta: 'SHORT · 5m signal / 5m exec · divergence fade',
+    audit: 'Audit −7.88% / DD 14.31% / 131 trades / win 35.9% / avg hold 44m',
+    ret: -7.88, daily: -0.0438, net: -788, dd: 14.31, trades: 131, win: 35.9, hold: '44m', pf: 0.74,
+    curve: [0,-0.6,-1.4,-0.8,-2.1,-3.2,-2.4,-3.9,-5.1,-4.2,-5.6,-6.8,-5.9,-7.1,-8.4,-7.6,-8.9,-9.8,-8.9,-9.4,-8.6,-8.1,-7.6,-7.88] }
+];
+
+const PHASES = [
+  { n: '1', title: 'Setup', detail: 'Config, strategies, universe' },
+  { n: '2', title: 'Market data', detail: 'Candles and indicators' },
+  { n: '3', title: 'Evaluation', detail: 'Strategy matrix' },
+  { n: '4', title: 'Results', detail: 'Portfolio and audit' }
+];
+
+const STAGE_BY_PHASE = ['resolving universe', 'market pipeline', 'running strategy matrix', 'building results'];
+
+const REJECTIONS = {
+  s1: [['volume spike below floor', 4128], ['rsi outside band', 2864], ['vwap extension too wide', 1902], ['confluence timeframe misaligned', 1188]],
+  s2: [['trend template not satisfied', 2210], ['base depth outside range', 1044], ['volume dry-up absent', 786], ['distribution day count', 402]],
+  s3: [['reclaim not confirmed on next bar', 1866], ['relative strength below peer median', 1120], ['spread over ceiling', 604], ['news present with no-news policy', 288]],
+  s4: [['no rollover confirmation', 1502], ['borrow unavailable', 918], ['rsi still rising', 744], ['spread over ceiling', 512]],
+  s5: [['pullback depth outside band', 3402], ['vwap slope negative', 2288], ['participation cap reached', 1466], ['spread over ceiling', 902]],
+  s6: [['compression not established', 2904], ['breakout bar not confirmed', 1810], ['relative volume below floor', 1204], ['session window closed', 688]],
+  s7: [['divergence not confirmed', 2412], ['trend too strong to fade', 1688], ['borrow unavailable', 1002], ['spread over ceiling', 604]]
+};
+
+const SUGGESTIONS = {
+  s1: 'The volume floor refuses more candidates than every other control combined. Test 1.3 and 1.4 before widening the RSI band, and re-run the cost stress at each step.',
+  s2: 'Acceptance is already sparse at 61 trades. Loosening the base-depth range would raise trade count but the concentration gate is the binding constraint, not the sample size.',
+  s3: 'Next-bar reclaim confirmation is doing most of the filtering and is a timing requirement, not a tunable. The no-news policy is refusing 288 candidates — worth measuring separately.',
+  s4: 'Borrow availability refuses 918 candidates that the model wanted. Until borrow is modelled explicitly this strategy cannot be evaluated fairly.',
+  s5: 'Highest candidate count and highest drawdown. Participation caps refuse 1,466 entries, which means the paper-shadow gate will not reproduce this equity curve.',
+  s6: 'Breakout confirmation refuses 1,810 candidates. Compare against s1 on the same universe before treating compression as a separate edge.',
+  s7: 'Negative expectancy with 74% profit factor. Trend strength refuses 1,688 fades and the remainder still loses. Retire rather than tune.'
+};
+
+const TRADES = {
+  s1: [['NVDA','LONG','12 Jun 14:35','12 Jun 15:50','target 2.0R','1h 15m',2.0,412],['MU','LONG','15 Jun 10:05','15 Jun 10:40','structural stop','35m',-1.0,-186],['PLTR','LONG','18 Jun 15:10','18 Jun 16:00','max hold','50m',0.4,74],['AMD','LONG','23 Jun 14:50','23 Jun 16:10','trailing stop','1h 20m',1.4,268],['MRVL','LONG','25 Jun 15:05','25 Jun 15:35','failed breakout guard','30m',-1.0,-142],['SMCI','LONG','01 Jul 14:40','01 Jul 16:20','target 2.0R','1h 40m',2.0,388],['COIN','LONG','07 Jul 15:20','07 Jul 15:55','structural stop','35m',-1.0,-204],['UBER','LONG','10 Jul 14:35','10 Jul 16:05','trailing stop','1h 30m',1.1,196],['TSLA','LONG','16 Jul 15:00','16 Jul 15:40','structural stop','40m',-1.0,-178],['NVDA','LONG','22 Jul 14:45','22 Jul 16:15','target 2.0R','1h 30m',2.0,424]],
+  s2: [['MSFT','LONG','04 Mar 09:35','18 Mar 15:50','trailing stop','14d 6h',2.6,684],['NVDA','LONG','11 Mar 09:35','26 Mar 15:50','target 3.0R','15d 6h',3.0,812],['LIN','LONG','19 Mar 09:35','24 Mar 15:50','structural stop','5d 6h',-1.0,-248],['NOW','LONG','02 Apr 09:35','21 Apr 15:50','trailing stop','19d 6h',2.1,542],['AVGO','LONG','15 Apr 09:35','29 Apr 15:50','target 3.0R','14d 6h',3.0,766],['V','LONG','06 May 09:35','12 May 15:50','structural stop','6d 6h',-1.0,-232],['LRCX','LONG','21 May 09:35','09 Jun 15:50','trailing stop','19d 6h',1.8,468],['ORCL','LONG','12 Jun 09:35','19 Jun 15:50','max hold','7d 6h',0.3,78],['ANET','LONG','01 Jul 09:35','17 Jul 15:50','trailing stop','16d 6h',2.2,564],['META','LONG','14 Jul 09:35','24 Jul 15:50','structural stop','10d 6h',-1.0,-256]],
+  s3: [['UBER','LONG','09 Apr 09:35','15 Apr 15:50','target 2.0R','6d 6h',2.0,314],['CRWD','LONG','22 Apr 09:35','28 Apr 15:50','structural stop','6d 6h',-1.0,-158],['WMT','LONG','06 May 09:35','14 May 15:50','trailing stop','8d 6h',1.3,204],['TSM','LONG','20 May 09:35','26 May 15:50','structural stop','6d 6h',-1.0,-162],['SHOP','LONG','03 Jun 09:35','11 Jun 15:50','target 2.0R','8d 6h',2.0,308],['JPM','LONG','17 Jun 09:35','23 Jun 15:50','max hold','6d 6h',0.2,32],['PANW','LONG','01 Jul 09:35','08 Jul 15:50','trailing stop','7d 6h',1.1,176],['NFLX','LONG','15 Jul 09:35','21 Jul 15:50','structural stop','6d 6h',-1.0,-154],['GOOGL','LONG','22 Jul 09:35','29 Jul 15:50','target 2.0R','7d 6h',2.0,296],['MU','LONG','29 Jul 09:35','31 Jul 15:50','structural stop','2d 6h',-1.0,-166]],
+  s4: [['SMCI','SHORT','14 Apr 09:35','18 Apr 15:50','target 2.0R','4d 6h',2.0,286],['RIVN','SHORT','28 Apr 09:35','01 May 15:50','structural stop','3d 6h',-1.0,-148],['COIN','SHORT','12 May 09:35','16 May 15:50','structural stop','4d 6h',-1.0,-152],['DKNG','SHORT','26 May 09:35','01 Jun 15:50','trailing stop','6d 6h',0.9,128],['MARA','SHORT','09 Jun 09:35','12 Jun 15:50','structural stop','3d 6h',-1.0,-144],['HOOD','SHORT','23 Jun 09:35','29 Jun 15:50','max hold','6d 6h',-0.3,-44],['SMCI','SHORT','07 Jul 09:35','10 Jul 15:50','target 2.0R','3d 6h',2.0,292],['PLTR','SHORT','21 Jul 09:35','24 Jul 15:50','structural stop','3d 6h',-1.0,-156],['RIVN','SHORT','28 Jul 09:35','30 Jul 15:50','structural stop','2d 6h',-1.0,-146],['COIN','SHORT','31 Jul 09:35','31 Jul 15:50','failed breakout guard','6h',-0.6,-88]],
+  s5: [['NVDA','LONG','12 Jun 10:05','12 Jun 11:00','target 2.0R','55m',2.0,368],['AMD','LONG','12 Jun 14:20','12 Jun 15:05','structural stop','45m',-1.0,-182],['PLTR','LONG','16 Jun 10:35','16 Jun 11:20','trailing stop','45m',1.2,214],['MU','LONG','19 Jun 14:05','19 Jun 14:50','structural stop','45m',-1.0,-176],['TSLA','LONG','24 Jun 10:15','24 Jun 11:25','target 2.0R','1h 10m',2.0,392],['COIN','LONG','30 Jun 14:35','30 Jun 15:10','structural stop','35m',-1.0,-198],['MRVL','LONG','08 Jul 10:20','08 Jul 11:05','trailing stop','45m',1.1,188],['SOFI','LONG','14 Jul 14:10','14 Jul 14:55','structural stop','45m',-1.0,-164],['SMCI','LONG','21 Jul 10:25','21 Jul 11:30','target 2.0R','1h 5m',2.0,376],['UBER','LONG','28 Jul 14:15','28 Jul 15:00','max hold','45m',0.3,52]],
+  s6: [['MU','LONG','11 Jun 10:40','11 Jun 11:55','target 2.0R','1h 15m',2.0,322],['NVDA','LONG','17 Jun 14:25','17 Jun 15:10','structural stop','45m',-1.0,-168],['AMD','LONG','23 Jun 10:50','23 Jun 12:00','trailing stop','1h 10m',1.0,164],['DKNG','LONG','27 Jun 14:15','27 Jun 15:05','structural stop','50m',-1.0,-152],['MRVL','LONG','03 Jul 10:35','03 Jul 11:50','target 2.0R','1h 15m',2.0,318],['HOOD','LONG','09 Jul 14:30','09 Jul 15:20','structural stop','50m',-1.0,-158],['PLTR','LONG','15 Jul 10:45','15 Jul 12:05','max hold','1h 20m',0.2,34],['MARA','LONG','21 Jul 14:20','21 Jul 15:10','structural stop','50m',-1.0,-146],['SOFI','LONG','25 Jul 10:30','25 Jul 11:45','trailing stop','1h 15m',0.9,142],['RIVN','LONG','30 Jul 14:35','30 Jul 15:25','structural stop','50m',-1.0,-154]],
+  s7: [['NVDA','SHORT','10 Jun 14:20','10 Jun 14:55','structural stop','35m',-1.0,-186],['PLTR','SHORT','16 Jun 10:30','16 Jun 11:05','structural stop','35m',-1.0,-178],['TSLA','SHORT','20 Jun 14:35','20 Jun 15:15','target 2.0R','40m',2.0,342],['SMCI','SHORT','26 Jun 10:25','26 Jun 11:00','structural stop','35m',-1.0,-192],['COIN','SHORT','02 Jul 14:40','02 Jul 15:20','structural stop','40m',-1.0,-204],['AMD','SHORT','08 Jul 10:35','08 Jul 11:10','trailing stop','35m',0.6,98],['MU','SHORT','14 Jul 14:25','14 Jul 15:00','structural stop','35m',-1.0,-172],['MARA','SHORT','18 Jul 10:40','18 Jul 11:15','structural stop','35m',-1.0,-168],['HOOD','SHORT','24 Jul 14:30','24 Jul 15:05','target 2.0R','35m',2.0,318],['RIVN','SHORT','30 Jul 10:45','30 Jul 11:20','structural stop','35m',-1.0,-164]]
+};
+
+const SNAPSHOTS = [
+  { run: 'swing-quality-180d', when: '28 Jul 2026 09:14 UTC', best: 'minervini-trend-template-vcp v4', universe: 'Swing quality', ret: 22.18, dd: 12.4, trades: 61, win: 54.1, decision: 'RETAIN_RESEARCH' },
+  { run: 'intraday-catalyst-90d', when: '24 Jul 2026 17:41 UTC', best: 'intraday-vwap-momentum-pullback bt-v1', universe: 'Intraday catalyst', ret: 18.9, dd: 15.22, trades: 302, win: 44.7, decision: 'RETAIN_RESEARCH' },
+  { run: 'intraday-catalyst-180d', when: '19 Jul 2026 11:08 UTC', best: 'intraday-ema10-ema20-macd-volume v1', universe: 'Intraday catalyst', ret: 14.62, dd: 8.91, trades: 214, win: 47.2, decision: 'PAPER_SHADOW' },
+  { run: 'earnings-reaction-120d', when: '11 Jul 2026 15:52 UTC', best: 'swing-reversal-reclaim-bull-quality v1', universe: 'Earnings reaction', ret: 9.04, dd: 7.12, trades: 88, win: 51.1, decision: 'RETAIN_RESEARCH' },
+  { run: 'short-book-180d', when: '02 Jul 2026 08:37 UTC', best: 'swing-overbought-rollover-short v5', universe: 'Swing quality', ret: -3.41, dd: 9.86, trades: 47, win: 38.3, decision: 'FAILED_GATE' },
+  { run: 'fade-book-90d', when: '26 Jun 2026 13:20 UTC', best: 'intraday-macd-divergence-fade bt-v1', universe: 'Intraday catalyst', ret: -7.88, dd: 14.31, trades: 131, win: 35.9, decision: 'FAILED_GATE' }
+];
+
+const METRICS = {
+  ret: { label: 'Total return %', higher: true, fmt: v => (v >= 0 ? '+' : '\u2212') + Math.abs(v).toFixed(2) + '%' },
+  daily: { label: 'Avg daily return %', higher: true, fmt: v => (v >= 0 ? '+' : '\u2212') + Math.abs(v).toFixed(4) + '%' },
+  net: { label: 'Net profit', higher: true, fmt: v => (v >= 0 ? '+$' : '\u2212$') + Math.abs(v).toLocaleString('en-US') },
+  dd: { label: 'Max drawdown %', higher: false, fmt: v => v.toFixed(2) + '%' },
+  win: { label: 'Win rate %', higher: true, fmt: v => v.toFixed(1) + '%' }
+};
+
+class Component extends DCLogic {
+  state = {
+    phase: 'results',
+    wishlist: 'intraday',
+    selected: ['s1', 's2', 's5', 's6'],
+    runName: 'intraday-catalyst-180d',
+    lookback: 180, capital: 10000, risk: 1, notional: 25, slots: 4, cache: 'use_cache',
+    metric: 'ret',
+    drill: 's1',
+    progress: 0.42, phaseIndex: 2, elapsedSec: 224
+  };
+
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      if (this.state.phase !== 'running') return;
+      this.setState(s => {
+        const next = Math.min(1, s.progress + 0.012);
+        const phaseIndex = next < 0.12 ? 0 : next < 0.3 ? 1 : next < 0.94 ? 2 : 3;
+        if (next >= 1) return { progress: 1, phaseIndex: 3, phase: 'results', elapsedSec: s.elapsedSec + 1 };
+        return { progress: next, phaseIndex, elapsedSec: s.elapsedSec + 1 };
+      });
+    }, 700);
+  }
+
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  picked() { return STRATEGIES.filter(st => this.state.selected.includes(st.id)); }
+
+  money(v) { return '$' + Math.round(v).toLocaleString('en-US'); }
+
+  signedMoney(v) { return (v >= 0 ? '+$' : '\u2212$') + Math.abs(Math.round(v)).toLocaleString('en-US'); }
+
+  chart(picked) {
+    const W = 640; const H = 210; const PL = 42; const PB = 22;
+    const all = picked.flatMap(p => p.curve);
+    const lo = Math.min(-2, Math.min(...all)); const hi = Math.max(2, Math.max(...all));
+    const x = i => PL + (i / 23) * (W - PL - 8);
+    const y = v => 8 + (1 - (v - lo) / (hi - lo)) * (H - 8 - PB);
+    const dashes = ['none', '5 3', '2 3', '8 3', '1 3', '6 2 2 2', '3 5'];
+    const kids = [];
+    [hi, (hi + lo) / 2, 0, lo].forEach((v, i) => {
+      kids.push(React.createElement('line', { key: 'g' + i, x1: PL, x2: W - 8, y1: y(v), y2: y(v),
+        stroke: v === 0 ? 'var(--color-neutral-600)' : 'var(--color-neutral-300)', strokeWidth: v === 0 ? 1.5 : 1 }));
+      kids.push(React.createElement('text', { key: 't' + i, x: PL - 6, y: y(v) + 3.5, textAnchor: 'end',
+        fontSize: 9.5, fill: 'var(--color-neutral-700)', style: { fontVariantNumeric: 'tabular-nums' } },
+        (v >= 0 ? '+' : '\u2212') + Math.abs(v).toFixed(0) + '%'));
+    });
+    picked.forEach((p, pi) => {
+      const d = p.curve.map((v, i) => (i === 0 ? 'M' : 'L') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+      kids.push(React.createElement('path', { key: 'p' + p.id, d, fill: 'none',
+        stroke: p.ret >= 0 ? 'var(--color-text)' : 'var(--color-accent)',
+        strokeWidth: pi === 0 ? 2.4 : 1.6, strokeDasharray: dashes[pi % dashes.length] }));
+      kids.push(React.createElement('circle', { key: 'c' + p.id, cx: x(23), cy: y(p.curve[23]), r: 3,
+        fill: p.ret >= 0 ? 'var(--color-text)' : 'var(--color-accent)' }));
+    });
+    ['Jan', 'Mar', 'May', 'Jul'].forEach((m, i) => {
+      kids.push(React.createElement('text', { key: 'x' + i, x: x(i * 7.6), y: H - 4, fontSize: 9.5,
+        fill: 'var(--color-neutral-700)' }, m));
+    });
+    return React.createElement('svg', {
+      viewBox: '0 0 ' + W + ' ' + H, width: '100%', role: 'img',
+      'aria-label': 'Portfolio equity curves for the selected strategies',
+      style: { display: 'block', maxHeight: '230px' }
+    }, kids);
+  }
+
+  renderVals() {
+    const s = this.state;
+    const picked = this.picked();
+    const dashes = ['none', '5 3', '2 3', '8 3', '1 3', '6 2 2 2', '3 5'];
+
+    const phases = [
+      { key: 'configure', label: 'Configure' },
+      { key: 'running', label: 'Running' },
+      { key: 'results', label: 'Results' }
+    ].map((p, i) => ({
+      label: p.label,
+      border: i === 0 ? '0' : '1px solid var(--color-divider)',
+      weight: s.phase === p.key ? '700' : '500',
+      bg: s.phase === p.key ? 'var(--color-text)' : 'transparent',
+      fg: s.phase === p.key ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+      apply: () => this.setState({ phase: p.key })
+    }));
+
+    const catalog = STRATEGIES.map((st, i) => {
+      const on = s.selected.includes(st.id);
+      return {
+        name: st.name + ' ' + st.v,
+        meta: st.meta,
+        audit: st.audit,
+        status: st.promoted ? 'PROMOTED' : 'RESEARCH ONLY',
+        tagCls: st.promoted ? 'tag-accent' : 'tag-neutral',
+        border: i === 0 ? '0' : '1px solid var(--color-neutral-300)',
+        bg: on ? 'var(--color-accent-100)' : 'transparent',
+        on,
+        toggle: () => this.setState(prev => ({
+          selected: prev.selected.includes(st.id)
+            ? prev.selected.filter(x => x !== st.id)
+            : prev.selected.concat(st.id)
+        }))
+      };
+    });
+
+    const totalWork = UNIVERSES[s.wishlist].length * Math.max(1, picked.length);
+    const done = Math.round(totalWork * s.progress);
+    const mm = String(Math.floor(s.elapsedSec / 60)).padStart(2, '0');
+    const ss = String(s.elapsedSec % 60).padStart(2, '0');
+
+    const phaseRail = PHASES.map((p, i) => {
+      const active = i === s.phaseIndex && s.phase === 'running';
+      const complete = i < s.phaseIndex || s.phase === 'results';
+      return {
+        n: p.n, title: p.title, detail: p.detail,
+        border: i === 0 ? '0' : '1px solid var(--color-divider)',
+        bg: active ? 'var(--color-accent-100)' : complete ? 'var(--color-neutral-100)' : 'transparent',
+        fg: active ? 'var(--color-accent-800)' : complete ? 'var(--color-text)' : 'var(--color-neutral-500)',
+        sub: active ? 'var(--color-accent-900)' : 'var(--color-neutral-700)'
+      };
+    });
+
+    const groupCards = picked.map((p, i) => {
+      const frac = Math.max(0, Math.min(1, s.progress * 1.25 - i * 0.16));
+      const tickers = UNIVERSES[s.wishlist];
+      const doneN = Math.round(tickers.length * frac);
+      const status = frac >= 1 ? 'completed' : frac <= 0 ? 'queued' : 'running · current ' + tickers[Math.min(tickers.length - 1, doneN)];
+      return {
+        name: p.name + ' ' + p.v,
+        count: doneN + ' / ' + tickers.length,
+        status,
+        width: (frac * 100).toFixed(1) + '%',
+        barColor: frac >= 1 ? 'var(--color-neutral-600)' : 'var(--color-accent)',
+        border: i < 2 ? '0' : '1px solid var(--color-divider)',
+        rightBorder: i % 2 === 0 ? '1px solid var(--color-divider)' : '0',
+        events: frac <= 0
+          ? ['queued behind ' + i + ' strategy group' + (i === 1 ? '' : 's')]
+          : ['finished ' + tickers[Math.max(0, doneN - 1)] + ' · ' + Math.round(frac * 34) + ' candidates',
+             'running ' + tickers[Math.min(tickers.length - 1, doneN)] + ' · ' + Math.round(frac * 1200) + ' bars',
+             'indicator warm-up satisfied at 60 d']
+      };
+    });
+
+    const activity = [
+      'stage: ' + STAGE_BY_PHASE[s.phaseIndex],
+      'strategy group ready · ' + picked.length + ' strategies × ' + UNIVERSES[s.wishlist].length + ' tickers',
+      'market pipeline complete · ' + (UNIVERSES[s.wishlist].length * 1240).toLocaleString('en-US') + ' normalized bars',
+      'warm-up manifest written · data/backtest/normalized/240d',
+      'universe resolved from wishlist · point-in-time membership unavailable, run marked research-only',
+      'loaded ' + picked.length + ' strategy definitions from configs',
+      'run config generated · ' + s.runName + '.generated.yaml'
+    ];
+
+    const m = METRICS[s.metric];
+    const vals = picked.map(p => p[s.metric]);
+    const best = m.higher ? Math.max(...vals) : Math.min(...vals);
+    const span = Math.max(...vals.map(v => Math.abs(v))) || 1;
+    const ordered = picked.slice().sort((a, b) => m.higher ? b[s.metric] - a[s.metric] : a[s.metric] - b[s.metric]);
+
+    const leaderboard = ordered.map((p, i) => ({
+      rank: i + 1,
+      rankColor: i === 0 ? 'var(--color-accent)' : 'var(--color-neutral-600)',
+      name: p.name + ' ' + p.v,
+      value: m.fmt(p[s.metric]),
+      color: s.metric === 'dd' ? GAIN : p[s.metric] >= 0 ? GAIN : LOSS,
+      width: (Math.abs(p[s.metric]) / span * 100).toFixed(1) + '%',
+      barColor: i === 0 ? 'var(--color-accent)' : 'var(--color-neutral-500)'
+    }));
+
+    const winnerStrategy = ordered[0] || picked[0] || STRATEGIES[0];
+
+    const cellDefs = [
+      { k: 'ret', higher: true, fmt: METRICS.ret.fmt },
+      { k: 'daily', higher: true, fmt: METRICS.daily.fmt },
+      { k: 'net', higher: true, fmt: METRICS.net.fmt },
+      { k: 'dd', higher: false, fmt: METRICS.dd.fmt },
+      { k: 'trades', higher: true, fmt: v => v.toLocaleString('en-US') },
+      { k: 'win', higher: true, fmt: METRICS.win.fmt },
+      { k: 'hold', higher: null, fmt: v => v },
+      { k: 'pf', higher: true, fmt: v => v.toFixed(2) }
+    ];
+    const ranks = {};
+    cellDefs.forEach(cd => {
+      if (cd.higher === null) return;
+      const sorted = picked.slice().sort((a, b) => cd.higher ? b[cd.k] - a[cd.k] : a[cd.k] - b[cd.k]);
+      ranks[cd.k] = sorted.map(p => p.id);
+    });
+    const tints = ['var(--color-accent-200)', 'var(--color-accent-100)', 'transparent', 'var(--color-neutral-200)', 'var(--color-neutral-300)'];
+
+    const matrix = picked.map(p => ({
+      name: p.name + ' ' + p.v,
+      meta: p.meta,
+      winFlag: p.id === winnerStrategy.id ? '1' : '0',
+      drill: () => this.setState({ drill: p.id }),
+      cells: cellDefs.map(cd => {
+        const rank = cd.higher === null ? 2 : ranks[cd.k].indexOf(p.id);
+        const negative = (cd.k === 'ret' || cd.k === 'net' || cd.k === 'daily') && p[cd.k] < 0;
+        return {
+          text: cd.fmt(p[cd.k]),
+          bg: cd.higher === null ? 'transparent' : (tints[Math.min(tints.length - 1, rank)] || 'transparent'),
+          fg: negative ? LOSS : 'inherit',
+          weight: rank === 0 && cd.higher !== null ? '700' : '400'
+        };
+      })
+    }));
+
+    const gates = [
+      ['Universe', false, 'Point-in-time membership and delisting evidence missing for this wishlist.'],
+      ['Timing', true, 'Completed-bar features, later-bar confirmation, next-bar execution enforced.'],
+      ['Execution', true, 'Costs, quote side, spread, slippage and participation stated explicitly.'],
+      ['Statistical', false, 'Development and validation split done; the chronological holdout is unused.'],
+      ['Cost stress', true, 'Survives 2× slippage and 1.5× spread on the winner.'],
+      ['Concentration', false, 'Top two tickers carry 41% of net profit, over the 30% ceiling.'],
+      ['Paper shadow', false, 'No paper-shadow period recorded for this run.']
+    ].map((g, i) => ({
+      label: g[0],
+      glyph: g[1] ? '\u2713' : '\u2715',
+      color: g[1] ? GAIN : LOSS,
+      note: g[2],
+      border: i === 0 ? '0' : '1px solid var(--color-neutral-300)'
+    }));
+
+    const drillId = picked.some(p => p.id === s.drill) ? s.drill : (picked[0] ? picked[0].id : 's1');
+    const drillStrategy = STRATEGIES.find(p => p.id === drillId);
+    const rej = REJECTIONS[drillId];
+    const rejMax = rej[0][1];
+
+    const trades = TRADES[drillId].map(t => ({
+      ticker: t[0], side: t[1], entry: t[2], exit: t[3], reason: t[4], hold: t[5],
+      r: (t[6] >= 0 ? '+' : '\u2212') + Math.abs(t[6]).toFixed(1) + 'R',
+      net: (t[7] >= 0 ? '+$' : '\u2212$') + Math.abs(t[7]).toLocaleString('en-US'),
+      color: t[7] >= 0 ? GAIN : LOSS
+    }));
+
+    const closed = picked.reduce((a, p) => a + p.trades, 0);
+    const wins = Math.round(picked.reduce((a, p) => a + p.trades * p.win / 100, 0));
+
+    return {
+      phases,
+      wishlist: s.wishlist,
+      setWishlist: e => this.setState({ wishlist: e.target.value }),
+      universe: UNIVERSES[s.wishlist],
+      catalog,
+      selectedCountText: picked.length === 0
+        ? 'Select at least one strategy. A run with no strategy produces no evidence.'
+        : picked.length + ' selected · ' + (picked.length * UNIVERSES[s.wishlist].length) +
+          ' work items · ' + picked.filter(p => !p.promoted).length + ' research-only',
+
+      runName: s.runName, setRunName: e => this.setState({ runName: e.target.value }),
+      lookback: s.lookback, setLookback: e => this.setState({ lookback: parseInt(e.target.value, 10) || 180 }),
+      capital: s.capital, setCapital: e => this.setState({ capital: parseFloat(e.target.value) || 10000 }),
+      risk: s.risk, setRisk: e => this.setState({ risk: parseFloat(e.target.value) || 1 }),
+      notional: s.notional, setNotional: e => this.setState({ notional: parseFloat(e.target.value) || 25 }),
+      slots: s.slots, setSlots: e => this.setState({ slots: parseInt(e.target.value, 10) || 4 }),
+      cache: s.cache, setCache: e => this.setState({ cache: e.target.value }),
+
+      notRunning: s.phase !== 'running',
+      running: s.phase === 'running',
+      startLabel: picked.length === 0 ? 'Select a strategy first' : 'Run backtest \u00b7 ' + picked.length + ' strategies',
+      start: () => this.setState({ phase: 'running', progress: 0, phaseIndex: 0, elapsedSec: 0 }),
+      cancel: () => this.setState({ phase: 'configure' }),
+
+      showProgress: s.phase === 'running',
+      showResults: s.phase === 'results',
+      showIdle: s.phase === 'configure',
+
+      statusLabel: s.phase === 'running' ? 'running' : 'completed',
+      statusTag: s.phase === 'running' ? 'tag-accent' : 'tag-neutral',
+      stageText: STAGE_BY_PHASE[s.phaseIndex],
+      elapsed: '00:' + mm + ':' + ss,
+      progressText: done + ' / ' + totalWork,
+      progressPctText: (s.progress * 100).toFixed(1) + '%',
+      progressWidth: (s.progress * 100).toFixed(1) + '%',
+      phaseRail, groupCards, activity,
+
+      winner: {
+        name: winnerStrategy.name + ' ' + winnerStrategy.v,
+        summary: METRICS.ret.fmt(winnerStrategy.ret) + ' return · ' + METRICS.daily.fmt(winnerStrategy.daily) +
+          ' daily · DD ' + winnerStrategy.dd.toFixed(2) + '% · ranked on ' + m.label.toLowerCase()
+      },
+      endingCapital: this.money(s.capital + winnerStrategy.net),
+      netProfit: this.signedMoney(winnerStrategy.net),
+      netColor: winnerStrategy.net >= 0 ? GAIN : LOSS,
+      tradeCount: closed.toLocaleString('en-US'),
+      winLossText: wins + ' wins / ' + (closed - wins) + ' losses',
+      dailyAvg: METRICS.daily.fmt(winnerStrategy.daily),
+      tradingDays: Math.round(s.lookback * 0.69),
+
+      chart: this.chart(picked),
+      legend: picked.map((p, i) => ({
+        name: p.name.replace('intraday-', '').replace('swing-', '') + ' ' + p.v,
+        stroke: '2px ' + (dashes[i % dashes.length] === 'none' ? 'solid' : 'dashed') + ' ' +
+          (p.ret >= 0 ? 'var(--color-text)' : 'var(--color-accent)'),
+        color: p.ret >= 0 ? GAIN : LOSS,
+        ret: METRICS.ret.fmt(p.ret)
+      })),
+
+      metric: s.metric,
+      setMetric: e => this.setState({ metric: e.target.value }),
+      leaderboard,
+      matrix,
+      gates,
+
+      drillName: drillStrategy.name + ' ' + drillStrategy.v,
+      drill: {
+        evaluated: (UNIVERSES[s.wishlist].length * 1240).toLocaleString('en-US') + ' bars',
+        candidates: (drillStrategy.trades * 6).toLocaleString('en-US'),
+        accepted: drillStrategy.trades.toLocaleString('en-US'),
+        perDay: '$' + (drillStrategy.net / Math.round(s.lookback * 0.69)).toFixed(2) + ' / trading day',
+        bestWorst: '+$' + Math.round(Math.abs(drillStrategy.net) * 0.31) + ' 18 Jun / \u2212$' +
+          Math.round(Math.abs(drillStrategy.net) * 0.24) + ' 07 Jul',
+        direction: drillStrategy.meta.startsWith('SHORT')
+          ? 'short only · ' + drillStrategy.trades + ' trades'
+          : 'long only · ' + drillStrategy.trades + ' trades',
+        rejections: rej.map(r => ({
+          label: r[0],
+          count: r[1].toLocaleString('en-US'),
+          width: (r[1] / rejMax * 100).toFixed(1) + '%'
+        })),
+        suggestion: SUGGESTIONS[drillId]
+      },
+      trades,
+      tradesCaption: 'Most recent 10 of ' + drillStrategy.trades + ' accepted trades · one entry and one full exit per trade',
+
+      snapshots: SNAPSHOTS.map(sn => ({
+        run: sn.run, when: sn.when, best: sn.best, universe: sn.universe,
+        ret: METRICS.ret.fmt(sn.ret), retColor: sn.ret >= 0 ? GAIN : LOSS,
+        dd: sn.dd.toFixed(2) + '%', trades: sn.trades, win: sn.win.toFixed(1) + '%',
+        decision: sn.decision,
+        tagCls: sn.decision === 'PAPER_SHADOW' ? 'tag-accent' : 'tag-neutral'
+      }))
+    };
+  }
+}
+</script>
+</body>
+</html>

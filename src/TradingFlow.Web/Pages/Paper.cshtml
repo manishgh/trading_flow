@@ -57,9 +57,34 @@
                 </div>
             </div>
 
-            <label class="mt-md" for="ScreenerFilter">Finviz Screener <span class="tf-help" title="Optional Finviz Elite query or URL. Paper run uses wishlist tickers plus symbols returned by this screener.">?</span></label>
-            <input type="text" name="ScreenerFilter" id="ScreenerFilter" value="@Model.ScreenerFilter" placeholder="v=111&f=cap_smallover,sh_relvol_o2,ta_change_u" />
-            <div class="muted mt-xs">Optional. Use a Finviz query string or URL to add today's screeners to this paper run.</div>
+            @* A screener is a universe in its own right, not an addition to a
+               wishlist. Choosing Screener runs against exactly what the screen
+               returns and ignores the wishlist, so a screen can be traded without
+               promoting its symbols into a curated list first. *@
+            <label class="mt-md" for="UniverseSource">Universe source</label>
+            <select name="UniverseSource" id="UniverseSource">
+                <option value="wishlist" selected="@(Model.UniverseSource == "wishlist")">Wishlist only</option>
+                <option value="screener" selected="@(Model.UniverseSource == "screener")">Screener only</option>
+                <option value="both" selected="@(Model.UniverseSource == "both")">Wishlist and screener</option>
+            </select>
+            <div class="muted mt-xs">
+                Screener only ignores the wishlist entirely and trades exactly what the screen returns.
+            </div>
+
+            <label class="mt-md" for="ScreenerFilter">Finviz screen <span class="tf-help" title="A saved screen name, or a Finviz Elite query or URL.">?</span></label>
+            @* Saved screens are offered by name: Finviz has no endpoint that
+               lists the screens saved in its own interface. *@
+            <input type="text" name="ScreenerFilter" id="ScreenerFilter" list="PaperSavedScreens"
+                   value="@Model.ScreenerFilter" placeholder="A saved screen name, or v=111&f=cap_smallover,sh_relvol_o2" />
+            <datalist id="PaperSavedScreens">
+                @foreach (var preset in Model.ScreenerPresets)
+                {
+                    <option value="@preset.Name">@preset.Category · @preset.FilterQuery</option>
+                }
+            </datalist>
+            <div class="muted mt-xs">
+                Name a screen on the Wishlists page to pick it here, or paste a Finviz query or URL for a one-off.
+            </div>
 
             <div class="actions mt-md">
                 <a class="button secondary" asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Manage Wishlist</a>

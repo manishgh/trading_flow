@@ -383,8 +383,49 @@ public sealed class SimpleYamlReader
             RequireList(runMap, "strategies")
                 .Select(strategyPath => ResolveConfigPath(runDirectory, strategyPath))
                 .ToArray(),
-            ReadUniverseConfig(runMap));
+            ReadUniverseConfig(runMap),
+            ReadUniverseRankConfig(runMap));
     }
+
+    /// <summary>
+    /// Reads <c>universe.rank</c>. Every field falls back to the shipped default,
+    /// so a profile may state only the weights it wants to move and the rest stay
+    /// at the documented values rather than silently becoming zero.
+    /// </summary>
+    private static UniverseRankConfig ReadUniverseRankConfig(
+        IReadOnlyDictionary<string, List<string>> runMap)
+    {
+        var fallback = UniverseRankConfig.Default;
+        var catalysts = new Dictionary<string, decimal>(
+            fallback.CatalystWeights,
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var kind in fallback.CatalystWeights.Keys.ToArray())
+        {
+            var configured = OptionalDecimal(runMap, $"universe.rank.catalyst_weights.{kind.ToLowerInvariant()}");
+            if (configured is { } value)
+            {
+                catalysts[kind] = value;
+            }
+        }
+
+        return new UniverseRankConfig(
+            OptionalString(runMap, "universe.rank.weights_version", fallback.WeightsVersion),
+            ReadRankWeights(runMap, "universe.rank.intraday", fallback.Intraday),
+            ReadRankWeights(runMap, "universe.rank.swing", fallback.Swing),
+            catalysts,
+            OptionalDecimal(runMap, "universe.rank.veto_penalty") ?? fallback.VetoPenalty,
+            OptionalDecimal(runMap, "universe.rank.liquidity_spread_ceiling_bps") ?? fallback.LiquiditySpreadCeilingBps);
+    }
+
+    private static UniverseRankWeights ReadRankWeights(
+        IReadOnlyDictionary<string, List<string>> runMap,
+        string prefix,
+        UniverseRankWeights fallback) => new(
+            OptionalDecimal(runMap, $"{prefix}.model_edge") ?? fallback.ModelEdge,
+            OptionalDecimal(runMap, $"{prefix}.market_structure") ?? fallback.MarketStructure,
+            OptionalDecimal(runMap, $"{prefix}.catalyst") ?? fallback.Catalyst,
+            OptionalDecimal(runMap, $"{prefix}.technical_state") ?? fallback.TechnicalState,
+            OptionalDecimal(runMap, $"{prefix}.liquidity") ?? fallback.Liquidity);
 
     private static UniverseConfig? ReadUniverseConfig(IReadOnlyDictionary<string, List<string>> runMap)
     {

@@ -1,0 +1,23 @@
+@*
+    Lucide icons, inlined as SVG on currentColor.
+
+    Inlined rather than linked because the local UI must work offline, and drawn
+    on currentColor so an icon inherits the colour of the control it sits in and
+    cannot drift from it. Lucide's rounded `rx` is dropped to 0 to match the
+    system's zero-radius rule.
+
+    Usage: <partial name="_Icon" model='new IconModel("bell", 14)' />
+    An icon is always decorative here: every control it appears in also carries
+    a text label, so the SVG stays aria-hidden.
+*@
+@model TradingFlow.Web.Pages.Shared.IconModel
+@{
+    var path = TradingFlow.Web.Pages.Shared.IconModel.PathFor(Model.Name);
+}
+@if (path is not null)
+{
+    <svg xmlns="http://www.w3.org/2000/svg" width="@Model.Size" height="@Model.Size"
+         viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"
+         class="icon">@Html.Raw(path)</svg>
+}

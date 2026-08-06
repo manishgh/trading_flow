@@ -10,8 +10,12 @@ using Moq;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Domain.Wishlists;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using TradingFlow.Data.Context;
 using TradingFlow.Web.Pages;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Wishlists;
 using Xunit;
 
 namespace TradingFlow.Tests;
@@ -166,7 +170,34 @@ public sealed class PaperModelTests
             paperJobs,
             AtomicFileArtifactWriter.Instance,
             wishlistRepository.Object,
+            CreateScreenerPresetService(),
             NullLogger<PaperModel>.Instance);
+    }
+
+    /// <summary>
+    /// A preset service over a throwaway in-memory journal. The paper screen
+    /// reads saved screens on every load, so the real query path runs here
+    /// rather than being mocked away.
+    /// </summary>
+    private static ScreenerPresetService CreateScreenerPresetService()
+    {
+        var connection = new SqliteConnection("Filename=:memory:");
+        connection.Open();
+        var options = new DbContextOptionsBuilder<TradingFlowDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        using (var database = new TradingFlowDbContext(options))
+        {
+            database.Database.EnsureCreated();
+        }
+
+        return new ScreenerPresetService(new PaperTestDbContextFactory(options), TimeProvider.System);
+    }
+
+    private sealed class PaperTestDbContextFactory(DbContextOptions<TradingFlowDbContext> options)
+        : IDbContextFactory<TradingFlowDbContext>
+    {
+        public TradingFlowDbContext CreateDbContext() => new(options);
     }
 
     private static ConfigCatalogService CreateCatalog(string repoRoot)

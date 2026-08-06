@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/modernist-4f4a56b3-a32f-4519-b155-938ba199102d/styles.css">
+<script src="_ds/modernist-4f4a56b3-a32f-4519-b155-938ba199102d/_ds_bundle.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=swap">
+<style>
+  html, body { margin: 0; padding: 0; background: var(--color-bg); }
+  a { color: var(--color-accent-700); text-decoration: none; }
+  a:hover { color: var(--color-accent); text-decoration: underline; }
+  .tf-num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.tf-grid { width: 100%; border-collapse: collapse; }
+  table.tf-grid th {
+    text-align: left; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    font-weight: 700; color: var(--color-neutral-700); padding: 7px 10px;
+    border-bottom: 2px solid var(--color-divider); background: var(--color-bg);
+    position: sticky; top: 0; z-index: 2; white-space: nowrap;
+  }
+  table.tf-grid td { padding: 8px 10px; border-bottom: 1px solid var(--color-neutral-300); vertical-align: middle; }
+  table.tf-grid tbody tr { cursor: pointer; }
+  table.tf-grid tbody tr:hover { background: var(--color-neutral-200); }
+  table.tf-grid tbody tr[data-sel="1"] { background: var(--color-accent-100); box-shadow: inset 3px 0 0 var(--color-accent); }
+  table.tf-grid[data-density="compact"] td { padding: 3px 10px; font-size: 12px; }
+  table.tf-grid[data-density="compact"] th { padding: 5px 10px; }
+  table.tf-grid[data-density="compact"] td small { display: none; }
+  .tf-sortbtn { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; letter-spacing: 0.08em; }
+  .tf-sortbtn:hover { color: var(--color-accent); }
+  .tf-cell-sub { display: block; font-size: 10.5px; color: var(--color-neutral-700); }
+  .tf-scroll { overflow: auto; }
+  .tf-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+  .tf-scroll::-webkit-scrollbar-thumb { background: var(--color-neutral-400); }
+  .tf-ladder-row { all: unset; cursor: pointer; display: block; width: 100%; }
+  .tf-ladder-row:hover { background: var(--color-neutral-200); }
+  .tf-ladder-row[data-sel="1"] { background: var(--color-accent-100); box-shadow: inset 3px 0 0 var(--color-accent); }
+  .tf-tabbtn { all: unset; cursor: pointer; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body);font-size:13px;-webkit-font-smoothing:antialiased">
+
+  <header style="display:flex;align-items:center;gap:24px;padding:0 20px;height:52px;border-bottom:2px solid var(--color-divider);background:var(--color-bg);position:sticky;top:0;z-index:20">
+    <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;letter-spacing:-0.01em;white-space:nowrap">TRADINGFLOW</span>
+    <nav style="display:flex;gap:2px;align-items:center">
+      <span style="padding:6px 10px;font-size:13px;font-weight:700;color:var(--color-accent);border-bottom:2px solid var(--color-accent)">Desk</span>
+      <a href="#positions" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Positions</a>
+      <a href="#orders" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Orders</a>
+      <a href="#news" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">News</a>
+      <a href="Earnings.dc.html" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Earnings</a>
+      <a href="Backtest Lab.dc.html" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Research</a>
+      <a href="#ops" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Operations</a>
+    </nav>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:16px">
+      <div class="seg" style="min-height:28px">
+        <label class="seg-opt" style="padding:4px 11px;font-size:11px;font-weight:700;letter-spacing:0.04em;white-space:nowrap">
+          <input type="radio" name="tf-env" checked="{{ envPaper }}" onChange="{{ setEnvPaper }}" />PAPER
+        </label>
+        <label class="seg-opt" style="padding:4px 11px;font-size:11px;font-weight:700;letter-spacing:0.04em;opacity:0.45;cursor:not-allowed;white-space:nowrap" title="Live routing disabled pending promotion">
+          <input type="radio" name="tf-env" disabled="{{ true }}" />LIVE&#8202;&#128274;
+        </label>
+      </div>
+      <div style="display:flex;gap:14px;text-align:right">
+        <span style="display:grid;gap:0">
+          <small style="font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">NY</small>
+          <strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ clockNy }}</strong>
+        </span>
+        <span style="display:grid;gap:0">
+          <small style="font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">UTC</small>
+          <strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ clockUtc }}</strong>
+        </span>
+      </div>
+      <button class="btn btn-secondary" style="height:28px;padding:0 10px;font-size:11.5px;white-space:nowrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"></path><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"></path></svg>Alerts on</button>
+      <span style="font-size:12px;color:var(--color-neutral-700)">operator</span>
+    </div>
+  </header>
+
+  <section aria-label="Operational status" style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-bottom:2px solid var(--color-divider);background:var(--color-neutral-100)">
+    <div style="padding:8px 14px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Environment</small>
+      <strong style="font-size:13px;letter-spacing:0.03em">PAPER · alpaca</strong>
+    </div>
+    <div style="padding:8px 14px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Market session</small>
+      <strong style="font-size:13px">Regular</strong>
+    </div>
+    <div style="padding:8px 14px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Quotes · SIP</small>
+      <strong style="font-size:13px">Connected <span style="font-weight:400;color:var(--color-neutral-700)">{{ quoteAge }}</span></strong>
+    </div>
+    <div style="padding:8px 14px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Predictor</small>
+      <strong style="font-size:13px">Available <span style="font-weight:400;color:var(--color-neutral-700)">v2.4</span></strong>
+    </div>
+    <div style="padding:8px 14px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Entry gate</small>
+      <strong style="font-size:13px;color:var(--color-accent-700)">1 check open</strong>
+    </div>
+    <div style="padding:8px 14px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Open P/L</small>
+      <strong style="font-size:13px;font-variant-numeric:tabular-nums;color:{{ totalPlColor }}">{{ totalPlText }}</strong>
+    </div>
+    <div style="padding:8px 14px">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Buying power</small>
+      <strong style="font-size:13px;font-variant-numeric:tabular-nums">$48,120.00</strong>
+    </div>
+  </section>
+
+  <section aria-label="Desk context" style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.4fr) minmax(0,2fr) minmax(0,1.2fr) auto;gap:14px;align-items:end;padding:12px 20px;border-bottom:1px solid var(--color-neutral-300)">
+    <div class="field">
+      <label for="tf-wl">Wishlist</label>
+      <select class="input" id="tf-wl" style="height:32px;min-height:32px;padding:4px 8px">
+        <option>Intraday catalyst · 14 active</option>
+        <option>Swing quality · 22 active</option>
+        <option>Earnings reaction · 9 active</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="tf-strat">Strategy context</label>
+      <select class="input" id="tf-strat" style="height:32px;min-height:32px;padding:4px 8px">
+        <option>intraday-ema10-ema20-macd-volume v1</option>
+        <option>minervini-trend-template-vcp v4-trend-rider</option>
+        <option>swing-reversal-reclaim-bull-quality-no-news v1</option>
+        <option>swing-overbought-rollover-short-no-news v5</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="tf-screener">Finviz screener — name, saved view, or query string</label>
+      <div style="display:flex;gap:0">
+        <select class="input" style="height:32px;min-height:32px;padding:4px 8px;width:132px;flex:none;border-right:0" value="{{ screenerScope }}" onChange="{{ setScreenerScope }}">
+          <option value="swing">Swing</option>
+          <option value="intraday">Intraday (today)</option>
+        </select>
+        <input class="input" id="tf-screener" style="height:32px;min-height:32px;padding:4px 8px;font-family:ui-monospace,monospace;font-size:11.5px" value="{{ screenerQuery }}" onChange="{{ setScreenerQuery }}" />
+      </div>
+    </div>
+    <div class="field">
+      <label for="tf-search">Search</label>
+      <input class="input" id="tf-search" type="search" placeholder="Ticker or name" style="height:32px;min-height:32px;padding:4px 8px" value="{{ search }}" onInput="{{ setSearch }}" />
+    </div>
+    <button class="btn btn-secondary" style="height:32px;padding:0 12px;font-size:12px;white-space:nowrap" onClick="{{ syncScreener }}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>Sync screener</button>
+  </section>
+
+  <section aria-label="Screener result" style="display:flex;align-items:center;gap:16px;padding:9px 20px;border-bottom:2px solid var(--color-divider);background:var(--color-accent-100);flex-wrap:wrap">
+    <strong style="font-size:11px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-accent-800);white-space:nowrap">{{ screenerLabel }}</strong>
+    <span style="font-size:12px;color:var(--color-accent-900)">{{ screenerSummary }}</span>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <sc-for list="{{ screenerNew }}" as="cand" hint-placeholder-count="4">
+        <span class="tag tag-outline" style="font-weight:700;font-size:11px;background:var(--color-bg)">{{ cand }}</span>
+      </sc-for>
+    </div>
+    <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+      <span style="font-size:11px;color:var(--color-accent-900)">Synced {{ screenerSyncedAt }}</span>
+      <button class="btn btn-primary" style="min-height:28px;padding:4px 11px;font-size:11.5px;white-space:nowrap" onClick="{{ promoteCandidates }}">{{ promoteLabel }}</button>
+    </span>
+  </section>
+
+  <section aria-label="View controls" style="display:flex;align-items:center;gap:18px;padding:9px 20px;border-bottom:1px solid var(--color-neutral-300);flex-wrap:wrap">
+    <div style="display:flex;gap:0;border:1px solid var(--color-divider)">
+      <sc-for list="{{ tabs }}" as="tab" hint-placeholder-count="5">
+        <button class="tf-tabbtn" style="padding:5px 12px;font-size:12px;white-space:nowrap;font-weight:{{ tab.weight }};background:{{ tab.bg }};color:{{ tab.fg }};border-left:{{ tab.border }}" onClick="{{ tab.select }}">{{ tab.label }} <span style="opacity:0.65">{{ tab.count }}</span></button>
+      </sc-for>
+    </div>
+    <span style="font-size:12px;color:var(--color-neutral-700)">{{ shownText }}</span>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:14px">
+      <span style="font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Layout</span>
+      <div class="seg" style="min-height:28px">
+        <label class="seg-opt" style="padding:4px 11px;font-size:11.5px;white-space:nowrap">
+          <input type="radio" name="tf-layout" checked="{{ isRail }}" onChange="{{ setLayoutRail }}" />Grid + rail
+        </label>
+        <label class="seg-opt" style="padding:4px 11px;font-size:11.5px;white-space:nowrap">
+          <input type="radio" name="tf-layout" checked="{{ isFocus }}" onChange="{{ setLayoutFocus }}" />Ladder + focus
+        </label>
+      </div>
+      <span style="font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Density</span>
+      <div class="seg" style="min-height:28px">
+        <label class="seg-opt" style="padding:4px 11px;font-size:11.5px;white-space:nowrap">
+          <input type="radio" name="tf-density" checked="{{ isComfortable }}" onChange="{{ setComfortable }}" />Comfortable
+        </label>
+        <label class="seg-opt" style="padding:4px 11px;font-size:11.5px;white-space:nowrap">
+          <input type="radio" name="tf-density" checked="{{ isCompact }}" onChange="{{ setCompact }}" />Compact
+        </label>
+      </div>
+      <button class="tf-tabbtn" style="display:inline-flex;align-items:center;gap:6px;padding:4px 11px;font-size:11.5px;white-space:nowrap;border:1px solid var(--color-divider);font-weight:{{ optWeight }};background:{{ optBg }};color:{{ optFg }}" onClick="{{ toggleOptional }}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="0"></rect><path d="M9 3v18"></path><path d="M15 3v18"></path></svg>Extra columns
+      </button>
+    </div>
+  </section>
+
+  <div style="display:grid;grid-template-columns:{{ shellColumns }};align-items:start;min-height:calc(100vh - 300px)">
+
+    <sc-if value="{{ isFocus }}" hint-placeholder-val="{{ false }}">
+      <aside aria-label="Symbol ladder" class="tf-scroll" style="border-right:2px solid var(--color-divider);max-height:calc(100vh - 300px);position:sticky;top:0">
+        <div style="padding:8px 12px;border-bottom:2px solid var(--color-divider);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;font-weight:700;color:var(--color-neutral-700)">Ladder</div>
+        <sc-for list="{{ rows }}" as="row" hint-placeholder-count="12">
+          <button class="tf-ladder-row" data-sel="{{ row.selFlag }}" style="padding:7px 12px;border-bottom:1px solid var(--color-neutral-300);text-align:left" onClick="{{ row.select }}">
+            <span style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+              <strong style="font-size:13px;letter-spacing:-0.01em">{{ row.ticker }}</strong>
+              <span style="font-size:12.5px;font-variant-numeric:tabular-nums">{{ row.lastText }}</span>
+            </span>
+            <span style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:2px">
+              <span style="font-size:10px;letter-spacing:0.05em;text-transform:uppercase;font-weight:700;color:{{ row.decisionColor }}">{{ row.decisionShort }}</span>
+              <span style="font-size:11px;font-variant-numeric:tabular-nums;color:{{ row.changeColor }}">{{ row.changeText }}</span>
+            </span>
+          </button>
+        </sc-for>
+      </aside>
+    </sc-if>
+
+    <main style="min-width:0;border-right:2px solid var(--color-divider)">
+
+      <sc-if value="{{ isRail }}" hint-placeholder-val="{{ true }}">
+        <div class="tf-scroll" style="max-height:calc(100vh - 300px)">
+          <table class="tf-grid" data-density="{{ density }}">
+            <thead>
+              <tr>
+                <th style="width:170px"><button class="tf-sortbtn" onClick="{{ sortTicker }}">Market{{ caretTicker }}</button></th>
+                <th class="tf-num" style="width:110px"><button class="tf-sortbtn" onClick="{{ sortLast }}">Last{{ caretLast }}</button></th>
+                <th style="width:120px">Bid / Ask</th>
+                <th class="tf-num" style="width:84px"><button class="tf-sortbtn" onClick="{{ sortSpread }}">Spread{{ caretSpread }}</button></th>
+                <sc-if value="{{ showOptional }}" hint-placeholder-val="{{ false }}">
+                  <th class="tf-num" style="width:70px">RVOL</th>
+                </sc-if>
+                <th style="min-width:210px"><button class="tf-sortbtn" onClick="{{ sortDecision }}">TradingFlow{{ caretDecision }}</button></th>
+                <th style="min-width:170px">Predictor</th>
+                <th style="width:104px">Sync</th>
+                <th class="tf-num" style="width:130px"><button class="tf-sortbtn" onClick="{{ sortPl }}">Position{{ caretPl }}</button></th>
+                <sc-if value="{{ showOptional }}" hint-placeholder-val="{{ false }}">
+                  <th style="min-width:200px">Latest news</th>
+                </sc-if>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ rows }}" as="row" hint-placeholder-count="12">
+                <tr data-sel="{{ row.selFlag }}" onClick="{{ row.select }}">
+                  <td>
+                    <strong style="font-size:13.5px;letter-spacing:-0.01em">{{ row.ticker }}</strong>
+                    <small class="tf-cell-sub">{{ row.name }}</small>
+                  </td>
+                  <td class="tf-num">
+                    <strong style="font-size:13.5px;font-variant-numeric:tabular-nums">{{ row.lastText }}</strong>
+                    <small class="tf-cell-sub" style="color:{{ row.changeColor }}">{{ row.changeText }}</small>
+                  </td>
+                  <td style="font-variant-numeric:tabular-nums;font-size:12px;color:var(--color-neutral-800)">{{ row.bidAskText }}<small class="tf-cell-sub">{{ row.sizeText }}</small></td>
+                  <td class="tf-num" style="font-variant-numeric:tabular-nums;color:{{ row.spreadColor }}">{{ row.spreadText }}</td>
+                  <sc-if value="{{ showOptional }}" hint-placeholder-val="{{ false }}">
+                    <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ row.rvolText }}</td>
+                  </sc-if>
+                  <td>
+                    <span class="tag {{ row.decisionTag }}" style="font-weight:700;letter-spacing:0.05em">{{ row.decision }}</span>
+                    <small class="tf-cell-sub" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ row.reason }}</small>
+                  </td>
+                  <td>
+                    <strong style="font-size:12px;letter-spacing:0.04em">{{ row.modelSignal }}</strong>
+                    <small class="tf-cell-sub">{{ row.modelDetail }}</small>
+                  </td>
+                  <td>
+                    <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;letter-spacing:0.05em;color:{{ row.syncColor }}">{{ row.syncGlyph }} {{ row.syncLabel }}</span>
+                  </td>
+                  <td class="tf-num">
+                    <strong style="font-variant-numeric:tabular-nums;color:{{ row.plColor }}">{{ row.plText }}</strong>
+                    <small class="tf-cell-sub">{{ row.posText }}</small>
+                  </td>
+                  <sc-if value="{{ showOptional }}" hint-placeholder-val="{{ false }}">
+                    <td style="max-width:240px">
+                      <span style="display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ row.headline }}</span>
+                      <small class="tf-cell-sub">{{ row.headlineAt }}</small>
+                    </td>
+                  </sc-if>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isFocus }}" hint-placeholder-val="{{ false }}">
+        <div class="tf-scroll" style="max-height:calc(100vh - 300px)">
+          <div style="padding:16px 20px;border-bottom:2px solid var(--color-divider)">
+            <div style="display:flex;align-items:flex-end;gap:24px;flex-wrap:wrap">
+              <div>
+                <small style="display:block;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent);font-weight:700">Selected market</small>
+                <h1 style="font-family:var(--font-heading);font-weight:800;font-size:38px;line-height:1;letter-spacing:-0.02em;margin:4px 0 2px">{{ sel.ticker }}</h1>
+                <p style="margin:0;font-size:13px;color:var(--color-neutral-700)">{{ sel.name }}</p>
+              </div>
+              <div style="display:flex;align-items:baseline;gap:12px">
+                <strong style="font-family:var(--font-heading);font-weight:800;font-size:34px;font-variant-numeric:tabular-nums;line-height:1">{{ sel.lastText }}</strong>
+                <span style="font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;color:{{ sel.changeColor }}">{{ sel.changeText }}</span>
+              </div>
+              <div style="margin-left:auto;display:grid;grid-template-columns:repeat(4,auto);gap:0;border:1px solid var(--color-divider)">
+                <div style="padding:6px 14px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Bid</small><strong style="font-variant-numeric:tabular-nums">{{ sel.bidText }}</strong></div>
+                <div style="padding:6px 14px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Ask</small><strong style="font-variant-numeric:tabular-nums">{{ sel.askText }}</strong></div>
+                <div style="padding:6px 14px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Spread</small><strong style="font-variant-numeric:tabular-nums">{{ sel.spreadText }}</strong></div>
+                <div style="padding:6px 14px"><small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">RVOL</small><strong style="font-variant-numeric:tabular-nums">{{ sel.rvolText }}</strong></div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-bottom:2px solid var(--color-divider)">
+            <div style="padding:14px 20px;border-right:1px solid var(--color-neutral-300)">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+                <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">TradingFlow decision</h2>
+                <span class="tag {{ sel.decisionTag }}" style="font-weight:700;letter-spacing:0.05em">{{ sel.decision }}</span>
+              </div>
+              <p style="margin:0 0 12px;font-size:13.5px;line-height:1.45;text-wrap:pretty">{{ sel.reason }}</p>
+              <dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px">
+                <dt style="color:var(--color-neutral-700)">Setup</dt><dd style="margin:0;font-weight:600">{{ sel.setup }}</dd>
+                <dt style="color:var(--color-neutral-700)">Detected</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ sel.setupAt }}</dd>
+                <dt style="color:var(--color-neutral-700)">Severity</dt><dd style="margin:0">{{ sel.severity }}</dd>
+                <dt style="color:var(--color-neutral-700)">Authority</dt><dd style="margin:0">Authoritative for entry</dd>
+              </dl>
+            </div>
+            <div style="padding:14px 20px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+                <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">Market predictor</h2>
+                <span class="tag tag-neutral" style="font-weight:700;letter-spacing:0.05em">{{ sel.modelSignal }}</span>
+              </div>
+              <p style="margin:0 0 12px;font-size:13.5px;line-height:1.45;text-wrap:pretty">{{ sel.modelReason }}</p>
+              <dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px">
+                <dt style="color:var(--color-neutral-700)">Probability</dt><dd style="margin:0;font-weight:600;font-variant-numeric:tabular-nums">{{ sel.modelProbText }}</dd>
+                <dt style="color:var(--color-neutral-700)">Horizon</dt><dd style="margin:0">{{ sel.modelHorizon }}</dd>
+                <dt style="color:var(--color-neutral-700)">Catalyst</dt><dd style="margin:0">{{ sel.catalyst }}</dd>
+                <dt style="color:var(--color-neutral-700)">Readiness</dt><dd style="margin:0">{{ sel.readiness }}</dd>
+              </dl>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:2px solid var(--color-divider);background:{{ sel.syncBg }}">
+            <strong style="font-family:var(--font-heading);font-weight:800;font-size:15px;letter-spacing:0.04em;color:{{ sel.syncColor }}">{{ sel.syncGlyph }} {{ sel.syncHeadline }}</strong>
+            <span style="font-size:12.5px;color:var(--color-neutral-800)">{{ sel.syncNote }}</span>
+          </div>
+
+          <div id="positions" style="padding:14px 20px 18px">
+            <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 10px">Open book</h2>
+            <table class="tf-grid" data-density="{{ density }}">
+              <thead>
+                <tr>
+                  <th style="width:80px">Ticker</th>
+                  <th style="width:96px">Source</th>
+                  <th class="tf-num" style="width:60px">Qty</th>
+                  <th class="tf-num" style="width:86px">Entry</th>
+                  <th class="tf-num" style="width:86px">Last</th>
+                  <th class="tf-num" style="width:96px">P/L</th>
+                  <th class="tf-num" style="width:74px">P/L %</th>
+                  <th style="min-width:190px">Protection</th>
+                  <th style="width:96px"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ book }}" as="pos" hint-placeholder-count="4">
+                  <tr onClick="{{ pos.select }}">
+                    <td><strong>{{ pos.ticker }}</strong></td>
+                    <td><span class="tag tag-neutral" style="font-size:10.5px">{{ pos.source }}</span></td>
+                    <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ pos.qty }}</td>
+                    <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ pos.entryText }}</td>
+                    <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ pos.lastText }}</td>
+                    <td class="tf-num" style="font-variant-numeric:tabular-nums;font-weight:700;color:{{ pos.plColor }}">{{ pos.plText }}</td>
+                    <td class="tf-num" style="font-variant-numeric:tabular-nums;color:{{ pos.plColor }}">{{ pos.plPctText }}</td>
+                    <td style="font-size:12px;color:var(--color-neutral-800)">{{ pos.protection }}</td>
+                    <td><button class="btn btn-secondary" style="height:26px;padding:0 9px;font-size:11px" onClick="{{ pos.exit }}">Review exit</button></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+    </main>
+
+    <aside aria-label="Selected symbol and order ticket" class="tf-scroll" style="max-height:calc(100vh - 300px);position:sticky;top:0">
+
+      <sc-if value="{{ isRail }}" hint-placeholder-val="{{ true }}">
+        <div style="padding:14px 18px;border-bottom:2px solid var(--color-divider)">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+            <div>
+              <small style="display:block;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent);font-weight:700">Selected market</small>
+              <h2 style="font-family:var(--font-heading);font-weight:800;font-size:26px;line-height:1.05;letter-spacing:-0.02em;margin:3px 0 1px">{{ sel.ticker }}</h2>
+              <p style="margin:0;font-size:12px;color:var(--color-neutral-700)">{{ sel.name }}</p>
+            </div>
+            <div style="text-align:right">
+              <strong style="display:block;font-size:20px;font-variant-numeric:tabular-nums;line-height:1.1">{{ sel.lastText }}</strong>
+              <span style="font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:{{ sel.changeColor }}">{{ sel.changeText }}</span>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--color-divider);margin-top:12px">
+            <div style="padding:5px 9px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Bid</small><strong style="font-size:12.5px;font-variant-numeric:tabular-nums">{{ sel.bidText }}</strong></div>
+            <div style="padding:5px 9px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Ask</small><strong style="font-size:12.5px;font-variant-numeric:tabular-nums">{{ sel.askText }}</strong></div>
+            <div style="padding:5px 9px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Spread</small><strong style="font-size:12.5px;font-variant-numeric:tabular-nums">{{ sel.spreadText }}</strong></div>
+            <div style="padding:5px 9px"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">RVOL</small><strong style="font-size:12.5px;font-variant-numeric:tabular-nums">{{ sel.rvolText }}</strong></div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-bottom:1px solid var(--color-neutral-300)">
+          <div style="padding:11px 14px;border-right:1px solid var(--color-neutral-300)">
+            <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700;margin-bottom:5px">TradingFlow</small>
+            <span class="tag {{ sel.decisionTag }}" style="font-weight:700;letter-spacing:0.05em">{{ sel.decision }}</span>
+            <p style="margin:7px 0 0;font-size:12px;line-height:1.4;color:var(--color-neutral-800);text-wrap:pretty">{{ sel.reason }}</p>
+            <p style="margin:6px 0 0;font-size:11px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ sel.setup }} · {{ sel.setupAt }}</p>
+          </div>
+          <div style="padding:11px 14px">
+            <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700;margin-bottom:5px">Predictor</small>
+            <span class="tag tag-neutral" style="font-weight:700;letter-spacing:0.05em">{{ sel.modelSignal }}</span>
+            <p style="margin:7px 0 0;font-size:12px;line-height:1.4;color:var(--color-neutral-800);text-wrap:pretty">{{ sel.modelReason }}</p>
+            <p style="margin:6px 0 0;font-size:11px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ sel.modelProbText }} · {{ sel.modelHorizon }}</p>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:9px;padding:9px 14px;border-bottom:2px solid var(--color-divider);background:{{ sel.syncBg }}">
+          <strong style="font-size:12px;font-weight:800;letter-spacing:0.05em;color:{{ sel.syncColor }};white-space:nowrap">{{ sel.syncGlyph }} {{ sel.syncHeadline }}</strong>
+          <span style="font-size:11.5px;color:var(--color-neutral-800);line-height:1.35">{{ sel.syncNote }}</span>
+        </div>
+      </sc-if>
+
+      <div style="padding:14px 18px;border-bottom:2px solid var(--color-divider)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px">
+          <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">Order ticket</h2>
+          <span style="font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;font-weight:700;color:var(--color-neutral-700)">Paper · server revalidates</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;border:1px solid var(--color-divider);margin-bottom:12px">
+          <button class="tf-tabbtn" style="padding:8px 12px;font-size:12.5px;font-weight:700;letter-spacing:0.04em;text-align:left;background:{{ buyTabBg }};color:{{ buyTabFg }}" onClick="{{ setBuy }}">BUY {{ sel.ticker }}</button>
+          <button class="tf-tabbtn" style="padding:8px 12px;font-size:12.5px;font-weight:700;letter-spacing:0.04em;text-align:left;background:{{ sellTabBg }};color:{{ sellTabFg }};border-left:1px solid var(--color-divider)" onClick="{{ setSell }}">SELL {{ sel.ticker }}</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+          <div class="field">
+            <label for="tf-qty">Quantity</label>
+            <input class="input" id="tf-qty" type="number" min="1" step="1" style="height:32px;min-height:32px;padding:4px 8px;font-variant-numeric:tabular-nums" value="{{ qty }}" onChange="{{ setQty }}" />
+          </div>
+          <div class="field">
+            <label for="tf-otype">Order type</label>
+            <select class="input" id="tf-otype" style="height:32px;min-height:32px;padding:4px 8px" value="{{ orderType }}" onChange="{{ setOrderType }}">
+              <option value="limit">Limit</option>
+              <option value="market">Market</option>
+              <option value="stop_limit">Stop limit</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="tf-limit">Limit price</label>
+            <input class="input" id="tf-limit" type="number" step="0.01" style="height:32px;min-height:32px;padding:4px 8px;font-variant-numeric:tabular-nums" value="{{ limit }}" onChange="{{ setLimit }}" />
+          </div>
+          <div class="field">
+            <label for="tf-tif">Time in force</label>
+            <select class="input" id="tf-tif" style="height:32px;min-height:32px;padding:4px 8px" value="{{ tif }}" onChange="{{ setTif }}">
+              <option value="day">Day</option>
+              <option value="gtc">GTC</option>
+              <option value="ioc">IOC</option>
+            </select>
+          </div>
+          <sc-if value="{{ isBuy }}" hint-placeholder-val="{{ true }}">
+            <div class="field">
+              <label for="tf-stop">Stop price</label>
+              <input class="input" id="tf-stop" type="number" step="0.01" style="height:32px;min-height:32px;padding:4px 8px;font-variant-numeric:tabular-nums" value="{{ stop }}" onChange="{{ setStop }}" />
+            </div>
+          </sc-if>
+          <sc-if value="{{ isBuy }}" hint-placeholder-val="{{ true }}">
+            <div class="field">
+              <label for="tf-target">Take profit</label>
+              <input class="input" id="tf-target" type="number" step="0.01" style="height:32px;min-height:32px;padding:4px 8px;font-variant-numeric:tabular-nums" value="{{ target }}" onChange="{{ setTarget }}" />
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+          <sc-for list="{{ sizePresets }}" as="preset" hint-placeholder-count="4">
+            <button class="btn btn-secondary" style="height:26px;padding:0 9px;font-size:11px" onClick="{{ preset.apply }}">{{ preset.label }}</button>
+          </sc-for>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--color-divider);margin-top:12px">
+          <div style="padding:7px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Notional</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ notionalText }}</strong></div>
+          <div style="padding:7px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Risk</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ riskText }}</strong></div>
+          <div style="padding:7px 10px"><small style="display:block;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">R multiple</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ rMultipleText }}</strong></div>
+        </div>
+
+        <ul style="list-style:none;margin:12px 0 0;padding:0;display:grid;gap:0;border:1px solid var(--color-divider)">
+          <sc-for list="{{ checks }}" as="check" hint-placeholder-count="6">
+            <li style="display:flex;align-items:baseline;gap:8px;padding:6px 10px;border-top:{{ check.border }};font-size:12px">
+              <strong style="flex:none;width:13px;color:{{ check.color }};font-weight:800">{{ check.glyph }}</strong>
+              <span style="flex:none;width:104px;color:var(--color-neutral-700)">{{ check.label }}</span>
+              <span style="min-width:0;font-variant-numeric:tabular-nums;color:{{ check.color }}">{{ check.value }}</span>
+            </li>
+          </sc-for>
+        </ul>
+
+        <sc-if value="{{ blocked }}" hint-placeholder-val="{{ false }}">
+          <p style="margin:10px 0 0;padding:8px 10px;border-left:3px solid var(--color-accent);background:var(--color-accent-100);font-size:12px;color:var(--color-accent-900);line-height:1.4">{{ blockedReason }}</p>
+        </sc-if>
+
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <sc-if value="{{ atEntry }}" hint-placeholder-val="{{ true }}">
+            <button class="btn btn-primary" style="flex:1;height:38px;padding:0 12px;font-size:13px;justify-content:flex-start" onClick="{{ review }}">{{ reviewLabel }}</button>
+          </sc-if>
+          <sc-if value="{{ atReview }}" hint-placeholder-val="{{ false }}">
+            <button class="btn btn-primary" style="flex:1;height:38px;padding:0 12px;font-size:13px;justify-content:flex-start" onClick="{{ submit }}">{{ submitLabel }}</button>
+          </sc-if>
+          <sc-if value="{{ atReview }}" hint-placeholder-val="{{ false }}">
+            <button class="btn btn-secondary" style="height:38px;padding:0 12px;font-size:13px" onClick="{{ backToEntry }}">Edit</button>
+          </sc-if>
+        </div>
+        <sc-if value="{{ atReview }}" hint-placeholder-val="{{ false }}">
+          <p style="margin:8px 0 0;font-size:11.5px;color:var(--color-neutral-700);line-height:1.4">Ticket token expires {{ ticketExpiry }}. Quote, spread, session, exposure and duplicate controls are revalidated at submit.</p>
+        </sc-if>
+      </div>
+
+      <div id="news" style="padding:14px 18px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px">
+          <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">News</h2>
+          <div class="seg" style="height:24px">
+            <label class="seg-opt" style="padding:2px 9px;font-size:11px">
+              <input type="radio" name="tf-newsscope" checked="{{ newsGroup }}" onChange="{{ setNewsGroup }}" />Group
+            </label>
+            <label class="seg-opt" style="padding:2px 9px;font-size:11px">
+              <input type="radio" name="tf-newsscope" checked="{{ newsSymbol }}" onChange="{{ setNewsSymbol }}" />{{ sel.ticker }}
+            </label>
+          </div>
+        </div>
+        <div style="display:grid;gap:0">
+          <sc-for list="{{ news }}" as="item" hint-placeholder-count="6">
+            <article style="padding:9px 0 9px 10px;border-top:1px solid var(--color-neutral-300);border-left:3px solid {{ item.sentimentColor }}">
+              <div style="display:flex;justify-content:space-between;gap:8px;font-size:10.5px;color:var(--color-neutral-700)">
+                <strong style="letter-spacing:0.04em">{{ item.tickers }}</strong>
+                <time style="font-variant-numeric:tabular-nums">{{ item.at }}</time>
+              </div>
+              <p style="margin:3px 0 0;font-size:12.5px;font-weight:600;line-height:1.35;text-wrap:pretty">{{ item.headline }}</p>
+              <p style="margin:3px 0 0;font-size:11.5px;color:var(--color-neutral-700);line-height:1.4">{{ item.source }} · sentiment {{ item.sentiment }}</p>
+            </article>
+          </sc-for>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+    <div role="status" style="position:fixed;right:20px;bottom:20px;z-index:60;max-width:380px;background:var(--color-text);color:var(--color-bg);padding:12px 16px;box-shadow:var(--shadow-lg)">
+      <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.05em;text-transform:uppercase">{{ toastTitle }}</strong>
+      <span style="display:block;margin-top:4px;font-size:12.5px;line-height:1.4">{{ toastBody }}</span>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1600,&quot;height&quot;:1000},&quot;liveQuotes&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Behaviour&quot;}}">
+const GAIN = 'var(--color-text)';
+const LOSS = 'var(--color-accent-700)';
+const FLAT = 'var(--color-neutral-700)';
+
+const SEED = [
+  { t: 'NVDA', n: 'NVIDIA Corp', p: 181.42, prev: 178.06, sp: 1.6, rv: 2.4, d: 'ELIGIBLE',
+    r: 'Volume 2.4x 20-bar mean, EMA10 above EMA20, MACD histogram expanding, VWAP extension 0.8 ATR.',
+    setup: 'Intraday continuation', sa: '14:32:08', sev: 'high',
+    m: 'LONG', mp: 0.71, mh: 'intraday 1d', cat: 'confirmed / bullish', rdy: 'ready',
+    mr: 'Opportunity 71%, downside 12%. RVOL 2.4, RSI 61.8, MACD diff +0.0182. Catalyst confirmed 41m ago.',
+    scr: 'both', pos: { q: 120, e: 174.1, src: 'Wishlist', prot: 'Stop 169.80 · Target 188.40' },
+    hl: 'NVIDIA lifts data-centre capacity outlook at partner summit', ha: '14:11:22', ns: 0.62, prov: 'Benzinga' },
+  { t: 'AVGO', n: 'Broadcom Inc', p: 312.88, prev: 309.44, sp: 2.1, rv: 1.8, d: 'ELIGIBLE',
+    r: 'Reclaim of 20-day with rising relative strength; confluence timeframe 1h EMA50 aligned.',
+    setup: 'Swing reclaim', sa: '13:05:41', sev: 'medium',
+    m: 'LONG', mp: 0.66, mh: 'swing 5d', cat: 'confirmed / bullish', rdy: 'ready',
+    mr: 'Probability 66%, decision score 1.42, rank 3 of 22. Volume z-score 2.1, global context +0.3.',
+    scr: 'swing', pos: { q: 40, e: 305.2, src: 'Wishlist', prot: 'Stop 296.10 · Target 328.60' },
+    hl: 'Broadcom guides custom accelerator revenue above consensus', ha: '12:48:10', ns: 0.54, prov: 'Alpaca' },
+  { t: 'AMD', n: 'Advanced Micro Devices', p: 148.06, prev: 149.9, sp: 2.4, rv: 1.1, d: 'WATCHING',
+    r: 'Volume spike 1.1x below the 1.5x floor; MACD histogram still contracting.',
+    setup: 'No active setup', sa: '--', sev: 'none',
+    m: 'FLAT', mp: 0.48, mh: 'intraday 1d', cat: 'none / neutral', rdy: 'ready',
+    mr: 'Opportunity 48%, downside 34%. RVOL 1.1, RSI 47.2. No catalyst inside the relevance window.',
+    scr: 'none', pos: null,
+    hl: 'AMD supply commentary unchanged after channel checks', ha: '11:20:03', ns: 0.05, prov: 'Alpaca' },
+  { t: 'PLTR', n: 'Palantir Technologies', p: 41.77, prev: 40.12, sp: 3.8, rv: 3.1, d: 'ELIGIBLE',
+    r: 'Session gain 4.1% on 3.1x volume, holding above VWAP for 9 completed bars.',
+    setup: 'Catalyst participation', sa: '14:38:52', sev: 'high',
+    m: 'SHORT', mp: 0.58, mh: 'intraday 1d', cat: 'confirmed / bearish', rdy: 'ready',
+    mr: 'Downside 58%, opportunity 29%. Extension 3.4 ATR above VWAP flags mean reversion risk.',
+    scr: 'intraday', pos: null,
+    hl: 'Palantir wins expanded federal analytics vehicle', ha: '14:02:44', ns: 0.71, prov: 'Benzinga' },
+  { t: 'MU', n: 'Micron Technology', p: 106.34, prev: 104.9, sp: 2.7, rv: 1.9, d: 'ELIGIBLE',
+    r: 'ATR compression breakout with confirmation on the following bar; spread inside 5 bps.',
+    setup: 'Compression breakout', sa: '14:19:30', sev: 'medium',
+    m: 'LONG', mp: 0.63, mh: 'intraday 1d', cat: 'possible / bullish', rdy: 'ready',
+    mr: 'Opportunity 63%, downside 18%. RVOL 1.9, RSI 58.4, entry stop 1.8%, target 4.1%.',
+    scr: 'both', pos: { q: 90, e: 103.55, src: 'Stock Pulse', prot: 'Stop 100.20 · Target 112.80' },
+    hl: 'Micron HBM4 qualification ahead of schedule, supplier says', ha: '13:31:09', ns: 0.48, prov: 'Alpaca' },
+  { t: 'COIN', n: 'Coinbase Global', p: 244.91, prev: 251.7, sp: 5.9, rv: 2.2, d: 'BLOCKED',
+    r: 'Spread 5.9 bps exceeds the 5.0 bps entry ceiling for this strategy.',
+    setup: 'Intraday continuation', sa: '14:26:11', sev: 'medium',
+    m: 'FLAT', mp: 0.51, mh: 'intraday 1d', cat: 'possible / mixed', rdy: 'degraded',
+    mr: 'Opportunity 51%, downside 41%. Readiness degraded: latest 5-minute bar incomplete.',
+    scr: 'intraday', pos: null,
+    hl: 'Coinbase volumes soften as spot flows rotate', ha: '13:58:37', ns: -0.34, prov: 'Benzinga' },
+  { t: 'SMCI', n: 'Super Micro Computer', p: 38.62, prev: 40.05, sp: 4.4, rv: 2.7, d: 'WATCHING',
+    r: 'Below VWAP with negative MACD histogram; long setups suppressed for the session.',
+    setup: 'No active setup', sa: '--', sev: 'none',
+    m: 'SHORT', mp: 0.64, mh: 'intraday 1d', cat: 'confirmed / bearish', rdy: 'ready',
+    mr: 'Downside 64%, opportunity 21%. RVOL 2.7 on distribution, RSI 38.1.',
+    scr: 'none', pos: null,
+    hl: 'Super Micro margin commentary disappoints channel partners', ha: '12:11:58', ns: -0.52, prov: 'Alpaca' },
+  { t: 'ANET', n: 'Arista Networks', p: 128.55, prev: 127.1, sp: 2.9, rv: 1.4, d: 'WATCHING',
+    r: 'Trend template satisfied but no entry trigger on the completed bar.',
+    setup: 'Trend template', sa: '10:44:19', sev: 'low',
+    m: 'LONG', mp: 0.59, mh: 'swing 5d', cat: 'none / neutral', rdy: 'ready',
+    mr: 'Probability 59%, decision score 0.88, rank 9 of 22. Volume z-score 0.7.',
+    scr: 'swing', pos: null,
+    hl: 'Arista reiterates AI networking pipeline at investor day', ha: '09:52:14', ns: 0.31, prov: 'Alpaca' },
+  { t: 'MRVL', n: 'Marvell Technology', p: 74.18, prev: 73.02, sp: 3.2, rv: 1.6, d: 'ELIGIBLE',
+    r: 'VWAP pullback held with rising volume on the confirmation bar.',
+    setup: 'VWAP pullback', sa: '14:35:02', sev: 'medium',
+    m: 'LONG', mp: 0.61, mh: 'intraday 1d', cat: 'possible / bullish', rdy: 'ready',
+    mr: 'Opportunity 61%, downside 22%. RVOL 1.6, RSI 55.9, MACD diff +0.0094.',
+    scr: 'intraday', pos: null,
+    hl: 'Marvell custom silicon win reported by supply chain', ha: '13:14:26', ns: 0.44, prov: 'Benzinga' },
+  { t: 'CRWD', n: 'CrowdStrike Holdings', p: 396.4, prev: 392.8, sp: 3.6, rv: 1.2, d: 'WATCHING',
+    r: 'RSI 71.4 above the 70.0 entry ceiling; waiting for a reset.',
+    setup: 'No active setup', sa: '--', sev: 'none',
+    m: 'LONG', mp: 0.57, mh: 'swing 5d', cat: 'none / neutral', rdy: 'ready',
+    mr: 'Probability 57%, decision score 0.71, rank 14 of 22.',
+    scr: 'swing', pos: null,
+    hl: 'CrowdStrike federal renewals tracking ahead of plan', ha: '11:47:51', ns: 0.28, prov: 'Alpaca' },
+  { t: 'SOFI', n: 'SoFi Technologies', p: 22.04, prev: 21.55, sp: 6.8, rv: 2.9, d: 'BLOCKED',
+    r: 'Notional 25% cap reached across open positions for this account.',
+    setup: 'Catalyst participation', sa: '14:12:47', sev: 'medium',
+    m: 'LONG', mp: 0.6, mh: 'intraday 1d', cat: 'confirmed / bullish', rdy: 'ready',
+    mr: 'Opportunity 60%, downside 24%. RVOL 2.9, RSI 63.2.',
+    scr: 'intraday', pos: null,
+    hl: 'SoFi lifts member growth outlook', ha: '14:05:19', ns: 0.58, prov: 'Benzinga' },
+  { t: 'DKNG', n: 'DraftKings Inc', p: 44.86, prev: 45.9, sp: 4.1, rv: 1.3, d: 'WATCHING',
+    r: 'Confluence timeframe 1h EMA50 not reclaimed.',
+    setup: 'No active setup', sa: '--', sev: 'none',
+    m: 'FLAT', mp: 0.46, mh: 'swing 5d', cat: 'none / neutral', rdy: 'ready',
+    mr: 'Probability 46%, decision score -0.12, rank 19 of 22.',
+    scr: 'none', pos: null,
+    hl: 'DraftKings state approvals slip a quarter', ha: '10:33:05', ns: -0.22, prov: 'Alpaca' },
+  { t: 'RIVN', n: 'Rivian Automotive', p: 13.72, prev: 13.28, sp: 7.4, rv: 2.1, d: 'BLOCKED',
+    r: 'Spread 7.4 bps and quote age 4.2s both outside entry tolerance.',
+    setup: 'Compression breakout', sa: '14:08:33', sev: 'low',
+    m: 'FLAT', mp: 0.49, mh: 'intraday 1d', cat: 'possible / mixed', rdy: 'degraded',
+    mr: 'Readiness degraded: relative volume series incomplete for the session.',
+    scr: 'intraday', pos: null,
+    hl: 'Rivian production cadence steady into the quarter', ha: '12:56:41', ns: 0.11, prov: 'Alpaca' },
+  { t: 'UBER', n: 'Uber Technologies', p: 88.31, prev: 87.02, sp: 2.2, rv: 1.5, d: 'ELIGIBLE',
+    r: 'Reclaim confirmed on the completed bar with volume spike 1.5x.',
+    setup: 'Swing reclaim', sa: '13:41:58', sev: 'medium',
+    m: 'LONG', mp: 0.68, mh: 'swing 5d', cat: 'confirmed / bullish', rdy: 'ready',
+    mr: 'Probability 68%, decision score 1.61, rank 2 of 22. Volume z-score 1.9.',
+    scr: 'swing', pos: { q: 60, e: 85.4, src: 'Manual', prot: 'Stop 82.10 · Target 94.90' },
+    hl: 'Uber mobility bookings accelerate in core markets', ha: '13:22:07', ns: 0.49, prov: 'Benzinga' }
+];
+
+const SCREENERS = {
+  swing: {
+    label: 'Swing screener',
+    query: 'f=cap_midover,sh_avgvol_o500,ta_perf_4w20o,ta_sma50_pa&o=-perfytd',
+    name: 'Swing — momentum quality',
+    hits: 22,
+    fresh: ['AVGO', 'UBER', 'ANET', 'LRCX']
+  },
+  intraday: {
+    label: 'Intraday screener',
+    query: 'f=sh_curvol_o1000,sh_relvol_o2,ta_change_u3&ft=4&o=-volume',
+    name: 'Intraday — gap + RVOL (today only)',
+    hits: 17,
+    fresh: ['PLTR', 'SOFI', 'RIVN', 'MARA', 'HOOD']
+  }
+};
+
+const TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'signal', label: 'Signals' },
+  { key: 'trade', label: 'In trade' },
+  { key: 'screener', label: 'Screener' },
+  { key: 'disagree', label: 'Disagree' }
+];
+
+class Component extends DCLogic {
+  state = {
+    layout: 'rail',
+    density: 'comfortable',
+    showOptional: false,
+    tab: 'all',
+    search: '',
+    sort: 'decision',
+    dir: 'desc',
+    selected: 'NVDA',
+    side: 'buy',
+    stage: 'entry',
+    qty: 120,
+    orderType: 'limit',
+    tif: 'day',
+    limitOverride: null,
+    stopOverride: null,
+    targetOverride: null,
+    screenerScope: 'intraday',
+    screenerQuery: SCREENERS.intraday.query,
+    screenerSyncedAt: '14:36:12 UTC',
+    promoted: false,
+    newsScope: 'group',
+    toast: null,
+    prices: SEED.reduce((acc, s) => { acc[s.t] = { last: s.p, prev: s.prev }; return acc; }, {}),
+    now: new Date(Date.UTC(2026, 7, 4, 18, 41, 26))
+  };
+
+  componentDidMount() {
+    this.timer = setInterval(() => this.tick(), 2400);
+  }
+
+  componentWillUnmount() {
+    clearInterval(this.timer);
+    clearTimeout(this.toastTimer);
+  }
+
+  tick() {
+    if (this.props.liveQuotes === false) return;
+    this.setState(s => {
+      const prices = {};
+      for (const k in s.prices) {
+        const p = s.prices[k];
+        const drift = (Math.random() - 0.495) * p.last * 0.0011;
+        prices[k] = { last: Math.max(0.5, p.last + drift), prev: p.prev };
+      }
+      return { prices, now: new Date(s.now.getTime() + 2400) };
+    });
+  }
+
+  money(v) { return '$' + v.toFixed(2); }
+
+  signedMoney(v) {
+    const sign = v > 0.005 ? '+' : v < -0.005 ? '\u2212' : '';
+    return sign + '$' + Math.abs(v).toFixed(2);
+  }
+
+  dirColor(v) { return v > 0.005 ? GAIN : v < -0.005 ? LOSS : FLAT; }
+
+  glyph(v) { return v > 0.005 ? '\u25B2' : v < -0.005 ? '\u25BC' : '\u2014'; }
+
+  bullish(sig) { return sig === 'LONG'; }
+
+  syncOf(seed) {
+    const flowLong = seed.d === 'ELIGIBLE';
+    const modelLong = seed.m === 'LONG';
+    if (flowLong && modelLong) return 'agree';
+    if (!flowLong && !modelLong && seed.m !== 'SHORT') return 'agree';
+    if (flowLong && seed.m === 'SHORT') return 'conflict';
+    if (flowLong && seed.m === 'FLAT') return 'partial';
+    if (!flowLong && modelLong) return 'partial';
+    return 'partial';
+  }
+
+  syncMeta(kind) {
+    if (kind === 'agree') {
+      return { glyph: '\u25CF', label: 'AGREE', color: GAIN, bg: 'var(--color-neutral-200)',
+        headline: 'MODELS AGREE',
+        note: 'TradingFlow eligibility and the predictor point the same way. Eligibility remains authoritative for entry.' };
+    }
+    if (kind === 'conflict') {
+      return { glyph: '\u25C6', label: 'CONFLICT', color: LOSS, bg: 'var(--color-accent-100)',
+        headline: 'DIRECTIONAL CONFLICT',
+        note: 'The predictor opposes the TradingFlow verdict. Entry is permitted but the disagreement is recorded on the ticket.' };
+    }
+    return { glyph: '\u25CB', label: 'PARTIAL', color: FLAT, bg: 'var(--color-neutral-200)',
+      headline: 'PARTIAL AGREEMENT',
+      note: 'One side is neutral. Read this as no confirmation rather than as a contradiction.' };
+  }
+
+  build(seed) {
+    const live = this.state.prices[seed.t] || { last: seed.p, prev: seed.prev };
+    const last = live.last;
+    const half = last * (seed.sp / 10000) / 2;
+    const bid = last - half;
+    const ask = last + half;
+    const change = last - live.prev;
+    const changePct = (change / live.prev) * 100;
+    const sync = this.syncOf(seed);
+    const meta = this.syncMeta(sync);
+    const pos = seed.pos;
+    const pl = pos ? (last - pos.e) * pos.q : 0;
+    const plPct = pos ? ((last - pos.e) / pos.e) * 100 : 0;
+    return {
+      seed, ticker: seed.t, name: seed.n,
+      last, bid, ask, change, changePct, sync,
+      lastText: this.money(last),
+      bidText: this.money(bid),
+      askText: this.money(ask),
+      bidAskText: bid.toFixed(2) + ' / ' + ask.toFixed(2),
+      sizeText: (300 + Math.round(seed.rv * 210)) + ' \u00d7 ' + (280 + Math.round(seed.rv * 190)),
+      changeText: this.glyph(change) + ' ' + (change >= 0 ? '+' : '\u2212') + Math.abs(changePct).toFixed(2) + '%',
+      changeColor: this.dirColor(change),
+      spreadText: seed.sp.toFixed(1) + ' bps',
+      spreadColor: seed.sp > 5 ? LOSS : 'inherit',
+      rvolText: seed.rv.toFixed(1) + '\u00d7',
+      decision: seed.d,
+      decisionShort: seed.d === 'ELIGIBLE' ? 'ELIG' : seed.d === 'BLOCKED' ? 'BLOCK' : 'WATCH',
+      decisionColor: seed.d === 'ELIGIBLE' ? 'var(--color-accent-800)' : seed.d === 'BLOCKED' ? LOSS : FLAT,
+      decisionTag: seed.d === 'ELIGIBLE' ? 'tag-accent' : 'tag-neutral',
+      reason: seed.r,
+      setup: seed.setup, setupAt: seed.sa === '--' ? '\u2014' : seed.sa + ' UTC', severity: seed.sev,
+      modelSignal: seed.m,
+      modelProbText: Math.round(seed.mp * 100) + '%',
+      modelDetail: Math.round(seed.mp * 100) + '% \u00b7 ' + seed.mh,
+      modelHorizon: seed.mh,
+      modelReason: seed.mr,
+      catalyst: seed.cat, readiness: seed.rdy,
+      syncGlyph: meta.glyph, syncLabel: meta.label, syncColor: meta.color,
+      syncBg: meta.bg, syncHeadline: meta.headline, syncNote: meta.note,
+      pl, plPct,
+      plText: pos ? this.signedMoney(pl) : '\u2014',
+      plPctText: pos ? (plPct >= 0 ? '+' : '\u2212') + Math.abs(plPct).toFixed(2) + '%' : '\u2014',
+      plColor: pos ? this.dirColor(pl) : FLAT,
+      posText: pos ? pos.q + ' sh @ ' + pos.e.toFixed(2) : 'No open trade',
+      source: pos ? pos.src : '\u2014',
+      protection: pos ? pos.prot : '\u2014',
+      qty: pos ? pos.q : 0,
+      entryText: pos ? this.money(pos.e) : '\u2014',
+      headline: seed.hl,
+      headlineAt: seed.ha + ' UTC',
+      selFlag: seed.t === this.state.selected ? '1' : '0',
+      select: () => this.select(seed.t),
+      exit: () => this.exitPosition(seed.t)
+    };
+  }
+
+  select(t) {
+    this.setState({ selected: t, stage: 'entry', qty: null, limitOverride: null, stopOverride: null, targetOverride: null, side: 'buy' });
+  }
+
+  exitPosition(t) {
+    this.setState({ selected: t, side: 'sell', stage: 'review' });
+  }
+
+  matchesTab(r) {
+    const scope = this.state.screenerScope;
+    switch (this.state.tab) {
+      case 'signal': return r.seed.d === 'ELIGIBLE';
+      case 'trade': return !!r.seed.pos;
+      case 'screener': return r.seed.scr === 'both' || r.seed.scr === scope;
+      case 'disagree': return r.sync === 'conflict';
+      default: return true;
+    }
+  }
+
+  matchesSearch(r) {
+    const q = this.state.search.trim().toLowerCase();
+    if (!q) return true;
+    return r.ticker.toLowerCase().includes(q) || r.name.toLowerCase().includes(q);
+  }
+
+  sortRows(rows) {
+    const { sort, dir } = this.state;
+    const mul = dir === 'desc' ? -1 : 1;
+    const rank = { ELIGIBLE: 2, WATCHING: 1, BLOCKED: 0 };
+    const key = r => {
+      switch (sort) {
+        case 'last': return r.last;
+        case 'spread': return r.seed.sp;
+        case 'decision': return rank[r.decision] * 100 + r.seed.rv;
+        case 'pl': return r.seed.pos ? r.pl : -1e9;
+        default: return r.ticker;
+      }
+    };
+    return rows.slice().sort((a, b) => {
+      const ka = key(a); const kb = key(b);
+      if (ka < kb) return -1 * mul;
+      if (ka > kb) return 1 * mul;
+      return a.ticker < b.ticker ? -1 : 1;
+    });
+  }
+
+  caret(k) {
+    if (this.state.sort !== k) return '';
+    return this.state.dir === 'desc' ? ' \u25BE' : ' \u25B4';
+  }
+
+  toggleSort(k) {
+    this.setState(s => s.sort === k
+      ? { dir: s.dir === 'desc' ? 'asc' : 'desc' }
+      : { sort: k, dir: k === 'ticker' ? 'asc' : 'desc' });
+  }
+
+  fire(title, body) {
+    clearTimeout(this.toastTimer);
+    this.setState({ toast: { title, body } });
+    this.toastTimer = setTimeout(() => this.setState({ toast: null }), 5200);
+  }
+
+  clock(offsetHours) {
+    const d = new Date(this.state.now.getTime() + offsetHours * 3600000);
+    const p = n => String(n).padStart(2, '0');
+    return p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds());
+  }
+
+  renderVals() {
+    const s = this.state;
+    const all = SEED.map(seed => this.build(seed));
+    const bySym = {};
+    all.forEach(r => { bySym[r.ticker] = r; });
+    const rows = this.sortRows(all.filter(r => this.matchesTab(r)).filter(r => this.matchesSearch(r)));
+    const sel = bySym[s.selected] || all[0];
+    const screener = SCREENERS[s.screenerScope];
+
+    const qty = s.qty === null ? (sel.seed.pos ? sel.seed.pos.q : Math.max(1, Math.round(6000 / sel.last))) : s.qty;
+    const isBuy = s.side === 'buy';
+    const limit = s.limitOverride === null ? (isBuy ? sel.ask : sel.bid) : s.limitOverride;
+    const stop = s.stopOverride === null ? limit * 0.965 : s.stopOverride;
+    const target = s.targetOverride === null ? limit * 1.07 : s.targetOverride;
+    const notional = qty * limit;
+    const risk = Math.max(0, (limit - stop)) * qty;
+    const rMultiple = limit - stop > 0 ? (target - limit) / (limit - stop) : 0;
+
+    const spreadOk = sel.seed.sp <= 5;
+    const notionalOk = notional <= 12000;
+    const sessionOk = true;
+    const dupOk = !(isBuy && sel.seed.pos);
+    const protectionOk = !isBuy || (stop < limit && target > limit);
+    const exposureOk = notional <= 12000;
+    const checks = [
+      { label: 'Quote age', value: '0.4 s \u00b7 fresh', ok: true },
+      { label: 'Spread', value: sel.seed.sp.toFixed(1) + ' bps ' + (spreadOk ? 'within 5.0' : 'over 5.0 ceiling'), ok: spreadOk },
+      { label: 'Session', value: 'Regular \u00b7 extended hours off', ok: sessionOk },
+      { label: 'Notional', value: this.money(notional) + (notionalOk ? ' within 25% cap' : ' over 25% cap'), ok: notionalOk },
+      { label: 'Duplicate', value: dupOk ? 'No open position or working order' : 'Position already open \u2014 use exit', ok: dupOk },
+      { label: 'Protection', value: isBuy ? (protectionOk ? 'Stop and target bracket the limit' : 'Stop or target on the wrong side') : 'Exit carries no bracket', ok: protectionOk }
+    ].map((c, i) => ({
+      label: c.label, value: c.value,
+      glyph: c.ok ? '\u2713' : '\u2715',
+      color: c.ok ? GAIN : LOSS,
+      border: i === 0 ? '0' : '1px solid var(--color-neutral-300)'
+    }));
+
+    const failing = checks.filter(c => c.glyph === '\u2715');
+    const blocked = failing.length > 0;
+
+    const totalPl = all.reduce((sum, r) => sum + (r.seed.pos ? r.pl : 0), 0);
+
+    const tabs = TABS.map(t => {
+      const count = all.filter(r => {
+        const saved = this.state.tab;
+        this.state.tab = t.key;
+        const m = this.matchesTab(r);
+        this.state.tab = saved;
+        return m;
+      }).length;
+      const active = s.tab === t.key;
+      return {
+        label: t.label, count,
+        weight: active ? '700' : '500',
+        bg: active ? 'var(--color-text)' : 'transparent',
+        fg: active ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+        border: t.key === 'all' ? '0' : '1px solid var(--color-divider)',
+        select: () => this.setState({ tab: t.key })
+      };
+    });
+
+    const newsPool = s.newsScope === 'symbol' ? [sel] : all;
+    const news = newsPool
+      .slice()
+      .sort((a, b) => (a.seed.ha < b.seed.ha ? 1 : -1))
+      .slice(0, s.newsScope === 'symbol' ? 3 : 8)
+      .map(r => ({
+        tickers: r.ticker,
+        at: r.seed.ha + ' UTC',
+        headline: r.seed.hl,
+        source: r.seed.prov,
+        sentiment: (r.seed.ns >= 0 ? '+' : '\u2212') + Math.abs(r.seed.ns).toFixed(2),
+        sentimentColor: r.seed.ns > 0.2 ? 'var(--color-text)' : r.seed.ns < -0.2 ? 'var(--color-accent)' : 'var(--color-neutral-400)'
+      }));
+
+    const book = all.filter(r => r.seed.pos);
+
+    const presets = [
+      { label: '25%', frac: 0.25 }, { label: '50%', frac: 0.5 },
+      { label: '100%', frac: 1 }, { label: '1R risk', frac: null }
+    ].map(p => ({
+      label: p.label,
+      apply: () => this.setState({
+        qty: p.frac === null
+          ? Math.max(1, Math.round((10000 * 0.01) / Math.max(0.01, limit - stop)))
+          : Math.max(1, Math.round((12000 * p.frac) / limit))
+      })
+    }));
+
+    return {
+      envPaper: true,
+      setEnvPaper: () => {},
+      clockNy: this.clock(-4),
+      clockUtc: this.clock(0),
+      quoteAge: '0.4 s',
+      totalPlText: this.signedMoney(totalPl),
+      totalPlColor: this.dirColor(totalPl),
+
+      isRail: s.layout === 'rail',
+      isFocus: s.layout === 'focus',
+      setLayoutRail: () => this.setState({ layout: 'rail' }),
+      setLayoutFocus: () => this.setState({ layout: 'focus' }),
+      shellColumns: s.layout === 'focus' ? '212px minmax(0,1fr) 384px' : 'minmax(0,1fr) 384px',
+
+      density: s.density,
+      isComfortable: s.density === 'comfortable',
+      isCompact: s.density === 'compact',
+      setComfortable: () => this.setState({ density: 'comfortable' }),
+      setCompact: () => this.setState({ density: 'compact' }),
+      showOptional: s.showOptional,
+      toggleOptional: () => this.setState({ showOptional: !s.showOptional }),
+      optWeight: s.showOptional ? '700' : '500',
+      optBg: s.showOptional ? 'var(--color-text)' : 'transparent',
+      optFg: s.showOptional ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+
+      search: s.search,
+      setSearch: e => this.setState({ search: e.target.value }),
+      tabs,
+      shownText: rows.length + ' of ' + all.length + ' symbols',
+      rows,
+      sel,
+      book,
+
+      caretTicker: this.caret('ticker'),
+      caretLast: this.caret('last'),
+      caretSpread: this.caret('spread'),
+      caretDecision: this.caret('decision'),
+      caretPl: this.caret('pl'),
+      sortTicker: () => this.toggleSort('ticker'),
+      sortLast: () => this.toggleSort('last'),
+      sortSpread: () => this.toggleSort('spread'),
+      sortDecision: () => this.toggleSort('decision'),
+      sortPl: () => this.toggleSort('pl'),
+
+      screenerScope: s.screenerScope,
+      setScreenerScope: e => this.setState({
+        screenerScope: e.target.value,
+        screenerQuery: SCREENERS[e.target.value].query,
+        promoted: false
+      }),
+      screenerQuery: s.screenerQuery,
+      setScreenerQuery: e => this.setState({ screenerQuery: e.target.value }),
+      screenerLabel: screener.label,
+      screenerSummary: screener.name + ' \u00b7 ' + screener.hits + ' hits \u00b7 ' +
+        screener.fresh.length + ' not yet in the wishlist',
+      screenerNew: screener.fresh,
+      screenerSyncedAt: s.screenerSyncedAt,
+      promoteLabel: s.promoted ? 'Added to wishlist' : 'Add ' + screener.fresh.length + ' to wishlist',
+      promoteCandidates: () => {
+        this.setState({ promoted: true });
+        this.fire('Wishlist updated', screener.fresh.join(', ') + ' added to the ' +
+          (s.screenerScope === 'intraday' ? 'intraday catalyst' : 'swing quality') +
+          ' wishlist. The observer picks them up on the next cycle.');
+      },
+      syncScreener: () => {
+        this.setState({ screenerSyncedAt: this.clock(0) + ' UTC', promoted: false });
+        this.fire('Screener synced', screener.hits + ' symbols returned from Finviz Elite. ' +
+          screener.fresh.length + ' are new to the trading group.');
+      },
+
+      isBuy,
+      setBuy: () => this.setState({ side: 'buy', stage: 'entry' }),
+      setSell: () => this.setState({ side: 'sell', stage: 'entry' }),
+      buyTabBg: isBuy ? 'var(--color-text)' : 'transparent',
+      buyTabFg: isBuy ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+      sellTabBg: !isBuy ? 'var(--color-accent)' : 'transparent',
+      sellTabFg: !isBuy ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+
+      qty,
+      setQty: e => this.setState({ qty: Math.max(1, parseInt(e.target.value, 10) || 1) }),
+      orderType: s.orderType,
+      setOrderType: e => this.setState({ orderType: e.target.value }),
+      tif: s.tif,
+      setTif: e => this.setState({ tif: e.target.value }),
+      limit: limit.toFixed(2),
+      setLimit: e => this.setState({ limitOverride: parseFloat(e.target.value) || limit }),
+      stop: stop.toFixed(2),
+      setStop: e => this.setState({ stopOverride: parseFloat(e.target.value) || stop }),
+      target: target.toFixed(2),
+      setTarget: e => this.setState({ targetOverride: parseFloat(e.target.value) || target }),
+      sizePresets: presets,
+
+      notionalText: this.money(notional),
+      riskText: this.money(risk) + ' \u00b7 ' + ((risk / 10000) * 100).toFixed(2) + '%',
+      rMultipleText: rMultiple > 0 ? rMultiple.toFixed(2) + ' R' : '\u2014',
+
+      checks,
+      blocked,
+      blockedReason: blocked
+        ? 'Submission blocked: ' + failing.map(c => c.label.toLowerCase()).join(', ') +
+          '. The server fails closed on each of these before routing.'
+        : '',
+
+      atEntry: s.stage === 'entry',
+      atReview: s.stage === 'review',
+      reviewLabel: (isBuy ? 'Review protected buy \u2014 ' : 'Review exit \u2014 ') + sel.ticker + ' \u00d7 ' + qty,
+      submitLabel: blocked
+        ? 'Blocked \u2014 cannot submit'
+        : 'Confirm paper ' + (isBuy ? 'buy' : 'exit') + ' \u00b7 ' + this.money(notional),
+      review: () => this.setState({ stage: 'review' }),
+      backToEntry: () => this.setState({ stage: 'entry' }),
+      ticketExpiry: 'in 30 s',
+      submit: () => {
+        if (blocked) {
+          this.fire('Submission refused', 'The entry gate rejected this ticket: ' +
+            failing.map(c => c.label.toLowerCase()).join(', ') + '.');
+          return;
+        }
+        this.setState({ stage: 'entry' });
+        this.fire('Order accepted',
+          (isBuy ? 'BUY ' : 'SELL ') + qty + ' ' + sel.ticker + ' limit ' + this.money(limit) +
+          ' \u00b7 ' + s.tif.toUpperCase() + '. Broker order id 7f2c\u20269a41.');
+      },
+
+      newsGroup: s.newsScope === 'group',
+      newsSymbol: s.newsScope === 'symbol',
+      setNewsGroup: () => this.setState({ newsScope: 'group' }),
+      setNewsSymbol: () => this.setState({ newsScope: 'symbol' }),
+      news,
+
+      hasToast: !!s.toast,
+      toastTitle: s.toast ? s.toast.title : '',
+      toastBody: s.toast ? s.toast.body : ''
+    };
+  }
+}
+</script>
+</body>
+</html>

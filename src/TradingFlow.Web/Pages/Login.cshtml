@@ -5,30 +5,38 @@
     ViewData["MainClass"] = "auth-shell";
 }
 
-<section class="panel auth-panel" aria-labelledby="login-heading">
-    <header>
-        <p class="eyebrow">TradingFlow access</p>
+<section class="auth-panel" aria-labelledby="login-heading">
+    <header class="auth-head">
+        <span class="eyebrow">TradingFlow access</span>
         <h1 id="login-heading">Sign in</h1>
-        <p>Use your local operator account. Earnings remains available without signing in.</p>
+        <p class="standfirst">
+            Use your local operator account. There is no public registration route — accounts are
+            provisioned on the server. Earnings remains available without signing in.
+        </p>
     </header>
 
-    <form method="post" class="form-grid">
+    <form method="post" class="auth-form">
         <input type="hidden" asp-for="ReturnUrl" />
-        <div asp-validation-summary="ModelOnly" class="validation-summary"></div>
+        <div asp-validation-summary="ModelOnly" class="callout" role="alert"></div>
 
-        <label asp-for="Input.UserName"></label>
-        <input asp-for="Input.UserName" autocomplete="username" autofocus />
-        <span asp-validation-for="Input.UserName" class="field-validation"></span>
+        <div class="field">
+            <label asp-for="Input.UserName"></label>
+            <input class="input" asp-for="Input.UserName" autocomplete="username" autofocus />
+            <span asp-validation-for="Input.UserName" class="field-validation"></span>
+        </div>
 
-        <label asp-for="Input.Password"></label>
-        <input asp-for="Input.Password" autocomplete="current-password" />
-        <span asp-validation-for="Input.Password" class="field-validation"></span>
+        <div class="field">
+            <label asp-for="Input.Password"></label>
+            <input class="input" asp-for="Input.Password" autocomplete="current-password" />
+            <span asp-validation-for="Input.Password" class="field-validation"></span>
+        </div>
 
-        <label class="checkbox-row" asp-for="Input.RememberMe">
+        @* Square control: this is an independent boolean, not one of a set. *@
+        <label class="check-chip auth-remember" asp-for="Input.RememberMe">
             <input asp-for="Input.RememberMe" />
             <span>Keep me signed in on this device</span>
         </label>
 
-        <button type="submit" class="primary">Sign in</button>
+        <button type="submit" class="btn btn-primary btn-block btn-lg">Sign in</button>
     </form>
 </section>

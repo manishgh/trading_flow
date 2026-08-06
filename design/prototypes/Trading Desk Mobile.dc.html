@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/modernist-4f4a56b3-a32f-4519-b155-938ba199102d/styles.css">
+<script src="_ds/modernist-4f4a56b3-a32f-4519-b155-938ba199102d/_ds_bundle.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=swap">
+<style>
+  html, body { margin: 0; padding: 0; background: var(--color-bg); }
+  *, *::before, *::after { box-sizing: border-box; }
+  a { color: var(--color-accent-700); text-decoration: none; }
+  a:hover { color: var(--color-accent); }
+  .tf-row { all: unset; box-sizing: border-box; cursor: pointer; display: block; width: 100%; text-align: left; }
+  .tf-row:active { background: var(--color-neutral-200); }
+  .tf-row[data-sel="1"] { background: var(--color-accent-100); box-shadow: inset 3px 0 0 var(--color-accent); }
+  .tf-tab { all: unset; box-sizing: border-box; cursor: pointer; text-align: center; }
+  .tf-chip { all: unset; box-sizing: border-box; cursor: pointer; white-space: nowrap; }
+  .tf-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .tf-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+</style>
+</helmet>
+
+<div style="width:390px;height:844px;margin:0 auto;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body);font-size:14px;overflow:hidden;position:relative;-webkit-font-smoothing:antialiased">
+
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 18px 5px;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums">
+    <span>{{ clockLocal }}</span>
+    <span style="display:flex;gap:5px;align-items:center">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13a10 10 0 0 1 14 0"></path><path d="M8.5 16.5a5 5 0 0 1 7 0"></path><path d="M2 8.82a15 15 0 0 1 20 0"></path><line x1="12" x2="12.01" y1="20" y2="20"></line></svg>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="10" x="2" y="7" rx="0"></rect><line x1="22" x2="22" y1="11" y2="13"></line><line x1="6" x2="6" y1="11" y2="13"></line></svg>
+    </span>
+  </div>
+
+  <header style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 16px 10px;border-bottom:2px solid var(--color-divider)">
+    <div style="min-width:0">
+      <span style="display:block;font-family:var(--font-heading);font-weight:800;font-size:15px;letter-spacing:-0.01em">TRADINGFLOW</span>
+      <span style="display:block;font-size:11px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">Intraday catalyst · {{ clockNy }} NY</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;flex:none">
+      <span class="tag tag-neutral" style="font-weight:700;font-size:10px;letter-spacing:0.06em">PAPER</span>
+      <span style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:var(--color-neutral-800)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>Regular
+      </span>
+    </div>
+  </header>
+
+  <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:2px solid var(--color-divider);background:var(--color-neutral-100)">
+    <div style="padding:7px 14px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Open P/L</small>
+      <strong style="font-size:15px;font-variant-numeric:tabular-nums;color:{{ totalPlColor }}">{{ totalPlText }}</strong>
+    </div>
+    <div style="padding:7px 14px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Eligible</small>
+      <strong style="font-size:15px;font-variant-numeric:tabular-nums">{{ eligibleCount }}</strong>
+    </div>
+    <div style="padding:7px 14px">
+      <small style="display:block;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Entry gate</small>
+      <strong style="font-size:15px;color:var(--color-accent-700)">1 block</strong>
+    </div>
+  </div>
+
+  <main class="tf-scroll" style="min-height:0">
+
+    <sc-if value="{{ isList }}" hint-placeholder-val="{{ true }}">
+      <div>
+        <div style="display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--color-neutral-300)">
+          <sc-for list="{{ tabs }}" as="tab" hint-placeholder-count="4">
+            <button class="tf-chip" style="flex:1;padding:9px 10px;font-size:12.5px;min-height:44px;text-align:center;font-weight:{{ tab.weight }};background:{{ tab.bg }};color:{{ tab.fg }};border-right:1px solid var(--color-neutral-300)" onClick="{{ tab.select }}">{{ tab.label }} <span style="opacity:0.6">{{ tab.count }}</span></button>
+          </sc-for>
+        </div>
+        <sc-for list="{{ rows }}" as="row" hint-placeholder-count="10">
+          <button class="tf-row" data-sel="{{ row.selFlag }}" style="padding:11px 16px;border-bottom:1px solid var(--color-neutral-300);min-height:64px" onClick="{{ row.open }}">
+            <span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+              <span style="min-width:0;display:flex;align-items:baseline;gap:7px">
+                <strong style="font-size:16px;letter-spacing:-0.01em">{{ row.ticker }}</strong>
+                <span style="font-size:11px;color:var(--color-neutral-700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ row.name }}</span>
+              </span>
+              <span style="flex:none;text-align:right">
+                <strong style="display:block;font-size:15px;font-variant-numeric:tabular-nums">{{ row.lastText }}</strong>
+                <span style="font-size:11.5px;font-variant-numeric:tabular-nums;color:{{ row.changeColor }}">{{ row.changeText }}</span>
+              </span>
+            </span>
+            <span style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px">
+              <span style="display:flex;align-items:center;gap:6px;min-width:0">
+                <span class="tag {{ row.decisionTag }}" style="font-weight:700;font-size:9.5px;letter-spacing:0.06em">{{ row.decision }}</span>
+                <span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ row.syncColor }};white-space:nowrap">{{ row.syncGlyph }} {{ row.syncLabel }}</span>
+              </span>
+              <span style="flex:none;font-size:11.5px;font-variant-numeric:tabular-nums;color:{{ row.plColor }}">{{ row.plText }}</span>
+            </span>
+            <span style="display:block;margin-top:4px;font-size:11px;color:var(--color-neutral-700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ row.reason }}</span>
+          </button>
+        </sc-for>
+        <p style="margin:0;padding:14px 16px 22px;font-size:11px;color:var(--color-neutral-700);line-height:1.45">Rows are read-only. Tap a symbol to inspect its evidence and open a reviewed ticket.</p>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isDetail }}" hint-placeholder-val="{{ false }}">
+      <div>
+        <button class="tf-chip" style="display:flex;align-items:center;gap:7px;padding:11px 16px;min-height:44px;width:100%;font-size:12.5px;font-weight:700;color:var(--color-accent-700);border-bottom:1px solid var(--color-neutral-300)" onClick="{{ back }}">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>All markets
+        </button>
+
+        <div style="padding:13px 16px;border-bottom:2px solid var(--color-divider)">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+            <div style="min-width:0">
+              <h1 style="font-family:var(--font-heading);font-weight:800;font-size:30px;line-height:1;letter-spacing:-0.02em;margin:0">{{ sel.ticker }}</h1>
+              <p style="margin:3px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ sel.name }}</p>
+            </div>
+            <div style="text-align:right;flex:none">
+              <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:24px;font-variant-numeric:tabular-nums;line-height:1.05">{{ sel.lastText }}</strong>
+              <span style="font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;color:{{ sel.changeColor }}">{{ sel.changeText }}</span>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--color-divider);margin-top:11px">
+            <div style="padding:5px 8px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:8.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Bid</small><strong style="font-size:12px;font-variant-numeric:tabular-nums">{{ sel.bidText }}</strong></div>
+            <div style="padding:5px 8px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:8.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Ask</small><strong style="font-size:12px;font-variant-numeric:tabular-nums">{{ sel.askText }}</strong></div>
+            <div style="padding:5px 8px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:8.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Spread</small><strong style="font-size:12px;font-variant-numeric:tabular-nums">{{ sel.spreadText }}</strong></div>
+            <div style="padding:5px 8px"><small style="display:block;font-size:8.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">RVOL</small><strong style="font-size:12px;font-variant-numeric:tabular-nums">{{ sel.rvolText }}</strong></div>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:8px;padding:9px 16px;border-bottom:2px solid var(--color-divider);background:{{ sel.syncBg }}">
+          <strong style="flex:none;font-size:11.5px;font-weight:800;letter-spacing:0.05em;color:{{ sel.syncColor }}">{{ sel.syncGlyph }} {{ sel.syncHeadline }}</strong>
+          <span style="font-size:11px;color:var(--color-neutral-800);line-height:1.35">{{ sel.syncShort }}</span>
+        </div>
+
+        <div style="padding:12px 16px;border-bottom:1px solid var(--color-neutral-300)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px">
+            <h2 style="font-family:var(--font-heading);font-weight:800;font-size:11.5px;letter-spacing:0.07em;text-transform:uppercase;margin:0">TradingFlow decision</h2>
+            <span class="tag {{ sel.decisionTag }}" style="font-weight:700;font-size:10px;letter-spacing:0.05em">{{ sel.decision }}</span>
+          </div>
+          <p style="margin:0;font-size:13px;line-height:1.45;text-wrap:pretty">{{ sel.reason }}</p>
+          <p style="margin:6px 0 0;font-size:11.5px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ sel.setup }} · {{ sel.setupAt }}</p>
+        </div>
+
+        <div style="padding:12px 16px;border-bottom:2px solid var(--color-divider)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px">
+            <h2 style="font-family:var(--font-heading);font-weight:800;font-size:11.5px;letter-spacing:0.07em;text-transform:uppercase;margin:0">Market predictor</h2>
+            <span class="tag tag-neutral" style="font-weight:700;font-size:10px;letter-spacing:0.05em">{{ sel.modelSignal }}</span>
+          </div>
+          <p style="margin:0;font-size:13px;line-height:1.45;text-wrap:pretty">{{ sel.modelReason }}</p>
+          <p style="margin:6px 0 0;font-size:11.5px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ sel.modelProbText }} · {{ sel.modelHorizon }} · read-only evidence</p>
+        </div>
+
+        <sc-if value="{{ sel.hasPosition }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:12px 16px;border-bottom:2px solid var(--color-divider)">
+            <h2 style="font-family:var(--font-heading);font-weight:800;font-size:11.5px;letter-spacing:0.07em;text-transform:uppercase;margin:0 0 7px">Open position</h2>
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+              <span style="font-size:12.5px">{{ sel.posText }}</span>
+              <strong style="font-size:15px;font-variant-numeric:tabular-nums;color:{{ sel.plColor }}">{{ sel.plText }}</strong>
+            </div>
+            <p style="margin:5px 0 0;font-size:11.5px;color:var(--color-neutral-700)">{{ sel.protection }}</p>
+          </div>
+        </sc-if>
+
+        <div style="padding:12px 16px">
+          <h2 style="font-family:var(--font-heading);font-weight:800;font-size:11.5px;letter-spacing:0.07em;text-transform:uppercase;margin:0 0 8px">Symbol news</h2>
+          <sc-for list="{{ news }}" as="item" hint-placeholder-count="3">
+            <article style="padding:9px 0 9px 10px;border-top:1px solid var(--color-neutral-300);border-left:3px solid {{ item.color }}">
+              <div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-neutral-700)">
+                <strong>{{ item.provider }}</strong>
+                <time style="font-variant-numeric:tabular-nums">{{ item.at }}</time>
+              </div>
+              <p style="margin:3px 0 0;font-size:12.5px;font-weight:600;line-height:1.35;text-wrap:pretty">{{ item.headline }}</p>
+            </article>
+          </sc-for>
+        </div>
+        <div style="height:14px"></div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isTicket }}" hint-placeholder-val="{{ false }}">
+      <div>
+        <button class="tf-chip" style="display:flex;align-items:center;gap:7px;padding:11px 16px;min-height:44px;width:100%;font-size:12.5px;font-weight:700;color:var(--color-accent-700);border-bottom:1px solid var(--color-neutral-300)" onClick="{{ backToDetail }}">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>{{ sel.ticker }} evidence
+        </button>
+
+        <div style="padding:13px 16px;border-bottom:2px solid var(--color-divider)">
+          <h1 style="font-family:var(--font-heading);font-weight:800;font-size:20px;letter-spacing:-0.01em;margin:0">{{ ticketHeading }}</h1>
+          <p style="margin:5px 0 0;font-size:11.5px;color:var(--color-neutral-700);line-height:1.4">The server revalidates quote, spread, session, account, exposure and duplicate controls before submission.</p>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-bottom:2px solid var(--color-divider)">
+          <button class="tf-chip" style="padding:12px 14px;min-height:48px;font-size:13px;font-weight:700;letter-spacing:0.04em;text-align:left;background:{{ buyBg }};color:{{ buyFg }}" onClick="{{ setBuy }}">BUY</button>
+          <button class="tf-chip" style="padding:12px 14px;min-height:48px;font-size:13px;font-weight:700;letter-spacing:0.04em;text-align:left;border-left:1px solid var(--color-divider);background:{{ sellBg }};color:{{ sellFg }}" onClick="{{ setSell }}">SELL</button>
+        </div>
+
+        <div style="padding:13px 16px;display:grid;gap:11px;border-bottom:1px solid var(--color-neutral-300)">
+          <div class="field">
+            <label for="m-qty">Quantity</label>
+            <input class="input" id="m-qty" type="number" inputmode="numeric" min="1" style="min-height:46px;padding:8px 11px;font-size:16px;font-variant-numeric:tabular-nums" value="{{ qty }}" onChange="{{ setQty }}" />
+          </div>
+          <div style="display:flex;gap:7px;flex-wrap:wrap">
+            <sc-for list="{{ presets }}" as="p" hint-placeholder-count="4">
+              <button class="btn btn-secondary" style="min-height:38px;padding:6px 13px;font-size:12.5px" onClick="{{ p.apply }}">{{ p.label }}</button>
+            </sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px">
+            <div class="field">
+              <label for="m-limit">Limit price</label>
+              <input class="input" id="m-limit" type="number" inputmode="decimal" step="0.01" style="min-height:46px;padding:8px 11px;font-size:16px;font-variant-numeric:tabular-nums" value="{{ limit }}" onChange="{{ setLimit }}" />
+            </div>
+            <div class="field">
+              <label for="m-tif">Time in force</label>
+              <select class="input" id="m-tif" style="min-height:46px;padding:8px 11px;font-size:15px" value="{{ tif }}" onChange="{{ setTif }}">
+                <option value="day">Day</option>
+                <option value="gtc">GTC</option>
+                <option value="ioc">IOC</option>
+              </select>
+            </div>
+          </div>
+          <sc-if value="{{ isBuy }}" hint-placeholder-val="{{ true }}">
+            <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px">
+              <div class="field">
+                <label for="m-stop">Stop price</label>
+                <input class="input" id="m-stop" type="number" inputmode="decimal" step="0.01" style="min-height:46px;padding:8px 11px;font-size:16px;font-variant-numeric:tabular-nums" value="{{ stop }}" onChange="{{ setStop }}" />
+              </div>
+              <div class="field">
+                <label for="m-target">Take profit</label>
+                <input class="input" id="m-target" type="number" inputmode="decimal" step="0.01" style="min-height:46px;padding:8px 11px;font-size:16px;font-variant-numeric:tabular-nums" value="{{ target }}" onChange="{{ setTarget }}" />
+              </div>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid var(--color-neutral-300)">
+          <div style="padding:8px 12px;border-right:1px solid var(--color-neutral-300)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Notional</small><strong style="font-size:14px;font-variant-numeric:tabular-nums">{{ notionalText }}</strong></div>
+          <div style="padding:8px 12px;border-right:1px solid var(--color-neutral-300)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Risk</small><strong style="font-size:14px;font-variant-numeric:tabular-nums">{{ riskText }}</strong></div>
+          <div style="padding:8px 12px"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">R multiple</small><strong style="font-size:14px;font-variant-numeric:tabular-nums">{{ rText }}</strong></div>
+        </div>
+
+        <ul style="list-style:none;margin:0;padding:0">
+          <sc-for list="{{ checks }}" as="c" hint-placeholder-count="6">
+            <li style="display:flex;align-items:baseline;gap:9px;padding:8px 16px;border-bottom:1px solid var(--color-neutral-300);font-size:12.5px">
+              <strong style="flex:none;width:13px;color:{{ c.color }};font-weight:800">{{ c.glyph }}</strong>
+              <span style="flex:none;width:88px;color:var(--color-neutral-700)">{{ c.label }}</span>
+              <span style="min-width:0;color:{{ c.color }};line-height:1.35">{{ c.value }}</span>
+            </li>
+          </sc-for>
+        </ul>
+
+        <sc-if value="{{ blocked }}" hint-placeholder-val="{{ false }}">
+          <p style="margin:0;padding:11px 16px;background:var(--color-accent-100);font-size:12px;color:var(--color-accent-900);line-height:1.45">{{ blockedReason }}</p>
+        </sc-if>
+        <div style="height:12px"></div>
+      </div>
+    </sc-if>
+  </main>
+
+  <sc-if value="{{ isTicket }}" hint-placeholder-val="{{ false }}">
+    <div style="padding:11px 16px 14px;border-top:2px solid var(--color-divider);background:var(--color-bg)">
+      <button class="btn btn-primary" style="width:100%;min-height:52px;padding:10px 16px;font-size:15px;justify-content:flex-start;margin-top:0" onClick="{{ submit }}">{{ submitLabel }}</button>
+      <p style="margin:7px 0 0;font-size:11px;color:var(--color-neutral-700);line-height:1.4">{{ ticketFootnote }}</p>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ notTicket }}" hint-placeholder-val="{{ true }}">
+    <nav style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-top:2px solid var(--color-divider);background:var(--color-bg)">
+      <button class="tf-tab" style="padding:9px 4px 12px;min-height:56px;color:var(--color-accent)" onClick="{{ back }}">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin:0 auto"><path d="M3 3v16a2 2 0 0 0 2 2h16"></path><path d="m19 9-5 5-4-4-3 3"></path></svg>
+        <span style="display:block;margin-top:3px;font-size:10px;font-weight:700;letter-spacing:0.03em">Desk</span>
+      </button>
+      <button class="tf-tab" style="padding:9px 4px 12px;min-height:56px;color:var(--color-neutral-700)" onClick="{{ notImplemented }}">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin:0 auto"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path><rect width="20" height="14" x="2" y="6" rx="0"></rect></svg>
+        <span style="display:block;margin-top:3px;font-size:10px;font-weight:500;letter-spacing:0.03em">Positions</span>
+      </button>
+      <button class="tf-tab" style="padding:9px 4px 12px;min-height:56px;color:var(--color-neutral-700)" onClick="{{ notImplemented }}">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin:0 auto"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <span style="display:block;margin-top:3px;font-size:10px;font-weight:500;letter-spacing:0.03em">Orders</span>
+      </button>
+      <button class="tf-tab" style="padding:9px 4px 12px;min-height:56px;color:var(--color-neutral-700)" onClick="{{ notImplemented }}">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin:0 auto"><rect width="18" height="18" x="3" y="4" rx="0"></rect><path d="M3 10h18"></path><path d="M8 2v4"></path><path d="M16 2v4"></path></svg>
+        <span style="display:block;margin-top:3px;font-size:10px;font-weight:500;letter-spacing:0.03em">Earnings</span>
+      </button>
+      <button class="tf-tab" style="padding:9px 4px 12px;min-height:56px;color:var(--color-neutral-700)" onClick="{{ notImplemented }}">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin:0 auto"><path d="M10.268 21a2 2 0 0 0 3.464 0"></path><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"></path></svg>
+        <span style="display:block;margin-top:3px;font-size:10px;font-weight:500;letter-spacing:0.03em">Alerts</span>
+      </button>
+    </nav>
+  </sc-if>
+
+  <sc-if value="{{ showFab }}" hint-placeholder-val="{{ false }}">
+    <button class="btn btn-primary" style="position:absolute;left:16px;right:16px;bottom:70px;min-height:52px;padding:10px 16px;font-size:15px;justify-content:flex-start;box-shadow:var(--shadow-lg);margin-top:0" onClick="{{ openTicket }}">{{ fabLabel }}</button>
+  </sc-if>
+
+  <sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+    <div role="status" style="position:absolute;left:16px;right:16px;bottom:78px;z-index:60;background:var(--color-text);color:var(--color-bg);padding:11px 14px;box-shadow:var(--shadow-lg)">
+      <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:11.5px;letter-spacing:0.06em;text-transform:uppercase">{{ toastTitle }}</strong>
+      <span style="display:block;margin-top:3px;font-size:12px;line-height:1.4">{{ toastBody }}</span>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:390,&quot;height&quot;:844},&quot;liveQuotes&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Behaviour&quot;}}">
+const GAIN = 'var(--color-text)';
+const LOSS = 'var(--color-accent-700)';
+const FLAT = 'var(--color-neutral-700)';
+
+const SEED = [
+  { t: 'NVDA', n: 'NVIDIA Corp', p: 181.42, prev: 178.06, sp: 1.6, rv: 2.4, d: 'ELIGIBLE',
+    r: 'Volume 2.4x 20-bar mean, EMA10 above EMA20, MACD histogram expanding, VWAP extension 0.8 ATR.',
+    setup: 'Intraday continuation', sa: '14:32:08',
+    m: 'LONG', mp: 0.71, mh: 'intraday 1d',
+    mr: 'Opportunity 71%, downside 12%. RVOL 2.4, RSI 61.8, MACD diff +0.0182. Catalyst confirmed 41 minutes ago.',
+    pos: { q: 120, e: 174.1, prot: 'Stop 169.80 · Target 188.40' },
+    news: [['Benzinga', '14:11', 'NVIDIA lifts data-centre capacity outlook at partner summit', 0.62],
+           ['Alpaca', '11:38', 'Supply chain checks point to steady accelerator lead times', 0.28],
+           ['Benzinga', '09:14', 'Analyst raises target ahead of the partner summit', 0.41]] },
+  { t: 'PLTR', n: 'Palantir Technologies', p: 41.77, prev: 40.12, sp: 3.8, rv: 3.1, d: 'ELIGIBLE',
+    r: 'Session gain 4.1% on 3.1x volume, holding above VWAP for 9 completed bars.',
+    setup: 'Catalyst participation', sa: '14:38:52',
+    m: 'SHORT', mp: 0.58, mh: 'intraday 1d',
+    mr: 'Downside 58%, opportunity 29%. Extension 3.4 ATR above VWAP flags mean reversion risk.',
+    pos: null,
+    news: [['Benzinga', '14:02', 'Palantir wins expanded federal analytics vehicle', 0.71],
+           ['Alpaca', '10:47', 'Government software spending holds up in July data', 0.22]] },
+  { t: 'MU', n: 'Micron Technology', p: 106.34, prev: 104.9, sp: 2.7, rv: 1.9, d: 'ELIGIBLE',
+    r: 'ATR compression breakout with confirmation on the following bar; spread inside 5 bps.',
+    setup: 'Compression breakout', sa: '14:19:30',
+    m: 'LONG', mp: 0.63, mh: 'intraday 1d',
+    mr: 'Opportunity 63%, downside 18%. RVOL 1.9, RSI 58.4, entry stop 1.8%, target 4.1%.',
+    pos: { q: 90, e: 103.55, prot: 'Stop 100.20 · Target 112.80' },
+    news: [['Alpaca', '13:31', 'Micron HBM4 qualification ahead of schedule, supplier says', 0.48],
+           ['Benzinga', '10:41', 'Micron beats as HBM pricing holds; capex guide unchanged', 0.58]] },
+  { t: 'MRVL', n: 'Marvell Technology', p: 74.18, prev: 73.02, sp: 3.2, rv: 1.6, d: 'ELIGIBLE',
+    r: 'VWAP pullback held with rising volume on the confirmation bar.',
+    setup: 'VWAP pullback', sa: '14:35:02',
+    m: 'LONG', mp: 0.61, mh: 'intraday 1d',
+    mr: 'Opportunity 61%, downside 22%. RVOL 1.6, RSI 55.9, MACD diff +0.0094.',
+    pos: null,
+    news: [['Benzinga', '13:14', 'Marvell custom silicon win reported by supply chain', 0.44]] },
+  { t: 'AMD', n: 'Advanced Micro Devices', p: 148.06, prev: 149.9, sp: 2.4, rv: 1.1, d: 'WATCHING',
+    r: 'Volume spike 1.1x below the 1.5x floor; MACD histogram still contracting.',
+    setup: 'No active setup', sa: '--',
+    m: 'FLAT', mp: 0.48, mh: 'intraday 1d',
+    mr: 'Opportunity 48%, downside 34%. No catalyst inside the relevance window.',
+    pos: null,
+    news: [['Alpaca', '11:20', 'AMD supply commentary unchanged after channel checks', 0.05]] },
+  { t: 'SMCI', n: 'Super Micro Computer', p: 38.62, prev: 40.05, sp: 4.4, rv: 2.7, d: 'WATCHING',
+    r: 'Below VWAP with negative MACD histogram; long setups suppressed for the session.',
+    setup: 'No active setup', sa: '--',
+    m: 'SHORT', mp: 0.64, mh: 'intraday 1d',
+    mr: 'Downside 64%, opportunity 21%. RVOL 2.7 on distribution, RSI 38.1.',
+    pos: null,
+    news: [['Alpaca', '12:11', 'Super Micro margin commentary disappoints channel partners', -0.52]] },
+  { t: 'UBER', n: 'Uber Technologies', p: 88.31, prev: 87.02, sp: 2.2, rv: 1.5, d: 'ELIGIBLE',
+    r: 'Reclaim confirmed on the completed bar with volume spike 1.5x.',
+    setup: 'Swing reclaim', sa: '13:41:58',
+    m: 'LONG', mp: 0.68, mh: 'swing 5d',
+    mr: 'Probability 68%, decision score 1.61, rank 2 of 22. Volume z-score 1.9.',
+    pos: { q: 60, e: 85.4, prot: 'Stop 82.10 · Target 94.90' },
+    news: [['Benzinga', '13:22', 'Uber mobility bookings accelerate in core markets', 0.49]] },
+  { t: 'COIN', n: 'Coinbase Global', p: 244.91, prev: 251.7, sp: 5.9, rv: 2.2, d: 'BLOCKED',
+    r: 'Spread 5.9 bps exceeds the 5.0 bps entry ceiling for this strategy.',
+    setup: 'Intraday continuation', sa: '14:26:11',
+    m: 'FLAT', mp: 0.51, mh: 'intraday 1d',
+    mr: 'Opportunity 51%, downside 41%. Readiness degraded: latest 5-minute bar incomplete.',
+    pos: { q: 30, e: 252.1, prot: 'No broker stop on file' },
+    news: [['Benzinga', '13:58', 'Coinbase volumes soften as spot flows rotate', -0.34]] },
+  { t: 'SOFI', n: 'SoFi Technologies', p: 22.04, prev: 21.55, sp: 6.8, rv: 2.9, d: 'BLOCKED',
+    r: 'Notional 25% cap reached across open positions for this account.',
+    setup: 'Catalyst participation', sa: '14:12:47',
+    m: 'LONG', mp: 0.6, mh: 'intraday 1d',
+    mr: 'Opportunity 60%, downside 24%. RVOL 2.9, RSI 63.2.',
+    pos: null,
+    news: [['Benzinga', '14:05', 'SoFi lifts member growth outlook', 0.58]] },
+  { t: 'RIVN', n: 'Rivian Automotive', p: 13.72, prev: 13.28, sp: 7.4, rv: 2.1, d: 'BLOCKED',
+    r: 'Spread 7.4 bps and quote age 4.2 s both outside entry tolerance.',
+    setup: 'Compression breakout', sa: '14:08:33',
+    m: 'FLAT', mp: 0.49, mh: 'intraday 1d',
+    mr: 'Readiness degraded: relative volume series incomplete for the session.',
+    pos: null,
+    news: [['Alpaca', '12:56', 'Rivian production cadence steady into the quarter', 0.11]] }
+];
+
+const TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'signal', label: 'Signals' },
+  { key: 'trade', label: 'In trade' },
+  { key: 'disagree', label: 'Disagree' }
+];
+
+class Component extends DCLogic {
+  state = {
+    view: 'list',
+    tab: 'all',
+    selected: 'NVDA',
+    side: 'buy',
+    qty: null,
+    tif: 'day',
+    limitOverride: null,
+    stopOverride: null,
+    targetOverride: null,
+    toast: null,
+    prices: SEED.reduce((a, s) => { a[s.t] = { last: s.p, prev: s.prev }; return a; }, {}),
+    now: new Date(Date.UTC(2026, 7, 4, 18, 41, 26))
+  };
+
+  componentDidMount() { this.timer = setInterval(() => this.tick(), 2400); }
+  componentWillUnmount() { clearInterval(this.timer); clearTimeout(this.toastTimer); }
+
+  tick() {
+    if (this.props.liveQuotes === false) return;
+    this.setState(s => {
+      const prices = {};
+      for (const k in s.prices) {
+        const p = s.prices[k];
+        prices[k] = { last: Math.max(0.5, p.last + (Math.random() - 0.495) * p.last * 0.0011), prev: p.prev };
+      }
+      return { prices, now: new Date(s.now.getTime() + 2400) };
+    });
+  }
+
+  clock(off) {
+    const d = new Date(this.state.now.getTime() + off * 3600000);
+    const p = n => String(n).padStart(2, '0');
+    return p(d.getUTCHours()) + ':' + p(d.getUTCMinutes());
+  }
+
+  money(v) { return '$' + v.toFixed(2); }
+  signed(v) { return (v > 0.005 ? '+' : v < -0.005 ? '\u2212' : '') + '$' + Math.abs(v).toFixed(2); }
+  dirColor(v) { return v > 0.005 ? GAIN : v < -0.005 ? LOSS : FLAT; }
+  glyph(v) { return v > 0.005 ? '\u25B2' : v < -0.005 ? '\u25BC' : '\u2014'; }
+
+  syncOf(seed) {
+    const flowLong = seed.d === 'ELIGIBLE';
+    if (flowLong && seed.m === 'LONG') return 'agree';
+    if (flowLong && seed.m === 'SHORT') return 'conflict';
+    if (!flowLong && seed.m !== 'LONG') return 'agree';
+    return 'partial';
+  }
+
+  syncMeta(kind) {
+    if (kind === 'agree') return { glyph: '\u25CF', label: 'AGREE', color: GAIN, bg: 'var(--color-neutral-200)',
+      headline: 'MODELS AGREE', short: 'Both point the same way. Eligibility stays authoritative for entry.' };
+    if (kind === 'conflict') return { glyph: '\u25C6', label: 'CONFLICT', color: LOSS, bg: 'var(--color-accent-100)',
+      headline: 'CONFLICT', short: 'The predictor opposes the verdict. The disagreement is recorded on the ticket.' };
+    return { glyph: '\u25CB', label: 'PARTIAL', color: FLAT, bg: 'var(--color-neutral-200)',
+      headline: 'PARTIAL', short: 'One side is neutral. Read it as no confirmation, not a contradiction.' };
+  }
+
+  build(seed) {
+    const live = this.state.prices[seed.t] || { last: seed.p, prev: seed.prev };
+    const last = live.last;
+    const half = last * (seed.sp / 10000) / 2;
+    const change = last - live.prev;
+    const changePct = (change / live.prev) * 100;
+    const sync = this.syncOf(seed);
+    const meta = this.syncMeta(sync);
+    const pos = seed.pos;
+    const pl = pos ? (last - pos.e) * pos.q : 0;
+    return {
+      seed, ticker: seed.t, name: seed.n, sync,
+      last, bid: last - half, ask: last + half,
+      lastText: this.money(last),
+      bidText: this.money(last - half),
+      askText: this.money(last + half),
+      changeText: this.glyph(change) + ' ' + (change >= 0 ? '+' : '\u2212') + Math.abs(changePct).toFixed(2) + '%',
+      changeColor: this.dirColor(change),
+      spreadText: seed.sp.toFixed(1) + ' bps',
+      rvolText: seed.rv.toFixed(1) + '\u00d7',
+      decision: seed.d,
+      decisionTag: seed.d === 'ELIGIBLE' ? 'tag-accent' : 'tag-neutral',
+      reason: seed.r,
+      setup: seed.setup,
+      setupAt: seed.sa === '--' ? '\u2014' : seed.sa + ' UTC',
+      modelSignal: seed.m,
+      modelProbText: Math.round(seed.mp * 100) + '%',
+      modelHorizon: seed.mh,
+      modelReason: seed.mr,
+      syncGlyph: meta.glyph, syncLabel: meta.label, syncColor: meta.color,
+      syncBg: meta.bg, syncHeadline: meta.headline, syncShort: meta.short,
+      hasPosition: !!pos,
+      posText: pos ? pos.q + ' shares @ ' + this.money(pos.e) : '',
+      protection: pos ? pos.prot : '',
+      plRaw: pl,
+      plText: pos ? this.signed(pl) : '\u2014',
+      plColor: pos ? this.dirColor(pl) : FLAT,
+      selFlag: seed.t === this.state.selected ? '1' : '0',
+      open: () => this.setState({ selected: seed.t, view: 'detail', side: 'buy', qty: null, limitOverride: null, stopOverride: null, targetOverride: null })
+    };
+  }
+
+  matchesTab(r) {
+    switch (this.state.tab) {
+      case 'signal': return r.seed.d === 'ELIGIBLE';
+      case 'trade': return !!r.seed.pos;
+      case 'disagree': return r.sync === 'conflict';
+      default: return true;
+    }
+  }
+
+  fire(title, body) {
+    clearTimeout(this.toastTimer);
+    this.setState({ toast: { title, body } });
+    this.toastTimer = setTimeout(() => this.setState({ toast: null }), 4600);
+  }
+
+  renderVals() {
+    const s = this.state;
+    const all = SEED.map(seed => this.build(seed));
+    const bySym = {};
+    all.forEach(r => { bySym[r.ticker] = r; });
+    const rows = all.filter(r => this.matchesTab(r));
+    const sel = bySym[s.selected] || all[0];
+
+    const isBuy = s.side === 'buy';
+    const qty = s.qty === null ? (sel.seed.pos ? sel.seed.pos.q : Math.max(1, Math.round(6000 / sel.last))) : s.qty;
+    const limit = s.limitOverride === null ? (isBuy ? sel.ask : sel.bid) : s.limitOverride;
+    const stop = s.stopOverride === null ? limit * 0.965 : s.stopOverride;
+    const target = s.targetOverride === null ? limit * 1.07 : s.targetOverride;
+    const notional = qty * limit;
+    const risk = Math.max(0, limit - stop) * qty;
+    const r = limit - stop > 0 ? (target - limit) / (limit - stop) : 0;
+
+    const spreadOk = sel.seed.sp <= 5;
+    const notionalOk = notional <= 12000;
+    const dupOk = !(isBuy && sel.seed.pos);
+    const protOk = !isBuy || (stop < limit && target > limit);
+
+    const checks = [
+      { label: 'Quote age', value: '0.4 s · fresh', ok: true },
+      { label: 'Spread', value: sel.seed.sp.toFixed(1) + ' bps ' + (spreadOk ? 'within 5.0' : 'over the 5.0 ceiling'), ok: spreadOk },
+      { label: 'Session', value: 'Regular · extended hours off', ok: true },
+      { label: 'Notional', value: this.money(notional) + (notionalOk ? ' within 25% cap' : ' over 25% cap'), ok: notionalOk },
+      { label: 'Duplicate', value: dupOk ? 'No open position or working order' : 'Position already open — use sell', ok: dupOk },
+      { label: 'Protection', value: isBuy ? (protOk ? 'Stop and target bracket the limit' : 'Stop or target on the wrong side') : 'Exit carries no bracket', ok: protOk }
+    ].map(c => ({ label: c.label, value: c.value, glyph: c.ok ? '\u2713' : '\u2715', color: c.ok ? GAIN : LOSS }));
+
+    const failing = checks.filter(c => c.glyph === '\u2715');
+    const blocked = failing.length > 0;
+    const total = all.reduce((a, x) => a + (x.seed.pos ? x.plRaw : 0), 0);
+
+    const tabs = TABS.map(t => {
+      const saved = s.tab;
+      s.tab = t.key;
+      const count = all.filter(x => this.matchesTab(x)).length;
+      s.tab = saved;
+      const on = s.tab === t.key;
+      return {
+        label: t.label, count,
+        weight: on ? '700' : '500',
+        bg: on ? 'var(--color-text)' : 'transparent',
+        fg: on ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+        select: () => this.setState({ tab: t.key })
+      };
+    });
+
+    const presets = [
+      { label: '25%', frac: 0.25 }, { label: '50%', frac: 0.5 },
+      { label: 'Max', frac: 1 }, { label: '1R', frac: null }
+    ].map(p => ({
+      label: p.label,
+      apply: () => this.setState({
+        qty: p.frac === null
+          ? Math.max(1, Math.round(100 / Math.max(0.01, limit - stop)))
+          : Math.max(1, Math.round((12000 * p.frac) / limit))
+      })
+    }));
+
+    return {
+      clockLocal: this.clock(2),
+      clockNy: this.clock(-4),
+      totalPlText: this.signed(total),
+      totalPlColor: this.dirColor(total),
+      eligibleCount: all.filter(x => x.seed.d === 'ELIGIBLE').length,
+
+      isList: s.view === 'list',
+      isDetail: s.view === 'detail',
+      isTicket: s.view === 'ticket',
+      notTicket: s.view !== 'ticket',
+      showFab: s.view === 'detail',
+      back: () => this.setState({ view: 'list' }),
+      backToDetail: () => this.setState({ view: 'detail' }),
+      openTicket: () => this.setState({ view: 'ticket' }),
+      notImplemented: () => this.fire('Not in this prototype', 'Positions, Orders, Earnings and Alerts exist as separate screens in the desktop set.'),
+
+      tabs, rows, sel,
+      news: sel.seed.news.map(n => ({
+        provider: n[0], at: n[1] + ' UTC', headline: n[2],
+        color: n[3] > 0.25 ? 'var(--color-text)' : n[3] < -0.25 ? 'var(--color-accent)' : 'var(--color-neutral-400)'
+      })),
+
+      fabLabel: sel.seed.pos ? 'Open ticket · ' + sel.ticker : 'Review protected buy · ' + sel.ticker,
+      ticketHeading: (isBuy ? 'Protected buy ' : 'Exit ') + sel.ticker,
+      isBuy,
+      setBuy: () => this.setState({ side: 'buy' }),
+      setSell: () => this.setState({ side: 'sell' }),
+      buyBg: isBuy ? 'var(--color-text)' : 'transparent',
+      buyFg: isBuy ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+      sellBg: !isBuy ? 'var(--color-accent)' : 'transparent',
+      sellFg: !isBuy ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+
+      qty,
+      setQty: e => this.setState({ qty: Math.max(1, parseInt(e.target.value, 10) || 1) }),
+      presets,
+      limit: limit.toFixed(2),
+      setLimit: e => this.setState({ limitOverride: parseFloat(e.target.value) || limit }),
+      stop: stop.toFixed(2),
+      setStop: e => this.setState({ stopOverride: parseFloat(e.target.value) || stop }),
+      target: target.toFixed(2),
+      setTarget: e => this.setState({ targetOverride: parseFloat(e.target.value) || target }),
+      tif: s.tif,
+      setTif: e => this.setState({ tif: e.target.value }),
+
+      notionalText: this.money(notional),
+      riskText: this.money(risk),
+      rText: r > 0 ? r.toFixed(2) + ' R' : '\u2014',
+      checks, blocked,
+      blockedReason: blocked
+        ? 'Submission blocked: ' + failing.map(c => c.label.toLowerCase()).join(', ') +
+          '. The server fails closed on each of these before routing.'
+        : '',
+      submitLabel: blocked
+        ? 'Blocked \u2014 cannot submit'
+        : 'Confirm paper ' + (isBuy ? 'buy' : 'exit') + ' · ' + this.money(notional),
+      ticketFootnote: blocked
+        ? 'Clear the failing checks above, or pick another symbol.'
+        : 'Ticket token expires in 30 s. Quote, spread, session and exposure are revalidated at submit.',
+      submit: () => {
+        if (blocked) {
+          this.fire('Submission refused', 'The entry gate rejected this ticket: ' + failing.map(c => c.label.toLowerCase()).join(', ') + '.');
+          return;
+        }
+        this.setState({ view: 'detail' });
+        this.fire('Order accepted', (isBuy ? 'BUY ' : 'SELL ') + qty + ' ' + sel.ticker + ' limit ' + this.money(limit) + ' · ' + s.tif.toUpperCase() + '.');
+      },
+
+      hasToast: !!s.toast,
+      toastTitle: s.toast ? s.toast.title : '',
+      toastBody: s.toast ? s.toast.body : ''
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -22,7 +22,13 @@ public sealed record BacktestRunConfig(
     ScreenerConfig Screener,
     ArtifactRetentionConfig Artifacts,
     IReadOnlyList<string> Strategies,
-    UniverseConfig? Universe = null);
+    UniverseConfig? Universe = null,
+    /// <summary>
+    /// How the desk orders the resolved candidate universe. Read from
+    /// <c>universe.rank</c> so backtest, paper and live all take the ranking
+    /// through one config path rather than each carrying its own weights.
+    /// </summary>
+    UniverseRankConfig? Rank = null);
 
 /// <summary>
 /// Controls how the tradable ticker universe is chosen for a run. "static" keeps the

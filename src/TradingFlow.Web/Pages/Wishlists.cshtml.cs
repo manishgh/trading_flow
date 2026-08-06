@@ -1,20 +1,24 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Wishlists;
-using TradingFlow.Engine.Storage;
-using TradingFlow.Finviz;
+using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Pages;
 
 public sealed class WishlistsModel : PageModel
 {
     private readonly IWishlistRepository repository;
-    private readonly IRawArchiveWriter rawArchiveWriter;
+    private readonly ScreenerSyncService screener;
+    private readonly ScreenerPresetService presets;
 
-    public WishlistsModel(IWishlistRepository repository, IRawArchiveWriter rawArchiveWriter)
+    public WishlistsModel(
+        IWishlistRepository repository,
+        ScreenerSyncService screener,
+        ScreenerPresetService presets)
     {
         this.repository = repository;
-        this.rawArchiveWriter = rawArchiveWriter;
+        this.screener = screener;
+        this.presets = presets;
     }
 
     [BindProperty(SupportsGet = true)]
@@ -26,6 +30,18 @@ public sealed class WishlistsModel : PageModel
 
     [TempData] public string? StatusMessage { get; set; }
     [TempData] public string? ErrorMessage { get; set; }
+
+    /// <summary>Screener scope the import control is set to, carried across the post.</summary>
+    [BindProperty(SupportsGet = true)] public string ScreenerScopeName { get; set; } = "swing";
+
+    /// <summary>The last import in this request, used only for the confirmation line.</summary>
+    public ScreenerSyncResult? LastImport { get; private set; }
+
+    /// <summary>
+    /// Saved screens, which live here because Finviz has no endpoint that lists
+    /// the ones saved in its own UI.
+    /// </summary>
+    public IReadOnlyList<ScreenerPreset> Presets { get; private set; } = [];
 
     public async Task OnGetAsync(CancellationToken cancellationToken) => await LoadAsync(cancellationToken);
 
@@ -192,54 +208,45 @@ public sealed class WishlistsModel : PageModel
         return RedirectToPage("/Wishlists", new { id = wishlistId });
     }
 
+    /// <summary>
+    /// Imports a Finviz screen into the wishlist.
+    /// </summary>
+    /// <remarks>
+    /// This goes through the same <see cref="ScreenerSyncService"/> the desk's
+    /// screener bar uses, so a URL, a saved screener name and a bare query
+    /// normalise identically on both screens and an intraday scope means the same
+    /// thing in both places. Adding is idempotent and never removes an entry.
+    /// </remarks>
     public async Task<IActionResult> OnPostImportFinvizAsync(
         Guid targetWishlistId,
         string finvizFilter,
+        string? screenerScope,
         CancellationToken cancellationToken)
     {
-        if (String.IsNullOrWhiteSpace(finvizFilter))
+        var scope = String.Equals(screenerScope, "swing", StringComparison.OrdinalIgnoreCase)
+            ? ScreenerScope.Swing
+            : ScreenerScope.Intraday;
+        var result = await screener.PreviewAsync(finvizFilter, scope, targetWishlistId, cancellationToken);
+        if (!result.Succeeded)
         {
-            ErrorMessage = "Paste a Finviz screener URL or query first.";
+            ErrorMessage = result.Error;
             return RedirectToPage("/Wishlists", new { id = targetWishlistId });
         }
 
-        var token = ResolveFinvizToken();
-        if (String.IsNullOrWhiteSpace(token))
+        foreach (var ticker in result.NotInWishlist)
         {
-            ErrorMessage = "FINVIZ_API_KEY is not configured.";
-            return RedirectToPage("/Wishlists", new { id = targetWishlistId });
+            await repository.AddOrUpdateItemAsync(
+                targetWishlistId,
+                ticker,
+                displayName: null,
+                notes: $"Imported from {result.Name}",
+                cancellationToken);
         }
 
-        try
-        {
-            using var client = new FinvizClient(
-                new HttpClient(),
-                FinvizOptions.CreateDefault() with { AuthToken = token },
-                rawArchiveWriter);
-            var tickers = (await client.GetScreenerTickersAsync(finvizFilter, cancellationToken))
-                .Where(ticker => !String.IsNullOrWhiteSpace(ticker))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(250)
-                .ToArray();
-            foreach (var ticker in tickers)
-            {
-                await repository.AddOrUpdateItemAsync(
-                    targetWishlistId,
-                    ticker,
-                    displayName: null,
-                    notes: "Imported from Finviz",
-                    cancellationToken);
-            }
-
-            StatusMessage = tickers.Length == 0
-                ? "Finviz returned no tickers."
-                : $"Imported {tickers.Length} Finviz ticker(s).";
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            ErrorMessage = $"Finviz import failed: {exception.Message}";
-        }
-
+        LastImport = result;
+        StatusMessage = result.Symbols.Count == 0
+            ? $"{result.Name} returned no symbols."
+            : $"{result.Name}: {result.Symbols.Count} hit(s), {result.NotInWishlist.Count} added.";
         return RedirectToPage("/Wishlists", new { id = targetWishlistId });
     }
 
@@ -250,8 +257,41 @@ public sealed class WishlistsModel : PageModel
         return RedirectToPage("/Wishlists");
     }
 
+    /// <summary>Saves a named screen, or replaces the one with that name and horizon.</summary>
+    public async Task<IActionResult> OnPostSavePresetAsync(
+        string presetName,
+        string presetScope,
+        string presetQuery,
+        Guid? id,
+        CancellationToken cancellationToken)
+    {
+        if (String.IsNullOrWhiteSpace(presetName) || String.IsNullOrWhiteSpace(presetQuery))
+        {
+            ErrorMessage = "A saved screen needs both a name and a Finviz URL or query.";
+            return RedirectToPage("/Wishlists", new { id });
+        }
+
+        var scope = String.Equals(presetScope, "swing", StringComparison.OrdinalIgnoreCase)
+            ? ScreenerScope.Swing
+            : ScreenerScope.Intraday;
+        var saved = await presets.SaveAsync(presetName, scope, presetQuery, cancellationToken);
+        StatusMessage = $"Saved screen '{saved.Name}' for {saved.Category.ToLowerInvariant()}.";
+        return RedirectToPage("/Wishlists", new { id });
+    }
+
+    public async Task<IActionResult> OnPostDeletePresetAsync(
+        Guid presetId,
+        Guid? id,
+        CancellationToken cancellationToken)
+    {
+        await presets.DeleteAsync(presetId, cancellationToken);
+        StatusMessage = "Saved screen deleted.";
+        return RedirectToPage("/Wishlists", new { id });
+    }
+
     private async Task LoadAsync(CancellationToken cancellationToken)
     {
+        Presets = await presets.ListAsync(null, cancellationToken);
         Wishlists = await repository.ListAsync(cancellationToken);
         SelectedWishlist = Id.HasValue
             ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == Id.Value)
@@ -263,7 +303,4 @@ public sealed class WishlistsModel : PageModel
             .ToArray() ?? [];
     }
 
-    private static string? ResolveFinvizToken() =>
-        Environment.GetEnvironmentVariable("FINVIZ_API_KEY")
-        ?? Environment.GetEnvironmentVariable("FINVIZ_API_KEY", EnvironmentVariableTarget.User);
 }

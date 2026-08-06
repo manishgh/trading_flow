@@ -12,7 +12,17 @@ public static class MobileApiEndpoints
 {
     public static IEndpointRouteBuilder MapTradingFlowMobileApi(this IEndpointRouteBuilder endpoints)
     {
-        var group = endpoints.MapGroup("/api/mobile");
+        // Every endpoint under this group requires a signed-in operator.
+        //
+        // The Razor pages are protected by an AuthorizeFolder convention, which
+        // covers pages only - it does not reach minimal-API endpoints. Without
+        // this the group was open, and it carries order preview, order confirm,
+        // paper-run start and wishlist mutation. Authorising the group rather
+        // than each endpoint means one added later is protected by default.
+        //
+        // The phone client authenticates through /api/auth/login and carries the
+        // same cookie, so this changes nothing for a signed-in client.
+        var group = endpoints.MapGroup("/api/mobile").RequireAuthorization();
 
         group.MapPost("/pulse", (MobileStockPulseRequest request, StockPulseReceiverService pulseReceiver) =>
         {

@@ -58,60 +58,108 @@ public sealed class AlpacaMarketDataProvider : IMarketDataProvider
             {
                 var startStr = start.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
                 var endStr = end.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
-                var symbols = String.Join(
-                    ",",
-                    tickerBatch
-                        .Select(AlpacaSymbolMapper.ToProviderSymbol)
-                        .Select(Uri.EscapeDataString));
-                string? nextPageToken = null;
-
-                do
+                var batchBars = await FetchBatchWithFallbackAsync(tickerBatch, timeframe, originalTimeframe, startStr, endStr, cancellationToken);
+                foreach (var bar in batchBars)
                 {
-                    var url = $"/v2/stocks/bars?symbols={symbols}&timeframe={timeframe}&start={startStr}&end={endStr}&feed={_marketDataFeed}&adjustment=all&limit=10000";
-                    if (!String.IsNullOrWhiteSpace(nextPageToken))
-                    {
-                        url += $"&page_token={Uri.EscapeDataString(nextPageToken)}";
-                    }
-
-                    using var response = await SendWithRetriesAsync(url, cancellationToken);
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        var error = await response.Content.ReadAsStringAsync(cancellationToken);
-                        throw new Exception($"Alpaca API Error ({(int?)response.StatusCode}): {error}");
-                    }
-
-                    var content = await response.Content.ReadAsStringAsync(cancellationToken);
-                    using var doc = JsonDocument.Parse(content);
-                    
-                    if (doc.RootElement.TryGetProperty("bars", out var barsElement))
-                    {
-                        foreach (var tickerProperty in barsElement.EnumerateObject())
-                        {
-                            var ticker = AlpacaSymbolMapper.ToCanonicalSymbol(tickerProperty.Name);
-                            foreach (var bar in tickerProperty.Value.EnumerateArray())
-                            {
-                                yield return new OhlcvBar(
-                                    ticker,
-                                    bar.GetProperty("t").GetDateTimeOffset(),
-                                    originalTimeframe,
-                                    bar.GetProperty("o").GetDecimal(),
-                                    bar.GetProperty("h").GetDecimal(),
-                                    bar.GetProperty("l").GetDecimal(),
-                                    bar.GetProperty("c").GetDecimal(),
-                                    bar.GetProperty("v").GetDecimal()
-                                );
-                            }
-                        }
-                    }
-
-                    nextPageToken = doc.RootElement.TryGetProperty("next_page_token", out var tokenElement) &&
-                                    tokenElement.ValueKind == JsonValueKind.String
-                        ? tokenElement.GetString()
-                        : null;
+                    yield return bar;
                 }
-                while (!String.IsNullOrWhiteSpace(nextPageToken));
             }
         }
+    }
+
+    private async Task<List<OhlcvBar>> FetchBatchWithFallbackAsync(
+        string[] tickerBatch,
+        string timeframe,
+        string originalTimeframe,
+        string startStr,
+        string endStr,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await FetchBatchExactAsync(tickerBatch, timeframe, originalTimeframe, startStr, endStr, cancellationToken);
+        }
+        catch (Exception ex) when (ex.Message.Contains("invalid symbol") && tickerBatch.Length > 1)
+        {
+            var results = new List<OhlcvBar>();
+            foreach (var ticker in tickerBatch)
+            {
+                try
+                {
+                    results.AddRange(await FetchBatchExactAsync(new[] { ticker }, timeframe, originalTimeframe, startStr, endStr, cancellationToken));
+                }
+                catch (Exception innerEx) when (innerEx.Message.Contains("invalid symbol"))
+                {
+                    // Log or simply ignore the single invalid symbol
+                }
+            }
+            return results;
+        }
+    }
+
+    private async Task<List<OhlcvBar>> FetchBatchExactAsync(
+        string[] tickerBatch,
+        string timeframe,
+        string originalTimeframe,
+        string startStr,
+        string endStr,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<OhlcvBar>();
+        var symbols = String.Join(
+            ",",
+            tickerBatch
+                .Select(AlpacaSymbolMapper.ToProviderSymbol)
+                .Select(Uri.EscapeDataString));
+        string? nextPageToken = null;
+
+        do
+        {
+            var url = $"/v2/stocks/bars?symbols={symbols}&timeframe={timeframe}&start={startStr}&end={endStr}&feed={_marketDataFeed}&adjustment=all&limit=10000";
+            if (!String.IsNullOrWhiteSpace(nextPageToken))
+            {
+                url += $"&page_token={Uri.EscapeDataString(nextPageToken)}";
+            }
+
+            using var response = await SendWithRetriesAsync(url, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = await response.Content.ReadAsStringAsync(cancellationToken);
+                throw new Exception($"Alpaca API Error ({(int?)response.StatusCode}): {error}");
+            }
+
+            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(content);
+            
+            if (doc.RootElement.TryGetProperty("bars", out var barsElement))
+            {
+                foreach (var tickerProperty in barsElement.EnumerateObject())
+                {
+                    var ticker = AlpacaSymbolMapper.ToCanonicalSymbol(tickerProperty.Name);
+                    foreach (var bar in tickerProperty.Value.EnumerateArray())
+                    {
+                        results.Add(new OhlcvBar(
+                            ticker,
+                            bar.GetProperty("t").GetDateTimeOffset(),
+                            originalTimeframe,
+                            bar.GetProperty("o").GetDecimal(),
+                            bar.GetProperty("h").GetDecimal(),
+                            bar.GetProperty("l").GetDecimal(),
+                            bar.GetProperty("c").GetDecimal(),
+                            bar.GetProperty("v").GetDecimal()
+                        ));
+                    }
+                }
+            }
+
+            nextPageToken = doc.RootElement.TryGetProperty("next_page_token", out var tokenElement) &&
+                            tokenElement.ValueKind == JsonValueKind.String
+                ? tokenElement.GetString()
+                : null;
+        }
+        while (!String.IsNullOrWhiteSpace(nextPageToken));
+
+        return results;
     }
 
     private async Task<HttpResponseMessage> SendWithRetriesAsync(string url, CancellationToken cancellationToken)

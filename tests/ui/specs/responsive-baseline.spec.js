@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { signIn } from "./sign-in.js";
 
 const coreRoutes = [
   "/TradeDesk",
@@ -25,6 +26,12 @@ const viewports = [
 ];
 
 test.describe("approved UI baseline", () => {
+  // Every operator screen sits behind authorisation, so the suite signs in
+  // through the real login form rather than bypassing it.
+  test.beforeEach(async ({ page }) => {
+    await signIn(page);
+  });
+
   for (const route of coreRoutes) {
     test(`${route} renders without provider credentials`, async ({ page }) => {
       await page.goto(route);
@@ -82,9 +89,17 @@ test.describe("approved UI baseline", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/TradeDesk");
 
+    // Only what a thumb can actually reach counts. On a phone the desktop
+    // primary nav is replaced by the fixed tab bar, so its links are display:none
+    // and measure zero - a hidden control has no tap target to be too small.
     const undersized = await page.locator(
-      '.primary-nav a, button:visible, a.button:visible, input:not([type="hidden"]):not([type="checkbox"]):visible, select:visible'
+      '.primary-nav a, .desk-mobile-tabbar a, .desk-mobile-tabs a, button, a.btn, input:not([type="hidden"]):not([type="checkbox"]), select'
     ).evaluateAll(elements => elements
+      .filter(element => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      })
       .map(element => ({
         label: element.getAttribute("aria-label") || element.textContent?.trim() || element.getAttribute("name"),
         height: element.getBoundingClientRect().height

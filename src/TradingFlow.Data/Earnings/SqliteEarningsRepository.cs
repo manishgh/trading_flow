@@ -121,7 +121,7 @@ public sealed class SqliteEarningsRepository : IEarningsRepository
         var ids = eventIds.Distinct(StringComparer.Ordinal).ToArray();
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var snapshots = new List<EarningsAnalysisSnapshot>();
-        foreach (var idBatch in ids.Chunk(500))
+        foreach (var idBatch in ids.Chunk(100))
         {
             snapshots.AddRange(await db.EarningsAnalysisSnapshots
                 .AsNoTracking()

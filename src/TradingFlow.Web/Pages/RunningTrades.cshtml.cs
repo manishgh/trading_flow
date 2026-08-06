@@ -10,15 +10,21 @@ public sealed class RunningTradesModel : PageModel
     private readonly PaperJobService paperJobs;
     private readonly MobileAutomationService automation;
     private readonly TradingEnvironmentService environments;
+    private readonly PositionProtectionService protection;
+    private readonly ConfigCatalogService catalog;
 
     public RunningTradesModel(
         PaperJobService paperJobs,
         MobileAutomationService automation,
-        TradingEnvironmentService environments)
+        TradingEnvironmentService environments,
+        PositionProtectionService protection,
+        ConfigCatalogService catalog)
     {
         this.paperJobs = paperJobs;
         this.automation = automation;
         this.environments = environments;
+        this.protection = protection;
+        this.catalog = catalog;
     }
 
     [BindProperty(SupportsGet = true)] public string Source { get; set; } = "all";
@@ -38,6 +44,40 @@ public sealed class RunningTradesModel : PageModel
 
     public string? ErrorMessage { get; private set; }
 
+    /// <summary>
+    /// Protection asserted against the broker's working orders, keyed by ticker.
+    /// The local book records what was intended; this records what is actually
+    /// working, and the two can differ when an entry fills but its bracket does
+    /// not land.
+    /// </summary>
+    public IReadOnlyDictionary<string, PositionProtection> Protection { get; private set; } =
+        new Dictionary<string, PositionProtection>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Σ current price × quantity across the whole book, not just the filtered
+    /// source. Exposure is a portfolio fact; filtering the view must not make it
+    /// look smaller than it is.
+    /// </summary>
+    public decimal GrossExposure { get; private set; }
+
+    /// <summary>Positions with no working broker stop. Unknown does not count.</summary>
+    public int UnprotectedCount { get; private set; }
+
+    /// <summary>Positions whose protection could not be read from the broker.</summary>
+    public int UnknownProtectionCount { get; private set; }
+
+    /// <summary>Open position count across every source.</summary>
+    public int SlotsUsed { get; private set; }
+
+    /// <summary>The real cap from the active paper profile's portfolio config.</summary>
+    public int MaxConcurrentPositions { get; private set; }
+
+    /// <summary>
+    /// A count over the cap is a broken risk control being reported, not a
+    /// figure. The screen surfaces it as a block rather than a number.
+    /// </summary>
+    public bool SlotsOverCap => MaxConcurrentPositions > 0 && SlotsUsed > MaxConcurrentPositions;
+
     public static IReadOnlyList<(string Key, string Label)> Sources { get; } = new[]
     {
         ("all", "All"),
@@ -55,9 +95,9 @@ public sealed class RunningTradesModel : PageModel
         ("plpct", "P/L %")
     ];
 
-    public async Task OnGetAsync()
+    public async Task OnGetAsync(CancellationToken cancellationToken)
     {
-        await LoadAsync();
+        await LoadAsync(cancellationToken);
     }
 
     /// <summary>
@@ -67,12 +107,17 @@ public sealed class RunningTradesModel : PageModel
     /// The environment lock is re-checked here, not only in the view. Hiding the
     /// review control does not stop a POST that was composed by hand.
     /// </remarks>
-    public async Task<IActionResult> OnPostCloseAsync(string closeKind, Guid? jobId, Guid? sessionId, string ticker)
+    public async Task<IActionResult> OnPostCloseAsync(
+        string closeKind,
+        Guid? jobId,
+        Guid? sessionId,
+        string ticker,
+        CancellationToken cancellationToken)
     {
         if (!EnvironmentState.IsEnabled)
         {
             ErrorMessage = EnvironmentState.LockReason;
-            await LoadAsync();
+            await LoadAsync(cancellationToken);
             return Page();
         }
 
@@ -113,11 +158,44 @@ public sealed class RunningTradesModel : PageModel
     public bool EmptyStateOffersAllSources =>
         !String.IsNullOrWhiteSpace(Source) && !String.Equals(Source, "all", StringComparison.OrdinalIgnoreCase);
 
-    private async Task LoadAsync()
+    private async Task LoadAsync(CancellationToken cancellationToken)
     {
         var all = await RunningTradesBuilder.BuildAsync(paperJobs, automation);
         Trades = SortTrades(RunningTradesBuilder.Filter(all, Source)).ToArray();
         TotalPl = Trades.Sum(trade => trade.UnrealizedPl);
+
+        // Exposure and slots are portfolio facts, so they are measured across the
+        // whole book. Filtering to one source narrows what is listed, never what
+        // the account is actually carrying.
+        GrossExposure = all.Sum(trade => trade.CurrentPrice * trade.Quantity);
+        SlotsUsed = all.Count;
+        MaxConcurrentPositions = ResolveMaxConcurrentPositions();
+
+        Protection = await protection.GetAsync(
+            all.Select(trade => trade.Ticker).ToArray(),
+            cancellationToken);
+        UnprotectedCount = Protection.Values.Count(item => item.IsKnown && !item.HasBrokerStop);
+        UnknownProtectionCount = Protection.Values.Count(item => !item.IsKnown);
+    }
+
+    /// <summary>Protection state for a row, or unknown when the broker was not read.</summary>
+    public PositionProtection ProtectionFor(string ticker) =>
+        Protection.TryGetValue(ticker, out var found)
+            ? found
+            : new PositionProtection(ticker, false, false, "Protection has not been read.");
+
+    /// <summary>
+    /// The cap the risk gate actually enforces, from the active paper profile.
+    /// Zero means it could not be read, and the screen says unknown rather than
+    /// implying an unlimited book.
+    /// </summary>
+    private int ResolveMaxConcurrentPositions()
+    {
+        var configs = catalog.GetPaperConfigs();
+        var selected = configs.FirstOrDefault(config =>
+                config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
+            ?? configs.FirstOrDefault();
+        return selected?.Config.Portfolio.MaxConcurrentPositions ?? 0;
     }
 
     private IEnumerable<MobileRunningTrade> SortTrades(IEnumerable<MobileRunningTrade> trades)

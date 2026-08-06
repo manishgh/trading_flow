@@ -1,0 +1,124 @@
+@*
+    The running phase.
+
+    Four stages, each named by the worker's own CurrentStage values rather than
+    by a guess at progress. The per-strategy cards exist because strategies
+    progress independently: one total would hide a group that has stalled.
+*@
+@model TradingFlow.Web.Models.BacktestJobSnapshot
+@{
+    var elapsed = (Model.FinishedAt ?? DateTimeOffset.UtcNow) - (Model.StartedAt ?? Model.CreatedAt);
+    var progress = Model.TotalTickerCount <= 0
+        ? 0m
+        : Math.Clamp((decimal)Model.CompletedTickerCount / Model.TotalTickerCount * 100m, 0m, 100m);
+
+    // The worker's stage vocabulary, grouped into the four phases an operator
+    // reads. Keeping the mapping here means a new stage shows as pending rather
+    // than silently vanishing.
+    var stagePhases = new (string Title, string Detail, string[] Stages)[]
+    {
+        ("Setup", "Config, strategies, universe",
+            ["loading_config", "loading_strategies", "finviz_candidates", "resolving_universe"]),
+        ("Market data", "Candles and indicators",
+            ["market_pipeline", "preparing_ticker_contexts"]),
+        ("Evaluation", "Strategy matrix",
+            ["strategy_group_ready", "running_strategy_matrix", "running_strategy_ticker", "finished_strategy_ticker"]),
+        ("Results", "Portfolio and audit",
+            ["building_results", "writing_result", "completed"])
+    };
+
+    var activeIndex = Array.FindIndex(stagePhases,
+        phase => phase.Stages.Contains(Model.CurrentStage, StringComparer.OrdinalIgnoreCase));
+}
+
+<section class="lab-panel lab-running" data-lab-job="@Model.JobId">
+    <header class="lab-run-head">
+        <div>
+            <h2 class="lab-run-name">
+                @Model.RunName
+                <span class="tag @(Model.Status == "completed" ? "tag-neutral" : "tag-accent")" data-lab-status>@Model.Status</span>
+            </h2>
+            <p class="lab-run-stage">
+                <span data-lab-stage>@Model.CurrentStage.Replace('_', ' ')</span> ·
+                elapsed <span data-lab-elapsed>@elapsed.ToString(@"hh\:mm\:ss")</span>
+            </p>
+        </div>
+        <div class="lab-run-progress-figure">
+            <strong><span data-lab-completed>@Model.CompletedTickerCount</span> / <span data-lab-total>@Model.TotalTickerCount</span></strong>
+            <span class="note"><span data-lab-percent>@progress.ToString("0.0")</span>% of work items</span>
+        </div>
+    </header>
+
+    <div class="lab-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+         aria-valuenow="@((int)progress)" aria-label="Run progress">
+        <div class="lab-progress-fill" data-lab-progress style="width:@progress.ToString("0.0")%"></div>
+    </div>
+
+    <ol class="lab-phase-rail">
+        @for (var index = 0; index < stagePhases.Length; index++)
+        {
+            var phase = stagePhases[index];
+            var state = activeIndex < 0
+                ? "is-pending"
+                : index < activeIndex ? "is-complete" : index == activeIndex ? "is-active" : "is-pending";
+            <li class="@state">
+                <span class="lab-phase-number">@(index + 1)</span>
+                <span class="lab-phase-title">@phase.Title</span>
+                <span class="lab-phase-detail">@phase.Detail</span>
+            </li>
+        }
+    </ol>
+
+    @if (Model.StrategyGroups is { Count: > 0 } groups)
+    {
+        <div class="lab-strategy-cards" data-lab-groups>
+            @foreach (var group in groups)
+            {
+                var groupProgress = group.TotalTickerCount <= 0
+                    ? 0m
+                    : Math.Clamp((decimal)group.CompletedTickerCount / group.TotalTickerCount * 100m, 0m, 100m);
+                <article class="lab-strategy-card">
+                    <div class="lab-strategy-card-head">
+                        <strong>@group.StrategyName</strong>
+                        <span class="note">@group.CompletedTickerCount / @group.TotalTickerCount</span>
+                    </div>
+                    <p class="note">
+                        @group.Status@(String.IsNullOrWhiteSpace(group.CurrentTicker) ? null : $" · current {group.CurrentTicker}")
+                    </p>
+                    <div class="lab-progress lab-progress-sm">
+                        <div class="lab-progress-fill @(group.Status == "completed" ? "is-complete" : null)"
+                             style="width:@groupProgress.ToString("0.0")%"></div>
+                    </div>
+                    <ul class="lab-events">
+                        @foreach (var recent in group.RecentEvents.Reverse().Take(4))
+                        {
+                            <li>@recent</li>
+                        }
+                    </ul>
+                </article>
+            }
+        </div>
+    }
+
+    @if (!String.IsNullOrWhiteSpace(Model.ErrorMessage))
+    {
+        <p class="callout">@Model.ErrorMessage</p>
+    }
+
+    <section class="lab-activity">
+        <h3 class="sub-heading">Activity</h3>
+        @if (Model.Events.Count == 0)
+        {
+            <p class="empty-state">Waiting for the worker…</p>
+        }
+        else
+        {
+            <ul class="lab-events" data-lab-events>
+                @foreach (var entry in Model.Events.Reverse().Take(12))
+                {
+                    <li>@entry</li>
+                }
+            </ul>
+        }
+    </section>
+</section>

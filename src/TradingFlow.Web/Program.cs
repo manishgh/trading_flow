@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using TradingFlow.Data.Identity;
 using TradingFlow.Backtesting.StrategyEvaluation;
 using TradingFlow.Data.Backups;
 using TradingFlow.Data.Candles;
@@ -51,7 +53,18 @@ Environment.SetEnvironmentVariable(
     "TRADINGFLOW_RESULT_OWNER",
     Environment.GetEnvironmentVariable("TRADINGFLOW_RESULT_OWNER") ?? "web");
 
-builder.Services.AddRazorPages();
+// Every operator screen requires a signed-in principal. Authorising the folder
+// rather than each page means a page added later is protected by default: the
+// failure mode of forgetting an attribute is a locked screen, not an open one.
+// Earnings stays anonymous because it is an advisory monitor that cannot route
+// an order, which is stated on the screen itself.
+builder.Services.AddRazorPages(razor =>
+{
+    razor.Conventions.AuthorizeFolder("/");
+    razor.Conventions.AllowAnonymousToPage("/Login");
+    razor.Conventions.AllowAnonymousToPage("/AccessDenied");
+    razor.Conventions.AllowAnonymousToPage("/Earnings");
+});
 var repositoryRoot = ResolveRepositoryRoot(builder.Environment.ContentRootPath);
 var dataRoot = ResolveRootFromEnvironment("TRADINGFLOW_DATA_ROOT", Path.Combine(repositoryRoot, "data"));
 var cacheRoot = ResolveRootFromEnvironment("TRADINGFLOW_CACHE_ROOT", Path.Combine(dataRoot, "cache"));
@@ -109,6 +122,9 @@ builder.Services.AddSingleton<NewsFeedService>();
 if (!uiTestMode)
 {
     builder.Services.AddHostedService(sp => sp.GetRequiredService<NewsFeedService>());
+    
+    // Add real-time Alpaca WebSocket news service
+    builder.Services.AddHostedService<AlpacaNewsStreamService>();
 }
 builder.Services.AddSingleton<WarmupServiceClient>();
 builder.Services.AddSingleton<WishlistUniverseResolver>();
@@ -117,6 +133,11 @@ builder.Services.AddSingleton<WishlistMarketMonitor>();
 builder.Services.AddSingleton<WishlistDeskService>();
 builder.Services.AddSingleton<TradingEnvironmentService>();
 builder.Services.AddSingleton<OperationalStatusService>();
+builder.Services.AddSingleton<OperationsHealthService>();
+builder.Services.AddSingleton<UniverseRankService>();
+builder.Services.AddSingleton<ScreenerSyncService>();
+builder.Services.AddSingleton<ScreenerPresetService>();
+builder.Services.AddSingleton<PositionProtectionService>();
 builder.Services.AddSingleton<IEarningsRepository, SqliteEarningsRepository>();
 builder.Services.AddSingleton(EarningsMonitorOptions.Default);
 builder.Services.AddSingleton<EarningsAnalyzer>();
@@ -217,7 +238,68 @@ builder.Services.AddDbContextFactory<TradingFlowDbContext>((serviceProvider, opt
     options
         .UseSqlite($"Data Source={dbPath}")
         .AddInterceptors(serviceProvider.GetRequiredService<SqliteConnectionDurabilityInterceptor>()));
+// Identity needs a scoped context of its own. AddDbContextFactory registers only
+// the factory, so the user and role stores get a scoped context built from it
+// rather than sharing one across requests.
+builder.Services.AddScoped(serviceProvider =>
+    serviceProvider.GetRequiredService<IDbContextFactory<TradingFlowDbContext>>().CreateDbContext());
 builder.Services.AddSingleton<TradingFlowDatabaseInitializer>();
+
+// Local operator accounts. Every store, page and endpoint in this app already
+// assumes Identity - TradingFlowDbContext derives from IdentityDbContext, the
+// login page injects SignInManager, and the layout branches on the signed-in
+// principal - so this registration is what makes those work rather than a new
+// policy. Accounts are provisioned by `users add` on the CLI; there is no
+// public registration route.
+builder.Services
+    .AddIdentityCore<TradingFlowUser>(identity =>
+    {
+        identity.User.RequireUniqueEmail = false;
+        identity.Password.RequiredLength = 12;
+        identity.Password.RequireDigit = true;
+        identity.Password.RequireLowercase = true;
+        identity.Password.RequireUppercase = true;
+        identity.Password.RequireNonAlphanumeric = true;
+        // A trading surface locks out rather than throttles: an attacker who can
+        // keep guessing eventually reaches an account that can move money.
+        identity.Lockout.MaxFailedAccessAttempts = 5;
+        identity.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+        identity.Lockout.AllowedForNewUsers = true;
+    })
+    .AddRoles<IdentityRole<Guid>>()
+    .AddEntityFrameworkStores<TradingFlowDbContext>()
+    .AddSignInManager()
+    .AddDefaultTokenProviders();
+builder.Services
+    .AddAuthentication(IdentityConstants.ApplicationScheme)
+    .AddIdentityCookies();
+builder.Services.ConfigureApplicationCookie(cookie =>
+{
+    cookie.LoginPath = "/Login";
+    cookie.LogoutPath = "/Login";
+    cookie.AccessDeniedPath = "/AccessDenied";
+    cookie.Cookie.HttpOnly = true;
+    cookie.Cookie.SameSite = SameSiteMode.Lax;
+    cookie.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+    cookie.ExpireTimeSpan = TimeSpan.FromHours(12);
+    cookie.SlidingExpiration = true;
+});
+// Fail closed. Without a fallback policy, only endpoints that opt in are
+// protected, so forgetting one leaves it open - which is exactly what happened
+// to /api/mobile, a group carrying order preview, order confirm and paper-run
+// start. With it, every endpoint requires a signed-in operator unless it
+// explicitly says otherwise, and the failure mode of forgetting is a locked
+// endpoint rather than an exposed one.
+//
+// The deliberate exceptions are marked AllowAnonymous at their definition:
+// the Login and AccessDenied pages, the Earnings page and its API, the auth
+// login endpoint, and the health probes.
+builder.Services.AddAuthorization(authorization =>
+{
+    authorization.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
 
 builder.Services.AddSingleton<TradingFlow.Domain.Locking.ITickerLockService, TradingFlow.Data.Locking.SqliteTickerLockService>();
 builder.Services.AddSingleton<TradingFlow.Domain.Orders.IOrderStateRepository, TradingFlow.Data.Orders.SqliteOrderStateRepository>();
@@ -360,6 +442,48 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<TradingFlowDatabaseInitializer>().InitializeAsync(db);
 }
 
+// `dotnet run --project src/TradingFlow.Web users add --username <name> [--admin]`
+// creates the first local account and exits without starting the server. It runs
+// after the schema is initialised and needs an interactive terminal so the
+// password never reaches command history.
+if (await LocalUserProvisioningCommand.TryExecuteAsync(args, app.Services))
+{
+    return;
+}
+
+// UI test mode seeds one operator account into the isolated test database so the
+// browser suite signs in through the real login form rather than bypassing
+// authorisation. Testing the authenticated screens by disabling authentication
+// would test a shell the operator never sees.
+//
+// This runs only under TRADINGFLOW_UI_TEST_MODE, which also points the data root
+// at .tmp/ui-tests. It cannot touch a real journal.
+if (uiTestMode)
+{
+    var testUserName = Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_USER") ?? "ui-operator";
+    var testPassword = Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_PASSWORD")
+        ?? "Ui-Test-Operator-1!";
+    using var seedScope = app.Services.CreateScope();
+    var userManager = seedScope.ServiceProvider.GetRequiredService<UserManager<TradingFlowUser>>();
+    if (await userManager.FindByNameAsync(testUserName) is null)
+    {
+        var seeded = new TradingFlowUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = testUserName,
+            DisplayName = "UI test operator",
+            CreatedAtUtc = DateTimeOffset.UtcNow
+        };
+        var seedResult = await userManager.CreateAsync(seeded, testPassword);
+        if (!seedResult.Succeeded)
+        {
+            throw new InvalidOperationException(
+                "The UI test operator could not be seeded: " +
+                String.Join("; ", seedResult.Errors.Select(error => error.Description)));
+        }
+    }
+}
+
 if (!uiTestMode)
 {
     // Resolve before any resumable job starts so entry submission is fail-closed until
@@ -378,10 +502,20 @@ if (!app.Environment.IsDevelopment())
 
 app.UseStaticFiles();
 app.UseRouting();
+// Order matters: routing selects the endpoint, authentication establishes who is
+// asking, authorization then reads that endpoint's requirements. Placed before
+// UseRouting these two run without an endpoint and enforce nothing.
+app.UseAuthentication();
+app.UseAuthorization();
 app.MapRazorPages();
+app.MapTradingFlowAuthApi();
 app.MapTradingFlowMobileApi();
 app.MapTradingFlowEarningsApi();
-app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "TradingFlow.Web" }));
+// Health probes stay open: a readiness check that needs a session cannot tell a
+// load balancer or a container runtime whether the process is alive. Neither
+// reveals operator data.
+app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "TradingFlow.Web" }))
+    .AllowAnonymous();
 app.MapGet("/health/trading-readiness", (
     IOrderSynchronizationCoordinator synchronization,
     IAccountReconciliationService reconciliation,
@@ -400,7 +534,7 @@ app.MapGet("/health/trading-readiness", (
     return admissionSnapshot.EntriesAllowed
         ? Results.Ok(response)
         : Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable);
-});
+}).AllowAnonymous();
 app.MapGet("/api/profiler/alpaca", () => Results.Ok(TradingFlow.Domain.Logging.ApiProfiler.GetSummary("Alpaca")));
 app.MapPost("/api/operations/reconciliations/{reconciliationId:guid}/ack", async (
     Guid reconciliationId,

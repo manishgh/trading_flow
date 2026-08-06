@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "trading-flow-web",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": [
+        "run",
+        "--project",
+        "src/TradingFlow.Web",
+        "--urls",
+        "http://127.0.0.1:5088"
+      ],
+      "port": 5088
+    }
+  ]
+}

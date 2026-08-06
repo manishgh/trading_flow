@@ -1,0 +1,25 @@
+@*
+    Whether the verdict and the model point the same way.
+
+    A CONFLICT is stated, not resolved. Eligibility remains authoritative for
+    entry; the band exists so the operator sees the disagreement rather than
+    having it silently removed from the universe.
+*@
+@model TradingFlow.Web.Services.RankedDeskRow
+
+<section class="agreement-band @(Model.Agreement == TradingFlow.Web.Services.AgreementFlag.Conflict ? "is-conflict" : null)"
+         aria-label="Model agreement">
+    <span class="agreement-headline @Model.AgreementCssClass">
+        @(Model.Agreement switch
+        {
+            TradingFlow.Web.Services.AgreementFlag.Agree => "Models agree",
+            TradingFlow.Web.Services.AgreementFlag.Conflict => "Models conflict",
+            _ => "Partial agreement"
+        })
+    </span>
+    <span class="agreement-note">@Model.AgreementNote</span>
+    @if (Model.IsVetoed)
+    {
+        <span class="note">Rank penalty −@Model.VetoPenalty.ToString("0.00") applied; the candidate stays in the universe.</span>
+    }
+</section>

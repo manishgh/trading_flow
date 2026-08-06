@@ -102,3 +102,30 @@ artifacts:
 strategies:
   - ../strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml
 
+
+# See alpaca-paper.yaml for what this block does. The swing weight set leans
+# further on market structure and less on the model edge than intraday: over a
+# multi-day hold, trend quality has more to say than a single-session score.
+universe:
+  rank:
+    weights_version: rank.v1
+    intraday:
+      model_edge: 0.38
+      market_structure: 0.22
+      catalyst: 0.18
+      technical_state: 0.14
+      liquidity: 0.08
+    swing:
+      model_edge: 0.34
+      market_structure: 0.28
+      catalyst: 0.16
+      technical_state: 0.14
+      liquidity: 0.08
+    catalyst_weights:
+      er: 1.0
+      news: 0.85
+      sec: 0.5
+      scrn: 0.35
+      none: 0.08
+    veto_penalty: 0.12
+    liquidity_spread_ceiling_bps: 8.0

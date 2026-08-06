@@ -1,0 +1,72 @@
+@*
+    TradingFlow's decision beside the model's evidence.
+
+    Two equal cells, because both are worth reading. Only the left one can
+    authorise an entry, and both say so on the Authority line rather than
+    relying on position or size to imply it.
+*@
+@model TradingFlow.Web.Pages.Shared.DeskEvidenceModel
+@{
+    var ranked = Model.Row;
+    var row = ranked.Row;
+    var evidence = ranked.Evidence;
+    var available = evidence.AvailabilityStatus == "available";
+}
+
+<section class="desk-evidence-pair @(Model.Compact ? "is-compact" : null)" aria-label="Decision evidence">
+    <div class="desk-evidence-cell">
+        <div class="desk-evidence-head">
+            <h2 class="@(Model.Compact ? "sub-heading" : "section-heading")">TradingFlow decision</h2>
+            <span class="tag @(row.HasSignal ? "tag-accent" : "tag-neutral")" data-selected-signal-badge>
+                @(row.HasSignal ? "ELIGIBLE" : row.HasQuote ? "WATCHING" : "BLOCKED")
+            </span>
+        </div>
+        <p class="desk-evidence-copy" data-selected-signal-reason>@row.EligibilityReason</p>
+        <dl class="fact-list">
+            <dt>Setup</dt>
+            <dd data-selected-signal-type>@(row.LatestSignal?.SignalType ?? "No active setup")</dd>
+            <dt>Detected</dt>
+            <dd>
+                <time data-selected-signal-time datetime="@row.LatestSignal?.DetectedAtUtc.ToString("O")">
+                    @(row.LatestSignal is null ? "—" : $"{row.LatestSignal.DetectedAtUtc:HH:mm:ss} UTC")
+                </time>
+            </dd>
+            <dt>Severity</dt>
+            <dd>@(row.LatestSignal?.Severity ?? "—")</dd>
+            <dt>Authority</dt>
+            <dd>Authoritative for entry</dd>
+        </dl>
+    </div>
+
+    <div class="desk-evidence-cell">
+        <div class="desk-evidence-head">
+            <h2 class="@(Model.Compact ? "sub-heading" : "section-heading")">Market predictor</h2>
+            <span class="tag @(available ? "tag-neutral" : "tag-outline")">@evidence.AvailabilityStatus</span>
+        </div>
+        @if (!available)
+        {
+            @* Unavailable evidence says so. It never renders as a neutral reading,
+               which would be indistinguishable from the model having an opinion. *@
+            <p class="desk-evidence-copy unknown">@(evidence.AvailabilityReason ?? "Prediction evidence is unavailable.")</p>
+        }
+        else
+        {
+            <p class="desk-evidence-copy">
+                @evidence.FinalSignal.Replace('_', ' ') — @(Model.IsIntraday ? "intraday" : "swing") leg on the
+                @evidence.ResolvedHorizon horizon, from a @(evidence.Model?.Status ?? "unknown") model.
+            </p>
+        }
+        <dl class="fact-list">
+            <dt>Probability</dt>
+            <dd>@(Model.Probability is { } probability ? probability.ToString("P1") : "—")</dd>
+            <dt>Horizon</dt>
+            <dd>@evidence.ResolvedHorizon</dd>
+            <dt>Catalyst</dt>
+            <dd>@Model.CatalystStatus · @Model.CatalystDirection</dd>
+            <dt>Readiness</dt>
+            <dd>@evidence.ReadinessStatus</dd>
+            <dt>Authority</dt>
+            <dd class="unknown">Read-only evidence</dd>
+        </dl>
+    </div>
+</section>

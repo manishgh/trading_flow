@@ -7,6 +7,7 @@ using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Pages;
 
@@ -18,6 +19,7 @@ public sealed class PaperModel : PageModel
     private readonly PaperJobService paperJobs;
     private readonly IArtifactWriter artifactWriter;
     private readonly IWishlistRepository wishlistRepository;
+    private readonly ScreenerPresetService screenerPresets;
     private readonly ILogger<PaperModel> logger;
 
     public PaperModel(
@@ -27,6 +29,7 @@ public sealed class PaperModel : PageModel
         PaperJobService paperJobs,
         IArtifactWriter artifactWriter,
         IWishlistRepository wishlistRepository,
+        ScreenerPresetService screenerPresets,
         ILogger<PaperModel> logger)
     {
         this.catalog = catalog;
@@ -35,6 +38,7 @@ public sealed class PaperModel : PageModel
         this.paperJobs = paperJobs;
         this.artifactWriter = artifactWriter;
         this.wishlistRepository = wishlistRepository;
+        this.screenerPresets = screenerPresets;
         this.logger = logger;
     }
 
@@ -46,6 +50,24 @@ public sealed class PaperModel : PageModel
     [BindProperty(SupportsGet = true)] public bool AllowExtendedHoursTrading { get; set; }
     [BindProperty(SupportsGet = true)] public bool NewsEnabled { get; set; } = true;
     [BindProperty(SupportsGet = true)] public string? ScreenerFilter { get; set; }
+
+    /// <summary>
+    /// Where the candidate universe comes from: <c>wishlist</c>, <c>screener</c>
+    /// or <c>both</c>.
+    /// </summary>
+    /// <remarks>
+    /// A screener is a universe in its own right, not an addition to a wishlist.
+    /// Selecting <c>screener</c> runs against exactly what the screen returns and
+    /// ignores the wishlist entirely, so an operator can trade a screen without
+    /// first promoting its symbols into a curated list.
+    /// </remarks>
+    [BindProperty(SupportsGet = true)] public string UniverseSource { get; set; } = "wishlist";
+
+    /// <summary>
+    /// Saved screens, offered by name. Finviz exposes no endpoint that lists the
+    /// screens saved in its own UI, so the catalogue is local.
+    /// </summary>
+    public IReadOnlyList<TradingFlow.Domain.Wishlists.ScreenerPreset> ScreenerPresets { get; private set; } = [];
     [BindProperty] public string? StrategyYaml { get; set; }
 
     [BindProperty] public string? QuickEditTimeframe { get; set; }
@@ -92,6 +114,7 @@ public sealed class PaperModel : PageModel
 
         AllowExtendedHoursTrading = selectedExecutionConfig?.Config.Execution.AllowExtendedHoursTrading ?? false;
         ScreenerFilter ??= String.Empty;
+        UniverseSource = NormalizeUniverseSource(UniverseSource);
 
         var selectedStrategy = Strategies.FirstOrDefault(s => s.Path == SelectedStrategyPath);
         SelectedStrategyUsesNews = selectedStrategy is not null && StrategyCapabilityInspector.UsesNews(selectedStrategy.Definition);
@@ -226,11 +249,47 @@ public sealed class PaperModel : PageModel
         Load(baseConfigPath, strategyPath);
         await LoadWishlistsAsync(Guid.TryParse(wishlistIdText, out var parsedWishlistId) ? parsedWishlistId : null, cancellationToken);
         PopulateSelectedStrategyUi();
-        var wishlistTickers = SelectedWishlist?.Items
-            .Where(item => item.Active)
-            .Select(item => item.Ticker)
-            .Where(ticker => !String.IsNullOrWhiteSpace(ticker))
-            .ToArray() ?? [];
+        var source = NormalizeUniverseSource(form["UniverseSource"].ToString());
+        UniverseSource = source;
+
+        // A saved screen may be named rather than pasted. Resolving it here means
+        // the run config records the filter that actually ran, not a name whose
+        // meaning could change afterwards.
+        if (!String.IsNullOrWhiteSpace(screenerFilter))
+        {
+            var resolved = await screenerPresets.ListAsync(null, cancellationToken);
+            var named = resolved.FirstOrDefault(preset =>
+                preset.Name.Equals(screenerFilter.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (named is not null)
+            {
+                screenerFilter = named.FilterQuery;
+                ScreenerFilter = screenerFilter;
+            }
+        }
+
+        // A screener-only run ignores the wishlist outright rather than merging
+        // with it: the operator asked to trade the screen, and silently adding
+        // curated names would make the universe something neither source states.
+        var usesWishlist = source is "wishlist" or "both";
+        var usesScreener = source is "screener" or "both";
+        var wishlistTickers = usesWishlist
+            ? SelectedWishlist?.Items
+                .Where(item => item.Active)
+                .Select(item => item.Ticker)
+                .Where(ticker => !String.IsNullOrWhiteSpace(ticker))
+                .ToArray() ?? []
+            : [];
+        if (!usesScreener)
+        {
+            screenerFilter = String.Empty;
+            ScreenerFilter = screenerFilter;
+        }
+
+        if (usesScreener && String.IsNullOrWhiteSpace(screenerFilter))
+        {
+            ModelState.AddModelError(String.Empty, "Choose a saved screen or paste a Finviz query for a screener universe.");
+            return Page();
+        }
         if (wishlistTickers.Length == 0 && String.IsNullOrWhiteSpace(screenerFilter))
         {
             ModelState.AddModelError(String.Empty, "Select a wishlist with active tickers or provide a Finviz screener.");
@@ -250,9 +309,9 @@ public sealed class PaperModel : PageModel
                 screenerFilter,
                 runName,
                 newsEnabled,
-                SelectedWishlist?.Id,
-                SelectedWishlist?.Name,
-                SelectedWishlist is null ? "finviz" : "wishlist");
+                usesWishlist ? SelectedWishlist?.Id : null,
+                usesWishlist ? SelectedWishlist?.Name : null,
+                source == "both" ? "wishlist+finviz" : source == "screener" ? "finviz" : "wishlist");
         }
         catch (InvalidOperationException exception)
         {
@@ -312,6 +371,7 @@ public sealed class PaperModel : PageModel
 
     private async Task LoadWishlistsAsync(Guid? wishlistId, CancellationToken cancellationToken)
     {
+        ScreenerPresets = await screenerPresets.ListAsync(null, cancellationToken);
         Wishlists = await wishlistRepository.ListAsync(cancellationToken);
         SelectedWishlist = wishlistId.HasValue
             ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == wishlistId.Value)
@@ -381,4 +441,12 @@ public sealed class PaperModel : PageModel
             ?? catalog.GetStrategies().FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase));
         return strategy is not null && StrategyCapabilityInspector.UsesNews(strategy.Definition);
     }
+
+    private static string NormalizeUniverseSource(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "screener" => "screener",
+            "both" => "both",
+            _ => "wishlist"
+        };
 }

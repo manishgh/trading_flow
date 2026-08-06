@@ -18,9 +18,15 @@ public static class LocalUserProvisioningCommand
         }
 
         var commandArgs = args.Skip(commandIndex).ToArray();
+        if (commandArgs.Length >= 2 && commandArgs[1].Equals("reset-password", StringComparison.OrdinalIgnoreCase))
+        {
+            return await HandleResetPasswordAsync(commandArgs, services);
+        }
+
         if (commandArgs.Length < 2 || !commandArgs[1].Equals("add", StringComparison.OrdinalIgnoreCase))
         {
             Console.Error.WriteLine("Usage: users add --username <name> [--display-name <name>] [--admin]");
+            Console.Error.WriteLine("       users reset-password --username <name>");
             Environment.ExitCode = 2;
             return true;
         }
@@ -90,6 +96,64 @@ public static class LocalUserProvisioningCommand
         }
 
         Console.WriteLine($"Created {(isAdministrator ? "administrator" : "operator")} user '{user.UserName}'.");
+        return true;
+    }
+
+    private static async Task<bool> HandleResetPasswordAsync(string[] commandArgs, IServiceProvider services)
+    {
+        var username = ReadOption(commandArgs, "--username");
+        if (String.IsNullOrWhiteSpace(username))
+        {
+            Console.Error.WriteLine("--username is required.");
+            Environment.ExitCode = 2;
+            return true;
+        }
+
+        var password = ReadOption(commandArgs, "--password");
+        if (String.IsNullOrWhiteSpace(password))
+        {
+            if (Console.IsInputRedirected)
+            {
+                Console.Error.WriteLine("Password reset requires an interactive terminal or --password.");
+                Environment.ExitCode = 2;
+                return true;
+            }
+
+            Console.Write("New password: ");
+            password = ReadSecret();
+            Console.Write("Confirm new password: ");
+            var confirmation = ReadSecret();
+            if (!password.Equals(confirmation, StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("Passwords do not match.");
+                Environment.ExitCode = 2;
+                return true;
+            }
+        }
+
+        using var scope = services.CreateScope();
+        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<TradingFlowUser>>();
+        var user = await userManager.FindByNameAsync(username.Trim());
+        if (user is null)
+        {
+            Console.Error.WriteLine($"User '{username}' not found.");
+            Environment.ExitCode = 1;
+            return true;
+        }
+
+        var token = await userManager.GeneratePasswordResetTokenAsync(user);
+        var result = await userManager.ResetPasswordAsync(user, token, password);
+        if (!result.Succeeded)
+        {
+            foreach (var error in result.Errors)
+            {
+                Console.Error.WriteLine(error.Description);
+            }
+            Environment.ExitCode = 1;
+            return true;
+        }
+
+        Console.WriteLine($"Password reset successfully for user '{user.UserName}'.");
         return true;
     }
 

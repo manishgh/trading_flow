@@ -1,21 +1,24 @@
 @page "/Wishlists"
+@using TradingFlow.Web.Pages.Shared
 @model TradingFlow.Web.Pages.WishlistsModel
 @{
-    ViewData["Title"] = "Wishlist Management";
+    ViewData["Title"] = "Wishlists";
+    ViewData["MainClass"] = "shell-flush wishlists-page";
     var selected = Model.SelectedWishlist;
-    var selectedName = selected?.Name ?? String.Empty;
 }
 
-<header class="page-header compact-page-header">
+<div class="page-head">
     <div>
-        <h1>Wishlist Management</h1>
-        <p>Create groups, maintain ticker context, control observation, and import a Finviz universe.</p>
+        <span class="eyebrow">Universe management</span>
+        <h1>Wishlists</h1>
+        <p class="standfirst">
+            Create groups, maintain ticker context, control observation, and import a Finviz universe.
+            This page cannot submit an order or start a strategy.
+        </p>
     </div>
-    <div class="actions">
-        <a class="button" asp-page="/TradeDesk" asp-route-id="@selected?.Id">Open Desk</a>
-        <a class="button secondary" asp-page="/Wishlists" asp-route-id="@selected?.Id">Refresh</a>
-    </div>
-</header>
+    @* The whole point of this page is to feed the desk, so that is the primary. *@
+    <a class="btn btn-primary btn-md" asp-page="/TradeDesk" asp-route-id="@selected?.Id">Open desk</a>
+</div>
 
 @if (!String.IsNullOrWhiteSpace(Model.StatusMessage))
 {
@@ -26,108 +29,228 @@
     <div class="status-banner error" role="alert">@Model.ErrorMessage</div>
 }
 
-<section class="panel">
-    <form id="wishlistOpenForm" method="get" class="wishlist-toolbar">
-        <div>
-            <label for="WishlistCombo">Wishlist</label>
-            <input id="WishlistCombo" list="WishlistOptions" value="@selectedName" autocomplete="off" />
-            <input id="WishlistId" type="hidden" name="id" value="@selected?.Id" />
-            <datalist id="WishlistOptions">
-                @foreach (var wishlist in Model.Wishlists)
-                {
-                    <option value="@wishlist.Name" data-id="@wishlist.Id"></option>
-                }
-            </datalist>
-        </div>
-        <button type="submit">Open</button>
-        <button id="CreateWishlistButton" class="secondary" type="button">Add New</button>
+@* Group tabs replace the previous combobox and datalist. A datalist gives no
+   sense of how many groups exist or which is observed; three or four tabs do. *@
+<div class="wishlist-groups">
+    <nav class="wishlist-group-tabs" aria-label="Wishlists">
+        @foreach (var wishlist in Model.Wishlists)
+        {
+            var active = selected?.Id == wishlist.Id;
+            <a asp-page="/Wishlists" asp-route-id="@wishlist.Id" aria-current="@(active ? "page" : null)">
+                <strong>@wishlist.Name</strong>
+                <span>@wishlist.Items.Count(item => item.Active) active · observer @(wishlist.IsObserved ? "running" : "paused")</span>
+            </a>
+        }
+    </nav>
+    <form method="post" asp-page-handler="CreateWishlist" class="wishlist-create">
+        <label class="visually-hidden" for="CreateWishlistName">New wishlist name</label>
+        <input class="input" id="CreateWishlistName" name="WishlistName" placeholder="New wishlist name" autocomplete="off" required />
+        <button class="btn btn-secondary btn-md" type="submit">Add new</button>
     </form>
-    <form id="createWishlistForm" method="post" asp-page-handler="CreateWishlist">
-        <input id="CreateWishlistName" type="hidden" name="WishlistName" />
-    </form>
-</section>
+</div>
 
 @if (selected is null)
 {
-    <section class="panel empty-state">
-        <strong>No wishlist selected.</strong>
-        <span>Type a new name above and choose Add New.</span>
-    </section>
+    <p class="empty-state">No wishlist selected. Name one above and choose Add new.</p>
 }
 else
 {
-    <section class="wishlist-management-layout">
-        <div class="wishlist-management-main">
-            <section class="panel">
-                <div class="panel-header compact">
-                    <div>
-                        <h2>@selected.Name</h2>
-                        <p>@Model.ActiveItems.Count active symbol@(Model.ActiveItems.Count == 1 ? "" : "s").</p>
-                    </div>
+    <div class="wishlists-body">
+        <div class="wishlists-main">
+            <section class="wishlist-block" aria-labelledby="SettingsHeading">
+                <div class="wishlist-block-head">
+                    <h2 id="SettingsHeading" class="section-heading">Settings</h2>
                     <form method="post" asp-page-handler="SetObserved">
                         <input type="hidden" name="WishlistId" value="@selected.Id" />
                         <input type="hidden" name="IsObserved" value="@(selected.IsObserved ? "false" : "true")" />
-                        <button class="secondary" type="submit">@(selected.IsObserved ? "Pause observer" : "Start observer")</button>
+                        <button class="btn btn-secondary btn-md" type="submit">@(selected.IsObserved ? "Pause observer" : "Start observer")</button>
                     </form>
                 </div>
 
-                <form method="post" asp-page-handler="SaveWishlist" class="wishlist-settings-grid">
+                <form method="post" asp-page-handler="SaveWishlist" class="wishlist-settings">
                     <input type="hidden" name="WishlistId" value="@selected.Id" />
-                    <div>
+                    <div class="field">
                         <label for="WishlistName">Name</label>
-                        <input id="WishlistName" name="WishlistName" value="@selected.Name" required />
+                        <input class="input" id="WishlistName" name="WishlistName" value="@selected.Name" required />
                     </div>
-                    <div>
+                    <div class="field">
                         <label for="WishlistDescription">Description</label>
-                        <input id="WishlistDescription" name="Description" value="@selected.Description" />
+                        <input class="input" id="WishlistDescription" name="Description" value="@selected.Description" />
                     </div>
-                    <label class="toggle-field"><input type="checkbox" name="IsDefault" value="true" checked="@selected.IsDefault" /> Default wishlist</label>
-                    <label class="toggle-field"><input type="checkbox" name="IncludeExtendedHours" value="true" checked="@selected.IncludeExtendedHours" /> Include extended hours</label>
+                    @* Square controls for independent booleans, never round radio
+                       dots: these are two unrelated switches, not a choice of one. *@
+                    <div class="check-strip">
+                        <label class="check-chip">
+                            <input type="checkbox" name="IsDefault" value="true" checked="@selected.IsDefault" />
+                            <partial name="_Icon" model='new IconModel("check", 13)' />
+                            <span>Default wishlist</span>
+                        </label>
+                        <label class="check-chip">
+                            <input type="checkbox" name="IncludeExtendedHours" value="true" checked="@selected.IncludeExtendedHours" />
+                            <partial name="_Icon" model='new IconModel("check", 13)' />
+                            <span>Include extended hours</span>
+                        </label>
+                    </div>
                     <input type="hidden" name="IsObserved" value="@selected.IsObserved.ToString().ToLowerInvariant()" />
-                    <button type="submit">Save settings</button>
+                    <button class="btn btn-secondary btn-md" type="submit">Save settings</button>
                 </form>
             </section>
 
-            <section class="panel">
-                <h2>Add Symbols</h2>
-                <form method="post" asp-page-handler="AddTicker" class="add-ticker-strip">
+            <section class="wishlist-block" aria-labelledby="AddHeading">
+                <h2 id="AddHeading" class="section-heading">Add symbols</h2>
+
+                <form method="post" asp-page-handler="AddTicker" class="wishlist-add-single">
                     <input type="hidden" name="TargetWishlistId" value="@selected.Id" />
-                    <div><label for="TickerTop">Ticker</label><input id="TickerTop" name="Ticker" placeholder="RGTI" autocomplete="off" required /></div>
-                    <div><label for="DisplayNameTop">Name</label><input id="DisplayNameTop" name="DisplayName" placeholder="Optional" /></div>
-                    <div><label for="NotesTop">Notes</label><input id="NotesTop" name="Notes" placeholder="Catalyst, setup, risk" /></div>
-                    <button type="submit">Add Ticker</button>
+                    <div class="field">
+                        <label for="TickerTop">Ticker</label>
+                        <input class="input" id="TickerTop" name="Ticker" placeholder="RGTI" autocomplete="off" required />
+                    </div>
+                    <div class="field">
+                        <label for="DisplayNameTop">Name</label>
+                        <input class="input" id="DisplayNameTop" name="DisplayName" placeholder="Optional" />
+                    </div>
+                    <div class="field">
+                        <label for="NotesTop">Notes</label>
+                        <input class="input" id="NotesTop" name="Notes" placeholder="Catalyst, setup, risk" />
+                    </div>
+                    <button class="btn btn-secondary btn-md" type="submit">Add ticker</button>
                 </form>
-                <form method="post" asp-page-handler="AddTickers" class="bulk-add-strip">
+
+                <form method="post" asp-page-handler="AddTickers" class="wishlist-add-bulk">
                     <input type="hidden" name="TargetWishlistId" value="@selected.Id" />
-                    <div>
+                    <div class="field">
                         <label for="BulkTickers">Paste many symbols</label>
-                        <textarea id="BulkTickers" name="Tickers" rows="2"
-                                  placeholder="AAPL, MSFT, NVDA"></textarea>
-                        <small>Separate with commas, spaces, or new lines. Adding is idempotent.</small>
+                        <textarea class="input" id="BulkTickers" name="Tickers" rows="2" placeholder="AAPL, MSFT, NVDA"></textarea>
+                        <span class="note">Separate with commas, spaces or new lines. Adding is idempotent.</span>
                     </div>
-                    <button type="submit">Add All</button>
+                    <button class="btn btn-secondary btn-md" type="submit">Add all</button>
                 </form>
-                <form method="post" asp-page-handler="ImportFinviz" class="finviz-import-strip">
+
+                @* The scope select is the same control as the desk's screener bar -
+                   same options, same normalisation, same session-scoping rule. *@
+                <form method="post" asp-page-handler="ImportFinviz" class="wishlist-import">
                     <input type="hidden" name="TargetWishlistId" value="@selected.Id" />
-                    <div>
-                        <label for="FinvizFilter">Finviz screener URL or query</label>
-                        <input id="FinvizFilter" name="FinvizFilter" placeholder="Paste Finviz Elite URL or query" />
-                        <small>Adds returned symbols without removing existing entries.</small>
+                    <div class="field">
+                        <label for="ScreenerScope">Screener scope</label>
+                        <select class="input" id="ScreenerScope" name="screenerScope">
+                            <option value="swing" selected="@(Model.ScreenerScopeName == "swing")">Swing</option>
+                            <option value="intraday" selected="@(Model.ScreenerScopeName == "intraday")">Intraday (today)</option>
+                        </select>
                     </div>
-                    <button class="secondary" type="submit">Import</button>
+                    <div class="field">
+                        <label for="FinvizFilter">Saved screen, Finviz URL, or query</label>
+                        <input class="input input-mono" id="FinvizFilter" name="FinvizFilter"
+                               list="SavedScreens"
+                               placeholder="A saved screen name, or https://elite.finviz.com/screener.ashx?f=..." />
+                        @* Saved screens are offered by name; the box still takes a
+                           raw URL or query for a one-off. *@
+                        <datalist id="SavedScreens">
+                            @foreach (var preset in Model.Presets)
+                            {
+                                <option value="@preset.Name">@preset.Category</option>
+                            }
+                        </datalist>
+                        <span class="note">
+                            Adds returned symbols without removing existing entries. An intraday screen is
+                            scoped to the current session only.
+                        </span>
+                    </div>
+                    <button class="btn btn-secondary btn-md" type="submit">
+                        <partial name="_Icon" model='new IconModel("download", 14)' />Import
+                    </button>
                 </form>
             </section>
 
-            <section class="panel">
-                <div class="panel-header compact">
-                    <div>
-                        <h2>Symbols</h2>
-                        <p>Select rows to act on many at once, or edit context inline.</p>
+            <section class="wishlist-block" aria-labelledby="ScreensHeading">
+                <h2 id="ScreensHeading" class="section-heading">Saved screens</h2>
+                @* Finviz Elite has one screener call: hand it filters, get a CSV.
+                   There is no endpoint that lists the screens saved in the Finviz
+                   UI, so the named list lives here. *@
+                <p class="note">
+                    Finviz does not expose the screens you saved in its own interface, so name them here
+                    once and pick them by name afterwards. A screen is scoped to a horizon because an
+                    intraday screen and a swing screen answer different questions.
+                </p>
+
+                <form method="post" asp-page-handler="SavePreset" class="wishlist-preset-form">
+                    <input type="hidden" name="id" value="@selected.Id" />
+                    <div class="field">
+                        <label for="PresetName">Name</label>
+                        <input class="input" id="PresetName" name="presetName" placeholder="Gap and go" required />
                     </div>
-                </div>
+                    <div class="field">
+                        <label for="PresetScope">Horizon</label>
+                        <select class="input" id="PresetScope" name="presetScope">
+                            <option value="intraday">Intraday</option>
+                            <option value="swing">Swing</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="PresetQuery">Finviz URL or filter query</label>
+                        <input class="input input-mono" id="PresetQuery" name="presetQuery"
+                               placeholder="sh_price_o5,sh_avgvol_o500,ta_change_u5" required />
+                    </div>
+                    <button class="btn btn-secondary btn-md" type="submit">Save screen</button>
+                </form>
+
+                @if (Model.Presets.Count == 0)
+                {
+                    <p class="empty-state">No screen is saved yet.</p>
+                }
+                else
+                {
+                    <div class="table-scroll">
+                        <table class="grid-table">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Name</th>
+                                    <th scope="col">Horizon</th>
+                                    <th scope="col">Filter</th>
+                                    <th scope="col">Verified</th>
+                                    <th scope="col"><span class="visually-hidden">Delete</span></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var preset in Model.Presets)
+                                {
+                                    <tr>
+                                        <td><strong>@preset.Name</strong></td>
+                                        <td><span class="tag tag-neutral">@preset.Category</span></td>
+                                        <td class="mono">@preset.FilterQuery</td>
+                                        @* Verification is a model score against what the screen
+                                           returned. Unverified is not a failure - it means nobody
+                                           has scored it yet. *@
+                                        <td class="@(preset.IsVerified ? null : "unknown")">
+                                            @if (preset.IsVerified)
+                                            {
+                                                @($"yes · avg {preset.AverageMlScore:P1}")
+                                            }
+                                            else
+                                            {
+                                                @:not scored yet
+                                            }
+                                        </td>
+                                        <td>
+                                            <form method="post" asp-page-handler="DeletePreset">
+                                                <input type="hidden" name="presetId" value="@preset.Id" />
+                                                <input type="hidden" name="id" value="@selected.Id" />
+                                                <button class="btn btn-danger btn-sm" type="submit"
+                                                        data-confirm="Delete the saved screen @preset.Name?">Delete</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </section>
+
+            <section class="wishlist-block" aria-labelledby="SymbolsHeading">
+                <h2 id="SymbolsHeading" class="section-heading">Symbols</h2>
                 @if (Model.ActiveItems.Count == 0)
                 {
-                    <div class="empty-state"><strong>No active symbols.</strong><span>Add one above or import a Finviz screen.</span></div>
+                    <p class="empty-state">No active symbols. Add one above or import a Finviz screen.</p>
                 }
                 else
                 {
@@ -136,14 +259,14 @@ else
                        57 controls on a 28-symbol group. *@
                     <form method="post" asp-page-handler="RemoveTickers" data-bulk-form>
                         <input type="hidden" name="WishlistId" value="@selected.Id" />
-                        <div class="bulk-action-bar" data-bulk-bar hidden>
+                        <div class="wishlist-bulk-bar" data-bulk-bar hidden>
                             <strong><span data-bulk-count>0</span> selected</strong>
-                            <button class="danger compact-command" type="submit"
+                            <button class="btn btn-danger btn-sm" type="submit"
                                     data-confirm="Remove the selected symbols from this wishlist?">Remove selected</button>
-                            <button class="secondary compact-command" type="button" data-bulk-clear>Clear selection</button>
+                            <button class="btn btn-secondary btn-sm" type="button" data-bulk-clear>Clear</button>
                         </div>
                         <div class="table-scroll" role="region" aria-label="Wishlist symbol management" tabindex="0">
-                            <table class="management-table">
+                            <table class="grid-table management-table">
                                 <thead>
                                     <tr>
                                         <th scope="col" class="select-column">
@@ -152,29 +275,31 @@ else
                                         <th scope="col">Ticker</th>
                                         <th scope="col">Name</th>
                                         <th scope="col">Notes</th>
-                                        <th scope="col">Actions</th>
+                                        <th scope="col">Added</th>
+                                        <th scope="col"><span class="visually-hidden">Save</span></th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                @foreach (var item in Model.ActiveItems)
-                                {
-                                    var formId = $"edit_{item.Id:N}";
-                                    <tr>
-                                        <td class="select-column">
-                                            <input type="checkbox" name="Tickers" value="@item.Ticker"
-                                                   data-bulk-item aria-label="Select @item.Ticker" />
-                                        </td>
-                                        <td>
-                                            <strong>@item.Ticker</strong>
-                                            <input form="@formId" type="hidden" name="Ticker" value="@item.Ticker" />
-                                        </td>
-                                        <td><input form="@formId" name="DisplayName" value="@item.DisplayName" aria-label="@item.Ticker display name" /></td>
-                                        <td><input form="@formId" name="Notes" value="@item.Notes" aria-label="@item.Ticker notes" /></td>
-                                        <td class="management-actions">
-                                            <button class="secondary compact-command" form="@formId" type="submit">Save</button>
-                                        </td>
-                                    </tr>
-                                }
+                                    @foreach (var item in Model.ActiveItems)
+                                    {
+                                        var formId = $"edit_{item.Id:N}";
+                                        <tr>
+                                            <td class="select-column">
+                                                <input type="checkbox" name="Tickers" value="@item.Ticker"
+                                                       data-bulk-item aria-label="Select @item.Ticker" />
+                                            </td>
+                                            <td>
+                                                <strong>@item.Ticker</strong>
+                                                <input form="@formId" type="hidden" name="Ticker" value="@item.Ticker" />
+                                            </td>
+                                            <td><input class="input" form="@formId" name="DisplayName" value="@item.DisplayName" aria-label="@item.Ticker display name" /></td>
+                                            <td><input class="input" form="@formId" name="Notes" value="@item.Notes" aria-label="@item.Ticker notes" /></td>
+                                            <td class="cell-sub">@item.AddedAtUtc.UtcDateTime.ToString("yyyy-MM-dd")</td>
+                                            <td class="management-actions">
+                                                <button class="btn btn-secondary btn-sm" form="@formId" type="submit">Save</button>
+                                            </td>
+                                        </tr>
+                                    }
                                 </tbody>
                             </table>
                         </div>
@@ -191,20 +316,48 @@ else
             </section>
         </div>
 
-        <aside class="panel wishlist-safety-panel">
-            <h2>Management only</h2>
-            <p>This page cannot submit broker orders or start a strategy. Open Trade Desk to review live evidence first.</p>
-            <dl>
-                <dt>Observer</dt><dd>@(selected.IsObserved ? "Running" : "Paused")</dd>
-                <dt>Extended hours data</dt><dd>@(selected.IncludeExtendedHours ? "Included" : "Regular session only")</dd>
-                <dt>Default</dt><dd>@(selected.IsDefault ? "Yes" : "No")</dd>
+        <aside class="wishlists-rail">
+            <h2 class="section-heading">Management only</h2>
+            <p class="note">
+                This page cannot submit broker orders or start a strategy. Open the desk to review live
+                evidence first.
+            </p>
+            <dl class="fact-list">
+                <dt>Observer</dt>
+                <dd>@(selected.IsObserved ? "Running" : "Paused")</dd>
+                <dt>Extended hours</dt>
+                <dd>@(selected.IncludeExtendedHours ? "Included" : "Regular session only")</dd>
+                <dt>Default</dt>
+                <dd>@(selected.IsDefault ? "Yes" : "No")</dd>
+                <dt>Active symbols</dt>
+                <dd>@Model.ActiveItems.Count</dd>
+                <dt>Last import</dt>
+                <dd>
+                    @if (Model.LastImport is { } import)
+                    {
+                        @($"{import.Name} · {import.Symbols.Count} hit(s)")
+                    }
+                    else
+                    {
+                        <span class="unknown">none this session</span>
+                    }
+                </dd>
             </dl>
+
+            @* This is the sentence that stops a current list being projected
+               backward into a backtest and read as evidence. *@
+            <p class="callout">
+                A current wishlist may drive today's operation but may not be projected backward.
+                Backtests built on it are marked research-only.
+            </p>
+
             <form method="post" asp-page-handler="DeleteWishlist">
                 <input type="hidden" name="WishlistId" value="@selected.Id" />
-                <button class="danger" type="submit" data-confirm="Delete wishlist @selected.Name?">Delete wishlist</button>
+                <button class="btn btn-danger btn-md" type="submit"
+                        data-confirm="Delete wishlist @selected.Name? Open positions, orders and persisted signals are not deleted.">Delete wishlist</button>
             </form>
         </aside>
-    </section>
+    </div>
 }
 
 @section Scripts {

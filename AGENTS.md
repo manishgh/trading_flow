@@ -126,7 +126,8 @@ data/candles/_archive-pending/{timestamp}-{manifestId}.json
 ## Active Providers
 
 - Alpaca is primary for market data, historical data, news, and paper broker.
-- Finviz is retained for screener/ticker universe enrichment.
+- Finviz is a first-class candidate-universe source. The screener is enabled in both paper
+  profiles and feeds the candidate universe directly; it is not enrichment-only.
 - CSV/local data remains useful for deterministic backtests.
 - Yahoo, eToro, and TradingView webhook/signal paths are not active priorities.
 
@@ -149,9 +150,61 @@ Backtest profiles currently worth keeping:
 - `configs/backtest/intraday-backtest-profile.yaml`
 - `configs/backtest/swing-backtest-profile.yaml`
 
-Backtest and paper universes must come from database wishlists. Generated
-run files are audit artifacts only; do not reintroduce hand-maintained
-backtest ticker-list configs.
+Both paper profiles enable the screener source:
+
+```yaml
+universe:
+  sources:
+    - type: wishlist      # operator-curated, persisted in tradingflow.db
+      enabled: true
+    - type: screener      # Finviz saved view or query string
+      enabled: true
+      scope: intraday     # intraday | swing, must match the profile horizon
+  merge: rank            # both sources feed one ML-ranked candidate set
+```
+
+Backtest and paper universes come from database wishlists or the Finviz
+screener — never from hand-maintained ticker-list configs. Generated run
+files remain audit artifacts only.
+
+## Candidate Universe and ML Ranking
+
+The desk selects a universe source, not a single symbol. Everything downstream
+ranks that whole set.
+
+1. Universe resolution. `wishlist` returns the operator's curated symbols for the
+   selected list; `screener` returns every symbol the Finviz scope/query returns.
+   Screener symbols are tradable immediately and do not need wishlist promotion
+   first — promotion is an operator convenience, not a gate.
+2. Ranking. The rank engine scores every candidate in the resolved universe in one
+   call and returns an ordered list with per-symbol factor contributions. Per-symbol
+   prediction (`MarketPredictorHttpClient`) is one input, not the ranking.
+3. Inputs and weights, by horizon:
+
+   | Input | Intraday | Swing | Source |
+   | --- | --- | --- | --- |
+   | Model edge (direction-adjusted probability) | 0.38 | 0.34 | predictor |
+   | Market structure (RVOL intraday / trend quality swing) | 0.22 | 0.28 | indicator engine |
+   | Catalyst weight (ER 1.0, NEWS 0.85, SEC 0.5, SCRN 0.35, none 0.08) | 0.18 | 0.16 | news + earnings + screener |
+   | Technical state (eligible 1.0, watching 0.42, blocked 0.1) | 0.14 | 0.14 | signal generator / evaluator |
+   | Liquidity (1 - spread bps / 8) | 0.08 | 0.08 | quote stream |
+
+   A model veto subtracts a flat 0.12 rather than removing the candidate, so the
+   disagreement stays visible and auditable.
+4. Defaults live in config, not code: weights, catalyst table, veto penalty and
+   horizon presets belong in the paper/backtest profile under `universe.rank`, with
+   engine code reading them through the same path for backtest, paper and live.
+5. Persist each ranking run (universe source, horizon, weights version, per-symbol
+   score and factor values) so an audit page can explain why symbol N ranked where
+   it did.
+
+Desk view semantics built on this ranking:
+
+- All — the full ranked universe.
+- Signals — technicals triggered on the completed bar and no model veto: tradable now.
+- In trade — open positions.
+- Disagree — technicals say go, the model says stand aside.
+- Screener — raw screener membership for the selected scope.
 
 ## Data Policy
 
@@ -229,6 +282,7 @@ Near-term work is paper trading and backtesting quality:
 
 - make intraday strategies simple, explainable, and config-driven
 - improve premarket/opening-range and long/short day-bias logic
+- treat the Finviz screener as an enabled, first-class universe source alongside wishlists
 - use Finviz RVOL for screener-based candidates where available
 - keep StockIndicators for standard technical indicators
 - use news catalysts mainly for swing and catalyst-driven intraday selection

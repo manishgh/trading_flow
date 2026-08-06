@@ -6,7 +6,6 @@ const selectedTicker = normalizeTicker(root?.dataset.selectedTicker);
 const connectionNode = document.getElementById("DeskQuoteConnection");
 const freshnessNode = document.getElementById("DeskQuoteFreshness");
 const announcementNode = document.getElementById("DeskConnectionAnnouncement");
-const toastNode = document.getElementById("SignalToast");
 const rowMap = buildRowMap();
 let latestQuoteTimestamp = null;
 let lastConnectionAnnouncement = "";
@@ -266,13 +265,10 @@ function notifySignal(signal) {
         return;
     }
     lastSignalId = signal.id;
-    const message = `${signal.ticker}: ${signal.signalType}. ${signal.reason}`;
-    setText(toastNode, message);
-    toastNode?.classList.add("show");
-    window.setTimeout(() => toastNode?.classList.remove("show"), 6000);
-    if (Notification.permission === "granted" && document.hidden) {
-        new Notification(`${signal.ticker} actionable signal`, { body: `${signal.signalType}: ${signal.reason}` });
-    }
+    // The shared chrome owns the toast and the notification permission, so the
+    // alerts toggle in the header governs both from one place.
+    window.TradingFlow?.toast(`${signal.ticker} · ${signal.signalType}`, signal.reason);
+    window.TradingFlow?.notify(`${signal.ticker} actionable signal`, `${signal.signalType}: ${signal.reason}`);
 }
 
 function refreshFreshness() {
@@ -286,18 +282,6 @@ function refreshFreshness() {
         setConnectionState("stale", `Quote stream is connected, but the newest quote is ${ageText}.`);
     }
 }
-
-document.getElementById("EnableDeskAlertsButton")?.addEventListener("click", async () => {
-    if (!("Notification" in window)) {
-        setText(toastNode, "This browser does not support notifications.");
-        toastNode?.classList.add("show");
-        return;
-    }
-    const permission = await Notification.requestPermission();
-    setText(toastNode, permission === "granted" ? "Trade Desk alerts enabled." : "Browser alerts remain disabled.");
-    toastNode?.classList.add("show");
-    window.setTimeout(() => toastNode?.classList.remove("show"), 4000);
-});
 
 if (wishlistId) {
     createNamedEventStream(`/api/wishlists/${wishlistId}/quotes/stream`, "quotes", {

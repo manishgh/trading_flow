@@ -1,0 +1,189 @@
+@*
+    The inline order ticket.
+
+    Two stages. Stage one posts the draft and the server re-checks quote,
+    spread, session, account, exposure and duplicates; stage two confirms
+    against the token that preview issued. Every value in the checklist comes
+    from the server's own response, so the screen can never claim a check
+    passed that the server will fail.
+*@
+@using TradingFlow.Web.Pages.Shared
+@model TradingFlow.Web.Pages.Shared.DeskTicketModel
+@{
+    var row = Model.Row.Row;
+    var preview = Model.Preview;
+    var ticker = row.Ticker;
+    var quantityDefault = preview?.Quantity ?? 1m;
+    var limitDefault = preview?.LimitPrice ?? Model.DefaultLimit;
+    var stopDefault = preview?.StopLossPrice ?? Model.DefaultStop;
+    var targetDefault = preview?.TakeProfitPrice ?? Model.DefaultTarget;
+    var side = preview?.Side ?? "buy";
+    var isExit = String.Equals(side, "sell", StringComparison.OrdinalIgnoreCase);
+    var notional = preview?.Notional ?? quantityDefault * limitDefault;
+    var riskPerShare = limitDefault - stopDefault;
+    var risk = riskPerShare > 0 ? riskPerShare * quantityDefault : (decimal?)null;
+    var rMultiple = riskPerShare > 0 ? (targetDefault - limitDefault) / riskPerShare : (decimal?)null;
+}
+
+<section class="desk-rail-block desk-ticket" aria-labelledby="TicketHeading">
+    <div class="desk-rail-head">
+        <h2 id="TicketHeading" class="section-heading">Order ticket</h2>
+        <span class="note">Paper · server revalidates</span>
+    </div>
+
+    @if (Model.Confirmation is { } confirmation)
+    {
+        <p class="callout">
+            Accepted: @confirmation.Side.ToUpperInvariant() @confirmation.Quantity.ToString("0.####") @confirmation.Ticker
+            at @confirmation.LimitPrice.ToString("C2"). Broker order @confirmation.OrderId.
+        </p>
+    }
+
+    <form method="post" asp-page-handler="PreviewTicket" class="desk-ticket-form" data-desk-ticket>
+        <input type="hidden" name="ticker" value="@ticker" />
+        <input type="hidden" name="ticket.Ticker" value="@ticker" />
+        <input type="hidden" name="env" value="@Model.Env" />
+        <input type="hidden" name="ticket.Horizon" value="@Model.Horizon" />
+
+        @* SELL renders only where a tracked position exists, so the control
+           cannot invite an accidental short. *@
+        <div class="desk-ticket-sides" role="group" aria-label="Order side">
+            <label class="desk-ticket-side @(isExit ? null : "is-buy")">
+                <input type="radio" name="ticket.Side" value="buy" checked="@(!isExit)" />
+                <span>Buy @ticker</span>
+            </label>
+            @if (Model.HasPosition)
+            {
+                <label class="desk-ticket-side @(isExit ? "is-sell" : null)">
+                    <input type="radio" name="ticket.Side" value="sell" checked="@isExit" />
+                    <span>Sell @ticker</span>
+                </label>
+            }
+        </div>
+
+        <div class="desk-ticket-fields">
+            <div class="field">
+                <label for="TicketQuantity">Quantity</label>
+                <input class="input" id="TicketQuantity" name="ticket.Quantity" type="number"
+                       inputmode="numeric" step="1" min="1" value="@quantityDefault.ToString("0.####")" />
+            </div>
+            <div class="field">
+                <label for="TicketOrderType">Order type</label>
+                <select class="input" id="TicketOrderType" name="ticket.OrderType">
+                    <option value="limit" selected="@(preview?.OrderType != "market" && preview?.OrderType != "stop_limit")">Limit</option>
+                    @if (Model.HasPosition)
+                    {
+                        <option value="market" selected="@(preview?.OrderType == "market")">Market</option>
+                        <option value="stop_limit" selected="@(preview?.OrderType == "stop_limit")">Stop limit</option>
+                    }
+                </select>
+            </div>
+            <div class="field">
+                <label for="TicketLimit">Limit price</label>
+                <input class="input" id="TicketLimit" name="ticket.LimitPrice" type="number"
+                       inputmode="decimal" step="0.01" min="0" value="@limitDefault.ToString("0.00")" />
+            </div>
+            <div class="field">
+                <label for="TicketTif">Time in force</label>
+                <select class="input" id="TicketTif" name="ticket.TimeInForce">
+                    <option value="day" selected="@(preview?.TimeInForce != "gtc" && preview?.TimeInForce != "ioc")">Day</option>
+                    <option value="gtc" selected="@(preview?.TimeInForce == "gtc")">Good till cancelled</option>
+                    <option value="ioc" selected="@(preview?.TimeInForce == "ioc")">Immediate or cancel</option>
+                </select>
+            </div>
+            @if (!isExit)
+            {
+                <div class="field">
+                    <label for="TicketStop">Stop price</label>
+                    <input class="input" id="TicketStop" name="ticket.StopLossPrice" type="number"
+                           inputmode="decimal" step="0.01" min="0" value="@stopDefault.ToString("0.00")" />
+                </div>
+                <div class="field">
+                    <label for="TicketTarget">Take profit</label>
+                    <input class="input" id="TicketTarget" name="ticket.TakeProfitPrice" type="number"
+                           inputmode="decimal" step="0.01" min="0" value="@targetDefault.ToString("0.00")" />
+                </div>
+            }
+        </div>
+
+        @* Size presets are client-side conveniences over the quantity field. They
+           change what is proposed, never what is submitted: the server sizes
+           nothing and re-checks everything. *@
+        <div class="desk-ticket-presets" role="group" aria-label="Size presets">
+            <button class="btn btn-secondary btn-sm" type="button" data-size-preset="0.25">25%</button>
+            <button class="btn btn-secondary btn-sm" type="button" data-size-preset="0.5">50%</button>
+            <button class="btn btn-secondary btn-sm" type="button" data-size-preset="1">100%</button>
+            <button class="btn btn-secondary btn-sm" type="button" data-size-preset="risk">1R risk</button>
+        </div>
+
+        <div class="cell-strip desk-ticket-derived">
+            <div>
+                <span class="cell-label">Notional</span>
+                <span class="cell-value" data-ticket-notional>@notional.ToString("C2")</span>
+            </div>
+            <div>
+                <span class="cell-label">Risk</span>
+                <span class="cell-value" data-ticket-risk>@(risk is { } riskValue ? riskValue.ToString("C2") : "—")</span>
+            </div>
+            <div>
+                <span class="cell-label">R multiple</span>
+                <span class="cell-value" data-ticket-r>@(rMultiple is { } multiple ? multiple.ToString("0.00") : "—")</span>
+            </div>
+        </div>
+
+        @if (preview is null)
+        {
+            @* No checklist before a preview. The rows state what the server
+               checked, so rendering them unchecked would be a claim about work
+               that has not happened. *@
+            <p class="note">
+                The server re-checks quote, spread, session, account, exposure and duplicate controls
+                when you review. Nothing is submitted by reviewing.
+            </p>
+            <button class="btn btn-primary btn-block btn-lg" type="submit">
+                Review protected @(isExit ? "sell" : "buy") — @ticker × <span data-ticket-quantity-label>@quantityDefault.ToString("0.####")</span>
+            </button>
+        }
+        else
+        {
+            <ul class="check-list">
+                @foreach (var (label, passed, value) in Model.Checks)
+                {
+                    <li class="@(passed ? "is-pass" : "is-fail")">
+                        <span class="check-glyph">@(passed ? "✓" : "✕")</span>
+                        <span class="check-label">@label</span>
+                        <span>@value</span>
+                    </li>
+                }
+            </ul>
+            @if (Model.IsBlocked)
+            {
+                <p class="callout">
+                    Blocked by @String.Join(", ", Model.FailingChecks.Select(check => check.ToLowerInvariant())).
+                    @foreach (var rejection in preview.Rejections)
+                    {
+                        <span class="desk-ticket-rejection">@rejection</span>
+                    }
+                </p>
+            }
+        }
+    </form>
+
+    @if (preview is not null)
+    {
+        <form method="post" asp-page-handler="ConfirmTicket" class="desk-ticket-confirm">
+            <input type="hidden" name="ticketToken" value="@preview.TicketToken" />
+            <input type="hidden" name="id" value="@Model.Row.Row.Item.WishlistId" />
+            <input type="hidden" name="ticker" value="@ticker" />
+            <input type="hidden" name="env" value="@Model.Env" />
+            <button class="btn btn-primary btn-block btn-lg" type="submit" disabled="@Model.IsBlocked">
+                @(Model.IsBlocked
+                    ? "Blocked — cannot submit"
+                    : $"Confirm paper {(isExit ? "sell" : "buy")} · {preview.Notional:C2}")
+            </button>
+            <p class="note" data-ticket-expiry data-expires-at="@preview.ExpiresAtUtc.ToString("O")">
+                Ticket token expires at @preview.ExpiresAtUtc.UtcDateTime.ToString("HH:mm:ss") UTC.
+            </p>
+        </form>
+    }
+</section>

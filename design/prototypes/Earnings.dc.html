@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/modernist-4f4a56b3-a32f-4519-b155-938ba199102d/styles.css">
+<script src="_ds/modernist-4f4a56b3-a32f-4519-b155-938ba199102d/_ds_bundle.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=swap">
+<style>
+  html, body { margin: 0; padding: 0; background: var(--color-bg); }
+  a { color: var(--color-accent-700); text-decoration: none; }
+  a:hover { color: var(--color-accent); text-decoration: underline; }
+  .tf-scroll { overflow: auto; }
+  .tf-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+  .tf-scroll::-webkit-scrollbar-thumb { background: var(--color-neutral-400); }
+  .tf-chip { all: unset; cursor: pointer; white-space: nowrap; }
+  .tf-chip:hover { background: var(--color-neutral-200) !important; }
+  .tf-alert { all: unset; cursor: pointer; display: block; }
+  .tf-alert:hover { background: var(--color-neutral-200); }
+  .tf-event summary { cursor: pointer; list-style: none; }
+  .tf-event summary::-webkit-details-marker { display: none; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body);font-size:13px;-webkit-font-smoothing:antialiased">
+
+  <header style="display:flex;align-items:center;gap:24px;padding:0 20px;height:52px;border-bottom:2px solid var(--color-divider);background:var(--color-bg);position:sticky;top:0;z-index:20">
+    <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;letter-spacing:-0.01em;white-space:nowrap">TRADINGFLOW</span>
+    <nav style="display:flex;gap:2px;align-items:center">
+      <a href="Trading Desk.dc.html" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Desk</a>
+      <a href="Trading Desk.dc.html#positions" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Positions</a>
+      <a href="Trading Desk.dc.html#orders" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Orders</a>
+      <a href="Trading Desk.dc.html#news" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">News</a>
+      <span style="padding:6px 10px;font-size:13px;font-weight:700;color:var(--color-accent);border-bottom:2px solid var(--color-accent)">Earnings</span>
+      <a href="Backtest Lab.dc.html" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Research</a>
+      <a href="#ops" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Operations</a>
+    </nav>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:16px">
+      <div style="display:flex;gap:14px;text-align:right">
+        <span style="display:grid"><small style="font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">NY</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ clockNy }}</strong></span>
+        <span style="display:grid"><small style="font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">AMS</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ clockAms }}</strong></span>
+        <span style="display:grid"><small style="font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">UTC</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ clockUtc }}</strong></span>
+      </div>
+      <button class="btn btn-secondary" style="height:28px;padding:0 10px;font-size:11.5px;white-space:nowrap" onClick="{{ refresh }}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>Refresh</button>
+    </div>
+  </header>
+
+  <section aria-label="Monitor state" style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:2px solid var(--color-divider);background:var(--color-neutral-100)">
+    <div style="padding:8px 16px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Monitor</small>
+      <strong style="font-size:13px">Running · every 60 s</strong>
+    </div>
+    <div style="padding:8px 16px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Last analysis</small>
+      <strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ lastAnalysis }}</strong>
+    </div>
+    <div style="padding:8px 16px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Evidence window</small>
+      <strong style="font-size:13px;font-variant-numeric:tabular-nums">04 Aug 15:00 → 19:52 UTC</strong>
+    </div>
+    <div style="padding:8px 16px;border-right:1px solid var(--color-neutral-300)">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Next reporting day</small>
+      <strong style="font-size:13px">Wed 05 Aug 2026</strong>
+    </div>
+    <div style="padding:8px 16px">
+      <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Authority</small>
+      <strong style="font-size:13px;color:var(--color-accent-700)">Advisory only · cannot route</strong>
+    </div>
+  </section>
+
+  <section aria-label="Attention" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:2px solid var(--color-divider)">
+    <button class="tf-alert" style="padding:12px 16px;border-right:1px solid var(--color-neutral-300);text-align:left;background:{{ a0.bg }};box-shadow:{{ a0.rule }}" onClick="{{ a0.apply }}">
+      <span style="display:flex;align-items:center;gap:10px;color:{{ a0.color }}">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 7h6v6"></path><path d="m22 7-8.5 8.5-5-5L2 17"></path></svg>
+        <strong style="font-family:var(--font-heading);font-weight:800;font-size:30px;line-height:1;font-variant-numeric:tabular-nums">{{ a0.count }}</strong>
+        <span style="font-size:12px;letter-spacing:0.07em;text-transform:uppercase;font-weight:700">Beat + breakout confirmed</span>
+      </span>
+      <span style="display:block;margin-top:6px;font-size:12px;color:var(--color-neutral-800);line-height:1.4">Result beat and a completed bar closed above the pre-release reference high on elevated slot volume.</span>
+      <span style="display:block;margin-top:5px;font-size:11.5px;font-weight:700;letter-spacing:0.04em">{{ a0.tickers }}</span>
+    </button>
+    <button class="tf-alert" style="padding:12px 16px;border-right:1px solid var(--color-neutral-300);text-align:left;background:{{ a1.bg }};box-shadow:{{ a1.rule }}" onClick="{{ a1.apply }}">
+      <span style="display:flex;align-items:center;gap:10px;color:{{ a1.color }}">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <strong style="font-family:var(--font-heading);font-weight:800;font-size:30px;line-height:1;font-variant-numeric:tabular-nums">{{ a1.count }}</strong>
+        <span style="font-size:12px;letter-spacing:0.07em;text-transform:uppercase;font-weight:700">Reporting within 30 minutes</span>
+      </span>
+      <span style="display:block;margin-top:6px;font-size:12px;color:var(--color-neutral-800);line-height:1.4">Confirmed or estimated slot inside the next half hour. No result evidence exists yet.</span>
+      <span style="display:block;margin-top:5px;font-size:11.5px;font-weight:700;letter-spacing:0.04em">{{ a1.tickers }}</span>
+    </button>
+    <button class="tf-alert" style="padding:12px 16px;text-align:left;background:{{ a2.bg }};box-shadow:{{ a2.rule }}" onClick="{{ a2.apply }}">
+      <span style="display:flex;align-items:center;gap:10px;color:{{ a2.color }}">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path><rect width="20" height="14" x="2" y="6" rx="0"></rect></svg>
+        <strong style="font-family:var(--font-heading);font-weight:800;font-size:30px;line-height:1;font-variant-numeric:tabular-nums">{{ a2.count }}</strong>
+        <span style="font-size:12px;letter-spacing:0.07em;text-transform:uppercase;font-weight:700">Symbols you hold reporting</span>
+      </span>
+      <span style="display:block;margin-top:6px;font-size:12px;color:var(--color-neutral-800);line-height:1.4">Open positions in the trading group with a print today or on the next reporting day.</span>
+      <span style="display:block;margin-top:5px;font-size:11.5px;font-weight:700;letter-spacing:0.04em">{{ a2.tickers }}</span>
+    </button>
+  </section>
+
+  <section aria-label="Filters" style="display:grid;gap:9px;padding:11px 20px;border-bottom:2px solid var(--color-divider)">
+    <div style="display:grid;grid-template-columns:104px minmax(0,1fr);gap:12px;align-items:center">
+      <span style="font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Dates</span>
+      <div style="display:flex;gap:0;border:1px solid var(--color-divider);width:max-content">
+        <sc-for list="{{ scopeChips }}" as="chip" hint-placeholder-count="3">
+          <button class="tf-chip" style="padding:5px 12px;font-size:12px;border-left:{{ chip.border }};font-weight:{{ chip.weight }};background:{{ chip.bg }};color:{{ chip.fg }}" onClick="{{ chip.apply }}">{{ chip.label }}</button>
+        </sc-for>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:104px minmax(0,1fr);gap:12px;align-items:center">
+      <span style="font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Session</span>
+      <div style="display:flex;gap:0;border:1px solid var(--color-divider);width:max-content">
+        <sc-for list="{{ sessionChips }}" as="chip" hint-placeholder-count="4">
+          <button class="tf-chip" style="padding:5px 12px;font-size:12px;border-left:{{ chip.border }};font-weight:{{ chip.weight }};background:{{ chip.bg }};color:{{ chip.fg }}" onClick="{{ chip.apply }}">{{ chip.label }} <span style="opacity:0.6">{{ chip.count }}</span></button>
+        </sc-for>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:104px minmax(0,1fr);gap:12px;align-items:center">
+      <span style="font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Result</span>
+      <div style="display:flex;gap:0;border:1px solid var(--color-divider);width:max-content">
+        <sc-for list="{{ outcomeChips }}" as="chip" hint-placeholder-count="5">
+          <button class="tf-chip" style="padding:5px 12px;font-size:12px;border-left:{{ chip.border }};font-weight:{{ chip.weight }};background:{{ chip.bg }};color:{{ chip.fg }}" onClick="{{ chip.apply }}">{{ chip.label }} <span style="opacity:0.6">{{ chip.count }}</span></button>
+        </sc-for>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:104px minmax(0,1fr);gap:12px;align-items:center">
+      <span style="font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Refine</span>
+      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+        <div style="display:flex;gap:0;border:1px solid var(--color-divider)">
+          <button class="tf-chip" style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;font-size:12px;font-weight:{{ heldWeight }};background:{{ heldBg }};color:{{ heldFg }}" onClick="{{ toggleHeld }}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity:{{ heldMark }}"><path d="M20 6 9 17l-5-5"></path></svg>Only symbols I hold</button>
+          <button class="tf-chip" style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;font-size:12px;border-left:1px solid var(--color-divider);font-weight:{{ newsWeight }};background:{{ newsBg }};color:{{ newsFg }}" onClick="{{ toggleNews }}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity:{{ newsMark }}"><path d="M20 6 9 17l-5-5"></path></svg>Has news evidence</button>
+        </div>
+        <span style="display:flex;align-items:center;gap:7px">
+          <span style="font-size:12px;color:var(--color-neutral-800)">Min |EPS surprise|</span>
+          <input class="input" type="number" min="0" step="1" style="width:74px;height:28px;min-height:28px;padding:3px 7px;font-variant-numeric:tabular-nums" value="{{ minSurprise }}" onChange="{{ setMinSurprise }}" />
+          <span style="font-size:12px;color:var(--color-neutral-700)">%</span>
+        </span>
+        <span style="display:flex;align-items:center;gap:7px">
+          <span style="font-size:12px;color:var(--color-neutral-800)">Sort</span>
+          <select class="input" style="width:172px;height:28px;min-height:28px;padding:3px 7px" value="{{ sort }}" onChange="{{ setSort }}">
+            <option value="time">Scheduled time</option>
+            <option value="cap">Market cap</option>
+            <option value="surprise">EPS surprise</option>
+            <option value="move">Event move</option>
+            <option value="rvol">Relative volume</option>
+          </select>
+        </span>
+        <span style="margin-left:auto;font-size:12px;color:var(--color-neutral-700)">{{ shownText }}</span>
+      </div>
+    </div>
+  </section>
+
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) 400px;align-items:start">
+
+    <main class="tf-scroll" style="border-right:2px solid var(--color-divider);padding:0 20px 32px;max-height:calc(100vh - 340px)">
+      <sc-for list="{{ dayGroups }}" as="day" hint-placeholder-count="2">
+        <section style="padding-top:16px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;padding-bottom:7px;border-bottom:2px solid var(--color-text);position:sticky;top:0;background:var(--color-bg);z-index:2">
+            <h2 style="font-family:var(--font-heading);font-weight:800;font-size:19px;letter-spacing:-0.01em;margin:0">{{ day.label }}</h2>
+            <span style="font-size:11.5px;color:var(--color-neutral-700);white-space:nowrap">{{ day.summary }}</span>
+          </div>
+          <div style="display:grid;gap:0">
+            <sc-for list="{{ day.items }}" as="ev" hint-placeholder-count="4">
+              <article style="border-bottom:1px solid var(--color-neutral-300);border-left:4px solid {{ ev.accent }};padding:13px 0 15px 14px">
+                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+                  <div style="min-width:0">
+                    <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+                      <h3 style="font-family:var(--font-heading);font-weight:800;font-size:19px;letter-spacing:-0.01em;margin:0">{{ ev.ticker }}</h3>
+                      <span style="font-size:13px;color:var(--color-neutral-800)">{{ ev.company }}</span>
+                      <span style="font-size:11px;color:var(--color-neutral-700)">{{ ev.cap }}</span>
+                    </div>
+                    <div style="display:flex;gap:16px;margin-top:4px;font-size:11.5px;color:var(--color-neutral-700);flex-wrap:wrap;font-variant-numeric:tabular-nums">
+                      <span>{{ ev.window }}</span>
+                      <span>{{ ev.nyText }}</span>
+                      <span>{{ ev.utcText }}</span>
+                      <span>{{ ev.estimateNote }}</span>
+                    </div>
+                  </div>
+                  <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                    <sc-for list="{{ ev.badges }}" as="badge" hint-placeholder-count="3">
+                      <span class="tag {{ badge.cls }}" style="font-weight:700;letter-spacing:0.04em;white-space:nowrap">{{ badge.text }}</span>
+                    </sc-for>
+                  </div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border:1px solid var(--color-divider);margin-top:11px">
+                  <div style="padding:6px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">EPS est</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ ev.epsEst }}</strong></div>
+                  <div style="padding:6px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">EPS actual</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ ev.epsAct }}</strong></div>
+                  <div style="padding:6px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Surprise</small><strong style="font-size:13px;font-variant-numeric:tabular-nums;color:{{ ev.epsColor }}">{{ ev.epsSurprise }}</strong></div>
+                  <div style="padding:6px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Rev est</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ ev.revEst }}</strong></div>
+                  <div style="padding:6px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Rev actual</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ ev.revAct }}</strong></div>
+                  <div style="padding:6px 10px"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Rev surprise</small><strong style="font-size:13px;font-variant-numeric:tabular-nums;color:{{ ev.revColor }}">{{ ev.revSurprise }}</strong></div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border:1px solid var(--color-divider);border-top:0">
+                  <div style="padding:6px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Pre-release high</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ ev.preHigh }}</strong></div>
+                  <div style="padding:6px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Latest close</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ ev.latestClose }}</strong></div>
+                  <div style="padding:6px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Event move</small><strong style="font-size:13px;font-variant-numeric:tabular-nums;color:{{ ev.moveColor }}">{{ ev.move }}</strong></div>
+                  <div style="padding:6px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Slot RVOL</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ ev.rvol }}</strong></div>
+                  <div style="padding:6px 10px;border-right:1px solid var(--color-divider)"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">EMA 10 / 20</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ ev.ema }}</strong></div>
+                  <div style="padding:6px 10px"><small style="display:block;font-size:9px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">MACD hist</small><strong style="font-size:13px;font-variant-numeric:tabular-nums">{{ ev.macd }}</strong></div>
+                </div>
+
+                <p style="margin:10px 0 0;font-size:13px;line-height:1.45;text-wrap:pretty">{{ ev.reason }}</p>
+
+                <sc-if value="{{ ev.held }}" hint-placeholder-val="{{ false }}">
+                  <p style="margin:8px 0 0;padding:7px 10px;border-left:3px solid var(--color-accent);background:var(--color-accent-100);font-size:12px;color:var(--color-accent-900);line-height:1.4">{{ ev.heldNote }}</p>
+                </sc-if>
+
+                <details class="tf-event" style="margin-top:10px">
+                  <summary style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--color-accent-700)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>Provenance and previous quarter</summary>
+                  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;border:1px solid var(--color-divider);margin-top:9px">
+                    <dl style="margin:0;padding:9px 12px;border-right:1px solid var(--color-divider);display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12px">
+                      <dt style="color:var(--color-neutral-700)">Provider</dt><dd style="margin:0">{{ ev.provider }}</dd>
+                      <dt style="color:var(--color-neutral-700)">Received</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ ev.receivedAt }}</dd>
+                      <dt style="color:var(--color-neutral-700)">Result first seen</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ ev.firstSeen }}</dd>
+                      <dt style="color:var(--color-neutral-700)">Latest completed bar</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ ev.lastBar }}</dd>
+                      <dt style="color:var(--color-neutral-700)">Bar session</dt><dd style="margin:0">{{ ev.barSession }}</dd>
+                    </dl>
+                    <dl style="margin:0;padding:9px 12px;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12px">
+                      <dt style="color:var(--color-neutral-700)">Prior quarter</dt><dd style="margin:0">{{ ev.prevDate }}</dd>
+                      <dt style="color:var(--color-neutral-700)">Prior EPS</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ ev.prevEps }}</dd>
+                      <dt style="color:var(--color-neutral-700)">Prior surprise</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ ev.prevSurprise }}</dd>
+                      <dt style="color:var(--color-neutral-700)">Prior 1-day move</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ ev.prevMove }}</dd>
+                      <dt style="color:var(--color-neutral-700)">Outcome then</dt><dd style="margin:0">{{ ev.prevOutcome }}</dd>
+                    </dl>
+                  </div>
+                </details>
+
+                <div style="display:flex;gap:8px;margin-top:11px;flex-wrap:wrap">
+                  <a class="btn btn-secondary" href="Trading Desk.dc.html" style="min-height:28px;padding:4px 11px;font-size:11.5px;white-space:nowrap">Inspect on desk</a>
+                  <button class="btn btn-secondary" style="min-height:28px;padding:4px 11px;font-size:11.5px;white-space:nowrap" onClick="{{ ev.watch }}">Add to earnings wishlist</button>
+                  <button class="btn btn-secondary" style="min-height:28px;padding:4px 11px;font-size:11.5px;white-space:nowrap" onClick="{{ ev.focusNews }}">Show evidence</button>
+                </div>
+              </article>
+            </sc-for>
+          </div>
+          <sc-if value="{{ day.empty }}" hint-placeholder-val="{{ false }}">
+            <p style="margin:16px 0 0;padding:22px;border:1px dashed var(--color-neutral-400);font-size:13px;color:var(--color-neutral-700)">No event on this day matches the current filters.</p>
+          </sc-if>
+        </section>
+      </sc-for>
+    </main>
+
+    <aside class="tf-scroll" style="max-height:calc(100vh - 340px);position:sticky;top:0;padding:16px 18px 32px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:9px;border-bottom:2px solid var(--color-text);margin-bottom:2px">
+        <div>
+          <h2 style="display:flex;align-items:center;gap:7px;font-family:var(--font-heading);font-weight:800;font-size:15px;letter-spacing:0.03em;text-transform:uppercase;margin:0">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18h-5"></path><path d="M18 14h-8"></path><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-4 0v-9a2 2 0 0 1 2-2h2"></path></svg>News &amp; evidence</h2>
+          <p style="margin:3px 0 0;font-size:11.5px;color:var(--color-neutral-700)">{{ newsCaption }}</p>
+        </div>
+        <span class="tag tag-neutral" style="font-weight:700;font-variant-numeric:tabular-nums">{{ newsCount }}</span>
+      </div>
+      <sc-if value="{{ newsScoped }}" hint-placeholder-val="{{ false }}">
+        <button class="btn btn-secondary" style="min-height:26px;padding:3px 10px;font-size:11px;margin:10px 0 0" onClick="{{ clearNewsScope }}">Show all evidence</button>
+      </sc-if>
+      <div style="display:grid;gap:0;margin-top:4px">
+        <sc-for list="{{ news }}" as="item" hint-placeholder-count="7">
+          <article style="padding:11px 0 12px 11px;border-bottom:1px solid var(--color-neutral-300);border-left:3px solid {{ item.color }}">
+            <div style="display:flex;justify-content:space-between;gap:8px;font-size:10.5px;color:var(--color-neutral-700)">
+              <strong style="letter-spacing:0.04em">{{ item.tickers }}</strong>
+              <time style="font-variant-numeric:tabular-nums">{{ item.at }}</time>
+            </div>
+            <p style="margin:4px 0 0;font-size:12.5px;font-weight:600;line-height:1.35;text-wrap:pretty">{{ item.headline }}</p>
+            <p style="margin:4px 0 0;font-size:11.5px;color:var(--color-neutral-800);line-height:1.4">{{ item.why }}</p>
+            <div style="display:flex;justify-content:space-between;gap:8px;margin-top:5px;font-size:10.5px;color:var(--color-neutral-700)">
+              <span>{{ item.provider }} · {{ item.category }}</span>
+              <span style="font-variant-numeric:tabular-nums">sentiment {{ item.sentiment }} · {{ item.sentimentLabel }}</span>
+            </div>
+          </article>
+        </sc-for>
+      </div>
+    </aside>
+  </div>
+
+  <sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+    <div role="status" style="position:fixed;right:20px;bottom:20px;z-index:60;max-width:380px;background:var(--color-text);color:var(--color-bg);padding:12px 16px;box-shadow:var(--shadow-lg)">
+      <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.05em;text-transform:uppercase">{{ toastTitle }}</strong>
+      <span style="display:block;margin-top:4px;font-size:12.5px;line-height:1.4">{{ toastBody }}</span>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1600,&quot;height&quot;:1000}}">
+const GAIN = 'var(--color-text)';
+const LOSS = 'var(--color-accent-700)';
+const FLAT = 'var(--color-neutral-700)';
+
+const HELD = ['NVDA', 'AVGO', 'MU', 'UBER', 'ETSY'];
+
+const EVENTS = [
+  { id: 'e1', t: 'ETSY', c: 'Etsy Inc', day: 'today', win: 'beforeMarketOpen', winLabel: 'Pre-market',
+    ny: '07:00 NY', utc: '11:00 UTC', est: false, capM: 6200, band: 'under10b',
+    epsE: 0.62, epsA: 0.78, revE: 646, revA: 671,
+    outcome: 'beat', assessment: 'positive', breakout: 'confirmed',
+    reason: 'EPS beat 25.8% and revenue beat 3.9%. Price cleared the pre-release reference high of 58.40 on the 12:05 completed bar with slot relative volume 4.1x, EMA10 above EMA20 and a rising MACD histogram. Breakout confirmed on completed bars only.',
+    preHigh: 58.4, close: 63.18, move: 9.4, rvol: 4.1, ema10: 60.22, ema20: 57.86, macd: 0.412,
+    recv: '11:02:14 UTC', seen: '11:04:31 UTC', bar: '18:35:00 UTC', barSession: 'regular',
+    prev: { d: '06 May 2026', eps: '0.51 vs 0.44 est', sur: '+15.9%', move: '+4.2%', out: 'Beat' } },
+
+  { id: 'e2', t: 'AMD', c: 'Advanced Micro Devices', day: 'today', win: 'afterMarketClose', winLabel: 'Post-market',
+    ny: '16:20 NY', utc: '20:20 UTC', est: false, capM: 239000, band: '100bPlus',
+    epsE: 1.14, epsA: null, revE: 8420, revA: null,
+    outcome: 'pending', assessment: 'awaiting', breakout: 'awaiting',
+    reason: 'Reporting shortly, after the close. No result is observable yet. The monitor archives the raw provider payload before parsing and will not evaluate a reaction until a completed 5-minute bar exists after the first observable result.',
+    preHigh: 151.9, close: 148.06, move: null, rvol: 1.1, ema10: 147.4, ema20: 149.8, macd: -0.084,
+    recv: '06:12:03 UTC', seen: null, bar: '18:35:00 UTC', barSession: 'regular',
+    prev: { d: '05 May 2026', eps: '0.98 vs 0.94 est', sur: '+4.3%', move: '−2.1%', out: 'Beat' } },
+
+  { id: 'e3', t: 'MU', c: 'Micron Technology', day: 'today', win: 'beforeMarketOpen', winLabel: 'Pre-market',
+    ny: '06:30 NY', utc: '10:30 UTC', est: false, capM: 118000, band: '100bPlus',
+    epsE: 2.41, epsA: 2.66, revE: 9180, revA: 9410,
+    outcome: 'beat', assessment: 'positive', breakout: 'possible',
+    reason: 'EPS beat 10.4% and revenue beat 2.5%. Price is 1.1% below the pre-release reference high of 107.50 with slot relative volume 1.9x. EMA10 sits above EMA20 but no completed bar has closed above the reference high, so the breakout stays possible rather than confirmed.',
+    preHigh: 107.5, close: 106.34, move: 3.6, rvol: 1.9, ema10: 105.8, ema20: 103.9, macd: 0.196,
+    recv: '10:31:48 UTC', seen: '10:33:12 UTC', bar: '18:35:00 UTC', barSession: 'regular',
+    prev: { d: '25 Mar 2026', eps: '2.12 vs 2.05 est', sur: '+3.4%', move: '+6.8%', out: 'Beat' } },
+
+  { id: 'e4', t: 'SMCI', c: 'Super Micro Computer', day: 'today', win: 'beforeMarketOpen', winLabel: 'Pre-market',
+    ny: '08:00 NY', utc: '12:00 UTC', est: false, capM: 22400, band: '10bTo50b',
+    epsE: 0.54, epsA: 0.41, revE: 5900, revA: 5410,
+    outcome: 'miss', assessment: 'negative', breakout: 'failed',
+    reason: 'EPS missed 24.1% and revenue missed 8.3%. Price is 8.4% below the pre-release reference close on 2.7x slot relative volume with EMA10 beneath EMA20 and a negative MACD histogram. No breakout evidence; the reaction is distribution.',
+    preHigh: 42.1, close: 38.62, move: -8.4, rvol: 2.7, ema10: 39.4, ema20: 41.2, macd: -0.331,
+    recv: '12:01:22 UTC', seen: '12:02:55 UTC', bar: '18:35:00 UTC', barSession: 'regular',
+    prev: { d: '05 May 2026', eps: '0.66 vs 0.61 est', sur: '+8.2%', move: '+11.4%', out: 'Beat' } },
+
+  { id: 'e5', t: 'DKNG', c: 'DraftKings Inc', day: 'today', win: 'duringMarket', winLabel: 'Market hours',
+    ny: '12:00 NY', utc: '16:00 UTC', est: true, capM: 21800, band: '10bTo50b',
+    epsE: 0.18, epsA: 0.18, revE: 1420, revA: 1408,
+    outcome: 'inline', assessment: 'mixed', breakout: 'none',
+    reason: 'EPS in line and revenue 0.8% light. Price is 2.3% below the pre-release close on 1.3x slot relative volume. The schedule was a provider estimate, so the release time carries lower confidence than a confirmed slot.',
+    preHigh: 46.9, close: 44.86, move: -2.3, rvol: 1.3, ema10: 45.3, ema20: 46.0, macd: -0.052,
+    recv: '16:04:09 UTC', seen: '16:07:41 UTC', bar: '18:35:00 UTC', barSession: 'regular',
+    prev: { d: '07 May 2026', eps: '0.22 vs 0.19 est', sur: '+15.8%', move: '+3.1%', out: 'Beat' } },
+
+  { id: 'e6', t: 'RIVN', c: 'Rivian Automotive', day: 'today', win: 'afterMarketClose', winLabel: 'Post-market',
+    ny: '16:05 NY', utc: '20:05 UTC', est: false, capM: 15100, band: '10bTo50b',
+    epsE: -0.71, epsA: null, revE: 1690, revA: null,
+    outcome: 'pending', assessment: 'awaiting', breakout: 'awaiting',
+    reason: 'Reporting shortly, after the close. Extended-hours observation is recorded but does not authorise extended-hours execution.',
+    preHigh: 14.1, close: 13.72, move: null, rvol: 2.1, ema10: 13.6, ema20: 13.9, macd: -0.021,
+    recv: '05:44:51 UTC', seen: null, bar: '18:35:00 UTC', barSession: 'regular',
+    prev: { d: '06 May 2026', eps: '−0.84 vs −0.79 est', sur: '−6.3%', move: '−5.9%', out: 'Miss' } },
+
+  { id: 'e7', t: 'AVGO', c: 'Broadcom Inc', day: 'next', win: 'afterMarketClose', winLabel: 'Post-market',
+    ny: '16:15 NY', utc: '20:15 UTC', est: false, capM: 1460000, band: '100bPlus',
+    epsE: 1.72, epsA: null, revE: 15900, revA: null,
+    outcome: 'pending', assessment: 'awaiting', breakout: 'awaiting',
+    reason: 'Tomorrow after the close. Two open positions in the trading group are directly exposed to this print.',
+    preHigh: 314.2, close: 312.88, move: null, rvol: 1.8, ema10: 310.4, ema20: 305.1, macd: 0.288,
+    recv: '04 Aug 06:02:10 UTC', seen: null, bar: '18:35:00 UTC', barSession: 'regular',
+    prev: { d: '05 Jun 2026', eps: '1.58 vs 1.51 est', sur: '+4.6%', move: '+9.2%', out: 'Beat' } },
+
+  { id: 'e8', t: 'COIN', c: 'Coinbase Global', day: 'next', win: 'afterMarketClose', winLabel: 'Post-market',
+    ny: '16:05 NY', utc: '20:05 UTC', est: false, capM: 62400, band: '50bTo100b',
+    epsE: 1.34, epsA: null, revE: 1780, revA: null,
+    outcome: 'pending', assessment: 'awaiting', breakout: 'awaiting',
+    reason: 'Tomorrow after the close. Spread is currently outside the entry ceiling on the desk, which will also apply to any post-print reaction trade.',
+    preHigh: 254.8, close: 244.91, move: null, rvol: 2.2, ema10: 248.2, ema20: 252.6, macd: -0.174,
+    recv: '04 Aug 06:02:10 UTC', seen: null, bar: '18:35:00 UTC', barSession: 'regular',
+    prev: { d: '07 May 2026', eps: '1.11 vs 1.28 est', sur: '−13.3%', move: '−7.4%', out: 'Miss' } },
+
+  { id: 'e9', t: 'UBER', c: 'Uber Technologies', day: 'next', win: 'beforeMarketOpen', winLabel: 'Pre-market',
+    ny: '06:00 NY', utc: '10:00 UTC', est: false, capM: 184000, band: '100bPlus',
+    epsE: 0.66, epsA: null, revE: 12400, revA: null,
+    outcome: 'pending', assessment: 'awaiting', breakout: 'awaiting',
+    reason: 'Tomorrow before the open. One open position is exposed; the swing reclaim thesis on the desk predates the print.',
+    preHigh: 89.4, close: 88.31, move: null, rvol: 1.5, ema10: 87.6, ema20: 85.9, macd: 0.121,
+    recv: '04 Aug 06:02:10 UTC', seen: null, bar: '18:35:00 UTC', barSession: 'regular',
+    prev: { d: '06 May 2026', eps: '0.59 vs 0.54 est', sur: '+9.3%', move: '+5.4%', out: 'Beat' } },
+
+  { id: 'e10', t: 'ANET', c: 'Arista Networks', day: 'next', win: 'afterMarketClose', winLabel: 'Post-market',
+    ny: '16:30 NY', utc: '20:30 UTC', est: true, capM: 158000, band: '100bPlus',
+    epsE: 0.71, epsA: null, revE: 2280, revA: null,
+    outcome: 'pending', assessment: 'awaiting', breakout: 'awaiting',
+    reason: 'Tomorrow after the close, on a provider-estimated slot.',
+    preHigh: 129.9, close: 128.55, move: null, rvol: 1.4, ema10: 128.1, ema20: 126.4, macd: 0.067,
+    recv: '04 Aug 06:02:10 UTC', seen: null, bar: '18:35:00 UTC', barSession: 'regular',
+    prev: { d: '05 May 2026', eps: '0.64 vs 0.62 est', sur: '+3.2%', move: '+2.6%', out: 'Beat' } }
+];
+
+const NEWS = [
+  { at: '12:08:44 UTC', tickers: 'ETSY', cat: 'earnings-result', s: 0.74, sl: 'positive',
+    hl: 'Etsy tops estimates on marketplace take-rate expansion, lifts full-year outlook',
+    why: 'Confirms the EPS and revenue beat with a raised outlook, which is the mechanism behind the confirmed breakout.', p: 'Benzinga' },
+  { at: '12:02:31 UTC', tickers: 'SMCI', cat: 'earnings-result', s: -0.68, sl: 'negative',
+    hl: 'Super Micro misses on margin compression; server backlog conversion slips',
+    why: 'Explains the 8.4% adverse reaction and the failed-breakout assessment.', p: 'Benzinga' },
+  { at: '11:52:19 UTC', tickers: 'ETSY, EBAY', cat: 'sector', s: 0.41, sl: 'positive',
+    hl: 'Online marketplace GMV data firms through July, survey shows',
+    why: 'Sector confirmation for the ETSY reaction; relevant to peers reporting later this week.', p: 'Alpaca' },
+  { at: '10:41:07 UTC', tickers: 'MU', cat: 'earnings-result', s: 0.58, sl: 'positive',
+    hl: 'Micron beats as HBM pricing holds; capex guide unchanged',
+    why: 'Supports the positive result assessment; the unchanged capex guide is why the move stalled below the reference high.', p: 'Alpaca' },
+  { at: '09:30:00 UTC', tickers: 'AMD', cat: 'preview', s: 0.12, sl: 'neutral',
+    hl: 'AMD data-centre expectations set a high bar into tonight\u2019s print, desk note says',
+    why: 'Pre-release context only. No result evidence exists for AMD yet.', p: 'Benzinga' },
+  { at: '08:15:33 UTC', tickers: 'AVGO', cat: 'preview', s: 0.28, sl: 'neutral',
+    hl: 'Broadcom custom-silicon pipeline in focus ahead of tomorrow\u2019s report',
+    why: 'Relevant to the two open positions exposed to tomorrow\u2019s AVGO print.', p: 'Alpaca' },
+  { at: '07:04:50 UTC', tickers: 'DKNG', cat: 'earnings-result', s: -0.09, sl: 'neutral',
+    hl: 'DraftKings revenue lands just under consensus; handle growth intact',
+    why: 'Matches the mixed assessment: in-line EPS with slightly light revenue.', p: 'Alpaca' },
+  { at: '06:22:11 UTC', tickers: 'RIVN', cat: 'preview', s: -0.15, sl: 'neutral',
+    hl: 'Rivian delivery cadence steady into the quarter, supplier checks suggest',
+    why: 'Pre-release only. The monitor will not assess a reaction before a completed bar exists.', p: 'Benzinga' }
+];
+
+const SCOPES = [
+  { key: 'both', label: 'Today & next reporting day' },
+  { key: 'today', label: 'Today' },
+  { key: 'next', label: 'Next reporting day' }
+];
+const SESSIONS = [
+  { key: 'all', label: 'All sessions' },
+  { key: 'beforeMarketOpen', label: 'Pre-market' },
+  { key: 'duringMarket', label: 'Market hours' },
+  { key: 'afterMarketClose', label: 'Post-market' }
+];
+const OUTCOMES = [
+  { key: 'all', label: 'All results' },
+  { key: 'beat', label: 'Beat' },
+  { key: 'miss', label: 'Miss' },
+  { key: 'inline', label: 'In line' },
+  { key: 'pending', label: 'Pending' }
+];
+
+class Component extends DCLogic {
+  state = {
+    scope: 'both', session: 'all', outcome: 'all',
+    onlyHeld: false, onlyNews: false, minSurprise: '',
+    sort: 'time', alert: null, newsScope: null,
+    toast: null,
+    now: new Date(Date.UTC(2026, 7, 4, 19, 52, 14))
+  };
+
+  componentDidMount() { this.timer = setInterval(() => this.setState(s => ({ now: new Date(s.now.getTime() + 1000) })), 1000); }
+  componentWillUnmount() { clearInterval(this.timer); clearTimeout(this.toastTimer); }
+
+  clock(off) {
+    const d = new Date(this.state.now.getTime() + off * 3600000);
+    const p = n => String(n).padStart(2, '0');
+    return p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds());
+  }
+
+  fire(title, body) {
+    clearTimeout(this.toastTimer);
+    this.setState({ toast: { title, body } });
+    this.toastTimer = setTimeout(() => this.setState({ toast: null }), 5000);
+  }
+
+  cap(m) {
+    if (m >= 1000000) return '$' + (m / 1000000).toFixed(2) + 'T cap';
+    if (m >= 1000) return '$' + (m / 1000).toFixed(1) + 'B cap';
+    return '$' + m.toFixed(0) + 'M cap';
+  }
+
+  pct(v) { return v === null ? '\u2014' : (v >= 0 ? '+' : '\u2212') + Math.abs(v).toFixed(1) + '%'; }
+  usd(v) { return v === null ? '\u2014' : '$' + v.toFixed(2); }
+  mm(v) { return v === null ? '\u2014' : '$' + (v / 1000).toFixed(2) + 'B'; }
+
+  surprisePct(a, e) { return a === null || e === null || e === 0 ? null : ((a - e) / Math.abs(e)) * 100; }
+
+  minutesTo(ev) {
+    const [h, m] = ev.utc.split(':');
+    const hh = parseInt(h, 10);
+    const mm = parseInt(m, 10);
+    if (ev.day === 'next') return 1000;
+    const target = Date.UTC(2026, 7, 4, hh, mm, 0);
+    return Math.round((target - this.state.now.getTime()) / 60000);
+  }
+
+  build(ev) {
+    const epsSur = this.surprisePct(ev.epsA, ev.epsE);
+    const revSur = this.surprisePct(ev.revA, ev.revE);
+    const held = HELD.includes(ev.t);
+    const accent = ev.assessment === 'positive' ? 'var(--color-text)'
+      : ev.assessment === 'negative' ? 'var(--color-accent)'
+      : ev.assessment === 'mixed' ? 'var(--color-neutral-500)'
+      : 'var(--color-neutral-300)';
+    const badges = [
+      { text: ev.winLabel, cls: 'tag-neutral' },
+      { text: ev.outcome === 'beat' ? 'BEAT' : ev.outcome === 'miss' ? 'MISS' : ev.outcome === 'inline' ? 'IN LINE' : 'AWAITING',
+        cls: ev.outcome === 'beat' ? 'tag-accent' : 'tag-neutral' },
+      { text: ev.breakout === 'confirmed' ? 'BREAKOUT CONFIRMED'
+        : ev.breakout === 'possible' ? 'BREAKOUT POSSIBLE'
+        : ev.breakout === 'failed' ? 'BREAKOUT FAILED' : 'NO BREAKOUT YET',
+        cls: ev.breakout === 'confirmed' ? 'tag-accent' : 'tag-outline' }
+    ];
+    if (held) badges.unshift({ text: 'HELD', cls: 'tag-accent' });
+    const mins = this.minutesTo(ev);
+    if (ev.outcome === 'pending' && mins > 0 && mins <= 30) {
+      badges.unshift({ text: 'IN ' + mins + ' MIN', cls: 'tag-accent' });
+    }
+    return {
+      raw: ev, ticker: ev.t, company: ev.c, cap: this.cap(ev.capM),
+      window: ev.winLabel, nyText: ev.ny, utcText: ev.utc,
+      estimateNote: ev.est ? 'Provider-estimated slot' : 'Confirmed slot',
+      badges, accent,
+      epsEst: ev.epsE === null ? '\u2014' : ev.epsE.toFixed(2),
+      epsAct: ev.epsA === null ? 'awaiting' : ev.epsA.toFixed(2),
+      epsSurprise: epsSur === null ? '\u2014' : this.pct(epsSur),
+      epsColor: epsSur === null ? FLAT : epsSur > 0 ? GAIN : LOSS,
+      revEst: this.mm(ev.revE), revAct: ev.revA === null ? 'awaiting' : this.mm(ev.revA),
+      revSurprise: revSur === null ? '\u2014' : this.pct(revSur),
+      revColor: revSur === null ? FLAT : revSur > 0 ? GAIN : LOSS,
+      preHigh: this.usd(ev.preHigh), latestClose: this.usd(ev.close),
+      move: ev.move === null ? 'awaiting' : this.pct(ev.move),
+      moveColor: ev.move === null ? FLAT : ev.move > 0 ? GAIN : LOSS,
+      rvol: ev.rvol.toFixed(1) + '\u00d7',
+      ema: ev.ema10.toFixed(2) + ' / ' + ev.ema20.toFixed(2),
+      macd: (ev.macd >= 0 ? '+' : '\u2212') + Math.abs(ev.macd).toFixed(3),
+      reason: ev.reason,
+      held, heldNote: 'You hold ' + ev.t + ' in the trading group. Protection on the open position was set before this print and is unchanged.',
+      provider: 'Finviz Elite · reaction from Alpaca SIP completed bars',
+      receivedAt: ev.recv, firstSeen: ev.seen === null ? 'Not yet observable' : ev.seen,
+      lastBar: ev.bar, barSession: ev.barSession,
+      prevDate: ev.prev.d, prevEps: ev.prev.eps, prevSurprise: ev.prev.sur,
+      prevMove: ev.prev.move, prevOutcome: ev.prev.out,
+      epsSurRaw: epsSur, moveRaw: ev.move,
+      watch: () => this.fire('Wishlist updated', ev.t + ' added to the earnings reaction wishlist. The desk observer will pick it up on the next cycle.'),
+      focusNews: () => this.setState({ newsScope: ev.t })
+    };
+  }
+
+  matches(e) {
+    const s = this.state;
+    if (s.alert === 'breakout' && !(e.raw.outcome === 'beat' && e.raw.breakout === 'confirmed')) return false;
+    if (s.alert === 'soon' && !(e.raw.outcome === 'pending' && this.minutesTo(e.raw) > 0 && this.minutesTo(e.raw) <= 30)) return false;
+    if (s.alert === 'held' && !e.held) return false;
+    if (s.session !== 'all' && e.raw.win !== s.session) return false;
+    if (s.outcome !== 'all' && e.raw.outcome !== s.outcome) return false;
+    if (s.onlyHeld && !e.held) return false;
+    if (s.onlyNews && !NEWS.some(n => n.tickers.includes(e.ticker))) return false;
+    const min = parseFloat(s.minSurprise);
+    if (!isNaN(min) && (e.epsSurRaw === null || Math.abs(e.epsSurRaw) < min)) return false;
+    return true;
+  }
+
+  sortItems(items) {
+    const s = this.state.sort;
+    const key = e => {
+      switch (s) {
+        case 'cap': return -e.raw.capM;
+        case 'surprise': return -(e.epsSurRaw === null ? -1e9 : Math.abs(e.epsSurRaw));
+        case 'move': return -(e.moveRaw === null ? -1e9 : Math.abs(e.moveRaw));
+        case 'rvol': return -e.raw.rvol;
+        default: return e.raw.utc;
+      }
+    };
+    return items.slice().sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+  }
+
+  chip(list, current, setter, counts) {
+    return list.map((o, i) => ({
+      label: o.label,
+      count: counts ? counts[o.key] : '',
+      border: i === 0 ? '0' : '1px solid var(--color-divider)',
+      weight: current === o.key ? '700' : '500',
+      bg: current === o.key ? 'var(--color-text)' : 'transparent',
+      fg: current === o.key ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+      apply: () => setter(o.key)
+    }));
+  }
+
+  renderVals() {
+    const s = this.state;
+    const all = EVENTS.map(e => this.build(e));
+    const visible = this.sortItems(all.filter(e => this.matches(e)));
+
+    const breakoutHits = all.filter(e => e.raw.outcome === 'beat' && e.raw.breakout === 'confirmed');
+    const soonHits = all.filter(e => e.raw.outcome === 'pending' && this.minutesTo(e.raw) > 0 && this.minutesTo(e.raw) <= 30);
+    const heldHits = all.filter(e => e.held);
+
+    const alertDefs = [
+      { key: 'breakout', label: 'Beat + breakout confirmed', hits: breakoutHits,
+        detail: 'Result beat and a completed bar closed above the pre-release reference high on elevated slot volume.' },
+      { key: 'soon', label: 'Reporting within 30 minutes', hits: soonHits,
+        detail: 'Confirmed or estimated slot inside the next half hour. No result evidence exists yet.' },
+      { key: 'held', label: 'Symbols you hold reporting', hits: heldHits,
+        detail: 'Open positions in the trading group with a print today or on the next reporting day.' }
+    ];
+    const alerts = alertDefs.map(a => ({
+      count: a.hits.length,
+      label: a.label,
+      detail: a.detail,
+      tickers: a.hits.length === 0 ? 'None' : a.hits.map(h => h.ticker).join('  \u00b7  '),
+      color: a.hits.length === 0 ? FLAT : a.key === 'breakout' ? 'var(--color-accent)' : 'var(--color-text)',
+      bg: s.alert === a.key ? 'var(--color-accent-100)' : 'transparent',
+      rule: s.alert === a.key ? 'inset 0 -3px 0 var(--color-accent)' : 'none',
+      apply: () => this.setState({ alert: s.alert === a.key ? null : a.key })
+    }));
+
+    const sessionCounts = {};
+    SESSIONS.forEach(o => { sessionCounts[o.key] = o.key === 'all' ? all.length : all.filter(e => e.raw.win === o.key).length; });
+    const outcomeCounts = {};
+    OUTCOMES.forEach(o => { outcomeCounts[o.key] = o.key === 'all' ? all.length : all.filter(e => e.raw.outcome === o.key).length; });
+
+    const groups = [];
+    if (s.scope !== 'next') {
+      const items = visible.filter(e => e.raw.day === 'today');
+      groups.push({
+        label: 'Today · Tue 04 Aug 2026',
+        summary: items.length + ' of ' + all.filter(e => e.raw.day === 'today').length + ' events · ' +
+          all.filter(e => e.raw.day === 'today' && e.raw.outcome !== 'pending').length + ' reported',
+        items, empty: items.length === 0
+      });
+    }
+    if (s.scope !== 'today') {
+      const items = visible.filter(e => e.raw.day === 'next');
+      groups.push({
+        label: 'Next reporting day · Wed 05 Aug 2026',
+        summary: items.length + ' of ' + all.filter(e => e.raw.day === 'next').length + ' events · none reported yet',
+        items, empty: items.length === 0
+      });
+    }
+
+    const news = (s.newsScope ? NEWS.filter(n => n.tickers.includes(s.newsScope)) : NEWS).map(n => ({
+      at: n.at, tickers: n.tickers, headline: n.hl, why: n.why,
+      provider: n.p, category: n.cat,
+      sentiment: (n.s >= 0 ? '+' : '\u2212') + Math.abs(n.s).toFixed(2),
+      sentimentLabel: n.sl,
+      color: n.s > 0.25 ? 'var(--color-text)' : n.s < -0.25 ? 'var(--color-accent)' : 'var(--color-neutral-400)'
+    }));
+
+    return {
+      clockNy: this.clock(-4), clockAms: this.clock(2), clockUtc: this.clock(0),
+      lastAnalysis: this.clock(0).slice(0, 5) + ':02 UTC',
+      refresh: () => this.fire('Calendar refreshed', 'Finviz schedules and results re-read; Alpaca completed bars advanced to 18:35 UTC.'),
+
+      a0: alerts[0], a1: alerts[1], a2: alerts[2],
+      scopeChips: this.chip(SCOPES, s.scope, k => this.setState({ scope: k }), null),
+      sessionChips: this.chip(SESSIONS, s.session, k => this.setState({ session: k }), sessionCounts),
+      outcomeChips: this.chip(OUTCOMES, s.outcome, k => this.setState({ outcome: k }), outcomeCounts),
+      toggleHeld: () => this.setState({ onlyHeld: !s.onlyHeld }),
+      heldWeight: s.onlyHeld ? '700' : '500',
+      heldBg: s.onlyHeld ? 'var(--color-text)' : 'transparent',
+      heldFg: s.onlyHeld ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+      heldMark: s.onlyHeld ? '1' : '0.28',
+      toggleNews: () => this.setState({ onlyNews: !s.onlyNews }),
+      newsWeight: s.onlyNews ? '700' : '500',
+      newsBg: s.onlyNews ? 'var(--color-text)' : 'transparent',
+      newsFg: s.onlyNews ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+      newsMark: s.onlyNews ? '1' : '0.28',
+      minSurprise: s.minSurprise, setMinSurprise: e => this.setState({ minSurprise: e.target.value }),
+      sort: s.sort, setSort: e => this.setState({ sort: e.target.value }),
+      shownText: visible.length + ' of ' + all.length + ' events',
+
+      dayGroups: groups,
+
+      news,
+      newsCount: news.length,
+      newsCaption: s.newsScope
+        ? 'Evidence matched to ' + s.newsScope + ' inside the rolling window.'
+        : 'Point-in-time stories inside the rolling four-hour evidence window.',
+      newsScoped: !!s.newsScope,
+      clearNewsScope: () => this.setState({ newsScope: null }),
+
+      hasToast: !!s.toast,
+      toastTitle: s.toast ? s.toast.title : '',
+      toastBody: s.toast ? s.toast.body : ''
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,243 @@
+@page
+@using TradingFlow.Web.Pages.Shared
+@using TradingFlow.Web.Services
+@model TradingFlow.Web.Pages.OperationsModel
+@{
+    ViewData["Title"] = "Operations";
+    ViewData["MainClass"] = "shell-flush operations-page";
+    var report = Model.Report;
+}
+
+@functions {
+    // Glyph and label both render, so state never depends on colour alone.
+    static string GlyphFor(SubsystemState state) => state switch
+    {
+        SubsystemState.Healthy => "✓",
+        SubsystemState.Failing => "✕",
+        _ => "–"
+    };
+
+    static string GlyphClassFor(SubsystemState state) => state switch
+    {
+        SubsystemState.Healthy => "is-pass",
+        SubsystemState.Failing => "is-fail",
+        _ => "is-unknown"
+    };
+
+    static string TagClassFor(SubsystemState state) => state switch
+    {
+        SubsystemState.Healthy => "tag tag-neutral",
+        SubsystemState.Failing => "tag tag-accent",
+        _ => "tag tag-outline"
+    };
+
+    static string Stamp(DateTimeOffset? value) =>
+        value is null ? "not checked" : value.Value.UtcDateTime.ToString("HH:mm:ss");
+}
+
+<div class="page-head">
+    <div>
+        <span class="eyebrow">Operator health</span>
+        <h1>Operations</h1>
+        <p class="standfirst">
+            Authoritative server state. Anything unreadable is reported as unknown rather than
+            guessed, and execution stays fail-closed while it is.
+        </p>
+    </div>
+    @if (report is not null)
+    {
+        <span class="tag @(report.AttentionCount > 0 || !report.Admission.EntriesAllowed ? "tag-accent" : "tag-neutral")">
+            @report.Headline
+        </span>
+    }
+</div>
+
+@if (report is null)
+{
+    <p class="empty-state">Operational state has not loaded.</p>
+}
+else
+{
+    @* Four cells, and only the ones actually in a bad state are filled. The entry
+       gate is the cell that changes most often and matters most. *@
+    <div class="metric-strip operations-summary">
+        <div>
+            <span class="micro-label">Environment</span>
+            <strong class="summary-value">@Model.EnvironmentState.Label</strong>
+            <span class="summary-detail">@(Model.EnvironmentState.IsEnabled ? "Unlocked for this operator." : Model.EnvironmentState.LockReason)</span>
+        </div>
+        <div class="@(report.Status.MarketSession == "unknown" ? "is-attention" : null)">
+            <span class="micro-label">Market session</span>
+            <strong class="summary-value">@report.Status.MarketSession</strong>
+            <span class="summary-detail">@report.Status.MarketSessionDetail</span>
+        </div>
+        <div class="@(report.Status.BrokerStatus == "ready" ? null : "is-attention")">
+            <span class="micro-label">Broker sync</span>
+            <strong class="summary-value">@report.Status.BrokerStatus</strong>
+            <span class="summary-detail">@report.Status.BrokerDetail</span>
+        </div>
+        <div class="@(report.Admission.EntriesAllowed ? null : "is-attention")">
+            <span class="micro-label">Entry gate</span>
+            <strong class="summary-value">@report.Status.AdmissionStatus</strong>
+            <span class="summary-detail">@report.Status.AdmissionDetail</span>
+        </div>
+    </div>
+
+    <div class="operations-body">
+        <section class="operations-subsystems" aria-labelledby="SubsystemsHeading">
+            <h2 id="SubsystemsHeading" class="section-heading">Subsystems</h2>
+            @* The table's min-content width exceeds this column below about
+               1330px, so it scrolls inside its own wrapper rather than pushing
+               into the panel beside it. *@
+            <div class="table-scroll">
+                <table class="grid-table subsystem-table">
+                    <caption class="visually-hidden">Subsystem health, owning service, evidence and check time</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col"><span class="visually-hidden">State glyph</span></th>
+                            <th scope="col">Subsystem</th>
+                            <th scope="col">State</th>
+                            <th scope="col">Evidence</th>
+                            <th scope="col">Checked</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var subsystem in report.Subsystems)
+                        {
+                            <tr>
+                                <td class="subsystem-glyph @GlyphClassFor(subsystem.State)"
+                                    aria-label="@subsystem.State.ToString()">@GlyphFor(subsystem.State)</td>
+                                <td>
+                                    @subsystem.Name
+                                    <span class="cell-sub">@subsystem.Owner</span>
+                                </td>
+                                <td><span class="@TagClassFor(subsystem.State)">@subsystem.StateLabel</span></td>
+                                <td class="subsystem-evidence">@subsystem.Evidence</td>
+                                <td class="num">@Stamp(subsystem.CheckedAtUtc)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <div class="operations-rail">
+            <section aria-labelledby="EntryGateHeading">
+                <h2 id="EntryGateHeading" class="section-heading">Entry gate</h2>
+                <p class="note">
+                    Blocks are stated with the server code so the reason is auditable, not
+                    paraphrased.
+                </p>
+                @if (report.Admission.Blocks.Count == 0)
+                {
+                    <p class="empty-state">No block is open. New entries are allowed by the server risk gate.</p>
+                }
+                else
+                {
+                    <ul class="block-list">
+                        @foreach (var block in report.Admission.Blocks.OrderBy(item => item.BlockedAtUtc))
+                        {
+                            <li>
+                                <div class="block-head">
+                                    <code class="block-code">@block.Code</code>
+                                    <span class="tag tag-neutral">@block.Source</span>
+                                </div>
+                                @* Detail is the audit trail. It is rendered verbatim and
+                                   never rewritten for the screen. *@
+                                <p class="block-detail">@block.Detail</p>
+                                <span class="note">Blocked @block.BlockedAtUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </section>
+
+            <section aria-labelledby="WarmupHeading">
+                <h2 id="WarmupHeading" class="section-heading">Warm-up cache</h2>
+                <dl class="fact-list">
+                    <dt>Window</dt>
+                    <dd>
+                        @if (report.Warmup.WindowStartUtc is { } start && report.Warmup.WindowEndUtc is { } end)
+                        {
+                            @($"{start.UtcDateTime:yyyy-MM-dd} to {end.UtcDateTime:yyyy-MM-dd}")
+                        }
+                        else
+                        {
+                            <span class="unknown">unknown</span>
+                        }
+                        <span class="cell-sub">@report.Warmup.CachePath</span>
+                    </dd>
+                    <dt>Manifest written</dt>
+                    <dd>
+                        @if (report.Warmup.ManifestWrittenAtUtc is { } written)
+                        {
+                            @($"{written.UtcDateTime:yyyy-MM-dd HH:mm} UTC")
+                        }
+                        else
+                        {
+                            <span class="unknown">never</span>
+                        }
+                    </dd>
+                    <dt>Coverage</dt>
+                    <dd>@report.Warmup.TickerCount tickers across @report.Warmup.TimeframeCount timeframes · @report.Warmup.BarCount bars</dd>
+                    <dt>Oldest observation</dt>
+                    <dd>
+                        @if (report.Warmup.WindowStartUtc is { } oldest)
+                        {
+                            @($"{oldest.UtcDateTime:yyyy-MM-dd}")
+                            @if (oldest.Year < 2016)
+                            {
+                                <span class="cell-sub accent-note">Predates the 2016 research boundary.</span>
+                            }
+                        }
+                        else
+                        {
+                            <span class="unknown">unknown</span>
+                        }
+                    </dd>
+                </dl>
+            </section>
+
+            <section aria-labelledby="EventsHeading">
+                <h2 id="EventsHeading" class="section-heading">Recent events</h2>
+                @* Only readings that carry their own timestamp appear here. There is
+                   no unified event log yet, so this states what each subsystem last
+                   observed rather than inventing a stream. *@
+                @{
+                    var events = report.Subsystems
+                        .Where(subsystem => subsystem.CheckedAtUtc is not null)
+                        .OrderByDescending(subsystem => subsystem.CheckedAtUtc)
+                        .Take(12)
+                        .ToArray();
+                }
+                @if (events.Length == 0)
+                {
+                    <p class="empty-state">No subsystem has reported a timestamped reading.</p>
+                }
+                else
+                {
+                    <ul class="event-list">
+                        @foreach (var item in events)
+                        {
+                            <li>
+                                <time datetime="@item.CheckedAtUtc!.Value.UtcDateTime.ToString("O")">@Stamp(item.CheckedAtUtc)</time>
+                                <span class="@(item.State == SubsystemState.Failing ? "event-fail" : null)">
+                                    @item.Name — @item.StateLabel
+                                </span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </section>
+
+            <section aria-labelledby="ElsewhereHeading">
+                <h2 id="ElsewhereHeading" class="section-heading">Elsewhere</h2>
+                <div class="operations-links">
+                    <a class="btn btn-secondary btn-md" asp-page="/Paper" asp-route-env="@Model.Env">Paper Lab</a>
+                    <a class="btn btn-secondary btn-md" asp-page="/Wishlists" asp-route-env="@Model.Env">Wishlists</a>
+                    <a class="btn btn-secondary btn-md" asp-page="/Warmup" asp-route-env="@Model.Env">Warm-up</a>
+                </div>
+            </section>
+        </div>
+    </div>
+}

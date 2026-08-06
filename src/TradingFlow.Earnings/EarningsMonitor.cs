@@ -289,6 +289,10 @@ public sealed class EarningsMonitor
             previous.NewsUrl != current.NewsUrl ||
             previous.NewsProvider != current.NewsProvider ||
             previous.NewsSentiment != current.NewsSentiment ||
+            previous.Ema10 != current.Ema10 ||
+            previous.Ema20 != current.Ema20 ||
+            previous.MacdHistogram != current.MacdHistogram ||
+            previous.SlotRelativeVolume != current.SlotRelativeVolume ||
             current.AnalyzedAtUtc - previous.AnalyzedAtUtc >= heartbeat;
     }
 }

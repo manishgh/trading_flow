@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/modernist-4f4a56b3-a32f-4519-b155-938ba199102d/styles.css">
+<script src="_ds/modernist-4f4a56b3-a32f-4519-b155-938ba199102d/_ds_bundle.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=swap">
+<style>
+  html, body { margin: 0; padding: 0; background: var(--color-bg); }
+  a { color: var(--color-accent-700); text-decoration: none; }
+  a:hover { color: var(--color-accent); text-decoration: underline; }
+  .tf-scroll { overflow: auto; }
+  .tf-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+  .tf-scroll::-webkit-scrollbar-thumb { background: var(--color-neutral-400); }
+  .tf-chip { all: unset; cursor: pointer; white-space: nowrap; }
+  .tf-chip:hover { background: var(--color-neutral-200) !important; }
+  .tf-navbtn { all: unset; cursor: pointer; white-space: nowrap; }
+  table.tf-grid { width: 100%; border-collapse: collapse; }
+  table.tf-grid th {
+    text-align: left; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    font-weight: 700; color: var(--color-neutral-700); padding: 7px 10px;
+    border-bottom: 2px solid var(--color-divider); background: var(--color-bg);
+    position: sticky; top: 0; z-index: 2; white-space: nowrap;
+  }
+  table.tf-grid td { padding: 8px 10px; border-bottom: 1px solid var(--color-neutral-300); vertical-align: middle; }
+  table.tf-grid tbody tr:hover { background: var(--color-neutral-200); }
+  .tf-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tf-cell-sub { display: block; font-size: 10.5px; color: var(--color-neutral-700); }
+  input[type="checkbox"] { accent-color: var(--color-accent); }
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body);font-size:13px;-webkit-font-smoothing:antialiased">
+
+  <header style="display:flex;align-items:center;gap:24px;padding:0 20px;height:52px;border-bottom:2px solid var(--color-divider);background:var(--color-bg);position:sticky;top:0;z-index:20">
+    <span style="font-family:var(--font-heading);font-weight:800;font-size:17px;letter-spacing:-0.01em;white-space:nowrap">TRADINGFLOW</span>
+    <nav style="display:flex;gap:2px;align-items:center">
+      <a href="Trading Desk.dc.html" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Desk</a>
+      <button class="tf-navbtn" style="padding:6px 10px;font-size:13px;font-weight:{{ nav.posWeight }};color:{{ nav.posColor }};border-bottom:{{ nav.posRule }}" onClick="{{ goPositions }}">Positions</button>
+      <button class="tf-navbtn" style="padding:6px 10px;font-size:13px;font-weight:{{ nav.ordWeight }};color:{{ nav.ordColor }};border-bottom:{{ nav.ordRule }}" onClick="{{ goOrders }}">Orders</button>
+      <button class="tf-navbtn" style="padding:6px 10px;font-size:13px;font-weight:{{ nav.wlWeight }};color:{{ nav.wlColor }};border-bottom:{{ nav.wlRule }}" onClick="{{ goWishlists }}">Wishlists</button>
+      <a href="Earnings.dc.html" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Earnings</a>
+      <a href="Backtest Lab.dc.html" style="padding:6px 10px;font-size:13px;color:var(--color-neutral-800);text-decoration:none">Research</a>
+      <button class="tf-navbtn" style="padding:6px 10px;font-size:13px;font-weight:{{ nav.opsWeight }};color:{{ nav.opsColor }};border-bottom:{{ nav.opsRule }}" onClick="{{ goOps }}">Operations</button>
+    </nav>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:16px">
+      <div class="seg" style="min-height:28px">
+        <label class="seg-opt" style="padding:4px 11px;font-size:11px;font-weight:700;letter-spacing:0.04em;white-space:nowrap"><input type="radio" name="ops-env" checked="{{ true }}" />PAPER</label>
+        <label class="seg-opt" style="padding:4px 11px;font-size:11px;font-weight:700;letter-spacing:0.04em;opacity:0.45;cursor:not-allowed;white-space:nowrap" title="Live routing disabled pending promotion"><input type="radio" name="ops-env" disabled="{{ true }}" />LIVE&#8202;&#128274;</label>
+      </div>
+      <span style="font-size:13px;font-variant-numeric:tabular-nums">{{ clockUtc }} UTC</span>
+      <button class="btn btn-secondary" style="height:28px;padding:0 10px;font-size:11.5px;white-space:nowrap" onClick="{{ refresh }}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>Refresh</button>
+    </div>
+  </header>
+
+  <sc-if value="{{ isPositions }}" hint-placeholder-val="{{ true }}">
+    <section data-screen-label="Positions">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:15px 20px 12px">
+        <div>
+          <small style="display:block;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent);font-weight:700">Trade book</small>
+          <h1 style="font-family:var(--font-heading);font-weight:800;font-size:27px;line-height:1.05;letter-spacing:-0.02em;margin:5px 0 0">Positions</h1>
+          <p style="margin:6px 0 0;font-size:13px;color:var(--color-neutral-800)">One live book for wishlist, Stock Pulse and manual paper positions. Values refresh every 10 seconds without replacing a focused control.</p>
+        </div>
+        <a class="btn btn-secondary" href="Trading Desk.dc.html" style="min-height:32px;padding:5px 12px;font-size:12px;white-space:nowrap">Open desk</a>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-top:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);background:var(--color-neutral-100)">
+        <div style="padding:10px 18px;border-right:1px solid var(--color-neutral-300)">
+          <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Total open P/L</small>
+          <strong style="font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums;color:{{ posTotalColor }}">{{ posTotal }}</strong>
+        </div>
+        <div style="padding:10px 18px;border-right:1px solid var(--color-neutral-300)">
+          <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Open trades</small>
+          <strong style="font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums">{{ posCount }}</strong>
+        </div>
+        <div style="padding:10px 18px;border-right:1px solid var(--color-neutral-300)">
+          <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Gross exposure</small>
+          <strong style="font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums">{{ posExposure }}</strong>
+        </div>
+        <div style="padding:10px 18px;border-right:1px solid var(--color-neutral-300)">
+          <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Unprotected</small>
+          <strong style="font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums;color:{{ posUnprotectedColor }}">{{ posUnprotected }}</strong>
+        </div>
+        <div style="padding:10px 18px">
+          <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">Slots used</small>
+          <strong style="font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums">{{ posSlots }}</strong>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:16px;padding:9px 20px;border-bottom:1px solid var(--color-neutral-300)">
+        <div style="display:flex;gap:0;border:1px solid var(--color-divider)">
+          <sc-for list="{{ sourceChips }}" as="chip" hint-placeholder-count="4">
+            <button class="tf-chip" style="padding:5px 12px;font-size:12px;border-left:{{ chip.border }};font-weight:{{ chip.weight }};background:{{ chip.bg }};color:{{ chip.fg }}" onClick="{{ chip.apply }}">{{ chip.label }} <span style="opacity:0.6">{{ chip.count }}</span></button>
+          </sc-for>
+        </div>
+        <span style="font-size:12px;color:var(--color-neutral-700)">{{ posShown }}</span>
+      </div>
+
+      <div style="padding:0 20px 28px">
+        <table class="tf-grid">
+          <thead>
+            <tr>
+              <th style="width:84px">Ticker</th>
+              <th style="width:104px">Source</th>
+              <th class="tf-num" style="width:62px">Qty</th>
+              <th class="tf-num" style="width:88px">Entry</th>
+              <th class="tf-num" style="width:88px">Last</th>
+              <th class="tf-num" style="width:100px">P/L</th>
+              <th class="tf-num" style="width:78px">P/L %</th>
+              <th style="min-width:210px">Strategy</th>
+              <th style="min-width:200px">Protection</th>
+              <th style="min-width:140px">Run</th>
+              <th style="width:110px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{ positions }}" as="p" hint-placeholder-count="5">
+              <tr>
+                <td><strong style="font-size:13.5px">{{ p.ticker }}</strong><small class="tf-cell-sub">{{ p.side }}</small></td>
+                <td><span class="tag tag-neutral" style="font-size:10.5px;font-weight:700">{{ p.source }}</span></td>
+                <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ p.qty }}</td>
+                <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ p.entry }}</td>
+                <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ p.last }}</td>
+                <td class="tf-num" style="font-variant-numeric:tabular-nums;font-weight:700;color:{{ p.color }}">{{ p.pl }}</td>
+                <td class="tf-num" style="font-variant-numeric:tabular-nums;color:{{ p.color }}">{{ p.plPct }}</td>
+                <td style="font-size:12px">{{ p.strategy }}</td>
+                <td style="font-size:12px;color:{{ p.protColor }}">{{ p.protection }}</td>
+                <td style="font-size:11.5px;color:var(--color-neutral-700)">{{ p.reference }}</td>
+                <td><button class="btn btn-secondary" style="min-height:26px;padding:3px 9px;font-size:11px;white-space:nowrap" onClick="{{ p.reviewExit }}">Review exit</button></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+        <p style="margin:12px 0 0;font-size:11.5px;color:var(--color-neutral-700)">A locked environment renders no exit control at all rather than a disabled one the client could re-enable.</p>
+      </div>
+    </section>
+  </sc-if>
+
+  <sc-if value="{{ isOrders }}" hint-placeholder-val="{{ false }}">
+    <section data-screen-label="Orders">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:15px 20px 12px">
+        <div>
+          <small style="display:block;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent);font-weight:700">Broker lifecycle</small>
+          <h1 style="font-family:var(--font-heading);font-weight:800;font-size:27px;line-height:1.05;letter-spacing:-0.02em;margin:5px 0 0">Orders</h1>
+          <p style="margin:6px 0 0;font-size:13px;color:var(--color-neutral-800)">Durable order state from intent through terminal state. Replace is cancel plus a fresh reviewed ticket, so an amended order is re-checked against quote, spread and session.</p>
+        </div>
+        <a class="btn btn-secondary" href="Trading Desk.dc.html" style="min-height:32px;padding:5px 12px;font-size:12px;white-space:nowrap">Open desk</a>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-top:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);background:var(--color-neutral-100)">
+        <sc-for list="{{ orderStats }}" as="st" hint-placeholder-count="5">
+          <div style="padding:10px 18px;border-right:{{ st.border }}">
+            <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">{{ st.label }}</small>
+            <strong style="font-family:var(--font-heading);font-weight:800;font-size:22px;font-variant-numeric:tabular-nums;color:{{ st.color }}">{{ st.value }}</strong>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:16px;padding:9px 20px;border-bottom:1px solid var(--color-neutral-300)">
+        <div style="display:flex;gap:0;border:1px solid var(--color-divider)">
+          <sc-for list="{{ orderChips }}" as="chip" hint-placeholder-count="5">
+            <button class="tf-chip" style="padding:5px 12px;font-size:12px;border-left:{{ chip.border }};font-weight:{{ chip.weight }};background:{{ chip.bg }};color:{{ chip.fg }}" onClick="{{ chip.apply }}">{{ chip.label }} <span style="opacity:0.6">{{ chip.count }}</span></button>
+          </sc-for>
+        </div>
+        <span style="font-size:12px;color:var(--color-neutral-700)">{{ ordShown }}</span>
+        <span style="margin-left:auto;font-size:11.5px;color:var(--color-neutral-700)">Latest persisted state · checking every 10 s</span>
+      </div>
+
+      <div style="padding:0 20px 28px">
+        <table class="tf-grid">
+          <thead>
+            <tr>
+              <th style="width:150px">Updated</th>
+              <th style="width:88px">Symbol</th>
+              <th style="width:132px">Status</th>
+              <th class="tf-num" style="width:88px">Requested</th>
+              <th class="tf-num" style="width:76px">Filled</th>
+              <th style="width:122px">Order</th>
+              <th style="width:112px">Price</th>
+              <th style="min-width:200px">Strategy</th>
+              <th style="min-width:170px">Client order</th>
+              <th style="width:150px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{ orders }}" as="o" hint-placeholder-count="9">
+              <tr>
+                <td style="font-size:11.5px;font-variant-numeric:tabular-nums">{{ o.updated }}<small class="tf-cell-sub">{{ o.local }}</small></td>
+                <td><strong style="font-size:13px">{{ o.symbol }}</strong><small class="tf-cell-sub">{{ o.side }}</small></td>
+                <td><span class="tag {{ o.stateTag }}" style="font-weight:700;font-size:10.5px;letter-spacing:0.04em">{{ o.state }}</span></td>
+                <td class="tf-num" style="font-variant-numeric:tabular-nums">{{ o.requested }}</td>
+                <td class="tf-num" style="font-variant-numeric:tabular-nums;color:{{ o.filledColor }}">{{ o.filled }}</td>
+                <td style="font-size:11.5px">{{ o.type }}</td>
+                <td style="font-size:11.5px;font-variant-numeric:tabular-nums">{{ o.price }}</td>
+                <td style="font-size:11.5px">{{ o.strategy }}</td>
+                <td style="font-size:10.5px;color:var(--color-neutral-700);font-family:ui-monospace,monospace">{{ o.clientId }}</td>
+                <td>
+                  <sc-if value="{{ o.canCancel }}" hint-placeholder-val="{{ false }}">
+                    <span style="display:flex;gap:5px">
+                      <button class="btn btn-secondary" style="min-height:26px;padding:3px 8px;font-size:11px;border-color:var(--color-accent);color:var(--color-accent-700)" onClick="{{ o.cancel }}">Cancel</button>
+                      <button class="btn btn-secondary" style="min-height:26px;padding:3px 8px;font-size:11px" onClick="{{ o.replace }}">Replace</button>
+                    </span>
+                  </sc-if>
+                  <sc-if value="{{ o.terminal }}" hint-placeholder-val="{{ true }}">
+                    <span style="font-size:11px;color:var(--color-neutral-500)">{{ o.terminalNote }}</span>
+                  </sc-if>
+                </td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </sc-if>
+
+  <sc-if value="{{ isWishlists }}" hint-placeholder-val="{{ false }}">
+    <section data-screen-label="Wishlists">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:15px 20px 12px">
+        <div>
+          <small style="display:block;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent);font-weight:700">Universe management</small>
+          <h1 style="font-family:var(--font-heading);font-weight:800;font-size:27px;line-height:1.05;letter-spacing:-0.02em;margin:5px 0 0">Wishlists</h1>
+          <p style="margin:6px 0 0;font-size:13px;color:var(--color-neutral-800)">Create groups, maintain ticker context, control observation, and import a Finviz universe. This page cannot submit an order or start a strategy.</p>
+        </div>
+        <a class="btn btn-primary" href="Trading Desk.dc.html" style="min-height:32px;padding:5px 12px;font-size:12px;white-space:nowrap;justify-content:flex-start">Open desk</a>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:0;border-top:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider)">
+        <sc-for list="{{ wishlistTabs }}" as="w" hint-placeholder-count="3">
+          <button class="tf-chip" style="padding:11px 18px;font-size:13px;border-right:1px solid var(--color-neutral-300);text-align:left;font-weight:{{ w.weight }};background:{{ w.bg }};color:{{ w.fg }}" onClick="{{ w.apply }}">
+            {{ w.name }}<span style="display:block;margin-top:2px;font-size:11px;opacity:0.7;font-variant-numeric:tabular-nums">{{ w.meta }}</span>
+          </button>
+        </sc-for>
+        <span style="margin-left:auto;padding:0 18px;display:flex;gap:8px;align-items:center">
+          <input class="input" placeholder="New wishlist name" style="width:200px;height:30px;min-height:30px;padding:3px 8px" value="{{ newName }}" onChange="{{ setNewName }}" />
+          <button class="btn btn-secondary" style="min-height:30px;padding:4px 11px;font-size:12px;white-space:nowrap" onClick="{{ createWishlist }}">Add new</button>
+        </span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;align-items:start">
+        <div style="border-right:2px solid var(--color-divider)">
+
+          <div style="padding:14px 20px;border-bottom:1px solid var(--color-neutral-300)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:11px">
+              <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">Settings</h2>
+              <button class="btn btn-secondary" style="min-height:28px;padding:4px 11px;font-size:11.5px;white-space:nowrap" onClick="{{ toggleObserver }}">{{ observerLabel }}</button>
+            </div>
+            <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:12px">
+              <div class="field"><label for="wl-name">Name</label><input class="input" id="wl-name" style="height:32px;min-height:32px;padding:4px 8px" value="{{ wlName }}" onChange="{{ setWlName }}" /></div>
+              <div class="field"><label for="wl-desc">Description</label><input class="input" id="wl-desc" style="height:32px;min-height:32px;padding:4px 8px" value="{{ wlDesc }}" onChange="{{ setWlDesc }}" /></div>
+            </div>
+            <div style="display:flex;gap:0;border:1px solid var(--color-divider);margin-top:11px;width:max-content">
+              <button class="tf-chip" style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;font-size:12px;font-weight:{{ defWeight }};background:{{ defBg }};color:{{ defFg }}" onClick="{{ toggleDefault }}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity:{{ defMark }}"><path d="M20 6 9 17l-5-5"></path></svg>Default wishlist</button>
+              <button class="tf-chip" style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;font-size:12px;border-left:1px solid var(--color-divider);font-weight:{{ extWeight }};background:{{ extBg }};color:{{ extFg }}" onClick="{{ toggleExtended }}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity:{{ extMark }}"><path d="M20 6 9 17l-5-5"></path></svg>Include extended hours</button>
+            </div>
+          </div>
+
+          <div style="padding:14px 20px;border-bottom:1px solid var(--color-neutral-300)">
+            <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 11px">Add symbols</h2>
+            <div style="display:grid;grid-template-columns:96px minmax(0,1fr) minmax(0,1.4fr) auto;gap:10px;align-items:end">
+              <div class="field"><label for="wl-tk">Ticker</label><input class="input" id="wl-tk" placeholder="RGTI" style="height:32px;min-height:32px;padding:4px 8px" /></div>
+              <div class="field"><label for="wl-dn">Name</label><input class="input" id="wl-dn" placeholder="Optional" style="height:32px;min-height:32px;padding:4px 8px" /></div>
+              <div class="field"><label for="wl-nt">Notes</label><input class="input" id="wl-nt" placeholder="Catalyst, setup, risk" style="height:32px;min-height:32px;padding:4px 8px" /></div>
+              <button class="btn btn-secondary" style="height:32px;padding:0 12px;font-size:12px;white-space:nowrap" onClick="{{ addOne }}">Add ticker</button>
+            </div>
+            <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:11px">
+              <div class="field">
+                <label for="wl-bulk">Paste many symbols</label>
+                <textarea class="input" id="wl-bulk" rows="2" placeholder="AAPL, MSFT, NVDA" style="min-height:52px;padding:5px 8px"></textarea>
+              </div>
+              <button class="btn btn-secondary" style="height:32px;padding:0 12px;font-size:12px;white-space:nowrap" onClick="{{ addMany }}">Add all</button>
+            </div>
+            <p style="margin:5px 0 0;font-size:11px;color:var(--color-neutral-700)">Separate with commas, spaces or new lines. Adding is idempotent.</p>
+            <div style="display:grid;grid-template-columns:132px minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:12px;padding-top:12px;border-top:1px solid var(--color-neutral-300)">
+              <div class="field">
+                <label for="wl-scope">Screener scope</label>
+                <select class="input" id="wl-scope" style="height:32px;min-height:32px;padding:4px 8px" value="{{ importScope }}" onChange="{{ setImportScope }}">
+                  <option value="swing">Swing</option>
+                  <option value="intraday">Intraday (today)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="wl-finviz">Finviz screener URL, name or query</label>
+                <input class="input" id="wl-finviz" style="height:32px;min-height:32px;padding:4px 8px;font-family:ui-monospace,monospace;font-size:11.5px" value="{{ importQuery }}" onChange="{{ setImportQuery }}" />
+              </div>
+              <button class="btn btn-secondary" style="height:32px;padding:0 12px;font-size:12px;white-space:nowrap" onClick="{{ runImport }}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"></path><path d="m8 11 4 4 4-4"></path><path d="M8 21h8"></path></svg>Import</button>
+            </div>
+            <p style="margin:5px 0 0;font-size:11px;color:var(--color-neutral-700)">Adds returned symbols without removing existing entries. An intraday screen is scoped to the current session only.</p>
+          </div>
+
+          <div style="padding:14px 20px 28px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
+              <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0">Symbols</h2>
+              <sc-if value="{{ hasSelection }}" hint-placeholder-val="{{ false }}">
+                <span style="display:flex;align-items:center;gap:9px;padding:5px 10px;background:var(--color-accent-100)">
+                  <strong style="font-size:12px;color:var(--color-accent-900);font-variant-numeric:tabular-nums">{{ selectionCount }} selected</strong>
+                  <button class="btn btn-secondary" style="min-height:26px;padding:3px 9px;font-size:11px;border-color:var(--color-accent);color:var(--color-accent-700)" onClick="{{ removeSelected }}">Remove selected</button>
+                  <button class="btn btn-secondary" style="min-height:26px;padding:3px 9px;font-size:11px" onClick="{{ clearSelection }}">Clear</button>
+                </span>
+              </sc-if>
+            </div>
+            <table class="tf-grid">
+              <thead>
+                <tr>
+                  <th style="width:34px"><input type="checkbox" style="width:15px;height:15px" checked="{{ allSelected }}" onChange="{{ toggleAll }}" /></th>
+                  <th style="width:88px">Ticker</th>
+                  <th style="min-width:200px">Name</th>
+                  <th style="min-width:280px">Notes</th>
+                  <th style="width:120px">Added</th>
+                  <th style="width:96px"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ symbols }}" as="sym" hint-placeholder-count="10">
+                  <tr>
+                    <td><input type="checkbox" style="width:15px;height:15px" checked="{{ sym.checked }}" onChange="{{ sym.toggle }}" /></td>
+                    <td><strong style="font-size:13px">{{ sym.ticker }}</strong></td>
+                    <td><input class="input" style="height:28px;min-height:28px;padding:3px 7px;font-size:12px" value="{{ sym.name }}" onChange="{{ sym.setName }}" /></td>
+                    <td><input class="input" style="height:28px;min-height:28px;padding:3px 7px;font-size:12px" value="{{ sym.notes }}" onChange="{{ sym.setNotes }}" /></td>
+                    <td style="font-size:11.5px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ sym.added }}</td>
+                    <td><button class="btn btn-secondary" style="min-height:26px;padding:3px 9px;font-size:11px" onClick="{{ sym.save }}">Save</button></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <aside style="padding:14px 18px 28px;position:sticky;top:0">
+          <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 5px">Management only</h2>
+          <p style="margin:0 0 12px;font-size:12px;color:var(--color-neutral-800);line-height:1.45">This page cannot submit broker orders or start a strategy. Open the desk to review live evidence first.</p>
+          <dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px;padding-bottom:14px;border-bottom:1px solid var(--color-neutral-300)">
+            <dt style="color:var(--color-neutral-700)">Observer</dt><dd style="margin:0;font-weight:600">{{ observerState }}</dd>
+            <dt style="color:var(--color-neutral-700)">Extended hours</dt><dd style="margin:0">{{ extendedState }}</dd>
+            <dt style="color:var(--color-neutral-700)">Default</dt><dd style="margin:0">{{ defaultState }}</dd>
+            <dt style="color:var(--color-neutral-700)">Active symbols</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ activeCount }}</dd>
+            <dt style="color:var(--color-neutral-700)">Last import</dt><dd style="margin:0;font-variant-numeric:tabular-nums">{{ lastImport }}</dd>
+          </dl>
+          <p style="margin:14px 0 0;padding:9px 11px;border-left:3px solid var(--color-accent);background:var(--color-accent-100);font-size:12px;color:var(--color-accent-900);line-height:1.45">A current wishlist may drive today's operation but may not be projected backward. Backtests built on it are marked research-only.</p>
+          <button class="btn btn-secondary" style="min-height:32px;padding:5px 12px;font-size:12px;margin-top:16px;border-color:var(--color-accent);color:var(--color-accent-700);white-space:nowrap" onClick="{{ deleteWishlist }}">Delete wishlist</button>
+        </aside>
+      </div>
+    </section>
+  </sc-if>
+
+  <sc-if value="{{ isOps }}" hint-placeholder-val="{{ false }}">
+    <section data-screen-label="Operations">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:15px 20px 12px">
+        <div>
+          <small style="display:block;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent);font-weight:700">Operator health</small>
+          <h1 style="font-family:var(--font-heading);font-weight:800;font-size:27px;line-height:1.05;letter-spacing:-0.02em;margin:5px 0 0">Operations</h1>
+          <p style="margin:6px 0 0;font-size:13px;color:var(--color-neutral-800)">Authoritative server state. Anything unreadable is reported as unknown rather than guessed, and execution stays fail-closed while it is.</p>
+        </div>
+        <span class="tag {{ opsOverallTag }}" style="font-weight:700;letter-spacing:0.05em;font-size:12px">{{ opsOverall }}</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider)">
+        <sc-for list="{{ opsSummary }}" as="o" hint-placeholder-count="4">
+          <div style="padding:11px 18px;border-right:{{ o.border }};background:{{ o.bg }}">
+            <small style="display:block;font-size:9.5px;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-neutral-700);font-weight:700">{{ o.label }}</small>
+            <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:17px;margin-top:2px;color:{{ o.color }}">{{ o.value }}</strong>
+            <span style="display:block;margin-top:3px;font-size:11.5px;color:var(--color-neutral-800);line-height:1.35">{{ o.detail }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);align-items:start">
+        <div style="min-width:0;border-right:2px solid var(--color-divider);padding:15px 20px 28px">
+          <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 11px">Subsystems</h2>
+          <div class="tf-scroll">
+          <table class="tf-grid">
+            <thead>
+              <tr>
+                <th style="width:26px"></th>
+                <th style="width:160px">Subsystem</th>
+                <th style="width:114px">State</th>
+                <th style="min-width:220px">Evidence</th>
+                <th style="width:96px">Checked</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ subsystems }}" as="sub" hint-placeholder-count="11">
+                <tr>
+                  <td style="text-align:center;font-weight:800;color:{{ sub.color }}">{{ sub.glyph }}</td>
+                  <td><strong style="font-size:12.5px">{{ sub.name }}</strong><small class="tf-cell-sub">{{ sub.owner }}</small></td>
+                  <td><span class="tag {{ sub.tag }}" style="font-weight:700;font-size:10.5px;letter-spacing:0.04em">{{ sub.state }}</span></td>
+                  <td style="font-size:12px;line-height:1.4;color:var(--color-neutral-800)">{{ sub.evidence }}</td>
+                  <td style="font-size:11.5px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ sub.checked }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+          </div>
+        </div>
+
+        <div style="min-width:0;padding:15px 20px 28px">
+          <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 5px">Entry gate</h2>
+          <p style="margin:0 0 11px;font-size:12px;color:var(--color-neutral-800);line-height:1.45">Blocks are stated with the server code so the reason is auditable, not paraphrased.</p>
+          <ul style="list-style:none;margin:0 0 18px;padding:0;border:1px solid var(--color-divider)">
+            <sc-for list="{{ blocks }}" as="b" hint-placeholder-count="3">
+              <li style="padding:9px 11px;border-top:{{ b.border }}">
+                <span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                  <strong style="font-family:ui-monospace,monospace;font-size:11.5px;color:var(--color-accent-800)">{{ b.code }}</strong>
+                  <span class="tag {{ b.tag }}" style="font-weight:700;font-size:10px;letter-spacing:0.05em">{{ b.severity }}</span>
+                </span>
+                <span style="display:block;margin-top:4px;font-size:12px;line-height:1.4;color:var(--color-neutral-800)">{{ b.detail }}</span>
+              </li>
+            </sc-for>
+          </ul>
+
+          <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 5px">Warm-up cache</h2>
+          <dl style="margin:0 0 18px;display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px">
+            <dt style="color:var(--color-neutral-700)">Window</dt><dd style="margin:0;font-variant-numeric:tabular-nums">240 d · data/backtest/normalized/240d</dd>
+            <dt style="color:var(--color-neutral-700)">Manifest written</dt><dd style="margin:0;font-variant-numeric:tabular-nums">04 Aug 06:14:22 UTC</dd>
+            <dt style="color:var(--color-neutral-700)">Coverage</dt><dd style="margin:0;font-variant-numeric:tabular-nums">14 of 14 tickers</dd>
+            <dt style="color:var(--color-neutral-700)">Oldest observation</dt><dd style="margin:0;font-variant-numeric:tabular-nums">2016-01-04</dd>
+          </dl>
+
+          <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 8px">Recent events</h2>
+          <ul style="list-style:none;margin:0;padding:0;border-top:1px solid var(--color-neutral-300)">
+            <sc-for list="{{ events }}" as="ev" hint-placeholder-count="8">
+              <li style="padding:6px 0;border-bottom:1px solid var(--color-neutral-300);display:grid;grid-template-columns:74px 1fr;gap:10px;font-size:11.5px">
+                <time style="color:var(--color-neutral-700);font-variant-numeric:tabular-nums">{{ ev.at }}</time>
+                <span style="color:{{ ev.color }};line-height:1.4">{{ ev.text }}</span>
+              </li>
+            </sc-for>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </sc-if>
+
+  <sc-if value="{{ hasDialog }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" style="position:fixed;inset:0;display:grid;place-items:center;padding:20px;background:color-mix(in srgb, var(--color-text) 45%, transparent);z-index:80">
+      <div class="dialog elev-lg" style="width:min(520px,100%);background:var(--color-bg);border:2px solid var(--color-text);padding:18px 20px">
+        <h2 style="font-family:var(--font-heading);font-weight:800;font-size:17px;letter-spacing:-0.01em;margin:0">{{ dialogTitle }}</h2>
+        <p style="margin:8px 0 0;font-size:13px;line-height:1.45;color:var(--color-neutral-800);text-wrap:pretty">{{ dialogBody }}</p>
+        <dl style="margin:14px 0 0;display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px;padding-top:12px;border-top:1px solid var(--color-neutral-300)">
+          <dt style="color:var(--color-neutral-700)">Environment</dt><dd style="margin:0">Paper</dd>
+          <dt style="color:var(--color-neutral-700)">Action</dt><dd style="margin:0">{{ dialogAction }}</dd>
+          <dt style="color:var(--color-neutral-700)">Protection</dt><dd style="margin:0">{{ dialogProtection }}</dd>
+        </dl>
+        <p style="margin:12px 0 0;font-size:11.5px;color:var(--color-neutral-700);line-height:1.4">{{ dialogNote }}</p>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn btn-primary" style="min-height:36px;padding:6px 13px;font-size:13px;justify-content:flex-start" onClick="{{ dialogConfirm }}">{{ dialogConfirmLabel }}</button>
+          <button class="btn btn-secondary" style="min-height:36px;padding:6px 13px;font-size:13px" onClick="{{ dialogCancel }}">Keep as is</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+    <div role="status" style="position:fixed;right:20px;bottom:20px;z-index:90;max-width:380px;background:var(--color-text);color:var(--color-bg);padding:12px 16px;box-shadow:var(--shadow-lg)">
+      <strong style="display:block;font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.05em;text-transform:uppercase">{{ toastTitle }}</strong>
+      <span style="display:block;margin-top:4px;font-size:12.5px;line-height:1.4">{{ toastBody }}</span>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1600,&quot;height&quot;:1000}}">
+const GAIN = 'var(--color-text)';
+const LOSS = 'var(--color-accent-700)';
+const FLAT = 'var(--color-neutral-700)';
+const OK = 'var(--color-text)';
+
+const POSITIONS = [
+  { t: 'NVDA', side: 'LONG', src: 'Wishlist', q: 120, e: 174.1, last: 181.42,
+    strategy: 'intraday-ema10-ema20-macd-volume v1', prot: 'Stop 169.80 · Target 188.40',
+    ref: 'job 4f2a…91c', protected: true },
+  { t: 'AVGO', side: 'LONG', src: 'Wishlist', q: 40, e: 305.2, last: 312.88,
+    strategy: 'minervini-trend-template-vcp v4', prot: 'Stop 296.10 · Target 328.60',
+    ref: 'job 8c14…2be', protected: true },
+  { t: 'MU', side: 'LONG', src: 'Stock Pulse', q: 90, e: 103.55, last: 106.34,
+    strategy: 'intraday-ema10-ema20-macd-volume v1', prot: 'Stop 100.20 · Target 112.80',
+    ref: 'session 1d90…77a', protected: true },
+  { t: 'UBER', side: 'LONG', src: 'Manual', q: 60, e: 85.4, last: 88.31,
+    strategy: 'manual entry · swing horizon', prot: 'Stop 82.10 · Target 94.90',
+    ref: 'ticket 6ba2…04f', protected: true },
+  { t: 'COIN', side: 'LONG', src: 'Manual', q: 30, e: 252.1, last: 244.91,
+    strategy: 'manual entry · intraday horizon', prot: 'No broker stop on file',
+    ref: 'ticket 3e77…c15', protected: false }
+];
+
+const ORDERS = [
+  { at: '04 Aug 18:33:41', sym: 'MU', side: 'BUY', state: 'Filled', req: 90, fill: 90,
+    type: 'limit / day', price: 'Fill $103.55', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-1c9d4a7e-0b21' },
+  { at: '04 Aug 18:29:12', sym: 'PLTR', side: 'BUY', state: 'New', req: 140, fill: 0,
+    type: 'limit / day', price: 'Limit $41.60', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-77b0e2f1-4d8a' },
+  { at: '04 Aug 18:21:55', sym: 'MRVL', side: 'BUY', state: 'Partially filled', req: 200, fill: 120,
+    type: 'limit / day', price: 'Limit $74.05', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-2a41c8d9-9e03' },
+  { at: '04 Aug 18:12:07', sym: 'SOFI', side: 'BUY', state: 'Rejected', req: 500, fill: 0,
+    type: 'limit / day', price: 'Limit $22.10', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-9f30ab52-1c74' },
+  { at: '04 Aug 17:58:33', sym: 'RIVN', side: 'BUY', state: 'Cancel pending', req: 600, fill: 0,
+    type: 'stop limit / day', price: 'Stop $13.90', strategy: 'intraday-atr-compression-breakout bt-v1', id: 'tf-5d82fe10-7a29' },
+  { at: '04 Aug 17:44:19', sym: 'COIN', side: 'BUY', state: 'Filled', req: 30, fill: 30,
+    type: 'market / day', price: 'Fill $252.10', strategy: 'manual entry', id: 'tf-b104c7a3-3f61' },
+  { at: '04 Aug 16:31:02', sym: 'SMCI', side: 'SELL', state: 'Filled', req: 150, fill: 150,
+    type: 'limit / day', price: 'Fill $39.88', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-e2c9017b-8d40' },
+  { at: '04 Aug 15:12:48', sym: 'DKNG', side: 'BUY', state: 'Expired', req: 220, fill: 0,
+    type: 'limit / day', price: 'Limit $44.20', strategy: 'swing-reversal-reclaim-bull-quality v1', id: 'tf-6a7f2b94-05ce' },
+  { at: '04 Aug 14:06:25', sym: 'AMD', side: 'BUY', state: 'Cancelled', req: 180, fill: 0,
+    type: 'limit / day', price: 'Limit $147.20', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-0b53d8e6-2a17' }
+];
+
+const WISHLISTS = {
+  intraday: {
+    name: 'Intraday catalyst', desc: 'Same-session catalyst and participation candidates',
+    observed: true, isDefault: true, extended: false, lastImport: '04 Aug 14:36 UTC',
+    items: [
+      ['NVDA', 'NVIDIA Corp', 'Continuation base above VWAP; partner summit catalyst', '12 Jul'],
+      ['AMD', 'Advanced Micro Devices', 'Reports tonight after the close — no entry before the print', '12 Jul'],
+      ['PLTR', 'Palantir Technologies', 'Federal vehicle award; watch 3.4 ATR extension', '18 Jul'],
+      ['MU', 'Micron Technology', 'HBM pricing; compression breakout candidate', '12 Jul'],
+      ['COIN', 'Coinbase Global', 'Spread routinely over the 5 bps ceiling', '21 Jul'],
+      ['SMCI', 'Super Micro Computer', 'Distribution since the miss; long setups suppressed', '24 Jul'],
+      ['MRVL', 'Marvell Technology', 'VWAP pullback works; keep size at half', '28 Jul'],
+      ['SOFI', 'SoFi Technologies', 'Notional cap keeps blocking this one', '28 Jul'],
+      ['RIVN', 'Rivian Automotive', 'Wide spread and slow quotes; observation only', '30 Jul'],
+      ['TSLA', 'Tesla Inc', 'High RVOL but fails the confluence filter most days', '30 Jul'],
+      ['DKNG', 'DraftKings Inc', 'Needs the 1h EMA50 reclaim first', '02 Aug'],
+      ['HOOD', 'Robinhood Markets', 'From the intraday screener, 01 Aug', '01 Aug'],
+      ['MARA', 'Marathon Digital', 'From the intraday screener, 01 Aug', '01 Aug'],
+      ['UBER', 'Uber Technologies', 'Swing thesis predates the print; reports tomorrow', '19 Jul']
+    ]
+  },
+  swing: {
+    name: 'Swing quality', desc: 'Cross-sectional momentum with quality screens',
+    observed: true, isDefault: false, extended: true, lastImport: '02 Aug 06:10 UTC',
+    items: [
+      ['AVGO', 'Broadcom Inc', 'Custom silicon pipeline; reports tomorrow after close', '14 Jun'],
+      ['MSFT', 'Microsoft Corp', 'Trend template satisfied since March', '14 Jun'],
+      ['NVDA', 'NVIDIA Corp', 'Core holding candidate', '14 Jun'],
+      ['ANET', 'Arista Networks', 'Trend template satisfied, no trigger yet', '20 Jun'],
+      ['CRWD', 'CrowdStrike Holdings', 'RSI over the entry ceiling; wait for reset', '20 Jun'],
+      ['UBER', 'Uber Technologies', 'Reclaim confirmed 13:41 UTC', '28 Jun'],
+      ['LRCX', 'Lam Research', 'From the swing screener, 02 Aug', '02 Aug'],
+      ['NOW', 'ServiceNow Inc', 'Long base; watch volume dry-up', '05 Jul'],
+      ['V', 'Visa Inc', 'Low beta ballast for the group', '05 Jul'],
+      ['WMT', 'Walmart Inc', 'Defensive slot', '12 Jul']
+    ]
+  },
+  earnings: {
+    name: 'Earnings reaction', desc: 'Post-release breakout and fade candidates',
+    observed: false, isDefault: false, extended: true, lastImport: '03 Aug 22:02 UTC',
+    items: [
+      ['ETSY', 'Etsy Inc', 'Beat with confirmed breakout 12:05 UTC', '04 Aug'],
+      ['AMD', 'Advanced Micro Devices', 'Reports tonight', '04 Aug'],
+      ['MU', 'Micron Technology', 'Beat; move stalled below the reference high', '04 Aug'],
+      ['SMCI', 'Super Micro Computer', 'Miss with failed breakout', '04 Aug'],
+      ['DKNG', 'DraftKings Inc', 'In line, mixed reaction', '04 Aug'],
+      ['RIVN', 'Rivian Automotive', 'Reports tonight', '04 Aug'],
+      ['AVGO', 'Broadcom Inc', 'Reports tomorrow after the close', '03 Aug'],
+      ['COIN', 'Coinbase Global', 'Reports tomorrow after the close', '03 Aug'],
+      ['ANET', 'Arista Networks', 'Reports tomorrow, estimated slot', '03 Aug']
+    ]
+  }
+};
+
+const SCREENER_QUERIES = {
+  swing: 'f=cap_midover,sh_avgvol_o500,ta_perf_4w20o,ta_sma50_pa&o=-perfytd',
+  intraday: 'f=sh_curvol_o1000,sh_relvol_o2,ta_change_u3&ft=4&o=-volume'
+};
+
+const SUBSYSTEMS = [
+  ['Alpaca credentials', 'AlpacaCredentialProvider', 'valid', true,
+    'Key id and secret present from user-secrets. Read-only account check returned 200.', '18:41:02'],
+  ['Market calendar', 'AlpacaBrokerClient.GetSessionAsync', 'regular', true,
+    'Alpaca trade date 2026-08-04. Regular session. Calendar reads are provider-cached.', '18:41:02'],
+  ['Quote stream', 'OperationalStatusService', 'connected', true,
+    'Newest quote is 0s old. Fresh under the 20-second threshold; stale begins at 2 minutes.', '18:41:24'],
+  ['Order stream', 'IOrderSynchronizationCoordinator', 'connected', true,
+    'Broker order stream connected. Last event 18:33:41 UTC on tf-1c9d4a7e-0b21.', '18:41:20'],
+  ['Account reconciliation', 'IAccountReconciliationService', 'clean', true,
+    'Initial reconciliation completed. Broker positions match the local book on all five symbols.', '18:40:55'],
+  ['Entry gate', 'IEntryAdmissionControl', 'blocked', false,
+    'One block open. New entries are refused for the affected symbol until it clears.', '18:41:24'],
+  ['Market predictor', 'MarketPredictorHttpClient', 'available', true,
+    'Contract v2.4. Unified, swing and intraday modes answering. Read-only evidence.', '18:40:48'],
+  ['FinBERT sentiment', 'sidecar / FINBERT_SENTIMENT_URL', 'not configured', null,
+    'FINBERT_SENTIMENT_URL unset, so sentiment falls back to local VADER scoring.', '18:41:02'],
+  ['Warm-up service', 'WarmupServiceClient', 'available', true,
+    'Rolling candle cache advanced incrementally. Manifest written 06:14:22 UTC.', '18:14:10'],
+  ['Raw archive', 'IRawArchiveWriter', 'writing', true,
+    'Provider payloads archived before parsing. 1,284 documents today under data/raw.', '18:41:02'],
+  ['Database backup', 'DatabaseBackupHostedService', 'attention', false,
+    'Last successful backup 03 Aug 02:00 UTC. Today\u2019s scheduled run has not reported.', '18:00:00']
+];
+
+const BLOCKS = [
+  ['NOTIONAL_CAP_REACHED', 'high', 'SOFI would take the account to 27.4% of equity in one position, over the 25% max position notional. The order was refused before routing.'],
+  ['SPREAD_OVER_CEILING', 'medium', 'COIN and RIVN quote wider than the 5.0 bps entry ceiling for the selected strategy. Existing positions are unaffected.'],
+  ['UNPROTECTED_POSITION', 'high', 'COIN has no broker stop on file. Protection belonged to the entry; the position needs a stop or an exit.']
+];
+
+const EVENTS = [
+  ['18:41:24', 'entry gate re-evaluated · 3 blocks open', LOSS],
+  ['18:33:41', 'order filled · MU 90 @ $103.55 · tf-1c9d4a7e-0b21', OK],
+  ['18:29:12', 'order accepted · PLTR 140 limit $41.60', OK],
+  ['18:21:55', 'partial fill · MRVL 120 of 200', OK],
+  ['18:12:07', 'order rejected · SOFI · NOTIONAL_CAP_REACHED', LOSS],
+  ['17:58:33', 'cancel requested · RIVN · quote age outside tolerance', FLAT],
+  ['14:36:12', 'finviz screener synced · intraday · 17 hits, 5 new', OK],
+  ['06:14:22', 'warm-up manifest written · 240d · 14 of 14 tickers', OK]
+];
+
+class Component extends DCLogic {
+  state = {
+    page: 'positions',
+    source: 'all',
+    orderFilter: 'all',
+    wishlist: 'intraday',
+    newName: '',
+    wlName: WISHLISTS.intraday.name,
+    wlDesc: WISHLISTS.intraday.desc,
+    observed: WISHLISTS.intraday.observed,
+    isDefault: WISHLISTS.intraday.isDefault,
+    extended: WISHLISTS.intraday.extended,
+    selection: [],
+    importScope: 'intraday',
+    importQuery: SCREENER_QUERIES.intraday,
+    dialog: null,
+    toast: null,
+    now: new Date(Date.UTC(2026, 7, 4, 18, 41, 24))
+  };
+
+  componentDidMount() { this.timer = setInterval(() => this.setState(s => ({ now: new Date(s.now.getTime() + 1000) })), 1000); }
+  componentWillUnmount() { clearInterval(this.timer); clearTimeout(this.toastTimer); }
+
+  clock() {
+    const d = this.state.now;
+    const p = n => String(n).padStart(2, '0');
+    return p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds());
+  }
+
+  fire(title, body) {
+    clearTimeout(this.toastTimer);
+    this.setState({ toast: { title, body } });
+    this.toastTimer = setTimeout(() => this.setState({ toast: null }), 5000);
+  }
+
+  money(v) { return '$' + v.toFixed(2); }
+  signed(v) { return (v > 0.005 ? '+' : v < -0.005 ? '\u2212' : '') + '$' + Math.abs(v).toFixed(2); }
+  dirColor(v) { return v > 0.005 ? GAIN : v < -0.005 ? LOSS : FLAT; }
+
+  navItem(key) {
+    const on = this.state.page === key;
+    return {
+      weight: on ? '700' : '400',
+      color: on ? 'var(--color-accent)' : 'var(--color-neutral-800)',
+      rule: on ? '2px solid var(--color-accent)' : '2px solid transparent'
+    };
+  }
+
+  chips(list, current, setter, counts) {
+    return list.map((o, i) => ({
+      label: o.label,
+      count: counts[o.key],
+      border: i === 0 ? '0' : '1px solid var(--color-divider)',
+      weight: current === o.key ? '700' : '500',
+      bg: current === o.key ? 'var(--color-text)' : 'transparent',
+      fg: current === o.key ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+      apply: () => setter(o.key)
+    }));
+  }
+
+  selectWishlist(key) {
+    const w = WISHLISTS[key];
+    this.setState({
+      wishlist: key, wlName: w.name, wlDesc: w.desc, observed: w.observed,
+      isDefault: w.isDefault, extended: w.extended, selection: []
+    });
+  }
+
+  renderVals() {
+    const s = this.state;
+    const nav = {
+      posWeight: this.navItem('positions').weight, posColor: this.navItem('positions').color, posRule: this.navItem('positions').rule,
+      ordWeight: this.navItem('orders').weight, ordColor: this.navItem('orders').color, ordRule: this.navItem('orders').rule,
+      wlWeight: this.navItem('wishlists').weight, wlColor: this.navItem('wishlists').color, wlRule: this.navItem('wishlists').rule,
+      opsWeight: this.navItem('ops').weight, opsColor: this.navItem('ops').color, opsRule: this.navItem('ops').rule
+    };
+
+    const posAll = POSITIONS.map(p => {
+      const pl = (p.last - p.e) * p.q;
+      const plPct = ((p.last - p.e) / p.e) * 100;
+      return {
+        raw: p, ticker: p.t, side: p.side, source: p.src,
+        qty: p.q.toFixed(0), entry: this.money(p.e), last: this.money(p.last),
+        pl: this.signed(pl), plPct: (plPct >= 0 ? '+' : '\u2212') + Math.abs(plPct).toFixed(2) + '%',
+        color: this.dirColor(pl), plRaw: pl,
+        strategy: p.strategy,
+        protection: p.prot,
+        protColor: p.protected ? 'var(--color-neutral-800)' : LOSS,
+        reference: p.ref,
+        reviewExit: () => this.setState({
+          dialog: {
+            title: 'Review paper exit \u2014 ' + p.t,
+            body: 'Close the complete position of ' + p.q + ' shares at the inside bid. The server re-reads the selected run or automation session before requesting the broker exit.',
+            action: 'Close the complete position',
+            protection: p.prot,
+            note: 'An exit carries no stop or target. The server checks the exit quantity against the open position.',
+            confirmLabel: 'Confirm paper exit',
+            onConfirm: () => {
+              this.setState({ dialog: null });
+              this.fire('Exit submitted', p.t + ' \u00b7 ' + p.q + ' shares at market on the paper broker. Watch the Orders tab for the terminal state.');
+            }
+          }
+        })
+      };
+    });
+
+    const sourceKeys = [
+      { key: 'all', label: 'All' },
+      { key: 'Wishlist', label: 'Wishlist' },
+      { key: 'Stock Pulse', label: 'Stock Pulse' },
+      { key: 'Manual', label: 'Manual' }
+    ];
+    const sourceCounts = {};
+    sourceKeys.forEach(k => { sourceCounts[k.key] = k.key === 'all' ? posAll.length : posAll.filter(p => p.source === k.key).length; });
+    const positions = s.source === 'all' ? posAll : posAll.filter(p => p.source === s.source);
+    const total = posAll.reduce((a, p) => a + p.plRaw, 0);
+    const exposure = posAll.reduce((a, p) => a + p.raw.last * p.raw.q, 0);
+    const unprotected = posAll.filter(p => !p.raw.protected).length;
+
+    const working = ['New', 'Partially filled', 'Cancel pending'];
+    const ordAll = ORDERS.map(o => {
+      const isWorking = working.includes(o.state);
+      return {
+        raw: o, updated: o.at + ' UTC', local: o.at.slice(7, 12) + ' local (CEST +2)',
+        symbol: o.sym, side: o.side, state: o.state,
+        stateTag: o.state === 'Filled' ? 'tag-neutral' : isWorking ? 'tag-accent' : 'tag-outline',
+        requested: o.req.toFixed(0), filled: o.fill.toFixed(0),
+        filledColor: o.fill === 0 ? FLAT : o.fill < o.req ? LOSS : GAIN,
+        type: o.type, price: o.price, strategy: o.strategy, clientId: o.id,
+        canCancel: isWorking, terminal: !isWorking,
+        terminalNote: o.state === 'Filled' ? 'Terminal' : 'Terminal \u00b7 no action',
+        cancel: () => this.setState({
+          dialog: {
+            title: 'Cancel working order \u2014 ' + o.sym,
+            body: 'Request cancellation of the working ' + o.sym + ' ' + o.side.toLowerCase() + ' order for ' + o.req + ' shares. The broker may still fill it before the cancel is acknowledged.',
+            action: 'Cancel the working order',
+            protection: o.price,
+            note: 'Broker writes are idempotent and audited. The order keeps its client order id through the cancel.',
+            confirmLabel: 'Confirm cancel',
+            onConfirm: () => {
+              this.setState({ dialog: null });
+              this.fire('Cancel requested', o.sym + ' \u00b7 ' + o.id + '. State moves to cancel pending until the broker acknowledges.');
+            }
+          }
+        }),
+        replace: () => this.fire('Replace opens a fresh ticket', o.sym + ' cancel plus a new reviewed ticket, so quote, spread and session are re-checked before routing.')
+      };
+    });
+    const orderKeys = [
+      { key: 'all', label: 'All' },
+      { key: 'working', label: 'Working' },
+      { key: 'filled', label: 'Filled' },
+      { key: 'rejected', label: 'Rejected' },
+      { key: 'closed', label: 'Cancelled / expired' }
+    ];
+    const matchOrder = (o, key) => {
+      if (key === 'all') return true;
+      if (key === 'working') return o.canCancel;
+      if (key === 'filled') return o.state === 'Filled';
+      if (key === 'rejected') return o.state === 'Rejected';
+      return o.state === 'Cancelled' || o.state === 'Expired';
+    };
+    const orderCounts = {};
+    orderKeys.forEach(k => { orderCounts[k.key] = ordAll.filter(o => matchOrder(o, k.key)).length; });
+    const orders = ordAll.filter(o => matchOrder(o, s.orderFilter));
+
+    const orderStats = [
+      { label: 'Working', value: orderCounts.working, color: 'var(--color-accent)' },
+      { label: 'Filled', value: orderCounts.filled, color: OK },
+      { label: 'Rejected', value: orderCounts.rejected, color: LOSS },
+      { label: 'Cancelled / expired', value: orderCounts.closed, color: FLAT },
+      { label: 'Total today', value: ordAll.length, color: OK }
+    ].map((o, i) => ({ ...o, border: i === 4 ? '0' : '1px solid var(--color-neutral-300)' }));
+
+    const wl = WISHLISTS[s.wishlist];
+    const wishlistTabs = Object.keys(WISHLISTS).map(key => {
+      const w = WISHLISTS[key];
+      const on = key === s.wishlist;
+      return {
+        name: w.name,
+        meta: w.items.length + ' active · observer ' + (w.observed ? 'running' : 'paused'),
+        weight: on ? '700' : '500',
+        bg: on ? 'var(--color-text)' : 'transparent',
+        fg: on ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+        apply: () => this.selectWishlist(key)
+      };
+    });
+
+    const symbols = wl.items.map(it => ({
+      ticker: it[0], name: it[1], notes: it[2], added: it[3] + ' 2026',
+      checked: s.selection.includes(it[0]),
+      toggle: () => this.setState(prev => ({
+        selection: prev.selection.includes(it[0])
+          ? prev.selection.filter(x => x !== it[0])
+          : prev.selection.concat(it[0])
+      })),
+      setName: () => {},
+      setNotes: () => {},
+      save: () => this.fire('Symbol saved', it[0] + ' context updated on ' + wl.name + '. Adding is idempotent, so nothing was duplicated.')
+    }));
+
+    const opsSummary = [
+      { label: 'Environment', value: 'PAPER', detail: 'Live routing disabled pending promotion.', color: OK, bg: 'transparent' },
+      { label: 'Market session', value: 'Regular', detail: 'Alpaca trade date 2026-08-04.', color: OK, bg: 'transparent' },
+      { label: 'Broker sync', value: 'Ready', detail: 'Stream connected, reconciliation clean.', color: OK, bg: 'transparent' },
+      { label: 'Entry gate', value: 'Blocked', detail: '3 blocks open. New entries refused for the affected symbols.', color: LOSS, bg: 'var(--color-accent-100)' }
+    ].map((o, i) => ({ ...o, border: i === 3 ? '0' : '1px solid var(--color-neutral-300)' }));
+
+    const subsystems = SUBSYSTEMS.map(sub => ({
+      name: sub[0], owner: sub[1], state: sub[2],
+      glyph: sub[3] === true ? '\u2713' : sub[3] === false ? '\u2715' : '\u2013',
+      color: sub[3] === true ? OK : sub[3] === false ? LOSS : FLAT,
+      tag: sub[3] === true ? 'tag-neutral' : sub[3] === false ? 'tag-accent' : 'tag-outline',
+      evidence: sub[4], checked: sub[5] + ' UTC'
+    }));
+
+    const blocks = BLOCKS.map((b, i) => ({
+      code: b[0],
+      severity: b[1].toUpperCase(),
+      tag: b[1] === 'high' ? 'tag-accent' : 'tag-neutral',
+      detail: b[2],
+      border: i === 0 ? '0' : '1px solid var(--color-neutral-300)'
+    }));
+
+    const d = s.dialog;
+
+    return {
+      nav,
+      clockUtc: this.clock(),
+      refresh: () => this.fire('Refreshed', 'Positions, orders and subsystem state re-read from the server at ' + this.clock() + ' UTC.'),
+      goPositions: () => this.setState({ page: 'positions' }),
+      goOrders: () => this.setState({ page: 'orders' }),
+      goWishlists: () => this.setState({ page: 'wishlists' }),
+      goOps: () => this.setState({ page: 'ops' }),
+      isPositions: s.page === 'positions',
+      isOrders: s.page === 'orders',
+      isWishlists: s.page === 'wishlists',
+      isOps: s.page === 'ops',
+
+      positions,
+      sourceChips: this.chips(sourceKeys, s.source, k => this.setState({ source: k }), sourceCounts),
+      posShown: positions.length + ' of ' + posAll.length + ' positions',
+      posTotal: this.signed(total), posTotalColor: this.dirColor(total),
+      posCount: posAll.length,
+      posExposure: '$' + Math.round(exposure).toLocaleString('en-US'),
+      posUnprotected: unprotected, posUnprotectedColor: unprotected > 0 ? LOSS : OK,
+      posSlots: posAll.length + ' of 6',
+
+      orders, orderStats,
+      orderChips: this.chips(orderKeys, s.orderFilter, k => this.setState({ orderFilter: k }), orderCounts),
+      ordShown: orders.length + ' of ' + ordAll.length + ' orders',
+
+      wishlistTabs,
+      newName: s.newName,
+      setNewName: e => this.setState({ newName: e.target.value }),
+      createWishlist: () => this.fire('Wishlist created',
+        (s.newName.trim() || 'Untitled') + ' created with no symbols and the observer paused.'),
+      wlName: s.wlName, setWlName: e => this.setState({ wlName: e.target.value }),
+      wlDesc: s.wlDesc, setWlDesc: e => this.setState({ wlDesc: e.target.value }),
+      observerLabel: s.observed ? 'Pause observer' : 'Start observer',
+      toggleObserver: () => {
+        this.setState({ observed: !s.observed });
+        this.fire(s.observed ? 'Observer paused' : 'Observer started',
+          wl.name + ' \u00b7 ' + (s.observed ? 'no further signals will be persisted for this group.' : 'the monitor re-evaluates every symbol once per minute.'));
+      },
+      toggleDefault: () => this.setState({ isDefault: !s.isDefault }),
+      defWeight: s.isDefault ? '700' : '500',
+      defBg: s.isDefault ? 'var(--color-text)' : 'transparent',
+      defFg: s.isDefault ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+      defMark: s.isDefault ? '1' : '0.28',
+      toggleExtended: () => this.setState({ extended: !s.extended }),
+      extWeight: s.extended ? '700' : '500',
+      extBg: s.extended ? 'var(--color-text)' : 'transparent',
+      extFg: s.extended ? 'var(--color-bg)' : 'var(--color-neutral-800)',
+      extMark: s.extended ? '1' : '0.28',
+
+      symbols,
+      hasSelection: s.selection.length > 0,
+      selectionCount: s.selection.length,
+      allSelected: s.selection.length === wl.items.length && wl.items.length > 0,
+      toggleAll: () => this.setState({
+        selection: s.selection.length === wl.items.length ? [] : wl.items.map(i => i[0])
+      }),
+      clearSelection: () => this.setState({ selection: [] }),
+      removeSelected: () => {
+        const removed = s.selection.join(', ');
+        this.setState({ selection: [] });
+        this.fire('Symbols removed', removed + ' removed from ' + wl.name + '. Open positions on those symbols are untouched.');
+      },
+      addOne: () => this.fire('Ticker added', 'Added to ' + wl.name + '. The observer picks it up on the next cycle.'),
+      addMany: () => this.fire('Symbols added', 'Bulk add applied to ' + wl.name + '. Duplicates were ignored.'),
+      importScope: s.importScope,
+      setImportScope: e => this.setState({ importScope: e.target.value, importQuery: SCREENER_QUERIES[e.target.value] }),
+      importQuery: s.importQuery,
+      setImportQuery: e => this.setState({ importQuery: e.target.value }),
+      runImport: () => this.fire('Screener imported',
+        (s.importScope === 'intraday' ? '17 hits, 5 new' : '22 hits, 4 new') +
+        ' added to ' + wl.name + '. Existing entries were left in place.'),
+
+      observerState: s.observed ? 'Running · 60 s cadence' : 'Paused',
+      extendedState: s.extended ? 'Included' : 'Regular session only',
+      defaultState: s.isDefault ? 'Yes' : 'No',
+      activeCount: wl.items.length,
+      lastImport: wl.lastImport,
+      deleteWishlist: () => this.setState({
+        dialog: {
+          title: 'Delete ' + wl.name + '?',
+          body: 'This removes the group and its ' + wl.items.length + ' symbol entries. Open positions, orders and persisted signals are not deleted.',
+          action: 'Delete the wishlist and its entries',
+          protection: 'Not applicable',
+          note: 'Backtest and paper run configs that referenced this group keep their generated audit artifacts.',
+          confirmLabel: 'Delete wishlist',
+          onConfirm: () => {
+            this.setState({ dialog: null });
+            this.fire('Wishlist deleted', wl.name + ' removed. Positions and orders are unaffected.');
+          }
+        }
+      }),
+
+      opsOverall: '3 blocks open · 1 subsystem needs attention',
+      opsOverallTag: 'tag-accent',
+      opsSummary,
+      subsystems,
+      blocks,
+      events: EVENTS.map(e => ({ at: e[0], text: e[1], color: e[2] })),
+
+      hasDialog: !!d,
+      dialogTitle: d ? d.title : '',
+      dialogBody: d ? d.body : '',
+      dialogAction: d ? d.action : '',
+      dialogProtection: d ? d.protection : '',
+      dialogNote: d ? d.note : '',
+      dialogConfirmLabel: d ? d.confirmLabel : '',
+      dialogConfirm: () => { if (d) d.onConfirm(); },
+      dialogCancel: () => this.setState({ dialog: null }),
+
+      hasToast: !!s.toast,
+      toastTitle: s.toast ? s.toast.title : '',
+      toastBody: s.toast ? s.toast.body : ''
+    };
+  }
+}
+</script>
+</body>
+</html>
