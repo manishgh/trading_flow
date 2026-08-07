@@ -2,13 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Alpaca;
 using TradingFlow.Domain.Earnings;
+using TradingFlow.Earnings;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.News;
 using TradingFlow.Engine.Abstractions;
@@ -132,27 +132,44 @@ public class AlpacaNewsStreamService : BackgroundService
         }
     }
 
+    /// <summary>
+    /// Writes results carried by a structured headline straight onto the calendar event. The
+    /// provider calendar does not publish after-close actuals on the evening of the release, so
+    /// without this an after-close reporter shows no EPS until the provider backfills it.
+    /// </summary>
     private async Task TryExtractEarningsAsync(CatalystEvent[] events, CancellationToken cancellationToken)
     {
-        // Very simple regex parser for earnings
-        // E.g. "Airbnb Q2 EPS $1.37 Beats $1.25 Estimate, Sales $3.608B Beat $3.576B Estimate"
-        var epsRegex = new Regex(@"EPS\s+\$?([0-9.]+)", RegexOptions.IgnoreCase);
-        var salesRegex = new Regex(@"(?:Sales|Revenue)\s+\$?([0-9.]+)[MB]", RegexOptions.IgnoreCase);
-
+        // E.g. "Airbnb Q2 EPS $1.37 Beats $1.25 Estimate, Sales $3.608B Beat $3.576B Estimate".
+        // The shared extractor is deliberate: it only accepts explicit actual-vs-estimate
+        // headlines, so guidance and preview articles cannot masquerade as a reported result.
         foreach (var ev in events)
         {
-            var epsMatch = epsRegex.Match(ev.Headline);
-            var salesMatch = salesRegex.Match(ev.Headline);
-
-            if (epsMatch.Success || salesMatch.Success)
+            if (!EarningsNewsResultExtractor.TryExtract(ev.Headline, out var result) || !result.HasResult)
             {
-                // We'd ideally need the specific EarningsEventId here, but we can look up by Ticker
-                // This is a fast path, but we'd need to coordinate with EarningsMonitor.
-                // For safety, we will just log this capability for now as requested.
-                _logger.LogInformation("Potential earnings extracted from {Ticker}: EPS={Eps}, Sales={Sales}", 
-                    ev.Ticker, 
-                    epsMatch.Success ? epsMatch.Groups[1].Value : "N/A",
-                    salesMatch.Success ? salesMatch.Groups[1].Value : "N/A");
+                continue;
+            }
+
+            var applied = await _earnings.TryApplyNewsResultAsync(
+                ev.Ticker,
+                ev.Timestamp,
+                result,
+                cancellationToken);
+            if (applied)
+            {
+                _logger.LogInformation(
+                    "Applied headline earnings result for {Ticker}: EPS={Eps} vs {EpsEstimate}, Revenue={Revenue}M. Headline={Headline}",
+                    ev.Ticker,
+                    result.EpsActual,
+                    result.EpsEstimate,
+                    result.RevenueActualMillions,
+                    ev.Headline);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Parsed a headline result for {Ticker} but no calendar event accepted it. Headline={Headline}",
+                    ev.Ticker,
+                    ev.Headline);
             }
         }
     }

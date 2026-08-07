@@ -6,6 +6,8 @@ namespace TradingFlow.Data.Earnings;
 
 public sealed class SqliteEarningsRepository : IEarningsRepository
 {
+    private const int MatchWindowDays = 2;
+
     private readonly IDbContextFactory<TradingFlowDbContext> dbFactory;
 
     public SqliteEarningsRepository(IDbContextFactory<TradingFlowDbContext> dbFactory)
@@ -61,6 +63,73 @@ public sealed class SqliteEarningsRepository : IEarningsRepository
 
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<bool> TryApplyNewsResultAsync(
+        string ticker,
+        DateTimeOffset observedAtUtc,
+        EarningsNewsResult result,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ticker);
+        ArgumentNullException.ThrowIfNull(result);
+        if (!result.HasResult)
+        {
+            return false;
+        }
+
+        var normalizedTicker = ticker.Trim().ToUpperInvariant();
+        var observedUtc = observedAtUtc.ToUniversalTime();
+        // A company reports quarterly, so the nearest event inside this window is unambiguous. The
+        // window is two-sided because the provider schedule is an estimate and a release routinely
+        // lands ahead of it. Report dates carry the filter because SQLite cannot compare
+        // DateTimeOffset in SQL; the nearest-match on the scheduled time is done in memory.
+        var earliestDate = DateOnly.FromDateTime(observedUtc.AddDays(-MatchWindowDays).UtcDateTime);
+        var latestDate = DateOnly.FromDateTime(observedUtc.AddDays(MatchWindowDays).UtcDateTime);
+
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var candidates = await db.EarningsCalendarEvents
+            .Where(item => item.Ticker == normalizedTicker &&
+                item.ReportDateExchange >= earliestDate &&
+                item.ReportDateExchange <= latestDate)
+            .ToArrayAsync(cancellationToken);
+        var target = candidates
+            .OrderBy(item => (item.ScheduledAtUtc - observedUtc).Duration())
+            .FirstOrDefault();
+        if (target is null)
+        {
+            return false;
+        }
+
+        // Estimate, actual, and surprise are written as one set. Pairing this headline's actual
+        // with the provider's estimate would invent a surprise neither source reports, and the two
+        // consensus figures do disagree: a headline reading "EPS $0.11 Misses $0.12 Estimate"
+        // against a provider estimate of $0.11 would otherwise be recorded as having met.
+        var applied = false;
+        if (target.EpsActual is null && result.EpsActual.HasValue)
+        {
+            target.EpsEstimate = result.EpsEstimate ?? target.EpsEstimate;
+            target.EpsActual = result.EpsActual;
+            target.EpsSurprisePercent = result.EpsSurprisePercent;
+            applied = true;
+        }
+
+        if (target.RevenueActualMillions is null && result.RevenueActualMillions.HasValue)
+        {
+            target.RevenueEstimateMillions = result.RevenueEstimateMillions ?? target.RevenueEstimateMillions;
+            target.RevenueActualMillions = result.RevenueActualMillions;
+            target.RevenueSurprisePercent = result.RevenueSurprisePercent;
+            applied = true;
+        }
+
+        if (!applied)
+        {
+            return false;
+        }
+
+        target.ResultFirstSeenAtUtc ??= observedUtc;
+        await db.SaveChangesAsync(cancellationToken);
+        return true;
     }
 
     public async Task<IReadOnlyList<EarningsCalendarEvent>> GetCalendarAsync(
@@ -146,16 +215,30 @@ public sealed class SqliteEarningsRepository : IEarningsRepository
         target.ReleaseWindow = source.ReleaseWindow;
         target.IsScheduleEstimate = source.IsScheduleEstimate;
         target.MarketCapMillions = source.MarketCapMillions;
-        target.EpsEstimate = source.EpsEstimate;
-        target.EpsActual = source.EpsActual;
-        target.EpsSurprisePercent = source.EpsSurprisePercent;
+        // Estimate/actual/surprise move as one set so a provider estimate is never paired with a
+        // headline actual. The provider wins whenever it has an actual of its own; until then a
+        // headline-derived result stands, because the provider publishes no after-close actual for
+        // roughly two hours after the release and overwriting would erase it on the next refresh.
+        if (source.EpsActual is not null || target.EpsActual is null)
+        {
+            target.EpsEstimate = source.EpsEstimate;
+            target.EpsActual = source.EpsActual;
+            target.EpsSurprisePercent = source.EpsSurprisePercent;
+        }
+
+        if (source.RevenueActualMillions is not null || target.RevenueActualMillions is null)
+        {
+            target.RevenueEstimateMillions = source.RevenueEstimateMillions;
+            target.RevenueActualMillions = source.RevenueActualMillions;
+            target.RevenueSurprisePercent = source.RevenueSurprisePercent;
+        }
+
+        // Provider-only mirror fields; the headline path never writes these, so preserving a
+        // non-null value simply guards against the provider dropping one it already reported.
         target.ReportedEpsEstimate = source.ReportedEpsEstimate;
-        target.ReportedEpsActual = source.ReportedEpsActual;
-        target.ReportedEpsSurprisePercent = source.ReportedEpsSurprisePercent;
-        target.RevenueEstimateMillions = source.RevenueEstimateMillions;
-        target.RevenueActualMillions = source.RevenueActualMillions;
-        target.RevenueSurprisePercent = source.RevenueSurprisePercent;
-        target.OneDayPriceReactionPercent = source.OneDayPriceReactionPercent;
+        target.ReportedEpsActual = source.ReportedEpsActual ?? target.ReportedEpsActual;
+        target.ReportedEpsSurprisePercent = source.ReportedEpsSurprisePercent ?? target.ReportedEpsSurprisePercent;
+        target.OneDayPriceReactionPercent = source.OneDayPriceReactionPercent ?? target.OneDayPriceReactionPercent;
         target.SourceUrl = source.SourceUrl;
         target.SourceArtifactSha256 = source.SourceArtifactSha256;
         target.ProviderReceivedAtUtc = source.ProviderReceivedAtUtc;

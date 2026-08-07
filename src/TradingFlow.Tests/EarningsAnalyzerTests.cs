@@ -288,6 +288,41 @@ public sealed class EarningsAnalyzerTests
     }
 
     [Fact]
+    public void Analyze_AnchorsOnTheCompanyReleaseHeadlineNotTheLaterCommentary()
+    {
+        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var scheduled = DateTimeOffset.Parse("2026-08-03T12:30:00Z");
+        var calendarEvent = CreateEvent(scheduled, epsSurprise: null, revenueSurprise: null);
+        calendarEvent.CompanyName = "Test Corp";
+
+        var result = analyzer.Analyze(
+            calendarEvent,
+            CreateBars(scheduled),
+            [
+                new PersistedNewsItem
+                {
+                    Id = "official-release",
+                    Ticker = "TEST",
+                    Timestamp = scheduled,
+                    Headline = "Test Corp Announces Second Quarter 2026 Results",
+                    Provider = "finviz"
+                },
+                new PersistedNewsItem
+                {
+                    Id = "later-commentary",
+                    Ticker = "TEST",
+                    Timestamp = scheduled.AddMinutes(10),
+                    Headline = "Test Corp Raises Guidance After Second-Quarter Earnings Beat",
+                    Provider = "finviz"
+                }
+            ],
+            DateTimeOffset.Parse("2026-08-03T14:35:00Z"));
+
+        Assert.Equal(scheduled, result.ResultNewsPublishedAtUtc);
+        Assert.Equal("Test Corp Announces Second Quarter 2026 Results", result.NewsHeadline);
+    }
+
+    [Fact]
     public void Analyze_AwaitingReleaseIncludesLatestCompletedPreEarningsPrice()
     {
         var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);

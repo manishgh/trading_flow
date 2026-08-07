@@ -11,9 +11,13 @@ namespace TradingFlow.Earnings;
 /// </summary>
 public sealed class EarningsAnalyzer
 {
+    // "results" is deliberately broad: the company's own release is titled
+    // "<Company> Announces Second Quarter <Year> Results", which matched none of the narrower
+    // terms, so the first article carrying the true publication time was being discarded. The
+    // ticker/company match and the preview exclusion below keep unrelated articles out.
     private static readonly string[] ResultTerms =
     [
-        "earnings", "quarterly results", "financial results", "eps", "revenue", "guidance"
+        "earnings", "results", "eps", "revenue", "guidance"
     ];
 
     private static readonly string[] PreviewTerms =

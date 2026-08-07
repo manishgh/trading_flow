@@ -97,18 +97,21 @@ public sealed class EarningsMonitor
                 TimeZoneInfo.ConvertTime(nowUtc, EarningsTimeZones.NewYork).DateTime);
             var from = exchangeToday;
             var to = EarningsCalendarDates.NextWeekday(exchangeToday);
+            // Fetch wider than we analyze. The provider posts after-close actuals well after the
+            // report date has passed, so a window that starts at today would never collect them.
+            var calendarFrom = from.AddDays(-options.RecentResultLookbackDays);
 
             if (forceCalendarRefresh ||
                 lastCalendarRefreshUtc is null ||
                 nowUtc - lastCalendarRefreshUtc >= options.CalendarRefreshInterval)
             {
-                var providerEvents = await finviz.GetEarningsCalendarAsync(from, to, timeout.Token);
-                await earnings.ReplaceProviderWindowAsync("finviz", from, to, providerEvents, timeout.Token);
+                var providerEvents = await finviz.GetEarningsCalendarAsync(calendarFrom, to, timeout.Token);
+                await earnings.ReplaceProviderWindowAsync("finviz", calendarFrom, to, providerEvents, timeout.Token);
                 lastCalendarRefreshUtc = nowUtc;
                 logger.LogInformation(
                     "Refreshed {EventCount} Finviz earnings events for {FromDate} through {ToDate}.",
                     providerEvents.Count,
-                    from,
+                    calendarFrom,
                     to);
             }
 

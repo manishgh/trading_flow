@@ -22,6 +22,12 @@ public sealed class NewsFeedService : BackgroundService
 {
     private static readonly TimeSpan RetentionWindow = TimeSpan.FromHours(72);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
+    // Bounded so the per-ticker REST sweep stays cheap at the poll cadence. This only has to
+    // outlast a websocket outage, not the full retention window.
+    private static readonly TimeSpan AlpacaGapFillWindow = TimeSpan.FromHours(6);
+    // Shared because the sweep now runs on every poll; a per-call client would leak a connection
+    // pool every minute.
+    private static readonly HttpClient AlpacaHttpClient = new();
 
     private readonly SimpleYamlReader yamlReader;
     private readonly PaperRuntimeFactory runtimeFactory;
@@ -141,19 +147,29 @@ public sealed class NewsFeedService : BackgroundService
             var earningsTickers = await GetCurrentEarningsTickersAsync(nowUtc, cancellationToken);
             var events = new List<CatalystEvent>();
             events.AddRange(await LoadFinvizNewsAsync(cancellationToken));
+            // The Alpaca websocket delivers live items only and cannot replay what it missed, so a
+            // disconnect silently loses every article published while it was down. This rolling REST
+            // sweep is the gap-fill, and the dedupe below drops whatever the socket already delivered.
+            events.AddRange(await LoadAlpacaNewsAsync(
+                earningsTickers,
+                nowUtc.Subtract(AlpacaGapFillWindow),
+                nowUtc,
+                cancellationToken));
             events.AddRange(await officialNews.GetEventsAsync(earningsTickers, evidenceWindow.StartUtc, cancellationToken));
             events = events
                 .Where(item => item.Timestamp >= retentionStartUtc)
-                .OrderByDescending(item => item.Timestamp)
-                .Take(500)
                 .ToList();
 
-            var existing = await repository.GetRecentAsync(retentionStartUtc, 500, null, cancellationToken);
+            // Dedupe before capping. Capping first would let already-stored items crowd out the
+            // gap-filled ones, which are the whole point of the Alpaca sweep.
+            var existing = await repository.GetRecentAsync(retentionStartUtc, 5000, null, cancellationToken);
             var existingKeys = existing
                 .Select(StorageDedupeKey)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var unseenEvents = events
                 .Where(item => !existingKeys.Contains(StorageDedupeKey(item)))
+                .OrderByDescending(item => item.Timestamp)
+                .Take(500)
                 .ToArray();
             var enrichedEvents = await EnrichNewsAsync(unseenEvents, cancellationToken);
             await repository.UpsertAsync(enrichedEvents, cancellationToken);
@@ -258,9 +274,10 @@ public sealed class NewsFeedService : BackgroundService
             return Array.Empty<CatalystEvent>();
         }
 
-        var tickers = catalog.GetPaperConfigs()
-            .SelectMany(config => config.Config.Tickers)
-            .Concat(earningsTickers)
+        // Earnings tickers lead: they are the reason this sweep exists, and the cap below would
+        // otherwise drop them whenever the paper configs already fill it.
+        var tickers = earningsTickers
+            .Concat(catalog.GetPaperConfigs().SelectMany(config => config.Config.Tickers))
             .Select(ticker => ticker.Trim().ToUpperInvariant())
             .Where(ticker => ticker.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -272,7 +289,7 @@ public sealed class NewsFeedService : BackgroundService
         }
 
         var provider = new AlpacaNewsProvider(
-            new HttpClient(),
+            AlpacaHttpClient,
             AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
             {
                 KeyId = alpacaCredentials.KeyId,

@@ -9,6 +9,7 @@ public sealed record EarningsMonitorOptions(
     TimeSpan PriorResultRequestTimeout,
     TimeSpan PriorResultRefreshInterval,
     TimeSpan AnalysisSnapshotHeartbeat,
+    int RecentResultLookbackDays,
     int PriorResultMinimumDaysAgo,
     int PriorResultMaximumDaysAgo,
     int IntradayLookbackDays,
@@ -24,6 +25,10 @@ public sealed record EarningsMonitorOptions(
         PriorResultRequestTimeout: TimeSpan.FromMinutes(2),
         PriorResultRefreshInterval: TimeSpan.FromHours(24),
         AnalysisSnapshotHeartbeat: TimeSpan.FromMinutes(15),
+        // The calendar refresh reaches back a week so after-close actuals are still picked up once
+        // the provider posts them. Without this the live window advances past a report date before
+        // the provider fills it in, and the historical sweep below does not reach back that far.
+        RecentResultLookbackDays: 7,
         PriorResultMinimumDaysAgo: 70,
         PriorResultMaximumDaysAgo: 112,
         // 100 calendar days reliably covers the 63 prior US trading sessions used by RVOL.

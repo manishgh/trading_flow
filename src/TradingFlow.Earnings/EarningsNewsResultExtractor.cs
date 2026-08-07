@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using TradingFlow.Domain.Earnings;
 
 namespace TradingFlow.Earnings;
 
@@ -57,17 +58,12 @@ public static partial class EarningsNewsResultExtractor
         result = new EarningsNewsResult(
             epsEstimate,
             epsActual,
-            SurprisePercent(epsActual, epsEstimate),
+            EarningsNewsResult.SurprisePercent(epsActual, epsEstimate),
             revenueEstimate,
             revenueActual,
-            SurprisePercent(revenueActual, revenueEstimate));
+            EarningsNewsResult.SurprisePercent(revenueActual, revenueEstimate));
         return true;
     }
-
-    private static decimal? SurprisePercent(decimal? actual, decimal? estimate) =>
-        actual.HasValue && estimate.HasValue && estimate.Value != 0m
-            ? (actual.Value - estimate.Value) / Math.Abs(estimate.Value) * 100m
-            : null;
 
     private static bool TryParseAccountingNumber(string value, out decimal parsed)
     {
@@ -106,15 +102,4 @@ public static partial class EarningsNewsResultExtractor
 
     [GeneratedRegex(@"\b(?:Sales|Revenue)\s+\$?(?<actual>\(?-?[\d,]+(?:\.\d+)?\)?)(?<actualScale>[KMB])?\s+(?:Beat(?:s)?|Miss(?:es)?|Meet(?:s)?|In[ -]?Line(?:\s+With)?)\s+\$?(?<estimate>\(?-?[\d,]+(?:\.\d+)?\)?)(?<estimateScale>[KMB])?\s+Estimate\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex RevenuePattern();
-}
-
-public sealed record EarningsNewsResult(
-    decimal? EpsEstimate,
-    decimal? EpsActual,
-    decimal? EpsSurprisePercent,
-    decimal? RevenueEstimateMillions,
-    decimal? RevenueActualMillions,
-    decimal? RevenueSurprisePercent)
-{
-    public static EarningsNewsResult Empty { get; } = new(null, null, null, null, null, null);
 }
