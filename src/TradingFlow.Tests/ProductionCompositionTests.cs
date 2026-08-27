@@ -151,6 +151,17 @@ public sealed class ProductionCompositionTests
         Assert.DoesNotContain(services, descriptor => descriptor.ServiceType == typeof(IHostedService));
     }
 
+    [Fact]
+    public void WebLogging_UsesPortableStructuredConsoleWithoutWindowsEventLog()
+    {
+        var root = TestRepository.FindRoot();
+        var program = File.ReadAllText(Path.Combine(root, "src", "TradingFlow.Web", "Program.cs"));
+
+        Assert.Contains("builder.Logging.ClearProviders()", program, StringComparison.Ordinal);
+        Assert.Contains("builder.Logging.AddJsonConsole", program, StringComparison.Ordinal);
+        Assert.DoesNotContain("AddEventLog", program, StringComparison.Ordinal);
+    }
+
     private static Type ResolveHostedServiceType(ServiceDescriptor descriptor)
     {
         if (descriptor.ImplementationType is not null)

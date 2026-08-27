@@ -190,6 +190,11 @@ the latest completed 1-minute bar is more than three minutes stale during the ac
 04:00-20:00 ET session. Detailed evidence is in
 [Phase 2 verification](docs/verification/strategy-flow-phase-2.md).
 
+The Web host clears platform-specific default logging providers and writes structured
+JSON to standard output. Local runs and containers therefore use the same portable
+logging path, and lack of Windows Event Log privileges cannot terminate background
+market/news services.
+
 ## Rolling Candle Warmup
 
 Generate or refresh a rolling normalized candle and indicator cache:

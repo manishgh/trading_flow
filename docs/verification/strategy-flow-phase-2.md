@@ -116,7 +116,7 @@ Final verification results:
 - Solution build: passed, 0 warnings, 0 errors, including `net10.0-android`.
 - Focused Phase 2 and adjacent regression tests: 102 passed, 0 failed, 0 skipped.
 - Complete solution tests, including the live Alpaca candle-pipeline integration:
-  1,224 passed, 0 failed, 0 skipped.
+  1,225 passed, 0 failed, 0 skipped.
 - Fresh disposable SQLite migration: passed through `AddDurableMarketState`.
 - EF model drift check: no pending model changes.
 - The external Alpaca candle-pipeline integration completed successfully against

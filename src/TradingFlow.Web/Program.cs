@@ -42,6 +42,17 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     ContentRootPath = webContentRoot,
     WebRootPath = Path.Combine(webContentRoot, "wwwroot")
 });
+// Console JSON is the portable production sink for local runs, containers,
+// Azure Monitor, Logstash, and Elastic. The ASP.NET Windows default includes
+// Event Log, which requires machine-level privileges and must not be able to
+// crash a background service merely because it cannot write an event.
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole(options =>
+{
+    options.IncludeScopes = true;
+    options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'";
+    options.UseUtcTimestamp = true;
+});
 var uiTestMode = String.Equals(
     Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_MODE"),
     "true",

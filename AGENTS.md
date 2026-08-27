@@ -267,7 +267,7 @@ dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.cspr
 Recent verification before this handoff:
 
 - `dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.csproj --no-build --no-restore`
-- Result: 1,224 passed, 0 failed on 2026-08-28 after the Phase 2 durable discovery and market-state ownership pass.
+- Result: 1,225 passed, 0 failed on 2026-08-28 after the Phase 2 durable discovery and market-state ownership pass plus the portable structured-logging smoke fix.
 - Focused Phase 2 and adjacent regression slice: 102 passed, 0 failed.
 - `TradingFlow.slnx` and the separate `net10.0-android` target build with 0 warnings and 0 errors.
 - Fresh SQLite migrations through `AddDurableMarketState` and the EF model-drift check pass.
