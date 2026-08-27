@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
@@ -304,7 +305,11 @@ public sealed class TradeDeskModel : PageModel
 
     private async Task LoadAsync(CancellationToken cancellationToken)
     {
-        Strategies = catalog.GetStrategies();
+        Strategies = await catalog.GetStrategiesAsync(
+            environments.Parse(Env) == TradingEnvironment.Live
+                ? StrategySelectionMode.RunLive
+                : StrategySelectionMode.RunPaperShadow,
+            cancellationToken);
         SelectedStrategyId = ResolveStrategyId();
         SelectedPaperConfigPath = ResolvePaperConfigPath();
         RankConfig = ResolveRankConfig();

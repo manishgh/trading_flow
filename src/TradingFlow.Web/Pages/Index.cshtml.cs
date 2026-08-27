@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Wishlists;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 
@@ -48,6 +49,9 @@ public sealed class IndexModel : PageModel
         var openTrades = await RunningTradesBuilder.BuildAsync(paperJobs, automation);
         var signals = await wishlists.GetSignalsAsync(null, null, DateTimeOffset.UtcNow.AddMinutes(-20), 8, cancellationToken);
         var news = await newsFeed.GetRollingAsync(1, null, cancellationToken);
+        var researchStrategies = await catalog.GetStrategiesAsync(
+            StrategySelectionMode.Backtest,
+            cancellationToken);
 
         var activeWishlistCount = allWishlists.Count(wishlist => wishlist.IsObserved);
         var activeTickerCount = allWishlists
@@ -97,8 +101,8 @@ public sealed class IndexModel : PageModel
         Research = new DashboardTile(
             "Backtest Lab",
             activeResearchRuns.ToString(),
-            $"{catalog.GetStrategies().Count} promoted strategies",
-            "Backtests and optimization jobs for promoted strategy evidence.",
+            $"{researchStrategies.Count} research strategies",
+            "Backtests and optimization jobs for immutable research strategy evidence.",
             "/Backtests",
             "Run research",
             activeResearchRuns > 0 ? "warn" : "neutral");

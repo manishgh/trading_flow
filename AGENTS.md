@@ -139,12 +139,14 @@ Paper configs:
 - `configs/paper/alpaca-paper.yaml`
 - `configs/paper/alpaca-paper-swing.yaml`
 
-Strategy configs:
+Strategy classification:
 
-- `configs/strategies/intraday-ema10-ema20-macd-volume.v1.yaml`
-- `configs/strategies/minervini-trend-template-vcp.v4-trend-rider.yaml`
-- `configs/strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml`
-- `configs/strategies/swing-overbought-rollover-short-no-news.v5.yaml`
+- `configs/strategy-catalog.json` is the authority.
+- Bootstrap is six research artifacts, fifteen archived artifacts, and no paper
+  execution or live authorization.
+- Research/archive is artifact disposition. Paper experiment, paper shadow, and
+  validated are exact-identity authorization grants.
+- Web/mobile paper mode is explicit and never falls back to research.
 
 Backtest profiles currently worth keeping:
 

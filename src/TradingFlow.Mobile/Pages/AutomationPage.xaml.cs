@@ -78,7 +78,7 @@ public partial class AutomationPage : ContentPage
             StatusLabel.TextColor = healthy ? ThemePalette.Positive : ThemePalette.Negative;
 
             catalog ??= await api.GetCatalogAsync();
-            longStrategies = (catalog?.Strategies ?? Array.Empty<MobileStrategyOption>())
+            longStrategies = (catalog?.PaperShadowStrategies ?? Array.Empty<MobileStrategyOption>())
                 .Where(x => x.Direction.Equals("long", StringComparison.OrdinalIgnoreCase))
                 .ToList();
             SelectDefaultConfig();

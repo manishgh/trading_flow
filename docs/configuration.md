@@ -210,21 +210,27 @@ Supported `entry_rules.setup_type` values in the retained and research strategy 
 - `volatility_contraction_pattern`
 - `vwap_reclaim_trap`
 
-Current canonical research strategy files:
+The authoritative classification is `configs/strategy-catalog.json`. Its current
+research set contains six exact artifacts:
 
 - `intraday-ema10-ema20-macd-volume.v1.yaml`
-- `swing-reversal-reclaim-bull-quality-no-news.v1.yaml`
-- `swing-overbought-rollover-short-no-news.v5.yaml`
-- `minervini-trend-template-vcp.v4-trend-rider.yaml`
-- `brian_shannon_mta_avwap_strategies.yaml`
-- `kristjan_qullamaggie_stream_methodology.yaml`
 - `lance_breitstein_intraday_tactics.yaml`
-- `minervini-trend-template-vcp.v2.yaml`
+- `minervini-trend-template-vcp.v4-trend-rider.yaml`
+- `intraday-atr-compression-breakout.bt-v1.yaml`
+- `intraday-vwap-momentum-pullback.bt-v1.yaml`
+- `swing-connors-rsi2-oversold.bt-v3.yaml`
 
-Research-only backtest strategies are stored under `configs/backtest/strategies`.
-Neither directory membership nor a positive run promotes a strategy. The current
-integrated decision is `RETAIN_RESEARCH`, so all listed strategies remain research
-artifacts.
+The other fifteen strategy files are explicitly archived. Neither directory
+membership nor a positive run grants execution permission. Backtest sees research
+artifacts; creating a paper experiment uses research as source material; paper
+experiment, paper shadow, and live selectors require their own exact-identity
+authorization. Both paper execution catalogs intentionally start empty.
+
+Paper callers must select `experiment` or `shadow` explicitly. Missing or unknown
+modes are rejected; they do not default to a more permissive catalog. Strategy
+authorization is not a YAML setting: exact grants and durable entry-admission tokens
+are stored in `data/research/evidence/strategy-authorizations.db`. Generated run YAML
+records the selected identity and mode for audit but cannot create a grant.
 
 The retained day-trading research strategy uses RSI for audit context and broad
 filtering only. Entry research is driven by price/VWAP and EMA state, bullish MACD
@@ -239,7 +245,7 @@ entry_rules:
   opening_range_break_buffer: 0.10
 
 exit_rules:
-  initial_stop_mode: atr                 # atr | vwap_minus_atr | vwap_plus_atr | opening_range_opposite | extreme_shadow
+  initial_stop_mode: atr                 # atr | vwap_minus_atr | vwap_plus_atr | opening_range_opposite | extreme_shadow | flush_low | swing_low
   profit_target_mode: r_multiple         # r_multiple | vwap
   enable_failed_breakout_circuit_breaker: true
   failed_breakout_bars: 3

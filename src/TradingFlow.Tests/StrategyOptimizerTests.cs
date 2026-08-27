@@ -10,7 +10,7 @@ public class StrategyOptimizerTests
     [Fact]
     public void ApplyParameter_MapsIntradaySelectionFields()
     {
-        var optimizer = new StrategyOptimizer(new SimpleYamlReader(), new BacktestRunner(new SimpleYamlReader()));
+        var optimizer = new StrategyOptimizer(new SimpleYamlReader(), CreateRunner());
         var method = typeof(StrategyOptimizer).GetMethod(
             "ApplyParameter",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
@@ -215,7 +215,7 @@ parameters:
 
         var messages = new List<BacktestProgress>();
         var optimizationUpdates = new List<OptimizationProgress>();
-        var optimizer = new StrategyOptimizer(new SimpleYamlReader(), new BacktestRunner(new SimpleYamlReader()));
+        var optimizer = new StrategyOptimizer(new SimpleYamlReader(), CreateRunner());
 
         await optimizer.OptimizeAsync(
             optimizationPath,
@@ -254,6 +254,18 @@ parameters:
     private static string FindRepositoryRoot()
     {
         return TestRepository.FindRoot();
+    }
+
+    private static BacktestRunner CreateRunner()
+    {
+        var reader = new SimpleYamlReader();
+        var root = FindRepositoryRoot();
+        return new BacktestRunner(
+            reader,
+            new StrategyArtifactCatalog(
+                root,
+                Path.Combine(root, "configs", "strategy-catalog.json"),
+                reader));
     }
 
     private static string BuildCsvBars()

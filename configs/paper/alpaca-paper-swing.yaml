@@ -100,7 +100,6 @@ artifacts:
   retention_mode: full
 
 strategies:
-  - ../strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml
 
 
 # See alpaca-paper.yaml for what this block does. The swing weight set leans

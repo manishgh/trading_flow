@@ -5,7 +5,9 @@ public sealed record MobileStockPulseRequest(string Ticker, string PulseType, st
 public sealed record MobileCatalogResponse(
     IReadOnlyList<MobileRunConfigOption> BacktestConfigs,
     IReadOnlyList<MobileRunConfigOption> PaperConfigs,
-    IReadOnlyList<MobileStrategyOption> Strategies);
+    IReadOnlyList<MobileStrategyOption> Strategies,
+    IReadOnlyList<MobileStrategyOption> PaperExperimentStrategies,
+    IReadOnlyList<MobileStrategyOption> PaperShadowStrategies);
 
 public sealed record MobileRunConfigOption(
     string Path,
@@ -19,6 +21,10 @@ public sealed record MobileRunConfigOption(
 public sealed record MobileStrategyOption(
     string Path,
     string FileName,
+    string ArtifactStrategyId,
+    string SemanticVersion,
+    string ContentSha256,
+    string Lifecycle,
     string StrategyId,
     string StrategyName,
     int Version,
@@ -44,7 +50,8 @@ public sealed record MobilePaperRunRequest(
     bool NewsEnabled,
     string OrderExpiration,
     string EntryOrderType,
-    Guid? WishlistId);
+    Guid? WishlistId,
+    string PaperExecutionMode);
 
 public sealed record MobileBacktestRunRequest(
     string BaseConfigPath,

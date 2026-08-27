@@ -2,7 +2,6 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Logging;
-using TradingFlow.Engine.Storage;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
@@ -17,7 +16,6 @@ public sealed class PaperModel : PageModel
     private readonly PaperEnvironmentService paperEnvironment;
     private readonly RunConfigWriter configWriter;
     private readonly PaperJobService paperJobs;
-    private readonly IArtifactWriter artifactWriter;
     private readonly IWishlistRepository wishlistRepository;
     private readonly ScreenerPresetService screenerPresets;
     private readonly IPaperRunUniverseSnapshotResolver universeSnapshots;
@@ -28,7 +26,6 @@ public sealed class PaperModel : PageModel
         PaperEnvironmentService paperEnvironment,
         RunConfigWriter configWriter,
         PaperJobService paperJobs,
-        IArtifactWriter artifactWriter,
         IWishlistRepository wishlistRepository,
         ScreenerPresetService screenerPresets,
         IPaperRunUniverseSnapshotResolver universeSnapshots,
@@ -38,7 +35,6 @@ public sealed class PaperModel : PageModel
         this.paperEnvironment = paperEnvironment;
         this.configWriter = configWriter;
         this.paperJobs = paperJobs;
-        this.artifactWriter = artifactWriter;
         this.wishlistRepository = wishlistRepository;
         this.screenerPresets = screenerPresets;
         this.universeSnapshots = universeSnapshots;
@@ -47,12 +43,18 @@ public sealed class PaperModel : PageModel
 
     [BindProperty] public string ConfigPath { get; set; } = String.Empty;
     [BindProperty] public string SelectedStrategyPath { get; set; } = String.Empty;
+    [BindProperty(SupportsGet = true)] public string? PaperExecutionMode { get; set; }
     [BindProperty(SupportsGet = true)] public Guid? WishlistId { get; set; }
-    [BindProperty(SupportsGet = true)] public string OrderExpiration { get; set; } = "gtc";
-    [BindProperty(SupportsGet = true)] public string EntryOrderType { get; set; } = "limit";
+    [BindProperty(SupportsGet = true)] public string? OrderExpiration { get; set; } = "gtc";
+    [BindProperty(SupportsGet = true)] public string? EntryOrderType { get; set; } = "limit";
     [BindProperty(SupportsGet = true)] public bool AllowExtendedHoursTrading { get; set; }
     [BindProperty(SupportsGet = true)] public bool NewsEnabled { get; set; } = true;
     [BindProperty(SupportsGet = true)] public string? ScreenerFilter { get; set; }
+    [BindProperty(SupportsGet = true)] public string? ExperimentSourceStrategyPath { get; set; }
+    [BindProperty] public string ExperimentSemanticVersion { get; set; } = String.Empty;
+    [BindProperty] public Guid ExperimentRegistrationOperationId { get; set; }
+    [BindProperty] public DateTimeOffset ExperimentRegistrationRequestedAtUtc { get; set; }
+    [BindProperty] public PaperExperimentParameterInput ExperimentParameters { get; set; } = new();
 
     /// <summary>
     /// Where the candidate universe comes from: <c>wishlist</c>, <c>screener</c>
@@ -64,23 +66,16 @@ public sealed class PaperModel : PageModel
     /// ignores the wishlist entirely, so an operator can trade a screen without
     /// first promoting its symbols into a curated list.
     /// </remarks>
-    [BindProperty(SupportsGet = true)] public string UniverseSource { get; set; } = "wishlist";
+    [BindProperty(SupportsGet = true)] public string? UniverseSource { get; set; } = "wishlist";
 
     /// <summary>
     /// Saved screens, offered by name. Finviz exposes no endpoint that lists the
     /// screens saved in its own UI, so the catalogue is local.
     /// </summary>
     public IReadOnlyList<TradingFlow.Domain.Wishlists.ScreenerPreset> ScreenerPresets { get; private set; } = [];
-    [BindProperty] public string? StrategyYaml { get; set; }
-
-    [BindProperty] public string? QuickEditTimeframe { get; set; }
-    [BindProperty] public string? QuickEditSetupType { get; set; }
-    [BindProperty] public string? QuickEditMinVolumeSpike { get; set; }
-    [BindProperty] public string? QuickEditStopAtr { get; set; }
-    [BindProperty] public string? QuickEditTargetR { get; set; }
-
     public IReadOnlyList<RunConfigSummary> Configs { get; private set; } = [];
     public IReadOnlyList<StrategyOption> Strategies { get; private set; } = [];
+    public IReadOnlyList<StrategyOption> ResearchStrategies { get; private set; } = [];
     public IReadOnlyList<Wishlist> Wishlists { get; private set; } = [];
     public IReadOnlyList<BacktestJobSnapshot> LiveJobs { get; private set; } = [];
     public RunConfigSummary Selected { get; private set; } = null!;
@@ -96,13 +91,17 @@ public sealed class PaperModel : PageModel
     public async Task OnGetAsync(string? configPath, string? strategyPath, Guid? wishlistId, CancellationToken cancellationToken)
     {
         SuggestedRunName = $"paper_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}";
+        ExperimentRegistrationOperationId = Guid.NewGuid();
+        ExperimentRegistrationRequestedAtUtc = DateTimeOffset.UtcNow;
         if (!string.IsNullOrEmpty(configPath)) ConfigPath = configPath;
         if (!string.IsNullOrEmpty(strategyPath)) SelectedStrategyPath = strategyPath;
         WishlistId = wishlistId ?? WishlistId;
+        PaperExecutionMode = NormalizePaperExecutionModeForDisplay(PaperExecutionMode);
 
-        Load(ConfigPath, SelectedStrategyPath);
+        await LoadAsync(ConfigPath, SelectedStrategyPath, cancellationToken);
         await LoadWishlistsAsync(WishlistId, cancellationToken);
 
+        PopulateExperimentParameterDefaults();
         if (string.IsNullOrEmpty(OrderExpiration))
         {
             var selectedConfig = Configs.FirstOrDefault(c => c.Path == ConfigPath);
@@ -122,38 +121,6 @@ public sealed class PaperModel : PageModel
         var selectedStrategy = Strategies.FirstOrDefault(s => s.Path == SelectedStrategyPath);
         SelectedStrategyUsesNews = selectedStrategy is not null && StrategyCapabilityInspector.UsesNews(selectedStrategy.Definition);
         NewsEnabled = (selectedExecutionConfig?.Config.News.Enabled ?? true) && SelectedStrategyUsesNews;
-        if (selectedStrategy != null && string.IsNullOrEmpty(StrategyYaml))
-        {
-            try
-            {
-                StrategyYaml = System.IO.File.ReadAllText(selectedStrategy.Path);
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(
-                    exception,
-                    "Failed to read selected strategy YAML from {StrategyPath}.",
-                    selectedStrategy.Path);
-            }
-        }
-
-        if (!string.IsNullOrEmpty(StrategyYaml))
-        {
-            var tfMatch = System.Text.RegularExpressions.Regex.Match(StrategyYaml, @"timeframe:\s*(\w+)");
-            if (tfMatch.Success) QuickEditTimeframe = tfMatch.Groups[1].Value;
-
-            var setupMatch = System.Text.RegularExpressions.Regex.Match(StrategyYaml, @"setup_type:\s*(\w+)");
-            if (setupMatch.Success) QuickEditSetupType = setupMatch.Groups[1].Value;
-
-            var volumeMatch = System.Text.RegularExpressions.Regex.Match(StrategyYaml, @"min_volume_spike:\s*([\d\.]+)");
-            if (volumeMatch.Success) QuickEditMinVolumeSpike = volumeMatch.Groups[1].Value;
-
-            var stopMatch = System.Text.RegularExpressions.Regex.Match(StrategyYaml, @"stop_atr_multiple:\s*([\d\.]+)");
-            if (stopMatch.Success) QuickEditStopAtr = stopMatch.Groups[1].Value;
-
-            var targetMatch = System.Text.RegularExpressions.Regex.Match(StrategyYaml, @"target_r_multiple:\s*([\d\.]+)");
-            if (targetMatch.Success) QuickEditTargetR = targetMatch.Groups[1].Value;
-        }
     }
 
     public string FormatLocalTime(DateTimeOffset timestamp)
@@ -167,62 +134,12 @@ public sealed class PaperModel : PageModel
         if (!string.IsNullOrEmpty(formConfigPath)) ConfigPath = formConfigPath;
         if (Guid.TryParse(Request.Form["WishlistId"].ToString(), out var wishlistId)) WishlistId = wishlistId;
 
-        Load(ConfigPath, SelectedStrategyPath);
+        await LoadAsync(ConfigPath, SelectedStrategyPath, cancellationToken);
         await LoadWishlistsAsync(WishlistId, cancellationToken);
 
         PaperSnapshot = await paperEnvironment.InspectAsync(ConfigPath, cancellationToken);
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
         AlpacaCheckJson = JsonSerializer.Serialize(PaperSnapshot.AlpacaReadOnlyCheck, jsonOptions);
-    }
-
-    public IActionResult OnPostSaveStrategy()
-    {
-        var form = Request.Form;
-        var strategyPath = form["SelectedStrategyPath"].ToString();
-        var strategyYaml = form["StrategyYaml"].ToString();
-
-        if (!string.IsNullOrWhiteSpace(form["QuickEditTimeframe"]))
-            strategyYaml = System.Text.RegularExpressions.Regex.Replace(
-                strategyYaml,
-                @"(?m)^timeframe:\s*\w+",
-                $"timeframe: {form["QuickEditTimeframe"]}",
-                System.Text.RegularExpressions.RegexOptions.None,
-                TimeSpan.FromSeconds(1));
-
-        if (!string.IsNullOrWhiteSpace(form["QuickEditSetupType"]))
-            strategyYaml = System.Text.RegularExpressions.Regex.Replace(strategyYaml, @"setup_type:\s*\w+", $"setup_type: {form["QuickEditSetupType"]}");
-
-        if (!string.IsNullOrWhiteSpace(form["QuickEditMinVolumeSpike"]))
-            strategyYaml = System.Text.RegularExpressions.Regex.Replace(strategyYaml, @"min_volume_spike:\s*[\d\.]+", $"min_volume_spike: {form["QuickEditMinVolumeSpike"]}");
-
-        if (!string.IsNullOrWhiteSpace(form["QuickEditStopAtr"]))
-            strategyYaml = System.Text.RegularExpressions.Regex.Replace(strategyYaml, @"stop_atr_multiple:\s*[\d\.]+", $"stop_atr_multiple: {form["QuickEditStopAtr"]}");
-
-        if (!string.IsNullOrWhiteSpace(form["QuickEditTargetR"]))
-            strategyYaml = System.Text.RegularExpressions.Regex.Replace(strategyYaml, @"target_r_multiple:\s*[\d\.]+", $"target_r_multiple: {form["QuickEditTargetR"]}");
-
-        if (!string.IsNullOrWhiteSpace(strategyPath) && !string.IsNullOrWhiteSpace(strategyYaml))
-        {
-            try
-            {
-                artifactWriter.WriteText(strategyPath, strategyYaml);
-            }
-            catch (Exception exception)
-            {
-                ModelState.AddModelError(String.Empty, $"Could not save strategy: {exception.Message}");
-            }
-        }
-        return RedirectToPage(new {
-            configPath = form["BaseConfigPath"].ToString(),
-            strategyPath,
-            wishlistId = form["WishlistId"].ToString(),
-            orderExpiration = form["OrderExpiration"].ToString(),
-            entryOrderType = form["EntryOrderType"].ToString(),
-            allowExtendedHoursTrading = form.TryGetValue("AllowExtendedHoursTrading", out var extendedHoursValue) &&
-                extendedHoursValue.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
-            newsEnabled = form.TryGetValue("NewsEnabled", out var ne) && ne.ToString().Contains("true", StringComparison.OrdinalIgnoreCase),
-            screenerFilter = form["ScreenerFilter"].ToString()
-        });
     }
 
     public async Task<IActionResult> OnPostRunLive(CancellationToken cancellationToken)
@@ -231,6 +148,18 @@ public sealed class PaperModel : PageModel
         var runName = form["RunName"].ToString();
         var baseConfigPath = form["BaseConfigPath"].ToString();
         var strategyPath = form["SelectedStrategyPath"].ToString();
+        if (!TryNormalizePaperExecutionMode(
+                form["PaperExecutionMode"].ToString(),
+                out var normalizedPaperMode))
+        {
+            ModelState.AddModelError(String.Empty, "paper_execution_mode_invalid");
+            PaperExecutionMode = "shadow";
+            await LoadAsync(baseConfigPath, strategyPath, cancellationToken);
+            await LoadWishlistsAsync(null, cancellationToken);
+            return Page();
+        }
+
+        PaperExecutionMode = normalizedPaperMode;
         var wishlistIdText = form["WishlistId"].ToString();
         var orderExpiration = form["OrderExpiration"].ToString();
         var entryOrderType = form["EntryOrderType"].ToString();
@@ -249,9 +178,24 @@ public sealed class PaperModel : PageModel
         ScreenerFilter = screenerFilter;
         SuggestedRunName = runName;
 
-        Load(baseConfigPath, strategyPath);
+        await LoadAsync(baseConfigPath, strategyPath, cancellationToken);
         await LoadWishlistsAsync(Guid.TryParse(wishlistIdText, out var parsedWishlistId) ? parsedWishlistId : null, cancellationToken);
-        PopulateSelectedStrategyUi();
+        PopulateSelectedStrategyState();
+        var selectedPaperStrategy = Strategies.SingleOrDefault(strategy =>
+                Path.GetFullPath(strategy.Path).Equals(
+                    Path.GetFullPath(strategyPath),
+                    StringComparison.OrdinalIgnoreCase));
+        if (selectedPaperStrategy is null)
+        {
+            var failureCode = PaperExecutionMode == "experiment"
+                ? "no_paper_experiment_strategy"
+                : "no_paper_shadow_strategy";
+            ModelState.AddModelError(
+                String.Empty,
+                $"{failureCode}: no exact strategy artifact is authorized for the selected paper mode.");
+            return Page();
+        }
+
         var source = NormalizeUniverseSource(form["UniverseSource"].ToString());
         UniverseSource = source;
 
@@ -282,7 +226,8 @@ public sealed class PaperModel : PageModel
             tempConfigPath = configWriter.SaveTempConfig(
                 baseConfigPath,
                 universe.Tickers,
-                strategyPath,
+                selectedPaperStrategy.Artifact,
+                ResolvePaperSelectionMode(),
                 orderExpiration,
                 entryOrderType,
                 allowExtendedHoursTrading,
@@ -310,32 +255,103 @@ public sealed class PaperModel : PageModel
         return RedirectToPage("/PaperJob", new { id = job.JobId });
     }
 
-    private void PopulateSelectedStrategyUi()
+    public async Task<IActionResult> OnPostCreateExperimentAsync(CancellationToken cancellationToken)
     {
-        var selectedStrategy = Strategies.FirstOrDefault(strategy => strategy.Path == SelectedStrategyPath);
-        SelectedStrategyUsesNews = selectedStrategy is not null && StrategyCapabilityInspector.UsesNews(selectedStrategy.Definition);
-        if (selectedStrategy is null || !String.IsNullOrEmpty(StrategyYaml))
+        PaperExecutionMode = "experiment";
+        await LoadAsync(ConfigPath, SelectedStrategyPath, cancellationToken);
+        await LoadWishlistsAsync(WishlistId, cancellationToken);
+        if (!ModelState.IsValid)
         {
-            return;
+            ResetExperimentRegistrationCommandIfMissing();
+            return Page();
+        }
+
+        var source = ResearchStrategies.SingleOrDefault(strategy =>
+            !String.IsNullOrWhiteSpace(ExperimentSourceStrategyPath) &&
+            Path.GetFullPath(strategy.Path).Equals(
+                Path.GetFullPath(ExperimentSourceStrategyPath),
+                StringComparison.OrdinalIgnoreCase));
+        if (source is null)
+        {
+            ModelState.AddModelError(String.Empty, "paper_experiment_source_invalid");
+            ResetExperimentRegistrationCommandIfMissing();
+            return Page();
+        }
+
+        if (ExperimentRegistrationOperationId == Guid.Empty ||
+            ExperimentRegistrationRequestedAtUtc == default ||
+            ExperimentRegistrationRequestedAtUtc.Offset != TimeSpan.Zero)
+        {
+            ModelState.AddModelError(String.Empty, "paper_experiment_operation_invalid");
+            ResetExperimentRegistrationCommandIfMissing();
+            return Page();
+        }
+
+        var actor = User.Identity?.Name ?? "local-operator";
+        var semanticVersion = String.IsNullOrWhiteSpace(ExperimentSemanticVersion)
+            ? source.Identity.SemanticVersion
+            : ExperimentSemanticVersion.Trim();
+        StrategyParameterOverride? parameterOverride = null;
+        if (ExperimentParameters.ApplyOverrides)
+        {
+            if (String.IsNullOrWhiteSpace(ExperimentSemanticVersion) ||
+                semanticVersion.Equals(source.Identity.SemanticVersion, StringComparison.Ordinal))
+            {
+                ModelState.AddModelError(
+                    nameof(ExperimentSemanticVersion),
+                    "Changed experiment parameters require a new semantic version.");
+                return Page();
+            }
+
+            parameterOverride = ExperimentParameters.ToOverride(source.Path, semanticVersion, actor);
         }
 
         try
         {
-            StrategyYaml = System.IO.File.ReadAllText(selectedStrategy.Path);
+            var artifact = configWriter.RegisterPaperExperiment(
+                source.Path,
+                semanticVersion,
+                actor,
+                ExperimentRegistrationOperationId,
+                ExperimentRegistrationRequestedAtUtc,
+                parameterOverride);
+            return RedirectToPage("/Paper", new
+            {
+                paperExecutionMode = "experiment",
+                strategyPath = artifact.SourcePath,
+                wishlistId = WishlistId
+            });
         }
-        catch (Exception exception)
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidOperationException or InvalidDataException or NotSupportedException)
         {
-            logger.LogWarning(
-                exception,
-                "Failed to read selected strategy YAML from {StrategyPath}.",
-                selectedStrategy.Path);
+            logger.LogInformation(
+                "Paper experiment registration {OperationId} rejected: {Reason}",
+                ExperimentRegistrationOperationId,
+                exception.Message);
+            ModelState.AddModelError(String.Empty, exception.Message);
+            return Page();
         }
     }
 
-    private void Load(string? configPath, string? strategyPath)
+    private void PopulateSelectedStrategyState()
+    {
+        var selectedStrategy = Strategies.FirstOrDefault(strategy => strategy.Path == SelectedStrategyPath);
+        SelectedStrategyUsesNews = selectedStrategy is not null && StrategyCapabilityInspector.UsesNews(selectedStrategy.Definition);
+    }
+
+    private async Task LoadAsync(
+        string? configPath,
+        string? strategyPath,
+        CancellationToken cancellationToken)
     {
         Configs = catalog.GetPaperConfigs();
-        Strategies = catalog.GetStrategies();
+        ResearchStrategies = await catalog.GetStrategiesAsync(
+            StrategySelectionMode.CreatePaperExperiment,
+            cancellationToken);
+        Strategies = await catalog.GetStrategiesAsync(
+            ResolvePaperSelectionMode(),
+            cancellationToken);
         LiveJobs = paperJobs.List().Take(10).ToArray();
 
         if (Configs.Count == 0)
@@ -348,8 +364,12 @@ public sealed class PaperModel : PageModel
             : catalog.GetConfig(configPath);
         ConfigPath = Selected.Path;
         SelectedStrategyPath = String.IsNullOrWhiteSpace(strategyPath)
-            ? Strategies.FirstOrDefault()?.Path ?? Selected.Strategies.FirstOrDefault()?.Path ?? String.Empty
-            : strategyPath;
+            ? String.Empty
+            : Strategies.Any(strategy => Path.GetFullPath(strategy.Path).Equals(
+                Path.GetFullPath(strategyPath),
+                StringComparison.OrdinalIgnoreCase))
+                ? strategyPath
+                : String.Empty;
     }
 
     private async Task LoadWishlistsAsync(Guid? wishlistId, CancellationToken cancellationToken)
@@ -362,28 +382,35 @@ public sealed class PaperModel : PageModel
         WishlistId = SelectedWishlist?.Id;
     }
 
-    public IActionResult OnGetStrategyDetails(string strategyPath)
+    public async Task<IActionResult> OnGetStrategyDetailsAsync(
+        string strategyPath,
+        string? paperExecutionMode,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(strategyPath) || !System.IO.File.Exists(strategyPath))
             return new JsonResult(new { success = false });
 
-        var yaml = System.IO.File.ReadAllText(strategyPath);
-        var tfMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"timeframe:\s*(\w+)");
-        var setupMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"setup_type:\s*(\w+)");
-        var volumeMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"min_volume_spike:\s*([\d\.]+)");
-        var stopMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"stop_atr_multiple:\s*([\d\.]+)");
-        var targetMatch = System.Text.RegularExpressions.Regex.Match(yaml, @"target_r_multiple:\s*([\d\.]+)");
-        var strategy = catalog.GetStrategies().FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase));
-        var usesNews = strategy is not null && StrategyCapabilityInspector.UsesNews(strategy.Definition);
+        if (!TryNormalizePaperExecutionMode(paperExecutionMode, out var normalizedMode))
+        {
+            return BadRequest(new { success = false, error = "paper_execution_mode_invalid" });
+        }
+
+        var strategies = await catalog.GetStrategiesAsync(
+            normalizedMode == "experiment"
+                ? StrategySelectionMode.RunPaperExperiment
+                : StrategySelectionMode.RunPaperShadow,
+            cancellationToken);
+        var strategy = strategies.FirstOrDefault(x =>
+            Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase));
+        if (strategy is null)
+        {
+            return new JsonResult(new { success = false });
+        }
+
+        var usesNews = StrategyCapabilityInspector.UsesNews(strategy.Definition);
 
         return new JsonResult(new {
             success = true,
-            yaml = yaml,
-            timeframe = tfMatch.Success ? tfMatch.Groups[1].Value : "",
-            setupType = setupMatch.Success ? setupMatch.Groups[1].Value : "",
-            minVolumeSpike = volumeMatch.Success ? volumeMatch.Groups[1].Value : "",
-            stopAtr = stopMatch.Success ? stopMatch.Groups[1].Value : "",
-            targetR = targetMatch.Success ? targetMatch.Groups[1].Value : "",
             usesNews
         });
     }
@@ -420,8 +447,7 @@ public sealed class PaperModel : PageModel
             return false;
         }
 
-        var strategy = Strategies.FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase))
-            ?? catalog.GetStrategies().FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase));
+        var strategy = Strategies.FirstOrDefault(x => Path.GetFullPath(x.Path).Equals(Path.GetFullPath(strategyPath), StringComparison.OrdinalIgnoreCase));
         return strategy is not null && StrategyCapabilityInspector.UsesNews(strategy.Definition);
     }
 
@@ -432,4 +458,49 @@ public sealed class PaperModel : PageModel
             "both" => "both",
             _ => "wishlist"
         };
+
+    private StrategySelectionMode ResolvePaperSelectionMode() =>
+        PaperExecutionMode == "experiment"
+            ? StrategySelectionMode.RunPaperExperiment
+            : StrategySelectionMode.RunPaperShadow;
+
+    private static string NormalizePaperExecutionModeForDisplay(string? value) =>
+        TryNormalizePaperExecutionMode(value, out var normalized) ? normalized : "shadow";
+
+    private static bool TryNormalizePaperExecutionMode(string? value, out string normalized)
+    {
+        normalized = value?.Trim().ToLowerInvariant() ?? String.Empty;
+        return normalized is "experiment" or "shadow";
+    }
+
+    private void PopulateExperimentParameterDefaults()
+    {
+        var source = ResearchStrategies.FirstOrDefault(strategy =>
+                !String.IsNullOrWhiteSpace(ExperimentSourceStrategyPath) &&
+                Path.GetFullPath(strategy.Path).Equals(
+                    Path.GetFullPath(ExperimentSourceStrategyPath),
+                    StringComparison.OrdinalIgnoreCase))
+            ?? ResearchStrategies.FirstOrDefault();
+        if (source is null)
+        {
+            return;
+        }
+
+        ExperimentSourceStrategyPath = source.Path;
+        ExperimentParameters = PaperExperimentParameterInput.From(source.Definition);
+    }
+
+    private void ResetExperimentRegistrationCommandIfMissing()
+    {
+        if (ExperimentRegistrationOperationId == Guid.Empty)
+        {
+            ExperimentRegistrationOperationId = Guid.NewGuid();
+        }
+
+        if (ExperimentRegistrationRequestedAtUtc == default ||
+            ExperimentRegistrationRequestedAtUtc.Offset != TimeSpan.Zero)
+        {
+            ExperimentRegistrationRequestedAtUtc = DateTimeOffset.UtcNow;
+        }
+    }
 }

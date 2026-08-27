@@ -1,6 +1,6 @@
 # Strategy Lifecycle, Universe, And Execution Implementation Plan
 
-**Status:** Plan only. No runtime behavior is changed by this document.
+**Status:** Phases 0 and 1 complete. Phase 2 has not started.
 
 **Prepared:** 2026-08-27
 
@@ -75,33 +75,88 @@ is green.
 
 ## 3. Decisions Frozen By This Plan
 
-### 3.1 Strategy lifecycle
+### 3.1 Strategy identity, disposition, and authorization
 
-Use five explicit lifecycle states:
+Do not encode mutable execution permission into immutable strategy identity. The
+model has three separate concerns:
 
-- `research`: executable only in backtest and diagnostic replay.
-- `paper_experiment`: may use the paper broker, but is not promotion evidence and
-  must be labelled as an experiment in UI and audit.
-- `paper_shadow`: immutable strategy with an accepted evidence-backed promotion
-  decision and a frozen observation window.
-- `validated`: eligible for future live selection only after every live gate is met.
-- `archived`: retained for provenance and comparison, never selectable.
+- **Artifact identity:** `(strategy_id, semantic_version, content_sha256)` identifies
+  one fully resolved immutable strategy document. Lifecycle and permission are not
+  part of this identity.
+- **Catalog disposition:** `research` or `archived`. Research artifacts are eligible
+  for backtest and diagnostic replay; archived artifacts are provenance-only. An
+  archive disposition is terminal for new execution authorization.
+- **Execution authorization:** `paper_experiment`, `paper_shadow`, or `validated`
+  is a grant over an exact artifact identity. A grant never rewrites, renames, or
+  duplicates the underlying artifact.
 
-`paper_experiment` and `paper_shadow` are intentionally different. Paper execution
-alone does not imply validation.
+`paper_experiment` and `paper_shadow` are intentionally different grants. A paper
+experiment registration permits an explicitly labelled operator experiment but is
+not promotion evidence. Paper shadow requires an accepted evidence-backed decision
+and a frozen observation window. Validated authorizes future live selection only
+after every live gate is met.
 
-The authoritative identity is `(strategy_id, semantic_version, content_sha256)`.
+For compact UI/audit display, an artifact may expose a computed effective lifecycle
+label using the order `archived > validated > paper_shadow > paper_experiment >
+research`. Only active, non-revoked, non-superseded grants whose prerequisite grants
+remain satisfied participate in this projection. Suspension is displayed separately
+and never as a lifecycle label. This projection is not an authorization boundary.
+Selection checks the underlying exact-identity disposition, grant, decision status,
+prerequisite grants, and suspension state.
+
 `content_sha256` is calculated from the canonical fully resolved strategy snapshot,
 including parser defaults, admission profile, indicator definitions/versions,
 risk/execution policy, and unknown-key rejection. Hashing source YAML bytes alone is
 not sufficient.
+The only exception is a terminal archived historical document whose legacy YAML is
+deliberately outside the current executable parser contract. Its view-only identity
+canonically binds stable family ID, semantic version, source SHA-256, and admission
+profile. It can never receive an execution grant or become a run snapshot; every
+research or executable identity still uses the fully resolved canonical document.
 The existing `SqliteStrategyPromotionRegistry` is the source of promotion status.
 Directory location is organization, not authority.
 
 Before it becomes runtime authority, the promotion schema must be migrated and
 tested against that full identity. A decision for an older content hash cannot
-promote a changed file. Acceptance, revocation, supersession, suspension, and stale
-hash behavior must be explicit and transactionally enforced.
+authorize a changed file. Acceptance, revocation, supersession, suspension, and
+stale-hash behavior must be explicit and transactionally enforced.
+
+Allowed authorization transitions and their effects are deterministic:
+
+- Registering `paper_experiment` is allowed only for an exact non-archived research
+  artifact. Unchanged content reuses the same identity; changed parameters require a
+  new semantic version and therefore a new artifact identity. Publication is a
+  crash-safe two-store saga: write the immutable, content-addressed artifact first,
+  then commit its exact-identity `paper_experiment` grant in SQLite. Catalog
+  visibility requires both, so a crash may leave an inert orphan artifact but can
+  never leave an executable grant without its artifact. Retrying is idempotent and
+  does not remove research/backtest eligibility.
+- Accepting `paper_shadow` is allowed only for the exact identity of a registered
+  paper experiment with complete promotion evidence. It adds paper-shadow
+  authorization; it does not replace the artifact or delete experiment history.
+- Accepting `validated` is allowed only for an exact identity with an active,
+  unsuspended paper-shadow authorization and the required completed shadow evidence.
+  It adds live authorization. The same identity remains selectable for paper shadow.
+- `rejected` records a terminal decision outcome but grants no permission and does
+  not alter an earlier unrelated grant.
+- `revoked` targets one accepted grant for the same exact identity and removes only
+  that grant. Revoking `paper_shadow` also makes any dependent validated grant
+  ineligible for new entries until paper shadow is accepted again; historical
+  decisions and run evidence remain readable.
+- `superseded` targets one accepted grant and makes it inactive. The replacement is
+  a separate accepted decision for the same stable family ID and the same
+  authorization-grant type, using a different semantic version. Changed resolved
+  content always requires that new semantic version; a hash-only replacement under
+  the old version is forbidden. Refreshing evidence for the same exact identity uses
+  an explicit revoke plus accepted decision rather than artifact supersession. The
+  terminal decision and replacement acceptance commit atomically as one
+  supersession operation.
+- `suspended` is an exact-identity safety overlay. It blocks all new paper/live
+  entries for that identity while monitoring, protection, exits, and diagnostic
+  reads continue. `resumed` must target the active suspension and restores only the
+  grants that remain otherwise active.
+- Archiving blocks every new authorization and selection mode for the identity but
+  never deletes its documents, decisions, or runs.
 
 Bootstrap is fail-closed: every existing strategy is explicitly classified as
 `research` or `archived`. No filename, hardcoded audit percentage, folder location,
@@ -357,6 +412,77 @@ Every phase follows this gate:
 
 ### Phase 1 - Immutable strategy catalog and lifecycle
 
+Phase 1 uses the following reviewed contract. Existing YAML `strategy_id` values
+are import aliases; the stable family ID and semantic version below are the
+authoritative identity inputs. A `(strategy_id, semantic_version)` pair has exactly
+one canonical content hash. Changed resolved content requires a new semantic
+version.
+
+| Artifact | Bootstrap state | Stable family ID | Semantic version |
+| --- | --- | --- | --- |
+| `configs/strategies/brian_shannon_mta_avwap_strategies.yaml` | archived | `swing.avwap-bounce` | `1.0.0` |
+| `configs/strategies/intraday-ema10-ema20-macd-volume.v1.yaml` | research | `intraday.ema-macd-volume` | `1.0.0` |
+| `configs/strategies/kristjan_qullamaggie_stream_methodology.yaml` | archived | `intraday.episodic-pivot-gap` | `1.0.0` |
+| `configs/strategies/lance_breitstein_intraday_tactics.yaml` | research | `intraday.vwap-trap-reclaim` | `1.0.0` |
+| `configs/strategies/minervini-trend-template-vcp.v2.yaml` | archived | `swing.minervini-vcp` | `2.0.0` |
+| `configs/strategies/minervini-trend-template-vcp.v4-trend-rider.yaml` | research | `swing.minervini-vcp` | `4.0.0` |
+| `configs/strategies/swing-catalyst-drift.v5.yaml` | archived | `swing.catalyst-drift` | `5.0.0` |
+| `configs/strategies/swing-mean-reversion-reclaim.v1.yaml` | archived | `swing.mean-reversion-reclaim` | `1.0.0` |
+| `configs/strategies/swing-overbought-rollover-short-no-news.v5.yaml` | archived | `swing.overbought-rollover-short` | `5.0.0` |
+| `configs/strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml` | archived | `swing.reversal-reclaim` | `1.0.0` |
+| `configs/backtest/strategies/intraday-atr-compression-breakout.bt-v1.yaml` | research | `intraday.atr-compression-or-breakout` | `1.0.0` |
+| `configs/backtest/strategies/intraday-macd-divergence-fade.bt-v1.yaml` | archived | `intraday.macd-divergence-fade` | `1.0.0` |
+| `configs/backtest/strategies/intraday-vwap-momentum-pullback.bt-v1.yaml` | research | `intraday.vwap-momentum-pullback` | `1.0.0` |
+| `configs/backtest/strategies/minervini-trend-template-breakout-proxy.bt-v5.yaml` | archived | `swing.minervini-vcp` | `5.0.0` |
+| `configs/backtest/strategies/minervini-trend-template-pivot-vcp.bt-v6.yaml` | archived | `swing.minervini-vcp` | `6.0.0` |
+| `configs/backtest/strategies/minervini-trend-template-pivot-vcp.bt-v7.yaml` | archived | `swing.minervini-vcp` | `7.0.0` |
+| `configs/backtest/strategies/minervini-trend-template-pivot-vcp.bt-v8-hourly-confirmation.yaml` | archived | `swing.minervini-vcp` | `8.0.0` |
+| `configs/backtest/strategies/swing-connors-rsi2-deep-oversold.bt-v4.yaml` | archived | `swing.connors-rsi2` | `4.0.0` |
+| `configs/backtest/strategies/swing-connors-rsi2-oversold.bt-v3.yaml` | research | `swing.connors-rsi2` | `3.0.0` |
+| `configs/backtest/strategies/swing-mean-reversion-reclaim.tech-only.bt-v1.yaml` | archived | `swing.mean-reversion-reclaim-technical-only` | `1.0.0` |
+| `configs/backtest/strategies/swing-mean-reversion-rsi2-recovery.bt-v2.yaml` | archived | `swing.connors-rsi2` | `2.0.0` |
+
+The bootstrap therefore contains six research artifacts, fifteen archived
+artifacts, and no paper-experiment, paper-shadow, or validated artifacts.
+Minervini V4 remains the stale research control rather than a promoted strategy.
+Connors RSI2 V3 is the faithful untuned benchmark; V4 is an archived tuned variant.
+
+Additional lifecycle rules:
+
+- Schema-v1 promotion-table rename, v3 schema creation, row copy, row-count and
+  SQLite integrity verification, and schema-version advancement occur in one
+  atomic SQLite transaction. A crash rolls the whole migration back; reopening
+  retries from v1 without a partly migrated state. Legacy decisions remain readable
+  evidence but never authorize execution because they lack the full exact identity.
+- Suspension is an exact-identity safety overlay rather than an artifact disposition
+  or execution grant.
+  It blocks new paper/live entries while monitoring, protection, exits, and
+  diagnostic reads continue. Suspension and resume are explicit decisions.
+- Creating a paper experiment starts from an exact non-archived research identity.
+  It publishes the immutable artifact before committing its exact-identity
+  `paper_experiment` authorization; only the intersection is selectable. Unchanged
+  content preserves and reuses the source
+  identity; parameter edits require a new semantic version and record `derived_from`,
+  override diff, actor, UTC timestamp, resolved content, admission profile, and
+  resulting hash. A reused family/version with different content is a conflict.
+  Disposable run YAML is never lifecycle or authorization authority.
+- A run snapshot is separate from a catalog artifact. It records the selected
+  artifact identity and execution provenance but cannot create or change disposition
+  or authorization.
+  A paper-experiment run must reference an already registered `paper_experiment`;
+  a paper-shadow run must reference an exact identity authorized as `paper_shadow`.
+- Selection is enforced in the domain/application service with explicit operations:
+  `backtest` sees `research`; `create_paper_experiment` sees `research` as source
+  material; `run_paper_experiment` sees active `paper_experiment` grants;
+  `run_paper_shadow` sees exact active `paper_shadow` grants, including identities
+  that also have `validated`; `run_live` sees exact active `validated` grants;
+  archive is view-only. Diagnostic replay may address a specific non-archived
+  identity. UI filtering is not an authorization boundary.
+- Both paper execution catalogs are empty after bootstrap. Web/mobile separately
+  show `no_paper_experiment_strategy` or `no_paper_shadow_strategy`, disable the
+  corresponding start action, and direct starts return conflict. There is no
+  fallback to a research filename.
+
 - Introduce strategy artifact metadata and content hashing.
 - Canonicalize the fully resolved strategy, parser defaults, admission profile,
   indicator versions, and risk/execution policy; reject unknown YAML keys.
@@ -369,13 +495,39 @@ Every phase follows this gate:
   bootstrap contains no paper-shadow or validated strategy.
 - Separate canonical research, paper experiment/shadow, validated, and archive
   views without trusting folder location as promotion evidence.
-- Stop mutating shared YAML. Editable UI parameters create an immutable run snapshot
-  with a new hash; they never overwrite the source strategy.
+- Stop mutating shared YAML. Editable paper parameters register a new immutable
+  paper-experiment artifact before a run snapshot may reference it; backtest-local
+  parameter variations remain immutable research run snapshots. Neither overwrites
+  the source strategy.
 - Apply the retained/archived dispositions in section 3.2.
 
-**Accept:** catalog tests prove mode filtering, hash integrity, immutability,
-revocation, stale-hash rejection, unknown-key rejection, and no unpromoted live
-selection.
+**Accept:** catalog tests prove all 21 files are classified exactly once; bootstrap
+counts are 6/15/0; mode filtering, immutable identity versus authorization
+separation, deterministic authorization transitions, canonical identity uniqueness,
+hash integrity,
+immutable experiment registration and derivation, separation of catalog artifacts
+from run snapshots, atomic migration rollback/retry, v1 preservation,
+suspension/resume, revocation, stale-hash rejection, unknown-key rejection, both
+expected empty paper states, and no unpromoted live selection all fail closed.
+
+**Implemented Phase 1 boundary:** `configs/strategy-catalog.json` is the explicit
+research/archive bootstrap; `data/strategy-artifacts/paper-experiments` stores
+immutable experiment artifacts; and
+`data/research/evidence/strategy-authorizations.db` is the single authorization
+ledger for paper experiment, paper shadow, validated, suspension, and durable entry
+admission tokens. Every strategy-routed broker entry presents exact identity and
+explicit mode at the final order boundary. Run snapshots are immutable provenance,
+never grants. The Web host can create paper-experiment grants but uses a deny-all
+human promotion authorizer for paper-shadow/validated decisions. Experiment
+registration uses a stable operator command ID and UTC request time, so retrying the
+artifact-first/grant-second saga is idempotent while a distinct duplicate grant is
+rejected. Revoking the experiment prerequisite makes dependent shadow and validated
+grants ineligible for new entries without invalidating prior admission tokens.
+Derived artifacts remain selectable after shadow/live authorization, and the Paper
+UI exposes the first immutable experiment-registration command. Its collapsed
+parameter editor loads the exact source values, requires a new semantic version for
+edits, validates risk/execution ranges, and publishes the derived content and full
+override diff without mutating source YAML.
 
 ### Phase 2 - Durable discovery, warming, and market-state ownership
 

@@ -190,10 +190,20 @@ public interface IEvidenceRetentionService
 /// <summary>
 /// Authorization-sensitive boundary. Research assemblies must not receive this interface.
 /// </summary>
+public sealed record StrategySupersessionCommitResult(
+    EvidenceCatalogCommitResult Supersession,
+    EvidenceCatalogCommitResult Replacement);
+
 public interface IPromotionRegistry
 {
     Task<EvidenceCatalogCommitResult> RegisterDecisionAsync(
         StrategyPromotionDecision authorizedDecision,
+        string actingPrincipal,
+        CancellationToken cancellationToken = default);
+
+    Task<StrategySupersessionCommitResult> RegisterSupersessionAsync(
+        StrategyPromotionDecision supersessionDecision,
+        StrategyPromotionDecision acceptedReplacement,
         string actingPrincipal,
         CancellationToken cancellationToken = default);
 

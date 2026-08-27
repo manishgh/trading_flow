@@ -103,7 +103,6 @@ artifacts:
   retention_mode: full
 
 strategies:
-  - ../strategies/intraday-ema10-ema20-macd-volume.v1.yaml
 
 
 

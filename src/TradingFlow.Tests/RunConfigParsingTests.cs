@@ -58,11 +58,7 @@ public sealed class RunConfigParsingTests
         var reader = new SimpleYamlReader();
         var original = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", strategyFile));
 
-        var writeMethod = typeof(RunConfigWriter).GetMethod(
-            "WriteStrategyYaml",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        Assert.NotNull(writeMethod);
-        var yaml = (string)writeMethod!.Invoke(null, [original])!;
+        var yaml = RunConfigWriter.SerializeStrategyYaml(original);
 
         var tempPath = Path.Combine(Path.GetTempPath(), $"roundtrip-{Guid.NewGuid():N}.yaml");
         File.WriteAllText(tempPath, yaml);
@@ -197,8 +193,7 @@ public sealed class RunConfigParsingTests
         Assert.Equal("1m", config.DerivedTimeframes.Source);
         Assert.False(config.Execution.AllowExtendedHoursTrading);
         Assert.Equal("full", config.Artifacts.RetentionMode);
-        Assert.Single(config.Strategies);
-        Assert.Contains(config.Strategies, path => path.EndsWith(PaperIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(config.Strategies);
     }
 
     [Fact]
@@ -220,9 +215,7 @@ public sealed class RunConfigParsingTests
         Assert.True(config.News.Enabled);
         Assert.False(config.Execution.AllowExtendedHoursTrading);
         Assert.True(config.Universe?.IsUnresolvedWishlist);
-        Assert.Single(config.Strategies);
-        Assert.Contains(config.Strategies, path => path.EndsWith(SwingQualityLongStrategyFile, StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(config.Strategies, path => path.EndsWith(SwingOverboughtShortStrategyFile, StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(config.Strategies);
     }
 
     [Fact]
@@ -356,24 +349,15 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
-    public void ImportedResearchStrategies_ParseWithRuleSpecificFields()
+    public void BootstrapCatalog_ParsesOnlyAdmittedResearchStrategies()
     {
         var repoRoot = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
-
-        var shannon = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", ShannonAvwapStrategyFile));
-        Assert.Equal("brian_shannon_mta_avwap_strategies", shannon.Source);
-        Assert.Equal("avwap_pullback_bounce", shannon.EntryRules.SetupType);
-        Assert.Equal("recent_gap_or_high_volume_node", shannon.EntryRules.AnchorType);
-        Assert.True(shannon.EntryRules.RequirePriceAboveSma50Daily);
-        Assert.True(shannon.EntryRules.RequirePriceAboveSma200Daily);
-        Assert.Equal(1.5m, shannon.EntryRules.AvwapProximityPct);
-        Assert.True(shannon.EntryRules.RequirePullbackVolumeDryup);
-        Assert.True(shannon.EntryRules.RequirePriceAboveEma5_65m);
-        Assert.Equal(1.25m, shannon.EntryRules.MinBounceVolumeRatio);
-        Assert.False(shannon.Confluence.Enabled);
-
-        var breitstein = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", BreitsteinVwapTrapStrategyFile));
+        var catalog = CreateStrategyArtifactCatalog(repoRoot).GetSnapshot();
+        var breitstein = Assert.Single(
+                catalog.ExecutableArtifacts,
+                artifact => artifact.SourcePath.EndsWith(BreitsteinVwapTrapStrategyFile, StringComparison.OrdinalIgnoreCase))
+            .ResolvedStrategy;
         Assert.Equal("lance_breitstein_intraday_tactics", breitstein.Source);
         Assert.Equal("vwap_reclaim_trap", breitstein.EntryRules.SetupType);
         Assert.Equal(2.0m, breitstein.EntryRules.MinSessionRelativeVolume);
@@ -381,74 +365,34 @@ public sealed class RunConfigParsingTests
         Assert.Equal(12, breitstein.EntryRules.VwapReclaimMaxBarsSinceFlush);
         Assert.Equal(1.50m, breitstein.EntryRules.MinReclaimVolumeRatio);
         Assert.Equal("1m", breitstein.Execution.Timeframe);
-
-        var qullamaggie = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", QullamaggieEpisodicPivotStrategyFile));
-        Assert.Equal("kristjan_qullamaggie_stream_methodology", qullamaggie.Source);
-        Assert.Equal("episodic_pivot_gap", qullamaggie.EntryRules.SetupType);
-        Assert.Equal(8.0m, qullamaggie.EntryRules.MinGapUpPct);
-        Assert.Equal(3.0m, qullamaggie.EntryRules.MinSessionRelativeVolume);
-        Assert.True(qullamaggie.EntryRules.RequirePositiveNews);
-        Assert.Equal(24m, qullamaggie.EntryRules.MaxNewsAgeHours);
-
-        var minervini = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", MinerviniVcpStrategyFile));
-        Assert.Equal("mark_minervini_trade_like_a_stock_market_wizard", minervini.Source);
-        Assert.Equal("volatility_contraction_pattern", minervini.EntryRules.SetupType);
-        Assert.Equal(2, minervini.Version);
-        Assert.True(minervini.EntryRules.RequirePriceAboveBollingerMiddle);
-        Assert.True(minervini.EntryRules.RequireMacdHistogramPositive);
-        Assert.True(minervini.EntryRules.RequirePriceAboveEma10);
-        Assert.True(minervini.EntryRules.RequirePriceAboveEma20);
-        Assert.True(minervini.EntryRules.RequirePriceAboveEma50);
-        Assert.True(minervini.EntryRules.RequireEma10AboveEma20);
-        Assert.True(minervini.EntryRules.RequireEma20AboveEma50);
-        Assert.Equal(25, minervini.EntryRules.VolatilityContractionLookbackBars);
-        Assert.Equal(0.55m, minervini.EntryRules.MinCloseLocationValue);
-        Assert.True(minervini.ExitRules.EnableAtrTrailingStop);
-        Assert.Equal(4.0m, minervini.ExitRules.TargetRMultiple);
+        Assert.Equal(6, catalog.ExecutableArtifacts.Count);
+        Assert.Equal(15, catalog.ArchivedArtifacts.Count);
+        Assert.Contains(catalog.ArchivedArtifacts, artifact =>
+            artifact.SourcePath.EndsWith(ShannonAvwapStrategyFile, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(catalog.ArchivedArtifacts, artifact =>
+            artifact.SourcePath.EndsWith(QullamaggieEpisodicPivotStrategyFile, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void AllStrategyConfigs_ParseWithoutActivatingUnreferencedStrategies()
+    public void AllExecutableStrategyConfigs_AreStrictlyParsedByCatalog()
     {
         var repoRoot = FindRepositoryRoot();
-        var reader = new SimpleYamlReader();
-        var strategyDir = Path.Combine(repoRoot, "configs", "strategies");
-
-        foreach (var strategyPath in Directory.EnumerateFiles(strategyDir, "*.yaml"))
+        var artifacts = CreateStrategyArtifactCatalog(repoRoot).GetSnapshot().ExecutableArtifacts;
+        foreach (var artifact in artifacts)
         {
-            var strategy = reader.ReadStrategy(strategyPath);
-
-            Assert.False(string.IsNullOrWhiteSpace(strategy.StrategyId));
-            Assert.False(string.IsNullOrWhiteSpace(strategy.EntryRules.SetupType));
+            Assert.False(String.IsNullOrWhiteSpace(artifact.ResolvedStrategy.StrategyId));
+            Assert.False(String.IsNullOrWhiteSpace(artifact.ResolvedStrategy.EntryRules.SetupType));
         }
     }
 
     [Fact]
-    public void MobileAutomationTimeframes_UseFinestExecutionSourceForShannonSwing()
+    public void ArchivedShannonStrategy_IsUnavailableToRuntimeAutomation()
     {
         var repoRoot = FindRepositoryRoot();
-        var reader = new SimpleYamlReader();
-        var config = reader.ReadBacktestRun(Path.Combine(repoRoot, "configs", "paper", PaperSwingFile));
-        var strategy = reader.ReadStrategy(Path.Combine(repoRoot, "configs", "strategies", ShannonAvwapStrategyFile));
-        var serviceType = typeof(MobileAutomationService);
+        var catalog = CreateStrategyArtifactCatalog(repoRoot);
+        var sourcePath = Path.Combine(repoRoot, "configs", "strategies", ShannonAvwapStrategyFile);
 
-        var required = (string[])serviceType
-            .GetMethod("ResolveRequiredTimeframes", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-            .Invoke(null, new object[] { strategy })!;
-
-        var download = (string[])serviceType
-            .GetMethod("ResolveDownloadTimeframesForAutomation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-            .Invoke(null, new object[] { config, strategy, required })!;
-
-        var deriveFrom = (string)serviceType
-            .GetMethod("ResolveDeriveFromTimeframe", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-            .Invoke(null, new object[] { config, required, download })!;
-
-        Assert.Contains("65m", required);
-        Assert.Contains("5m", required);
-        Assert.Contains("5m", download);
-        Assert.Contains("1d", download);
-        Assert.Equal("5m", deriveFrom);
+        Assert.Throws<InvalidOperationException>(() => catalog.RequireSourcePath(sourcePath));
     }
 
     [Fact]
@@ -560,7 +504,10 @@ public sealed class RunConfigParsingTests
             var writer = new RunConfigWriter(
                 new ProjectPaths(tempRoot),
                 new SimpleYamlReader(),
-                AtomicFileArtifactWriter.Instance);
+                AtomicFileArtifactWriter.Instance,
+                CreateStrategyArtifactCatalog(repoRoot),
+                CreateExperimentArtifactStore(repoRoot),
+                new StrategyAuthorizationTestRegistry());
 
             var generatedPath = writer.WriteBacktestConfig(new BacktestRunRequest(
                 BaseConfigPath: baseConfigPath,
@@ -586,8 +533,99 @@ public sealed class RunConfigParsingTests
             Assert.Contains("  source: wishlist", generatedYaml);
             Assert.Contains("  wishlist_name: volatile", generatedYaml);
             Assert.Contains("  - POET", generatedYaml);
-            Assert.Contains(RetainedStrategyFile, generatedYaml);
-            Assert.True(new SimpleYamlReader().ReadBacktestRun(generatedPath).Universe?.IsResolvedSnapshot);
+            var generated = new SimpleYamlReader().ReadBacktestRun(generatedPath);
+            var snapshotPath = Assert.Single(generated.Strategies);
+            Assert.True(File.Exists(snapshotPath));
+            Assert.True(File.Exists(snapshotPath + ".artifact.json"));
+            var validator = new StrategyRunArtifactValidator(
+                new SimpleYamlReader(),
+                CreateStrategyArtifactCatalog(repoRoot));
+            _ = validator.ReadAndValidate(
+                snapshotPath,
+                TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
+            Assert.Throws<InvalidDataException>(() => validator.ReadAndValidate(
+                snapshotPath,
+                TradingFlow.Domain.Strategies.StrategySelectionMode.RunPaperShadow));
+
+            var spoofedStrategyDirectory = Path.Combine(tempRoot, "unrelated", "configs", "strategies");
+            Directory.CreateDirectory(spoofedStrategyDirectory);
+            var orphanPath = Path.Combine(spoofedStrategyDirectory, "orphan-strategy.yaml");
+            File.Copy(snapshotPath, orphanPath);
+            Assert.Throws<InvalidOperationException>(() => validator.ReadAndValidate(
+                orphanPath,
+                TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest));
+
+            var originalSnapshot = File.ReadAllText(snapshotPath);
+            File.WriteAllText(
+                snapshotPath,
+                System.Text.RegularExpressions.Regex.Replace(
+                    originalSnapshot,
+                    @"(?m)^  min_volume_spike:.*$",
+                    "  min_volume_spike: 9.0"));
+            Assert.Throws<InvalidDataException>(() => validator.ReadAndValidate(
+                snapshotPath,
+                TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest));
+            Assert.True(generated.Universe?.IsResolvedSnapshot);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RunConfigWriter_ConcurrentSameNameRunsPublishDistinctCompleteSnapshots()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var tempRoot = Path.Combine(Path.GetTempPath(), "trading-flow-writer-concurrency-test", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var reader = new SimpleYamlReader();
+            var artifactCatalog = CreateStrategyArtifactCatalog(repoRoot);
+            var writer = new RunConfigWriter(
+                new ProjectPaths(tempRoot),
+                reader,
+                AtomicFileArtifactWriter.Instance,
+                artifactCatalog,
+                CreateExperimentArtifactStore(repoRoot),
+                new StrategyAuthorizationTestRegistry());
+            var request = new BacktestRunRequest(
+                Path.Combine(repoRoot, "configs", "backtest", RetainedBacktestFile),
+                "same-operator-name",
+                30,
+                Guid.Parse("220939c3-1e91-4c4e-9bca-5d61f9837ebd"),
+                "volatile",
+                ["POET"],
+                [Path.Combine(repoRoot, "configs", "strategies", RetainedStrategyFile)],
+                10_000m,
+                1m,
+                25m,
+                4,
+                "use_cache",
+                []);
+
+            var paths = await Task.WhenAll(
+                Task.Run(() => writer.WriteBacktestConfig(request)),
+                Task.Run(() => writer.WriteBacktestConfig(request)));
+
+            Assert.Equal(2, paths.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+            var validator = new StrategyRunArtifactValidator(reader, artifactCatalog);
+            foreach (var path in paths)
+            {
+                Assert.True(File.Exists(path));
+                var run = reader.ReadBacktestRun(path);
+                var strategyPath = Assert.Single(run.Strategies);
+                Assert.True(File.Exists(strategyPath));
+                Assert.True(File.Exists(strategyPath + ".artifact.json"));
+                _ = validator.ReadAndValidate(
+                    strategyPath,
+                    TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
+            }
         }
         finally
         {
@@ -608,11 +646,18 @@ public sealed class RunConfigParsingTests
         try
         {
             var baseConfigPath = Path.Combine(repoRoot, "configs", "backtest", RetainedSwingBacktestFile);
-            var strategyPath = Path.Combine(repoRoot, "configs", "strategies", "swing-mean-reversion-reclaim.v1.yaml");
+            var strategyPath = Path.Combine(
+                repoRoot,
+                "configs",
+                "strategies",
+                "minervini-trend-template-vcp.v4-trend-rider.yaml");
             var writer = new RunConfigWriter(
                 new ProjectPaths(tempRoot),
                 new SimpleYamlReader(),
-                AtomicFileArtifactWriter.Instance);
+                AtomicFileArtifactWriter.Instance,
+                CreateStrategyArtifactCatalog(repoRoot),
+                CreateExperimentArtifactStore(repoRoot),
+                new StrategyAuthorizationTestRegistry());
 
             var generatedPath = writer.WriteBacktestConfig(new BacktestRunRequest(
                 BaseConfigPath: baseConfigPath,
@@ -652,6 +697,85 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
+    public void RunConfigWriter_ParameterOverrideRequiresVersionAndRecordsImmutableProvenance()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var tempRoot = Path.Combine(Path.GetTempPath(), "trading-flow-versioned-override-test", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var baseConfigPath = Path.Combine(repoRoot, "configs", "backtest", RetainedBacktestFile);
+            var strategyPath = Path.Combine(repoRoot, "configs", "strategies", RetainedStrategyFile);
+            var writer = new RunConfigWriter(
+                new ProjectPaths(tempRoot),
+                new SimpleYamlReader(),
+                AtomicFileArtifactWriter.Instance,
+                CreateStrategyArtifactCatalog(repoRoot),
+                CreateExperimentArtifactStore(repoRoot),
+                new StrategyAuthorizationTestRegistry());
+            var unversionedOverride = new StrategyParameterOverride(
+                strategyPath,
+                2.5m,
+                0m,
+                100m,
+                null,
+                false,
+                "1h",
+                50,
+                1m,
+                3m,
+                6m,
+                false,
+                1m,
+                1m,
+                1,
+                "1m",
+                25m,
+                Actor: "unit-test");
+            BacktestRunRequest Request(StrategyParameterOverride strategyOverride) => new(
+                baseConfigPath,
+                "versioned-override-test",
+                30,
+                Guid.Parse("220939c3-1e91-4c4e-9bca-5d61f9837ebd"),
+                "volatile",
+                ["POET"],
+                [strategyPath],
+                10000m,
+                1m,
+                25m,
+                4,
+                "use_cache",
+                [strategyOverride]);
+
+            Assert.Throws<InvalidOperationException>(() => writer.WriteBacktestConfig(Request(unversionedOverride)));
+
+            var generatedPath = writer.WriteBacktestConfig(Request(
+                unversionedOverride with { DerivedSemanticVersion = "1.1.0-research" }));
+            var generated = new SimpleYamlReader().ReadBacktestRun(generatedPath);
+            var snapshotPath = Assert.Single(generated.Strategies);
+            var manifestJson = File.ReadAllText(snapshotPath + ".artifact.json");
+
+            Assert.Contains("\"semanticVersion\":\"1.1.0-research\"", manifestJson, StringComparison.Ordinal);
+            Assert.Contains("\"createdBy\":\"unit-test\"", manifestJson, StringComparison.Ordinal);
+            Assert.Contains("entry_rules.min_volume_spike", manifestJson, StringComparison.Ordinal);
+            Assert.Contains("exit_rules.enable_atr_trailing_stop", manifestJson, StringComparison.Ordinal);
+            _ = new StrategyRunArtifactValidator(
+                new SimpleYamlReader(),
+                CreateStrategyArtifactCatalog(repoRoot)).ReadAndValidate(
+                snapshotPath,
+                TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void RunConfigWriter_AddsFinerExecutionTimeframeToDownloads()
     {
         var repoRoot = FindRepositoryRoot();
@@ -665,7 +789,10 @@ public sealed class RunConfigParsingTests
             var writer = new RunConfigWriter(
                 new ProjectPaths(tempRoot),
                 new SimpleYamlReader(),
-                AtomicFileArtifactWriter.Instance);
+                AtomicFileArtifactWriter.Instance,
+                CreateStrategyArtifactCatalog(repoRoot),
+                CreateExperimentArtifactStore(repoRoot),
+                new StrategyAuthorizationTestRegistry());
 
             var generatedPath = writer.WriteBacktestConfig(new BacktestRunRequest(
                 BaseConfigPath: baseConfigPath,
@@ -708,15 +835,25 @@ public sealed class RunConfigParsingTests
         {
             var baseConfigPath = Path.Combine(repoRoot, "configs", "paper", "alpaca-paper.yaml");
             var strategyPath = Path.Combine(repoRoot, "configs", "strategies", RetainedStrategyFile);
+            var artifactCatalog = CreateStrategyArtifactCatalog(repoRoot);
+            var sourceArtifact = artifactCatalog.RequireSourcePath(strategyPath);
+            var paperShadowArtifact = sourceArtifact with
+            {
+                EffectiveLifecycle = TradingFlow.Domain.Strategies.StrategyLifecycleState.PaperShadow
+            };
             var writer = new RunConfigWriter(
                 new ProjectPaths(tempRoot),
                 new SimpleYamlReader(),
-                AtomicFileArtifactWriter.Instance);
+                AtomicFileArtifactWriter.Instance,
+                artifactCatalog,
+                CreateExperimentArtifactStore(repoRoot),
+                new StrategyAuthorizationTestRegistry());
 
             var generatedPath = writer.SaveTempConfig(
                 baseConfigPath,
                 ["MU", "NVDA"],
-                strategyPath,
+                paperShadowArtifact,
+                TradingFlow.Domain.Strategies.StrategySelectionMode.RunPaperShadow,
                 orderExpiration: "day",
                 entryOrderType: "limit",
                 allowExtendedHoursTrading: true,
@@ -743,6 +880,11 @@ public sealed class RunConfigParsingTests
             Assert.Equal(["MU"], parsed.Universe!.ResolvedSelectedSourceTickers);
             Assert.Equal(["NVDA"], parsed.Universe.ResolvedScreenerTickers);
             Assert.Equal(["MU", "NVDA"], parsed.Tickers);
+            _ = new StrategyRunArtifactValidator(
+                new SimpleYamlReader(),
+                CreateStrategyArtifactCatalog(repoRoot)).ReadAndValidate(
+                Assert.Single(parsed.Strategies),
+                TradingFlow.Domain.Strategies.StrategySelectionMode.RunPaperShadow);
         }
         finally
         {
@@ -768,7 +910,10 @@ public sealed class RunConfigParsingTests
             var writer = new RunConfigWriter(
                 new ProjectPaths(tempRoot),
                 new SimpleYamlReader(),
-                AtomicFileArtifactWriter.Instance);
+                AtomicFileArtifactWriter.Instance,
+                CreateStrategyArtifactCatalog(FindRepositoryRoot()),
+                CreateExperimentArtifactStore(FindRepositoryRoot()),
+                new StrategyAuthorizationTestRegistry());
 
             writer.DeleteTempConfig(tempConfig);
             writer.DeleteTempConfig(retainedConfig);
@@ -788,5 +933,21 @@ public sealed class RunConfigParsingTests
     private static string FindRepositoryRoot()
     {
         return TestRepository.FindRoot();
+    }
+
+    private static StrategyArtifactCatalog CreateStrategyArtifactCatalog(string repositoryRoot) =>
+        new(
+            repositoryRoot,
+            Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
+            new SimpleYamlReader());
+
+    private static StrategyExperimentArtifactStore CreateExperimentArtifactStore(string repositoryRoot)
+    {
+        var reader = new SimpleYamlReader();
+        return new StrategyExperimentArtifactStore(
+            Path.Combine(Path.GetTempPath(), "trading-flow-empty-experiments", Guid.NewGuid().ToString("N")),
+            CreateStrategyArtifactCatalog(repositoryRoot),
+            reader,
+            AtomicFileArtifactWriter.Instance);
     }
 }

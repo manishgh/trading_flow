@@ -167,7 +167,8 @@ public sealed class MobileAutomationSessionStoreTests
                 new SimpleYamlReader(),
                 runtimeFactory,
                 new ProjectPaths(root),
-                store);
+                store,
+                CreateConfigCatalog());
 
             await service.InitializeAsync();
             var snapshot = service.Get(sessionId);
@@ -188,6 +189,26 @@ public sealed class MobileAutomationSessionStoreTests
         var path = Path.Combine(Path.GetTempPath(), "trading-flow-mobile-automation-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static ConfigCatalogService CreateConfigCatalog()
+    {
+        var repositoryRoot = TestRepository.FindRoot();
+        var reader = new SimpleYamlReader();
+        var catalog = new StrategyArtifactCatalog(
+            repositoryRoot,
+            Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
+            reader);
+        return new ConfigCatalogService(
+            new ProjectPaths(repositoryRoot),
+            reader,
+            catalog,
+            new StrategyExperimentArtifactStore(
+                Path.Combine(Path.GetTempPath(), "trading-flow-mobile-session-experiments", Guid.NewGuid().ToString("N")),
+                catalog,
+                reader,
+                AtomicFileArtifactWriter.Instance),
+            new StrategyAuthorizationTestRegistry());
     }
 
     private static MobileAutomationSessionSnapshot CreateSnapshot(Guid sessionId, string status, DateTimeOffset createdAt)

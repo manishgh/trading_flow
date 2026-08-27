@@ -10,14 +10,18 @@ using TradingFlow.Data.Candles;
 using TradingFlow.Data.Context;
 using TradingFlow.Data.News;
 using TradingFlow.Data.Earnings;
+using TradingFlow.Data.Evidence;
+using TradingFlow.Data.Evidence.Governance;
 using TradingFlow.Data.Wishlists;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Engine.Execution;
+using TradingFlow.Engine.Research;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Domain.Earnings;
 using TradingFlow.Domain.News;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Earnings;
 using TradingFlow.Finviz;
 using TradingFlow.Web;
@@ -66,18 +70,69 @@ builder.Services.AddRazorPages(razor =>
     razor.Conventions.AllowAnonymousToPage("/Earnings");
 });
 var repositoryRoot = ResolveRepositoryRoot(builder.Environment.ContentRootPath);
-var dataRoot = ResolveRootFromEnvironment("TRADINGFLOW_DATA_ROOT", Path.Combine(repositoryRoot, "data"));
-var cacheRoot = ResolveRootFromEnvironment("TRADINGFLOW_CACHE_ROOT", Path.Combine(dataRoot, "cache"));
+var dataRoot = RuntimeDataRootResolver.Resolve(
+    repositoryRoot,
+    uiTestMode,
+    Environment.GetEnvironmentVariable("TRADINGFLOW_DATA_ROOT"));
+var cacheRoot = uiTestMode
+    ? Path.Combine(dataRoot, "cache")
+    : ResolveRootFromEnvironment("TRADINGFLOW_CACHE_ROOT", Path.Combine(dataRoot, "cache"));
 var dataProtectionKeyRoot = Path.Combine(dataRoot, "security", "data-protection-keys");
 Directory.CreateDirectory(dataProtectionKeyRoot);
 builder.Services
     .AddDataProtection()
     .SetApplicationName("TradingFlow.Web")
     .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyRoot));
-var backupRoot = ResolveRootFromEnvironment("TRADINGFLOW_BACKUP_ROOT", Path.Combine(dataRoot, "backups"));
+var backupRoot = uiTestMode
+    ? Path.Combine(dataRoot, "backups")
+    : ResolveRootFromEnvironment("TRADINGFLOW_BACKUP_ROOT", Path.Combine(dataRoot, "backups"));
 builder.Services.AddSingleton(new ProjectPaths(repositoryRoot, dataRoot, cacheRoot));
 builder.Services.AddSingleton<SimpleYamlReader>();
+builder.Services.AddSingleton(serviceProvider => new StrategyArtifactCatalog(
+    repositoryRoot,
+    Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
+    serviceProvider.GetRequiredService<SimpleYamlReader>()));
 builder.Services.AddSingleton<IArtifactWriter>(AtomicFileArtifactWriter.Instance);
+builder.Services.AddSingleton(serviceProvider => new StrategyExperimentArtifactStore(
+    Path.Combine(dataRoot, "strategy-artifacts", "paper-experiments"),
+    serviceProvider.GetRequiredService<StrategyArtifactCatalog>(),
+    serviceProvider.GetRequiredService<SimpleYamlReader>(),
+    serviceProvider.GetRequiredService<IArtifactWriter>()));
+var evidenceRoot = Path.Combine(dataRoot, "research", "evidence");
+var evidenceCatalogPath = Path.Combine(evidenceRoot, "catalog.db");
+var evidenceObjectRoot = Path.Combine(evidenceRoot, "objects");
+var promotionRegistryPath = Path.Combine(evidenceRoot, "strategy-authorizations.db");
+builder.Services.AddSingleton<IImmutableArtifactStore>(new FileSystemImmutableArtifactStore(
+    new ImmutableArtifactStoreOptions(evidenceObjectRoot)));
+builder.Services.AddSingleton(serviceProvider => new SqliteEvidenceCatalog(
+    new EvidenceCatalogOptions(
+        evidenceCatalogPath,
+        File.Exists(evidenceCatalogPath)
+            ? EvidenceCatalogOpenMode.OpenExisting
+            : EvidenceCatalogOpenMode.BootstrapNew),
+    serviceProvider.GetRequiredService<IImmutableArtifactStore>()));
+builder.Services.AddSingleton<IEvidenceCatalog>(serviceProvider =>
+    serviceProvider.GetRequiredService<SqliteEvidenceCatalog>());
+builder.Services.AddSingleton<IEvidenceReferenceSubjectRegistry>(serviceProvider =>
+    serviceProvider.GetRequiredService<SqliteEvidenceCatalog>());
+builder.Services.AddSingleton<IPromotionPrincipalAuthorizer, DenyAllPromotionPrincipalAuthorizer>();
+builder.Services.AddSingleton(serviceProvider => new SqliteStrategyPromotionRegistry(
+    new StrategyPromotionRegistryOptions(
+        promotionRegistryPath,
+        File.Exists(promotionRegistryPath)
+            ? StrategyPromotionRegistryOpenMode.OpenExisting
+            : StrategyPromotionRegistryOpenMode.BootstrapNew),
+    serviceProvider.GetRequiredService<IEvidenceCatalog>(),
+    serviceProvider.GetRequiredService<IEvidenceReferenceSubjectRegistry>(),
+    serviceProvider.GetRequiredService<IImmutableArtifactStore>(),
+    serviceProvider.GetRequiredService<IPromotionPrincipalAuthorizer>(),
+    serviceProvider.GetRequiredService<StrategyExperimentArtifactStore>()));
+builder.Services.AddSingleton<IPromotionRegistry>(serviceProvider =>
+    serviceProvider.GetRequiredService<SqliteStrategyPromotionRegistry>());
+builder.Services.AddSingleton<IStrategyAuthorizationPolicy>(serviceProvider =>
+    serviceProvider.GetRequiredService<SqliteStrategyPromotionRegistry>());
+builder.Services.AddSingleton<IStrategyExperimentAuthorizationCommands>(serviceProvider =>
+    serviceProvider.GetRequiredService<SqliteStrategyPromotionRegistry>());
 builder.Services.AddSingleton(new RawArchiveOptions(Path.Combine(dataRoot, "raw")));
 builder.Services.AddSingleton<IRawArchiveWriter, FileSystemRawArchiveWriter>();
 builder.Services.AddSingleton<ICandleStore>(sp =>

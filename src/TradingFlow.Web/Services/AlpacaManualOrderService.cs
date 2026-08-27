@@ -261,7 +261,8 @@ public sealed class AlpacaManualOrderService : IDisposable
                     stopLossPrice.Value,
                     takeProfitPrice.Value,
                     now),
-                AllowExtendedHoursTrading: allowExtendedHoursTrading),
+                AllowExtendedHoursTrading: allowExtendedHoursTrading,
+                OperatorOverride: true),
             broker,
             cancellationToken);
 

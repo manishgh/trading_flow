@@ -6,6 +6,45 @@ namespace TradingFlow.Tests;
 
 public sealed class StrategyInitialStopResolverTests
 {
+    [Fact]
+    public void Resolve_FlushLow_UsesOnlyCompletedRecentFlushContext()
+    {
+        var strategy = CreateStrategy() with
+        {
+            EntryRules = CreateStrategy().EntryRules with
+            {
+                RequirePriorFlushBelowVwapBars = 2,
+                VwapReclaimMaxBarsSinceFlush = 3
+            },
+            ExitRules = CreateStrategy().ExitRules with
+            {
+                InitialStopMode = "flush_low",
+                StopTickBuffer = 0.01m
+            }
+        };
+        var bars = Enumerable.Range(0, 8)
+            .Select(index => new TradingFlow.Domain.Market.OhlcvBar(
+                "TEST",
+                new DateTimeOffset(2026, 8, 27, 14, index, 0, TimeSpan.Zero),
+                "1m",
+                10m,
+                11m,
+                index == 0 ? 5m : 9m - (index * 0.1m),
+                10m,
+                1000m))
+            .ToArray();
+        var result = resolver.Resolve(CreateRequest(
+            strategy,
+            PlannedOrderSide.Long,
+            entryPrice: 10m,
+            atr: 1m,
+            bars: bars,
+            entryIndex: 7));
+
+        Assert.True(result.IsResolved);
+        Assert.Equal(8.29m, result.StopPrice);
+    }
+
     private readonly StrategyInitialStopResolver resolver = new();
 
     [Fact]

@@ -1021,7 +1021,16 @@ public class LiveRunnerIntegrationTests
     {
         try
         {
-            await runner.RunAsync(run, strategies, cts.Token, progress);
+            var authorized = strategies
+                .Select((strategy, index) => new AuthorizedRuntimeStrategy(
+                    new StrategyArtifactIdentity(
+                        $"test.live-runner.{index}",
+                        "1.0.0",
+                        new string((char)('a' + index), 64)),
+                    StrategySelectionMode.RunPaperShadow,
+                    strategy))
+                .ToArray();
+            await runner.RunAsync(run, authorized, cts.Token, progress);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {

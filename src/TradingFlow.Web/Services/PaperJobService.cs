@@ -9,6 +9,7 @@ using TradingFlow.Engine.Storage;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Orders;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Web.Models;
 
 namespace TradingFlow.Web.Services;
@@ -29,6 +30,7 @@ public sealed class PaperJobService
     private readonly bool autoResumeJobs;
     private readonly IOrderSubmissionService? orderSubmissionService;
     private readonly IOrderLifecycleService? orderLifecycleService;
+    private readonly ConfigCatalogService configCatalog;
 
     private readonly IServiceScopeFactory _scopeFactory;
 
@@ -48,7 +50,8 @@ public sealed class PaperJobService
         TradingFlow.Domain.Audit.IDecisionAuditRepository? auditRepo = null,
         PaperRuntimeFactory? runtimeFactory = null,
         IOrderSubmissionService? orderSubmissionService = null,
-        IOrderLifecycleService? orderLifecycleService = null)
+        IOrderLifecycleService? orderLifecycleService = null,
+        ConfigCatalogService? configCatalog = null)
     {
         this.yamlReader = yamlReader;
         _scopeFactory = scopeFactory;
@@ -66,6 +69,8 @@ public sealed class PaperJobService
         _auditRepo = auditRepo;
         this.orderSubmissionService = orderSubmissionService;
         this.orderLifecycleService = orderLifecycleService;
+        this.configCatalog = configCatalog
+            ?? throw new ArgumentNullException(nameof(configCatalog));
     }
 
     public async Task InitializeAsync()
@@ -412,7 +417,24 @@ public sealed class PaperJobService
         try
         {
             var runConfig = runtimeFactory.ResolveRunPaths(yamlReader.ReadBacktestRun(job.ConfigPath));
-            var strategies = runConfig.Strategies.Select(yamlReader.ReadStrategy).ToArray();
+            foreach (var strategyPath in runConfig.Strategies)
+            {
+                await configCatalog.RequireAuthorizedPaperRunSnapshotAsync(
+                    strategyPath,
+                    cts.Token);
+            }
+            var validatedStrategies = runConfig.Strategies
+                .Select(configCatalog.ReadAndValidatePaperSnapshot)
+                .ToArray();
+            var strategies = validatedStrategies
+                .Select(strategy => strategy.Definition)
+                .ToArray();
+            var runtimeStrategies = validatedStrategies
+                .Select(strategy => new AuthorizedRuntimeStrategy(
+                    strategy.Manifest.Identity,
+                    strategy.Manifest.SelectionMode,
+                    strategy.Definition))
+                .ToArray();
             var executionRunContext = ExecutionRunContextFactory.Create(
                 job.JobId,
                 runConfig.Mode,
@@ -445,7 +467,7 @@ public sealed class PaperJobService
             });
 
             using var profilerScope = TradingFlow.Domain.Logging.ApiProfiler.BeginScope(runConfig.RunName);
-            await runner.RunAsync(runConfig, strategies, cts.Token, progress);
+            await runner.RunAsync(runConfig, runtimeStrategies, cts.Token, progress);
             if (job.Status != "cancelled")
             {
                 job.Status = "completed";

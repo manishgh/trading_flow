@@ -12,6 +12,7 @@ using TradingFlow.Engine.Storage;
 using TradingFlow.Data.Catalysts;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Engine.Execution;
+using System.Runtime.CompilerServices;
 
 namespace TradingFlow.Backtesting;
 
@@ -47,15 +48,58 @@ public sealed partial class LiveRunner(
     private readonly ExecutionRunContext? _executionRunContext = executionRunContext;
     private readonly IOrderLifecycleService? _orderLifecycleService = orderLifecycleService;
     private readonly TradingFlow.Engine.Regime.RegimeGateService _regimeGate = new();
+    private IReadOnlyDictionary<StrategyDefinition, AuthorizedRuntimeStrategy> runtimeStrategies =
+        new Dictionary<StrategyDefinition, AuthorizedRuntimeStrategy>(StrategyReferenceComparer.Instance);
 
-    public async Task RunAsync(
+    public Task RunAsync(
+        BacktestRunConfig run,
+        AuthorizedRuntimeStrategy[] strategies,
+        CancellationToken cancellationToken,
+        IProgress<string>? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(strategies);
+        var effectiveStrategies = strategies
+            .Select(strategy => strategy with
+            {
+                Definition = ApplyRunSessionPolicy(run, [strategy.Definition]).Single()
+            })
+            .ToArray();
+        var authorizations = effectiveStrategies.ToDictionary(
+            strategy => strategy.Definition,
+            strategy => strategy,
+            StrategyReferenceComparer.Instance);
+        return RunCoreAsync(
+            run,
+            effectiveStrategies.Select(strategy => strategy.Definition).ToArray(),
+            authorizations,
+            cancellationToken,
+            progress);
+    }
+
+    public Task RunAsync(
         BacktestRunConfig run,
         StrategyDefinition[] strategies,
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
     {
+        ArgumentNullException.ThrowIfNull(strategies);
+        return RunCoreAsync(
+            run,
+            ApplyRunSessionPolicy(run, strategies),
+            new Dictionary<StrategyDefinition, AuthorizedRuntimeStrategy>(StrategyReferenceComparer.Instance),
+            cancellationToken,
+            progress);
+    }
+
+    private async Task RunCoreAsync(
+        BacktestRunConfig run,
+        StrategyDefinition[] strategies,
+        IReadOnlyDictionary<StrategyDefinition, AuthorizedRuntimeStrategy> authorizations,
+        CancellationToken cancellationToken,
+        IProgress<string>? progress)
+    {
         RunUniverseValidator.RequireResolved(run);
-        strategies = ApplyRunSessionPolicy(run, strategies);
+        runtimeStrategies = authorizations;
         logger.LogInformation("Starting LiveRunner for run: {RunName}", run.RunName);
         progress?.Report($"Starting LiveRunner for run: {run.RunName}");
 
@@ -412,6 +456,16 @@ public sealed partial class LiveRunner(
             progress?.Report($"Iteration finished. Waiting {pollingInterval}...");
             await Task.Delay(pollingInterval, cancellationToken);
         }
+    }
+
+    private sealed class StrategyReferenceComparer : IEqualityComparer<StrategyDefinition>
+    {
+        public static StrategyReferenceComparer Instance { get; } = new();
+
+        public bool Equals(StrategyDefinition? left, StrategyDefinition? right) =>
+            ReferenceEquals(left, right);
+
+        public int GetHashCode(StrategyDefinition value) => RuntimeHelpers.GetHashCode(value);
     }
 
 

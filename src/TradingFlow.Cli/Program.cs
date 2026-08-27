@@ -859,7 +859,10 @@ if (args.Length > 0 && args[0].Equals("optimize", StringComparison.OrdinalIgnore
         : throw new ArgumentException("Optimization config path required.");
 
     var reader = new SimpleYamlReader();
-    var runner = new BacktestRunner(reader, rawArchiveWriter: CreateRawArchiveWriter());
+    var runner = new BacktestRunner(
+        reader,
+        CreateStrategyArtifactCatalog(reader),
+        rawArchiveWriter: CreateRawArchiveWriter());
     var optimizer = new StrategyOptimizer(reader, runner);
 
     var progress = new Progress<BacktestProgress>(update =>
@@ -1081,23 +1084,15 @@ var runConfig = readerInstance.ReadBacktestRun(configPath);
 if (runConfig.Mode.Equals("paper", StringComparison.OrdinalIgnoreCase) ||
     runConfig.Mode.Equals("live", StringComparison.OrdinalIgnoreCase))
 {
-    var runner = new LiveRunner(
-        CreateProvider(runConfig),
-        CreateNewsProvider(runConfig),
-        new TradingFlow.Engine.Execution.PseudoBroker(),
-        null,
-        null,
-        null,
-        Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRunner>.Instance,
-        rawArchiveWriter: CreateRawArchiveWriter());
-
-    var strategies = runConfig.Strategies.Select(readerInstance.ReadStrategy).ToArray();
-    await runner.RunAsync(runConfig, strategies, CancellationToken.None);
-    Console.WriteLine("Live runner execution finished.");
+    throw new InvalidOperationException(
+        "Generic CLI paper/live execution is disabled because it cannot establish the authoritative strategy authorization context. Use the Web/API paper workflow.");
 }
 else
 {
-    var runner = new BacktestRunner(readerInstance, rawArchiveWriter: CreateRawArchiveWriter());
+    var runner = new BacktestRunner(
+        readerInstance,
+        CreateStrategyArtifactCatalog(readerInstance),
+        rawArchiveWriter: CreateRawArchiveWriter());
     var result = await runner.RunAsync(configPath, CancellationToken.None);
     Console.WriteLine(JsonSerializer.Serialize(new
     {
@@ -1173,16 +1168,6 @@ static string RequireRunConfigArgument(string[] args, string commandName)
     }
 
     return args[1];
-}
-
-static TradingFlow.Engine.Abstractions.ICatalystProvider? CreateNewsProvider(TradingFlow.Domain.Backtesting.BacktestRunConfig run)
-{
-    if (!run.News.Enabled)
-    {
-        return null;
-    }
-
-    return CreateRawNewsProvider(run);
 }
 
 static TradingFlow.Engine.Abstractions.ICatalystProvider? CreateRawNewsProvider(TradingFlow.Domain.Backtesting.BacktestRunConfig run)
@@ -1377,6 +1362,18 @@ static IRawArchiveWriter CreateRawArchiveWriter()
     }
 
     return new FileSystemRawArchiveWriter(new RawArchiveOptions(Path.Combine(dataRoot, "raw")));
+}
+
+static StrategyArtifactCatalog CreateStrategyArtifactCatalog(SimpleYamlReader reader)
+{
+    var solutionPath = FindRepositoryFile("TradingFlow.sln")
+        ?? throw new InvalidOperationException(
+            "Cannot resolve the strategy catalog. Run inside the repository or provide a repository checkout containing TradingFlow.sln.");
+    var repositoryRoot = Path.GetDirectoryName(solutionPath)!;
+    return new StrategyArtifactCatalog(
+        repositoryRoot,
+        Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
+        reader);
 }
 
 static string? FindRepositoryFile(string relativePath)

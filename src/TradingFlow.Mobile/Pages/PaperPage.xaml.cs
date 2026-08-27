@@ -28,8 +28,10 @@ public partial class PaperPage : ContentPage
         NewsView.ItemsSource = newsItems;
         AutomationSessionsView.ItemsSource = automationSessions;
         PositionsView.ItemsSource = positions;
+        PaperModePicker.ItemsSource = new[] { "Paper shadow", "Paper experiment" };
         OrderExpirationPicker.ItemsSource = new[] { "day", "gtc" };
         EntryOrderTypePicker.ItemsSource = new[] { "market", "limit" };
+        PaperModePicker.SelectedIndex = 0;
         OrderExpirationPicker.SelectedIndex = 0;
         EntryOrderTypePicker.SelectedIndex = 0;
         suppressPersist = false;
@@ -71,9 +73,19 @@ public partial class PaperPage : ContentPage
 
             catalog ??= await api.GetCatalogAsync();
             ConfigPicker.ItemsSource = catalog?.PaperConfigs.ToList();
-            StrategyPicker.ItemsSource = catalog?.Strategies.ToList();
+            RestoreFormState();
+            ApplyPaperModeSelection();
+            SelectStrategyByPath(Preferences.Get("PaperStrategyPath", string.Empty));
             ConfigPicker.SelectedIndex = ConfigPicker.SelectedIndex < 0 && ConfigPicker.Items.Count > 0 ? 0 : ConfigPicker.SelectedIndex;
             StrategyPicker.SelectedIndex = StrategyPicker.SelectedIndex < 0 && StrategyPicker.Items.Count > 0 ? 0 : StrategyPicker.SelectedIndex;
+            RunButton.IsEnabled = StrategyPicker.Items.Count > 0;
+            if (StrategyPicker.Items.Count == 0)
+            {
+                StatusLabel.Text = PaperModePicker.SelectedIndex == 1
+                    ? "Connected. No paper-experiment strategy is registered."
+                    : "Connected. No strategy is authorized for paper shadow.";
+                StatusLabel.TextColor = ThemePalette.Warning;
+            }
 
             var previousWishlistId = (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Id;
             wishlists = await api.GetWishlistsAsync() ?? Array.Empty<MobileWishlistResponse>();
@@ -84,8 +96,6 @@ public partial class PaperPage : ContentPage
                 ?? wishlists.FirstOrDefault(wishlist => wishlist.IsDefault)
                 ?? wishlists.FirstOrDefault();
             suppressPersist = false;
-
-            RestoreFormState();
 
             var latestJobs = await api.GetPaperJobsAsync() ?? Array.Empty<BacktestJobSnapshot>();
             var latestAutomationSessions = await api.GetAutomationSessionsAsync() ?? Array.Empty<MobileAutomationSessionSnapshot>();
@@ -122,6 +132,28 @@ public partial class PaperPage : ContentPage
             BusyIndicator.IsVisible = false;
             RefreshRoot.IsRefreshing = false;
         }
+    }
+
+    private void ApplyPaperModeSelection()
+    {
+        var experimentMode = PaperModePicker.SelectedIndex == 1;
+        var selectedPath = (StrategyPicker.SelectedItem as MobileStrategyOption)?.Path
+            ?? Preferences.Get("PaperStrategyPath", string.Empty);
+        StrategyPicker.ItemsSource = experimentMode
+            ? catalog?.PaperExperimentStrategies.ToList()
+            : catalog?.PaperShadowStrategies.ToList();
+        SelectStrategyByPath(selectedPath);
+        if (StrategyPicker.SelectedIndex < 0)
+        {
+            StrategyPicker.SelectedIndex = StrategyPicker.Items.Count > 0 ? 0 : -1;
+        }
+        RunButton.IsEnabled = StrategyPicker.Items.Count > 0;
+    }
+
+    private void OnPaperModeChanged(object? sender, EventArgs e)
+    {
+        ApplyPaperModeSelection();
+        SaveFormState();
     }
 
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
@@ -188,7 +220,8 @@ public partial class PaperPage : ContentPage
                 NewsCheck.IsChecked,
                 OrderExpirationPicker.SelectedItem?.ToString() ?? "day",
                 EntryOrderTypePicker.SelectedItem?.ToString() ?? "market",
-                (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Id);
+                (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Id,
+                PaperModePicker.SelectedIndex == 1 ? "experiment" : "shadow");
             var job = await api.StartPaperRunAsync(request);
             if (job is not null)
             {
@@ -359,6 +392,7 @@ public partial class PaperPage : ContentPage
         try
         {
             RunNameEntry.Text = Preferences.Get("PaperRunName", string.Empty);
+            PaperModePicker.SelectedIndex = Preferences.Get("PaperExecutionMode", "shadow") == "experiment" ? 1 : 0;
             ScreenerEntry.Text = Preferences.Get("PaperScreener", string.Empty);
             AllowExtendedHoursTradingCheck.IsChecked = Preferences.Get("AllowExtendedHoursTrading", false);
             NewsCheck.IsChecked = Preferences.Get("PaperNews", false);
@@ -383,6 +417,7 @@ public partial class PaperPage : ContentPage
         }
 
         Preferences.Set("PaperRunName", RunNameEntry.Text ?? string.Empty);
+        Preferences.Set("PaperExecutionMode", PaperModePicker.SelectedIndex == 1 ? "experiment" : "shadow");
         Preferences.Set("PaperScreener", ScreenerEntry.Text ?? string.Empty);
         Preferences.Set("AllowExtendedHoursTrading", AllowExtendedHoursTradingCheck.IsChecked);
         Preferences.Set("PaperNews", NewsCheck.IsChecked);

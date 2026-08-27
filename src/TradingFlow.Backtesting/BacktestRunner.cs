@@ -30,6 +30,7 @@ public sealed record PreparedBacktestMarket(
 
 public sealed partial class BacktestRunner(
     SimpleYamlReader yamlReader,
+    StrategyArtifactCatalog strategyArtifacts,
     IArtifactWriter? artifactWriter = null,
     ICandleStore? candleStore = null,
     IRawArchiveWriter? rawArchiveWriter = null)
@@ -53,7 +54,12 @@ public sealed partial class BacktestRunner(
         progress?.Report(BacktestProgress.StageOnly("loading_config", $"Loading run config {Path.GetFileName(configPath)}."));
         var run = yamlReader.ReadBacktestRun(configPath);
         progress?.Report(BacktestProgress.StageOnly("loading_strategies", $"Loading {run.Strategies.Count} strategy config(s)."));
-        var strategies = ApplyRunSessionPolicy(run, run.Strategies.Select(yamlReader.ReadStrategy).ToArray());
+        var artifactValidator = new StrategyRunArtifactValidator(yamlReader, strategyArtifacts);
+        var strategies = ApplyRunSessionPolicy(
+            run,
+            run.Strategies
+                .Select(path => artifactValidator.ReadAndValidate(path, StrategySelectionMode.Backtest))
+                .ToArray());
 
         return await RunAsync(run, strategies, startedAt, GetResultPath(run), cancellationToken, progress);
     }

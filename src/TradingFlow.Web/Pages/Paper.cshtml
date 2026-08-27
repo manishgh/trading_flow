@@ -4,6 +4,13 @@
     ViewData["Title"] = "Paper Trading Lab";
     var selectedConfig = Model.Configs.FirstOrDefault(c => c.Path == Model.ConfigPath);
     var selectedStrategy = Model.Strategies.FirstOrDefault(s => s.Path == Model.SelectedStrategyPath);
+    var researchParameterDefaultsJson = System.Text.Json.JsonSerializer.Serialize(
+        Model.ResearchStrategies.Select(strategy => new
+        {
+            path = strategy.Path,
+            parameters = TradingFlow.Web.Models.PaperExperimentParameterInput.From(strategy.Definition)
+        }),
+        new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
     string AuditLine(TradingFlow.Web.Models.StrategyOption strategy)
     {
         var audit = strategy.Audit;
@@ -21,7 +28,7 @@
     </div>
 </div>
 
-<div asp-validation-summary="ModelOnly" class="paper-validation" role="alert"></div>
+<div asp-validation-summary="All" class="paper-validation" role="alert"></div>
 
 <form method="post">
 <div class="grid two">
@@ -31,9 +38,10 @@
             <h2>Wishlist + Finviz</h2>
             <div class="muted mb-md">Paper trading universe is the selected wishlist plus optional Finviz screener results.</div>
             <input type="hidden" name="BaseConfigPath" id="BaseConfigPath" value="@Model.ConfigPath" />
+            <input type="hidden" asp-for="ConfigPath" />
 
             <label for="WishlistId">Wishlist <span class="tf-help" title="Named ticker group stored in the database. This replaces the old paper-config ticker list.">?</span></label>
-            <select name="WishlistId" id="WishlistId" onchange="window.location='?wishlistId=' + encodeURIComponent(this.value) + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '')">
+            <select name="WishlistId" id="WishlistId" onchange="window.location='?wishlistId=' + encodeURIComponent(this.value) + '&paperExecutionMode=' + encodeURIComponent(document.getElementById('PaperExecutionMode')?.value || 'shadow') + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '')">
                 @foreach (var wishlist in Model.Wishlists)
                 {
                     <option value="@wishlist.Id" selected="@(Model.SelectedWishlist?.Id == wishlist.Id)">@wishlist.Name</option>
@@ -93,52 +101,152 @@
 
         <div class="panel mt-lg">
             <h2>Strategy Configuration</h2>
-            <div class="muted mb-md">Select a strategy and optionally edit its parameters directly in YAML format.</div>
+            <div class="muted mb-md">Choose an explicit authorization mode. Experiment runs never count as promotion evidence.</div>
 
-            <label for="SelectedStrategyDropdown">Strategy Config <span class="tf-help" title="The YAML strategy definition used by the shared signal engine. Backtest and paper trading use the same strategy fields.">?</span></label>
-            <select name="SelectedStrategyPath" id="SelectedStrategyDropdown" onchange="loadStrategyDetails(this.value)">
-                @foreach (var strategy in Model.Strategies)
-                {
-                    <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.Definition.StrategyName - @AuditLine(strategy)</option>
-                }
+            <label for="PaperExecutionMode">Paper authorization</label>
+            <select name="PaperExecutionMode" id="PaperExecutionMode" class="mb-md"
+                    onchange="window.location='?wishlistId=@Model.SelectedWishlist?.Id&paperExecutionMode=' + encodeURIComponent(this.value)">
+                <option value="shadow" selected="@(Model.PaperExecutionMode == "shadow")">Paper shadow (evidence-authorized)</option>
+                <option value="experiment" selected="@(Model.PaperExecutionMode == "experiment")">Paper experiment (operator-labelled)</option>
             </select>
-            @if (selectedStrategy is not null)
+
+            @if (Model.Strategies.Count == 0)
             {
-                <div class="muted mt-xs">@AuditLine(selectedStrategy)</div>
+                <div class="paper-validation" role="status">
+                    @(Model.PaperExecutionMode == "experiment"
+                        ? "No registered paper-experiment strategy is available. Create an immutable experiment artifact before starting a run."
+                        : "No paper-shadow strategy is available. Complete research review and authorize an exact version and content hash.")
+                </div>
+            }
+            else
+            {
+                <label for="SelectedStrategyDropdown">Authorized strategy <span class="tf-help" title="The exact authorized version and content hash used by the shared decision engine.">?</span></label>
+                <select name="SelectedStrategyPath" id="SelectedStrategyDropdown" onchange="loadStrategyDetails(this.value)">
+                    @foreach (var strategy in Model.Strategies)
+                    {
+                        <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">
+                            @strategy.Definition.StrategyName · @strategy.Identity.SemanticVersion · @strategy.Lifecycle
+                        </option>
+                    }
+                </select>
+                @if (selectedStrategy is not null)
+                {
+                    <div class="muted mt-xs">
+                        @AuditLine(selectedStrategy) · hash @selectedStrategy.Identity.ContentSha256[..12]
+                    </div>
+                }
             }
 
-            <div class="strategy-quick-edit">
-                <h3>Quick Edit</h3>
-                <div class="strategy-quick-edit-grid">
-                    <div>
-                        <label for="QuickEditTimeframe">Timeframe <span class="tf-help" title="Signal timeframe for the strategy pattern. Example: swing strategies usually evaluate 1d candles; intraday patterns may evaluate 5m while executing on 1m.">?</span></label>
-                        <input id="QuickEditTimeframe" type="text" name="QuickEditTimeframe" value="@Model.QuickEditTimeframe" />
+            @if (Model.PaperExecutionMode == "experiment")
+            {
+                <div class="paper-experiment-registration mt-md">
+                    <h3>Register immutable experiment</h3>
+                    <div class="muted mb-md">
+                        Start from a reviewed research artifact. Leaving the version blank preserves the source version;
+                        changed parameters require a new semantic version.
                     </div>
-                    <div>
-                        <label for="QuickEditSetupType">Setup Type <span class="tf-help" title="Names the signal pattern/gate used by the strategy, such as ross_gap_go_bull_flag or swing_reclaim.">?</span></label>
-                        <input id="QuickEditSetupType" type="text" name="QuickEditSetupType" value="@Model.QuickEditSetupType" />
-                    </div>
-                    <div>
-                        <label for="QuickEditMinVolumeSpike">Min Volume Spike / RVOL <span class="tf-help" title="Minimum standard relative volume. The engine compares current cumulative session volume against completed prior sessions, closer to Finviz-style attention volume. 1.0 means normal; 2.0 means twice normal.">?</span></label>
-                        <input id="QuickEditMinVolumeSpike" type="text" name="QuickEditMinVolumeSpike" value="@Model.QuickEditMinVolumeSpike" />
-                    </div>
-                    <div>
-                        <label for="QuickEditStopAtr">Stop ATR Multiple <span class="tf-help" title="Stop distance expressed in ATR. Higher values give trades more room but increase risk per share.">?</span></label>
-                        <input id="QuickEditStopAtr" type="text" name="QuickEditStopAtr" value="@Model.QuickEditStopAtr" />
-                    </div>
-                    <div>
-                        <label for="QuickEditTargetR">Target R Multiple <span class="tf-help" title="Profit target measured in R, where 1R equals the initial risk from entry to stop.">?</span></label>
-                        <input id="QuickEditTargetR" type="text" name="QuickEditTargetR" value="@Model.QuickEditTargetR" />
-                    </div>
+                    <label for="ExperimentSourceStrategyPath">Research source</label>
+                    <select id="ExperimentSourceStrategyPath" name="ExperimentSourceStrategyPath"
+                            onchange="loadExperimentParameterDefaults(this.value)">
+                        @foreach (var strategy in Model.ResearchStrategies)
+                        {
+                            <option value="@strategy.Path" selected="@(strategy.Path == Model.ExperimentSourceStrategyPath)">
+                                @strategy.Definition.StrategyName · @strategy.Identity.SemanticVersion
+                            </option>
+                        }
+                    </select>
+                    <label class="mt-md" for="ExperimentSemanticVersion">Experiment version</label>
+                    <input id="ExperimentSemanticVersion" name="ExperimentSemanticVersion"
+                           value="@Model.ExperimentSemanticVersion"
+                           placeholder="Use source version" />
+                    <label class="checkbox-field mt-md" for="ExperimentParameters_ApplyOverrides">
+                        <input asp-for="ExperimentParameters.ApplyOverrides" type="checkbox"
+                               onchange="toggleExperimentOverrides()" />
+                        <span>Derive with edited parameters</span>
+                    </label>
+                    <details id="ExperimentOverrideDetails" class="mt-md" open="@Model.ExperimentParameters.ApplyOverrides">
+                        <summary>Experiment parameter overrides</summary>
+                        <div class="muted mb-md">
+                            Values begin with the selected source strategy. Enabling overrides requires a new version;
+                            the source remains unchanged and the complete diff is stored with the artifact.
+                        </div>
+                        <div class="compact-form-grid">
+                            <label asp-for="ExperimentParameters.MinVolumeSpike">
+                                Minimum volume ratio
+                                <input asp-for="ExperimentParameters.MinVolumeSpike" type="number" min="0" step="0.01" />
+                            </label>
+                            <label asp-for="ExperimentParameters.MaxVwapExtensionAtr">
+                                Maximum VWAP extension (ATR)
+                                <input asp-for="ExperimentParameters.MaxVwapExtensionAtr" type="number" min="0.01" step="0.01" />
+                            </label>
+                            <label asp-for="ExperimentParameters.MinEntryRsi">
+                                Minimum entry RSI
+                                <input asp-for="ExperimentParameters.MinEntryRsi" type="number" min="0" max="100" step="0.1" />
+                            </label>
+                            <label asp-for="ExperimentParameters.MaxEntryRsi">
+                                Maximum entry RSI
+                                <input asp-for="ExperimentParameters.MaxEntryRsi" type="number" min="0" max="100" step="0.1" />
+                            </label>
+                            <label class="checkbox-field" asp-for="ExperimentParameters.ConfluenceEnabled">
+                                <input asp-for="ExperimentParameters.ConfluenceEnabled" type="checkbox" />
+                                <span>Enable higher-timeframe confluence</span>
+                            </label>
+                            <label asp-for="ExperimentParameters.ConfluenceTimeframe">
+                                Confluence timeframe
+                                <input asp-for="ExperimentParameters.ConfluenceTimeframe" placeholder="15m, 1h, 1d" />
+                            </label>
+                            <label asp-for="ExperimentParameters.ConfluenceEmaPeriod">
+                                Confluence EMA period
+                                <input asp-for="ExperimentParameters.ConfluenceEmaPeriod" type="number" min="1" step="1" />
+                            </label>
+                            <label asp-for="ExperimentParameters.ExecutionTimeframe">
+                                Execution timeframe
+                                <input asp-for="ExperimentParameters.ExecutionTimeframe" placeholder="1m, 5m, 1h" />
+                            </label>
+                            <label asp-for="ExperimentParameters.StopAtrMultiple">
+                                Initial stop (ATR)
+                                <input asp-for="ExperimentParameters.StopAtrMultiple" type="number" min="0.01" step="0.01" />
+                            </label>
+                            <label asp-for="ExperimentParameters.TargetRMultiple">
+                                Profit target (R)
+                                <input asp-for="ExperimentParameters.TargetRMultiple" type="number" min="0.01" step="0.01" />
+                            </label>
+                            <label asp-for="ExperimentParameters.MaxHoldHours">
+                                Maximum hold (hours)
+                                <input asp-for="ExperimentParameters.MaxHoldHours" type="number" min="0.25" step="0.25" />
+                            </label>
+                            <label asp-for="ExperimentParameters.MinHoldBarsBeforeTechnicalExit">
+                                Minimum bars before technical exit
+                                <input asp-for="ExperimentParameters.MinHoldBarsBeforeTechnicalExit" type="number" min="0" step="1" />
+                            </label>
+                            <label class="checkbox-field" asp-for="ExperimentParameters.EnableAtrTrailingStop">
+                                <input asp-for="ExperimentParameters.EnableAtrTrailingStop" type="checkbox" />
+                                <span>Enable ATR trailing stop</span>
+                            </label>
+                            <label asp-for="ExperimentParameters.TrailingStopAtrMultiple">
+                                Trailing distance (ATR)
+                                <input asp-for="ExperimentParameters.TrailingStopAtrMultiple" type="number" min="0.01" step="0.01" />
+                            </label>
+                            <label asp-for="ExperimentParameters.TrailingActivationR">
+                                Trail activation (R)
+                                <input asp-for="ExperimentParameters.TrailingActivationR" type="number" min="0" step="0.01" />
+                            </label>
+                            <label asp-for="ExperimentParameters.SlippageBps">
+                                Slippage (bps)
+                                <input asp-for="ExperimentParameters.SlippageBps" type="number" min="0" step="0.1" />
+                            </label>
+                        </div>
+                    </details>
+                    <input type="hidden" name="ExperimentRegistrationOperationId"
+                           value="@Model.ExperimentRegistrationOperationId" />
+                    <input type="hidden" name="ExperimentRegistrationRequestedAtUtc"
+                           value="@Model.ExperimentRegistrationRequestedAtUtc.ToString("O")" />
+                    <button type="submit" asp-page-handler="CreateExperiment" class="button secondary mt-md"
+                            disabled="@(Model.ResearchStrategies.Count == 0)">
+                        Register experiment
+                    </button>
                 </div>
-            </div>
-
-            <label for="StrategyYaml">Raw Strategy YAML <span class="tf-help" title="Full strategy source. Quick Edit changes selected common fields, while advanced rules can be edited directly here. Save Strategy persists this file.">?</span></label>
-            <textarea class="mono" name="StrategyYaml" id="StrategyYaml" rows="12">@Model.StrategyYaml</textarea>
-
-            <div class="actions mt-md">
-                <button type="submit" asp-page-handler="SaveStrategy" class="button secondary" title="Persists edits to the selected strategy YAML file. Required for changed strategy parameters like RVOL or ATR stop.">Save Strategy</button>
-            </div>
+            }
         </div>
     </div>
 
@@ -185,7 +293,9 @@
             <input name="RunName" id="RunName" value="@Model.SuggestedRunName" />
 
             <div class="actions mt-md">
-                <button type="submit" asp-page-handler="RunLive" class="button go" title="Starts a paper LiveRunner job using the selected strategy and generated run configuration.">Start Paper Trading</button>
+                <button type="submit" asp-page-handler="RunLive" class="button go"
+                        disabled="@(Model.Strategies.Count == 0)"
+                        title="Starts a paper LiveRunner job using the selected exact authorization.">Start Paper Trading</button>
             </div>
         </div>
         </form>
@@ -193,7 +303,7 @@
         <section class="panel mt-md">
             <div class="section-title">
                 <h2>Paper Jobs</h2>
-                <a class="button secondary" asp-page="/Paper" asp-route-wishlistId="@Model.SelectedWishlist?.Id" asp-route-strategyPath="@Model.SelectedStrategyPath" title="Reloads the paper lab and job list without starting a new run.">Refresh</a>
+                <a class="button secondary" asp-page="/Paper" asp-route-wishlistId="@Model.SelectedWishlist?.Id" asp-route-strategyPath="@Model.SelectedStrategyPath" asp-route-paperExecutionMode="@Model.PaperExecutionMode" title="Reloads the paper lab and job list without starting a new run.">Refresh</a>
             </div>
 
             @if (Model.LiveJobs.Count == 0)
@@ -272,6 +382,49 @@
     <script>
         let currentStrategyUsesNews = @Model.SelectedStrategyUsesNews.ToString().ToLowerInvariant();
         let currentConfigNewsEnabled = @((selectedConfig?.Config.News.Enabled ?? true).ToString().ToLowerInvariant());
+        const researchParameterDefaults = @Html.Raw(researchParameterDefaultsJson);
+
+        function toggleExperimentOverrides() {
+            const enabled = document.getElementById('ExperimentParameters_ApplyOverrides')?.checked === true;
+            const details = document.getElementById('ExperimentOverrideDetails');
+            if (details) {
+                details.open = enabled;
+                details.querySelectorAll('input, select').forEach(control => control.disabled = !enabled);
+            }
+        }
+
+        function loadExperimentParameterDefaults(strategyPath) {
+            const selected = researchParameterDefaults.find(item => item.path.toLowerCase() === strategyPath.toLowerCase());
+            if (!selected) return;
+
+            const parameters = selected.parameters;
+            const fields = {
+                'ExperimentParameters_MinVolumeSpike': 'minVolumeSpike',
+                'ExperimentParameters_MinEntryRsi': 'minEntryRsi',
+                'ExperimentParameters_MaxEntryRsi': 'maxEntryRsi',
+                'ExperimentParameters_MaxVwapExtensionAtr': 'maxVwapExtensionAtr',
+                'ExperimentParameters_ConfluenceTimeframe': 'confluenceTimeframe',
+                'ExperimentParameters_ConfluenceEmaPeriod': 'confluenceEmaPeriod',
+                'ExperimentParameters_StopAtrMultiple': 'stopAtrMultiple',
+                'ExperimentParameters_TargetRMultiple': 'targetRMultiple',
+                'ExperimentParameters_MaxHoldHours': 'maxHoldHours',
+                'ExperimentParameters_TrailingStopAtrMultiple': 'trailingStopAtrMultiple',
+                'ExperimentParameters_TrailingActivationR': 'trailingActivationR',
+                'ExperimentParameters_MinHoldBarsBeforeTechnicalExit': 'minHoldBarsBeforeTechnicalExit',
+                'ExperimentParameters_ExecutionTimeframe': 'executionTimeframe',
+                'ExperimentParameters_SlippageBps': 'slippageBps'
+            };
+            Object.entries(fields).forEach(([id, property]) => {
+                const input = document.getElementById(id);
+                if (input) input.value = parameters[property] ?? '';
+            });
+
+            document.getElementById('ExperimentParameters_ConfluenceEnabled').checked = Boolean(parameters.confluenceEnabled);
+            document.getElementById('ExperimentParameters_EnableAtrTrailingStop').checked = Boolean(parameters.enableAtrTrailingStop);
+            document.getElementById('ExperimentParameters_ApplyOverrides').checked = false;
+            document.getElementById('ExperimentSemanticVersion').value = '';
+            toggleExperimentOverrides();
+        }
 
         function updateNewsToggle() {
             const checkbox = document.getElementById('NewsEnabledCheckbox');
@@ -293,16 +446,11 @@
                 environmentStrategy.value = strategyPath;
             }
 
-            fetch('?handler=StrategyDetails&strategyPath=' + encodeURIComponent(strategyPath))
+            const paperMode = document.getElementById('PaperExecutionMode')?.value || 'shadow';
+            fetch('?handler=StrategyDetails&strategyPath=' + encodeURIComponent(strategyPath) + '&paperExecutionMode=' + encodeURIComponent(paperMode))
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        document.getElementById('StrategyYaml').value = data.yaml;
-                        document.querySelector('input[name="QuickEditTimeframe"]').value = data.timeframe;
-                        document.querySelector('input[name="QuickEditSetupType"]').value = data.setupType;
-                        document.querySelector('input[name="QuickEditMinVolumeSpike"]').value = data.minVolumeSpike;
-                        document.querySelector('input[name="QuickEditStopAtr"]').value = data.stopAtr;
-                        document.querySelector('input[name="QuickEditTargetR"]').value = data.targetR;
                         currentStrategyUsesNews = Boolean(data.usesNews);
                         updateNewsToggle();
                     }
@@ -364,5 +512,6 @@
             ?.addEventListener('change', updateExtendedHoursExecution);
         updateExtendedHoursExecution();
         updateNewsToggle();
+        toggleExperimentOverrides();
     </script>
 }

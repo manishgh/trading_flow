@@ -39,12 +39,14 @@ public sealed partial class MobileAutomationService
     private readonly PositionGuardianEngine positionGuardianEngine = new();
     private readonly IOrderSubmissionService? orderSubmissionService;
     private readonly IOrderLifecycleService? orderLifecycleService;
+    private readonly ConfigCatalogService configCatalog;
 
     public MobileAutomationService(
         SimpleYamlReader yamlReader,
         PaperRuntimeFactory runtimeFactory,
         ProjectPaths paths,
         MobileAutomationSessionStore sessionStore,
+        ConfigCatalogService configCatalog,
         ILogger<MobileAutomationService>? logger = null,
         ICandleStore? candleStore = null,
         IOrderStateRepository? orderRepo = null,
@@ -56,6 +58,7 @@ public sealed partial class MobileAutomationService
         this.runtimeFactory = runtimeFactory;
         this.paths = paths;
         this.sessionStore = sessionStore;
+        this.configCatalog = configCatalog;
         this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<MobileAutomationService>.Instance;
         this.candleStore = candleStore ?? NullCandleStore.Instance;
         this.orderRepo = orderRepo;
@@ -108,7 +111,11 @@ public sealed partial class MobileAutomationService
         }
 
         var runConfig = runtimeFactory.ResolveRunPaths(yamlReader.ReadBacktestRun(request.ConfigPath));
-        var strategy = yamlReader.ReadStrategy(paths.ResolveRepositoryPath(request.StrategyPath));
+        var selectedStrategy = await configCatalog.RequireSelectableAsync(
+            StrategySelectionMode.RunPaperShadow,
+            paths.ResolveRepositoryPath(request.StrategyPath),
+            cancellationToken);
+        var strategy = selectedStrategy.Definition;
         if (!strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Mobile automation currently supports long intraday paper entries only.");
@@ -138,7 +145,15 @@ public sealed partial class MobileAutomationService
         session.Report("queued", $"Queued {request.Source} automation for {normalizedTicker}. EntryMode={entryMode}.");
         await PersistAsync(cancellationToken);
 
-        _ = Task.Run(() => RunAsync(session, runConfig, strategy, entryMode, cancellationToken), cancellationToken);
+        _ = Task.Run(() => RunAsync(
+            session,
+            runConfig,
+            new AuthorizedRuntimeStrategy(
+                selectedStrategy.Identity,
+                StrategySelectionMode.RunPaperShadow,
+                strategy),
+            entryMode,
+            cancellationToken), cancellationToken);
         return session.ToSnapshot();
     }
 
@@ -222,10 +237,11 @@ public sealed partial class MobileAutomationService
     private async Task RunAsync(
         MutableAutomationSession session,
         BacktestRunConfig runConfig,
-        StrategyDefinition strategy,
+        AuthorizedRuntimeStrategy runtimeStrategy,
         string entryMode,
         CancellationToken outerCancellationToken)
     {
+        var strategy = runtimeStrategy.Definition;
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(outerCancellationToken);
         cancellationTokens[session.SessionId] = linkedCts;
         var cancellationToken = linkedCts.Token;
@@ -323,7 +339,9 @@ public sealed partial class MobileAutomationService
                     ExecutionRunContextFactory.ResolveSessionDate(submittedAt, strategy.Session.ExchangeTimezone),
                     submittedAt,
                     order,
-                    AllowExtendedHoursTrading: runConfig.Execution.AllowExtendedHoursTrading),
+                    AllowExtendedHoursTrading: runConfig.Execution.AllowExtendedHoursTrading,
+                    StrategyIdentity: runtimeStrategy.Identity,
+                    StrategySelectionMode: runtimeStrategy.SelectionMode),
                 brokerClient,
                 cancellationToken);
             var orderId = submission.BrokerOrderId;

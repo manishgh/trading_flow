@@ -96,6 +96,24 @@ public sealed class StrategyInitialStopResolver
                 stop = PlannedStopRequest.FromStructuralPrice(stopPrice);
                 break;
 
+            case "flush_low" when !isShort:
+                var flushLookback = Math.Max(
+                    1,
+                    (request.Strategy.EntryRules.VwapReclaimMaxBarsSinceFlush ?? 0) +
+                    (request.Strategy.EntryRules.RequirePriorFlushBelowVwapBars ?? 0));
+                var flushLow = LowestLowThroughStopContext(
+                    request.ExecutionBars,
+                    request.StopContextIndex,
+                    flushLookback);
+                if (flushLow is not > 0m)
+                {
+                    return StrategyInitialStopResult.Rejected("flush_low_unavailable_for_initial_stop");
+                }
+
+                stopPrice = flushLow.Value - request.Strategy.ExitRules.StopTickBuffer;
+                stop = PlannedStopRequest.FromStructuralPrice(stopPrice);
+                break;
+
             case "swing_low" when !isShort:
                 var swingLow = request.Signal.SetupStructuralStopPrice ??
                     request.Signal.ReversionStretchLow ??

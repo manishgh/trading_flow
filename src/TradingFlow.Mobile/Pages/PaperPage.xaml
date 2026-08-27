@@ -31,6 +31,7 @@
                         </Grid>
                         <Picker x:Name="WishlistPicker" Title="Wishlist" SelectedIndexChanged="OnWishlistPicked" />
                         <Picker x:Name="ConfigPicker" Title="Paper profile" SelectedIndexChanged="OnFormChanged" IsVisible="False" />
+                        <Picker x:Name="PaperModePicker" Title="Paper mode" SelectedIndexChanged="OnPaperModeChanged" />
                         <Picker x:Name="StrategyPicker" Title="Strategy" SelectedIndexChanged="OnFormChanged" />
                         <Entry x:Name="ScreenerEntry" Placeholder="Optional Finviz query or URL" Keyboard="Url" TextChanged="OnFormChanged" />
 

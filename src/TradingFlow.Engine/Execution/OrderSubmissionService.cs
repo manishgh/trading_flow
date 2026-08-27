@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Strategies;
 
 namespace TradingFlow.Engine.Execution;
 
@@ -24,7 +25,10 @@ public sealed record BracketOrderSubmission(
     DateOnly SessionDate,
     DateTimeOffset CreatedAtUtc,
     FinalizedOrder Order,
-    bool AllowExtendedHoursTrading = false);
+    bool AllowExtendedHoursTrading = false,
+    StrategyArtifactIdentity? StrategyIdentity = null,
+    StrategySelectionMode? StrategySelectionMode = null,
+    bool OperatorOverride = false);
 
 public sealed record OrderSubmissionResult(
     string BrokerOrderId,
@@ -66,6 +70,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
     private readonly IOrderEventRepository eventRepository;
     private readonly ICandidateRepository candidateRepository;
     private readonly IEntryGateChain entryGates;
+    private readonly IStrategyAuthorizationPolicy strategyAuthorizations;
     private readonly ILogger<OrderSubmissionService> logger;
 
     public OrderSubmissionService(
@@ -73,12 +78,14 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         IOrderEventRepository eventRepository,
         ICandidateRepository candidateRepository,
         IEntryGateChain entryGates,
+        IStrategyAuthorizationPolicy strategyAuthorizations,
         ILogger<OrderSubmissionService> logger)
     {
         this.intentRepository = intentRepository;
         this.eventRepository = eventRepository;
         this.candidateRepository = candidateRepository;
         this.entryGates = entryGates;
+        this.strategyAuthorizations = strategyAuthorizations;
         this.logger = logger;
     }
 
@@ -140,6 +147,30 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         bool submitOutsideRegularHours,
         CancellationToken cancellationToken)
     {
+        if (submission.OperatorOverride)
+        {
+            if (submission.StrategyIdentity is not null || submission.StrategySelectionMode is not null)
+            {
+                throw new InvalidOperationException(
+                    "An operator override cannot also claim strategy execution authorization.");
+            }
+        }
+        else
+        {
+            var identity = submission.StrategyIdentity
+                ?? throw new UnauthorizedAccessException(
+                    "Strategy-routed entry has no immutable strategy identity.");
+            var selectionMode = submission.StrategySelectionMode
+                ?? throw new UnauthorizedAccessException(
+                    "Strategy-routed entry has no explicit execution mode.");
+            _ = await strategyAuthorizations.AdmitNewEntryAsync(
+                identity,
+                selectionMode,
+                submission.IntentId,
+                DateTimeOffset.UtcNow,
+                cancellationToken);
+        }
+
         var requestJson = JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
@@ -153,6 +184,9 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             stopPrice = submission.Order.StopLossPrice,
             takeProfitPrice = submission.Order.TakeProfitPrice,
             submission.AllowExtendedHoursTrading,
+            strategyIdentity = submission.StrategyIdentity,
+            strategySelectionMode = submission.StrategySelectionMode,
+            submission.OperatorOverride,
             submitOutsideRegularHours,
             submission.SessionDate
         });

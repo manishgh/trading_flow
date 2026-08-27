@@ -436,6 +436,12 @@ public sealed partial class LiveRunner
                                     "Order submission is not armed because the durable submission service or execution provenance is unavailable.");
                             }
 
+                            if (!runtimeStrategies.TryGetValue(strategy, out var runtimeStrategy))
+                            {
+                                throw new UnauthorizedAccessException(
+                                    $"Strategy '{strategy.StrategyId}' has no exact runtime authorization identity.");
+                            }
+
                             progress?.Report($"Submitting Bracket Order: {shares} shares of {ticker}...");
                             var intentId = OrderIntentIdFactory.Create(
                                 _executionRunContext.RunId,
@@ -465,7 +471,9 @@ public sealed partial class LiveRunner
                                         strategy.Session.ExchangeTimezone),
                                     decisionTimestamp,
                                     order,
-                                    AllowExtendedHoursTrading: run.Execution.AllowExtendedHoursTrading),
+                                    AllowExtendedHoursTrading: run.Execution.AllowExtendedHoursTrading,
+                                    StrategyIdentity: runtimeStrategy.Identity,
+                                    StrategySelectionMode: runtimeStrategy.SelectionMode),
                                 _brokerClient,
                                 cancellationToken);
                             var orderId = submission.BrokerOrderId;

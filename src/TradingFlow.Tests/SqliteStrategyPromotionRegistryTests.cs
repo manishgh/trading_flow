@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 using TradingFlow.Data.Evidence;
 using TradingFlow.Data.Evidence.Governance;
 using TradingFlow.Domain.Research;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Research;
 using TradingFlow.Engine.Storage;
 
@@ -42,6 +44,12 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
             run.Assumptions.CostModel,
             run.Outputs[3]);
         registry = NewRegistry(StrategyPromotionRegistryOpenMode.BootstrapNew);
+        await registry.GrantPaperExperimentAsync(
+            new StrategyArtifactIdentity(run.StudyId, "1.0.0", run.StudyConfigArtifact.Content.Sha256),
+            "paper-experiment-grant",
+            "governor@example.test",
+            Now.AddMinutes(-1),
+            "Register exact paper experiment before shadow governance.");
         Assert.Empty(await registry.GetDecisionHistoryAsync());
     }
 
@@ -110,6 +118,31 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RegisterDecision_RejectsSecondNonTerminalGrantForExactIdentity()
+    {
+        var first = Decision("accepted-first", StrategyPromotionDecisionStatus.Accepted);
+        var duplicate = Decision("accepted-duplicate", StrategyPromotionDecisionStatus.Accepted);
+        await registry.RegisterDecisionAsync(first, first.ApprovedBy);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            registry.RegisterDecisionAsync(duplicate, duplicate.ApprovedBy));
+
+        Assert.Contains("non-terminal", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal([first.DecisionId],
+            (await registry.GetDecisionHistoryAsync()).Select(decision => decision.DecisionId));
+
+        var revoke = Decision(
+            "revoke-first",
+            StrategyPromotionDecisionStatus.Revoked,
+            first.DecisionId);
+        await registry.RegisterDecisionAsync(revoke, revoke.ApprovedBy);
+        await registry.RegisterDecisionAsync(duplicate, duplicate.ApprovedBy);
+
+        Assert.Equal([duplicate.DecisionId],
+            (await registry.GetActiveDecisionsAsync()).Select(decision => decision.DecisionId));
+    }
+
+    [Fact]
     public async Task ConcurrentTerminalDecisions_AllowOnlyOnePermanentOutcome()
     {
         var accepted = Decision("accepted", StrategyPromotionDecisionStatus.Accepted);
@@ -121,7 +154,8 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
         var superseded = Decision(
             "superseded",
             StrategyPromotionDecisionStatus.Superseded,
-            accepted.DecisionId);
+            accepted.DecisionId,
+            semanticVersion: "2.0.0");
 
         var attempts = await Task.WhenAll(
             CaptureAsync(() => registry.RegisterDecisionAsync(revoked, revoked.ApprovedBy)),
@@ -132,6 +166,38 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
         Assert.Single(attempts, attempt => attempt.Error is InvalidOperationException);
         Assert.Empty(await registry.GetActiveDecisionsAsync());
         Assert.Equal(2, (await registry.GetDecisionHistoryAsync()).Count);
+    }
+
+    [Fact]
+    public async Task Supersession_AtomicallyReplacesSameFamilyAndGrantWithNewVersion()
+    {
+        var accepted = Decision("accepted-v1", StrategyPromotionDecisionStatus.Accepted);
+        await registry.RegisterDecisionAsync(accepted, accepted.ApprovedBy);
+        var superseded = Decision(
+            "supersede-v1",
+            StrategyPromotionDecisionStatus.Superseded,
+            accepted.DecisionId);
+        var replacement = Decision(
+            "accepted-v2",
+            StrategyPromotionDecisionStatus.Accepted,
+            semanticVersion: "2.0.0");
+        await registry.GrantPaperExperimentAsync(
+            replacement.ArtifactIdentity,
+            "paper-experiment-grant-v2",
+            replacement.ApprovedBy,
+            Now.AddMinutes(-1),
+            "Register replacement experiment before atomic shadow supersession.");
+
+        var result = await registry.RegisterSupersessionAsync(
+            superseded,
+            replacement,
+            accepted.ApprovedBy);
+
+        Assert.False(result.Supersession.AlreadyCommitted);
+        Assert.False(result.Replacement.AlreadyCommitted);
+        var active = Assert.Single(await registry.GetActiveDecisionsAsync());
+        Assert.Equal(replacement.DecisionId, active.DecisionId);
+        Assert.Equal("2.0.0", active.SemanticVersion);
     }
 
     [Theory]
@@ -187,6 +253,437 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
             registry.GetDecisionHistoryAsync());
     }
 
+    [Fact]
+    public async Task Suspension_BlocksNewEligibilityUntilExplicitResume()
+    {
+        var accepted = Decision("accepted", StrategyPromotionDecisionStatus.Accepted);
+        await registry.RegisterDecisionAsync(accepted, accepted.ApprovedBy);
+        var validated = Decision(
+            "validated",
+            StrategyPromotionDecisionStatus.Accepted,
+            authorizedAuthorization: StrategyExecutionAuthorization.Validated);
+        await registry.RegisterDecisionAsync(validated, validated.ApprovedBy);
+        var suspended = Decision(
+            "suspended",
+            StrategyPromotionDecisionStatus.Suspended,
+            accepted.DecisionId);
+        await registry.RegisterDecisionAsync(suspended, suspended.ApprovedBy);
+
+        Assert.Empty(await registry.GetActiveDecisionsAsync());
+
+        var resumed = Decision(
+            "resumed",
+            StrategyPromotionDecisionStatus.Resumed,
+            suspended.DecisionId);
+        await registry.RegisterDecisionAsync(resumed, resumed.ApprovedBy);
+
+        var active = await registry.GetActiveDecisionsAsync();
+        Assert.Equal(
+            [accepted.DecisionId, validated.DecisionId],
+            active.Select(item => item.DecisionId).OrderBy(item => item, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task PaperShadowAuthorization_RequiresRegisteredExperimentIdentity()
+    {
+        var isolated = new SqliteStrategyPromotionRegistry(
+            new StrategyPromotionRegistryOptions(
+                Path.Combine(rootPath, "no-experiment-promotions.db"),
+                StrategyPromotionRegistryOpenMode.BootstrapNew),
+            catalog,
+            catalog,
+            store,
+            new ConfiguredPromotionPrincipalAuthorizer(["governor@example.test"]),
+            NoRegisteredExperiments.Instance);
+        var accepted = Decision("unregistered-experiment", StrategyPromotionDecisionStatus.Accepted);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            isolated.RegisterDecisionAsync(accepted, accepted.ApprovedBy));
+
+        Assert.Contains("paper-experiment grant", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(await isolated.GetDecisionHistoryAsync());
+    }
+
+    [Fact]
+    public async Task ValidatedAuthorization_DependsOnActivePaperShadowGrant()
+    {
+        var validated = Decision(
+            "validated-first",
+            StrategyPromotionDecisionStatus.Accepted,
+            authorizedAuthorization: StrategyExecutionAuthorization.Validated);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            registry.RegisterDecisionAsync(validated, validated.ApprovedBy));
+
+        var shadow = Decision("shadow", StrategyPromotionDecisionStatus.Accepted);
+        await registry.RegisterDecisionAsync(shadow, shadow.ApprovedBy);
+        validated = Decision(
+            "validated-after-shadow",
+            StrategyPromotionDecisionStatus.Accepted,
+            authorizedAuthorization: StrategyExecutionAuthorization.Validated);
+        await registry.RegisterDecisionAsync(validated, validated.ApprovedBy);
+        Assert.Equal(2, (await registry.GetActiveDecisionsAsync()).Count);
+
+        var revokeShadow = Decision(
+            "revoke-shadow",
+            StrategyPromotionDecisionStatus.Revoked,
+            shadow.DecisionId);
+        await registry.RegisterDecisionAsync(revokeShadow, revokeShadow.ApprovedBy);
+
+        Assert.Empty(await registry.GetActiveDecisionsAsync());
+        Assert.Contains(
+            (await registry.GetDecisionHistoryAsync()).Select(item => item.DecisionId),
+            item => item == validated.DecisionId);
+    }
+
+    [Fact]
+    public async Task ValidatedAuthorization_CannotBeCreatedAfterExperimentRevocation()
+    {
+        var identity = new StrategyArtifactIdentity(
+            run.StudyId,
+            "1.0.0",
+            run.StudyConfigArtifact.Content.Sha256);
+        var shadow = Decision("shadow-before-experiment-revocation", StrategyPromotionDecisionStatus.Accepted);
+        await registry.RegisterDecisionAsync(shadow, shadow.ApprovedBy);
+        await registry.RevokePaperExperimentAsync(
+            identity,
+            "revoke-before-validation",
+            "paper-experiment-grant",
+            "governor@example.test",
+            Now.AddMinutes(1),
+            "Remove the exact experiment prerequisite before validation.");
+
+        var validated = Decision(
+            "validated-after-experiment-revocation",
+            StrategyPromotionDecisionStatus.Accepted,
+            authorizedAuthorization: StrategyExecutionAuthorization.Validated);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            registry.RegisterDecisionAsync(validated, validated.ApprovedBy));
+
+        Assert.Contains("paper-experiment", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            await registry.GetDecisionHistoryAsync(),
+            decision => decision.DecisionId == validated.DecisionId);
+    }
+
+    [Fact]
+    public async Task RevokedExperiment_InvalidatesDependentShadowAndLiveNewEntriesOnly()
+    {
+        var identity = new StrategyArtifactIdentity(
+            run.StudyId,
+            "1.0.0",
+            run.StudyConfigArtifact.Content.Sha256);
+        var shadow = Decision("dependent-shadow", StrategyPromotionDecisionStatus.Accepted);
+        await registry.RegisterDecisionAsync(shadow, shadow.ApprovedBy);
+        var validated = Decision(
+            "dependent-validated",
+            StrategyPromotionDecisionStatus.Accepted,
+            authorizedAuthorization: StrategyExecutionAuthorization.Validated);
+        await registry.RegisterDecisionAsync(validated, validated.ApprovedBy);
+        var shadowIntent = Guid.NewGuid();
+        var liveIntent = Guid.NewGuid();
+        var shadowAdmission = await registry.AdmitNewEntryAsync(
+            identity,
+            StrategySelectionMode.RunPaperShadow,
+            shadowIntent,
+            Now.AddMinutes(1));
+        var liveAdmission = await registry.AdmitNewEntryAsync(
+            identity,
+            StrategySelectionMode.RunLive,
+            liveIntent,
+            Now.AddMinutes(1));
+
+        await registry.RevokePaperExperimentAsync(
+            identity,
+            "revoke-experiment-prerequisite",
+            "paper-experiment-grant",
+            "governor@example.test",
+            Now.AddMinutes(2),
+            "Remove the prerequisite experiment authorization.");
+
+        Assert.Empty(await registry.GetActiveGrantsAsync());
+        Assert.Empty(await registry.GetActiveDecisionsAsync());
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            registry.AdmitNewEntryAsync(
+                identity,
+                StrategySelectionMode.RunPaperShadow,
+                Guid.NewGuid(),
+                Now.AddMinutes(3)));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            registry.AdmitNewEntryAsync(
+                identity,
+                StrategySelectionMode.RunLive,
+                Guid.NewGuid(),
+                Now.AddMinutes(3)));
+        Assert.Equal(
+            shadowAdmission,
+            await registry.AdmitNewEntryAsync(
+                identity,
+                StrategySelectionMode.RunPaperShadow,
+                shadowIntent,
+                Now.AddMinutes(3)));
+        Assert.Equal(
+            liveAdmission,
+            await registry.AdmitNewEntryAsync(
+                identity,
+                StrategySelectionMode.RunLive,
+                liveIntent,
+                Now.AddMinutes(3)));
+    }
+
+    [Fact]
+    public async Task PaperExperimentGrant_RetryRequiresOriginalDecisionIdentity()
+    {
+        var identity = new StrategyArtifactIdentity(
+            run.StudyId,
+            "1.0.0",
+            run.StudyConfigArtifact.Content.Sha256);
+
+        await registry.GrantPaperExperimentAsync(
+            identity,
+            "paper-experiment-grant",
+            "governor@example.test",
+            Now.AddMinutes(-1),
+            "Register exact paper experiment before shadow governance.");
+
+        var duplicate = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            registry.GrantPaperExperimentAsync(
+                identity,
+                "different-paper-experiment-grant",
+                "governor@example.test",
+                Now,
+                "Register exact paper experiment before shadow governance."));
+        Assert.Contains("reuse its original decision ID", duplicate.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PaperExperimentAuthorization_RevocationBlocksNewEntriesButPreservesPriorAdmission()
+    {
+        var identity = new StrategyArtifactIdentity(
+            run.StudyId,
+            "1.0.0",
+            run.StudyConfigArtifact.Content.Sha256);
+        var admittedIntent = Guid.NewGuid();
+        var admitted = await registry.AdmitNewEntryAsync(
+            identity,
+            StrategySelectionMode.RunPaperExperiment,
+            admittedIntent,
+            Now);
+
+        await registry.SuspendPaperExperimentAsync(
+            identity,
+            "paper-experiment-suspend",
+            "paper-experiment-grant",
+            "governor@example.test",
+            Now.AddMinutes(1),
+            "Pause new experiment entries while preserving admitted work.");
+
+        Assert.DoesNotContain(
+            await registry.GetActiveGrantsAsync(),
+            grant => grant.Authorization == StrategyExecutionAuthorization.PaperExperiment);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            registry.AdmitNewEntryAsync(
+                identity,
+                StrategySelectionMode.RunPaperExperiment,
+                Guid.NewGuid(),
+                Now.AddMinutes(2)));
+        Assert.Equal(
+            admitted,
+            await registry.AdmitNewEntryAsync(
+                identity,
+                StrategySelectionMode.RunPaperExperiment,
+                admittedIntent,
+                Now.AddMinutes(2)));
+
+        await registry.ResumePaperExperimentAsync(
+            identity,
+            "paper-experiment-resume",
+            "paper-experiment-suspend",
+            "governor@example.test",
+            Now.AddMinutes(3),
+            "Resume exact experiment identity.");
+        Assert.Contains(
+            await registry.GetActiveGrantsAsync(),
+            grant => grant.Identity == identity &&
+                     grant.Authorization == StrategyExecutionAuthorization.PaperExperiment);
+
+        await registry.RevokePaperExperimentAsync(
+            identity,
+            "paper-experiment-revoke",
+            "paper-experiment-grant",
+            "governor@example.test",
+            Now.AddMinutes(4),
+            "Withdraw exact experiment identity.");
+        Assert.DoesNotContain(
+            await registry.GetActiveGrantsAsync(),
+            grant => grant.Identity == identity);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            registry.AdmitNewEntryAsync(
+                identity,
+                StrategySelectionMode.RunPaperExperiment,
+                Guid.NewGuid(),
+                Now.AddMinutes(5)));
+    }
+
+    [Fact]
+    public async Task VersionOneMigrationFailure_RollsBackAndCanBeRetried()
+    {
+        var path = Path.Combine(rootPath, "faulted-migration.db");
+        await using (var connection = new SqliteConnection($"Data Source={path}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                CREATE TABLE promotion_registry_metadata (
+                    singleton INTEGER NOT NULL PRIMARY KEY CHECK(singleton = 1),
+                    schema_version INTEGER NOT NULL
+                );
+                INSERT INTO promotion_registry_metadata(singleton, schema_version) VALUES(1, 1);
+                CREATE TABLE promotion_decisions (
+                    decision_id TEXT NOT NULL PRIMARY KEY,
+                    status INTEGER NOT NULL,
+                    strategy_id TEXT NOT NULL,
+                    target_decision_id TEXT NULL,
+                    decided_at_utc TEXT NOT NULL,
+                    artifact_namespace TEXT NOT NULL,
+                    artifact_sha256 TEXT NOT NULL,
+                    artifact_byte_length INTEGER NOT NULL,
+                    canonical_json TEXT NOT NULL
+                );
+                CREATE TABLE strategy_authorization_decisions(blocker INTEGER);
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var faulted = new SqliteStrategyPromotionRegistry(
+            new StrategyPromotionRegistryOptions(path, StrategyPromotionRegistryOpenMode.OpenExisting),
+            catalog,
+            catalog,
+            store,
+            new ConfiguredPromotionPrincipalAuthorizer(["governor@example.test"]),
+            RegisteredExperiments.Instance);
+        await Assert.ThrowsAnyAsync<SqliteException>(() => faulted.GetActiveGrantsAsync());
+
+        await using (var verification = new SqliteConnection($"Data Source={path}"))
+        {
+            await verification.OpenAsync();
+            await using var command = verification.CreateCommand();
+            command.CommandText =
+                """
+                SELECT schema_version || ':' ||
+                       (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'promotion_decisions') || ':' ||
+                       (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'legacy_promotion_decisions_v1')
+                FROM promotion_registry_metadata WHERE singleton = 1;
+                """;
+            Assert.Equal("1:1:0", Convert.ToString(await command.ExecuteScalarAsync()));
+            command.CommandText = "DROP TABLE strategy_authorization_decisions;";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var retried = new SqliteStrategyPromotionRegistry(
+            new StrategyPromotionRegistryOptions(path, StrategyPromotionRegistryOpenMode.OpenExisting),
+            catalog,
+            catalog,
+            store,
+            new ConfiguredPromotionPrincipalAuthorizer(["governor@example.test"]),
+            RegisteredExperiments.Instance);
+        Assert.Empty(await retried.GetActiveGrantsAsync());
+        await using var reopened = new SqliteConnection($"Data Source={path}");
+        await reopened.OpenAsync();
+        await using var verify = reopened.CreateCommand();
+        verify.CommandText =
+            "SELECT schema_version FROM promotion_registry_metadata WHERE singleton = 1;";
+        Assert.Equal(3L, await verify.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task OpenExisting_MigratesVersionOneRowsButNeverAuthorizesThem()
+    {
+        var path = Path.Combine(rootPath, "legacy-promotions.db");
+        var current = Decision("legacy-accepted", StrategyPromotionDecisionStatus.Accepted);
+        var json = JsonNode.Parse(EvidenceCanonicalJson.SerializeToUtf8Bytes(current))!.AsObject();
+        json.Remove("semanticVersion");
+        json.Remove("authorizedAuthorization");
+        var bytes = Encoding.UTF8.GetBytes(json.ToJsonString());
+        var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var artifact = new EvidenceArtifactReference(
+            new EvidenceContentAddress(
+                sha,
+                bytes.Length,
+                "application/vnd.tradingflow.strategy-promotion-decision+json"),
+            new EvidenceObjectNamespace("governance/promotion-decisions"));
+        await store.PutIfAbsentAsync(new ImmutableArtifactWriteRequest(artifact), bytes);
+
+        await using (var connection = new SqliteConnection($"Data Source={path}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                CREATE TABLE promotion_registry_metadata (
+                    singleton INTEGER NOT NULL PRIMARY KEY CHECK(singleton = 1),
+                    schema_version INTEGER NOT NULL
+                );
+                INSERT INTO promotion_registry_metadata(singleton, schema_version) VALUES(1, 1);
+                CREATE TABLE promotion_decisions (
+                    decision_id TEXT NOT NULL PRIMARY KEY,
+                    status INTEGER NOT NULL,
+                    strategy_id TEXT NOT NULL,
+                    target_decision_id TEXT NULL,
+                    decided_at_utc TEXT NOT NULL,
+                    artifact_namespace TEXT NOT NULL,
+                    artifact_sha256 TEXT NOT NULL,
+                    artifact_byte_length INTEGER NOT NULL,
+                    canonical_json TEXT NOT NULL
+                );
+                INSERT INTO promotion_decisions(
+                    decision_id, status, strategy_id, target_decision_id,
+                    decided_at_utc, artifact_namespace, artifact_sha256,
+                    artifact_byte_length, canonical_json)
+                VALUES($id, $status, $strategy, NULL, $decided, $namespace, $sha, $length, $json);
+                """;
+            command.Parameters.AddWithValue("$id", current.DecisionId);
+            command.Parameters.AddWithValue("$status", (int)current.Status);
+            command.Parameters.AddWithValue("$strategy", current.StrategyId);
+            command.Parameters.AddWithValue("$decided", current.DecidedAtUtc.ToString("O"));
+            command.Parameters.AddWithValue("$namespace", artifact.ObjectNamespace.Value);
+            command.Parameters.AddWithValue("$sha", sha);
+            command.Parameters.AddWithValue("$length", bytes.Length);
+            command.Parameters.AddWithValue("$json", Encoding.UTF8.GetString(bytes));
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var migrated = new SqliteStrategyPromotionRegistry(
+            new StrategyPromotionRegistryOptions(path, StrategyPromotionRegistryOpenMode.OpenExisting),
+            catalog,
+            catalog,
+            store,
+            new ConfiguredPromotionPrincipalAuthorizer(["governor@example.test"]),
+            RegisteredExperiments.Instance);
+
+        var legacy = Assert.Single(await migrated.GetDecisionHistoryAsync());
+        Assert.Equal("0.0.0-legacy", legacy.SemanticVersion);
+        Assert.Empty(await migrated.GetActiveDecisionsAsync());
+
+        await using var verification = new SqliteConnection($"Data Source={path}");
+        await verification.OpenAsync();
+        await using var verifyCommand = verification.CreateCommand();
+        verifyCommand.CommandText =
+            "SELECT schema_version || ':' || (SELECT COUNT(*) FROM legacy_promotion_decisions_v1) " +
+            "FROM promotion_registry_metadata WHERE singleton = 1;";
+        Assert.Equal("3:1", Convert.ToString(await verifyCommand.ExecuteScalarAsync()));
+
+        var reopened = new SqliteStrategyPromotionRegistry(
+            new StrategyPromotionRegistryOptions(path, StrategyPromotionRegistryOpenMode.OpenExisting),
+            catalog,
+            catalog,
+            store,
+            new ConfiguredPromotionPrincipalAuthorizer(["governor@example.test"]),
+            RegisteredExperiments.Instance);
+        Assert.Single(await reopened.GetDecisionHistoryAsync());
+        Assert.Empty(await reopened.GetActiveDecisionsAsync());
+    }
+
     private SqliteStrategyPromotionRegistry NewRegistry(
         StrategyPromotionRegistryOpenMode mode) =>
         new(
@@ -196,7 +693,8 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
             catalog,
             catalog,
             store,
-            new ConfiguredPromotionPrincipalAuthorizer(["governor@example.test"]));
+            new ConfiguredPromotionPrincipalAuthorizer(["governor@example.test"]),
+            RegisteredExperiments.Instance);
 
     private StrategyPromotionDecision Decision(
         string decisionId,
@@ -205,7 +703,9 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
         string? manifestHash = null,
         string? configHash = null,
         string? holdoutId = null,
-        string? universeLedgerId = null) =>
+        string? universeLedgerId = null,
+        string semanticVersion = "1.0.0",
+        StrategyExecutionAuthorization? authorizedAuthorization = null) =>
         new(
             decisionId,
             status,
@@ -223,7 +723,11 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
             "governor@example.test",
             Now.AddMinutes(decisionId.Length),
             $"Governance decision {decisionId}.",
-            targetDecisionId);
+            targetDecisionId,
+            semanticVersion: semanticVersion,
+            authorizedAuthorization: status == StrategyPromotionDecisionStatus.Accepted
+                ? authorizedAuthorization ?? StrategyExecutionAuthorization.PaperShadow
+                : null);
 
     private async Task<EvidenceResearchRunManifest> CreateReadyResearchRunAsync()
     {
@@ -328,4 +832,18 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
     private sealed record RegistrationAttempt(
         EvidenceCatalogCommitResult? Result,
         Exception? Error);
+
+    private sealed class RegisteredExperiments : IStrategyExperimentArtifactCatalog
+    {
+        public static RegisteredExperiments Instance { get; } = new();
+
+        public bool IsRegistered(StrategyArtifactIdentity identity) => true;
+    }
+
+    private sealed class NoRegisteredExperiments : IStrategyExperimentArtifactCatalog
+    {
+        public static NoRegisteredExperiments Instance { get; } = new();
+
+        public bool IsRegistered(StrategyArtifactIdentity identity) => false;
+    }
 }

@@ -9,7 +9,6 @@
     var result = job?.Result;
     var drilled = Model.DrilledStrategy;
     var gates = Model.Gates;
-    var promotedRoot = System.IO.Path.Combine("configs", "strategies");
 }
 
 @functions {
@@ -85,13 +84,12 @@
             <div class="lab-strategy-list">
                 @foreach (var strategy in Model.Strategies)
                 {
-                    var isPromoted = strategy.Path.Contains(promotedRoot, StringComparison.OrdinalIgnoreCase);
                     <label class="lab-strategy">
                         @* Square, because these are independent multi-select. *@
                         <input type="checkbox" name="StrategyPaths" value="@strategy.Path"
                                checked="@(Model.SelectedStrategyPath == strategy.Path)" />
                         <span class="lab-strategy-body">
-                            <span class="lab-strategy-name">@strategy.Definition.StrategyName v@strategy.Definition.Version</span>
+                            <span class="lab-strategy-name">@strategy.Definition.StrategyName · @strategy.Identity.SemanticVersion</span>
                             <span class="lab-strategy-meta">
                                 @strategy.Definition.Direction · @strategy.Definition.Timeframe / @strategy.Definition.Execution.Timeframe
                             </span>
@@ -104,9 +102,8 @@
                             }
                             @* Research-only strategies must never reach paper or live.
                                Labelling the distinction here is how the operator learns it. *@
-                            <span class="tag @(isPromoted ? "tag-accent" : "tag-neutral")">
-                                @(isPromoted ? "PROMOTED" : "RESEARCH ONLY")
-                            </span>
+                            <span class="tag tag-neutral">@strategy.Lifecycle.ToString().ToUpperInvariant()</span>
+                            <span class="lab-strategy-meta">hash @strategy.Identity.ContentSha256[..12]</span>
                         </span>
                     </label>
                 }

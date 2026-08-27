@@ -1,5 +1,7 @@
 ﻿using System.Globalization;
 using System.Text;
+using TradingFlow.Domain.Research;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Market;
@@ -13,18 +15,34 @@ public sealed class RunConfigWriter
     private readonly ProjectPaths paths;
     private readonly SimpleYamlReader yamlReader;
     private readonly IArtifactWriter artifactWriter;
+    private readonly StrategyArtifactCatalog strategyArtifacts;
+    private readonly StrategyExperimentArtifactStore experimentArtifacts;
+    private readonly IStrategyExperimentAuthorizationCommands experimentAuthorizations;
 
-    public RunConfigWriter(ProjectPaths paths, SimpleYamlReader yamlReader, IArtifactWriter artifactWriter)
+    public RunConfigWriter(
+        ProjectPaths paths,
+        SimpleYamlReader yamlReader,
+        IArtifactWriter artifactWriter,
+        StrategyArtifactCatalog strategyArtifacts,
+        StrategyExperimentArtifactStore experimentArtifacts,
+        IStrategyExperimentAuthorizationCommands experimentAuthorizations)
     {
         this.paths = paths;
         this.yamlReader = yamlReader;
         this.artifactWriter = artifactWriter;
+        this.strategyArtifacts = strategyArtifacts ?? throw new ArgumentNullException(nameof(strategyArtifacts));
+        this.experimentArtifacts = experimentArtifacts ?? throw new ArgumentNullException(nameof(experimentArtifacts));
+        this.experimentAuthorizations = experimentAuthorizations
+            ?? throw new ArgumentNullException(nameof(experimentAuthorizations));
     }
 
     public string WriteBacktestConfig(BacktestRunRequest request)
     {
         var baseConfig = yamlReader.ReadBacktestRun(request.BaseConfigPath);
-        var selectedStrategies = request.StrategyPaths.Select(yamlReader.ReadStrategy).ToArray();
+        var selectedStrategies = request.StrategyPaths
+            .Select(strategyArtifacts.RequireSourcePath)
+            .Select(artifact => artifact.ResolvedStrategy)
+            .ToArray();
         var generatedConfigNeedsNews = baseConfig.News.Enabled || selectedStrategies.Any(StrategyCapabilityInspector.UsesNews);
         var runName = SanitizeRunName(request.RunName);
         var outputPath = Path.Combine(paths.GeneratedBacktestConfigsRoot, $"{runName}.yaml");
@@ -134,7 +152,7 @@ public sealed class RunConfigWriter
             yaml.AppendLine($"  - {relative}");
         }
 
-        artifactWriter.WriteText(outputPath, yaml.ToString());
+        WriteExclusive(outputPath, yaml.ToString());
         return outputPath;
     }
 
@@ -150,13 +168,31 @@ public sealed class RunConfigWriter
 
         foreach (var strategyPath in request.StrategyPaths)
         {
-            var definition = yamlReader.ReadStrategy(strategyPath);
+            var source = strategyArtifacts.RequireSourcePath(strategyPath);
+            var definition = source.ResolvedStrategy;
             var fullPath = Path.GetFullPath(strategyPath);
             var effective = overridesByPath.TryGetValue(fullPath, out var strategyOverride)
                 ? ApplyOverride(definition, strategyOverride)
                 : definition;
-            var outputStrategyPath = Path.Combine(strategyRoot, Path.GetFileName(strategyPath));
-            artifactWriter.WriteText(outputStrategyPath, WriteStrategyYaml(effective));
+            var semanticVersion = strategyOverride?.DerivedSemanticVersion;
+            if (strategyOverride is not null && String.IsNullOrWhiteSpace(semanticVersion))
+            {
+                throw new InvalidOperationException(
+                    $"Backtest parameter overrides for '{source.Identity.StrategyId}' require an explicit derived semantic version.");
+            }
+
+            semanticVersion ??= source.Identity.SemanticVersion;
+            var runArtifact = strategyArtifacts.CreateDerivedArtifact(
+                source,
+                effective,
+                semanticVersion);
+            var outputStrategyPath = WriteStrategySnapshot(
+                strategyRoot,
+                runArtifact,
+                source,
+                StrategySelectionMode.Backtest,
+                strategyOverride?.Actor ?? "web-backtest-operator",
+                strategyOverride is null ? EmptyOverrideDiff : BuildOverrideDiff(strategyOverride));
             generatedPaths.Add(outputStrategyPath);
         }
 
@@ -167,6 +203,7 @@ public sealed class RunConfigWriter
         TradingFlow.Domain.Strategies.StrategyDefinition definition,
         StrategyParameterOverride strategyOverride)
     {
+        ValidateOverride(strategyOverride);
         return definition with
         {
             EntryRules = definition.EntryRules with
@@ -200,17 +237,58 @@ public sealed class RunConfigWriter
         };
     }
 
-    public void SaveStrategyPermanent(string strategyPath, StrategyParameterOverride strategyOverride)
+    private static void ValidateOverride(StrategyParameterOverride value)
     {
-        var definition = yamlReader.ReadStrategy(strategyPath);
-        var updated = ApplyOverride(definition, strategyOverride);
-        artifactWriter.WriteText(strategyPath, WriteStrategyYaml(updated));
+        if (value.MinVolumeSpike < 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value.MinVolumeSpike), "Minimum volume spike cannot be negative.");
+        }
+
+        if (value.MinEntryRsi is < 0m or > 100m ||
+            value.MaxEntryRsi is < 0m or > 100m ||
+            value.MinEntryRsi > value.MaxEntryRsi)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value.MinEntryRsi), "Entry RSI must be an ordered range between 0 and 100.");
+        }
+
+        if (value.MaxVwapExtensionAtr is <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value.MaxVwapExtensionAtr), "VWAP extension must be positive when configured.");
+        }
+
+        if (value.ConfluenceEnabled && value.ConfluenceEmaPeriod <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value.ConfluenceEmaPeriod), "Confluence EMA period must be positive.");
+        }
+
+        if ((value.ConfluenceEnabled && TimeframeParser.Parse(value.ConfluenceTimeframe) <= TimeSpan.Zero) ||
+            TimeframeParser.Parse(value.ExecutionTimeframe) <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value.ExecutionTimeframe), "Strategy timeframes must be positive.");
+        }
+
+        if (value.StopAtrMultiple <= 0m || value.TargetRMultiple <= 0m || value.MaxHoldHours <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value.StopAtrMultiple), "Stop, target, and maximum hold values must be positive.");
+        }
+
+        if (value.EnableAtrTrailingStop &&
+            (value.TrailingStopAtrMultiple <= 0m || value.TrailingActivationR < 0m))
+        {
+            throw new ArgumentOutOfRangeException(nameof(value.TrailingStopAtrMultiple), "Enabled trailing-stop values must be valid and non-negative.");
+        }
+
+        if (value.MinHoldBarsBeforeTechnicalExit < 0 || value.SlippageBps < 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value.MinHoldBarsBeforeTechnicalExit), "Hold bars and slippage cannot be negative.");
+        }
     }
 
     public string SaveTempConfig(
         string baseConfigPath,
         IEnumerable<string> tickers,
-        string strategyPath,
+        StrategyArtifact strategyArtifact,
+        StrategySelectionMode selectionMode,
         string? orderExpiration = null,
         string? entryOrderType = null,
         bool allowExtendedHoursTrading = false,
@@ -224,6 +302,22 @@ public sealed class RunConfigWriter
         IEnumerable<string>? selectedSourceTickers = null,
         IEnumerable<string>? resolvedScreenerTickers = null)
     {
+        ArgumentNullException.ThrowIfNull(strategyArtifact);
+        var authorized = selectionMode switch
+        {
+            StrategySelectionMode.RunPaperExperiment =>
+                strategyArtifact.EffectiveLifecycle == StrategyLifecycleState.PaperExperiment,
+            StrategySelectionMode.RunPaperShadow =>
+                strategyArtifact.EffectiveLifecycle is StrategyLifecycleState.PaperShadow or StrategyLifecycleState.Validated,
+            _ => false
+        };
+        if (!authorized)
+        {
+            throw new InvalidOperationException(
+                $"Paper execution mode '{selectionMode}' is not authorized for strategy lifecycle " +
+                $"'{strategyArtifact.EffectiveLifecycle}'.");
+        }
+
         ExtendedHoursOrderPolicy.ValidateConfiguration(
             entryOrderType,
             orderExpiration,
@@ -231,9 +325,19 @@ public sealed class RunConfigWriter
         var rawYaml = File.ReadAllText(baseConfigPath);
         var baseConfig = yamlReader.ReadBacktestRun(baseConfigPath);
         var effectiveNewsEnabled = newsEnabled ?? baseConfig.News.Enabled;
-        var tempName = string.IsNullOrWhiteSpace(runName) ? $"temp-run-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}" : runName;
+        var tempName = SanitizeRunName(
+            string.IsNullOrWhiteSpace(runName)
+                ? $"temp-run-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}"
+                : runName);
         var outputPath = Path.Combine(paths.BacktestConfigsRoot, "temp", $"{tempName}.yaml");
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        var snapshotPath = WriteStrategySnapshot(
+            Path.Combine(Path.GetDirectoryName(outputPath)!, "strategies", tempName),
+            strategyArtifact,
+            strategyArtifact,
+            selectionMode,
+            "web-paper-operator",
+            EmptyOverrideDiff);
 
         // Replace run_name
         var lines = rawYaml.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None).ToList();
@@ -347,11 +451,8 @@ public sealed class RunConfigWriter
             {
                 inStrategies = true;
                 newYaml.AppendLine("strategies:");
-                if (!string.IsNullOrWhiteSpace(strategyPath))
-                {
-                    var relative = Path.GetRelativePath(Path.GetDirectoryName(outputPath)!, strategyPath).Replace('\\', '/');
-                    newYaml.AppendLine($"  - {relative}");
-                }
+                var relative = Path.GetRelativePath(Path.GetDirectoryName(outputPath)!, snapshotPath).Replace('\\', '/');
+                newYaml.AppendLine($"  - {relative}");
                 continue;
             }
 
@@ -407,8 +508,110 @@ public sealed class RunConfigWriter
             newYaml.AppendLine($"    negative_threshold: {baseConfig.News.VetoNegativeThreshold.ToString(CultureInfo.InvariantCulture)}");
         }
 
-        artifactWriter.WriteText(outputPath, newYaml.ToString());
+        WriteExclusive(outputPath, newYaml.ToString());
         return outputPath;
+    }
+
+    public StrategyArtifact RegisterPaperExperiment(
+        string sourceStrategyPath,
+        string semanticVersion,
+        string actor,
+        Guid operationId,
+        DateTimeOffset requestedAtUtc,
+        StrategyParameterOverride? strategyOverride = null)
+    {
+        if (operationId == Guid.Empty)
+        {
+            throw new ArgumentException("Paper-experiment registration operation ID cannot be empty.", nameof(operationId));
+        }
+
+        if (requestedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Paper-experiment registration time must be UTC.", nameof(requestedAtUtc));
+        }
+
+        var source = strategyArtifacts.RequireSourcePath(sourceStrategyPath);
+        var resolved = strategyOverride is null
+            ? source.ResolvedStrategy
+            : ApplyOverride(source.ResolvedStrategy, strategyOverride);
+        var overrideDiff = strategyOverride is null ? EmptyOverrideDiff : BuildOverrideDiff(strategyOverride);
+        var artifact = experimentArtifacts.Register(
+            source,
+            resolved,
+            semanticVersion,
+            actor,
+            overrideDiff,
+            SerializeStrategyYaml(resolved));
+        experimentAuthorizations.GrantPaperExperimentAsync(
+                artifact.Identity,
+                $"paper-experiment-grant-{operationId:N}",
+                actor,
+                requestedAtUtc,
+                "Immutable paper-experiment artifact registered for operator execution.")
+            .GetAwaiter()
+            .GetResult();
+        return artifact with { EffectiveLifecycle = StrategyLifecycleState.PaperExperiment };
+    }
+
+    private static IReadOnlyDictionary<string, string> EmptyOverrideDiff { get; } =
+        new SortedDictionary<string, string>(StringComparer.Ordinal);
+
+    private string WriteStrategySnapshot(
+        string outputDirectory,
+        StrategyArtifact artifact,
+        StrategyArtifact source,
+        StrategySelectionMode selectionMode,
+        string actor,
+        IReadOnlyDictionary<string, string> overrideDiff)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        var fileStem = SanitizeFileComponent(
+            $"{artifact.Identity.StrategyId}-{artifact.Identity.SemanticVersion}-{artifact.Identity.ContentSha256[..12]}");
+        var strategyPath = Path.Combine(outputDirectory, fileStem + ".yaml");
+        WriteExclusive(strategyPath, SerializeStrategyYaml(artifact.ResolvedStrategy));
+        var manifest = new StrategyRunArtifactManifest(
+            1,
+            artifact.Identity,
+            selectionMode,
+            source.Identity,
+            source.SourcePath,
+            artifact.AdmissionProfile,
+            DateTimeOffset.UtcNow,
+            String.IsNullOrWhiteSpace(actor) ? "unknown-operator" : actor.Trim(),
+            overrideDiff);
+        WriteExclusive(
+            strategyPath + ".artifact.json",
+            Encoding.UTF8.GetString(EvidenceCanonicalJson.SerializeToUtf8Bytes(manifest)));
+        return strategyPath;
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildOverrideDiff(
+        StrategyParameterOverride value) =>
+        new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["entry_rules.min_volume_spike"] = value.MinVolumeSpike.ToString(CultureInfo.InvariantCulture),
+            ["entry_rules.min_entry_rsi"] = value.MinEntryRsi.ToString(CultureInfo.InvariantCulture),
+            ["entry_rules.max_entry_rsi"] = value.MaxEntryRsi.ToString(CultureInfo.InvariantCulture),
+            ["entry_rules.max_vwap_extension_atr"] = value.MaxVwapExtensionAtr?.ToString(CultureInfo.InvariantCulture) ?? String.Empty,
+            ["confluence.enabled"] = value.ConfluenceEnabled.ToString().ToLowerInvariant(),
+            ["confluence.timeframe"] = value.ConfluenceTimeframe,
+            ["confluence.ema_period"] = value.ConfluenceEmaPeriod.ToString(CultureInfo.InvariantCulture),
+            ["exit_rules.stop_atr_multiple"] = value.StopAtrMultiple.ToString(CultureInfo.InvariantCulture),
+            ["exit_rules.target_r_multiple"] = value.TargetRMultiple.ToString(CultureInfo.InvariantCulture),
+            ["exit_rules.max_hold_hours"] = value.MaxHoldHours.ToString(CultureInfo.InvariantCulture),
+            ["exit_rules.enable_atr_trailing_stop"] = value.EnableAtrTrailingStop.ToString().ToLowerInvariant(),
+            ["exit_rules.trailing_stop_atr_multiple"] = value.TrailingStopAtrMultiple.ToString(CultureInfo.InvariantCulture),
+            ["exit_rules.trailing_activation_r"] = value.TrailingActivationR.ToString(CultureInfo.InvariantCulture),
+            ["exit_rules.min_hold_bars_before_technical_exit"] = value.MinHoldBarsBeforeTechnicalExit.ToString(CultureInfo.InvariantCulture),
+            ["execution.timeframe"] = value.ExecutionTimeframe,
+            ["execution.slippage_bps"] = value.SlippageBps.ToString(CultureInfo.InvariantCulture)
+        };
+
+    private static string SanitizeFileComponent(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        return new string(value.Select(character => invalid.Contains(character) ? '-' : character).ToArray())
+            .Replace('.', '-');
     }
 
     private static string QuoteYaml(string value) =>
@@ -445,7 +648,7 @@ public sealed class RunConfigWriter
         }
     }
 
-    private static string WriteStrategyYaml(TradingFlow.Domain.Strategies.StrategyDefinition strategy)
+    internal static string SerializeStrategyYaml(TradingFlow.Domain.Strategies.StrategyDefinition strategy)
     {
         var yaml = new StringBuilder();
         yaml.AppendLine($"strategy_id: {strategy.StrategyId}");
@@ -456,6 +659,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"direction: {strategy.Direction}");
         yaml.AppendLine("entry_rules:");
         yaml.AppendLine($"  setup_type: {strategy.EntryRules.SetupType}");
+        yaml.AppendLine($"  enable_short: {strategy.EntryRules.EnableShort.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  min_volume_spike: {strategy.EntryRules.MinVolumeSpike.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  min_volume_spike_source: {strategy.EntryRules.MinVolumeSpikeSource}");
         yaml.AppendLine($"  volume_confirmation_mode: {strategy.EntryRules.VolumeConfirmationMode}");
@@ -520,7 +724,9 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
         AppendOptionalDecimal(yaml, "  min_day_gain_pct", strategy.EntryRules.MinDayGainPct);
+        AppendOptionalDecimal(yaml, "  min_gap_up_pct", strategy.EntryRules.MinGapUpPct);
         AppendOptionalDecimal(yaml, "  min_session_gain_pct", strategy.EntryRules.MinSessionGainPct);
+        AppendOptionalDecimal(yaml, "  min_session_relative_volume", strategy.EntryRules.MinSessionRelativeVolume);
         AppendOptionalDecimal(yaml, "  max_pre_entry_session_range_pct", strategy.EntryRules.MaxPreEntrySessionRangePct);
         AppendOptionalDecimal(yaml, "  max_entry_pullback_from_session_high_pct", strategy.EntryRules.MaxEntryPullbackFromSessionHighPct);
         yaml.AppendLine($"  require_positive_news: {strategy.EntryRules.RequirePositiveNews.ToString().ToLowerInvariant()}");
@@ -570,6 +776,9 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  require_reclaim_low_above_sma50: {strategy.EntryRules.RequireReclaimLowAboveSma50.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  require_reclaim_close_above_sma10: {strategy.EntryRules.RequireReclaimCloseAboveSma10.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  require_reclaim_close_above_sma20: {strategy.EntryRules.RequireReclaimCloseAboveSma20.ToString().ToLowerInvariant()}");
+        AppendOptionalInt(yaml, "  require_prior_flush_below_vwap_bars", strategy.EntryRules.RequirePriorFlushBelowVwapBars);
+        AppendOptionalInt(yaml, "  vwap_reclaim_max_bars_since_flush", strategy.EntryRules.VwapReclaimMaxBarsSinceFlush);
+        AppendOptionalDecimal(yaml, "  min_reclaim_volume_ratio", strategy.EntryRules.MinReclaimVolumeRatio);
         yaml.AppendLine($"  short_setup_type: {strategy.EntryRules.ShortSetupType}");
         yaml.AppendLine($"  require_price_below_vwap_for_short: {strategy.EntryRules.RequirePriceBelowVwapForShort.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  require_macd_bearish_for_short: {strategy.EntryRules.RequireMacdBearishForShort.ToString().ToLowerInvariant()}");
@@ -773,10 +982,12 @@ public sealed class RunConfigWriter
             .Select(ch => Char.IsLetterOrDigit(ch) ? ch : '-')
             .ToArray());
         cleaned = String.Join("-", cleaned.Split('-', StringSplitOptions.RemoveEmptyEntries));
-        return String.IsNullOrWhiteSpace(cleaned)
-            ? $"ui-run-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}"
-            : $"{cleaned}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
+        var prefix = String.IsNullOrWhiteSpace(cleaned) ? "ui-run" : cleaned;
+        return $"{prefix}-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}";
     }
+
+    private void WriteExclusive(string path, string content) =>
+        artifactWriter.WriteTextExclusiveAsync(path, content).GetAwaiter().GetResult();
 
     private static string NormalizePath(string path)
     {

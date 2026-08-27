@@ -92,7 +92,7 @@ pre-listing observations.
 
 ## Strategy Catalog Separation
 
-Strategies are separated by evidence level:
+Strategy files are classified explicitly by `configs/strategy-catalog.json`:
 
 ```text
 configs/strategies/
@@ -104,8 +104,35 @@ configs/backtest/strategies/
 
 Do not mutate a canonical strategy for experiments. Copy it into the
 research/backtest strategy area, change the copy, run it, and capture the result in
-`docs/strategy-last-runs.md`. Promotion requires an immutable lifecycle decision
-bound to the exact strategy content hash. The current integrated decision is
+`docs/strategy-last-runs.md`. Folder location is never lifecycle authority.
+
+The immutable artifact identity is `(strategy_id, semantic_version,
+content_sha256)`. Research/archive is catalog disposition; paper experiment, paper
+shadow, and validated are exact-identity authorization grants. A run snapshot
+records the explicit operation (`backtest`, `run_paper_experiment`, or
+`run_paper_shadow`) and cannot mint a grant. Changed resolved content must use a new
+semantic version.
+
+Paper experiments are persisted under
+`data/strategy-artifacts/paper-experiments` using atomic, content-addressed
+directories and a bounded cross-process catalog lock. Publication writes the
+immutable artifact before committing its grant; catalog visibility requires both,
+so an interrupted publication can leave only an inert orphan artifact. The unified
+authorization ledger is
+`data/research/evidence/strategy-authorizations.db`. Paper shadow and validated
+selection comes only from active ledger grants. Revocation, supersession,
+identity-wide suspension, and prerequisite loss fail closed; protection and exits
+continue during suspension.
+
+The exact artifact identity and explicit run mode travel with the resolved strategy
+through paper/live execution. Immediately before an entry order is persisted and
+sent to the broker, the order service records an idempotent entry-admission token
+against the current grant. A token already admitted for the same intent may finish
+after a later revocation; no new intent can cross the boundary. Operator overrides
+are separately identified and cannot claim strategy authorization.
+
+Promotion requires an immutable authorization decision bound to the exact strategy
+content hash. The current integrated decision is
 `RETAIN_RESEARCH`; no strategy is paper-shadow or validated.
 
 The July 2026 intraday execution spec is implemented as research-only. The shared engine now supports generic execution primitives for those configs:

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using TradingFlow.Domain.Strategies;
 
 namespace TradingFlow.Domain.Research;
 
@@ -424,7 +425,9 @@ public enum StrategyPromotionDecisionStatus
     Accepted = 1,
     Rejected = 2,
     Revoked = 3,
-    Superseded = 4
+    Superseded = 4,
+    Suspended = 5,
+    Resumed = 6
 }
 
 public sealed record EvidenceResearchRunReference
@@ -484,7 +487,9 @@ public sealed class StrategyPromotionDecision
         string approvedBy,
         DateTimeOffset decidedAtUtc,
         string reason,
-        string? targetDecisionId = null)
+        string? targetDecisionId = null,
+        string semanticVersion = "0.0.0-legacy",
+        StrategyExecutionAuthorization? authorizedAuthorization = null)
     {
         DecisionId = EvidenceValue.NormalizeRequired(decisionId, nameof(decisionId));
         if (!Enum.IsDefined(status))
@@ -497,6 +502,8 @@ public sealed class StrategyPromotionDecision
         HoldoutId = EvidenceValue.NormalizeSha256(holdoutId);
         StrategyId = EvidenceValue.NormalizeRequired(strategyId, nameof(strategyId));
         StrategyConfigHash = EvidenceValue.NormalizeSha256(strategyConfigHash);
+        SemanticVersion = EvidenceValue.NormalizeRequired(semanticVersion, nameof(semanticVersion));
+        _ = new StrategyArtifactIdentity(StrategyId, SemanticVersion, StrategyConfigHash);
         CodeVersion = EvidenceValue.NormalizeRequired(codeVersion, nameof(codeVersion));
         Datasets = EvidenceHoldoutIdentity.CopyDatasetReferences(datasets, nameof(datasets));
         UniverseLedgerId = EvidenceValue.NormalizeRequired(universeLedgerId, nameof(universeLedgerId));
@@ -508,13 +515,27 @@ public sealed class StrategyPromotionDecision
         DecidedAtUtc = decidedAtUtc;
         Reason = EvidenceValue.NormalizeRequired(reason, nameof(reason));
         TargetDecisionId = String.IsNullOrWhiteSpace(targetDecisionId) ? null : targetDecisionId.Trim();
+        AuthorizedAuthorization = authorizedAuthorization;
         var requiresTarget = Status is StrategyPromotionDecisionStatus.Revoked or
-            StrategyPromotionDecisionStatus.Superseded;
+            StrategyPromotionDecisionStatus.Superseded or
+            StrategyPromotionDecisionStatus.Suspended or
+            StrategyPromotionDecisionStatus.Resumed;
         if (requiresTarget != (TargetDecisionId is not null))
         {
             throw new ArgumentException(
-                "Revoked/superseded decisions require a target; accepted/rejected decisions cannot have one.",
+                "Revoked, superseded, suspended, and resumed decisions require a target; accepted/rejected decisions cannot have one.",
                 nameof(targetDecisionId));
+        }
+
+        var isLegacyIdentity = SemanticVersion.Equals("0.0.0-legacy", StringComparison.OrdinalIgnoreCase);
+        if ((!isLegacyIdentity &&
+             (Status == StrategyPromotionDecisionStatus.Accepted) !=
+             (AuthorizedAuthorization is StrategyExecutionAuthorization.PaperShadow or StrategyExecutionAuthorization.Validated)) ||
+            (isLegacyIdentity && AuthorizedAuthorization is not null))
+        {
+            throw new ArgumentException(
+                "Accepted decisions must authorize paper_shadow or validated; other decisions cannot authorize execution.",
+                nameof(authorizedAuthorization));
         }
     }
 
@@ -529,6 +550,13 @@ public sealed class StrategyPromotionDecision
     public string StrategyId { get; }
 
     public string StrategyConfigHash { get; }
+
+    public string SemanticVersion { get; }
+
+    public StrategyArtifactIdentity ArtifactIdentity =>
+        new(StrategyId, SemanticVersion, StrategyConfigHash);
+
+    public StrategyExecutionAuthorization? AuthorizedAuthorization { get; }
 
     public string CodeVersion { get; }
 

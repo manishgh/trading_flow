@@ -39,11 +39,28 @@ public class PaperJobServiceTests
     {
         // Arrange
         var credentials = new AlpacaCredentialProvider(new ConfigurationBuilder().Build());
+        var repositoryRoot = TestRepository.FindRoot();
+        var reader = new SimpleYamlReader();
+        var strategyCatalog = new StrategyArtifactCatalog(
+            repositoryRoot,
+            Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
+            reader);
+        var configCatalog = new ConfigCatalogService(
+            new ProjectPaths(repositoryRoot),
+            reader,
+            strategyCatalog,
+            new StrategyExperimentArtifactStore(
+                Path.Combine(Path.GetTempPath(), "trading-flow-paper-job-experiments", Guid.NewGuid().ToString("N")),
+                strategyCatalog,
+                reader,
+                TradingFlow.Engine.Storage.AtomicFileArtifactWriter.Instance),
+            new StrategyAuthorizationTestRegistry());
         var service = new PaperJobService(
-            new SimpleYamlReader(),
+            reader,
             _scopeFactoryMock.Object,
             credentials,
-            new ProjectPaths(Directory.GetCurrentDirectory()));
+            new ProjectPaths(Directory.GetCurrentDirectory()),
+            configCatalog: configCatalog);
         var runName = "TestRun";
         var configPath = "dummy.yaml";
         

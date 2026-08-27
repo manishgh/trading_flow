@@ -1,5 +1,6 @@
 ﻿using System.Text.RegularExpressions;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Web.Services;
 
 namespace TradingFlow.Tests;
@@ -7,18 +8,60 @@ namespace TradingFlow.Tests;
 public sealed class ConfigCatalogServiceTests
 {
     [Fact]
-    public void GetStrategies_ReturnsCurrentResearchBootstrapSet()
+    public async Task GetStrategies_ReturnsCurrentResearchBootstrapSet()
     {
         var repoRoot = TestRepository.FindRoot();
-        var catalog = new ConfigCatalogService(new ProjectPaths(repoRoot), new SimpleYamlReader());
+        var reader = new SimpleYamlReader();
+        var catalog = new ConfigCatalogService(
+            new ProjectPaths(repoRoot),
+            reader,
+            CreateStrategyCatalog(repoRoot, reader),
+            CreateExperimentStore(repoRoot, reader),
+            new StrategyAuthorizationTestRegistry());
 
-        var strategies = catalog.GetStrategies();
+        var strategies = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest);
 
-        Assert.Equal(3, strategies.Count);
+        Assert.Equal(6, strategies.Count);
         Assert.Contains(strategies, strategy => strategy.FileName == "intraday-ema10-ema20-macd-volume.v1.yaml" && strategy.Audit is null);
-        
+        Assert.All(strategies, strategy => Assert.Equal(StrategyLifecycleState.Research, strategy.Lifecycle));
         Assert.DoesNotContain(strategies, strategy =>
             strategy.FileName == "brian_shannon_mta_avwap_strategies.yaml");
+    }
+
+    [Fact]
+    public async Task PaperCatalogs_StartEmptyAndNeverFallBackToResearch()
+    {
+        var repoRoot = TestRepository.FindRoot();
+        var reader = new SimpleYamlReader();
+        var catalog = new ConfigCatalogService(
+            new ProjectPaths(repoRoot),
+            reader,
+            CreateStrategyCatalog(repoRoot, reader),
+            CreateExperimentStore(repoRoot, reader),
+            new StrategyAuthorizationTestRegistry());
+
+        Assert.Empty(await catalog.GetStrategiesAsync(StrategySelectionMode.RunPaperExperiment));
+        Assert.Empty(await catalog.GetStrategiesAsync(StrategySelectionMode.RunPaperShadow));
+        Assert.Empty(await catalog.GetStrategiesAsync(StrategySelectionMode.RunLive));
+    }
+
+    [Fact]
+    public void GetConfig_ParsesCanonicalPaperProfilesAgainstLifecycleCatalog()
+    {
+        var repoRoot = TestRepository.FindRoot();
+        var reader = new SimpleYamlReader();
+        var catalog = new ConfigCatalogService(
+            new ProjectPaths(repoRoot),
+            reader,
+            CreateStrategyCatalog(repoRoot, reader),
+            CreateExperimentStore(repoRoot, reader),
+            new StrategyAuthorizationTestRegistry());
+
+        var intraday = catalog.GetConfig(Path.Combine(repoRoot, "configs", "paper", "alpaca-paper.yaml"));
+        var swing = catalog.GetConfig(Path.Combine(repoRoot, "configs", "paper", "alpaca-paper-swing.yaml"));
+
+        Assert.Empty(intraday.Strategies);
+        Assert.Empty(swing.Strategies);
     }
 
     [Fact]
@@ -44,7 +87,13 @@ public sealed class ConfigCatalogServiceTests
 
             File.WriteAllText(Path.Combine(tempRoot, "configs", "backtest", "stale-ui-run.yaml"), yaml);
 
-            var catalog = new ConfigCatalogService(new ProjectPaths(tempRoot), new SimpleYamlReader());
+            var reader = new SimpleYamlReader();
+            var catalog = new ConfigCatalogService(
+                new ProjectPaths(tempRoot),
+                reader,
+                CreateStrategyCatalog(repoRoot, reader),
+                CreateExperimentStore(repoRoot, reader),
+                new StrategyAuthorizationTestRegistry());
 
             var configs = catalog.GetBacktestConfigs();
 
@@ -57,6 +106,19 @@ public sealed class ConfigCatalogServiceTests
                 Directory.Delete(tempRoot, recursive: true);
             }
         }
+    }
+
+    private static StrategyArtifactCatalog CreateStrategyCatalog(string root, SimpleYamlReader reader) =>
+        new(root, Path.Combine(root, "configs", "strategy-catalog.json"), reader);
+
+    private static StrategyExperimentArtifactStore CreateExperimentStore(string root, SimpleYamlReader reader)
+    {
+        var catalog = CreateStrategyCatalog(root, reader);
+        return new StrategyExperimentArtifactStore(
+            Path.Combine(Path.GetTempPath(), "trading-flow-empty-experiments", Guid.NewGuid().ToString("N")),
+            catalog,
+            reader,
+            TradingFlow.Engine.Storage.AtomicFileArtifactWriter.Instance);
     }
 }
 

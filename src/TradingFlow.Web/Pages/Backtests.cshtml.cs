@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
@@ -220,22 +221,6 @@ public sealed class BacktestsModel : PageModel
 
     private const string ElapsedFormat = @"hh\:mm\:ss";
 
-    public IActionResult OnPostSaveStrategy()
-    {
-        var form = Request.Form;
-        var strategyPath = form["SaveStrategyPath"].ToString();
-
-        if (!String.IsNullOrWhiteSpace(strategyPath))
-        {
-            var overrides = ParseStrategyOverrides(form, strategyPath);
-            if (overrides is null) return RedirectToPage();
-            
-            configWriter.SaveStrategyPermanent(strategyPath, overrides);
-        }
-
-        return RedirectToPage(new { configPath = form["SelectedConfigPath"].ToString(), strategyPath });
-    }
-
     public IActionResult OnPostOptimize()
     {
         var form = Request.Form;
@@ -324,7 +309,9 @@ public sealed class BacktestsModel : PageModel
     {
         Configs = catalog.GetBacktestConfigs();
         Wishlists = await wishlists.ListAsync(cancellationToken);
-        Strategies = catalog.GetStrategies();
+        Strategies = await catalog.GetStrategiesAsync(
+            StrategySelectionMode.Backtest,
+            cancellationToken);
         OptimizationJobs = optJobs.List().Take(5).ToArray();
         BacktestJobs = backtestJobs.List().Take(5).ToArray();
         ResearchSnapshots = LoadResearchSnapshots();
@@ -444,35 +431,6 @@ public sealed class BacktestsModel : PageModel
     private static Guid? ParseGuid(string value)
     {
         return Guid.TryParse(value, out var parsed) ? parsed : null;
-    }
-
-    private static decimal? ParseNullableDecimal(string value)
-    {
-        return Decimal.TryParse(value, out var parsed) ? parsed : null;
-    }
-
-    private static StrategyParameterOverride? ParseStrategyOverrides(Microsoft.AspNetCore.Http.IFormCollection form, string strategyPath)
-    {
-        if (String.IsNullOrWhiteSpace(strategyPath)) return null;
-
-        return new StrategyParameterOverride(
-            strategyPath,
-            ParseDecimal(form["MinVolumeSpike"].ToString(), 1m),
-            ParseDecimal(form["MinEntryRsi"].ToString(), 0m),
-            ParseDecimal(form["MaxEntryRsi"].ToString(), 100m),
-            ParseNullableDecimal(form["MaxVwapExtensionAtr"].ToString()),
-            form.ContainsKey("ConfluenceEnabled"),
-            form["ConfluenceTimeframe"].ToString(),
-            ParseInt(form["ConfluenceEmaPeriod"].ToString(), 50),
-            ParseDecimal(form["StopAtrMultiple"].ToString(), 2m),
-            ParseDecimal(form["TargetRMultiple"].ToString(), 2m),
-            ParseDecimal(form["MaxHoldHours"].ToString(), 24m),
-            form.ContainsKey("EnableAtrTrailingStop"),
-            ParseDecimal(form["TrailingStopAtrMultiple"].ToString(), 2m),
-            ParseDecimal(form["TrailingActivationR"].ToString(), 1m),
-            ParseInt(form["MinHoldBarsBeforeTechnicalExit"].ToString(), 1),
-            form["ExecutionTimeframe"].ToString(),
-            ParseDecimal(form["SlippageBps"].ToString(), 0m));
     }
 
     public sealed record ResearchSnapshot(

@@ -3,6 +3,7 @@ using Moq;
 using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Execution;
 
 namespace TradingFlow.Tests;
@@ -30,6 +31,7 @@ public sealed class OrderSubmissionServiceTests
             events,
             new RecordingCandidateRepository(),
             new PassThroughEntryGateChain(),
+            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
         var context = ExecutionRunContextFactory.Create(
             Guid.NewGuid(), "paper", new { test = true }, DateTimeOffset.UtcNow, typeof(OrderSubmissionServiceTests).Assembly);
@@ -70,6 +72,7 @@ public sealed class OrderSubmissionServiceTests
             events,
             new RecordingCandidateRepository(),
             new PassThroughEntryGateChain(),
+            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -95,6 +98,7 @@ public sealed class OrderSubmissionServiceTests
             new RecordingEventRepository(repository),
             new RecordingCandidateRepository(),
             new RejectingEntryGateChain(),
+            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
@@ -127,6 +131,7 @@ public sealed class OrderSubmissionServiceTests
             events,
             new RecordingCandidateRepository(),
             new PassThroughEntryGateChain(),
+            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -135,6 +140,54 @@ public sealed class OrderSubmissionServiceTests
 
         Assert.Equal(2, repository.ReservationAttempts);
         Assert.Single(submittedClientIds);
+        broker.Verify(
+            client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task SubmitBracketOrderAsync_RevocationBlocksNewIntentButAllowsPreviouslyAdmittedIntent()
+    {
+        var repository = new RecordingIntentRepository();
+        var events = new RecordingEventRepository(repository);
+        var authorizations = CreateAuthorizationRegistry();
+        var broker = new Mock<IBrokerClient>();
+        SetupRegularSession(broker);
+        broker
+            .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BrokerOrderReceipt("broker-order-admitted", DateTimeOffset.UtcNow));
+        var service = new OrderSubmissionService(
+            repository,
+            events,
+            new RecordingCandidateRepository(),
+            new PassThroughEntryGateChain(),
+            authorizations,
+            NullLogger<OrderSubmissionService>.Instance);
+        var admittedIntent = Guid.NewGuid();
+        _ = await authorizations.AdmitNewEntryAsync(
+            TestStrategyIdentity,
+            StrategySelectionMode.RunPaperShadow,
+            admittedIntent,
+            DateTimeOffset.UtcNow);
+        await authorizations.SuspendPaperExperimentAsync(
+            TestStrategyIdentity,
+            "suspend-identity-for-test",
+            "test-grant",
+            "test-operator",
+            DateTimeOffset.UtcNow,
+            "Block new entries.");
+
+        var accepted = await service.SubmitBracketOrderAsync(
+            CreateSubmission(admittedIntent),
+            broker.Object,
+            CancellationToken.None);
+        Assert.Equal("broker-order-admitted", accepted.BrokerOrderId);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.SubmitBracketOrderAsync(
+                CreateSubmission(Guid.NewGuid()),
+                broker.Object,
+                CancellationToken.None));
         broker.Verify(
             client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
             Times.Once);
@@ -155,6 +208,7 @@ public sealed class OrderSubmissionServiceTests
             events,
             new RecordingCandidateRepository(),
             new PassThroughEntryGateChain(),
+            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -185,6 +239,7 @@ public sealed class OrderSubmissionServiceTests
                     EntryGateSlot.SystemState,
                     RejectCode.REJECT_DEGRADED_DATA,
                     "stream down")),
+            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
@@ -387,7 +442,9 @@ public sealed class OrderSubmissionServiceTests
             "day",
             new DateOnly(2026, 7, 21),
             new DateTimeOffset(2026, 7, 21, 14, 35, 0, TimeSpan.Zero),
-            new FinalizedOrder("MSFT", "Swing A", 10, 100m, 98m, 104m, DateTimeOffset.UtcNow, String.Empty));
+            new FinalizedOrder("MSFT", "Swing A", 10, 100m, 98m, 104m, DateTimeOffset.UtcNow, String.Empty),
+            StrategyIdentity: TestStrategyIdentity,
+            StrategySelectionMode: StrategySelectionMode.RunPaperShadow);
     }
 
     private static void SetupRegularSession(Mock<IBrokerClient> broker)
@@ -409,7 +466,21 @@ public sealed class OrderSubmissionServiceTests
             new RecordingEventRepository(repository),
             new RecordingCandidateRepository(),
             new PassThroughEntryGateChain(),
+            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
+
+    private static readonly StrategyArtifactIdentity TestStrategyIdentity = new(
+        "test.swing",
+        "1.0.0",
+        new string('c', 64));
+
+    private static StrategyAuthorizationTestRegistry CreateAuthorizationRegistry()
+    {
+        var registry = new StrategyAuthorizationTestRegistry();
+        registry.Seed(TestStrategyIdentity, StrategyExecutionAuthorization.PaperExperiment);
+        registry.Seed(TestStrategyIdentity, StrategyExecutionAuthorization.PaperShadow);
+        return registry;
+    }
 
     private sealed class RecordingIntentRepository : IOrderIntentRepository
     {

@@ -118,7 +118,27 @@ public sealed class MobileAutomationServiceEntryGateTests
             new SimpleYamlReader(),
             new PaperRuntimeFactory(credentialProvider, paths),
             paths,
-            new MobileAutomationSessionStore(paths, AtomicFileArtifactWriter.Instance));
+            new MobileAutomationSessionStore(paths, AtomicFileArtifactWriter.Instance),
+            CreateConfigCatalog(root));
+    }
+
+    private static ConfigCatalogService CreateConfigCatalog(string root)
+    {
+        var reader = new SimpleYamlReader();
+        var catalog = new StrategyArtifactCatalog(
+            root,
+            Path.Combine(root, "configs", "strategy-catalog.json"),
+            reader);
+        return new ConfigCatalogService(
+            new ProjectPaths(root),
+            reader,
+            catalog,
+            new StrategyExperimentArtifactStore(
+                Path.Combine(Path.GetTempPath(), "trading-flow-mobile-entry-experiments", Guid.NewGuid().ToString("N")),
+                catalog,
+                reader,
+                AtomicFileArtifactWriter.Instance),
+            new StrategyAuthorizationTestRegistry());
     }
 
     private static string FindRepositoryRoot()
@@ -137,4 +157,3 @@ public sealed class MobileAutomationServiceEntryGateTests
         throw new DirectoryNotFoundException("Could not locate TradingFlow repository root.");
     }
 }
-

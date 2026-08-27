@@ -33,12 +33,25 @@ public static class MobileApiEndpoints
             return Results.Ok();
         });
 
-        group.MapGet("/catalog", (ConfigCatalogService catalog) =>
+        group.MapGet("/catalog", async (
+            ConfigCatalogService catalog,
+            CancellationToken cancellationToken) =>
         {
+            var strategies = await catalog.GetStrategiesAsync(
+                StrategySelectionMode.Backtest,
+                cancellationToken);
+            var paperExperimentStrategies = await catalog.GetStrategiesAsync(
+                StrategySelectionMode.RunPaperExperiment,
+                cancellationToken);
+            var paperShadowStrategies = await catalog.GetStrategiesAsync(
+                StrategySelectionMode.RunPaperShadow,
+                cancellationToken);
             return Results.Ok(new MobileCatalogResponse(
                 catalog.GetBacktestConfigs().Select(ToMobileRunConfig).ToArray(),
                 catalog.GetPaperConfigs().Select(ToMobileRunConfig).ToArray(),
-                catalog.GetStrategies().Select(ToMobileStrategy).ToArray()));
+                strategies.Select(ToMobileStrategy).ToArray(),
+                paperExperimentStrategies.Select(ToMobileStrategy).ToArray(),
+                paperShadowStrategies.Select(ToMobileStrategy).ToArray()));
         });
 
 
@@ -304,6 +317,7 @@ public static class MobileApiEndpoints
 
         group.MapPost("/paper/runs", async (
             MobilePaperRunRequest request,
+            ConfigCatalogService catalog,
             RunConfigWriter configWriter,
             PaperJobService paperJobs,
             WishlistUniverseResolver universeResolver,
@@ -311,6 +325,46 @@ public static class MobileApiEndpoints
             IWishlistRepository wishlists,
             CancellationToken cancellationToken) =>
         {
+            if (!MobilePaperRunRequestValidator.TryValidate(request, out var requestError))
+            {
+                return Results.BadRequest(requestError);
+            }
+
+            if (!TryResolvePaperSelectionMode(request.PaperExecutionMode, out var paperSelectionMode))
+            {
+                return Results.BadRequest("paper_execution_mode_invalid");
+            }
+
+            StrategyOption selectedPaperStrategy;
+            try
+            {
+                selectedPaperStrategy = await catalog.RequireSelectableAsync(
+                    paperSelectionMode,
+                    request.StrategyPath,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or NotSupportedException)
+            {
+                return PaperStrategyUnavailable(paperSelectionMode);
+            }
+
+            RunConfigSummary? baseConfig;
+            try
+            {
+                var requestedConfigPath = Path.GetFullPath(request.BaseConfigPath);
+                baseConfig = catalog.GetPaperConfigs().SingleOrDefault(config =>
+                    Path.GetFullPath(config.Path).Equals(requestedConfigPath, StringComparison.OrdinalIgnoreCase));
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+            {
+                return Results.BadRequest("paper_base_config_invalid");
+            }
+
+            if (baseConfig is null)
+            {
+                return Results.BadRequest("paper_base_config_invalid");
+            }
+
             var wishlist = request.WishlistId is { } wishlistId
                 ? await wishlists.GetByIdAsync(wishlistId, cancellationToken)
                 : null;
@@ -343,12 +397,13 @@ public static class MobileApiEndpoints
                     request.ScreenerFilter,
                     includeScreener,
                     wishlist?.Id,
-                    request.StrategyPath,
+                    selectedPaperStrategy.Path,
                     cancellationToken);
                 configPath = configWriter.SaveTempConfig(
-                    request.BaseConfigPath,
+                    baseConfig.Path,
                     universe.Tickers,
-                    request.StrategyPath,
+                    selectedPaperStrategy.Artifact,
+                    paperSelectionMode,
                     request.OrderExpiration,
                     request.EntryOrderType,
                     request.AllowExtendedHoursTrading,
@@ -362,9 +417,10 @@ public static class MobileApiEndpoints
                     universe.SelectedSourceTickers,
                     universe.ScreenerTickers);
             }
-            catch (InvalidOperationException exception)
+            catch (Exception exception) when (
+                exception is ArgumentException or InvalidDataException or InvalidOperationException or NotSupportedException)
             {
-                return Results.BadRequest(exception.Message);
+                return PaperRunConfigurationInvalid();
             }
 
             return Results.Ok(paperJobs.Start(runName, configPath));
@@ -405,6 +461,7 @@ public static class MobileApiEndpoints
 
         group.MapPost("/automation/entry", async (
             MobileAutomationStartRequest request,
+            ConfigCatalogService catalog,
             RunConfigWriter configWriter,
             MobileAutomationService automation,
             CancellationToken cancellationToken) =>
@@ -414,13 +471,25 @@ public static class MobileApiEndpoints
                 return Results.BadRequest("Ticker is required.");
             }
 
+            var paperStrategies = await catalog.GetStrategiesAsync(
+                StrategySelectionMode.RunPaperShadow,
+                cancellationToken);
+            var selectedPaperStrategy = paperStrategies.SingleOrDefault(strategy => Path.GetFullPath(strategy.Path).Equals(
+                    Path.GetFullPath(request.StrategyPath),
+                    StringComparison.OrdinalIgnoreCase));
+            if (selectedPaperStrategy is null)
+            {
+                return Results.Conflict("no_paper_eligible_strategy");
+            }
+
             string generatedConfigPath;
             try
             {
                 generatedConfigPath = configWriter.SaveTempConfig(
                     request.ConfigPath,
                     [request.Ticker.Trim().ToUpperInvariant()],
-                    request.StrategyPath,
+                    selectedPaperStrategy.Artifact,
+                    StrategySelectionMode.RunPaperShadow,
                     orderExpiration: "day",
                     entryOrderType: request.EntryOrderType,
                     allowExtendedHoursTrading: request.AllowExtendedHoursTrading,
@@ -673,6 +742,14 @@ public static class MobileApiEndpoints
         return endpoints;
     }
 
+    internal static IResult PaperStrategyUnavailable(StrategySelectionMode selectionMode) =>
+        Results.Conflict(selectionMode == StrategySelectionMode.RunPaperExperiment
+            ? "no_paper_experiment_strategy"
+            : "no_paper_shadow_strategy");
+
+    internal static IResult PaperRunConfigurationInvalid() =>
+        Results.BadRequest("paper_run_configuration_invalid");
+
 
 
     private static WishlistMarketSnapshot ToWishlistMarketSnapshot(MobileWishlistMonitorSnapshotRequest request)
@@ -866,6 +943,10 @@ public static class MobileApiEndpoints
         return new MobileStrategyOption(
             option.Path,
             option.FileName,
+            option.Identity.StrategyId,
+            option.Identity.SemanticVersion,
+            option.Identity.ContentSha256,
+            option.Lifecycle.ToString(),
             strategy.StrategyId,
             strategy.StrategyName,
             strategy.Version,
@@ -962,6 +1043,24 @@ public static class MobileApiEndpoints
                 session.Events.LastOrDefault() ?? session.CurrentStage,
                 session.RunName,
                 session.SessionId);
+        }
+    }
+
+    private static bool TryResolvePaperSelectionMode(
+        string? value,
+        out StrategySelectionMode mode)
+    {
+        switch (value?.Trim().ToLowerInvariant())
+        {
+            case "shadow":
+                mode = StrategySelectionMode.RunPaperShadow;
+                return true;
+            case "experiment":
+                mode = StrategySelectionMode.RunPaperExperiment;
+                return true;
+            default:
+                mode = default;
+                return false;
         }
     }
 }

@@ -9,9 +9,9 @@ public sealed class SimpleYamlReader
 {
     public StrategyDefinition ReadStrategy(string path)
     {
-        var map = ReadKeyValueMap(path);
+        var map = new TrackingConfigurationMap(ReadKeyValueMap(path));
 
-        return new StrategyDefinition(
+        var strategy = new StrategyDefinition(
             RequireString(map, "strategy_id"),
             RequireString(map, "strategy_name"),
             RequireString(map, "source"),
@@ -241,7 +241,7 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "exit_rules.exit_short_on_sma10_cross_above_sma20", false),
                 OptionalBool(map, "exit_rules.exit_on_ema10_cross_below_ema20", false),
                 OptionalBool(map, "exit_rules.allow_same_bar_stop_target", true),
-                OptionalString(map, "exit_rules.initial_stop_mode", "atr"),
+                ReadInitialStopMode(map),
                 OptionalString(map, "exit_rules.profit_target_mode", "r_multiple"),
                 OptionalBool(map, "exit_rules.enable_failed_breakout_circuit_breaker", false),
                 OptionalInt(map, "exit_rules.failed_breakout_bars", 3),
@@ -269,6 +269,8 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "session.is_continuous_market", false),
                 OptionalBool(map, "session.use_extended_hours", false)),
             ReadRegimeRules(map));
+        map.ThrowIfUnknownKeys(path);
+        return strategy;
     }
 
     private static RegimeRules? ReadRegimeRules(IReadOnlyDictionary<string, List<string>> map)
@@ -283,6 +285,24 @@ public sealed class SimpleYamlReader
             benchmark.Trim().ToUpperInvariant(),
             OptionalString(map, "regime.rule", RegimeRules.PriceAboveSma),
             OptionalInt(map, "regime.sma_period", 50));
+    }
+
+    private static string ReadInitialStopMode(IReadOnlyDictionary<string, List<string>> map)
+    {
+        var explicitMode = OptionalString(map, "exit_rules.initial_stop_mode", "atr");
+        if (!OptionalBool(map, "exit_rules.stop_at_flush_low", false))
+        {
+            return explicitMode;
+        }
+
+        if (map.ContainsKey("exit_rules.initial_stop_mode") &&
+            !explicitMode.Equals("flush_low", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "exit_rules.stop_at_flush_low conflicts with exit_rules.initial_stop_mode.");
+        }
+
+        return "flush_low";
     }
 
     public BacktestRunConfig ReadBacktestRun(string path)
@@ -505,10 +525,10 @@ public sealed class SimpleYamlReader
             parameters);
     }
 
-    private static Dictionary<string, List<string>> ReadKeyValueMap(string path)
+    private static ParsedYamlMap ReadKeyValueMap(string path)
     {
-        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-        var sectionStack = new Stack<(int Indent, string Key)>();
+        var result = new ParsedYamlMap();
+        var sectionStack = new Stack<(int Indent, string Key, string FullKey)>();
         string? activeListKey = null;
 
         foreach (var rawLine in File.ReadLines(path))
@@ -527,6 +547,11 @@ public sealed class SimpleYamlReader
                 sectionStack.Pop();
             }
 
+            foreach (var section in sectionStack)
+            {
+                result.SetKind(section.FullKey, YamlValueKind.Mapping);
+            }
+
             if (line.StartsWith("- ", StringComparison.Ordinal))
             {
                 if (activeListKey is null)
@@ -535,13 +560,14 @@ public sealed class SimpleYamlReader
                 }
 
                 result[activeListKey].Add(Unquote(line[2..].Trim()));
+                result.SetKind(activeListKey, YamlValueKind.Sequence);
                 continue;
             }
 
             var colonIndex = line.IndexOf(':', StringComparison.Ordinal);
             if (colonIndex < 0)
             {
-                continue;
+                throw new InvalidOperationException($"Malformed YAML line without a key/value separator in {path}: {line}");
             }
 
             var key = line[..colonIndex].Trim();
@@ -552,45 +578,86 @@ public sealed class SimpleYamlReader
 
             if (String.IsNullOrEmpty(value))
             {
-                sectionStack.Push((indent, key));
+                RejectDuplicateKey(result, fullKey, path);
+                sectionStack.Push((indent, key, fullKey));
                 activeListKey = fullKey;
-                result[fullKey] = new List<string>();
+                result.Add(fullKey, new List<string>(), YamlValueKind.Empty);
             }
             else
             {
+                RejectDuplicateKey(result, fullKey, path);
                 activeListKey = null;
-                result[fullKey] = new List<string> { Unquote(value) };
+                if (value.StartsWith("[", StringComparison.Ordinal) &&
+                    value.EndsWith("]", StringComparison.Ordinal))
+                {
+                    var values = value[1..^1]
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Select(Unquote)
+                        .ToList();
+                    result.Add(fullKey, values, YamlValueKind.Sequence);
+                }
+                else
+                {
+                    result.Add(fullKey, new List<string> { Unquote(value) }, YamlValueKind.Scalar);
+                }
             }
         }
 
         return result;
     }
 
+    private static void RejectDuplicateKey(
+        IReadOnlyDictionary<string, List<string>> map,
+        string key,
+        string path)
+    {
+        if (map.ContainsKey(key))
+        {
+            throw new InvalidOperationException($"Duplicate YAML key '{key}' in '{path}'.");
+        }
+    }
+
     private static string RequireString(IReadOnlyDictionary<string, List<string>> map, string key)
     {
-        if (!map.TryGetValue(key, out var values) || values.Count == 0)
+        if (!TryGetScalar(map, key, out var value) || String.IsNullOrWhiteSpace(value))
         {
             throw new InvalidOperationException($"Missing YAML key: {key}");
         }
 
-        return values[0];
+        return value;
     }
 
     private static IReadOnlyList<string> RequireList(IReadOnlyDictionary<string, List<string>> map, string key)
     {
-        if (!map.TryGetValue(key, out var values) || values.Count == 0)
+        if (!map.TryGetValue(key, out var values))
         {
             throw new InvalidOperationException($"Missing YAML list: {key}");
         }
+
+        if (GetNodeKind(map, key) == YamlValueKind.Empty)
+        {
+            return Array.Empty<string>();
+        }
+
+        EnsureNodeKind(map, key, YamlValueKind.Sequence);
 
         return values;
     }
 
     private static IReadOnlyList<string> OptionalList(IReadOnlyDictionary<string, List<string>> map, string key)
     {
-        return map.TryGetValue(key, out var values)
-            ? values.Where(value => !String.IsNullOrWhiteSpace(value)).ToArray()
-            : Array.Empty<string>();
+        if (!map.TryGetValue(key, out var values))
+        {
+            return Array.Empty<string>();
+        }
+
+        if (GetNodeKind(map, key) == YamlValueKind.Empty)
+        {
+            return Array.Empty<string>();
+        }
+
+        EnsureNodeKind(map, key, YamlValueKind.Sequence);
+        return values.Where(value => !String.IsNullOrWhiteSpace(value)).ToArray();
     }
 
     private static int RequireInt(IReadOnlyDictionary<string, List<string>> map, string key)
@@ -600,15 +667,15 @@ public sealed class SimpleYamlReader
 
     private static int OptionalInt(IReadOnlyDictionary<string, List<string>> map, string key, int fallback)
     {
-        return map.TryGetValue(key, out var values) && values.Count > 0 && !String.IsNullOrWhiteSpace(values[0])
-            ? Int32.Parse(values[0], CultureInfo.InvariantCulture)
+        return TryGetScalar(map, key, out var value) && !String.IsNullOrWhiteSpace(value)
+            ? Int32.Parse(value, CultureInfo.InvariantCulture)
             : fallback;
     }
 
     private static int? OptionalNullableInt(IReadOnlyDictionary<string, List<string>> map, string key)
     {
-        return map.TryGetValue(key, out var values) && values.Count > 0 && !String.IsNullOrWhiteSpace(values[0])
-            ? Int32.Parse(values[0], CultureInfo.InvariantCulture)
+        return TryGetScalar(map, key, out var value) && !String.IsNullOrWhiteSpace(value)
+            ? Int32.Parse(value, CultureInfo.InvariantCulture)
             : null;
     }
 
@@ -619,8 +686,8 @@ public sealed class SimpleYamlReader
 
     private static decimal? OptionalDecimal(IReadOnlyDictionary<string, List<string>> map, string key)
     {
-        return map.TryGetValue(key, out var values) && values.Count > 0 && !String.IsNullOrWhiteSpace(values[0])
-            ? Decimal.Parse(values[0], CultureInfo.InvariantCulture)
+        return TryGetScalar(map, key, out var value) && !String.IsNullOrWhiteSpace(value)
+            ? Decimal.Parse(value, CultureInfo.InvariantCulture)
             : null;
     }
 
@@ -631,43 +698,219 @@ public sealed class SimpleYamlReader
 
     private static bool OptionalBool(IReadOnlyDictionary<string, List<string>> map, string key, bool fallback)
     {
-        return map.TryGetValue(key, out var values) && values.Count > 0 && !String.IsNullOrWhiteSpace(values[0])
-            ? Boolean.Parse(values[0])
+        return TryGetScalar(map, key, out var value) && !String.IsNullOrWhiteSpace(value)
+            ? Boolean.Parse(value)
             : fallback;
     }
 
     private static string OptionalString(IReadOnlyDictionary<string, List<string>> map, string key, string fallback)
     {
-        return map.TryGetValue(key, out var values) && values.Count > 0 && !String.IsNullOrWhiteSpace(values[0])
-            ? values[0]
+        return TryGetScalar(map, key, out var value) && !String.IsNullOrWhiteSpace(value)
+            ? value
             : fallback;
     }
 
     private static string? OptionalNullableString(IReadOnlyDictionary<string, List<string>> map, string key)
     {
-        return map.TryGetValue(key, out var values) && values.Count > 0 && !String.IsNullOrWhiteSpace(values[0])
-            ? values[0]
+        return TryGetScalar(map, key, out var value) && !String.IsNullOrWhiteSpace(value)
+            ? value
             : null;
     }
 
     private static DateOnly? OptionalDateOnly(IReadOnlyDictionary<string, List<string>> map, string key)
     {
-        if (!map.TryGetValue(key, out var values) || values.Count == 0 || String.IsNullOrWhiteSpace(values[0]))
+        if (!TryGetScalar(map, key, out var value) || String.IsNullOrWhiteSpace(value))
         {
             return null;
         }
 
-        return DateOnly.Parse(values[0], CultureInfo.InvariantCulture);
+        return DateOnly.Parse(value, CultureInfo.InvariantCulture);
     }
 
     private static DateTimeOffset? OptionalDateTimeOffset(IReadOnlyDictionary<string, List<string>> map, string key)
     {
-        if (!map.TryGetValue(key, out var values) || values.Count == 0 || String.IsNullOrWhiteSpace(values[0]))
+        if (!TryGetScalar(map, key, out var value) || String.IsNullOrWhiteSpace(value))
         {
             return null;
         }
 
-        return DateTimeOffset.Parse(values[0], CultureInfo.InvariantCulture);
+        return DateTimeOffset.Parse(value, CultureInfo.InvariantCulture);
+    }
+
+    private static bool TryGetScalar(
+        IReadOnlyDictionary<string, List<string>> map,
+        string key,
+        out string value)
+    {
+        if (!map.TryGetValue(key, out var values))
+        {
+            value = String.Empty;
+            return false;
+        }
+
+        var kind = GetNodeKind(map, key);
+        if (kind == YamlValueKind.Empty)
+        {
+            value = String.Empty;
+            return false;
+        }
+
+        if (kind != YamlValueKind.Scalar || values.Count != 1)
+        {
+            throw new InvalidOperationException(
+                $"YAML key '{key}' must contain exactly one scalar value, not a list or mapping.");
+        }
+
+        value = values[0];
+        return true;
+    }
+
+    private static void EnsureNodeKind(
+        IReadOnlyDictionary<string, List<string>> map,
+        string key,
+        YamlValueKind expected)
+    {
+        var actual = GetNodeKind(map, key);
+        if (actual != expected)
+        {
+            throw new InvalidOperationException(
+                $"YAML key '{key}' must be a {expected.ToString().ToLowerInvariant()}, not {actual.ToString().ToLowerInvariant()}.");
+        }
+    }
+
+    private static YamlValueKind GetNodeKind(
+        IReadOnlyDictionary<string, List<string>> map,
+        string key)
+    {
+        return map is IYamlShapeMap shaped
+            ? shaped.GetKind(key)
+            : YamlValueKind.Scalar;
+    }
+
+    private enum YamlValueKind
+    {
+        Empty,
+        Scalar,
+        Sequence,
+        Mapping
+    }
+
+    private interface IYamlShapeMap
+    {
+        YamlValueKind GetKind(string key);
+    }
+
+    private sealed class ParsedYamlMap : IReadOnlyDictionary<string, List<string>>, IYamlShapeMap
+    {
+        private readonly Dictionary<string, List<string>> values = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, YamlValueKind> kinds = new(StringComparer.OrdinalIgnoreCase);
+
+        public IEnumerable<string> Keys => values.Keys;
+
+        public IEnumerable<List<string>> Values => values.Values;
+
+        public int Count => values.Count;
+
+        public List<string> this[string key] => values[key];
+
+        public void Add(string key, List<string> nodeValues, YamlValueKind kind)
+        {
+            values.Add(key, nodeValues);
+            kinds.Add(key, kind);
+        }
+
+        public void SetKind(string key, YamlValueKind kind) => kinds[key] = kind;
+
+        public YamlValueKind GetKind(string key) => kinds[key];
+
+        public bool ContainsKey(string key) => values.ContainsKey(key);
+
+        public bool TryGetValue(string key, out List<string> value) => values.TryGetValue(key, out value!);
+
+        public IEnumerator<KeyValuePair<string, List<string>>> GetEnumerator() => values.GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    /// <summary>
+    /// Records every key the typed strategy parser asks for. A key present in
+    /// YAML but never requested is therefore a typo or unsupported rule and is
+    /// rejected instead of being silently ignored.
+    /// </summary>
+    private sealed class TrackingConfigurationMap(
+        IReadOnlyDictionary<string, List<string>> inner)
+        : IReadOnlyDictionary<string, List<string>>, IYamlShapeMap
+    {
+        private static readonly HashSet<string> KnownSectionKeys = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "entry_rules",
+            "risk_guards",
+            "risk_guards.per_ticker_daily",
+            "confluence",
+            "exit_rules",
+            "execution",
+            "execution.confirmation",
+            "session",
+            "regime"
+        };
+        private readonly HashSet<string> accessed = new(StringComparer.OrdinalIgnoreCase);
+
+        public IEnumerable<string> Keys => inner.Keys;
+
+        public IEnumerable<List<string>> Values => inner.Values;
+
+        public int Count => inner.Count;
+
+        public List<string> this[string key]
+        {
+            get
+            {
+                accessed.Add(key);
+                return inner[key];
+            }
+        }
+
+        public bool ContainsKey(string key)
+        {
+            accessed.Add(key);
+            return inner.ContainsKey(key);
+        }
+
+        public bool TryGetValue(string key, out List<string> value)
+        {
+            accessed.Add(key);
+            return inner.TryGetValue(key, out value!);
+        }
+
+        public IEnumerator<KeyValuePair<string, List<string>>> GetEnumerator() => inner.GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public YamlValueKind GetKind(string key) => GetNodeKind(inner, key);
+
+        public void ThrowIfUnknownKeys(string path)
+        {
+            var invalidSections = KnownSectionKeys
+                .Where(inner.ContainsKey)
+                .Where(key => GetNodeKind(inner, key) != YamlValueKind.Mapping)
+                .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (invalidSections.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Strategy YAML mapping section(s) contain scalar/list data in '{path}': {String.Join(", ", invalidSections)}");
+            }
+
+            var unknown = inner.Keys
+                .Where(key => !accessed.Contains(key) && !KnownSectionKeys.Contains(key))
+                .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (unknown.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Unsupported strategy YAML key(s) in '{path}': {String.Join(", ", unknown)}");
+            }
+        }
     }
 
     private static string Unquote(string value)

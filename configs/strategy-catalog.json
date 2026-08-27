@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 1,
+  "admissionProfiles": [
+    {
+      "profileId": "default-deterministic-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v1",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "1.0.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-next-executable-bar-v1"
+    }
+  ],
+  "strategies": [
+    {
+      "sourcePath": "configs/strategies/brian_shannon_mta_avwap_strategies.yaml",
+      "strategyId": "swing.avwap-bounce",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Archived research note; the configured AVWAP stop rule has no faithful engine implementation."
+    },
+    {
+      "sourcePath": "configs/strategies/intraday-ema10-ema20-macd-volume.v1.yaml",
+      "strategyId": "intraday.ema-macd-volume",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Canonical intraday technical baseline."
+    },
+    {
+      "sourcePath": "configs/strategies/kristjan_qullamaggie_stream_methodology.yaml",
+      "strategyId": "intraday.episodic-pivot-gap",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Archived until the event, opening-range trigger, and low-of-day risk are modeled faithfully."
+    },
+    {
+      "sourcePath": "configs/strategies/lance_breitstein_intraday_tactics.yaml",
+      "strategyId": "intraday.vwap-trap-reclaim",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Retained research hypothesis; not represented as a verified named-trader implementation."
+    },
+    {
+      "sourcePath": "configs/strategies/minervini-trend-template-vcp.v2.yaml",
+      "strategyId": "swing.minervini-vcp",
+      "semanticVersion": "2.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Superseded historical Minervini variant."
+    },
+    {
+      "sourcePath": "configs/strategies/minervini-trend-template-vcp.v4-trend-rider.yaml",
+      "strategyId": "swing.minervini-vcp",
+      "semanticVersion": "4.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Canonical stale research control; clean revalidation is required."
+    },
+    {
+      "sourcePath": "configs/strategies/swing-catalyst-drift.v5.yaml",
+      "strategyId": "swing.catalyst-drift",
+      "semanticVersion": "5.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Generic positive sentiment is not the classified catalyst required by the research plan."
+    },
+    {
+      "sourcePath": "configs/strategies/swing-mean-reversion-reclaim.v1.yaml",
+      "strategyId": "swing.mean-reversion-reclaim",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Mean reversion is outside the retained two-track research program."
+    },
+    {
+      "sourcePath": "configs/strategies/swing-overbought-rollover-short-no-news.v5.yaml",
+      "strategyId": "swing.overbought-rollover-short",
+      "semanticVersion": "5.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Short execution is not admitted to paper or live and this family is outside the retained program."
+    },
+    {
+      "sourcePath": "configs/strategies/swing-reversal-reclaim-bull-quality-no-news.v1.yaml",
+      "strategyId": "swing.reversal-reclaim",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Archived mean-reversion family."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/intraday-atr-compression-breakout.bt-v1.yaml",
+      "strategyId": "intraday.atr-compression-or-breakout",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Retained structural intraday research hypothesis."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/intraday-macd-divergence-fade.bt-v1.yaml",
+      "strategyId": "intraday.macd-divergence-fade",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Generic divergence fade is excluded by the retained research program."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/intraday-vwap-momentum-pullback.bt-v1.yaml",
+      "strategyId": "intraday.vwap-momentum-pullback",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Retained catalyst-context intraday research hypothesis."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/minervini-trend-template-breakout-proxy.bt-v5.yaml",
+      "strategyId": "swing.minervini-vcp",
+      "semanticVersion": "5.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Superseded concentrated Minervini proxy."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/minervini-trend-template-pivot-vcp.bt-v6.yaml",
+      "strategyId": "swing.minervini-vcp",
+      "semanticVersion": "6.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Superseded Minervini research variant."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/minervini-trend-template-pivot-vcp.bt-v7.yaml",
+      "strategyId": "swing.minervini-vcp",
+      "semanticVersion": "7.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Sparse Minervini research variant; not the canonical control."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/minervini-trend-template-pivot-vcp.bt-v8-hourly-confirmation.yaml",
+      "strategyId": "swing.minervini-vcp",
+      "semanticVersion": "8.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Sparse hourly-confirmation variant; not the canonical control."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-deep-oversold.bt-v4.yaml",
+      "strategyId": "swing.connors-rsi2",
+      "semanticVersion": "4.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Tuned RSI2 threshold retained only as historical evidence."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-oversold.bt-v3.yaml",
+      "strategyId": "swing.connors-rsi2",
+      "semanticVersion": "3.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Canonical untuned Connors RSI2 benchmark."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-mean-reversion-reclaim.tech-only.bt-v1.yaml",
+      "strategyId": "swing.mean-reversion-reclaim-technical-only",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Rejected technical-only mean-reversion variant."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-mean-reversion-rsi2-recovery.bt-v2.yaml",
+      "strategyId": "swing.connors-rsi2",
+      "semanticVersion": "2.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "default-deterministic-v1",
+      "reason": "Superseded RSI2 recovery variant."
+    }
+  ]
+}

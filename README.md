@@ -152,6 +152,14 @@ run files freeze the resolved ticker snapshot for execution and audit; they are 
 hand-maintained ticker lists. Base profiles are unresolved templates and fail closed
 when executed directly.
 
+Strategy files are classified by `configs/strategy-catalog.json`; folder placement
+never authorizes execution. Paper experiment, paper shadow, and validated grants are
+persisted in `data/research/evidence/strategy-authorizations.db` against exact
+strategy ID, semantic version, and canonical content hash. Every strategy-routed
+entry obtains a durable admission token immediately before order intent persistence
+and broker submission. Revocation or suspension blocks new intents while existing
+protection and exits remain available.
+
 ## Rolling Candle Warmup
 
 Generate or refresh a rolling normalized candle and indicator cache:
@@ -188,18 +196,17 @@ folder is not promotion evidence. Experimental variants live under
 `RETAIN_RESEARCH`: no strategy is validated for live execution or admitted to a new
 paper-shadow run.
 
-Current retained research strategies:
+The exact bootstrap classification is in
+`configs/strategy-catalog.json`: six research artifacts, fifteen archived
+artifacts, and no paper-experiment, paper-shadow, or validated authorization.
+Folder location is not authority.
 
-- `intraday-ema10-ema20-macd-volume.v1.yaml`
-- `swing-reversal-reclaim-bull-quality-no-news.v1.yaml`
-- `swing-overbought-rollover-short-no-news.v5.yaml`
-- `minervini-trend-template-vcp.v4-trend-rider.yaml`
-
-Current research-only intraday execution specs:
-
-- `configs/backtest/strategies/intraday-vwap-momentum-pullback.bt-v1.yaml`
-- `configs/backtest/strategies/intraday-atr-compression-breakout.bt-v1.yaml`
-- `configs/backtest/strategies/intraday-macd-divergence-fade.bt-v1.yaml`
+Strategy content identity is `(strategy_id, semantic_version, content_sha256)`.
+Research/archive is catalog disposition; paper experiment, paper shadow, and
+validated are separate exact-identity grants. Generated run snapshots record the
+selected operation but cannot promote a strategy. Paper experiment and paper shadow
+are separate choices in Web and Android and both fail closed when their catalog is
+empty.
 
 Each completed comparison may report a run-local winner in its result JSON. That
 label is not a lifecycle promotion. Latest run evidence is tracked in
