@@ -124,11 +124,53 @@ public class CandlePipelineEngineTests
             provider,
             CancellationToken.None);
 
-        Assert.True(result.TickerStates.TryGetValue("AAPL", out var state));
-        Assert.True(state.BarsByTimeframe.ContainsKey("5m"));
-        Assert.False(state.BarsByTimeframe.ContainsKey("1m"));
+        Assert.False(result.TickerStates.ContainsKey("AAPL"));
         Assert.True(result.Failures.TryGetValue("AAPL", out var reason));
         Assert.Contains("Cannot derive required timeframe 1m from coarser source timeframe 5m", reason);
+    }
+
+    [Fact]
+    public async Task RunAsync_FiltersProviderBarThatIsNotCompletedAtRequestEnd()
+    {
+        var start = new DateTimeOffset(2026, 8, 27, 14, 30, 0, TimeSpan.Zero);
+        var result = await new CandlePipelineEngine().RunAsync(
+            new CandlePipelineRequest(
+                ["AAPL"],
+                ["1m"],
+                ["1m"],
+                "1m",
+                start,
+                start.AddSeconds(30),
+                BoundedCapacity: 4,
+                WorkerCount: 1),
+            new SingleBarMarketDataProvider(start),
+            default);
+
+        Assert.False(result.TickerStates.ContainsKey("AAPL"));
+        Assert.Equal(1, result.Metrics.ReadCount);
+        Assert.Equal(1, result.Metrics.IncompleteBarFilteredCount);
+        Assert.Contains("No market data bars", result.Failures["AAPL"]);
+    }
+
+    [Fact]
+    public async Task RunAsync_PartialBatchFailureRetriesEveryTickerFromStart()
+    {
+        var result = await new CandlePipelineEngine().RunAsync(
+            new CandlePipelineRequest(
+                ["AAPL", "MSFT"],
+                ["1m"],
+                ["1m"],
+                "1m",
+                new DateTimeOffset(2026, 8, 27, 14, 29, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 8, 27, 14, 35, 0, TimeSpan.Zero),
+                BoundedCapacity: 4,
+                WorkerCount: 2),
+            new PartiallyFailingBatchMarketDataProvider(),
+            default);
+
+        Assert.Empty(result.Failures);
+        Assert.Equal(3, result.TickerStates["AAPL"].BarsByTimeframe["1m"].Count);
+        Assert.Equal(2, result.TickerStates["MSFT"].BarsByTimeframe["1m"].Count);
     }
 
     [Fact]
@@ -202,6 +244,71 @@ public class CandlePipelineEngineTests
             });
     }
 
+    [Fact]
+    public async Task RunAsync_ReplayContractDeduplicatesIdenticalCompletedBars()
+    {
+        var result = await new CandlePipelineEngine().RunAsync(
+            new CandlePipelineRequest(
+                ["AAPL"],
+                ["1m"],
+                ["1m"],
+                "1m",
+                DateTimeOffset.UtcNow.AddDays(-1),
+                DateTimeOffset.UtcNow,
+                BoundedCapacity: 4,
+                WorkerCount: 1),
+            new DuplicateMarketDataProvider(),
+            default);
+
+        Assert.Empty(result.Failures);
+        Assert.Equal(2, result.Metrics.ReadCount);
+        Assert.Equal(1, result.Metrics.GroupedCount);
+        Assert.Single(result.TickerStates["AAPL"].BarsByTimeframe["1m"]);
+    }
+
+    [Fact]
+    public async Task RunAsync_ConflictingCompletedBarsExcludeTickerDeterministically()
+    {
+        var result = await new CandlePipelineEngine().RunAsync(
+            new CandlePipelineRequest(
+                ["AAPL"],
+                ["1m"],
+                ["1m"],
+                "1m",
+                DateTimeOffset.UtcNow.AddDays(-1),
+                DateTimeOffset.UtcNow,
+                BoundedCapacity: 4,
+                WorkerCount: 2),
+            new ConflictingMarketDataProvider(),
+            default);
+
+        Assert.False(result.TickerStates.ContainsKey("AAPL"));
+        Assert.Contains("Conflicting completed", result.Failures["AAPL"]);
+    }
+
+    [Fact]
+    public async Task RunAsync_AuthoritativeSparseProviderDerivesCompletedBarWithoutSyntheticTrades()
+    {
+        var start = new DateTimeOffset(2026, 8, 27, 13, 30, 0, TimeSpan.Zero);
+        var result = await new CandlePipelineEngine().RunAsync(
+            new CandlePipelineRequest(
+                ["AAPL"],
+                ["1m"],
+                ["1m", "5m"],
+                "1m",
+                start,
+                start.AddMinutes(5),
+                BoundedCapacity: 4,
+                WorkerCount: 2),
+            new AuthoritativeSparseMarketDataProvider(start),
+            default);
+
+        Assert.Empty(result.Failures);
+        var state = result.TickerStates["AAPL"];
+        Assert.Equal(4, state.BarsByTimeframe["1m"].Count);
+        Assert.Equal(4_000m, Assert.Single(state.BarsByTimeframe["5m"]).Volume);
+    }
+
     private sealed class CapturingMarketDataProvider : IMarketDataProvider
     {
         public IReadOnlyList<string> RequestedTickers { get; private set; } = [];
@@ -238,6 +345,85 @@ public class CandlePipelineEngineTests
                         await Task.Yield();
                     }
                 }
+            }
+        }
+    }
+
+    private sealed class SingleBarMarketDataProvider(DateTimeOffset timestamp) : IMarketDataProvider
+    {
+        public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
+            IReadOnlyCollection<string> tickers,
+            IReadOnlyCollection<string> timeframes,
+            DateTimeOffset start,
+            DateTimeOffset end,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            yield return new OhlcvBar("AAPL", timestamp, "1m", 100m, 101m, 99m, 100.5m, 1_000m);
+        }
+    }
+
+    private sealed class PartiallyFailingBatchMarketDataProvider : IMarketDataProvider
+    {
+        public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
+            IReadOnlyCollection<string> tickers,
+            IReadOnlyCollection<string> timeframes,
+            DateTimeOffset start,
+            DateTimeOffset end,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            if (tickers.Count > 1)
+            {
+                yield return Create("AAPL", 0);
+                throw new InvalidOperationException("page 2 failed");
+            }
+
+            var ticker = tickers.Single();
+            var count = ticker == "AAPL" ? 3 : 2;
+            for (var index = 0; index < count; index++)
+            {
+                yield return Create(ticker, index);
+            }
+        }
+
+        private static OhlcvBar Create(string ticker, int minute) => new(
+            ticker,
+            new DateTimeOffset(2026, 8, 27, 14, 30, 0, TimeSpan.Zero).AddMinutes(minute),
+            "1m",
+            100m + minute,
+            101m + minute,
+            99m + minute,
+            100.5m + minute,
+            1_000m);
+    }
+
+    private sealed class AuthoritativeSparseMarketDataProvider(DateTimeOffset start) :
+        IMarketDataProvider,
+        IMarketDataCompletenessProvider
+    {
+        public bool OmittedIntradayIntervalsMeanNoQualifyingTrades => true;
+
+        public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
+            IReadOnlyCollection<string> tickers,
+            IReadOnlyCollection<string> timeframes,
+            DateTimeOffset requestStart,
+            DateTimeOffset end,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            foreach (var index in Enumerable.Range(0, 5).Where(index => index != 2))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return new OhlcvBar(
+                    "AAPL",
+                    start.AddMinutes(index),
+                    "1m",
+                    100m + index,
+                    101m + index,
+                    99m + index,
+                    100.5m + index,
+                    1_000m);
+                await Task.Yield();
             }
         }
     }
@@ -357,6 +543,46 @@ public class CandlePipelineEngineTests
         public Task<IReadOnlyList<OhlcvBar>> ReadBarsAsync(CandleStoreReadRequest request, CancellationToken cancellationToken)
         {
             return Task.FromResult<IReadOnlyList<OhlcvBar>>(Array.Empty<OhlcvBar>());
+        }
+    }
+
+    private sealed class DuplicateMarketDataProvider : IMarketDataProvider
+    {
+        public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
+            IReadOnlyCollection<string> tickers,
+            IReadOnlyCollection<string> timeframes,
+            DateTimeOffset start,
+            DateTimeOffset end,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var bar = new OhlcvBar(
+                "AAPL",
+                new DateTimeOffset(2026, 8, 27, 13, 30, 0, TimeSpan.Zero),
+                "1m",
+                100m,
+                101m,
+                99m,
+                100.5m,
+                1_000m);
+            yield return bar;
+            await Task.Yield();
+            yield return bar;
+        }
+    }
+
+    private sealed class ConflictingMarketDataProvider : IMarketDataProvider
+    {
+        public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
+            IReadOnlyCollection<string> tickers,
+            IReadOnlyCollection<string> timeframes,
+            DateTimeOffset start,
+            DateTimeOffset end,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var timestamp = new DateTimeOffset(2026, 8, 27, 13, 30, 0, TimeSpan.Zero);
+            yield return new OhlcvBar("AAPL", timestamp, "1m", 100m, 101m, 99m, 100.5m, 1_000m);
+            await Task.Yield();
+            yield return new OhlcvBar("AAPL", timestamp, "1m", 100m, 102m, 99m, 101.5m, 1_100m);
         }
     }
 }

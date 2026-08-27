@@ -3,6 +3,7 @@ using Moq;
 using TradingFlow.Backtesting;
 using TradingFlow.Domain.Audit;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Locking;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
@@ -15,6 +16,236 @@ namespace TradingFlow.Tests;
 
 public class LiveRunnerIntegrationTests
 {
+    [Theory]
+    [InlineData("accepted")]
+    [InlineData("accepted_for_bidding")]
+    [InlineData("pending_cancel")]
+    [InlineData("pending_replace")]
+    public async Task RunAsync_PendingShortEntryRemainsInUniverseAfterDiscoveryDropsSymbol(string status)
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var requestedTickers = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var provider = CreateRecordingProvider(requestedTickers);
+            var pendingShort = new ActiveBrokerOrder(
+                "broker-short-1",
+                "RGTI",
+                "sell",
+                status,
+                "limit",
+                10m,
+                null,
+                100m,
+                DateTimeOffset.UtcNow.AddMinutes(-31),
+                "TEST-S-RGTI-20260721-001-12345678",
+                0m,
+                null,
+                DateTimeOffset.UtcNow);
+            var broker = new Mock<IBrokerClient>();
+            broker.Setup(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([pendingShort]);
+            broker.Setup(client => client.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([]);
+            var runner = CreateRunner(
+                provider.Object,
+                lockService: null,
+                brokerClient: broker.Object,
+                discoverySession: new ScriptedLiveDiscoverySession([[]]),
+                iterationInterval: TimeSpan.FromMilliseconds(10));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var progress = CancelAfterIterations(cts, 1);
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["RGTI"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                cts,
+                progress);
+
+            Assert.Contains("RGTI", requestedTickers);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_PartialBrokerSnapshotBlocksAllOrderDecisions()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var provider = CreateRecordingProvider(new System.Collections.Concurrent.ConcurrentQueue<string>());
+            var pendingOrder = new ActiveBrokerOrder(
+                "broker-entry-1",
+                "AAPL",
+                "buy",
+                "accepted",
+                "limit",
+                100m,
+                null,
+                10m,
+                DateTimeOffset.UtcNow.AddMinutes(-31),
+                "TEST-B-AAPL-20260721-001-12345678",
+                0m,
+                null,
+                DateTimeOffset.UtcNow);
+            var broker = new Mock<IBrokerClient>();
+            broker.SetupSequence(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([])
+                .ReturnsAsync([pendingOrder]);
+            broker.SetupSequence(client => client.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([])
+                .ThrowsAsync(new InvalidOperationException("positions unavailable"));
+            var audit = new Mock<IDecisionAuditRepository>();
+            audit.Setup(repository => repository.SaveAuditAsync(
+                    It.IsAny<DecisionAuditRecord>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+            var runner = CreateRunner(
+                provider.Object,
+                lockService: null,
+                auditRepoMock: audit,
+                brokerClient: broker.Object,
+                discoverySession: new ScriptedLiveDiscoverySession([["AAPL"]]),
+                iterationInterval: TimeSpan.FromMilliseconds(10));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            var run = CreateRunConfig(
+                resultsRoot,
+                ["AAPL"],
+                ["5m"],
+                workerCount: 1,
+                derivedSource: "5m");
+            run = run with
+            {
+                Execution = run.Execution! with { OrderExpiration = "active_cancel" }
+            };
+            await RunUntilCancelledAsync(
+                runner,
+                run,
+                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                cts,
+                CancelAfterIterations(cts, 1));
+
+            audit.Verify(repository => repository.SaveAuditAsync(
+                    It.Is<DecisionAuditRecord>(record =>
+                        record.Ticker == "AAPL" &&
+                        record.Decision == "Skipped" &&
+                        record.RejectionReason == "broker_state_unavailable_for_order_decisions"),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            broker.Verify(
+                client => client.CancelOrderAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_BrokerPollFailureRetainsLastConfirmedPositionExposure()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var requestedTickers = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var provider = CreateRecordingProvider(requestedTickers);
+            var position = new BrokerPosition("AAPL", "long", 10m, 100m, 101m, 10m);
+            var broker = new Mock<IBrokerClient>();
+            broker.Setup(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([]);
+            broker.SetupSequence(client => client.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([position])
+                .ReturnsAsync([position])
+                .ThrowsAsync(new InvalidOperationException("broker state unavailable"));
+            var runner = CreateRunner(
+                provider.Object,
+                lockService: null,
+                brokerClient: broker.Object,
+                discoverySession: new ScriptedLiveDiscoverySession([[], []]),
+                iterationInterval: TimeSpan.FromMilliseconds(10));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var progress = CancelAfterIterations(cts, 2);
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                cts,
+                progress);
+
+            Assert.Equal(2, requestedTickers.Count(ticker => ticker == "AAPL"));
+            broker.Verify(
+                client => client.GetOpenPositionsAsync(It.IsAny<CancellationToken>()),
+                Times.Exactly(3));
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_AppliesDiscoveryAddAndDropWithoutRestartingRunner()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var requestedTickers = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var provider = new Mock<IMarketDataProvider>();
+            provider
+                .Setup(x => x.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                {
+                    var ticker = Assert.Single(tickers);
+                    requestedTickers.Enqueue(ticker);
+                    return YieldBars(CreateFiveMinuteBars(ticker), token);
+                });
+            var discovery = new ScriptedLiveDiscoverySession([["AAPL"], ["MSFT"], ["MSFT"]]);
+            var runner = CreateRunner(
+                provider.Object,
+                lockService: null,
+                discoverySession: discovery,
+                iterationInterval: TimeSpan.FromMilliseconds(10));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var completedIterations = 0;
+            var progress = new InlineProgress(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal) &&
+                    Interlocked.Increment(ref completedIterations) >= 3)
+                {
+                    cts.Cancel();
+                }
+            });
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                cts,
+                progress);
+
+            Assert.True(discovery.RefreshCount >= 3);
+            var requests = requestedTickers.ToArray();
+            Assert.Equal(1, requests.Count(ticker => ticker == "AAPL"));
+            Assert.Equal(2, requests.Count(ticker => ticker == "MSFT"));
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
     [Fact]
     public async Task RunAsync_OpenEntryOrder_PublishesTypedBrokerSnapshotToLifecycle()
     {
@@ -947,7 +1178,9 @@ public class LiveRunnerIntegrationTests
         IOrderStateRepository? orderStateRepository = null,
         IOrderSubmissionService? orderSubmissionService = null,
         IOrderLifecycleService? orderLifecycleService = null,
-        ICatalystProvider? catalystProvider = null)
+        ICatalystProvider? catalystProvider = null,
+        ILiveDiscoverySession? discoverySession = null,
+        TimeSpan? iterationInterval = null)
     {
         var defaultOrderRepo = new Mock<IOrderStateRepository>();
         defaultOrderRepo
@@ -978,7 +1211,9 @@ public class LiveRunnerIntegrationTests
                     new string('a', 64),
                     new string('b', 40),
                     new DateTimeOffset(2026, 7, 21, 13, 0, 0, TimeSpan.Zero)),
-            orderLifecycleService: orderLifecycleService);
+            orderLifecycleService: orderLifecycleService,
+            discoverySession: discoverySession,
+            iterationInterval: iterationInterval);
     }
 
     private static IOrderSubmissionService CreatePassThroughSubmissionService()
@@ -1035,6 +1270,89 @@ public class LiveRunnerIntegrationTests
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
         }
+    }
+
+    private sealed class ScriptedLiveDiscoverySession(IEnumerable<IReadOnlyList<string>> snapshots)
+        : ILiveDiscoverySession
+    {
+        private readonly Queue<IReadOnlyList<string>> snapshots = new(snapshots);
+        private HashSet<string> current = new(StringComparer.Ordinal);
+
+        public Guid ScopeId { get; } = Guid.NewGuid();
+        public int RefreshCount { get; private set; }
+
+        public Task<DiscoveryUniverseSnapshot> RefreshAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RefreshCount++;
+            var next = (snapshots.Count > 0 ? snapshots.Dequeue() : current.ToArray())
+                .ToHashSet(StringComparer.Ordinal);
+            var now = DateTimeOffset.UtcNow;
+            var members = next.Select(symbol => new ActiveDiscoveryAggregate(
+                Guid.NewGuid(),
+                ScopeId,
+                symbol,
+                "intraday",
+                now,
+                now,
+                now.AddMinutes(3),
+                RefreshCount,
+                [])).ToArray();
+            var result = new DiscoveryUniverseSnapshot(
+                ScopeId,
+                now,
+                members,
+                next.Except(current, StringComparer.Ordinal).ToArray(),
+                current.Except(next, StringComparer.Ordinal).ToArray());
+            current = next;
+            return Task.FromResult(result);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task RetainExposureSymbolsAsync(
+            IReadOnlyCollection<string> symbols,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class InlineProgress(Action<string> callback) : IProgress<string>
+    {
+        public void Report(string value) => callback(value);
+    }
+
+    private static Mock<IMarketDataProvider> CreateRecordingProvider(
+        System.Collections.Concurrent.ConcurrentQueue<string> requestedTickers)
+    {
+        var provider = new Mock<IMarketDataProvider>();
+        provider
+            .Setup(x => x.GetBarsAsync(
+                It.IsAny<IReadOnlyCollection<string>>(),
+                It.IsAny<IReadOnlyCollection<string>>(),
+                It.IsAny<DateTimeOffset>(),
+                It.IsAny<DateTimeOffset>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+            {
+                var ticker = Assert.Single(tickers);
+                requestedTickers.Enqueue(ticker);
+                return YieldBars(CreateFiveMinuteBars(ticker), token);
+            });
+        return provider;
+    }
+
+    private static IProgress<string> CancelAfterIterations(
+        CancellationTokenSource cancellation,
+        int targetCount)
+    {
+        var completed = 0;
+        return new InlineProgress(message =>
+        {
+            if (message.StartsWith("Iteration finished.", StringComparison.Ordinal) &&
+                Interlocked.Increment(ref completed) >= targetCount)
+            {
+                cancellation.Cancel();
+            }
+        });
     }
 
     private static BacktestRunConfig CreateRunConfig(
@@ -1141,7 +1459,10 @@ public class LiveRunnerIntegrationTests
 
     private static IReadOnlyList<OhlcvBar> CreateFiveMinuteBars(string ticker)
     {
-        var start = DateTimeOffset.UtcNow.AddDays(-7).AddHours(-8);
+        // Fixed, exchange-aligned bars keep the fixture deterministic and model
+        // real provider timestamps. Arbitrary wall-clock seconds would create
+        // incomplete 15-minute buckets and must be rejected by the engine.
+        var start = new DateTimeOffset(2026, 8, 20, 13, 30, 0, TimeSpan.Zero);
         var bars = new List<OhlcvBar>();
         for (var day = 0; day < 7; day++)
         {
@@ -1189,7 +1510,7 @@ public class LiveRunnerIntegrationTests
 
     private static IReadOnlyList<OhlcvBar> CreateFallingFiveMinuteBars(string ticker)
     {
-        var start = DateTimeOffset.UtcNow.AddDays(-7).AddHours(-8);
+        var start = new DateTimeOffset(2026, 8, 20, 13, 30, 0, TimeSpan.Zero);
         var bars = new List<OhlcvBar>();
         for (var day = 0; day < 7; day++)
         {
@@ -1214,7 +1535,7 @@ public class LiveRunnerIntegrationTests
 
     private static IReadOnlyList<OhlcvBar> CreateRisingFiveMinuteBars(string ticker)
     {
-        var start = DateTimeOffset.UtcNow.AddDays(-7).AddHours(-8);
+        var start = new DateTimeOffset(2026, 8, 20, 13, 30, 0, TimeSpan.Zero);
         var bars = new List<OhlcvBar>();
         for (var day = 0; day < 7; day++)
         {

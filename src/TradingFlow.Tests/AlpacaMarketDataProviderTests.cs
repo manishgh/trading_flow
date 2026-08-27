@@ -1,10 +1,28 @@
 using System.Net;
+using System.Text.Json;
 using TradingFlow.Alpaca;
+using TradingFlow.Engine.Abstractions;
 
 namespace TradingFlow.Tests;
 
 public class AlpacaMarketDataProviderTests
 {
+    [Fact]
+    public void ProviderDeclaresDocumentedNoTradeIntervalOmissionSemantics()
+    {
+        using var httpClient = new HttpClient(new PagedBarsHandler());
+        var provider = new AlpacaMarketDataProvider(
+            httpClient,
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+            {
+                KeyId = "test-key",
+                SecretKey = "test-secret"
+            });
+
+        var completeness = Assert.IsAssignableFrom<IMarketDataCompletenessProvider>(provider);
+        Assert.True(completeness.OmittedIntradayIntervalsMeanNoQualifyingTrades);
+    }
+
     [Fact]
     public void ResolveMarketDataStreamUrl_DefaultsToSip()
     {
@@ -66,6 +84,48 @@ public class AlpacaMarketDataProviderTests
     public void IsAuthorizedResponse_RejectsAmbiguousOrFailedResponses(string response)
     {
         Assert.False(AlpacaStreamClient.IsAuthorizedResponse(response));
+    }
+
+    [Theory]
+    [InlineData("{\"T\":\"subscription\",\"bars\":[\"AAPL\"]}", true)]
+    [InlineData("{\"T\":\"b\",\"S\":\"AAPL\"}", false)]
+    [InlineData("{}", false)]
+    public void IsSubscriptionAcknowledgement_RecognizesOnlySubscriptionFrames(
+        string json,
+        bool expected)
+    {
+        var message = JsonSerializer.Deserialize<JsonElement>(json);
+
+        Assert.Equal(expected, AlpacaStreamClient.IsSubscriptionAcknowledgement(message));
+    }
+
+    [Fact]
+    public void TryParseSubscriptionAcknowledgement_PreservesAcceptedChannels()
+    {
+        var message = JsonSerializer.Deserialize<JsonElement>(
+            """{"T":"subscription","bars":["AAPL"],"updatedBars":["AAPL"],"trades":["AAPL"],"statuses":["AAPL"]}""");
+
+        Assert.True(AlpacaStreamClient.TryParseSubscriptionAcknowledgement(message, out var acknowledgement));
+        Assert.NotNull(acknowledgement);
+        Assert.Contains("AAPL", acknowledgement.Bars);
+        Assert.Contains("AAPL", acknowledgement.UpdatedBars);
+        Assert.Contains("AAPL", acknowledgement.Trades);
+        Assert.Contains("AAPL", acknowledgement.Statuses);
+    }
+
+    [Fact]
+    public void SubscriptionAcknowledgement_RequiresCompleteExpectedStateOnEveryChannel()
+    {
+        var complete = JsonSerializer.Deserialize<JsonElement>(
+            """{"T":"subscription","bars":["AAPL","MSFT"],"updatedBars":["AAPL","MSFT"],"trades":["AAPL","MSFT"],"statuses":["AAPL","MSFT"]}""");
+        var missingExistingSymbol = JsonSerializer.Deserialize<JsonElement>(
+            """{"T":"subscription","bars":["MSFT"],"updatedBars":["MSFT"],"trades":["MSFT"],"statuses":["MSFT"]}""");
+        var expected = new HashSet<string>(["AAPL", "MSFT"], StringComparer.OrdinalIgnoreCase);
+
+        Assert.True(AlpacaStreamClient.TryParseSubscriptionAcknowledgement(complete, out var accepted));
+        Assert.True(AlpacaStreamClient.SubscriptionAcknowledgementMatchesExpected(accepted!, expected));
+        Assert.True(AlpacaStreamClient.TryParseSubscriptionAcknowledgement(missingExistingSymbol, out var incomplete));
+        Assert.False(AlpacaStreamClient.SubscriptionAcknowledgementMatchesExpected(incomplete!, expected));
     }
 
     [Fact]

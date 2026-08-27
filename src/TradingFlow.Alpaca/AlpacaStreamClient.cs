@@ -6,15 +6,19 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
 namespace TradingFlow.Alpaca;
 
-public sealed class AlpacaStreamClient : IDisposable
+public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
 {
     private readonly ClientWebSocket _webSocket = new();
     private readonly SemaphoreSlim sendLock = new(1, 1);
+    private readonly Channel<SubscriptionAcknowledgement> subscriptionAcknowledgements =
+        Channel.CreateUnbounded<SubscriptionAcknowledgement>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly AlpacaOptions _options;
     private readonly Uri _streamUrl;
     private readonly ILogger<AlpacaStreamClient>? _logger;
@@ -54,15 +58,14 @@ public sealed class AlpacaStreamClient : IDisposable
         }
     }
 
-    public async Task SubscribeBarsAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken)
+    public Task SubscribeBarsAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken)
     {
         var subPayload = new
         {
             action = "subscribe",
             bars = tickers
         };
-        await SendMessageAsync(subPayload, cancellationToken);
-        var subResponse = await ReceiveMessageAsync(cancellationToken);
+        return SendMessageAsync(subPayload, cancellationToken);
     }
 
     /// <summary>
@@ -87,10 +90,40 @@ public sealed class AlpacaStreamClient : IDisposable
             new
             {
                 action = "subscribe",
+                bars = symbols,
+                updatedBars = symbols,
                 trades = symbols,
-                quotes = symbols,
-                statuses = symbols,
-                lulds = symbols
+                statuses = symbols
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Removes symbols from every channel owned by the shared connection. The
+    /// single read loop consumes Alpaca acknowledgements.
+    /// </summary>
+    public Task UnsubscribeMarketStateAsync(
+        IReadOnlyCollection<string> tickers,
+        CancellationToken cancellationToken)
+    {
+        var symbols = tickers
+            .Select(symbol => symbol.Trim().ToUpperInvariant())
+            .Where(symbol => symbol.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (symbols.Length == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        return SendMessageAsync(
+            new
+            {
+                action = "unsubscribe",
+                bars = symbols,
+                updatedBars = symbols,
+                trades = symbols,
+                statuses = symbols
             },
             cancellationToken);
     }
@@ -122,9 +155,39 @@ public sealed class AlpacaStreamClient : IDisposable
             {
                 foreach (var element in doc.RootElement.EnumerateArray())
                 {
-                    yield return element.Clone();
+                    var clone = element.Clone();
+                    if (TryParseSubscriptionAcknowledgement(clone, out var acknowledgement))
+                    {
+                        subscriptionAcknowledgements.Writer.TryWrite(acknowledgement!);
+                    }
+
+                    yield return clone;
                 }
             }
+        }
+    }
+
+    public async Task WaitForSubscriptionAcknowledgementAsync(
+        IReadOnlyCollection<string> expectedSymbols,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            var acknowledgement = await subscriptionAcknowledgements.Reader.ReadAsync(timeout.Token);
+            var expected = expectedSymbols
+                .Select(symbol => symbol.Trim().ToUpperInvariant())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (!SubscriptionAcknowledgementMatchesExpected(acknowledgement, expected))
+            {
+                throw new InvalidOperationException(
+                    $"Alpaca subscription acknowledgement does not match the complete expected symbol set [{String.Join(", ", expected)}].");
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException("Alpaca did not acknowledge the market-state subscription within 10 seconds.");
         }
     }
 
@@ -201,6 +264,60 @@ public sealed class AlpacaStreamClient : IDisposable
         return String.Equals(type, "success", StringComparison.OrdinalIgnoreCase) &&
                String.Equals(message, "authenticated", StringComparison.OrdinalIgnoreCase);
     }
+
+    internal static bool IsSubscriptionAcknowledgement(JsonElement element) =>
+        element.ValueKind == JsonValueKind.Object &&
+        element.TryGetProperty("T", out var type) &&
+        String.Equals(type.GetString(), "subscription", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool TryParseSubscriptionAcknowledgement(
+        JsonElement element,
+        out SubscriptionAcknowledgement? acknowledgement)
+    {
+        acknowledgement = null;
+        if (!IsSubscriptionAcknowledgement(element))
+        {
+            return false;
+        }
+
+        acknowledgement = new SubscriptionAcknowledgement(
+            ReadSymbolSet(element, "bars"),
+            ReadSymbolSet(element, "updatedBars"),
+            ReadSymbolSet(element, "trades"),
+            ReadSymbolSet(element, "statuses"));
+        return true;
+    }
+
+    internal static bool SubscriptionAcknowledgementMatchesExpected(
+        SubscriptionAcknowledgement acknowledgement,
+        IReadOnlySet<string> expected) =>
+        acknowledgement.Bars.SetEquals(expected) &&
+        acknowledgement.UpdatedBars.SetEquals(expected) &&
+        acknowledgement.Trades.SetEquals(expected) &&
+        acknowledgement.Statuses.SetEquals(expected);
+
+    private static IReadOnlySet<string> ReadSymbolSet(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.Array)
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return property
+            .EnumerateArray()
+            .Where(value => value.ValueKind == JsonValueKind.String)
+            .Select(value => value.GetString())
+            .Where(value => !String.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim().ToUpperInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    internal sealed record SubscriptionAcknowledgement(
+        IReadOnlySet<string> Bars,
+        IReadOnlySet<string> UpdatedBars,
+        IReadOnlySet<string> Trades,
+        IReadOnlySet<string> Statuses);
 
     public void Dispose()
     {

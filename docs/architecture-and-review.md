@@ -77,10 +77,21 @@ These are already small, single-purpose, tested classes — the target shape for
 
 ### 2.1 What is designed well (keep as-is)
 - **One-brain evaluation** and **mode/data isolation** — the core architecture is sound.
-- **Candle pipeline** (`CandlePipelineEngine`): bounded TPL-Dataflow, keyed parallelism,
-  ordered-within-key, backpressure, `ICandleStore` persistence boundary. This is the
-  right shape. The documented gap (batch derivation vs a rolling streaming aggregator)
-  is a real future item but not a defect for current batch/paper cadence.
+- **Candle pipelines**: batch/research uses `CandlePipelineEngine`; paper/live uses
+  `StreamingMarketStateProcessor`. Both use bounded TPL Dataflow, ordered work within
+  a symbol, explicit backpressure, and the `ICandleStore` persistence boundary. A
+  single leased Alpaca SIP owner fans normalized completed bars into per-symbol
+  pipelines. REST recovery and historical replay use the same canonical bar validator
+  and event contract, and incomplete or stale derived buckets are never exposed to
+  strategy evaluation. Alpaca-declared no-trade intervals can complete a derived
+  bucket without synthesizing price or volume; providers without declared omission
+  semantics remain fail-closed. Snapshot publication is fenced to the active stream
+  ownership generation, including startup warming and immediate lease-loss
+  invalidation. Historical conflicting bars exclude the ticker deterministically.
+  The local stream journal is fenced, recovers a torn final
+  append, and applies deterministic `stream > provider > derived > other` precedence.
+  SQLite supplies the local/single-node lease authority; a multi-node deployment must
+  replace that repository with an external lease authority rather than sharing SQLite.
 - **Catalyst path**: `ICatalystProvider` → `CatalystSnapshotAttacher` attaches the latest
   *fresh* catalyst before signal generation; the evaluator applies news gates; paper/live
   keeps a final negative-news veto. The design is correct. The one substantive gap

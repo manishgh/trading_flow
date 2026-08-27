@@ -76,9 +76,28 @@ public sealed class EntryGateChainTests
         Assert.Equal(0, fixture.Broker.OpenOrderCalls);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_CancelledMarketObservation_ReleasesStatusObservation()
+    {
+        var statuses = new TrackingTradingStatusProvider();
+        var fixture = new Fixture(tradingStatusProvider: statuses);
+        fixture.Broker.MarketObservationException = new OperationCanceledException("cancelled");
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            fixture.Chain.ExecuteAsync(
+                fixture.Submission,
+                fixture.Broker,
+                _ => Task.FromResult("must-not-submit")));
+
+        Assert.Equal(1, statuses.EnsureCalls);
+        Assert.Equal(1, statuses.ReleaseCalls);
+    }
+
     private sealed class Fixture
     {
-        public Fixture(SecurityTradingState tradingState = SecurityTradingState.TradingObserved)
+        public Fixture(
+            SecurityTradingState tradingState = SecurityTradingState.TradingObserved,
+            ISecurityTradingStatusProvider? tradingStatusProvider = null)
         {
             var candidateId = Guid.NewGuid();
             var runContext = new ExecutionRunContext(
@@ -123,7 +142,7 @@ public sealed class EntryGateChainTests
                 new PassThroughPositionConflictGuard(),
                 Candidates,
                 Evaluations,
-                new FixedTradingStatusProvider(tradingState, Now),
+                tradingStatusProvider ?? new FixedTradingStatusProvider(tradingState, Now),
                 new EntryGateOptions(20, 2_000, 20m, 15m, 15m, 100m, 75m, 1, 3),
                 new FixedTimeProvider(Now));
         }
@@ -147,8 +166,32 @@ public sealed class EntryGateChainTests
         public Task EnsureObservedAsync(string symbol, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
+        public Task ReleaseObservationAsync(string symbol, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public SecurityTradingStatus GetStatus(string symbol) =>
             new(symbol, state, state == SecurityTradingState.Halted ? "H" : "T", null, now, now);
+    }
+
+    private sealed class TrackingTradingStatusProvider : ISecurityTradingStatusProvider
+    {
+        public int EnsureCalls { get; private set; }
+        public int ReleaseCalls { get; private set; }
+
+        public Task EnsureObservedAsync(string symbol, CancellationToken cancellationToken)
+        {
+            EnsureCalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseObservationAsync(string symbol, CancellationToken cancellationToken)
+        {
+            ReleaseCalls++;
+            return Task.CompletedTask;
+        }
+
+        public SecurityTradingStatus GetStatus(string symbol) =>
+            new(symbol, SecurityTradingState.Unknown, null, null, null, Now);
     }
 
     private sealed class MemoryCandidateRepository(CandidateRecord candidate) : ICandidateRepository
@@ -197,6 +240,7 @@ public sealed class EntryGateChainTests
         }
 
         public BrokerMarketObservation MarketObservation { get; set; }
+        public Exception? MarketObservationException { get; set; }
         public int AccountCalls { get; private set; }
         public int PositionCalls { get; private set; }
         public int OpenOrderCalls { get; private set; }
@@ -225,7 +269,9 @@ public sealed class EntryGateChainTests
         public Task<BrokerMarketObservation> GetMarketObservationAsync(
             string symbol,
             EquityTradingSession session,
-            CancellationToken cancellationToken) => Task.FromResult(MarketObservation);
+            CancellationToken cancellationToken) => MarketObservationException is null
+                ? Task.FromResult(MarketObservation)
+                : Task.FromException<BrokerMarketObservation>(MarketObservationException);
 
         public Task<IReadOnlyList<BrokerPosition>> GetOpenPositionsAsync(CancellationToken cancellationToken)
         {

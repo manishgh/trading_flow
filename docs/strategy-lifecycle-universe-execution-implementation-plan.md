@@ -1,6 +1,6 @@
 # Strategy Lifecycle, Universe, And Execution Implementation Plan
 
-**Status:** Phases 0 and 1 complete. Phase 2 has not started.
+**Status:** Phases 0, 1, and 2 complete. Phase 3 has not started.
 
 **Prepared:** 2026-08-27
 
@@ -549,6 +549,34 @@ override diff without mutating source YAML.
 **Accept:** concurrent duplicate discovery produces one setup; symbols can enter or
 leave a refreshed screen without restarting the run; lease loss and takeover do not
 duplicate bars; restart reconstruction produces the same completed market state.
+
+**Implemented 2026-08-28:** Discovery snapshots, memberships, source evidence, TTL,
+expiry, and aggregate versions are durable in SQLite. `LiveRunner` consumes an
+incrementally refreshed discovery session and preserves symbols with confirmed broker
+exposure. One hosted Alpaca SIP service owns the websocket under a fenced 30-second
+lease renewed every 10 seconds. Renewal begins immediately after acquisition and is
+revalidated after transport connect but before subscription activation. It fans
+completed and revised bars into ordered,
+bounded per-symbol TPL Dataflow pipelines, merges batched REST recovery without
+overwriting newer stream bars, and persists accepted stream bars through
+`ICandleStore` behind a durable cross-process writer fence. The receive loop observes
+the complete expected subscription acknowledgement before REST recovery, and
+degraded/gapped state is withheld until repair. Connection-owned bar/repair work drains before transport
+disposal and lease release; failure to prove drain/disposal stops that host instance
+fail-closed. Forced lease-loss takeover and non-cancelling work are covered by
+deterministic transport tests. Replay uses the same canonical normalization and event
+contract. Intra-session minute gaps trigger REST reconciliation. Alpaca-confirmed
+no-trade intervals satisfy derived-bucket completeness without synthesizing bars;
+unknown provider and unmanifested cache omission semantics remain fail-closed. REST
+warm-up rejects bars that are incomplete at its request cutoff. Snapshots are unavailable
+during warming and invalidate immediately on ownership loss. Historical conflicting
+bars exclude the ticker deterministically. The exact stream fence is revalidated after
+indicator computation, and pending short entries plus the last confirmed broker state
+retain exposure when discovery or a broker poll drops out. Revisions are accepted only through
+completed bar close plus two minutes; malformed recognized bar frames are
+structurally logged, and malformed, duplicate, conflicting, out-of-order,
+stale-owner, and backpressured events fail explicitly. See
+[Phase 2 verification](verification/strategy-flow-phase-2.md).
 
 ### Phase 3 - Correct market evidence and RVOL
 

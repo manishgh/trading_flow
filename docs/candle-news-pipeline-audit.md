@@ -176,7 +176,8 @@ Code:
 
 ```text
 data/candles/{scope}/{runName}/{provider}/{source}/{timeframe}/{ticker}/{yyyy-MM-dd}.jsonl
-data/candles/_archive-pending/{timestamp}-{manifestId}.json
+data/candles/_archive-preparing/{timestamp}-{intentId}.json
+data/candles/_archive-pending/{scope}-{run}-{provider}-{source}-{yyyyMMddHHmm}.json
 ```
 
 `source` is currently `provider` or `derived`, so raw Alpaca/CSV candles and engine-resampled candles are auditable separately.
@@ -186,9 +187,11 @@ The local implementation:
 - upserts by candle timestamp instead of blindly appending duplicate overlapping windows
 - uses per-file locks for concurrent ticker writes
 - writes files atomically through temporary files and replace/move
-- emits `_archive-pending` manifests that a future Azure Blob copier can consume
+- writes a unique `_archive-preparing` intent before candle I/O
+- commits a coalesced `_archive-pending` manifest only after referenced files flush
+- records committed intent IDs so a crash between commit and intent cleanup is idempotent
 
-Azure Blob upload is intentionally not part of `ICandleStore` yet. The cleaner production shape is a separate archival worker that scans pending manifests, copies completed local files to blob, and marks manifests complete. That keeps the hot paper/live path fast and avoids broker execution latency depending on cloud storage writes.
+Azure Blob upload is intentionally not part of `ICandleStore` yet. The cleaner production shape is a separate archival worker that scans only committed pending manifests, acquires each manifest's sibling `.lock` file, copies completed local files to blob, and marks the manifest complete. Preparing intents are recovery evidence and are never upload-ready. That keeps the hot paper/live path independent of cloud storage writes.
 
 ## Scale-Out Shape for Hundreds of Stocks
 
@@ -200,7 +203,8 @@ flowchart LR
     LEASE --> PODB["Pod B\n10 ticker pipelines"]
     PODA --> STOREA["Local candle spill\nprovider + derived"]
     PODB --> STOREB["Local candle spill\nprovider + derived"]
-    STOREA --> MANIFEST["Archive pending manifests"]
+    STOREA --> INTENT["Archive preparing intent"]
+    INTENT --> MANIFEST["Committed archive pending manifest"]
     STOREB --> MANIFEST
     MANIFEST --> BLOB["Future blob copier\nnot in hot path"]
 ```
@@ -231,7 +235,8 @@ On restart, a pod can rebuild warm indicator state from local candle files first
 - Daily candles are not derived by `BarResampler`; daily should be downloaded directly or handled by a dedicated session-aware daily aggregator.
 - Indicator calculation recomputes the full ticker/timeframe window each iteration; paper/live should eventually use rolling indicator state.
 - Strategy evaluation still loops over prepared snapshots; a future live architecture should evaluate on completed-candle events.
-- Azure Blob archival is not implemented; only local files and pending manifests exist.
+- Azure Blob archival is not implemented; only local files, preparing intents, and
+  committed pending manifests exist.
 
 ## Target Streaming Design
 

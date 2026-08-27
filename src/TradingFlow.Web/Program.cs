@@ -10,6 +10,7 @@ using TradingFlow.Data.Candles;
 using TradingFlow.Data.Context;
 using TradingFlow.Data.News;
 using TradingFlow.Data.Earnings;
+using TradingFlow.Data.Discovery;
 using TradingFlow.Data.Evidence;
 using TradingFlow.Data.Evidence.Governance;
 using TradingFlow.Data.Wishlists;
@@ -22,11 +23,13 @@ using TradingFlow.Domain.Wishlists;
 using TradingFlow.Domain.Earnings;
 using TradingFlow.Domain.News;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Domain.Discovery;
 using TradingFlow.Earnings;
 using TradingFlow.Finviz;
 using TradingFlow.Web;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Wishlists;
+using TradingFlow.Web.Services.Discovery;
 
 var cultureInfo = new CultureInfo("en-US");
 CultureInfo.DefaultThreadCurrentCulture = cultureInfo;
@@ -335,6 +338,39 @@ builder.Services.AddAuthorization(authorization =>
 });
 
 builder.Services.AddSingleton<TradingFlow.Domain.Locking.ITickerLockService, TradingFlow.Data.Locking.SqliteTickerLockService>();
+builder.Services.AddSingleton<IDiscoveryRepository, SqliteDiscoveryRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Market.IMarketStreamLeaseRepository, TradingFlow.Data.Market.SqliteMarketStreamLeaseRepository>();
+var marketStateStreamOptions = new AlpacaMarketStateStreamOptions(
+    builder.Configuration["TradingFlow:MarketState:ResourceKey"] ?? AlpacaMarketStateStreamOptions.Default.ResourceKey,
+    ParsePositiveInteger(
+        builder.Configuration["TradingFlow:MarketState:LeaseSeconds"],
+        AlpacaMarketStateStreamOptions.Default.LeaseSeconds),
+    ParsePositiveInteger(
+        builder.Configuration["TradingFlow:MarketState:RenewEverySeconds"],
+        AlpacaMarketStateStreamOptions.Default.RenewEverySeconds));
+marketStateStreamOptions.Validate();
+builder.Services.AddSingleton(marketStateStreamOptions);
+var streamingMarketStateOptions = new TradingFlow.Engine.Pipeline.StreamingMarketStateOptions(
+    ParsePositiveInteger(builder.Configuration["TradingFlow:MarketState:SymbolPipelineCapacity"], 256),
+    ParsePositiveInteger(builder.Configuration["TradingFlow:MarketState:RevisionAcceptanceMinutes"], 2),
+    ParsePositiveInteger(builder.Configuration["TradingFlow:MarketState:RecoveryLookbackDays"], 10),
+    ["5m", "15m", "1h", "4h"],
+    ParsePositiveInteger(builder.Configuration["TradingFlow:MarketState:ActiveSessionStalenessMinutes"], 3));
+streamingMarketStateOptions.Validate();
+builder.Services.AddSingleton(streamingMarketStateOptions);
+builder.Services.AddSingleton(serviceProvider => new TradingFlow.Engine.Pipeline.StreamingMarketStateProcessor(
+    serviceProvider.GetRequiredService<ICandleStore>(),
+    new CandleStoreContext("market-state", "shared", "alpaca-sip"),
+    streamingMarketStateOptions,
+    serviceProvider.GetRequiredService<TimeProvider>(),
+    serviceProvider.GetRequiredService<ILogger<TradingFlow.Engine.Pipeline.StreamingMarketStateProcessor>>()));
+builder.Services.AddSingleton<TradingFlow.Engine.Pipeline.IMarketStateSnapshotProvider>(serviceProvider =>
+    serviceProvider.GetRequiredService<TradingFlow.Engine.Pipeline.StreamingMarketStateProcessor>());
+builder.Services.AddSingleton<IAlpacaMarketStateStreamClientFactory, AlpacaMarketStateStreamClientFactory>();
+builder.Services.AddSingleton<AlpacaMarketStateStreamService>();
+builder.Services.AddSingleton<IDiscoverySubscriptionSink>(serviceProvider =>
+    serviceProvider.GetRequiredService<AlpacaMarketStateStreamService>());
+builder.Services.AddSingleton<IPaperDiscoverySessionFactory, PaperDiscoverySessionFactory>();
 builder.Services.AddSingleton<TradingFlow.Domain.Orders.IOrderStateRepository, TradingFlow.Data.Orders.SqliteOrderStateRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderIntentRepository, TradingFlow.Data.Orders.SqliteOrderIntentRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderEventRepository, TradingFlow.Data.Orders.SqliteOrderEventRepository>();
@@ -364,9 +400,8 @@ builder.Services.AddSingleton(new EntryGateOptions(
     ResolveProductionParameter<int>("max_positions_swing", "TRADINGFLOW_MAX_POSITIONS_SWING")));
 builder.Services.AddSingleton(ManualEntryOptions.Parse(
     ResolveProductionParameter<string>("manual_entry_policy", "TRADINGFLOW_MANUAL_ENTRY_POLICY")));
-builder.Services.AddSingleton<AlpacaSecurityTradingStatusService>();
 builder.Services.AddSingleton<ISecurityTradingStatusProvider>(serviceProvider =>
-    serviceProvider.GetRequiredService<AlpacaSecurityTradingStatusService>());
+    serviceProvider.GetRequiredService<AlpacaMarketStateStreamService>());
 builder.Services.AddSingleton<IEntryGateChain, EntryGateChain>();
 var orderPollIntervalSeconds = productionConfiguration.ResolveParameter<int>(
     ProductionProfile.Paper,

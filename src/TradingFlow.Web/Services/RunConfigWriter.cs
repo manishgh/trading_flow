@@ -356,6 +356,7 @@ public sealed class RunConfigWriter
         var inStrategies = false;
         var skipScreenerBlock = false;
         var skipNewsBlock = false;
+        var skipDiscoveryBlock = false;
 
         foreach (var line in lines)
         {
@@ -377,6 +378,16 @@ public sealed class RunConfigWriter
                 }
 
                 skipScreenerBlock = false;
+            }
+
+            if (skipDiscoveryBlock)
+            {
+                if (line.StartsWith("  ", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                skipDiscoveryBlock = false;
             }
 
             if (line.StartsWith("  order_expiration:"))
@@ -481,6 +492,12 @@ public sealed class RunConfigWriter
                 continue;
             }
 
+            if (line.StartsWith("discovery:"))
+            {
+                skipDiscoveryBlock = true;
+                continue;
+            }
+
             newYaml.AppendLine(line);
         }
 
@@ -491,6 +508,14 @@ public sealed class RunConfigWriter
         newYaml.AppendLine("  enabled: false");
         newYaml.AppendLine("  provider: finviz");
         newYaml.AppendLine("  filters: []");
+
+        AppendDiscoveryRuntime(
+            newYaml,
+            wishlistId,
+            universeSource,
+            resolvedScreenerQuery,
+            selectedSourceTickers ?? tickers,
+            resolvedScreenerTickers ?? []);
 
         newYaml.AppendLine();
         newYaml.AppendLine("news:");
@@ -510,6 +535,37 @@ public sealed class RunConfigWriter
 
         WriteExclusive(outputPath, newYaml.ToString());
         return outputPath;
+    }
+
+    private static void AppendDiscoveryRuntime(
+        StringBuilder yaml,
+        Guid? wishlistId,
+        string universeSource,
+        string? finvizQuery,
+        IEnumerable<string> selectedTickers,
+        IEnumerable<string> finvizTickers)
+    {
+        var normalizedSource = (universeSource ?? String.Empty).Trim().ToLowerInvariant();
+        var selected = selectedTickers
+            .Where(value => !String.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim().ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        yaml.AppendLine();
+        yaml.AppendLine("discovery:");
+        yaml.AppendLine("  enabled: true");
+        yaml.AppendLine($"  refresh_seconds: {TradingFlow.Domain.Backtesting.DiscoveryRuntimeConfig.DefaultRefreshSeconds}");
+        yaml.AppendLine($"  source_expiry_seconds: {TradingFlow.Domain.Backtesting.DiscoveryRuntimeConfig.DefaultSourceExpirySeconds}");
+        yaml.AppendLine($"  wishlist_id: {wishlistId?.ToString() ?? String.Empty}");
+        AppendTickerList(yaml, "wishlist_tickers", normalizedSource.Contains("wishlist", StringComparison.Ordinal) ? selected : []);
+        yaml.AppendLine($"  finviz_query: {QuoteYaml(finvizQuery ?? String.Empty)}");
+        AppendTickerList(yaml, "finviz_tickers", finvizTickers);
+        AppendTickerList(yaml, "operator_tickers", normalizedSource is "operator" or "ephemeral" ? selected : []);
+        AppendTickerList(yaml, "alert_tickers", normalizedSource.Contains("alert", StringComparison.Ordinal) ? selected : []);
+        AppendTickerList(yaml, "news_tickers", normalizedSource.Contains("news", StringComparison.Ordinal) ? selected : []);
+        AppendTickerList(yaml, "earnings_tickers", normalizedSource.Contains("earnings", StringComparison.Ordinal) ? selected : []);
     }
 
     public StrategyArtifact RegisterPaperExperiment(

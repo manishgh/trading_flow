@@ -137,9 +137,12 @@ public sealed class EntryGateChain(
 
         BrokerMarketObservation? market = null;
         string? marketError = null;
+        var statusObservationAcquired = false;
+        SecurityTradingStatus? tradingStatusSnapshot = null;
         try
         {
             await tradingStatuses.EnsureObservedAsync(submission.Order.Ticker, cancellationToken);
+            statusObservationAcquired = true;
             if (brokerClient is not IBrokerMarketObservationProvider marketProvider)
             {
                 throw new InvalidOperationException("Broker does not provide authoritative quote and trade observations.");
@@ -154,8 +157,18 @@ public sealed class EntryGateChain(
         {
             marketError = exception.Message;
         }
+        finally
+        {
+            tradingStatusSnapshot = tradingStatuses.GetStatus(submission.Order.Ticker);
+            if (statusObservationAcquired)
+            {
+                await tradingStatuses.ReleaseObservationAsync(
+                    submission.Order.Ticker,
+                    CancellationToken.None);
+            }
+        }
 
-        var tradingStatus = tradingStatuses.GetStatus(submission.Order.Ticker);
+        var tradingStatus = tradingStatusSnapshot ?? tradingStatuses.GetStatus(submission.Order.Ticker);
         var tradeAge = market?.LastTradeTimestampUtc is { } tradeTimestamp
             ? now - tradeTimestamp.ToUniversalTime()
             : (TimeSpan?)null;

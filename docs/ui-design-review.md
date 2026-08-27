@@ -140,9 +140,9 @@ nested *TradingFlow decision* and *Position* blocks, then Model Intelligence, La
 Symbol News, and Wishlist News.
 
 **Two of those sections show the same data.** `selected.LatestSignal.SignalType` is rendered at
-[TradeDesk.cshtml:287](src/TradingFlow.Web/Pages/TradeDesk.cshtml:287) under the heading
+[TradeDesk.cshtml:287](../src/TradingFlow.Web/Pages/TradeDesk.cshtml#L287) under the heading
 *TradingFlow decision*, and again at
-[TradeDesk.cshtml:388](src/TradingFlow.Web/Pages/TradeDesk.cshtml:388) under *Latest signal*. The
+[TradeDesk.cshtml:388](../src/TradingFlow.Web/Pages/TradeDesk.cshtml#L388) under *Latest signal*. The
 reason string is likewise duplicated across both.
 
 **Two news panels coexist.** *Selected Symbol News* and *Wishlist News* are both rendered; the

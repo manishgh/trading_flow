@@ -25,10 +25,12 @@ public sealed record CandlePipelineRequest(
     string ExchangeTimezone = "America/New_York",
     CandleStoreContext? StoreContext = null);
 
-public sealed record CandleEvent(
-    string Ticker,
-    string Timeframe,
-    OhlcvBar Bar);
+public sealed record CandleEvent(MarketBarEvent MarketEvent)
+{
+    public string Ticker => MarketEvent.Bar.Ticker;
+    public string Timeframe => MarketEvent.Bar.Timeframe;
+    public OhlcvBar Bar => MarketEvent.Bar;
+}
 
 public sealed record NormalizedCandleEvent(
     string Ticker,
@@ -44,6 +46,7 @@ public sealed record CandlePipelineMetrics(
     int IndicatorSnapshotSetCount,
     int FailureCount,
     int SessionFilteredCount,
+    int IncompleteBarFilteredCount,
     int MaxReadBufferDepth,
     int MaxNormalizeInputDepth,
     int MaxIndicatorInputDepth);
@@ -87,6 +90,7 @@ public sealed class CandlePipelineEngine
 
     private readonly IndicatorEngine indicatorEngine = new();
     private readonly BarResampler barResampler = new();
+    private readonly MarketDataReplayAdapter replayAdapter = new();
     private readonly ICandleStore candleStore;
 
     public CandlePipelineEngine(ICandleStore? candleStore = null)
@@ -102,7 +106,9 @@ public sealed class CandlePipelineEngine
     {
         var workerCount = ResolveWorkerCount(request.WorkerCount);
         var capacity = request.BoundedCapacity <= 0 ? 1000 : request.BoundedCapacity;
-        var barsByKey = new ConcurrentDictionary<TickerTimeframeKey, ConcurrentBag<OhlcvBar>>();
+        var barsByKey = new ConcurrentDictionary<
+            TickerTimeframeKey,
+            ConcurrentDictionary<DateTimeOffset, OhlcvBar>>();
         var failures = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var metrics = new MutablePipelineMetrics();
         var normalizedProgress = new ThrottledCounterProgress(
@@ -169,8 +175,18 @@ public sealed class CandlePipelineEngine
                 }
 
                 var key = new TickerTimeframeKey(normalized.Ticker, normalized.Timeframe);
-                var bag = barsByKey.GetOrAdd(key, _ => new ConcurrentBag<OhlcvBar>());
-                bag.Add(normalized.Bar);
+                var bars = barsByKey.GetOrAdd(key, _ => new ConcurrentDictionary<DateTimeOffset, OhlcvBar>());
+                if (!bars.TryAdd(normalized.Bar.Timestamp, normalized.Bar))
+                {
+                    if (bars[normalized.Bar.Timestamp] != normalized.Bar)
+                    {
+                        failures[normalized.Ticker] =
+                            $"Conflicting completed {normalized.Timeframe} bars exist at {normalized.Bar.Timestamp:O}.";
+                    }
+
+                    return;
+                }
+
                 metrics.IncrementGrouped();
             },
             new ExecutionDataflowBlockOptions
@@ -189,7 +205,6 @@ public sealed class CandlePipelineEngine
             : request.DownloadTimeframes;
 
         progress?.Report($"Reading market data for {request.Tickers.Count} ticker(s), {downloadedTimeframes.Count} timeframe(s).");
-        var seenTickers = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         try
         {
             // Prefer provider batch reads for API efficiency. If the provider
@@ -205,11 +220,10 @@ public sealed class CandlePipelineEngine
         {
             progress?.Report($"Batch market data read failed: {exception.Message}. Retrying unresolved ticker(s) one at a time.");
 
-            var fallbackTickers = metrics.ReadCount == 0
-                ? request.Tickers
-                : request.Tickers
-                    .Where(ticker => !seenTickers.ContainsKey(NormalizeTickerForFailure(ticker)))
-                    .ToArray();
+            // A paginated batch can fail after yielding a prefix. Retry every
+            // ticker independently; logical duplicates are idempotent, while a
+            // partial ticker must never be mistaken for complete history.
+            var fallbackTickers = request.Tickers;
 
             foreach (var ticker in fallbackTickers)
             {
@@ -236,13 +250,17 @@ public sealed class CandlePipelineEngine
         await groupBlock.Completion;
         normalizedProgress.Flush(metrics.NormalizedCount);
 
+        // Any malformed or conflicting bar invalidates the ticker's prepared
+        // market state. This prevents parallel normalization order from choosing
+        // a nondeterministic winner that a backtest could still evaluate.
         var grouped = barsByKey
+            .Where(item => !failures.ContainsKey(item.Key.Ticker))
             .GroupBy(x => x.Key.Ticker, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 group => group.Key,
                 group => group.ToDictionary(
                     item => item.Key.Timeframe,
-                    item => (IReadOnlyList<OhlcvBar>)item.Value.OrderBy(x => x.Timestamp).ToArray(),
+                    item => (IReadOnlyList<OhlcvBar>)item.Value.Values.OrderBy(x => x.Timestamp).ToArray(),
                     StringComparer.OrdinalIgnoreCase),
                 StringComparer.OrdinalIgnoreCase);
 
@@ -257,8 +275,23 @@ public sealed class CandlePipelineEngine
         // Persist provider bars before deriving so recovery/audit can distinguish
         // raw feed candles from bars created by our resampler.
         await PersistCandlesAsync(request, grouped, "provider", cancellationToken);
-        var derivedBars = DeriveMissingTimeframes(request, grouped, failures, metrics);
+        var providerConfirmsSparseNoTradeIntervals =
+            provider is IMarketDataCompletenessProvider
+            {
+                OmittedIntradayIntervalsMeanNoQualifyingTrades: true
+            };
+        var derivedBars = DeriveMissingTimeframes(
+            request,
+            grouped,
+            failures,
+            metrics,
+            providerConfirmsSparseNoTradeIntervals);
         await PersistCandlesAsync(request, derivedBars, "derived", cancellationToken);
+
+        foreach (var failedTicker in failures.Keys)
+        {
+            grouped.Remove(failedTicker);
+        }
 
         var snapshotsByTicker = new ConcurrentDictionary<string, ConcurrentDictionary<string, IReadOnlyList<IndicatorSnapshot>>>(StringComparer.OrdinalIgnoreCase);
         await ComputeIndicatorsAsync(grouped, snapshotsByTicker, workerCount, capacity, metrics, cancellationToken);
@@ -283,10 +316,25 @@ public sealed class CandlePipelineEngine
             {
                 await foreach (var bar in provider.GetBarsAsync(tickers, downloadedTimeframes, request.Start, request.End, cancellationToken))
                 {
-                    var normalizedTicker = NormalizeTickerForFailure(bar.Ticker);
-                    seenTickers.TryAdd(normalizedTicker, 0);
+                    var normalizedBar = CanonicalMarketBarValidator.Normalize(bar);
+                    var isStructurallyValid = CanonicalMarketBarValidator.IsValid(
+                        normalizedBar,
+                        requireOneMinuteSource: false,
+                        out _);
+                    if (isStructurallyValid &&
+                        !CanonicalMarketBarValidator.IsCompletedAsOf(normalizedBar, request.End))
+                    {
+                        metrics.IncrementRead();
+                        metrics.IncrementIncompleteBarFiltered();
+                        continue;
+                    }
+
+                    var replayEvent = replayAdapter.Create(
+                        normalizedBar,
+                        request.StoreContext?.ProviderName ?? provider.GetType().Name,
+                        "historical");
                     metrics.IncrementRead();
-                    await readBuffer.SendAsync(new CandleEvent(bar.Ticker, bar.Timeframe, bar), cancellationToken);
+                    await readBuffer.SendAsync(new CandleEvent(replayEvent), cancellationToken);
                     metrics.ObserveReadBufferDepth(readBuffer.Count);
                 }
             }
@@ -412,7 +460,8 @@ public sealed class CandlePipelineEngine
         CandlePipelineRequest request,
         IDictionary<string, Dictionary<string, IReadOnlyList<OhlcvBar>>> grouped,
         IDictionary<string, string> failures,
-        MutablePipelineMetrics metrics)
+        MutablePipelineMetrics metrics,
+        bool providerConfirmsSparseNoTradeIntervals)
     {
         var derivedBars = new List<OhlcvBar>();
         foreach (var (ticker, barsByTimeframe) in grouped)
@@ -443,7 +492,9 @@ public sealed class CandlePipelineEngine
                     continue;
                 }
 
-                var resampled = barResampler.Resample(sourceBars, target);
+                var resampled = providerConfirmsSparseNoTradeIntervals
+                    ? barResampler.ResampleAuthoritativeSparseHistory(sourceBars, target, request.End)
+                    : barResampler.ResampleComplete(sourceBars, target);
                 barsByTimeframe[target] = resampled;
                 derivedBars.AddRange(resampled);
                 metrics.IncrementDerivedTimeframe();
@@ -455,33 +506,12 @@ public sealed class CandlePipelineEngine
 
     private static NormalizedCandleEvent Normalize(CandleEvent candle)
     {
-        var bar = candle.Bar;
-        if (String.IsNullOrWhiteSpace(bar.Ticker))
+        var normalized = CanonicalMarketBarValidator.Normalize(candle.Bar);
+        if (!CanonicalMarketBarValidator.IsValid(normalized, requireOneMinuteSource: false, out var failure))
         {
-            throw new InvalidOperationException("Candle ticker is required.");
+            throw new InvalidOperationException(
+                $"Invalid candle for {normalized.Ticker} {normalized.Timeframe} at {normalized.Timestamp:O}: {failure}");
         }
-
-        if (String.IsNullOrWhiteSpace(bar.Timeframe))
-        {
-            throw new InvalidOperationException($"Candle timeframe is required for {bar.Ticker}.");
-        }
-
-        if (bar.High < bar.Low || bar.Open <= 0 || bar.High <= 0 || bar.Low <= 0 || bar.Close <= 0)
-        {
-            throw new InvalidOperationException($"Invalid OHLC values for {bar.Ticker} {bar.Timeframe} at {bar.Timestamp:O}.");
-        }
-
-        if (bar.Volume < 0)
-        {
-            throw new InvalidOperationException($"Invalid negative volume for {bar.Ticker} {bar.Timeframe} at {bar.Timestamp:O}.");
-        }
-
-        var normalized = bar with
-        {
-            Ticker = bar.Ticker.Trim().ToUpperInvariant(),
-            Timeframe = bar.Timeframe.Trim().ToLowerInvariant(),
-            Timestamp = bar.Timestamp.ToUniversalTime()
-        };
 
         return new NormalizedCandleEvent(normalized.Ticker, normalized.Timeframe, normalized);
     }
@@ -543,6 +573,7 @@ public sealed class CandlePipelineEngine
         private int indicatorWorkItemCount;
         private int indicatorSnapshotSetCount;
         private int sessionFilteredCount;
+        private int incompleteBarFilteredCount;
         private int maxReadBufferDepth;
         private int maxNormalizeInputDepth;
         private int maxIndicatorInputDepth;
@@ -560,6 +591,8 @@ public sealed class CandlePipelineEngine
         public int IncrementIndicatorSnapshotSet() => Interlocked.Increment(ref indicatorSnapshotSetCount);
 
         public int IncrementSessionFiltered() => Interlocked.Increment(ref sessionFilteredCount);
+
+        public int IncrementIncompleteBarFiltered() => Interlocked.Increment(ref incompleteBarFilteredCount);
 
         public int NormalizedCount => Volatile.Read(ref normalizedCount);
 
@@ -582,6 +615,7 @@ public sealed class CandlePipelineEngine
                 indicatorSnapshotSetCount,
                 failureCount,
                 sessionFilteredCount,
+                incompleteBarFilteredCount,
                 maxReadBufferDepth,
                 maxNormalizeInputDepth,
                 maxIndicatorInputDepth);

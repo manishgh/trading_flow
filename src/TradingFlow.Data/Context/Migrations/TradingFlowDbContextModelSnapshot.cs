@@ -260,6 +260,173 @@ namespace TradingFlow.Data.Context.Migrations
                     b.ToTable("DecisionAudits");
                 });
 
+            modelBuilder.Entity("TradingFlow.Domain.Discovery.DiscoveryAggregateRecord", b =>
+                {
+                    b.Property<Guid>("AggregateId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("FirstDiscoveredAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Horizon")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("LastObservedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ScopeId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("AggregateId");
+
+                    b.HasIndex("ScopeId", "Symbol")
+                        .IsUnique();
+
+                    b.HasIndex("ScopeId", "IsActive", "ExpiresAtUtc");
+
+                    b.ToTable("discovery_aggregates", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Discovery.DiscoverySnapshotRecord", b =>
+                {
+                    b.Property<Guid>("SnapshotId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContentSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Horizon")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsDiagnostic")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("ObservationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ObservedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ProviderTimestampUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RawReference")
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ScopeId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceKey")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("SourceVersion")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SymbolsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("SnapshotId");
+
+                    b.HasIndex("ExpiresAtUtc");
+
+                    b.HasIndex("ScopeId", "SourceKind", "SourceKey", "ObservationId")
+                        .IsUnique();
+
+                    b.HasIndex("ScopeId", "SourceKind", "SourceKey", "SourceVersion")
+                        .IsUnique();
+
+                    b.ToTable("discovery_snapshots", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Discovery.DiscoverySourceMembershipRecord", b =>
+                {
+                    b.Property<Guid>("MembershipId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("AggregateId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("FirstObservedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("LastObservedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("LatestSnapshotId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MetadataJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceKey")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("MembershipId");
+
+                    b.HasIndex("ExpiresAtUtc");
+
+                    b.HasIndex("LatestSnapshotId");
+
+                    b.HasIndex("AggregateId", "SourceKind", "SourceKey")
+                        .IsUnique();
+
+                    b.ToTable("discovery_source_memberships", (string)null);
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Earnings.EarningsAnalysisSnapshot", b =>
                 {
                     b.Property<Guid>("Id")
@@ -536,6 +703,43 @@ namespace TradingFlow.Data.Context.Migrations
                     b.HasIndex("ExpiresAt");
 
                     b.ToTable("TickerLocks");
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Market.MarketStreamLeaseRecord", b =>
+                {
+                    b.Property<string>("ResourceKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("resource_key");
+
+                    b.Property<long>("AcquiredAtUtc")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("acquired_at_utc");
+
+                    b.Property<long>("ExpiresAtUtc")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("expires_at_utc");
+
+                    b.Property<long>("FencingToken")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("fencing_token");
+
+                    b.Property<string>("OwnerId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("owner_id");
+
+                    b.Property<long>("RenewedAtUtc")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("renewed_at_utc");
+
+                    b.HasKey("ResourceKey");
+
+                    b.HasIndex("ExpiresAtUtc");
+
+                    b.ToTable("market_stream_leases", (string)null);
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.News.PersistedNewsItem", b =>
@@ -1897,6 +2101,25 @@ namespace TradingFlow.Data.Context.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("TradingFlow.Domain.Discovery.DiscoverySourceMembershipRecord", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.Discovery.DiscoveryAggregateRecord", "Aggregate")
+                        .WithMany("Sources")
+                        .HasForeignKey("AggregateId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TradingFlow.Domain.Discovery.DiscoverySnapshotRecord", "LatestSnapshot")
+                        .WithMany()
+                        .HasForeignKey("LatestSnapshotId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Aggregate");
+
+                    b.Navigation("LatestSnapshot");
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Earnings.EarningsAnalysisSnapshot", b =>
                 {
                     b.HasOne("TradingFlow.Domain.Earnings.EarningsCalendarEvent", null)
@@ -2018,6 +2241,11 @@ namespace TradingFlow.Data.Context.Migrations
                         .IsRequired();
 
                     b.Navigation("Wishlist");
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Discovery.DiscoveryAggregateRecord", b =>
+                {
+                    b.Navigation("Sources");
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Portfolio.AdvisoryPortfolio", b =>

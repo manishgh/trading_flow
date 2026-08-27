@@ -18,5 +18,11 @@ public interface INewsFeedRepository
         IReadOnlyCollection<string> tickers,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<PersistedNewsItem>> GetIngestedSinceForTickersAsync(
+        DateTimeOffset ingestedSinceUtc,
+        int limit,
+        IReadOnlyCollection<string> tickers,
+        CancellationToken cancellationToken);
+
     Task PruneOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken);
 }

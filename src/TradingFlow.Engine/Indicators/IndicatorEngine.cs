@@ -3,7 +3,12 @@ using Skender.Stock.Indicators;
 
 namespace TradingFlow.Engine.Indicators;
 
-public sealed class IndicatorEngine
+public interface IIndicatorCalculator
+{
+    IReadOnlyList<IndicatorSnapshot> Compute(IReadOnlyList<OhlcvBar> inputBars);
+}
+
+public sealed class IndicatorEngine : IIndicatorCalculator
 {
     private const int RsiPeriod = 14;
     private const int Rsi2Period = 2;

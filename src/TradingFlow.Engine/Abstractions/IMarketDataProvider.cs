@@ -12,3 +12,12 @@ public interface IMarketDataProvider
         CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Declares the provider's omission semantics. Alpaca's authoritative stock-bar
+/// response omits an interval when no qualifying trade occurred; an arbitrary
+/// file or adapter must not inherit that assumption implicitly.
+/// </summary>
+public interface IMarketDataCompletenessProvider
+{
+    bool OmittedIntradayIntervalsMeanNoQualifyingTrades { get; }
+}

@@ -11,6 +11,7 @@ using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Web.Models;
+using TradingFlow.Web.Services.Discovery;
 
 namespace TradingFlow.Web.Services;
 
@@ -31,6 +32,8 @@ public sealed class PaperJobService
     private readonly IOrderSubmissionService? orderSubmissionService;
     private readonly IOrderLifecycleService? orderLifecycleService;
     private readonly ConfigCatalogService configCatalog;
+    private readonly IPaperDiscoverySessionFactory? discoverySessionFactory;
+    private readonly TradingFlow.Engine.Pipeline.IMarketStateSnapshotProvider? marketStateSnapshots;
 
     private readonly IServiceScopeFactory _scopeFactory;
 
@@ -51,7 +54,9 @@ public sealed class PaperJobService
         PaperRuntimeFactory? runtimeFactory = null,
         IOrderSubmissionService? orderSubmissionService = null,
         IOrderLifecycleService? orderLifecycleService = null,
-        ConfigCatalogService? configCatalog = null)
+        ConfigCatalogService? configCatalog = null,
+        IPaperDiscoverySessionFactory? discoverySessionFactory = null,
+        TradingFlow.Engine.Pipeline.IMarketStateSnapshotProvider? marketStateSnapshots = null)
     {
         this.yamlReader = yamlReader;
         _scopeFactory = scopeFactory;
@@ -71,6 +76,8 @@ public sealed class PaperJobService
         this.orderLifecycleService = orderLifecycleService;
         this.configCatalog = configCatalog
             ?? throw new ArgumentNullException(nameof(configCatalog));
+        this.discoverySessionFactory = discoverySessionFactory;
+        this.marketStateSnapshots = marketStateSnapshots;
     }
 
     public async Task InitializeAsync()
@@ -445,6 +452,15 @@ public sealed class PaperJobService
             var provider = runtimeFactory.CreateProvider(runConfig);
             var newsProvider = runtimeFactory.CreateNewsProvider(runConfig);
             var brokerClient = runtimeFactory.CreateBrokerClient(runConfig);
+            if (runConfig.Discovery is { Enabled: true } && discoverySessionFactory is null)
+            {
+                throw new InvalidOperationException("Durable discovery is enabled but no discovery session factory is registered.");
+            }
+
+            var horizon = strategies.All(strategy => strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
+                ? "swing"
+                : "intraday";
+            await using var discoverySession = discoverySessionFactory?.Create(job.JobId, runConfig, horizon);
 
             var runner = new LiveRunner(
                 provider,
@@ -456,10 +472,11 @@ public sealed class PaperJobService
                 liveRunnerLogger,
                 artifactWriter,
                 candleStore,
-                runtimeFactory.RawArchiveWriter,
                 orderSubmissionService,
                 executionRunContext,
-                orderLifecycleService);
+                orderLifecycleService,
+                discoverySession,
+                marketStateSnapshots);
 
             var progress = new Progress<string>(msg =>
             {

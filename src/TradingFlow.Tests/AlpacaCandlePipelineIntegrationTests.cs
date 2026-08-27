@@ -41,15 +41,18 @@ public class AlpacaCandlePipelineIntegrationTests(ITestOutputHelper output)
         Assert.Empty(result.Failures);
         Assert.Equal(2, result.TickerStates.Count);
         Assert.True(result.Metrics.ReadCount > 100);
-        Assert.Equal(result.Metrics.ReadCount, result.Metrics.NormalizedCount);
-        Assert.Equal(result.Metrics.ReadCount, result.Metrics.GroupedCount);
+        Assert.Equal(
+            result.Metrics.ReadCount,
+            result.Metrics.NormalizedCount + result.Metrics.IncompleteBarFilteredCount);
+        Assert.Equal(result.Metrics.NormalizedCount, result.Metrics.GroupedCount);
         Assert.Equal(4, result.Metrics.DerivedTimeframeCount);
         Assert.Equal(6, result.Metrics.IndicatorWorkItemCount);
         Assert.Equal(6, result.Metrics.IndicatorSnapshotSetCount);
         output.WriteLine(
-            "Alpaca Dataflow metrics: read={0}, normalized={1}, grouped={2}, derived={3}, indicatorWork={4}, indicatorSets={5}",
+            "Alpaca Dataflow metrics: read={0}, normalized={1}, incomplete={2}, grouped={3}, derived={4}, indicatorWork={5}, indicatorSets={6}",
             result.Metrics.ReadCount,
             result.Metrics.NormalizedCount,
+            result.Metrics.IncompleteBarFilteredCount,
             result.Metrics.GroupedCount,
             result.Metrics.DerivedTimeframeCount,
             result.Metrics.IndicatorWorkItemCount,

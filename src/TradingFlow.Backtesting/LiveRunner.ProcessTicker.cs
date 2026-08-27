@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Audit;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Strategies;
@@ -27,6 +28,7 @@ public sealed partial class LiveRunner
         IReadOnlyCollection<string> activeTickers,
         IReadOnlyCollection<ActiveBrokerOrder> openOrders,
         IReadOnlyCollection<BrokerPosition> openPositions,
+        bool brokerStateConfirmedForOrderDecisions,
         IReadOnlyDictionary<string, decimal> screenerRelativeVolumeByTicker,
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
@@ -143,6 +145,37 @@ public sealed partial class LiveRunner
             };
             var json = System.Text.Json.JsonSerializer.Serialize(chartData);
             await _artifactWriter.WriteTextAsync(Path.Combine(resultsDir, $"{ticker}_chart.json"), json, cancellationToken);
+
+            if (!brokerStateConfirmedForOrderDecisions)
+            {
+                const string reason = "broker_state_unavailable_for_order_decisions";
+                logger.LogWarning(
+                    "Skipping order decisions for {Ticker} and {Strategy} because the broker order/position snapshot is incomplete.",
+                    ticker,
+                    strategy.StrategyName);
+                if (_auditRepo is not null)
+                {
+                    await _auditRepo.SaveAuditAsync(
+                        new DecisionAuditRecord
+                        {
+                            RunName = run.RunName,
+                            Ticker = ticker,
+                            StrategyName = strategy.StrategyName,
+                            Timestamp = DateTimeOffset.UtcNow,
+                            Decision = "Skipped",
+                            RejectionReason = reason,
+                            SignalJson = JsonSerializer.Serialize(new
+                            {
+                                ticker,
+                                strategy = strategy.StrategyName,
+                                brokerStateConfirmed = false
+                            })
+                        },
+                        cancellationToken);
+                }
+
+                continue;
+            }
 
             var technicalExitHandled = await TrySubmitTechnicalExitAsync(
                 run,

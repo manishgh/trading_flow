@@ -20,7 +20,10 @@ public sealed record CandleStoreContext(
 public sealed record CandleStoreWriteRequest(
     CandleStoreContext Context,
     string Source,
-    IReadOnlyCollection<OhlcvBar> Bars);
+    IReadOnlyCollection<OhlcvBar> Bars,
+    long? FencingToken = null);
+
+public sealed class StaleCandleStoreWriteException(string message) : InvalidOperationException(message);
 
 /// <summary>
 /// Reads previously persisted candles for one ticker/timeframe window.
@@ -33,7 +36,8 @@ public sealed record CandleStoreReadRequest(
     string Ticker,
     string Timeframe,
     DateTimeOffset Start,
-    DateTimeOffset End);
+    DateTimeOffset End,
+    string? Source = null);
 
 /// <summary>
 /// Persistence boundary for candle history produced while a backtest or
@@ -56,16 +60,35 @@ public interface ICandleStore
 }
 
 /// <summary>
+/// Candle store capable of durably rejecting writes from stale stream owners.
+/// Live market-state processing requires this stronger contract.
+/// </summary>
+public interface IFencedCandleStore : ICandleStore
+{
+    Task AdvanceFencingTokenAsync(
+        CandleStoreContext context,
+        string source,
+        long fencingToken,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// No-op store used by tests and CLI paths that do not need durable candle
 /// spill. This keeps persistence optional at the pipeline boundary.
 /// </summary>
-public sealed class NullCandleStore : ICandleStore
+public sealed class NullCandleStore : IFencedCandleStore
 {
     public static NullCandleStore Instance { get; } = new();
 
     private NullCandleStore()
     {
     }
+
+    public Task AdvanceFencingTokenAsync(
+        CandleStoreContext context,
+        string source,
+        long fencingToken,
+        CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task UpsertBarsAsync(CandleStoreWriteRequest request, CancellationToken cancellationToken)
     {

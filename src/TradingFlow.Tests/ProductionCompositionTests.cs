@@ -116,7 +116,7 @@ public sealed class ProductionCompositionTests
             typeof(EarningsMonitorHostedService),
             typeof(TradingFlow.Web.Services.Wishlists.WishlistObserverService),
             typeof(DatabaseBackupHostedService),
-            typeof(AlpacaSecurityTradingStatusService),
+            typeof(AlpacaMarketStateStreamService),
             typeof(AlpacaOrderSynchronizationHostedService)
         }.OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
 

@@ -28,7 +28,7 @@ public static class MobileApiEndpoints
         {
             if (!string.IsNullOrWhiteSpace(request.Ticker))
             {
-                pulseReceiver.RegisterPulse(request.Ticker);
+                pulseReceiver.RegisterPulse(request.Ticker, request.PulseType, request.Message);
             }
             return Results.Ok();
         });
@@ -494,10 +494,12 @@ public static class MobileApiEndpoints
                     entryOrderType: request.EntryOrderType,
                     allowExtendedHoursTrading: request.AllowExtendedHoursTrading,
                     resolvedScreenerQuery: string.Empty,
-                    runName: string.IsNullOrWhiteSpace(request.RunName)
-                        ? $"mobile_auto_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}"
-                        : request.RunName.Trim(),
-                    newsEnabled: false);
+                     runName: string.IsNullOrWhiteSpace(request.RunName)
+                         ? $"mobile_auto_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}"
+                         : request.RunName.Trim(),
+                     newsEnabled: false,
+                     universeSource: "alert",
+                     selectedSourceTickers: [request.Ticker.Trim().ToUpperInvariant()]);
             }
             catch (InvalidOperationException exception)
             {

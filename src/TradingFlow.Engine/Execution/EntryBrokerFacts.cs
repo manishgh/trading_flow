@@ -77,5 +77,7 @@ public interface ISecurityTradingStatusProvider
 {
     Task EnsureObservedAsync(string symbol, CancellationToken cancellationToken);
 
+    Task ReleaseObservationAsync(string symbol, CancellationToken cancellationToken);
+
     SecurityTradingStatus GetStatus(string symbol);
 }

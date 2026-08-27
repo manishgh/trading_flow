@@ -40,4 +40,57 @@ public sealed class TimeframeParserTests
         Assert.Equal(11.5m, dailyBars[0].Close);
         Assert.Equal(2500m, dailyBars[0].Volume);
     }
+
+    [Fact]
+    public void BarResampler_CompleteModeExcludesBucketWithMissingMinute()
+    {
+        var start = new DateTimeOffset(2026, 8, 27, 13, 30, 0, TimeSpan.Zero);
+        var bars = Enumerable.Range(0, 10)
+            .Where(index => index != 2)
+            .Select(index => new OhlcvBar(
+                "AAPL",
+                start.AddMinutes(index),
+                "1m",
+                100m,
+                101m,
+                99m,
+                100m,
+                1_000m))
+            .ToArray();
+
+        var result = new BarResampler().ResampleComplete(bars, "5m");
+
+        var completed = Assert.Single(result);
+        Assert.Equal(start.AddMinutes(5), completed.Timestamp);
+        Assert.Equal(5_000m, completed.Volume);
+    }
+
+    [Fact]
+    public void BarResampler_AuthoritativeSparseHistoryUsesRealBarsWithoutInventingVolume()
+    {
+        var start = new DateTimeOffset(2026, 8, 27, 13, 30, 0, TimeSpan.Zero);
+        var bars = Enumerable.Range(0, 5)
+            .Where(index => index != 2)
+            .Select(index => new OhlcvBar(
+                "AAPL",
+                start.AddMinutes(index),
+                "1m",
+                100m + index,
+                101m + index,
+                99m + index,
+                100.5m + index,
+                1_000m))
+            .ToArray();
+
+        var result = new BarResampler().ResampleAuthoritativeSparseHistory(
+            bars,
+            "5m",
+            start.AddMinutes(5));
+
+        var completed = Assert.Single(result);
+        Assert.Equal(start, completed.Timestamp);
+        Assert.Equal(4_000m, completed.Volume);
+        Assert.Equal(bars[0].Open, completed.Open);
+        Assert.Equal(bars[^1].Close, completed.Close);
+    }
 }

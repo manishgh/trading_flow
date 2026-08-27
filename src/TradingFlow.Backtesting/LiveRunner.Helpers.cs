@@ -17,6 +17,17 @@ namespace TradingFlow.Backtesting;
 // Pipeline-failure audits + small helpers (LiveRunner partial split).
 public sealed partial class LiveRunner
 {
+    private static TimeSpan ResolveIterationInterval(TimeSpan? configured)
+    {
+        var interval = configured ?? TimeSpan.FromMinutes(1);
+        return interval > TimeSpan.Zero
+            ? interval
+            : throw new ArgumentOutOfRangeException(
+                nameof(configured),
+                configured,
+                "LiveRunner iteration interval must be positive.");
+    }
+
     private async Task SaveTickerPipelineFailureAuditsAsync(
         BacktestRunConfig run,
         IReadOnlyCollection<StrategyDefinition> strategies,
@@ -153,7 +164,8 @@ public sealed partial class LiveRunner
 
     private static bool IsEntryExposureOrder(ActiveBrokerOrder order)
     {
-        return order.Side.Equals("buy", StringComparison.OrdinalIgnoreCase) &&
+        return ClientOrderIdFactory.IsBindingFormat(order.ClientOrderId) &&
+               !ClientOrderIdFactory.IsBindingFormat(order.ParentClientOrderId) &&
                IsOpenBrokerStatus(order.Status);
     }
 
@@ -197,7 +209,10 @@ public sealed partial class LiveRunner
         return status.Equals("new", StringComparison.OrdinalIgnoreCase) ||
                status.Equals("accepted", StringComparison.OrdinalIgnoreCase) ||
                status.Equals("pending_new", StringComparison.OrdinalIgnoreCase) ||
-               status.Equals("partially_filled", StringComparison.OrdinalIgnoreCase);
+               status.Equals("accepted_for_bidding", StringComparison.OrdinalIgnoreCase) ||
+               status.Equals("partially_filled", StringComparison.OrdinalIgnoreCase) ||
+               status.Equals("pending_cancel", StringComparison.OrdinalIgnoreCase) ||
+               status.Equals("pending_replace", StringComparison.OrdinalIgnoreCase);
     }
 
     private static int ResolveWorkerCount(int configuredWorkerCount)
@@ -210,27 +225,4 @@ public sealed partial class LiveRunner
         return Math.Max(1, Environment.ProcessorCount - 1);
     }
 
-    private static decimal? ParseFinvizRelativeVolumeFilter(string filter)
-    {
-        if (String.IsNullOrWhiteSpace(filter))
-        {
-            return null;
-        }
-
-        var query = Uri.UnescapeDataString(filter);
-        var match = System.Text.RegularExpressions.Regex.Match(
-            query,
-            @"sh_relvol_o(?<value>\d+(?:\.\d+)?)",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase,
-            TimeSpan.FromMilliseconds(250));
-
-        return match.Success &&
-            Decimal.TryParse(
-                match.Groups["value"].Value,
-                System.Globalization.NumberStyles.Number,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out var value)
-            ? value
-            : null;
-    }
 }

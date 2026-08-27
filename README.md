@@ -160,6 +160,36 @@ entry obtains a durable admission token immediately before order intent persiste
 and broker submission. Revocation or suspension blocks new intents while existing
 protection and exits remain available.
 
+### Runtime Discovery And Market State
+
+Paper/live ticker membership is a durable, versioned discovery projection rather
+than a static union inside the runner. Wishlist, Finviz, news, earnings, operator,
+and alert observations retain their source timestamps and expire independently.
+ADD/DROP changes apply without restarting a run, while confirmed broker exposure
+keeps a symbol subscribed until protection and exit work is complete.
+
+One hosted Alpaca SIP stream owns the provider websocket under a fenced SQLite
+lease. It publishes completed 1-minute bars and explicit provider revisions to one
+bounded, ordered TPL Dataflow pipeline per symbol. Batched REST recovery, live bars,
+and historical replay converge on the same canonical market-bar event and
+`ICandleStore` boundary. Derived timeframes never mix regular and extended sessions;
+Alpaca-confirmed no-trade minutes can complete a bucket without creating synthetic
+bars, while unknown or unmanifested-cache omission semantics fail closed. REST
+warm-up ignores bars that are not completed at its cutoff. Strategy snapshots are disabled
+during initial warming and immediately after stream ownership loss. Historical
+conflicting bars exclude the affected ticker deterministically. Snapshot publication
+revalidates the exact stream fence after indicator computation, and a failed broker
+poll retains the last confirmed long/short exposure rather than treating it as flat.
+paper/live falls back to the existing REST candle pipeline until the stream has all
+required warm-up bars. Lease ownership is renewed during connect and revalidated
+before subscriptions activate; accepted bar/repair work drains and the transport is
+disposed before release. Runtime defaults are discovery refresh 60 seconds, source
+expiry 180 seconds, stream lease 30 seconds renewed every 10 seconds, and revised-bar
+acceptance through bar close plus two minutes. Stream snapshots also fail closed when
+the latest completed 1-minute bar is more than three minutes stale during the active
+04:00-20:00 ET session. Detailed evidence is in
+[Phase 2 verification](docs/verification/strategy-flow-phase-2.md).
+
 ## Rolling Candle Warmup
 
 Generate or refresh a rolling normalized candle and indicator cache:

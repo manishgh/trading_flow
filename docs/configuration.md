@@ -90,6 +90,46 @@ The CLI reads `ALPACA_KEY_ID` and `ALPACA_SECRET_KEY`. The ignored
 `appsettings.local.json` path remains a local migration fallback only. Azure Key Vault
 is required for deployed paper/live environments.
 
+## Runtime Discovery And Stream
+
+Generated paper/live run snapshots carry the point-in-time discovery policy:
+
+```yaml
+discovery:
+  enabled: true
+  refresh_seconds: 60
+  source_expiry_seconds: 180
+  wishlist_id: "..."
+  wishlist_tickers: []
+  finviz_query: ""
+  finviz_tickers: []
+  operator_tickers: []
+  alert_tickers: []
+  news_tickers: []
+  earnings_tickers: []
+```
+
+The hosted stream settings are ordinary .NET configuration keys:
+
+```text
+TradingFlow:MarketState:ResourceKey = alpaca:paper:sip
+TradingFlow:MarketState:LeaseSeconds = 30
+TradingFlow:MarketState:RenewEverySeconds = 10
+TradingFlow:MarketState:SymbolPipelineCapacity = 256
+TradingFlow:MarketState:RevisionAcceptanceMinutes = 2
+TradingFlow:MarketState:RecoveryLookbackDays = 10
+TradingFlow:MarketState:ActiveSessionStalenessMinutes = 3
+```
+
+The service fails closed if the lease, subscription acknowledgement, recovery,
+bar continuity, or active-session freshness cannot be proven.
+
+`SqliteMarketStreamLeaseRepository` is the local/single-node lease implementation.
+Do not use a shared SQLite file as a multi-node clock authority. Before scaling the
+stream owner across nodes, bind `IMarketStreamLeaseRepository` to one external lease
+authority (for example Azure Blob lease or a server-timed relational store); fencing
+tokens and the one-active-owner contract remain unchanged.
+
 ## Signal Source
 
 The remaining active signal source is internal candle evaluation:

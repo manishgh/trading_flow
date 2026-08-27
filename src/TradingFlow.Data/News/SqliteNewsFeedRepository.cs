@@ -112,6 +112,34 @@ public sealed class SqliteNewsFeedRepository : INewsFeedRepository
             .ToArrayAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<PersistedNewsItem>> GetIngestedSinceForTickersAsync(
+        DateTimeOffset ingestedSinceUtc,
+        int limit,
+        IReadOnlyCollection<string> tickers,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(tickers);
+        var normalized = tickers
+            .Select(ticker => ticker.Trim().ToUpperInvariant())
+            .Where(ticker => ticker.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (normalized.Length == 0)
+        {
+            return [];
+        }
+
+        var cutoff = ingestedSinceUtc.ToUniversalTime();
+        using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        return await db.NewsItems
+            .AsNoTracking()
+            .Where(item => item.IngestedAt >= cutoff && normalized.Contains(item.Ticker))
+            .OrderByDescending(item => item.IngestedAt)
+            .ThenByDescending(item => item.Timestamp)
+            .Take(Math.Clamp(limit, 1, 5000))
+            .ToArrayAsync(cancellationToken);
+    }
+
     public async Task PruneOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken)
     {
         var normalizedCutoff = cutoff.ToUniversalTime();

@@ -93,7 +93,10 @@ IMarketDataProvider
   -> Backtest simulator or paper/live broker sink
 ```
 
-The current pipeline is TPL Dataflow-based and bounded. Paper/live currently runs batch-per-iteration; the target design is per-ticker warm in-memory pipelines with distributed ticker leases.
+The historical/fallback pipeline is TPL Dataflow-based and bounded. Paper/live also
+has one hosted Alpaca SIP websocket feeding a bounded, ordered in-memory pipeline per
+ticker under a durable fenced stream-owner lease. `LiveRunner` consumes those warm
+snapshots and falls back to the historical pipeline when required state is unavailable.
 
 ## Scale-Out Target
 
@@ -118,10 +121,14 @@ Local layout:
 
 ```text
 data/candles/{scope}/{runName}/{provider}/{source}/{timeframe}/{ticker}/{yyyy-MM-dd}.jsonl
-data/candles/_archive-pending/{timestamp}-{manifestId}.json
+data/candles/_archive-preparing/{timestamp}-{intentId}.json
+data/candles/_archive-pending/{scope}-{run}-{provider}-{source}-{yyyyMMddHHmm}.json
 ```
 
-`source` is currently `provider` or `derived`.
+`source` is currently `provider`, `derived`, or fenced `stream`.
+Preparing intents are written before candle I/O. A consumer-visible pending manifest
+is committed only after every referenced candle file is flushed; archive consumers
+must acquire the manifest's sibling `.lock` file before reading and acknowledging it.
 
 ## Active Providers
 
@@ -259,9 +266,11 @@ dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.cspr
 
 Recent verification before this handoff:
 
-- `dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.csproj --no-restore`
-- Result: 1,101 passed, 0 failed on 2026-08-27 after the final Phase 0 universe-contract and source-provenance pass.
-- Clean committed-only boundary suites: 39 passed, 0 failed.
+- `dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.csproj --no-build --no-restore`
+- Result: 1,224 passed, 0 failed on 2026-08-28 after the Phase 2 durable discovery and market-state ownership pass.
+- Focused Phase 2 and adjacent regression slice: 102 passed, 0 failed.
+- `TradingFlow.slnx` and the separate `net10.0-android` target build with 0 warnings and 0 errors.
+- Fresh SQLite migrations through `AddDurableMarketState` and the EF model-drift check pass.
 - The integrated research decision remains `RETAIN_RESEARCH`; no current research
   strategy is eligible for a new paper-shadow promotion.
 

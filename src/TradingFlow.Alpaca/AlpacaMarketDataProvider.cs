@@ -11,12 +11,16 @@ using TradingFlow.Engine.Abstractions;
 
 namespace TradingFlow.Alpaca;
 
-public sealed class AlpacaMarketDataProvider : IMarketDataProvider
+public sealed class AlpacaMarketDataProvider :
+    IMarketDataProvider,
+    IMarketDataCompletenessProvider
 {
     private readonly HttpClient _httpClient;
     private readonly AlpacaOptions _options;
     private readonly string _marketDataFeed;
     private readonly Polly.Bulkhead.AsyncBulkheadPolicy<HttpResponseMessage> _bulkhead = TradingFlow.Domain.Http.RateLimiterFactory.CreateBulkhead(10, 50);
+
+    public bool OmittedIntradayIntervalsMeanNoQualifyingTrades => true;
 
     public AlpacaMarketDataProvider(
         HttpClient httpClient,

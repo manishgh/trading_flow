@@ -8,6 +8,8 @@ using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Domain.Earnings;
 using TradingFlow.Domain.Portfolio;
+using TradingFlow.Domain.Discovery;
+using TradingFlow.Domain.Market;
 
 namespace TradingFlow.Data.Context;
 
@@ -41,6 +43,10 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
     public DbSet<CatalystResultRecord> CatalystResults => Set<CatalystResultRecord>();
     public DbSet<EarningsCalendarEvent> EarningsCalendarEvents => Set<EarningsCalendarEvent>();
     public DbSet<EarningsAnalysisSnapshot> EarningsAnalysisSnapshots => Set<EarningsAnalysisSnapshot>();
+    public DbSet<DiscoverySnapshotRecord> DiscoverySnapshots => Set<DiscoverySnapshotRecord>();
+    public DbSet<DiscoveryAggregateRecord> DiscoveryAggregates => Set<DiscoveryAggregateRecord>();
+    public DbSet<DiscoverySourceMembershipRecord> DiscoverySourceMemberships => Set<DiscoverySourceMembershipRecord>();
+    public DbSet<MarketStreamLeaseRecord> MarketStreamLeases => Set<MarketStreamLeaseRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -50,6 +56,84 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
         {
             entity.Property(user => user.DisplayName).HasMaxLength(160);
             entity.HasIndex(user => user.NormalizedUserName).IsUnique();
+        });
+
+        modelBuilder.Entity<DiscoverySnapshotRecord>(entity =>
+        {
+            entity.ToTable("discovery_snapshots");
+            entity.HasKey(snapshot => snapshot.SnapshotId);
+            entity.Property(snapshot => snapshot.SourceKind).HasMaxLength(40).IsRequired();
+            entity.Property(snapshot => snapshot.SourceKey).HasMaxLength(500).IsRequired();
+            entity.Property(snapshot => snapshot.Horizon).HasMaxLength(20).IsRequired();
+            entity.Property(snapshot => snapshot.ContentSha256).HasMaxLength(64).IsRequired();
+            entity.Property(snapshot => snapshot.RawReference).HasMaxLength(1000);
+            entity.Property(snapshot => snapshot.SymbolsJson).IsRequired();
+            entity.HasIndex(snapshot => new { snapshot.ScopeId, snapshot.SourceKind, snapshot.SourceKey, snapshot.ObservationId }).IsUnique();
+            entity.HasIndex(snapshot => new { snapshot.ScopeId, snapshot.SourceKind, snapshot.SourceKey, snapshot.SourceVersion }).IsUnique();
+            entity.HasIndex(snapshot => snapshot.ExpiresAtUtc);
+        });
+
+        modelBuilder.Entity<DiscoveryAggregateRecord>(entity =>
+        {
+            entity.ToTable("discovery_aggregates");
+            entity.HasKey(aggregate => aggregate.AggregateId);
+            entity.Property(aggregate => aggregate.Symbol).HasMaxLength(20).IsRequired();
+            entity.Property(aggregate => aggregate.Horizon).HasMaxLength(20).IsRequired();
+            entity.Property(aggregate => aggregate.Version).IsConcurrencyToken();
+            entity.HasIndex(aggregate => new { aggregate.ScopeId, aggregate.Symbol }).IsUnique();
+            entity.HasIndex(aggregate => new { aggregate.ScopeId, aggregate.IsActive, aggregate.ExpiresAtUtc });
+        });
+
+        modelBuilder.Entity<DiscoverySourceMembershipRecord>(entity =>
+        {
+            entity.ToTable("discovery_source_memberships");
+            entity.HasKey(membership => membership.MembershipId);
+            entity.Property(membership => membership.SourceKind).HasMaxLength(40).IsRequired();
+            entity.Property(membership => membership.SourceKey).HasMaxLength(500).IsRequired();
+            entity.Property(membership => membership.MetadataJson).IsRequired();
+            entity.Property(membership => membership.Version).IsConcurrencyToken();
+            entity.HasIndex(membership => new { membership.AggregateId, membership.SourceKind, membership.SourceKey }).IsUnique();
+            entity.HasIndex(membership => membership.ExpiresAtUtc);
+            entity.HasOne(membership => membership.Aggregate)
+                .WithMany(aggregate => aggregate.Sources)
+                .HasForeignKey(membership => membership.AggregateId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(membership => membership.LatestSnapshot)
+                .WithMany()
+                .HasForeignKey(membership => membership.LatestSnapshotId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<MarketStreamLeaseRecord>(entity =>
+        {
+            entity.ToTable("market_stream_leases");
+            entity.HasKey(lease => lease.ResourceKey);
+            entity.Property(lease => lease.ResourceKey)
+                .HasColumnName("resource_key")
+                .HasMaxLength(200);
+            entity.Property(lease => lease.OwnerId)
+                .HasColumnName("owner_id")
+                .HasMaxLength(200)
+                .IsRequired();
+            entity.Property(lease => lease.FencingToken)
+                .HasColumnName("fencing_token")
+                .IsConcurrencyToken();
+            entity.Property(lease => lease.AcquiredAtUtc)
+                .HasColumnName("acquired_at_utc")
+                .HasConversion(
+                    value => value.ToUniversalTime().ToUnixTimeMilliseconds(),
+                    value => DateTimeOffset.FromUnixTimeMilliseconds(value));
+            entity.Property(lease => lease.RenewedAtUtc)
+                .HasColumnName("renewed_at_utc")
+                .HasConversion(
+                    value => value.ToUniversalTime().ToUnixTimeMilliseconds(),
+                    value => DateTimeOffset.FromUnixTimeMilliseconds(value));
+            entity.Property(lease => lease.ExpiresAtUtc)
+                .HasColumnName("expires_at_utc")
+                .HasConversion(
+                    value => value.ToUniversalTime().ToUnixTimeMilliseconds(),
+                    value => DateTimeOffset.FromUnixTimeMilliseconds(value));
+            entity.HasIndex(lease => lease.ExpiresAtUtc);
         });
 
         modelBuilder.ConfigureProductionPersistence();

@@ -36,7 +36,7 @@ public static class RuntimeHostedServiceRegistration
             serviceProvider.GetRequiredService<WishlistObserverService>());
         services.AddHostedService<DatabaseBackupHostedService>();
         services.AddHostedService(serviceProvider =>
-            serviceProvider.GetRequiredService<AlpacaSecurityTradingStatusService>());
+            serviceProvider.GetRequiredService<AlpacaMarketStateStreamService>());
         services.AddHostedService<AlpacaOrderSynchronizationHostedService>();
         return services;
     }

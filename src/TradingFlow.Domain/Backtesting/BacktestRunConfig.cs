@@ -28,7 +28,43 @@ public sealed record BacktestRunConfig(
     /// <c>universe.rank</c> so backtest, paper and live all take the ranking
     /// through one config path rather than each carrying its own weights.
     /// </summary>
-    UniverseRankConfig? Rank = null);
+    UniverseRankConfig? Rank = null,
+    DiscoveryRuntimeConfig? Discovery = null);
+
+/// <summary>
+/// Runtime discovery policy embedded in the immutable run artifact. Initial
+/// symbols preserve run-start evidence while wishlist and Finviz sources may be
+/// refreshed durably without rewriting the artifact.
+/// </summary>
+public sealed record DiscoveryRuntimeConfig(
+    bool Enabled,
+    int RefreshSeconds,
+    int SourceExpirySeconds,
+    Guid? WishlistId,
+    IReadOnlyList<string> WishlistTickers,
+    string? FinvizQuery,
+    IReadOnlyList<string> FinvizTickers,
+    IReadOnlyList<string> OperatorTickers,
+    IReadOnlyList<string> AlertTickers,
+    IReadOnlyList<string> NewsTickers,
+    IReadOnlyList<string> EarningsTickers)
+{
+    public const int DefaultRefreshSeconds = 60;
+    public const int DefaultSourceExpirySeconds = 180;
+
+    public static DiscoveryRuntimeConfig Disabled { get; } = new(
+        false,
+        DefaultRefreshSeconds,
+        DefaultSourceExpirySeconds,
+        null,
+        [],
+        null,
+        [],
+        [],
+        [],
+        [],
+        []);
+}
 
 /// <summary>
 /// Controls how the tradable ticker universe is chosen for a run. "static" keeps the

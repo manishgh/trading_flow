@@ -13,6 +13,7 @@ using TradingFlow.Data.Catalysts;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Engine.Execution;
 using System.Runtime.CompilerServices;
+using TradingFlow.Domain.Discovery;
 
 namespace TradingFlow.Backtesting;
 
@@ -26,10 +27,12 @@ public sealed partial class LiveRunner(
     ILogger<LiveRunner> logger,
     IArtifactWriter? artifactWriter = null,
     ICandleStore? candleStore = null,
-    IRawArchiveWriter? rawArchiveWriter = null,
     IOrderSubmissionService? orderSubmissionService = null,
     ExecutionRunContext? executionRunContext = null,
-    IOrderLifecycleService? orderLifecycleService = null)
+    IOrderLifecycleService? orderLifecycleService = null,
+    ILiveDiscoverySession? discoverySession = null,
+    IMarketStateSnapshotProvider? marketStateSnapshots = null,
+    TimeSpan? iterationInterval = null)
 {
     private readonly SignalGenerator _signalGenerator = new();
     private readonly StrategyDecisionBrain _decisionBrain = new();
@@ -43,10 +46,12 @@ public sealed partial class LiveRunner(
     private readonly TradingFlow.Domain.Orders.IOrderStateRepository? _orderRepo = orderRepo;
     private readonly TradingFlow.Domain.Audit.IDecisionAuditRepository? _auditRepo = auditRepo;
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
-    private readonly IRawArchiveWriter? _rawArchiveWriter = rawArchiveWriter;
     private readonly IOrderSubmissionService? _orderSubmissionService = orderSubmissionService;
     private readonly ExecutionRunContext? _executionRunContext = executionRunContext;
     private readonly IOrderLifecycleService? _orderLifecycleService = orderLifecycleService;
+    private readonly ILiveDiscoverySession? _discoverySession = discoverySession;
+    private readonly IMarketStateSnapshotProvider? _marketStateSnapshots = marketStateSnapshots;
+    private readonly TimeSpan _iterationInterval = ResolveIterationInterval(iterationInterval);
     private readonly TradingFlow.Engine.Regime.RegimeGateService _regimeGate = new();
     private IReadOnlyDictionary<StrategyDefinition, AuthorizedRuntimeStrategy> runtimeStrategies =
         new Dictionary<StrategyDefinition, AuthorizedRuntimeStrategy>(StrategyReferenceComparer.Instance);
@@ -113,63 +118,88 @@ public sealed partial class LiveRunner(
 
         var catalystStreamer = new CatalystStreamer(catalystProvider);
 
-        var pollingInterval = TimeSpan.FromMinutes(1);
+        var pollingInterval = _iterationInterval;
 
-        var mergedTickers = new HashSet<string>(run.Tickers ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+        var configuredTickers = new HashSet<string>(run.Tickers ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+        var lastDiscoveryTickers = new HashSet<string>(configuredTickers, StringComparer.OrdinalIgnoreCase);
         var screenerRelativeVolumeByTicker = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        var lastConfirmedExposureTickers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        IReadOnlyList<ActiveBrokerOrder> lastConfirmedOpenOrders = Array.Empty<ActiveBrokerOrder>();
+        IReadOnlyList<BrokerPosition> lastConfirmedOpenPositions = Array.Empty<BrokerPosition>();
 
-        if (run.Screener != null && run.Screener.Enabled && run.Screener.Filters != null)
+        // Reconstruct broker exposure before the first discovery publication. A
+        // restart must never briefly unsubscribe a held position merely because
+        // its discovery source has already dropped it.
+        if (_discoverySession is not null && _brokerClient is not null)
         {
-            logger.LogInformation("Fetching dynamic tickers from screeners...");
-            progress?.Report("Fetching dynamic tickers from screeners...");
-
             try
             {
-                using var httpClient = new System.Net.Http.HttpClient();
-                using var finvizClient = new TradingFlow.Finviz.FinvizClient(httpClient, new TradingFlow.Finviz.FinvizOptions(
-                    new Uri("https://finviz.com", UriKind.Absolute),
-                    Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? ""),
-                    _rawArchiveWriter ?? throw new InvalidOperationException(
-                        "Finviz screening requires a raw archive writer so responses are durable before parsing."));
-
-                foreach (var filter in run.Screener.Filters)
-                {
-                    var screenerRows = await finvizClient.GetScreenerRowsAsync(filter, cancellationToken);
-                    var minimumRelativeVolume = ParseFinvizRelativeVolumeFilter(filter);
-                    foreach (var row in screenerRows)
-                    {
-                        mergedTickers.Add(row.Ticker);
-                        var effectiveRelativeVolume = row.RelativeVolume ?? minimumRelativeVolume;
-                        if (effectiveRelativeVolume is { } value)
-                        {
-                            screenerRelativeVolumeByTicker[row.Ticker] = value;
-                        }
-                    }
-                }
-                progress?.Report($"Merged screener tickers. Total tickers to process: {mergedTickers.Count}");
+                lastConfirmedOpenOrders = await _brokerClient.GetOpenOrdersAsync(cancellationToken);
+                lastConfirmedOpenPositions = await _brokerClient.GetOpenPositionsAsync(cancellationToken);
+                var retainedExposure = lastConfirmedOpenOrders
+                    .Where(IsEntryExposureOrder)
+                    .Select(order => order.Ticker)
+                    .Concat(lastConfirmedOpenPositions
+                        .Where(IsOpenExposurePosition)
+                        .Select(position => position.Ticker))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                lastConfirmedExposureTickers.UnionWith(retainedExposure);
+                await _discoverySession.RetainExposureSymbolsAsync(retainedExposure, cancellationToken);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                logger.LogError(ex, "Failed to fetch screener tickers.");
-                if (mergedTickers.Count == 0)
-                {
-                    throw new Exception($"Screener failed and no static tickers provided: {ex.Message}", ex);
-                }
-
-                logger.LogWarning("Screener failed but static tickers exist. Proceeding with static tickers only.");
-                progress?.Report($"Screener failed: {ex.Message}. Proceeding with {mergedTickers.Count} static tickers.");
+                throw;
             }
-        }
-
-        if (mergedTickers.Count == 0)
-        {
-            throw new Exception("No tickers found to process. Verify your screener query or static tickers list.");
+            catch (Exception exception)
+            {
+                logger.LogError(
+                    exception,
+                    "Initial broker exposure reconciliation failed for {RunName}; discovery publication is blocked to prevent unsafe unsubscription.",
+                    run.RunName);
+                throw;
+            }
         }
 
         while (!cancellationToken.IsCancellationRequested)
         {
             logger.LogInformation("LiveRunner iteration starting at {Time}", DateTimeOffset.UtcNow);
             progress?.Report($"LiveRunner iteration starting at {FormatLocalTime(DateTimeOffset.UtcNow)}");
+
+            var discoveryTickers = new HashSet<string>(lastDiscoveryTickers, StringComparer.OrdinalIgnoreCase);
+            if (_discoverySession is not null)
+            {
+                try
+                {
+                    var discovery = await _discoverySession.RefreshAsync(cancellationToken);
+                    discoveryTickers = discovery.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    lastDiscoveryTickers = new HashSet<string>(discoveryTickers, StringComparer.OrdinalIgnoreCase);
+                    if (discovery.Added.Count > 0 || discovery.Dropped.Count > 0)
+                    {
+                        logger.LogInformation(
+                            "Discovery universe changed for {RunName}: ADD [{Added}], DROP [{Dropped}].",
+                            run.RunName,
+                            String.Join(", ", discovery.Added),
+                            String.Join(", ", discovery.Dropped));
+                        progress?.Report(
+                            $"Discovery refresh: +{discovery.Added.Count} / -{discovery.Dropped.Count}; " +
+                            $"{discovery.Symbols.Count} active ticker(s).");
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    logger.LogError(
+                        exception,
+                        "Discovery refresh failed for {RunName}; retaining the last durable universe.",
+                        run.RunName);
+                    progress?.Report(
+                        $"Discovery refresh failed; retaining {lastDiscoveryTickers.Count} prior ticker(s): {exception.Message}");
+                }
+            }
 
             var end = DateTimeOffset.UtcNow;
 
@@ -195,15 +225,19 @@ public sealed partial class LiveRunner(
             }
             var start = end.AddDays(-maxLookbackDays); // Warmup
 
-            var activeExposureTickers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            IReadOnlyList<ActiveBrokerOrder> openOrdersSnapshot = Array.Empty<ActiveBrokerOrder>();
-            IReadOnlyList<BrokerPosition> openPositionsSnapshot = Array.Empty<BrokerPosition>();
+            var activeExposureTickers = new HashSet<string>(
+                lastConfirmedExposureTickers,
+                StringComparer.OrdinalIgnoreCase);
+            IReadOnlyList<ActiveBrokerOrder> openOrdersSnapshot = lastConfirmedOpenOrders;
+            IReadOnlyList<BrokerPosition> openPositionsSnapshot = lastConfirmedOpenPositions;
+            var brokerStateRefreshed = _brokerClient is null;
+            var brokerStateConfirmedForOrderDecisions = _brokerClient is null;
             if (_brokerClient != null)
             {
                 try
                 {
                     var openOrders = await _brokerClient.GetOpenOrdersAsync(cancellationToken);
-                    openOrdersSnapshot = openOrders;
+                    var openPositions = await _brokerClient.GetOpenPositionsAsync(cancellationToken);
 
                     if (_orderLifecycleService is not null)
                     {
@@ -283,11 +317,12 @@ public sealed partial class LiveRunner(
                         }
                         // Fetch the updated open orders list after cancellations
                         openOrders = await _brokerClient.GetOpenOrdersAsync(cancellationToken);
-                        openOrdersSnapshot = openOrders;
+                        openPositions = await _brokerClient.GetOpenPositionsAsync(cancellationToken);
                     }
 
-                    var openPositions = await _brokerClient.GetOpenPositionsAsync(cancellationToken);
+                    openOrdersSnapshot = openOrders;
                     openPositionsSnapshot = openPositions;
+                    activeExposureTickers.Clear();
                     foreach (var order in openOrders.Where(IsEntryExposureOrder))
                     {
                         activeExposureTickers.Add(order.Ticker);
@@ -297,12 +332,19 @@ public sealed partial class LiveRunner(
                     {
                         activeExposureTickers.Add(pos.Ticker);
                     }
+                    lastConfirmedOpenOrders = openOrdersSnapshot;
+                    lastConfirmedOpenPositions = openPositionsSnapshot;
+                    lastConfirmedExposureTickers = new HashSet<string>(
+                        activeExposureTickers,
+                        StringComparer.OrdinalIgnoreCase);
+                    brokerStateRefreshed = true;
+                    brokerStateConfirmedForOrderDecisions = true;
 
                     // Downward Reconciliation & Extended Hours exit handling
                     if (_orderRepo != null)
                     {
                         var allDbOrders = new List<TradingFlow.Domain.Orders.PersistedOrder>();
-                        foreach (var t in mergedTickers)
+                        foreach (var t in discoveryTickers.Concat(activeExposureTickers).Distinct(StringComparer.OrdinalIgnoreCase))
                         {
                             var orders = await _orderRepo.GetActiveOrdersByTickerAsync(t, cancellationToken);
                             allDbOrders.AddRange(orders);
@@ -359,14 +401,48 @@ public sealed partial class LiveRunner(
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "Failed to fetch active broker state; bypassing sequential trade check.");
+                    brokerStateConfirmedForOrderDecisions = false;
+                    logger.LogWarning(
+                        ex,
+                        "Failed to fetch a complete active broker snapshot; retaining the last confirmed exposure and blocking order decisions for this iteration.");
+                }
+            }
+
+            if (_discoverySession is not null && brokerStateRefreshed)
+            {
+                try
+                {
+                    await _discoverySession.RetainExposureSymbolsAsync(activeExposureTickers, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    logger.LogError(
+                        exception,
+                        "Failed to update retained exposure subscriptions for {RunName}; continuing with the prior subscription set.",
+                        run.RunName);
                 }
             }
 
             try
             {
+                var iterationTickers = new HashSet<string>(discoveryTickers, StringComparer.OrdinalIgnoreCase);
+                iterationTickers.UnionWith(activeExposureTickers);
+                if (iterationTickers.Count == 0)
+                {
+                    logger.LogWarning(
+                        "Discovery produced no active symbols for {RunName}; waiting for the next refresh.",
+                        run.RunName);
+                    progress?.Report("Discovery produced no active symbols. Waiting for the next refresh.");
+                    await Task.Delay(pollingInterval, cancellationToken);
+                    continue;
+                }
+
                 var processed = 0;
-                var total = mergedTickers.Count;
+                var total = iterationTickers.Count;
                 var activeTickerSnapshot = activeExposureTickers.ToArray();
                 var requiredTimeframes = ResolveRequiredTimeframes(run, strategies);
                 var requestedIntervals = run.Intervals
@@ -379,25 +455,68 @@ public sealed partial class LiveRunner(
                     requestedIntervals = requiredTimeframes;
                 }
 
-                var marketState = await _candlePipeline.RunAsync(
-                    new CandlePipelineRequest(
-                        mergedTickers.ToArray(),
-                        requestedIntervals,
-                        requiredTimeframes,
-                        run.DerivedTimeframes.Source,
-                        start,
-                        end,
-                        run.Engine.BoundedCapacity,
-                        run.Engine.WorkerCount,
-                        IncludeExtendedHours: true,
-                        ResolveExchangeTimezone(strategies),
-                        CreateCandleStoreContext(run)),
-                    provider,
-                    cancellationToken,
-                    new Progress<string>(message => progress?.Report(message)));
+                var preparedStates = new System.Collections.Concurrent.ConcurrentDictionary<string, TickerMarketState>(
+                    StringComparer.OrdinalIgnoreCase);
+                var unresolvedTickers = new System.Collections.Concurrent.ConcurrentBag<string>();
+                await Parallel.ForEachAsync(
+                    iterationTickers,
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = ResolveWorkerCount(run.Engine.WorkerCount),
+                        CancellationToken = cancellationToken
+                    },
+                    async (ticker, token) =>
+                    {
+                        var streamed = _marketStateSnapshots is null
+                            ? null
+                            : await _marketStateSnapshots.GetTickerStateAsync(
+                                ticker,
+                                requiredTimeframes,
+                                run.Engine.IndicatorWarmupBars,
+                                end,
+                                token);
+                        if (streamed is null)
+                        {
+                            unresolvedTickers.Add(ticker);
+                        }
+                        else
+                        {
+                            preparedStates[ticker] = streamed;
+                        }
+                    });
+
+                var fallbackFailures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (!unresolvedTickers.IsEmpty)
+                {
+                    var fallback = await _candlePipeline.RunAsync(
+                        new CandlePipelineRequest(
+                            unresolvedTickers.ToArray(),
+                            requestedIntervals,
+                            requiredTimeframes,
+                            run.DerivedTimeframes.Source,
+                            start,
+                            end,
+                            run.Engine.BoundedCapacity,
+                            run.Engine.WorkerCount,
+                            IncludeExtendedHours: true,
+                            ResolveExchangeTimezone(strategies),
+                            CreateCandleStoreContext(run)),
+                        provider,
+                        cancellationToken,
+                        new Progress<string>(message => progress?.Report(message)));
+                    foreach (var (ticker, state) in fallback.TickerStates)
+                    {
+                        preparedStates[ticker] = state;
+                    }
+
+                    foreach (var (ticker, failure) in fallback.Failures)
+                    {
+                        fallbackFailures[ticker] = failure;
+                    }
+                }
 
                 await Parallel.ForEachAsync(
-                    mergedTickers,
+                    iterationTickers,
                     new ParallelOptions
                     {
                         MaxDegreeOfParallelism = ResolveWorkerCount(run.Engine.WorkerCount),
@@ -408,9 +527,9 @@ public sealed partial class LiveRunner(
                         try
                         {
                             progress?.Report($"Processing prepared market state for {ticker}");
-                            if (!marketState.TickerStates.TryGetValue(ticker, out var tickerState))
+                            if (!preparedStates.TryGetValue(ticker, out var tickerState))
                             {
-                                var reason = marketState.Failures.TryGetValue(ticker, out var failure)
+                                var reason = fallbackFailures.TryGetValue(ticker, out var failure)
                                     ? failure
                                     : $"No prepared market state was produced for ticker {ticker}.";
                                 throw new InvalidOperationException(reason);
@@ -425,6 +544,7 @@ public sealed partial class LiveRunner(
                                 activeTickerSnapshot,
                                 openOrdersSnapshot,
                                 openPositionsSnapshot,
+                                brokerStateConfirmedForOrderDecisions,
                                 screenerRelativeVolumeByTicker,
                                 token,
                                 progress);

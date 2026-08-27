@@ -404,7 +404,8 @@ public sealed class SimpleYamlReader
                 .Select(strategyPath => ResolveConfigPath(runDirectory, strategyPath))
                 .ToArray(),
             ReadUniverseConfig(runMap),
-            ReadUniverseRankConfig(runMap));
+            ReadUniverseRankConfig(runMap),
+            ReadDiscoveryRuntimeConfig(runMap));
     }
 
     /// <summary>
@@ -476,6 +477,52 @@ public sealed class SimpleYamlReader
                 ? resolvedQuery
                 : null,
             OptionalDateTimeOffset(runMap, "universe.resolved_at_utc"));
+    }
+
+    private static DiscoveryRuntimeConfig? ReadDiscoveryRuntimeConfig(
+        IReadOnlyDictionary<string, List<string>> runMap)
+    {
+        if (!OptionalBool(runMap, "discovery.enabled", false))
+        {
+            return null;
+        }
+
+        var wishlistIdText = OptionalString(runMap, "discovery.wishlist_id", String.Empty);
+        if (wishlistIdText.Length > 0 && !Guid.TryParse(wishlistIdText, out _))
+        {
+            throw new InvalidDataException("Discovery wishlist_id must be a valid GUID when provided.");
+        }
+        Guid? wishlistId = Guid.TryParse(wishlistIdText, out var parsedWishlistId)
+            ? parsedWishlistId
+            : null;
+        var refreshSeconds = OptionalInt(
+            runMap,
+            "discovery.refresh_seconds",
+            DiscoveryRuntimeConfig.DefaultRefreshSeconds);
+        var expirySeconds = OptionalInt(
+            runMap,
+            "discovery.source_expiry_seconds",
+            DiscoveryRuntimeConfig.DefaultSourceExpirySeconds);
+        if (refreshSeconds <= 0 || expirySeconds <= refreshSeconds)
+        {
+            throw new InvalidDataException(
+                "Discovery refresh_seconds must be positive and source_expiry_seconds must exceed it.");
+        }
+
+        return new DiscoveryRuntimeConfig(
+            true,
+            refreshSeconds,
+            expirySeconds,
+            wishlistId,
+            OptionalList(runMap, "discovery.wishlist_tickers"),
+            OptionalString(runMap, "discovery.finviz_query", String.Empty) is { Length: > 0 } finvizQuery
+                ? finvizQuery
+                : null,
+            OptionalList(runMap, "discovery.finviz_tickers"),
+            OptionalList(runMap, "discovery.operator_tickers"),
+            OptionalList(runMap, "discovery.alert_tickers"),
+            OptionalList(runMap, "discovery.news_tickers"),
+            OptionalList(runMap, "discovery.earnings_tickers"));
     }
 
     public OptimizationConfig ReadOptimizationConfig(string path)
