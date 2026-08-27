@@ -11,7 +11,7 @@ engine:
 time_window:
   type: rolling
   lookback_days: 260
-  warmup_lookback_days: 260
+  warmup_lookback_days: 400
   start:
   end:
 
@@ -107,6 +107,7 @@ strategies:
 # further on market structure and less on the model edge than intraday: over a
 # multi-day hold, trend quality has more to say than a single-session score.
 universe:
+  mode: unresolved_wishlist
   rank:
     weights_version: rank.v1
     intraday:

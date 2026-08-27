@@ -89,6 +89,9 @@ news:
 artifacts:
   retention_mode: full
 
+universe:
+  mode: unresolved_wishlist
+
 strategies:
   - ../strategies/intraday-ema10-ema20-macd-volume.v1.yaml
 

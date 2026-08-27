@@ -448,7 +448,14 @@ public sealed class SimpleYamlReader
             OptionalString(runMap, "universe.candidate_screener_query", string.Empty) is { Length: > 0 } query
                 ? query
                 : null,
-            OptionalString(runMap, "universe.rescreen_frequency", UniverseConfig.RescreenPerRun));
+            OptionalString(runMap, "universe.rescreen_frequency", UniverseConfig.RescreenPerRun),
+            OptionalString(runMap, "universe.source", String.Empty),
+            OptionalList(runMap, "universe.selected_source_tickers"),
+            OptionalList(runMap, "universe.screener_tickers"),
+            OptionalString(runMap, "universe.resolved_screener_query", String.Empty) is { Length: > 0 } resolvedQuery
+                ? resolvedQuery
+                : null,
+            OptionalDateTimeOffset(runMap, "universe.resolved_at_utc"));
     }
 
     public OptimizationConfig ReadOptimizationConfig(string path)

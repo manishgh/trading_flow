@@ -93,6 +93,7 @@ public sealed class RunConfigParsingTests
     private const string BreitsteinVwapTrapStrategyFile = "lance_breitstein_intraday_tactics.yaml";
     private const string QullamaggieEpisodicPivotStrategyFile = "kristjan_qullamaggie_stream_methodology.yaml";
     private const string MinerviniVcpStrategyFile = "minervini-trend-template-vcp.v2.yaml";
+    private const string MinerviniTrendRiderResearchStrategyFile = "minervini-trend-template-vcp.v4-trend-rider.yaml";
 
     [Fact]
     public void ResearchIntradayExecutionStrategies_ParseExactExecutionFields()
@@ -212,12 +213,13 @@ public sealed class RunConfigParsingTests
         Assert.Equal("alpaca", config.Provider);
         Assert.Equal("sip", config.Providers.Alpaca.DataFeed);
         Assert.Equal(260, config.TimeWindow.LookbackDays);
-        Assert.Equal(260, config.TimeWindow.WarmupLookbackDays);
+        Assert.Equal(400, config.TimeWindow.WarmupLookbackDays);
         Assert.Contains("1h", config.Intervals);
         Assert.Contains("1d", config.Intervals);
         Assert.Equal("1h", config.DerivedTimeframes.Source);
         Assert.True(config.News.Enabled);
         Assert.False(config.Execution.AllowExtendedHoursTrading);
+        Assert.True(config.Universe?.IsUnresolvedWishlist);
         Assert.Single(config.Strategies);
         Assert.Contains(config.Strategies, path => path.EndsWith(SwingQualityLongStrategyFile, StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(config.Strategies, path => path.EndsWith(SwingOverboughtShortStrategyFile, StringComparison.OrdinalIgnoreCase));
@@ -450,7 +452,7 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
-    public void RetainedIntradayBacktestProfile_UsesWishlistUniverseAndTopTwoStrategies()
+    public void RetainedIntradayBacktestProfile_IsAnUnresolvedWishlistResearchTemplate()
     {
         var repoRoot = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
@@ -468,13 +470,14 @@ public sealed class RunConfigParsingTests
         Assert.False(config.News.Enabled);
         Assert.Equal("1m", config.DerivedTimeframes.Source);
         Assert.Equal("wishlist", config.Validation.BiasRisk.UniverseSource);
+        Assert.True(config.Universe?.IsUnresolvedWishlist);
         Assert.Empty(config.Tickers);
         Assert.Single(config.Strategies);
         Assert.Contains(config.Strategies, path => path.EndsWith(RetainedIntradayStrategyFile, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void RetainedSwingBacktestProfile_UsesWishlistUniverseAndPromotedLongAndShortStrategies()
+    public void SwingBacktestProfile_IsWishlistDrivenDiagnosticAndUsesCanonicalVcpResearchStrategy()
     {
         var repoRoot = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
@@ -490,6 +493,7 @@ public sealed class RunConfigParsingTests
         Assert.Equal("1h", config.DerivedTimeframes.Source);
         Assert.Equal("full", config.Artifacts.RetentionMode);
         Assert.Equal("wishlist", config.Validation.BiasRisk.UniverseSource);
+        Assert.True(config.Universe?.IsUnresolvedWishlist);
         Assert.True(config.Validation.OutOfSample.Enabled);
         Assert.Equal(30m, config.Validation.OutOfSample.Percent);
         Assert.True(config.Validation.WalkForward.Enabled);
@@ -501,9 +505,8 @@ public sealed class RunConfigParsingTests
         Assert.Equal(500, config.News.MaxArticlesPerTicker);
         Assert.Equal(3, config.News.SentimentTimeoutSeconds);
         Assert.Empty(config.Tickers);
-        Assert.Equal(2, config.Strategies.Count);
-        Assert.Contains(config.Strategies, path => path.EndsWith(SwingQualityLongStrategyFile, StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(config.Strategies, path => path.EndsWith(SwingOverboughtShortStrategyFile, StringComparison.OrdinalIgnoreCase));
+        Assert.Single(config.Strategies);
+        Assert.Contains(config.Strategies, path => path.EndsWith(MinerviniTrendRiderResearchStrategyFile, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -579,10 +582,12 @@ public sealed class RunConfigParsingTests
             Assert.Contains("  lookback_days: 365", generatedYaml);
             Assert.Contains("  warmup_lookback_days: 90", generatedYaml);
             Assert.Contains("universe:", generatedYaml);
+            Assert.Contains("  mode: resolved_snapshot", generatedYaml);
             Assert.Contains("  source: wishlist", generatedYaml);
             Assert.Contains("  wishlist_name: volatile", generatedYaml);
             Assert.Contains("  - POET", generatedYaml);
             Assert.Contains(RetainedStrategyFile, generatedYaml);
+            Assert.True(new SimpleYamlReader().ReadBacktestRun(generatedPath).Universe?.IsResolvedSnapshot);
         }
         finally
         {
@@ -715,20 +720,28 @@ public sealed class RunConfigParsingTests
                 orderExpiration: "day",
                 entryOrderType: "limit",
                 allowExtendedHoursTrading: true,
-                screenerFilter: "",
+                resolvedScreenerQuery: "f=cap_large",
                 runName: "paper-news-disabled-test",
-                newsEnabled: false);
+                newsEnabled: false,
+                selectedSourceTickers: ["MU"],
+                resolvedScreenerTickers: ["NVDA"]);
 
             var generatedYaml = File.ReadAllText(generatedPath);
             var parsed = new SimpleYamlReader().ReadBacktestRun(generatedPath);
 
             Assert.Single(System.Text.RegularExpressions.Regex.Matches(generatedYaml, "^news:", System.Text.RegularExpressions.RegexOptions.Multiline));
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(generatedYaml, "^universe:", System.Text.RegularExpressions.RegexOptions.Multiline));
             Assert.Contains("news:", generatedYaml);
             Assert.Contains("  enabled: false", generatedYaml);
             Assert.False(parsed.News.Enabled);
             Assert.Equal("limit", parsed.Execution.EntryOrderType);
             Assert.Equal("day", parsed.Execution.OrderExpiration);
             Assert.True(parsed.Execution.AllowExtendedHoursTrading);
+            Assert.True(parsed.Universe?.IsResolvedSnapshot);
+            Assert.False(parsed.Screener?.Enabled);
+            Assert.Contains("resolved_screener_query: \"f=cap_large\"", generatedYaml);
+            Assert.Equal(["MU"], parsed.Universe!.ResolvedSelectedSourceTickers);
+            Assert.Equal(["NVDA"], parsed.Universe.ResolvedScreenerTickers);
             Assert.Equal(["MU", "NVDA"], parsed.Tickers);
         }
         finally

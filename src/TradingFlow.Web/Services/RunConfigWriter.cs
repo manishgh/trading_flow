@@ -50,6 +50,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine("  end:");
         yaml.AppendLine();
         yaml.AppendLine("universe:");
+        yaml.AppendLine("  mode: resolved_snapshot");
         yaml.AppendLine("  source: wishlist");
         yaml.AppendLine($"  wishlist_id: {request.WishlistId?.ToString() ?? String.Empty}");
         yaml.AppendLine($"  wishlist_name: {request.WishlistName ?? String.Empty}");
@@ -213,12 +214,15 @@ public sealed class RunConfigWriter
         string? orderExpiration = null,
         string? entryOrderType = null,
         bool allowExtendedHoursTrading = false,
-        string? screenerFilter = null,
+        string? resolvedScreenerQuery = null,
         string? runName = null,
         bool? newsEnabled = null,
         Guid? wishlistId = null,
         string? wishlistName = null,
-        string universeSource = "ephemeral")
+        string universeSource = "ephemeral",
+        DateTimeOffset? universeResolvedAtUtc = null,
+        IEnumerable<string>? selectedSourceTickers = null,
+        IEnumerable<string>? resolvedScreenerTickers = null)
     {
         ExtendedHoursOrderPolicy.ValidateConfiguration(
             entryOrderType,
@@ -283,6 +287,33 @@ public sealed class RunConfigWriter
 
             if (line.StartsWith("  allow_extended_hours_trading:"))
             {
+                continue;
+            }
+
+            if (line.Trim().Equals("mode: unresolved_wishlist", StringComparison.OrdinalIgnoreCase))
+            {
+                newYaml.AppendLine("  mode: resolved_snapshot");
+                newYaml.AppendLine($"  source: {universeSource}");
+                if (wishlistId is not null)
+                {
+                    newYaml.AppendLine($"  wishlist_id: {wishlistId}");
+                }
+
+                if (!String.IsNullOrWhiteSpace(wishlistName))
+                {
+                    newYaml.AppendLine($"  wishlist_name: {wishlistName}");
+                }
+
+                AppendTickerList(newYaml, "selected_source_tickers", selectedSourceTickers);
+                AppendTickerList(newYaml, "screener_tickers", resolvedScreenerTickers);
+
+                if (!String.IsNullOrWhiteSpace(resolvedScreenerQuery))
+                {
+                    newYaml.AppendLine($"  resolved_screener_query: {QuoteYaml(resolvedScreenerQuery)}");
+                }
+
+                newYaml.AppendLine("  resolved_at_utc: " +
+                    (universeResolvedAtUtc ?? DateTimeOffset.UtcNow).ToString("O", CultureInfo.InvariantCulture));
                 continue;
             }
 
@@ -353,34 +384,12 @@ public sealed class RunConfigWriter
         }
 
         newYaml.AppendLine();
-        newYaml.AppendLine("universe:");
-        newYaml.AppendLine($"  source: {universeSource}");
-        if (wishlistId is not null)
-        {
-            newYaml.AppendLine($"  wishlist_id: {wishlistId}");
-        }
-
-        if (!String.IsNullOrWhiteSpace(wishlistName))
-        {
-            newYaml.AppendLine($"  wishlist_name: {wishlistName}");
-        }
-
-        newYaml.AppendLine("  resolved_at_utc: " + DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
-        newYaml.AppendLine();
         newYaml.AppendLine("screener:");
-        if (!string.IsNullOrWhiteSpace(screenerFilter) && screenerFilter != "[]")
-        {
-            newYaml.AppendLine("  enabled: true");
-            newYaml.AppendLine("  provider: finviz");
-            newYaml.AppendLine("  filters:");
-            newYaml.AppendLine($"    - \"{screenerFilter}\"");
-        }
-        else
-        {
-            newYaml.AppendLine("  enabled: false");
-            newYaml.AppendLine("  provider: finviz");
-            newYaml.AppendLine("  filters: []");
-        }
+        // Operational discovery is resolved before admission. Keeping this
+        // disabled prevents the live runner from changing the frozen universe.
+        newYaml.AppendLine("  enabled: false");
+        newYaml.AppendLine("  provider: finviz");
+        newYaml.AppendLine("  filters: []");
 
         newYaml.AppendLine();
         newYaml.AppendLine("news:");
@@ -400,6 +409,24 @@ public sealed class RunConfigWriter
 
         artifactWriter.WriteText(outputPath, newYaml.ToString());
         return outputPath;
+    }
+
+    private static string QuoteYaml(string value) =>
+        $"\"{value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal)}\"";
+
+    private static void AppendTickerList(StringBuilder yaml, string key, IEnumerable<string>? tickers)
+    {
+        var normalized = (tickers ?? [])
+            .Where(ticker => !String.IsNullOrWhiteSpace(ticker))
+            .Select(ticker => ticker.Trim().ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(ticker => ticker, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        yaml.AppendLine($"  {key}:");
+        foreach (var ticker in normalized)
+        {
+            yaml.AppendLine($"    - {ticker}");
+        }
     }
 
     public void DeleteTempConfig(string configPath)

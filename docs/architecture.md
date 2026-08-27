@@ -6,14 +6,17 @@
 flowchart LR
     A["Alpaca Market Data"] --> N["OHLCV Normalizer"]
     CSV["CSV Replay"] --> N
-    F["Finviz Screener"] --> U["Ticker Universe"]
+    F["Finviz Screener"] --> D["Discovery Snapshot"]
+    W["Database Wishlist"] --> D
+    D --> U["Persist + Deduplicate + Warm"]
     U --> A
 
     N --> S["Hot Candle Cache"]
     Blob["TradingFlow candle archive"] --> S
     S --> TF["Required Timeframe Builder"]
     TF --> I["Indicator Engine"]
-    I --> C["Strategy Brain"]
+    I --> Q["Strategy Admission + Trigger"]
+    Q --> C["Strategy Brain"]
 
     News["Alpaca / Finviz / Go News Sidecar"] --> V["Event/Sentiment Veto"]
     V --> C
@@ -93,13 +96,17 @@ Strategies are separated by evidence level:
 
 ```text
 configs/strategies/
-  promoted/runtime strategies that may appear in paper/backtest UI
+  canonical strategy artifacts; folder membership does not imply promotion
 
 configs/backtest/strategies/
   research-only strategies used for experiments and audits
 ```
 
-Do not mutate a promoted strategy for experiments. Copy it into the research/backtest strategy area, change the copy, run it, capture the result in `docs/strategy-last-runs.md`, and promote only after verification.
+Do not mutate a canonical strategy for experiments. Copy it into the
+research/backtest strategy area, change the copy, run it, and capture the result in
+`docs/strategy-last-runs.md`. Promotion requires an immutable lifecycle decision
+bound to the exact strategy content hash. The current integrated decision is
+`RETAIN_RESEARCH`; no strategy is paper-shadow or validated.
 
 The July 2026 intraday execution spec is implemented as research-only. The shared engine now supports generic execution primitives for those configs:
 

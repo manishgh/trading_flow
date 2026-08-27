@@ -7,7 +7,7 @@ namespace TradingFlow.Tests;
 public sealed class ConfigCatalogServiceTests
 {
     [Fact]
-    public void GetStrategies_ReturnsOnlyPromotedStrategies_WithAuditSummaries()
+    public void GetStrategies_ReturnsCurrentResearchBootstrapSet()
     {
         var repoRoot = TestRepository.FindRoot();
         var catalog = new ConfigCatalogService(new ProjectPaths(repoRoot), new SimpleYamlReader());

@@ -20,6 +20,7 @@ public sealed class PaperModel : PageModel
     private readonly IArtifactWriter artifactWriter;
     private readonly IWishlistRepository wishlistRepository;
     private readonly ScreenerPresetService screenerPresets;
+    private readonly IPaperRunUniverseSnapshotResolver universeSnapshots;
     private readonly ILogger<PaperModel> logger;
 
     public PaperModel(
@@ -30,6 +31,7 @@ public sealed class PaperModel : PageModel
         IArtifactWriter artifactWriter,
         IWishlistRepository wishlistRepository,
         ScreenerPresetService screenerPresets,
+        IPaperRunUniverseSnapshotResolver universeSnapshots,
         ILogger<PaperModel> logger)
     {
         this.catalog = catalog;
@@ -39,6 +41,7 @@ public sealed class PaperModel : PageModel
         this.artifactWriter = artifactWriter;
         this.wishlistRepository = wishlistRepository;
         this.screenerPresets = screenerPresets;
+        this.universeSnapshots = universeSnapshots;
         this.logger = logger;
     }
 
@@ -252,21 +255,6 @@ public sealed class PaperModel : PageModel
         var source = NormalizeUniverseSource(form["UniverseSource"].ToString());
         UniverseSource = source;
 
-        // A saved screen may be named rather than pasted. Resolving it here means
-        // the run config records the filter that actually ran, not a name whose
-        // meaning could change afterwards.
-        if (!String.IsNullOrWhiteSpace(screenerFilter))
-        {
-            var resolved = await screenerPresets.ListAsync(null, cancellationToken);
-            var named = resolved.FirstOrDefault(preset =>
-                preset.Name.Equals(screenerFilter.Trim(), StringComparison.OrdinalIgnoreCase));
-            if (named is not null)
-            {
-                screenerFilter = named.FilterQuery;
-                ScreenerFilter = screenerFilter;
-            }
-        }
-
         // A screener-only run ignores the wishlist outright rather than merging
         // with it: the operator asked to trade the screen, and silently adding
         // curated names would make the universe something neither source states.
@@ -279,39 +267,34 @@ public sealed class PaperModel : PageModel
                 .Where(ticker => !String.IsNullOrWhiteSpace(ticker))
                 .ToArray() ?? []
             : [];
-        if (!usesScreener)
-        {
-            screenerFilter = String.Empty;
-            ScreenerFilter = screenerFilter;
-        }
-
-        if (usesScreener && String.IsNullOrWhiteSpace(screenerFilter))
-        {
-            ModelState.AddModelError(String.Empty, "Choose a saved screen or paste a Finviz query for a screener universe.");
-            return Page();
-        }
-        if (wishlistTickers.Length == 0 && String.IsNullOrWhiteSpace(screenerFilter))
-        {
-            ModelState.AddModelError(String.Empty, "Select a wishlist with active tickers or provide a Finviz screener.");
-            return Page();
-        }
-
         string tempConfigPath;
         try
         {
+            var universe = await universeSnapshots.ResolveAsync(
+                wishlistTickers,
+                usesWishlist,
+                "wishlist",
+                screenerFilter,
+                usesScreener,
+                usesWishlist ? SelectedWishlist?.Id : null,
+                strategyPath,
+                cancellationToken);
             tempConfigPath = configWriter.SaveTempConfig(
                 baseConfigPath,
-                wishlistTickers,
+                universe.Tickers,
                 strategyPath,
                 orderExpiration,
                 entryOrderType,
                 allowExtendedHoursTrading,
-                screenerFilter,
+                universe.ScreenerQuery,
                 runName,
                 newsEnabled,
                 usesWishlist ? SelectedWishlist?.Id : null,
                 usesWishlist ? SelectedWishlist?.Name : null,
-                source == "both" ? "wishlist+finviz" : source == "screener" ? "finviz" : "wishlist");
+                universe.Source,
+                universe.ResolvedAtUtc,
+                universe.SelectedSourceTickers,
+                universe.ScreenerTickers);
         }
         catch (InvalidOperationException exception)
         {

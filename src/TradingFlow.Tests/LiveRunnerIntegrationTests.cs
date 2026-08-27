@@ -288,6 +288,97 @@ public class LiveRunnerIntegrationTests
     }
 
     [Fact]
+    public async Task RunAsync_PositiveNewsWithoutTechnicalTrigger_CreatesNoOrderIntentOrBrokerRequest()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var bars = CreateFallingFiveMinuteBars("AAPL");
+            var provider = new Mock<IMarketDataProvider>(MockBehavior.Strict);
+            provider
+                .Setup(x => x.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> _, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                    YieldBars(bars, token));
+
+            var catalysts = new Mock<ICatalystProvider>(MockBehavior.Strict);
+            catalysts
+                .Setup(x => x.GetCatalystsAsync(
+                    "AAPL",
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync([
+                    new CatalystEvent(
+                        "AAPL",
+                        bars[^1].Timestamp.AddMinutes(-10),
+                        CatalystType.NewsReport,
+                        "AAPL reports a strongly positive operating update",
+                        0.90m)
+                ]);
+
+            var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+            broker.Setup(x => x.GetOpenOrdersAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+            broker.Setup(x => x.GetOpenPositionsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+            var submissions = new Mock<IOrderSubmissionService>(MockBehavior.Strict);
+            var baseStrategy = CreateStrategy("5m", "5m");
+            var catalystStrategy = baseStrategy with
+            {
+                EntryRules = baseStrategy.EntryRules with
+                {
+                    SetupType = "catalyst_vwap_breakout",
+                    RequirePositiveNews = true,
+                    MinNewsSentiment = 0.25m
+                }
+            };
+            var runner = CreateRunner(
+                provider.Object,
+                lockService: null,
+                brokerClient: broker.Object,
+                orderSubmissionService: submissions.Object,
+                catalystProvider: catalysts.Object);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var progress = new Progress<string>(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                }
+            });
+
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(
+                    resultsRoot,
+                    ["AAPL"],
+                    ["5m"],
+                    workerCount: 1,
+                    derivedSource: "5m",
+                    dryRun: false,
+                    allowLiveOrders: true),
+                [catalystStrategy],
+                cts,
+                progress);
+
+            submissions.Verify(x => x.SubmitBracketOrderAsync(
+                It.IsAny<BracketOrderSubmission>(),
+                It.IsAny<IBrokerClient>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            broker.Verify(x => x.SubmitOrderAsync(
+                It.IsAny<BrokerEntryOrder>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_BatchedCandlePipeline_WritesMetricsAndAuditsEndToEnd()
     {
         var resultsRoot = CreateTempDirectory();
@@ -855,7 +946,8 @@ public class LiveRunnerIntegrationTests
         IBrokerClient? brokerClient = null,
         IOrderStateRepository? orderStateRepository = null,
         IOrderSubmissionService? orderSubmissionService = null,
-        IOrderLifecycleService? orderLifecycleService = null)
+        IOrderLifecycleService? orderLifecycleService = null,
+        ICatalystProvider? catalystProvider = null)
     {
         var defaultOrderRepo = new Mock<IOrderStateRepository>();
         defaultOrderRepo
@@ -871,7 +963,7 @@ public class LiveRunnerIntegrationTests
 
         return new LiveRunner(
             provider,
-            catalystProvider: null,
+            catalystProvider,
             brokerClient,
             lockService,
             orderStateRepository ?? defaultOrderRepo.Object,
@@ -972,7 +1064,15 @@ public class LiveRunnerIntegrationTests
             News: new NewsConfig(false, "none", 0, 0),
             Screener: new ScreenerConfig(false, "none", []),
             Artifacts: new ArtifactRetentionConfig("summary"),
-            Strategies: []);
+            Strategies: [],
+            Universe: new UniverseConfig(
+                UniverseConfig.ResolvedSnapshotMode,
+                [],
+                0m,
+                0m,
+                20,
+                null,
+                null));
     }
 
     private static StrategyDefinition CreateStrategy(

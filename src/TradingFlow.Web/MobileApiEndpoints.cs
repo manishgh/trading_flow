@@ -307,6 +307,7 @@ public static class MobileApiEndpoints
             RunConfigWriter configWriter,
             PaperJobService paperJobs,
             WishlistUniverseResolver universeResolver,
+            IPaperRunUniverseSnapshotResolver universeSnapshots,
             IWishlistRepository wishlists,
             CancellationToken cancellationToken) =>
         {
@@ -328,30 +329,38 @@ public static class MobileApiEndpoints
                 return Results.NotFound(ex.Message);
             }
 
-            if (tickers.Count == 0 && String.IsNullOrWhiteSpace(request.ScreenerFilter))
-            {
-                return Results.BadRequest("Provide at least one ticker, wishlist, or Finviz screener filter.");
-            }
-
             var runName = String.IsNullOrWhiteSpace(request.RunName)
                 ? $"paper_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}"
                 : request.RunName.Trim();
             string configPath;
             try
             {
+                var includeScreener = !String.IsNullOrWhiteSpace(request.ScreenerFilter);
+                var universe = await universeSnapshots.ResolveAsync(
+                    tickers,
+                    tickers.Count > 0,
+                    wishlist is null ? "ephemeral" : "wishlist",
+                    request.ScreenerFilter,
+                    includeScreener,
+                    wishlist?.Id,
+                    request.StrategyPath,
+                    cancellationToken);
                 configPath = configWriter.SaveTempConfig(
                     request.BaseConfigPath,
-                    tickers,
+                    universe.Tickers,
                     request.StrategyPath,
                     request.OrderExpiration,
                     request.EntryOrderType,
                     request.AllowExtendedHoursTrading,
-                    request.ScreenerFilter,
+                    universe.ScreenerQuery,
                     runName,
                     request.NewsEnabled,
                     wishlist?.Id,
                     wishlist?.Name,
-                    wishlist is null ? "ephemeral" : "wishlist");
+                    universe.Source,
+                    universe.ResolvedAtUtc,
+                    universe.SelectedSourceTickers,
+                    universe.ScreenerTickers);
             }
             catch (InvalidOperationException exception)
             {
@@ -415,7 +424,7 @@ public static class MobileApiEndpoints
                     orderExpiration: "day",
                     entryOrderType: request.EntryOrderType,
                     allowExtendedHoursTrading: request.AllowExtendedHoursTrading,
-                    screenerFilter: string.Empty,
+                    resolvedScreenerQuery: string.Empty,
                     runName: string.IsNullOrWhiteSpace(request.RunName)
                         ? $"mobile_auto_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}"
                         : request.RunName.Trim(),

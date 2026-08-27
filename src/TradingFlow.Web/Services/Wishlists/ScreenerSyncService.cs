@@ -48,6 +48,18 @@ public sealed record ScreenerSyncResult(
 }
 
 /// <summary>
+/// Point-in-time screener read used when resolving an immutable run universe.
+/// </summary>
+public interface IScreenerSnapshotSource
+{
+    Task<ScreenerSyncResult> PreviewAsync(
+        string input,
+        ScreenerScope scope,
+        Guid? wishlistId,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// Reads a Finviz screen and says what it would return, so an operator can see
 /// the result before anything is added to a wishlist.
 ///
@@ -61,7 +73,7 @@ public sealed record ScreenerSyncResult(
 /// session's conditions, and carrying it into the next day would silently widen
 /// tomorrow's universe with yesterday's reasoning.
 /// </summary>
-public sealed class ScreenerSyncService
+public sealed class ScreenerSyncService : IScreenerSnapshotSource
 {
     private readonly IDbContextFactory<TradingFlowDbContext> dbFactory;
     private readonly IWishlistRepository wishlists;

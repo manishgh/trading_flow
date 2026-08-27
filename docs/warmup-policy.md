@@ -12,8 +12,9 @@ indicators, rolling volume baselines, and paper/live recovery state.
   indicator engine compares current cumulative/slot/session volume with up to
   63 prior comparable sessions, so 60-90 calendar days is a better practical
   intraday warm-up when we can fetch it.
-- Swing trend strategies that use daily SMA/EMA context should prefer 200-260
-  calendar days so 50/150/200-day moving averages are meaningful.
+- Swing trend strategies that use daily SMA/EMA context require at least 260
+  completed trading bars. The shipped profiles request 400 calendar days so
+  weekends, holidays, and indicator stabilization do not under-warm SMA200.
 
 ## Current Config Defaults
 
@@ -23,14 +24,14 @@ indicators, rolling volume baselines, and paper/live recovery state.
   - downloads `1m`, `5m`, `15m`, `1h`, `1d`
 - Paper swing: `configs/paper/alpaca-paper-swing.yaml`
   - `lookback_days: 260`
-  - `warmup_lookback_days: 260`
+  - `warmup_lookback_days: 400`
   - downloads `1h`, `1d`
 - Intraday backtest profile: `configs/backtest/intraday-backtest-profile.yaml`
   - `lookback_days: 60`
   - `warmup_lookback_days: 90`
 - Swing backtest profile: `configs/backtest/swing-backtest-profile.yaml`
   - `lookback_days: 180`
-  - `warmup_lookback_days: 260`
+  - `warmup_lookback_days: 400`
 
 ## Runtime Behavior
 

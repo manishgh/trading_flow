@@ -23,8 +23,7 @@ public sealed class AlpacaNewsStreamClient : IDisposable
     public AlpacaNewsStreamClient(AlpacaOptions options, ILogger<AlpacaNewsStreamClient>? logger = null)
     {
         _options = options;
-        // The News websocket is always at this endpoint
-        _streamUrl = new Uri("wss://stream.data.alpaca.markets/v1beta1/news");
+        _streamUrl = options.ResolveNewsStreamUrl();
         _logger = logger;
     }
 

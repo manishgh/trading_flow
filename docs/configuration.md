@@ -210,7 +210,7 @@ Supported `entry_rules.setup_type` values in the retained and research strategy 
 - `volatility_contraction_pattern`
 - `vwap_reclaim_trap`
 
-Current active strategy files:
+Current canonical research strategy files:
 
 - `intraday-ema10-ema20-macd-volume.v1.yaml`
 - `swing-reversal-reclaim-bull-quality-no-news.v1.yaml`
@@ -221,9 +221,14 @@ Current active strategy files:
 - `lance_breitstein_intraday_tactics.yaml`
 - `minervini-trend-template-vcp.v2.yaml`
 
-Research-only backtest strategies are stored under `configs/backtest/strategies`. They are intentionally excluded from paper/live promotion until their result is positive, audited, and captured in the strategy ledger.
+Research-only backtest strategies are stored under `configs/backtest/strategies`.
+Neither directory membership nor a positive run promotes a strategy. The current
+integrated decision is `RETAIN_RESEARCH`, so all listed strategies remain research
+artifacts.
 
-The promoted day-trading strategy uses RSI for audit context and broad filtering only. Entry is driven by the indicator stack: price above VWAP, price above EMA10/EMA20, EMA10 above EMA20, MACD histogram bullish, and cumulative same-time volume participation.
+The retained day-trading research strategy uses RSI for audit context and broad
+filtering only. Entry research is driven by price/VWAP and EMA state, bullish MACD
+histogram, and cumulative same-time volume participation.
 
 ## Execution Rule Fields
 

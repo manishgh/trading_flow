@@ -1,3 +1,8 @@
+using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using TradingFlow.Web.Services;
+
 namespace TradingFlow.Tests;
 
 public sealed class ProductionCompositionTests
@@ -89,6 +94,98 @@ public sealed class ProductionCompositionTests
             AssertFileDoesNotContain(source, "AlpacaMarketDataProvider");
             AssertFileDoesNotContain(source, "Finviz");
         }
+    }
+
+    [Fact]
+    public void RuntimeComposition_ContainsNoAutonomousPrototypeTradingOrAdvisoryServices()
+    {
+        var services = new ServiceCollection();
+        services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOptions(
+            Enabled: true,
+            EnableEarningsMonitor: true));
+
+        var actualTypes = services
+            .Where(descriptor => descriptor.ServiceType == typeof(IHostedService))
+            .Select(ResolveHostedServiceType)
+            .OrderBy(type => type.FullName, StringComparer.Ordinal)
+            .ToArray();
+        var expectedTypes = new[]
+        {
+            typeof(NewsFeedService),
+            typeof(AlpacaNewsStreamService),
+            typeof(EarningsMonitorHostedService),
+            typeof(TradingFlow.Web.Services.Wishlists.WishlistObserverService),
+            typeof(DatabaseBackupHostedService),
+            typeof(AlpacaSecurityTradingStatusService),
+            typeof(AlpacaOrderSynchronizationHostedService)
+        }.OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
+
+        Assert.Equal(expectedTypes, actualTypes);
+        Assert.DoesNotContain(actualTypes, type =>
+            type.Name.Contains("CatalystExecution", StringComparison.Ordinal) ||
+            type.Name.Contains("PortfolioAdvisor", StringComparison.Ordinal) ||
+            type.Name.Contains("SectorNewsWatcher", StringComparison.Ordinal));
+
+        var root = TestRepository.FindRoot();
+        var webRoot = Path.Combine(root, "src", "TradingFlow.Web");
+        var registryPath = Path.Combine(webRoot, "Services", "RuntimeHostedServiceRegistration.cs");
+        var bypasses = Directory
+            .EnumerateFiles(webRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Equals(registryPath, StringComparison.OrdinalIgnoreCase))
+            .Where(path => File.ReadAllText(path).Contains("AddHostedService", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Empty(bypasses);
+
+        var program = File.ReadAllText(Path.Combine(webRoot, "Program.cs"));
+        Assert.Equal(1, CountOccurrences(program, "AddTradingFlowRuntimeHostedServices("));
+    }
+
+    [Fact]
+    public void RuntimeComposition_TestModeStartsNoBackgroundServices()
+    {
+        var services = new ServiceCollection();
+        services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOptions(
+            Enabled: false,
+            EnableEarningsMonitor: true));
+
+        Assert.DoesNotContain(services, descriptor => descriptor.ServiceType == typeof(IHostedService));
+    }
+
+    private static Type ResolveHostedServiceType(ServiceDescriptor descriptor)
+    {
+        if (descriptor.ImplementationType is not null)
+        {
+            return descriptor.ImplementationType;
+        }
+
+        if (descriptor.ImplementationInstance is not null)
+        {
+            return descriptor.ImplementationInstance.GetType();
+        }
+
+        var instance = descriptor.ImplementationFactory?.Invoke(UninitializedServiceProvider.Instance)
+            ?? throw new InvalidOperationException("Hosted service registration has no implementation.");
+        return instance.GetType();
+    }
+
+    private static int CountOccurrences(string value, string search)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = value.IndexOf(search, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += search.Length;
+        }
+
+        return count;
+    }
+
+    private sealed class UninitializedServiceProvider : IServiceProvider
+    {
+        public static UninitializedServiceProvider Instance { get; } = new();
+
+        public object? GetService(Type serviceType) => RuntimeHelpers.GetUninitializedObject(serviceType);
     }
 
     private static void AssertFileDoesNotContain(string path, string value)

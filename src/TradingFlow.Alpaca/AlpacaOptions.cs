@@ -55,4 +55,6 @@ public sealed record AlpacaOptions(
     }
 
     public Uri ResolveTradingStreamUrl() => AlpacaEndpointResolver.Resolve(Profile).TradingStream;
+
+    public Uri ResolveNewsStreamUrl() => AlpacaEndpointResolver.Resolve(Profile).NewsStream;
 }

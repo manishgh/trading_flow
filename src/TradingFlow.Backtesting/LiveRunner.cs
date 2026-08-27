@@ -4,6 +4,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
 using TradingFlow.Engine.Strategies;
@@ -53,6 +54,7 @@ public sealed partial class LiveRunner(
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
     {
+        RunUniverseValidator.RequireResolved(run);
         strategies = ApplyRunSessionPolicy(run, strategies);
         logger.LogInformation("Starting LiveRunner for run: {RunName}", run.RunName);
         progress?.Report($"Starting LiveRunner for run: {run.RunName}");

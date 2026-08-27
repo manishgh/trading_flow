@@ -47,7 +47,12 @@ public sealed record UniverseConfig(
     int? MaxSymbols,
     string CandidateSource = "static",
     string? CandidateScreenerQuery = null,
-    string RescreenFrequency = "per_run")
+    string RescreenFrequency = "per_run",
+    string ResolvedSource = "",
+    IReadOnlyList<string>? SelectedSourceTickers = null,
+    IReadOnlyList<string>? ScreenerTickers = null,
+    string? ResolvedScreenerQuery = null,
+    DateTimeOffset? ResolvedAtUtc = null)
 {
     public const string RescreenPerRun = "per_run";
     public const string RescreenPerDay = "per_day";
@@ -58,11 +63,17 @@ public sealed record UniverseConfig(
 
     public const string StaticMode = "static";
     public const string HistoricalScreenerMode = "historical_screener";
+    public const string UnresolvedWishlistMode = "unresolved_wishlist";
+    public const string ResolvedSnapshotMode = "resolved_snapshot";
     public const string StaticCandidateSource = "static";
     public const string FinvizCandidateSource = "finviz";
     public const string BothCandidateSource = "both";
 
     public bool IsHistoricalScreener => Mode.Equals(HistoricalScreenerMode, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsUnresolvedWishlist => Mode.Equals(UnresolvedWishlistMode, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsResolvedSnapshot => Mode.Equals(ResolvedSnapshotMode, StringComparison.OrdinalIgnoreCase);
 
     // "finviz" pulls the pool from a screener; "both" unions the curated candidates list
     // with the screener pool (matches a UI/API that can send either or both).
@@ -72,6 +83,10 @@ public sealed record UniverseConfig(
 
     public bool MergesCuratedAndFinviz =>
         CandidateSource.Equals(BothCandidateSource, StringComparison.OrdinalIgnoreCase);
+
+    public IReadOnlyList<string> ResolvedSelectedSourceTickers => SelectedSourceTickers ?? [];
+
+    public IReadOnlyList<string> ResolvedScreenerTickers => ScreenerTickers ?? [];
 
     public static UniverseConfig StaticUniverse { get; } =
         new(StaticMode, Array.Empty<string>(), 0m, 0m, 20, null, null);

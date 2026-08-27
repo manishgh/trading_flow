@@ -146,7 +146,11 @@ Pages:
 - `/Earnings` complete today/tomorrow earnings schedule, reported results, provider/news timestamps, and completed-bar breakout evidence.
 - `/Audit/{runName}` decision-tree audit for accepted, rejected, and no-signal evaluations.
 
-Backtest and paper universes come from database wishlists. Generated run files are internal audit artifacts only and should not be used as hand-maintained ticker lists.
+Backtest and paper universes are resolved from database wishlists and, where enabled,
+operational Finviz discovery. Discovery does not grant trading admission. Generated
+run files freeze the resolved ticker snapshot for execution and audit; they are not
+hand-maintained ticker lists. Base profiles are unresolved templates and fail closed
+when executed directly.
 
 ## Rolling Candle Warmup
 
@@ -176,11 +180,15 @@ local development, use environment variables or .NET user-secrets; see
 `docs/credential-security.md`. The ignored `appsettings.local.json` path remains a
 temporary local migration fallback and must never be committed.
 
-## Active Strategy Set
+## Strategy Research Set
 
-The promoted strategy catalog is under `configs/strategies`. Research-only strategies live under `configs/backtest/strategies` and must not be used by paper/live until promoted.
+Strategy files under `configs/strategies` are canonical research artifacts; their
+folder is not promotion evidence. Experimental variants live under
+`configs/backtest/strategies`. The binding integrated decision is currently
+`RETAIN_RESEARCH`: no strategy is validated for live execution or admitted to a new
+paper-shadow run.
 
-Current promoted/runtime strategies:
+Current retained research strategies:
 
 - `intraday-ema10-ema20-macd-volume.v1.yaml`
 - `swing-reversal-reclaim-bull-quality-no-news.v1.yaml`
@@ -193,7 +201,9 @@ Current research-only intraday execution specs:
 - `configs/backtest/strategies/intraday-atr-compression-breakout.bt-v1.yaml`
 - `configs/backtest/strategies/intraday-macd-divergence-fade.bt-v1.yaml`
 
-The current winner is reported in each result JSON under the top-level `Winner` property. Latest run evidence is tracked in [strategy-last-runs.md](docs/strategy-last-runs.md).
+Each completed comparison may report a run-local winner in its result JSON. That
+label is not a lifecycle promotion. Latest run evidence is tracked in
+[strategy-last-runs.md](docs/strategy-last-runs.md).
 
 Current limitation: partial exits are not yet modeled. Backtests currently support one entry and one full-position exit. Strategy YAML may express structural stops, VWAP targets, failed-breakout guards, trailing stops, and max-hold exits, but partial scale-out requires a future trade-lot model.
 

@@ -41,9 +41,13 @@ data/research/backtests/2026-06-11_swing_6tickers_180d/
 
 Older exploratory strategies and failed result artifacts should be treated as disposable once their lessons are captured. Candle caches remain separate from research results and should not be deleted during strategy cleanup.
 
-## Strategy Promotion
+## Strategy Lifecycle
 
-Only promoted strategy configs should remain in active runtime paths. Failed candidates should not appear in the runtime strategy catalog after their failure reason is captured in a research manifest or notes file. Backtest-only research configs may remain under `configs/backtest/strategies` when they document a reusable technical primitive or a user-supplied strategy spec.
+Canonical files under `configs/strategies` remain research artifacts until an
+immutable lifecycle decision binds their strategy ID, semantic version, and content
+hash. Folder location and a run-local winner label are not promotion evidence.
+Backtest-only configs may remain under `configs/backtest/strategies` when they
+document a reusable technical primitive or a user-supplied strategy spec.
 
 Promotion criteria should include:
 
@@ -54,11 +58,11 @@ Promotion criteria should include:
 - diagnostics show rejected trades are explainable
 - passes a broader validation window before paper/live promotion
 
-For now, the retained active strategies are:
+For now, the retained research strategies are:
 
 - `intraday-ema10-ema20-macd-volume.v1.yaml`: simplified intraday reset. It keeps only EMA10/EMA20 alignment, bullish MACD histogram, and 2x cumulative same-time volume versus the 63-session baseline.
 - `swing-reversal-reclaim-bull-quality-no-news.v1.yaml`: primary swing long. It had the best balance of return and drawdown in the six-ticker swing run.
-- `swing-overbought-rollover-short-no-news.v5.yaml`: candidate swing short. It is promoted as a separate short-side candidate because it captured the APP rollover and avoided the noisy false shorts from earlier variants, but its two-trade sample is not enough for live promotion by itself.
+- `swing-overbought-rollover-short-no-news.v5.yaml`: candidate swing short. It captured the APP rollover and avoided noisy false shorts in one comparison, but its two-trade sample is not promotion evidence.
 - `minervini-trend-template-vcp.v4-trend-rider.yaml`: current trend-rider swing candidate for long watchlists.
 
 Latest retained intraday comparison: reset pending. Previous V6/V8 candidates were removed from active runtime after the July 2026 simplification pass.
@@ -72,7 +76,9 @@ Latest retained swing comparison on the CRDO/MSFT/APP/INTC/MU/NVDA, 180-day cach
 - Swing Reversal Reclaim Bull Quality No News V1: +11.9532%, average daily +0.0980%, max drawdown 3.8461%, 10 trades.
 - Swing Overbought Rollover Short No News V5: +3.6649%, average daily +0.0300%, max drawdown 0%, 2 trades.
 
-Conclusion: keep the long and short swing strategies separate until portfolio conflict handling is explicit enough to arbitrate simultaneous long/short candidates on the same ticker or sector.
+Conclusion: retain these as separate research artifacts until portfolio conflict
+handling and the full promotion gates are satisfied. The integrated research
+decision remains `RETAIN_RESEARCH`; none is admitted to paper shadow or live.
 
 ## Paper and Live Warmup
 
@@ -108,7 +114,7 @@ This can run as an in-process hosted service for paper trading first, then move 
 The Backtests page should become a run lab:
 
 - run builder for provider, lookback, capital, risk, cache policy
-- universe selector with custom tickers and Finviz screener preview
+- wishlist and point-in-time research-universe selection with Finviz discovery preview
 - strategy selector with parsed strategy summaries
 - recent result comparison from saved JSON
 - diagnostics table with rejection reasons and validation warnings

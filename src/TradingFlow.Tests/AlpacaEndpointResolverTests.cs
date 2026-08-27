@@ -44,6 +44,19 @@ public sealed class AlpacaEndpointResolverTests
         Assert.Equal("wss://stream.data.alpaca.markets/v2/sip", options.ResolveMarketDataStreamUrl().AbsoluteUri);
     }
 
+    [Theory]
+    [InlineData(ProductionProfile.Development)]
+    [InlineData(ProductionProfile.Paper)]
+    [InlineData(ProductionProfile.Live)]
+    public void EveryProfileUsesTheCentralizedNewsStreamEndpoint(ProductionProfile profile)
+    {
+        var endpoints = AlpacaEndpointResolver.Resolve(profile);
+        var options = AlpacaOptions.Create(profile);
+
+        Assert.Equal("wss://stream.data.alpaca.markets/v1beta1/news", endpoints.NewsStream.AbsoluteUri);
+        Assert.Equal(endpoints.NewsStream, options.ResolveNewsStreamUrl());
+    }
+
     [Fact]
     public void OptionsDoNotExposeAConfigurableTradingBaseUrl()
     {

@@ -119,13 +119,6 @@ builder.Services.AddHttpClient<OfficialMarketNewsProvider>(client =>
     client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "TradingFlow/1.0");
 });
 builder.Services.AddSingleton<NewsFeedService>();
-if (!uiTestMode)
-{
-    builder.Services.AddHostedService(sp => sp.GetRequiredService<NewsFeedService>());
-    
-    // Add real-time Alpaca WebSocket news service
-    builder.Services.AddHostedService<AlpacaNewsStreamService>();
-}
 builder.Services.AddSingleton<WarmupServiceClient>();
 builder.Services.AddSingleton<WishlistUniverseResolver>();
 builder.Services.AddSingleton<WishlistBreakoutEvaluator>();
@@ -136,6 +129,8 @@ builder.Services.AddSingleton<OperationalStatusService>();
 builder.Services.AddSingleton<OperationsHealthService>();
 builder.Services.AddSingleton<UniverseRankService>();
 builder.Services.AddSingleton<ScreenerSyncService>();
+builder.Services.AddSingleton<IScreenerSnapshotSource>(services => services.GetRequiredService<ScreenerSyncService>());
+builder.Services.AddSingleton<IPaperRunUniverseSnapshotResolver, PaperRunUniverseSnapshotResolver>();
 builder.Services.AddSingleton<ScreenerPresetService>();
 builder.Services.AddSingleton<PositionProtectionService>();
 builder.Services.AddSingleton<IEarningsRepository, SqliteEarningsRepository>();
@@ -150,10 +145,6 @@ builder.Services.AddSingleton(serviceProvider => new FinvizClient(
     },
     serviceProvider.GetRequiredService<IRawArchiveWriter>()));
 builder.Services.AddSingleton<EarningsMonitor>();
-if (!uiTestMode && !String.IsNullOrWhiteSpace(finvizApiKey))
-{
-    builder.Services.AddHostedService<EarningsMonitorHostedService>();
-}
 var predictorBaseUrlText = builder.Configuration["MarketPredictor:BaseUrl"]
     ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MARKET_PREDICTOR_URL");
 var predictorBaseUri = Uri.TryCreate(predictorBaseUrlText, UriKind.Absolute, out var configuredPredictorUri)
@@ -199,18 +190,9 @@ builder.Services.AddSingleton<TradingFlow.Engine.Execution.IBrokerClient>(servic
         rawArchiveWriter);
 });
 
-builder.Services.AddTransient<TradingFlow.Web.Services.Workflows.SwingDailyJob>();
-builder.Services.AddTransient<TradingFlow.Web.Services.Workflows.IntradayPremarketJob>();
 builder.Services.AddTransient<TradingFlow.Data.Catalysts.CatalystStreamer>();
-builder.Services.AddHostedService<TradingFlow.Web.Services.Workflows.IntradayCatalystExecutionService>();
-builder.Services.AddHostedService<TradingFlow.Web.Services.Workflows.PortfolioAdvisorService>();
-builder.Services.AddHostedService<TradingFlow.Web.Services.Workflows.SectorNewsWatcherService>();
 builder.Services.AddTransient<SymbolIntelligenceService>();
 builder.Services.AddSingleton<WishlistObserverService>();
-if (!uiTestMode)
-{
-    builder.Services.AddHostedService(sp => sp.GetRequiredService<WishlistObserverService>());
-}
 builder.Services.AddSingleton<AlpacaQuoteService>();
 builder.Services.AddSingleton<AlpacaManualOrderService>();
 builder.Services.AddSingleton<IManualOrderMarketGateway, AlpacaManualOrderMarketGateway>();
@@ -229,10 +211,6 @@ builder.Services.AddSingleton(serviceProvider => new SqliteDatabaseBackupService
     serviceProvider.GetRequiredService<IArtifactWriter>(),
     serviceProvider.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton<SqliteDatabaseRestoreService>();
-if (!uiTestMode)
-{
-    builder.Services.AddHostedService<DatabaseBackupHostedService>();
-}
 builder.Services.AddSingleton<SqliteConnectionDurabilityInterceptor>();
 builder.Services.AddDbContextFactory<TradingFlowDbContext>((serviceProvider, options) =>
     options
@@ -334,11 +312,6 @@ builder.Services.AddSingleton(ManualEntryOptions.Parse(
 builder.Services.AddSingleton<AlpacaSecurityTradingStatusService>();
 builder.Services.AddSingleton<ISecurityTradingStatusProvider>(serviceProvider =>
     serviceProvider.GetRequiredService<AlpacaSecurityTradingStatusService>());
-if (!uiTestMode)
-{
-    builder.Services.AddHostedService(serviceProvider =>
-        serviceProvider.GetRequiredService<AlpacaSecurityTradingStatusService>());
-}
 builder.Services.AddSingleton<IEntryGateChain, EntryGateChain>();
 var orderPollIntervalSeconds = productionConfiguration.ResolveParameter<int>(
     ProductionProfile.Paper,
@@ -411,10 +384,9 @@ builder.Services.AddSingleton<IProtectiveOrderInvariantService, ProtectiveOrderI
 builder.Services.AddSingleton<IAccountReconciliationService, AccountReconciliationService>();
 builder.Services.AddSingleton<IOrderSynchronizationCoordinator, OrderSynchronizationCoordinator>();
 builder.Services.AddSingleton<IOrderSubmissionService, OrderSubmissionService>();
-if (!uiTestMode)
-{
-    builder.Services.AddHostedService<AlpacaOrderSynchronizationHostedService>();
-}
+builder.Services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOptions(
+    Enabled: !uiTestMode,
+    EnableEarningsMonitor: !String.IsNullOrWhiteSpace(finvizApiKey)));
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository, TradingFlow.Data.Jobs.SqliteJobRepository>();
 

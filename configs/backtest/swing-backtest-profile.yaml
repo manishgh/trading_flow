@@ -11,19 +11,14 @@ engine:
 
 time_window:
   type: rolling
-  lookback_days: 3
+  # Diagnostic six-month window. Promotion-grade research uses the frozen
+  # point-in-time research datasets and 2016-or-later program boundaries.
+  lookback_days: 180
   # 260 indicator bars are trading sessions, not calendar days. Four hundred
   # calendar days supplies the required pre-evaluation history with margin.
   warmup_lookback_days: 400
   start:
   end:
-
-tickers:
-  - AAPL
-  - MSFT
-  - NVDA
-  - TSLA
-  - PLTR
 
 market_data:
   provider: alpaca
@@ -77,7 +72,7 @@ validation:
     max_invalid_ohlc_bars: 0
     max_zero_volume_pct: 15.0
   bias_risk:
-    universe_source: list
+    universe_source: wishlist
     universe_as_of_date:
     price_adjustment_policy: alpaca_sip_cached
 
@@ -101,6 +96,9 @@ news:
 
 artifacts:
   retention_mode: full
+
+universe:
+  mode: unresolved_wishlist
 
 strategies:
   - ../strategies/minervini-trend-template-vcp.v4-trend-rider.yaml

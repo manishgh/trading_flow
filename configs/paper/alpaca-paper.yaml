@@ -115,6 +115,7 @@ strategies:
 # disagreement between the technical verdict and the model stays visible on the
 # desk and in the persisted ranking run.
 universe:
+  mode: unresolved_wishlist
   rank:
     weights_version: rank.v1
     intraday:

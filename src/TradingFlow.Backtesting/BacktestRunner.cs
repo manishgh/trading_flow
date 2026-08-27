@@ -96,6 +96,7 @@ public sealed partial class BacktestRunner(
         CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress)
     {
+        RunUniverseValidator.RequireResolved(run);
         if (run.Universe is not { } universe || !universe.IsHistoricalScreener)
         {
             return (run, null, null);

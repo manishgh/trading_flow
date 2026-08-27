@@ -945,7 +945,7 @@ public class BasicStrategyEvaluatorTests
     }
 
     [Fact]
-    public void GetLongEntryRejection_WhenCatalystTechnicalEntryHasNoTechnicalTrigger_ReturnsSetupRejection()
+    public void GetLongEntryRejection_WhenPositiveNewsHasNoTechnicalTrigger_ReturnsSetupRejection()
     {
         var baseStrategy = CreateBaseStrategy();
         var strategy = baseStrategy with

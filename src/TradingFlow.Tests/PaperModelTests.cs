@@ -171,7 +171,39 @@ public sealed class PaperModelTests
             AtomicFileArtifactWriter.Instance,
             wishlistRepository.Object,
             CreateScreenerPresetService(),
+            CreateUniverseResolver(),
             NullLogger<PaperModel>.Instance);
+    }
+
+    private static IPaperRunUniverseSnapshotResolver CreateUniverseResolver()
+    {
+        var resolver = new Mock<IPaperRunUniverseSnapshotResolver>();
+        resolver
+            .Setup(service => service.ResolveAsync(
+                It.IsAny<IEnumerable<string>>(),
+                It.IsAny<bool>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<bool>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                IEnumerable<string> tickers,
+                bool includeTickers,
+                string source,
+                string? query,
+                bool includeScreener,
+                Guid? _,
+                string _,
+                CancellationToken _) => new PaperRunUniverseSnapshot(
+                    includeTickers ? tickers.ToArray() : ["SCREEN"],
+                    includeTickers ? tickers.ToArray() : [],
+                    includeScreener ? ["SCREEN"] : [],
+                    includeScreener ? $"{source}+finviz" : source,
+                    query,
+                    DateTimeOffset.UtcNow));
+        return resolver.Object;
     }
 
     /// <summary>

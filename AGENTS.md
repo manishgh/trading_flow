@@ -32,9 +32,9 @@ The source/sink can change by mode, but the strategy signal, indicator, confluen
 
 These rules apply to every Codex/agent session in this repository.
 
-1. Keep validated strategies separate from research/backtest strategies. Validated/promoted strategies belong in the main strategy catalog only after evidence supports promotion. Experimental dimensions belong in separate backtest/research strategy files.
-2. Do not mutate a promoted strategy directly for experiments. Copy the validated strategy into a backtest/research strategy file, add new dimensions there, run and audit it, then either promote it or discard it.
-3. Promote only after verification. A strategy can move into the main active strategy folder/catalog only after backtest or paper evidence, audit review, and tests confirm the behavior.
+1. Keep canonical strategy artifacts separate from experimental backtest variants. Directory location is organization, never lifecycle authority.
+2. Do not mutate a canonical strategy directly for experiments. Copy it into a backtest/research strategy file, add new dimensions there, run and audit it, then either register the exact immutable artifact or discard it.
+3. Promotion requires an authorized lifecycle decision bound to strategy ID, semantic version, and canonical content hash. A filename, folder move, positive run, or paper execution cannot promote a strategy.
 4. Delete discarded backtest strategy changes and generated experimental configs. Keep only useful audit summaries/results needed for comparison.
 5. Preserve research memory in code and tests when technical primitives change. If a technical indicator, evaluator rule, or signal field is added/removed, add or update focused unit tests and keep a short audit note/result so future agents know why it exists.
 6. Stop TradingFlow runtime processes before code changes. Kill only project processes such as `TradingFlow.Web`, `TradingFlow.WarmupService`, workers, or CLI runs that may lock build outputs or mutate runtime files. Restart and verify services after the change when the user expects the app to remain available.
@@ -126,8 +126,9 @@ data/candles/_archive-pending/{timestamp}-{manifestId}.json
 ## Active Providers
 
 - Alpaca is primary for market data, historical data, news, and paper broker.
-- Finviz is a first-class candidate-universe source. The screener is enabled in both paper
-  profiles and feeds the candidate universe directly; it is not enrichment-only.
+- Finviz is an operational discovery source and news-enrichment provider. Current
+  membership is not historical point-in-time universe evidence, and discovery never
+  grants trading admission by itself.
 - CSV/local data remains useful for deterministic backtests.
 - Yahoo, eToro, and TradingView webhook/signal paths are not active priorities.
 
@@ -150,7 +151,7 @@ Backtest profiles currently worth keeping:
 - `configs/backtest/intraday-backtest-profile.yaml`
 - `configs/backtest/swing-backtest-profile.yaml`
 
-Both paper profiles enable the screener source:
+Paper profiles may combine persisted wishlist and screener discovery sources:
 
 ```yaml
 universe:
@@ -160,51 +161,37 @@ universe:
     - type: screener      # Finviz saved view or query string
       enabled: true
       scope: intraday     # intraday | swing, must match the profile horizon
-  merge: rank            # both sources feed one ML-ranked candidate set
+  merge: union           # preserve source provenance; admission happens later
 ```
 
 Backtest and paper universes come from database wishlists or the Finviz
 screener — never from hand-maintained ticker-list configs. Generated run
 files remain audit artifacts only.
 
-## Candidate Universe and ML Ranking
+## Candidate Discovery and Admission
 
-The desk selects a universe source, not a single symbol. Everything downstream
-ranks that whole set.
+The desk selects one or more discovery sources, not an already-approved trade.
 
-1. Universe resolution. `wishlist` returns the operator's curated symbols for the
-   selected list; `screener` returns every symbol the Finviz scope/query returns.
-   Screener symbols are tradable immediately and do not need wishlist promotion
-   first — promotion is an operator convenience, not a gate.
-2. Ranking. The rank engine scores every candidate in the resolved universe in one
-   call and returns an ordered list with per-symbol factor contributions. Per-symbol
-   prediction (`MarketPredictorHttpClient`) is one input, not the ranking.
-3. Inputs and weights, by horizon:
+1. Resolve wishlist and Finviz symbols while preserving source, observation time,
+   query/snapshot identity, and expiry.
+2. Persist and deduplicate the discovered set.
+3. Warm the required market state from Alpaca SIP data.
+4. Apply the selected strategy's deterministic admission profile to completed,
+   point-in-time evidence.
+5. Only a warm, qualified, armed, and triggered candidate can reach order planning.
+6. Finviz RVOL is discovery metadata only. Strategy RVOL is computed from Alpaca
+   candles using the versioned same-time baseline.
+7. Market Predictor output, when displayed, is advisory evidence only and cannot
+   qualify, veto, prioritize for execution, or authorize an order.
 
-   | Input | Intraday | Swing | Source |
-   | --- | --- | --- | --- |
-   | Model edge (direction-adjusted probability) | 0.38 | 0.34 | predictor |
-   | Market structure (RVOL intraday / trend quality swing) | 0.22 | 0.28 | indicator engine |
-   | Catalyst weight (ER 1.0, NEWS 0.85, SEC 0.5, SCRN 0.35, none 0.08) | 0.18 | 0.16 | news + earnings + screener |
-   | Technical state (eligible 1.0, watching 0.42, blocked 0.1) | 0.14 | 0.14 | signal generator / evaluator |
-   | Liquidity (1 - spread bps / 8) | 0.08 | 0.08 | quote stream |
+Desk view semantics built on discovery and deterministic admission:
 
-   A model veto subtracts a flat 0.12 rather than removing the candidate, so the
-   disagreement stays visible and auditable.
-4. Defaults live in config, not code: weights, catalyst table, veto penalty and
-   horizon presets belong in the paper/backtest profile under `universe.rank`, with
-   engine code reading them through the same path for backtest, paper and live.
-5. Persist each ranking run (universe source, horizon, weights version, per-symbol
-   score and factor values) so an audit page can explain why symbol N ranked where
-   it did.
-
-Desk view semantics built on this ranking:
-
-- All — the full ranked universe.
-- Signals — technicals triggered on the completed bar and no model veto: tradable now.
+- All — the full discovered universe with source and freshness.
+- Warming — insufficient completed market evidence for the selected strategy.
+- Signals — qualified and triggered on completed point-in-time evidence.
 - In trade — open positions.
-- Disagree — technicals say go, the model says stand aside.
-- Screener — raw screener membership for the selected scope.
+- Rejected/expired — exact admission, trigger, expiry, risk, or execution reason.
+- Screener — raw Finviz discovery membership; never a trading admission.
 
 ## Data Policy
 
@@ -271,7 +258,7 @@ dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.cspr
 Recent verification before this handoff:
 
 - `dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.csproj --no-restore`
-- Result: 989 passed, 0 failed on 2026-07-26.
+- Result: 1,101 passed, 0 failed on 2026-08-27 after the final Phase 0 universe-contract and source-provenance pass.
 - Clean committed-only boundary suites: 39 passed, 0 failed.
 - The integrated research decision remains `RETAIN_RESEARCH`; no current research
   strategy is eligible for a new paper-shadow promotion.
@@ -282,8 +269,10 @@ Near-term work is paper trading and backtesting quality:
 
 - make intraday strategies simple, explainable, and config-driven
 - improve premarket/opening-range and long/short day-bias logic
-- treat the Finviz screener as an enabled, first-class universe source alongside wishlists
-- use Finviz RVOL for screener-based candidates where available
+- treat Finviz as operational discovery alongside persisted wishlists while
+  preserving provenance and requiring normal strategy admission
+- use only Alpaca candle-derived, same-time RVOL in strategy decisions; retain
+  Finviz RVOL as discovery metadata
 - keep StockIndicators for standard technical indicators
 - use news catalysts mainly for swing and catalyst-driven intraday selection
 - improve audit pages so accepted/rejected decisions show exact matched values and reasons
