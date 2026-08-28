@@ -122,7 +122,6 @@ public sealed partial class LiveRunner(
 
         var configuredTickers = new HashSet<string>(run.Tickers ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
         var lastDiscoveryTickers = new HashSet<string>(configuredTickers, StringComparer.OrdinalIgnoreCase);
-        var screenerRelativeVolumeByTicker = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
         var lastConfirmedExposureTickers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         IReadOnlyList<ActiveBrokerOrder> lastConfirmedOpenOrders = Array.Empty<ActiveBrokerOrder>();
         IReadOnlyList<BrokerPosition> lastConfirmedOpenPositions = Array.Empty<BrokerPosition>();
@@ -545,7 +544,6 @@ public sealed partial class LiveRunner(
                                 openOrdersSnapshot,
                                 openPositionsSnapshot,
                                 brokerStateConfirmedForOrderDecisions,
-                                screenerRelativeVolumeByTicker,
                                 token,
                                 progress);
                         }

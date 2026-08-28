@@ -121,9 +121,8 @@ public sealed record CatalystEventStudyObservation(
     decimal? Ema10,
     decimal? Ema20,
     decimal? MacdHistogram,
-    decimal? SlotRelativeVolume,
-    decimal? SessionRelativeVolume,
-    decimal? CumulativeRelativeVolume,
+    decimal? SlotBarRelativeVolume,
+    decimal? CumulativeSameTimeRelativeVolume,
     IReadOnlyList<CatalystForwardReturn> ForwardReturns);
 
 public sealed record CatalystForwardReturn(
@@ -655,7 +654,6 @@ public sealed class CatalystTechnicalEventStudyRunner
             snapshot?.Ema20,
             snapshot?.MacdHistogram,
             snapshot?.SlotRelativeVolume,
-            snapshot?.SessionRelativeVolume,
             snapshot?.RelativeVolume,
             options.Horizons.Select(horizon =>
                 BuildForwardReturn(
@@ -857,7 +855,7 @@ public sealed class CatalystTechnicalEventStudyRunner
             return false;
         }
 
-        if (after.SessionRelativeVolume is >= 1m || after.SlotRelativeVolume is >= 1m || after.RelativeVolume is >= 1m)
+        if (after.SlotRelativeVolume is >= 1m || after.RelativeVolume is >= 1m)
         {
             return true;
         }

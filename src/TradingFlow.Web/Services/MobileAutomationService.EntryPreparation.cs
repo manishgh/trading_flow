@@ -255,7 +255,6 @@ public sealed partial class MobileAutomationService
             IsMacdNotBearish: latest.MacdHistogram is null or >= 0m,
             IsPriceAboveEma10: latest.Ema10 is not null && latest.CurrentPrice >= latest.Ema10.Value,
             IsEma10AboveEma20: latest.Ema10 is not null && latest.Ema20 is not null && latest.Ema10.Value >= latest.Ema20.Value,
-            SessionRelativeVolume: latest.SessionRelativeVolume,
             SlotRelativeVolume: latest.SlotRelativeVolume,
             Catalyst: latest.Catalyst);
 
@@ -279,7 +278,6 @@ public sealed partial class MobileAutomationService
         var missing = new List<string>();
         if (snapshot.Rsi is null) missing.Add("rsi");
         if (snapshot.Atr is null) missing.Add("atr");
-        if (snapshot.RelativeVolume is null) missing.Add("relative_volume");
         if (snapshot.Vwap is null) missing.Add("vwap");
         if (snapshot.BollingerMiddle is null) missing.Add("bollinger_middle");
         if (snapshot.MacdHistogram is null) missing.Add("macd_histogram");
@@ -292,12 +290,11 @@ public sealed partial class MobileAutomationService
         TradeSignal signal)
     {
         var relativeVolume = TradingFlow.Engine.Strategies.StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, snapshot);
-        if (relativeVolume is null)
-        {
-            return $"entry_relative_volume_unavailable (Source: {strategy.EntryRules.MinVolumeSpikeSource})";
-        }
-
-        return strategyEvaluator.GetLongEntryRejection(strategy, signal, relativeVolume.Value);
+        return strategyDecisionBrain.GetLongEntryRejection(
+            strategy,
+            signal,
+            snapshot,
+            relativeVolume);
     }
 
     private static string[] ResolveRequiredTimeframes(StrategyDefinition strategy)

@@ -29,7 +29,6 @@ public sealed partial class LiveRunner
         IReadOnlyCollection<ActiveBrokerOrder> openOrders,
         IReadOnlyCollection<BrokerPosition> openPositions,
         bool brokerStateConfirmedForOrderDecisions,
-        IReadOnlyDictionary<string, decimal> screenerRelativeVolumeByTicker,
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
     {
@@ -115,12 +114,8 @@ public sealed partial class LiveRunner
                 continue;
 
             var lastSnapshot = snapshots[^1];
-            var isFinvizRelativeVolume = screenerRelativeVolumeByTicker.TryGetValue(ticker, out var screenerRelativeVolume);
-            var configuredRelativeVolume = StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, lastSnapshot);
-            var relativeVolumeSource = isFinvizRelativeVolume ? "finviz_screener" : strategy.EntryRules.MinVolumeSpikeSource;
-            var effectiveRelativeVolume = isFinvizRelativeVolume
-                ? screenerRelativeVolume
-                : configuredRelativeVolume ?? 0m;
+            var effectiveRelativeVolume = StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, lastSnapshot);
+            var relativeVolumeSource = strategy.EntryRules.MinVolumeSpikeSource.ToConfigValue();
 
             var chartData = new
             {
@@ -131,14 +126,18 @@ public sealed partial class LiveRunner
                 Close = lastSnapshot.CurrentPrice,
                 Atr = lastSnapshot.Atr ?? 0m,
                 RelativeVolume = effectiveRelativeVolume,
-                SlotRelativeVolume = lastSnapshot.SlotRelativeVolume ?? 0m,
-                SessionRelativeVolume = lastSnapshot.SessionRelativeVolume ?? 0m,
-                CalculatedRelativeVolume = lastSnapshot.RelativeVolume ?? 0m,
+                SlotRelativeVolume = lastSnapshot.SlotRelativeVolume,
+                CalculatedRelativeVolume = lastSnapshot.RelativeVolume,
                 RelativeVolumeSource = relativeVolumeSource,
-                SlotAverageVolume = lastSnapshot.SlotAverageVolume ?? 0m,
-                CumulativeAverageVolume = lastSnapshot.CumulativeAverageVolume ?? 0m,
-                AverageSessionVolume = lastSnapshot.AverageSessionVolume ?? 0m,
+                SlotMedianVolume = lastSnapshot.SlotMedianVolume,
+                CumulativeSameTimeMedianVolume = lastSnapshot.CumulativeSameTimeMedianVolume,
                 RelativeVolumeSampleCount = lastSnapshot.RelativeVolumeSampleCount,
+                SlotRelativeVolumeSampleCount = lastSnapshot.SlotRelativeVolumeSampleCount,
+                MarketEvidenceProfileVersion = lastSnapshot.MarketEvidenceProfileVersion,
+                RelativeVolumeCohort = lastSnapshot.RelativeVolumeCohort,
+                DataFeed = lastSnapshot.DataFeed,
+                AdjustmentPolicy = lastSnapshot.AdjustmentPolicy,
+                MarketEvidenceReliability = lastSnapshot.MarketEvidenceReliability,
                 Volume = lastSnapshot.CurrentVolume,
                 Rsi = lastSnapshot.Rsi,
                 Vwap = lastSnapshot.Vwap
@@ -264,17 +263,11 @@ public sealed partial class LiveRunner
             var signal = _signalGenerator.CreateTradeSignal(strategy, barsList, snapshots, snapshots.Count - 1);
             if (signal != null)
             {
-                var signalJson = BuildSignalAuditJson(
+                var signalJson = StrategyDecisionBrain.BuildSignalAuditJson(
                     signal,
                     effectiveRelativeVolume,
                     relativeVolumeSource,
-                    lastSnapshot.RelativeVolume,
-                    lastSnapshot.SlotRelativeVolume,
-                    lastSnapshot.SessionRelativeVolume,
-                    lastSnapshot.SlotAverageVolume,
-                    lastSnapshot.CumulativeAverageVolume,
-                    lastSnapshot.AverageSessionVolume,
-                    lastSnapshot.RelativeVolumeSampleCount);
+                    lastSnapshot);
                 var decisionTimestamp = DateTimeOffset.UtcNow;
 
                 var signalAvailableTimestamp = lastSnapshot.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
@@ -606,7 +599,9 @@ public sealed partial class LiveRunner
                             relativeVolumeSource,
                             calculatedRelativeVolume = lastSnapshot.RelativeVolume,
                             slotRelativeVolume = lastSnapshot.SlotRelativeVolume,
-                            sessionRelativeVolume = lastSnapshot.SessionRelativeVolume
+                            slotRelativeVolumeSampleCount = lastSnapshot.SlotRelativeVolumeSampleCount,
+                            marketEvidenceProfileVersion = lastSnapshot.MarketEvidenceProfileVersion,
+                            relativeVolumeCohort = lastSnapshot.RelativeVolumeCohort
                         })
                     }, cancellationToken);
                 }

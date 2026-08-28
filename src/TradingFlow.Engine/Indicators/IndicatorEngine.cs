@@ -1,5 +1,6 @@
 using TradingFlow.Domain.Market;
 using Skender.Stock.Indicators;
+using TradingFlow.Engine.Market;
 
 namespace TradingFlow.Engine.Indicators;
 
@@ -14,9 +15,17 @@ public sealed class IndicatorEngine : IIndicatorCalculator
     private const int Rsi2Period = 2;
     private const int AtrPeriod = 14;
     private const int BollingerPeriod = 20;
-    public const int RelativeVolumeLookbackSessions = 63;
-    private const int RelativeVolumeMinimumComparableBars = 5;
-    private static readonly TimeZoneInfo ExchangeTimeZone = ResolveExchangeTimeZone();
+    public const int RelativeVolumeLookbackSessions = MarketEvidenceProfile.DefaultLookbackSessions;
+    private static readonly TimeOnly PremarketOpen = new(4, 0);
+    private static readonly TimeOnly PostmarketClose = new(20, 0);
+    private readonly MarketEvidenceProfile marketEvidenceProfile;
+    private readonly TimeZoneInfo exchangeTimeZone;
+
+    public IndicatorEngine(MarketEvidenceProfile? marketEvidenceProfile = null)
+    {
+        this.marketEvidenceProfile = marketEvidenceProfile ?? MarketEvidenceProfile.ProductionDefault;
+        exchangeTimeZone = ResolveExchangeTimeZone(this.marketEvidenceProfile.ExchangeTimeZone);
+    }
 
     public IReadOnlyList<IndicatorSnapshot> Compute(IReadOnlyList<OhlcvBar> inputBars)
     {
@@ -27,9 +36,26 @@ public sealed class IndicatorEngine : IIndicatorCalculator
         }
 
         var standardIndicators = ComputeStandardIndicators(bars);
-        var cumulativeVolumeBaseline = ComputeCumulativeVolumeBaseline(bars);
-        var slotVolumeBaseline = ComputeSlotVolumeBaseline(bars);
-        var sessionVolumeBaseline = ComputeSessionVolumeBaseline(bars);
+        var dataFeeds = bars
+            .Select(bar => NormalizeDataFeed(bar.DataFeed))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var mixedFeed = dataFeeds.Length != 1;
+        var dataFeed = mixedFeed ? "mixed" : dataFeeds[0];
+        var adjustmentPolicies = bars
+            .Select(bar => NormalizeAdjustmentPolicy(bar.AdjustmentPolicy))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var mixedAdjustmentPolicy = adjustmentPolicies.Length != 1;
+        var adjustmentPolicy = mixedAdjustmentPolicy ? "mixed" : adjustmentPolicies[0];
+        var marketEvidenceReliability = ResolveMarketEvidenceReliability(
+            mixedFeed,
+            dataFeed,
+            mixedAdjustmentPolicy,
+            adjustmentPolicy);
+        var volumeEvidence = marketEvidenceReliability == "verified_same_provenance"
+            ? ComputeVolumeEvidence(bars)
+            : VolumeEvidenceSeries.Unavailable(bars.Length);
         var vwap = ComputeVwap(bars);
 
         var snapshots = new List<IndicatorSnapshot>(bars.Length);
@@ -50,28 +76,31 @@ public sealed class IndicatorEngine : IIndicatorCalculator
                 standardIndicators.BollingerMiddle[i],
                 standardIndicators.BollingerUpper[i],
                 standardIndicators.BollingerLower[i],
-                cumulativeVolumeBaseline.RelativeVolume[i],
+                volumeEvidence.CumulativeRelativeVolume[i],
                 standardIndicators.MacdLine[i],
                 standardIndicators.MacdSignal[i],
                 standardIndicators.MacdHistogram[i],
                 Sma10: standardIndicators.Sma10[i],
                 Sma20: standardIndicators.Sma20[i],
                 Sma50: standardIndicators.Sma50[i],
-                SlotRelativeVolume: slotVolumeBaseline.RelativeVolume[i],
-                SessionRelativeVolume: sessionVolumeBaseline.RelativeVolume[i],
+                SlotRelativeVolume: volumeEvidence.SlotRelativeVolume[i],
                 Ema10: standardIndicators.Ema10[i],
-                SlotAverageVolume: slotVolumeBaseline.AverageVolume[i],
-                CumulativeAverageVolume: cumulativeVolumeBaseline.AverageVolume[i],
-                AverageSessionVolume: sessionVolumeBaseline.AverageVolume[i],
-                RelativeVolumeSampleCount: cumulativeVolumeBaseline.SampleCount[i],
+                SlotMedianVolume: volumeEvidence.SlotMedianVolume[i],
+                CumulativeSameTimeMedianVolume: volumeEvidence.CumulativeMedianVolume[i],
+                RelativeVolumeSampleCount: volumeEvidence.CumulativeSampleCount[i],
                 Sma150: standardIndicators.Sma150[i],
                 Sma200: standardIndicators.Sma200[i],
                 Ema5: standardIndicators.Ema5[i],
                 Adx: standardIndicators.Adx[i],
                 Obv: standardIndicators.Obv[i],
                 Rsi2: standardIndicators.Rsi2[i],
-                SlotRelativeVolumeSampleCount: slotVolumeBaseline.SampleCount[i],
-                SessionRelativeVolumeSampleCount: sessionVolumeBaseline.SampleCount[i]));
+                SlotRelativeVolumeSampleCount: volumeEvidence.SlotSampleCount[i],
+                MarketEvidenceProfileVersion: marketEvidenceProfile.Version,
+                RelativeVolumeCohort: volumeEvidence.Cohort[i],
+                RelativeVolumeMinimumSamples: marketEvidenceProfile.MinimumValidSamples,
+                DataFeed: dataFeed,
+                AdjustmentPolicy: adjustmentPolicy,
+                MarketEvidenceReliability: marketEvidenceReliability));
         }
 
         return snapshots;
@@ -131,121 +160,397 @@ public sealed class IndicatorEngine : IIndicatorCalculator
             bollinger.Select(x => ToDecimal(x.LowerBand)).ToArray());
     }
 
-    private static VolumeBaselineSeries ComputeCumulativeVolumeBaseline(IReadOnlyList<OhlcvBar> bars)
+    private VolumeEvidenceSeries ComputeVolumeEvidence(IReadOnlyList<OhlcvBar> bars)
     {
-        var relativeVolume = new decimal?[bars.Count];
-        var averageVolume = new decimal?[bars.Count];
-        var sampleCount = new int[bars.Count];
-        var cumulativeVolumesBySlot = new Dictionary<TimeSpan, List<decimal>>();
-        DateOnly? activeDate = null;
-        decimal activeSessionVolume = 0m;
+        var cumulativeRelativeVolume = new decimal?[bars.Count];
+        var slotRelativeVolume = new decimal?[bars.Count];
+        var cumulativeMedianVolume = new decimal?[bars.Count];
+        var slotMedianVolume = new decimal?[bars.Count];
+        var cumulativeSampleCount = new int[bars.Count];
+        var slotSampleCount = new int[bars.Count];
+        var cohorts = new string?[bars.Count];
+        var sessionVolumeHistory = new Dictionary<VolumeSessionKey, SessionVolumeState>();
+        var slotHistory = new Dictionary<VolumeSlotKey, List<SessionVolumeSample>>();
 
         for (var i = 0; i < bars.Count; i++)
         {
-            var exchangeTime = TimeZoneInfo.ConvertTime(bars[i].Timestamp, ExchangeTimeZone);
-            var exchangeDate = DateOnly.FromDateTime(exchangeTime.DateTime);
-            if (activeDate is not null && activeDate != exchangeDate)
+            if (!TryResolveVolumeSlot(bars[i], out var resolvedSlot))
             {
-                activeSessionVolume = 0m;
+                continue;
             }
 
-            activeDate = exchangeDate;
-            activeSessionVolume += bars[i].Volume;
-
-            var slot = exchangeTime.TimeOfDay;
-            if (!cumulativeVolumesBySlot.TryGetValue(slot, out var comparableCumulativeVolumes))
+            if (!sessionVolumeHistory.TryGetValue(resolvedSlot.SessionKey, out var currentSession))
             {
-                comparableCumulativeVolumes = new List<decimal>();
-                cumulativeVolumesBySlot[slot] = comparableCumulativeVolumes;
+                currentSession = new SessionVolumeState();
+                sessionVolumeHistory[resolvedSlot.SessionKey] = currentSession;
             }
 
-            if (comparableCumulativeVolumes.Count >= RelativeVolumeMinimumComparableBars)
+            currentSession.Slots[resolvedSlot.SequenceMinute] = bars[i].Volume;
+            if (bars[i].CoverageVerifiedThroughUtc is { } verifiedThrough &&
+                (currentSession.CoverageVerifiedThroughUtc is null ||
+                 verifiedThrough.ToUniversalTime() > currentSession.CoverageVerifiedThroughUtc.Value))
             {
-                var lookback = comparableCumulativeVolumes
-                    .Skip(Math.Max(0, comparableCumulativeVolumes.Count - RelativeVolumeLookbackSessions))
-                    .ToArray();
-                var average = lookback.Average();
-                averageVolume[i] = average;
-                sampleCount[i] = lookback.Length;
-                relativeVolume[i] = average <= 0 ? null : activeSessionVolume / average;
+                currentSession.CoverageVerifiedThroughUtc = verifiedThrough.ToUniversalTime();
             }
 
-            comparableCumulativeVolumes.Add(activeSessionVolume);
+            var cumulative = currentSession.Slots
+                .Where(pair => pair.Key <= resolvedSlot.SequenceMinute)
+                .Sum(pair => pair.Value);
+            cohorts[i] = resolvedSlot.Cohort.ToString().ToLowerInvariant();
+            var priorTradingSessions = ResolvePriorTradingSessions(resolvedSlot.SessionKey.TradeDate);
+
+            EvaluateCumulativeBaseline(
+                sessionVolumeHistory,
+                priorTradingSessions,
+                resolvedSlot,
+                cumulative,
+                out cumulativeRelativeVolume[i],
+                out cumulativeMedianVolume[i],
+                out cumulativeSampleCount[i]);
+            EvaluateBaseline(
+                slotHistory,
+                priorTradingSessions,
+                resolvedSlot.SlotKey,
+                resolvedSlot.SessionKey.TradeDate,
+                bars[i].Volume,
+                out slotRelativeVolume[i],
+                out slotMedianVolume[i],
+                out slotSampleCount[i]);
         }
 
-        return new VolumeBaselineSeries(relativeVolume, averageVolume, sampleCount);
+        return new VolumeEvidenceSeries(
+            cumulativeRelativeVolume,
+            slotRelativeVolume,
+            cumulativeMedianVolume,
+            slotMedianVolume,
+            cumulativeSampleCount,
+            slotSampleCount,
+            cohorts);
     }
 
-    private static VolumeBaselineSeries ComputeSlotVolumeBaseline(IReadOnlyList<OhlcvBar> bars)
+    private void EvaluateCumulativeBaseline(
+        IReadOnlyDictionary<VolumeSessionKey, SessionVolumeState> sessionHistory,
+        IReadOnlyList<DateOnly>? priorTradingSessions,
+        ResolvedVolumeSlot currentSlot,
+        decimal currentVolume,
+        out decimal? relativeVolume,
+        out decimal? medianVolume,
+        out int sampleCount)
     {
-        var relativeVolume = new decimal?[bars.Count];
-        var averageVolume = new decimal?[bars.Count];
-        var sampleCount = new int[bars.Count];
-        var volumesBySlot = new Dictionary<TimeSpan, List<decimal>>();
-
-        for (var i = 0; i < bars.Count; i++)
+        relativeVolume = null;
+        medianVolume = null;
+        sampleCount = 0;
+        if (priorTradingSessions is null)
         {
-            var slot = TimeZoneInfo.ConvertTime(bars[i].Timestamp, ExchangeTimeZone).TimeOfDay;
-            if (!volumesBySlot.TryGetValue(slot, out var comparableVolumes))
-            {
-                comparableVolumes = new List<decimal>();
-                volumesBySlot[slot] = comparableVolumes;
-            }
-
-            if (comparableVolumes.Count >= RelativeVolumeMinimumComparableBars)
-            {
-                var lookback = comparableVolumes
-                    .Skip(Math.Max(0, comparableVolumes.Count - RelativeVolumeLookbackSessions))
-                    .ToArray();
-                var average = lookback.Average();
-                averageVolume[i] = average;
-                sampleCount[i] = lookback.Length;
-                relativeVolume[i] = average <= 0 ? null : bars[i].Volume / average;
-            }
-
-            comparableVolumes.Add(bars[i].Volume);
+            return;
         }
 
-        return new VolumeBaselineSeries(relativeVolume, averageVolume, sampleCount);
+        var lookback = priorTradingSessions
+            .Select(tradeDate =>
+            {
+                if (!TryResolveComparableSlot(
+                        tradeDate,
+                        currentSlot,
+                        out var comparableSequenceMinute,
+                        out var requiredCoverageUtc) ||
+                    !sessionHistory.TryGetValue(
+                        new VolumeSessionKey(tradeDate, currentSlot.Cohort),
+                        out var session) ||
+                    session.CoverageVerifiedThroughUtc is null ||
+                    session.CoverageVerifiedThroughUtc.Value < requiredCoverageUtc)
+                {
+                    return (decimal?)null;
+                }
+
+                var comparableSlots = session.Slots
+                    .Where(slot => slot.Key <= comparableSequenceMinute)
+                    .Select(slot => slot.Value)
+                    .ToArray();
+                return comparableSlots.Length == 0
+                    ? (decimal?)null
+                    : comparableSlots.Sum();
+            })
+            .Where(volume => volume.HasValue)
+            .Select(volume => volume!.Value)
+            .ToArray();
+        sampleCount = lookback.Length;
+        if (sampleCount < marketEvidenceProfile.MinimumValidSamples)
+        {
+            return;
+        }
+
+        var median = Median(lookback);
+        medianVolume = median;
+        relativeVolume = median <= 0m ? null : currentVolume / median;
     }
 
-    private static VolumeBaselineSeries ComputeSessionVolumeBaseline(IReadOnlyList<OhlcvBar> bars)
+    private void EvaluateBaseline(
+        IDictionary<VolumeSlotKey, List<SessionVolumeSample>> history,
+        IReadOnlyList<DateOnly>? priorTradingSessions,
+        VolumeSlotKey slotKey,
+        DateOnly currentTradeDate,
+        decimal currentVolume,
+        out decimal? relativeVolume,
+        out decimal? medianVolume,
+        out int sampleCount)
     {
-        var relativeVolume = new decimal?[bars.Count];
-        var averageVolume = new decimal?[bars.Count];
-        var sampleCount = new int[bars.Count];
-        var completedSessionVolumes = new List<decimal>();
-        DateOnly? activeDate = null;
-        decimal activeSessionVolume = 0m;
-
-        for (var i = 0; i < bars.Count; i++)
+        if (!history.TryGetValue(slotKey, out var samples))
         {
-            var exchangeDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(bars[i].Timestamp, ExchangeTimeZone).DateTime);
-            if (activeDate is not null && activeDate != exchangeDate)
-            {
-                completedSessionVolumes.Add(activeSessionVolume);
-                activeSessionVolume = 0m;
-            }
-
-            activeDate = exchangeDate;
-            activeSessionVolume += bars[i].Volume;
-
-            if (completedSessionVolumes.Count >= RelativeVolumeMinimumComparableBars)
-            {
-                var lookback = completedSessionVolumes
-                    .Skip(Math.Max(0, completedSessionVolumes.Count - RelativeVolumeLookbackSessions))
-                    .ToArray();
-                var averageSessionVolume = lookback.Average();
-                averageVolume[i] = averageSessionVolume;
-                sampleCount[i] = lookback.Length;
-                relativeVolume[i] = averageSessionVolume <= 0 ? null : activeSessionVolume / averageSessionVolume;
-            }
+            samples = [];
+            history[slotKey] = samples;
         }
 
-        return new VolumeBaselineSeries(relativeVolume, averageVolume, sampleCount);
+        var priorDates = priorTradingSessions?.ToHashSet() ?? [];
+        var lookback = samples
+            .Where(sample => priorDates.Contains(sample.TradeDate))
+            .OrderBy(sample => sample.TradeDate)
+            .Select(sample => sample.Volume)
+            .ToArray();
+        sampleCount = lookback.Length;
+        relativeVolume = null;
+        medianVolume = null;
+        if (sampleCount >= marketEvidenceProfile.MinimumValidSamples)
+        {
+            var median = Median(lookback);
+            medianVolume = median;
+            relativeVolume = median <= 0m ? null : currentVolume / median;
+        }
+
+        var existingIndex = samples.FindIndex(sample => sample.TradeDate == currentTradeDate);
+        var current = new SessionVolumeSample(currentTradeDate, currentVolume);
+        if (existingIndex >= 0)
+        {
+            samples[existingIndex] = current;
+        }
+        else
+        {
+            samples.Add(current);
+        }
     }
 
-    private static decimal?[] ComputeVwap(IReadOnlyList<OhlcvBar> bars)
+    private bool TryResolveVolumeSlot(
+        OhlcvBar bar,
+        out ResolvedVolumeSlot resolvedSlot)
+    {
+        var exchangeTimestamp = TimeZoneInfo.ConvertTime(bar.Timestamp, exchangeTimeZone);
+        var exchangeDate = DateOnly.FromDateTime(exchangeTimestamp.DateTime);
+        var timeframe = TimeframeParser.Parse(bar.Timeframe);
+        if (IsDailyTimeframe(bar.Timeframe))
+        {
+            if (!marketEvidenceProfile.TryResolveSchedule(exchangeDate, out var dailySchedule) ||
+                !dailySchedule.IsTradingDay)
+            {
+                resolvedSlot = default;
+                return false;
+            }
+
+            resolvedSlot = new ResolvedVolumeSlot(
+                new VolumeSessionKey(exchangeDate, MarketVolumeCohort.Daily),
+                new VolumeSlotKey(MarketVolumeCohort.Daily, 0),
+                MarketVolumeCohort.Daily,
+                0,
+                timeframe);
+            return true;
+        }
+
+        var time = TimeOnly.FromDateTime(exchangeTimestamp.DateTime);
+        var tradeDate = time >= PostmarketClose ? exchangeDate.AddDays(1) : exchangeDate;
+        if (!TryClassifyClock(tradeDate, time, out var cohort, out var sequenceMinute))
+        {
+            resolvedSlot = default;
+            return false;
+        }
+
+        resolvedSlot = new ResolvedVolumeSlot(
+            new VolumeSessionKey(tradeDate, cohort),
+            new VolumeSlotKey(cohort, MinutesBetween(TimeOnly.MinValue, time)),
+            cohort,
+            sequenceMinute,
+            timeframe);
+        return true;
+    }
+
+    private IReadOnlyList<DateOnly>? ResolvePriorTradingSessions(DateOnly currentTradeDate)
+    {
+        var result = new List<DateOnly>(marketEvidenceProfile.LookbackSessions);
+        var cursor = currentTradeDate.AddDays(-1);
+        var safetyLimit = marketEvidenceProfile.LookbackSessions * 4 + 31;
+        for (var inspected = 0; inspected < safetyLimit && result.Count < marketEvidenceProfile.LookbackSessions; inspected++)
+        {
+            if (!marketEvidenceProfile.TryResolveSchedule(cursor, out var schedule))
+            {
+                return null;
+            }
+
+            if (schedule.IsTradingDay)
+            {
+                result.Add(cursor);
+            }
+
+            cursor = cursor.AddDays(-1);
+        }
+
+        return result.Count == marketEvidenceProfile.LookbackSessions ? result : null;
+    }
+
+    private bool TryResolveComparableSlot(
+        DateOnly tradeDate,
+        ResolvedVolumeSlot currentSlot,
+        out int sequenceMinute,
+        out DateTimeOffset requiredCoverageUtc)
+    {
+        if (currentSlot.Cohort == MarketVolumeCohort.Daily)
+        {
+            if (!marketEvidenceProfile.TryResolveSchedule(tradeDate, out var dailySchedule) ||
+                !dailySchedule.IsTradingDay)
+            {
+                sequenceMinute = default;
+                requiredCoverageUtc = default;
+                return false;
+            }
+
+            sequenceMinute = 0;
+            requiredCoverageUtc = ToUtc(tradeDate, TimeOnly.MinValue).Add(currentSlot.Timeframe);
+            return true;
+        }
+
+        var clock = TimeOnly.FromTimeSpan(TimeSpan.FromMinutes(currentSlot.SlotKey.ClockMinute));
+        if (!TryClassifyClock(tradeDate, clock, out var cohort, out sequenceMinute) ||
+            cohort != currentSlot.Cohort)
+        {
+            requiredCoverageUtc = default;
+            return false;
+        }
+
+        var localDate = currentSlot.Cohort == MarketVolumeCohort.Overnight && clock >= PostmarketClose
+            ? tradeDate.AddDays(-1)
+            : tradeDate;
+        requiredCoverageUtc = ToUtc(localDate, clock).Add(currentSlot.Timeframe);
+        return true;
+    }
+
+    private bool TryClassifyClock(
+        DateOnly tradeDate,
+        TimeOnly time,
+        out MarketVolumeCohort cohort,
+        out int sequenceMinute)
+    {
+        if (!marketEvidenceProfile.TryResolveSchedule(tradeDate, out var schedule) || !schedule.IsTradingDay)
+        {
+            cohort = default;
+            sequenceMinute = default;
+            return false;
+        }
+
+        if (time >= PostmarketClose || time < PremarketOpen)
+        {
+            cohort = MarketVolumeCohort.Overnight;
+            sequenceMinute = time >= PostmarketClose
+                ? MinutesBetween(PostmarketClose, time)
+                : 240 + MinutesBetween(TimeOnly.MinValue, time);
+            return true;
+        }
+
+        if (time < schedule.RegularOpen)
+        {
+            cohort = MarketVolumeCohort.Premarket;
+            sequenceMinute = MinutesBetween(PremarketOpen, time);
+            return true;
+        }
+
+        if (time < schedule.RegularClose)
+        {
+            cohort = MarketVolumeCohort.Regular;
+            sequenceMinute = MinutesBetween(schedule.RegularOpen, time);
+            return true;
+        }
+
+        if (time < PostmarketClose)
+        {
+            cohort = MarketVolumeCohort.Postmarket;
+            sequenceMinute = MinutesBetween(schedule.RegularClose, time);
+            return true;
+        }
+
+        cohort = default;
+        sequenceMinute = default;
+        return false;
+    }
+
+    private static bool IsDailyTimeframe(string timeframe) =>
+        timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase) ||
+        timeframe.EndsWith("w", StringComparison.OrdinalIgnoreCase) ||
+        timeframe.EndsWith("mo", StringComparison.OrdinalIgnoreCase);
+
+    private static int MinutesBetween(TimeOnly start, TimeOnly end) =>
+        (int)(end.ToTimeSpan() - start.ToTimeSpan()).TotalMinutes;
+
+    private DateTimeOffset ToUtc(DateOnly date, TimeOnly time)
+    {
+        var local = date.ToDateTime(time, DateTimeKind.Unspecified);
+        return new DateTimeOffset(local, exchangeTimeZone.GetUtcOffset(local)).ToUniversalTime();
+    }
+
+    private static decimal Median(IReadOnlyCollection<decimal> values)
+    {
+        var ordered = values.Order().ToArray();
+        var middle = ordered.Length / 2;
+        return ordered.Length % 2 == 0
+            ? (ordered[middle - 1] + ordered[middle]) / 2m
+            : ordered[middle];
+    }
+
+    private static string NormalizeDataFeed(string? dataFeed) =>
+        String.IsNullOrWhiteSpace(dataFeed)
+            ? "unspecified"
+            : dataFeed.Trim().ToLowerInvariant();
+
+    private static string NormalizeAdjustmentPolicy(string? adjustmentPolicy) =>
+        String.IsNullOrWhiteSpace(adjustmentPolicy)
+            ? "unspecified"
+            : adjustmentPolicy.Trim().ToLowerInvariant();
+
+    private string ResolveMarketEvidenceReliability(
+        bool mixedFeed,
+        string dataFeed,
+        bool mixedAdjustmentPolicy,
+        string adjustmentPolicy)
+    {
+        if (mixedFeed)
+        {
+            return "mixed_feed";
+        }
+
+        if (dataFeed == "unspecified")
+        {
+            return "feed_unspecified";
+        }
+
+        if (!dataFeed.Equals(
+                marketEvidenceProfile.OperationalRules.RequiredDataFeed,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return "unexpected_feed";
+        }
+
+        if (mixedAdjustmentPolicy)
+        {
+            return "mixed_adjustment_policy";
+        }
+
+        if (adjustmentPolicy == "unspecified")
+        {
+            return "adjustment_policy_unspecified";
+        }
+
+        return adjustmentPolicy.Equals(
+            marketEvidenceProfile.OperationalRules.RequiredAdjustmentPolicy,
+            StringComparison.OrdinalIgnoreCase)
+            ? "verified_same_provenance"
+            : "unexpected_adjustment_policy";
+    }
+
+    private decimal?[] ComputeVwap(IReadOnlyList<OhlcvBar> bars)
     {
         var output = new decimal?[bars.Count];
         DateOnly? activeDate = null;
@@ -254,7 +559,7 @@ public sealed class IndicatorEngine : IIndicatorCalculator
 
         for (var i = 0; i < bars.Count; i++)
         {
-            var barDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(bars[i].Timestamp, ExchangeTimeZone).DateTime);
+            var barDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(bars[i].Timestamp, exchangeTimeZone).DateTime);
             if (activeDate != barDate)
             {
                 activeDate = barDate;
@@ -276,22 +581,56 @@ public sealed class IndicatorEngine : IIndicatorCalculator
         return value is null ? null : Convert.ToDecimal(value.Value);
     }
 
-    private static TimeZoneInfo ResolveExchangeTimeZone()
+    private static TimeZoneInfo ResolveExchangeTimeZone(string timeZoneId)
     {
         try
         {
-            return TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+            return TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
         }
-        catch (TimeZoneNotFoundException)
+        catch (TimeZoneNotFoundException) when (timeZoneId.Equals("America/New_York", StringComparison.OrdinalIgnoreCase))
         {
             return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
         }
     }
 
-    private sealed record VolumeBaselineSeries(
-        decimal?[] RelativeVolume,
-        decimal?[] AverageVolume,
-        int[] SampleCount);
+    private readonly record struct VolumeSessionKey(DateOnly TradeDate, MarketVolumeCohort Cohort);
+
+    private readonly record struct VolumeSlotKey(MarketVolumeCohort Cohort, int ClockMinute);
+
+    private readonly record struct SessionVolumeSample(DateOnly TradeDate, decimal Volume);
+
+    private readonly record struct ResolvedVolumeSlot(
+        VolumeSessionKey SessionKey,
+        VolumeSlotKey SlotKey,
+        MarketVolumeCohort Cohort,
+        int SequenceMinute,
+        TimeSpan Timeframe);
+
+    private sealed class SessionVolumeState
+    {
+        public SortedDictionary<int, decimal> Slots { get; } = [];
+
+        public DateTimeOffset? CoverageVerifiedThroughUtc { get; set; }
+    }
+
+    private sealed record VolumeEvidenceSeries(
+        decimal?[] CumulativeRelativeVolume,
+        decimal?[] SlotRelativeVolume,
+        decimal?[] CumulativeMedianVolume,
+        decimal?[] SlotMedianVolume,
+        int[] CumulativeSampleCount,
+        int[] SlotSampleCount,
+        string?[] Cohort)
+    {
+        public static VolumeEvidenceSeries Unavailable(int count) => new(
+            new decimal?[count],
+            new decimal?[count],
+            new decimal?[count],
+            new decimal?[count],
+            new int[count],
+            new int[count],
+            new string?[count]);
+    }
 
     private sealed record StandardIndicatorSeries(
         decimal?[] Sma10,

@@ -23,7 +23,6 @@ public sealed partial class SignalGenerator
         var bar = bars[index];
         if (snapshot.Rsi is null ||
             snapshot.Atr is null ||
-            snapshot.RelativeVolume is null ||
             snapshot.Vwap is null ||
             snapshot.BollingerMiddle is null ||
             snapshot.MacdHistogram is null)
@@ -279,7 +278,6 @@ public sealed partial class SignalGenerator
             isSma50AboveSma150,
             isSma150AboveSma200,
             isPriceAboveEma5,
-            snapshot.SessionRelativeVolume,
             snapshot.SlotRelativeVolume,
             volumeSmaTrend.IsRising,
             volumeSmaTrend.CurrentSma,

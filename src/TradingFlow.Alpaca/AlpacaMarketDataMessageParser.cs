@@ -10,6 +10,15 @@ public static class AlpacaMarketDataMessageParser
         DateTimeOffset observedAtUtc,
         long fencingToken,
         out MarketBarEvent? marketEvent,
+        out AlpacaBarParseFailure? failure) =>
+        TryParseBar(message, observedAtUtc, fencingToken, "sip", out marketEvent, out failure);
+
+    public static bool TryParseBar(
+        JsonElement message,
+        DateTimeOffset observedAtUtc,
+        long fencingToken,
+        string dataFeed,
+        out MarketBarEvent? marketEvent,
         out AlpacaBarParseFailure? failure)
     {
         marketEvent = null;
@@ -52,15 +61,29 @@ public static class AlpacaMarketDataMessageParser
             high,
             low,
             close,
-            volume);
+            volume,
+            NormalizeFeed(dataFeed),
+            "all",
+            observedAtUtc.ToUniversalTime(),
+            timestamp.ToUniversalTime().AddMinutes(1));
         marketEvent = new MarketBarEvent(
             "alpaca",
-            "sip",
+            NormalizeFeed(dataFeed),
             bar,
             type == "u" ? MarketBarEventKind.ProviderRevision : MarketBarEventKind.CompletedBar,
             observedAtUtc.ToUniversalTime(),
             fencingToken);
         return true;
+    }
+
+    private static string NormalizeFeed(string dataFeed)
+    {
+        if (String.IsNullOrWhiteSpace(dataFeed))
+        {
+            throw new ArgumentException("Alpaca data feed is required.", nameof(dataFeed));
+        }
+
+        return dataFeed.Trim().ToLowerInvariant();
     }
 
     private static bool TryReadString(JsonElement element, string name, out string? value)

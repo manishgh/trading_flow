@@ -22,18 +22,6 @@ public sealed class BasicStrategyEvaluator
         }
 
 
-        var volumeRejection = GetVolumeConfirmationRejection(strategy, relativeVolume);
-        if (volumeRejection is not null)
-        {
-            return volumeRejection;
-        }
-
-        if (strategy.EntryRules.MinSessionRelativeVolume is { } minSessionRelativeVolume &&
-            (signal.SessionRelativeVolume is null || signal.SessionRelativeVolume.Value < minSessionRelativeVolume))
-        {
-            return $"session_relative_volume_below_minimum (Actual: {signal.SessionRelativeVolume?.ToString("F2") ?? "n/a"}, Required: {minSessionRelativeVolume:F2})";
-        }
-
         if (strategy.EntryRules.RequireVolumeSmaRising && !signal.IsVolumeSmaRising)
         {
             return $"volume_sma_not_rising (CurrentSma: {signal.VolumeSma?.ToString("F0") ?? "n/a"}, PreviousSma: {signal.PreviousVolumeSma?.ToString("F0") ?? "n/a"}, LookbackBars: {strategy.EntryRules.VolumeSmaRisingLookbackBars})";
@@ -403,12 +391,6 @@ public sealed class BasicStrategyEvaluator
             return "timeframe_mismatch";
         }
 
-
-        var volumeRejection = GetVolumeConfirmationRejection(strategy, relativeVolume);
-        if (volumeRejection is not null)
-        {
-            return volumeRejection;
-        }
 
         if (strategy.EntryRules.MinShortEntryRsi is { } minShortRsi &&
             signal.CurrentRsi < minShortRsi)
@@ -826,29 +808,6 @@ public sealed class BasicStrategyEvaluator
                 : $"prior_day_not_inside_or_nr7 (LookbackDays: {strategy.EntryRules.PriorNr7LookbackDays})",
             _ => throw new NotSupportedException($"Unsupported prior_compression_mode: {strategy.EntryRules.PriorCompressionMode}.")
         };
-    }
-
-    private static string? GetVolumeConfirmationRejection(StrategyDefinition strategy, decimal relativeVolume)
-    {
-        var mode = strategy.EntryRules.VolumeConfirmationMode;
-        if (mode.Equals("none", StringComparison.OrdinalIgnoreCase) ||
-            mode.Equals("soft_confirmation", StringComparison.OrdinalIgnoreCase) ||
-            mode.Equals("soft_marker", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        if (mode.Equals("liquidity_floor", StringComparison.OrdinalIgnoreCase))
-        {
-            var floor = strategy.EntryRules.MinVolumeLiquidityFloor ?? 0m;
-            return floor > 0m && relativeVolume < floor
-                ? $"volume_liquidity_floor_below_minimum (Actual: {relativeVolume:F2}, Required: {floor:F2})"
-                : null;
-        }
-
-        return relativeVolume < strategy.EntryRules.MinVolumeSpike
-            ? $"relative_volume_below_minimum (Actual: {relativeVolume:F2}, Required: {strategy.EntryRules.MinVolumeSpike:F2})"
-            : null;
     }
 
     private static bool AllowsShort(StrategyDefinition strategy)

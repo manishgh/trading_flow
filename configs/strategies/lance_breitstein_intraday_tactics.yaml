@@ -6,14 +6,14 @@ timeframe: 5m
 direction: long
 entry_rules:
   setup_type: vwap_reclaim_trap
-  min_volume_spike: 0.0
+  min_volume_spike: 2.0
+  min_volume_spike_source: cumulative_same_time
   min_entry_rsi: 0.0
   max_entry_rsi: 100.0
   trend_filter: none
   macd_filter: none
   require_price_above_bb_middle: false
   require_macd_histogram_positive: false
-  min_session_relative_volume: 2.0
   opening_range_minutes: 30 # Let morning volatility settle
 
   # The Trap Architecture

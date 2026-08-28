@@ -35,7 +35,7 @@ public sealed partial class MobileAutomationService
     private readonly ILogger<MobileAutomationService> logger;
     private readonly ICandleStore candleStore;
     private readonly SignalGenerator signalGenerator = new();
-    private readonly BasicStrategyEvaluator strategyEvaluator = new();
+    private readonly StrategyDecisionBrain strategyDecisionBrain = new();
     private readonly PositionGuardianEngine positionGuardianEngine = new();
     private readonly IOrderSubmissionService? orderSubmissionService;
     private readonly IOrderLifecycleService? orderLifecycleService;

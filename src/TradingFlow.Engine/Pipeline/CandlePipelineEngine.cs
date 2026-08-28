@@ -88,8 +88,6 @@ public sealed class CandlePipelineEngine
     private const int NormalizedProgressEventInterval = 25_000;
     private static readonly TimeSpan NormalizedProgressMinimumInterval = TimeSpan.FromSeconds(2);
 
-    private readonly IndicatorEngine indicatorEngine = new();
-    private readonly BarResampler barResampler = new();
     private readonly MarketDataReplayAdapter replayAdapter = new();
     private readonly ICandleStore candleStore;
 
@@ -106,6 +104,25 @@ public sealed class CandlePipelineEngine
     {
         var workerCount = ResolveWorkerCount(request.WorkerCount);
         var capacity = request.BoundedCapacity <= 0 ? 1000 : request.BoundedCapacity;
+        var providerConfirmsSparseNoTradeIntervals =
+            provider is IMarketDataCompletenessProvider
+            {
+                OmittedIntradayIntervalsMeanNoQualifyingTrades: true
+            };
+        var marketEvidenceProfile = await ResolveMarketEvidenceProfileAsync(
+            request,
+            provider,
+            cancellationToken);
+        var indicatorEngine = new IndicatorEngine(marketEvidenceProfile);
+        var resamplingProfile = provider is IMarketSessionScheduleProvider
+            ? marketEvidenceProfile
+            : new MarketEvidenceProfile(
+                "calendar_unverified_resampling_v1",
+                MarketEvidenceProfile.DefaultLookbackSessions,
+                MarketEvidenceProfile.DefaultMinimumValidSamples,
+                request.ExchangeTimezone,
+                allowStandardWeekdayFallback: true);
+        var barResampler = new BarResampler(resamplingProfile);
         var barsByKey = new ConcurrentDictionary<
             TickerTimeframeKey,
             ConcurrentDictionary<DateTimeOffset, OhlcvBar>>();
@@ -275,17 +292,13 @@ public sealed class CandlePipelineEngine
         // Persist provider bars before deriving so recovery/audit can distinguish
         // raw feed candles from bars created by our resampler.
         await PersistCandlesAsync(request, grouped, "provider", cancellationToken);
-        var providerConfirmsSparseNoTradeIntervals =
-            provider is IMarketDataCompletenessProvider
-            {
-                OmittedIntradayIntervalsMeanNoQualifyingTrades: true
-            };
         var derivedBars = DeriveMissingTimeframes(
             request,
             grouped,
             failures,
             metrics,
-            providerConfirmsSparseNoTradeIntervals);
+            providerConfirmsSparseNoTradeIntervals,
+            barResampler);
         await PersistCandlesAsync(request, derivedBars, "derived", cancellationToken);
 
         foreach (var failedTicker in failures.Keys)
@@ -294,7 +307,14 @@ public sealed class CandlePipelineEngine
         }
 
         var snapshotsByTicker = new ConcurrentDictionary<string, ConcurrentDictionary<string, IReadOnlyList<IndicatorSnapshot>>>(StringComparer.OrdinalIgnoreCase);
-        await ComputeIndicatorsAsync(grouped, snapshotsByTicker, workerCount, capacity, metrics, cancellationToken);
+        await ComputeIndicatorsAsync(
+            grouped,
+            snapshotsByTicker,
+            workerCount,
+            capacity,
+            metrics,
+            indicatorEngine,
+            cancellationToken);
 
         var states = new ConcurrentDictionary<string, TickerMarketState>(StringComparer.OrdinalIgnoreCase);
         foreach (var (ticker, barsByTimeframe) in grouped)
@@ -314,8 +334,12 @@ public sealed class CandlePipelineEngine
         {
             try
             {
-                await foreach (var bar in provider.GetBarsAsync(tickers, downloadedTimeframes, request.Start, request.End, cancellationToken))
+                await foreach (var providerBar in provider.GetBarsAsync(tickers, downloadedTimeframes, request.Start, request.End, cancellationToken))
                 {
+                    var bar = providerConfirmsSparseNoTradeIntervals &&
+                        providerBar.CoverageVerifiedThroughUtc is null
+                            ? providerBar with { CoverageVerifiedThroughUtc = request.End.ToUniversalTime() }
+                            : providerBar;
                     var normalizedBar = CanonicalMarketBarValidator.Normalize(bar);
                     var isStructurallyValid = CanonicalMarketBarValidator.IsValid(
                         normalizedBar,
@@ -399,6 +423,7 @@ public sealed class CandlePipelineEngine
         int workerCount,
         int capacity,
         MutablePipelineMetrics metrics,
+        IndicatorEngine indicatorEngine,
         CancellationToken cancellationToken)
     {
         var linkOptions = new DataflowLinkOptions
@@ -461,7 +486,8 @@ public sealed class CandlePipelineEngine
         IDictionary<string, Dictionary<string, IReadOnlyList<OhlcvBar>>> grouped,
         IDictionary<string, string> failures,
         MutablePipelineMetrics metrics,
-        bool providerConfirmsSparseNoTradeIntervals)
+        bool providerConfirmsSparseNoTradeIntervals,
+        BarResampler barResampler)
     {
         var derivedBars = new List<OhlcvBar>();
         foreach (var (ticker, barsByTimeframe) in grouped)
@@ -502,6 +528,35 @@ public sealed class CandlePipelineEngine
         }
 
         return derivedBars;
+    }
+
+    private static async Task<MarketEvidenceProfile> ResolveMarketEvidenceProfileAsync(
+        CandlePipelineRequest request,
+        IMarketDataProvider provider,
+        CancellationToken cancellationToken)
+    {
+        if (provider is not IMarketSessionScheduleProvider scheduleProvider)
+        {
+            return MarketEvidenceProfile.ProductionDefault;
+        }
+
+        var exchangeTimeZone = ResolveTimezone(request.ExchangeTimezone);
+        var localStart = TimeZoneInfo.ConvertTime(request.Start, exchangeTimeZone);
+        var localEnd = TimeZoneInfo.ConvertTime(request.End, exchangeTimeZone);
+        var firstDate = DateOnly.FromDateTime(localStart.DateTime).AddDays(-1);
+        var lastDate = DateOnly.FromDateTime(localEnd.DateTime).AddDays(1);
+        var schedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(
+            firstDate,
+            lastDate,
+            cancellationToken);
+        return new MarketEvidenceProfile(
+            MarketEvidenceProfile.ProductionVersion,
+            MarketEvidenceProfile.DefaultLookbackSessions,
+            MarketEvidenceProfile.DefaultMinimumValidSamples,
+            request.ExchangeTimezone,
+            schedules,
+            MarketEvidenceOperationalRules.Production,
+            allowStandardWeekdayFallback: false);
     }
 
     private static NormalizedCandleEvent Normalize(CandleEvent candle)

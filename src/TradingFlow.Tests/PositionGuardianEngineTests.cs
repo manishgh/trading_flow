@@ -113,8 +113,7 @@ public sealed class PositionGuardianEngineTests
             0.05m,
             macdHistogram,
             Ema10: ema10,
-            SlotRelativeVolume: 2m,
-            SessionRelativeVolume: 2m);
+            SlotRelativeVolume: 2m);
     }
 
     private static StrategyDefinition LoadStrategyWithTrailingStop()
@@ -174,5 +173,4 @@ public sealed class PositionGuardianEngineTests
         throw new DirectoryNotFoundException("Could not locate TradingFlow repository root.");
     }
 }
-
 

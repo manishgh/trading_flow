@@ -15,8 +15,12 @@ public sealed class EarningsMarketStateLoader
     private readonly ICandleStore candleStore;
     private readonly EarningsMonitorOptions options;
     private readonly SemaphoreSlim loadLock = new(1, 1);
+    private readonly SemaphoreSlim calendarLock = new(1, 1);
     private readonly Dictionary<string, SortedDictionary<DateTimeOffset, OhlcvBar>> state =
         new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<DateOnly, TradingFlow.Engine.Indicators.MarketSessionSchedule>? cachedSchedules;
+    private DateOnly cachedScheduleStart;
+    private DateOnly cachedScheduleEnd;
 
     public EarningsMarketStateLoader(
         Lazy<IMarketDataProvider> marketData,
@@ -26,6 +30,42 @@ public sealed class EarningsMarketStateLoader
         this.marketData = marketData;
         this.candleStore = candleStore;
         this.options = options;
+    }
+
+    public async Task<IReadOnlyDictionary<DateOnly, TradingFlow.Engine.Indicators.MarketSessionSchedule>>
+        LoadMarketSessionSchedulesAsync(
+            DateOnly startDateInclusive,
+            DateOnly endDateInclusive,
+            CancellationToken cancellationToken)
+    {
+        if (marketData.Value is not IMarketSessionScheduleProvider scheduleProvider)
+        {
+            throw new InvalidOperationException(
+                "The earnings market-data provider does not expose an authoritative exchange calendar.");
+        }
+
+        await calendarLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (cachedSchedules is not null &&
+                cachedScheduleStart <= startDateInclusive &&
+                cachedScheduleEnd >= endDateInclusive)
+            {
+                return cachedSchedules;
+            }
+
+            cachedSchedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(
+                startDateInclusive,
+                endDateInclusive,
+                cancellationToken);
+            cachedScheduleStart = startDateInclusive;
+            cachedScheduleEnd = endDateInclusive;
+            return cachedSchedules;
+        }
+        finally
+        {
+            calendarLock.Release();
+        }
     }
 
     public async Task<IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>>> LoadAsync(

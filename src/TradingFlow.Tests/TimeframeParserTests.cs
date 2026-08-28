@@ -1,5 +1,6 @@
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Market;
+using TradingFlow.Engine.Indicators;
 using Xunit;
 
 namespace TradingFlow.Tests;
@@ -92,5 +93,29 @@ public sealed class TimeframeParserTests
         Assert.Equal(4_000m, completed.Volume);
         Assert.Equal(bars[0].Open, completed.Open);
         Assert.Equal(bars[^1].Close, completed.Close);
+    }
+
+    [Fact]
+    public void BarResampler_UsesAuthoritativeEarlyCloseBoundary()
+    {
+        var tradeDate = new DateOnly(2026, 7, 3);
+        var profile = new MarketEvidenceProfile(
+            "unit_test_calendar_v1",
+            20,
+            20,
+            "America/New_York",
+            new Dictionary<DateOnly, MarketSessionSchedule>
+            {
+                [tradeDate] = new(tradeDate, true, new TimeOnly(9, 30), new TimeOnly(13, 0))
+            },
+            allowStandardWeekdayFallback: false);
+        var resampler = new BarResampler(profile);
+
+        var window = resampler.GetBucketWindow(
+            new DateTimeOffset(2026, 7, 3, 17, 0, 0, TimeSpan.Zero),
+            "1h");
+
+        Assert.Equal("postmarket", window.SessionSegment);
+        Assert.Equal(new DateTimeOffset(2026, 7, 3, 17, 0, 0, TimeSpan.Zero), window.StartUtc);
     }
 }

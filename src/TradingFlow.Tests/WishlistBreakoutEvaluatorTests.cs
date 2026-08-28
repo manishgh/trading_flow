@@ -10,8 +10,8 @@ public sealed class WishlistBreakoutEvaluatorTests
     public void Evaluate_WhenTrendMomentumAndParticipationAligns_ProducesBreakoutAlert()
     {
         var evaluator = new WishlistBreakoutEvaluator();
-        var current = Snapshot(price: 10.40m, volume: 120_000m, vwap: 10.05m, atr: 0.25m, ema10: 10.20m, ema20: 10.10m, macd: 0.08m, sessionRvol: 1.8m);
-        var previous = Snapshot(price: 10.10m, volume: 80_000m, vwap: 10.02m, atr: 0.25m, ema10: 10.08m, ema20: 10.07m, macd: 0.03m, sessionRvol: 1.2m);
+        var current = Snapshot(price: 10.40m, volume: 120_000m, vwap: 10.05m, atr: 0.25m, ema10: 10.20m, ema20: 10.10m, macd: 0.08m, cumulativeSameTimeRvol: 1.8m);
+        var previous = Snapshot(price: 10.10m, volume: 80_000m, vwap: 10.02m, atr: 0.25m, ema10: 10.08m, ema20: 10.07m, macd: 0.03m, cumulativeSameTimeRvol: 1.2m);
 
         var result = evaluator.Evaluate(new WishlistMarketSnapshot("test", current, previous, RecentHigh: 10.35m, SessionOpen: 10.00m));
 
@@ -25,14 +25,28 @@ public sealed class WishlistBreakoutEvaluatorTests
     public void Evaluate_WhenPriceIsTooExtendedFromVwap_RejectsChase()
     {
         var evaluator = new WishlistBreakoutEvaluator(new WishlistBreakoutEvaluatorOptions(MaxVwapExtensionAtr: 2.0m));
-        var current = Snapshot(price: 11.00m, volume: 200_000m, vwap: 10.00m, atr: 0.20m, ema10: 10.70m, ema20: 10.20m, macd: 0.20m, sessionRvol: 4.0m);
-        var previous = Snapshot(price: 10.70m, volume: 100_000m, vwap: 9.95m, atr: 0.20m, ema10: 10.40m, ema20: 10.10m, macd: 0.10m, sessionRvol: 2.0m);
+        var current = Snapshot(price: 11.00m, volume: 200_000m, vwap: 10.00m, atr: 0.20m, ema10: 10.70m, ema20: 10.20m, macd: 0.20m, cumulativeSameTimeRvol: 4.0m);
+        var previous = Snapshot(price: 10.70m, volume: 100_000m, vwap: 9.95m, atr: 0.20m, ema10: 10.40m, ema20: 10.10m, macd: 0.10m, cumulativeSameTimeRvol: 2.0m);
 
         var result = evaluator.Evaluate(new WishlistMarketSnapshot("TDIC", current, previous, RecentHigh: 10.80m, SessionOpen: 9.80m));
 
         Assert.False(result.ShouldAlert);
         Assert.Equal("wishlist_watch_rejected", result.SignalType);
         Assert.Contains("extension too high", result.Reason);
+    }
+
+    [Fact]
+    public void Evaluate_WhenRvolIsUnavailable_DoesNotSubstituteOneBarVolumeGrowth()
+    {
+        var evaluator = new WishlistBreakoutEvaluator();
+        var current = Snapshot(price: 10.40m, volume: 500_000m, vwap: 10.05m, atr: 0.25m, ema10: 10.20m, ema20: 10.10m, macd: 0.08m, cumulativeSameTimeRvol: null);
+        var previous = Snapshot(price: 10.10m, volume: 10_000m, vwap: 10.02m, atr: 0.25m, ema10: 10.08m, ema20: 10.07m, macd: 0.03m, cumulativeSameTimeRvol: 1.2m);
+
+        var result = evaluator.Evaluate(new WishlistMarketSnapshot("test", current, previous, RecentHigh: 10.35m, SessionOpen: 10.00m));
+
+        Assert.False(result.ShouldAlert);
+        Assert.Null(result.CumulativeSameTimeRelativeVolume);
+        Assert.Contains("cumulative same-time RVOL unavailable", result.Reason);
     }
 
     [Fact]
@@ -62,7 +76,7 @@ public sealed class WishlistBreakoutEvaluatorTests
         Assert.Equal("POET", result.Ticker);
     }
 
-    private static IndicatorSnapshot Snapshot(decimal price, decimal volume, decimal vwap, decimal atr, decimal ema10, decimal ema20, decimal macd, decimal sessionRvol)
+    private static IndicatorSnapshot Snapshot(decimal price, decimal volume, decimal vwap, decimal atr, decimal ema10, decimal ema20, decimal macd, decimal? cumulativeSameTimeRvol)
     {
         return new IndicatorSnapshot(
             "TEST",
@@ -79,12 +93,11 @@ public sealed class WishlistBreakoutEvaluatorTests
             BollingerMiddle: null,
             BollingerUpper: null,
             BollingerLower: null,
-            RelativeVolume: sessionRvol,
+            RelativeVolume: cumulativeSameTimeRvol,
             MacdLine: macd,
             MacdSignal: 0m,
             MacdHistogram: macd,
-            Ema10: ema10,
-            SessionRelativeVolume: sessionRvol);
+            Ema10: ema10);
     }
 
     private sealed class InMemoryWishlistRepository : IWishlistRepository

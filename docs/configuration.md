@@ -117,12 +117,51 @@ TradingFlow:MarketState:LeaseSeconds = 30
 TradingFlow:MarketState:RenewEverySeconds = 10
 TradingFlow:MarketState:SymbolPipelineCapacity = 256
 TradingFlow:MarketState:RevisionAcceptanceMinutes = 2
-TradingFlow:MarketState:RecoveryLookbackDays = 10
+TradingFlow:MarketState:RecoveryLookbackDays = 45
 TradingFlow:MarketState:ActiveSessionStalenessMinutes = 3
 ```
 
 The service fails closed if the lease, subscription acknowledgement, recovery,
 bar continuity, or active-session freshness cannot be proven.
+The production defaults are two minutes and 45 days. A research/test override must be
+recorded with its run evidence; production promotion requires a new named evidence
+profile and matching replay/backtest verification.
+
+## Market Evidence And RVOL
+
+Strategies select one of two typed Alpaca candle measures:
+
+```yaml
+entry_rules:
+  min_volume_spike: 2.0
+  min_volume_spike_source: cumulative_same_time # or slot_bar
+  volume_confirmation_mode: hard_gate
+```
+
+- `cumulative_same_time` is the production participation gate: current cumulative
+  market-session cohort volume through the completed bar divided by the median at the
+  same New York exchange clock time over the exact 20 prior exchange sessions.
+- `slot_bar` compares only the completed candle with the prior-session median for that
+  exact cohort/slot. It is local acceleration evidence and must be selected explicitly.
+- `hard_gate` requires a ready baseline and applies `min_volume_spike`.
+- `none`, `soft_confirmation`, and `soft_marker` do not apply the primary volume
+  threshold. A separate enabled rule that consumes RVOL still requires ready evidence.
+
+Production RVOL requires Alpaca SIP bars with `adjustment=all`. Fewer than 20 valid
+prior sessions, mixed/unknown feed provenance, or mixed/unknown adjustment provenance
+returns `rvol_baseline_not_ready`. Finviz-reported RVOL is discovery metadata only and
+is not a valid `min_volume_spike_source` value.
+
+The Alpaca exchange calendar is mandatory for production market evidence. A missing,
+incomplete, or malformed calendar fails closed; production does not substitute a
+weekday calendar. Sparse cumulative samples also require provider coverage through the
+requested completed slot, so missing bars alone never imply zero trading volume.
+
+`cache_policy: use_cache` reuses a complete, checksummed authoritative calendar range
+offline. `cache_policy: refresh` always loads and atomically commits a new provider
+calendar. Adjusted candle slices have a separate versioned 24-hour maximum age and an
+explicit restatement revision, so a matching `adjustment=all` label cannot make an old
+pre-split snapshot valid forever.
 
 `SqliteMarketStreamLeaseRepository` is the local/single-node lease implementation.
 Do not use a shared SQLite file as a multi-node clock authority. Before scaling the

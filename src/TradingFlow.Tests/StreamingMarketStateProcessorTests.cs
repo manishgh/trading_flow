@@ -1,8 +1,9 @@
+global using TradingFlow.Engine.Indicators;
+
 using Microsoft.Extensions.Logging.Abstractions;
 using TradingFlow.Data.Candles;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
-using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
 
@@ -10,6 +11,22 @@ namespace TradingFlow.Tests;
 
 public sealed class StreamingMarketStateProcessorTests
 {
+    [Theory]
+    [InlineData(0, 45)]
+    [InlineData(2, 0)]
+    public void Options_WhenEvidenceWindowIsNotPositive_RejectsConfiguration(
+        int revisionMinutes,
+        int recoveryDays)
+    {
+        var options = StreamingMarketStateOptions.Default with
+        {
+            RevisionAcceptanceMinutes = revisionMinutes,
+            RecoveryLookbackDays = recoveryDays
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(options.Validate);
+    }
+
     [Fact]
     public async Task ProcessAsync_DeduplicatesAndAcceptsOnlyTimelyProviderRevision()
     {
@@ -307,6 +324,51 @@ public sealed class StreamingMarketStateProcessorTests
     }
 
     [Fact]
+    public async Task RepeatedRestWarmup_ReplacesPreviouslyCachedAdjustedHistory()
+    {
+        var timestamp = Utc(2026, 8, 27, 14, 30);
+        var clock = new FixedTimeProvider(timestamp.AddMinutes(5));
+        var processor = CreateProcessor(NullCandleStore.Instance, clock);
+        var beforeSplitRefresh = Bar("AAPL", timestamp, 100m) with { KnownAtUtc = null };
+        var afterSplitRefresh = Bar("AAPL", timestamp, 50m) with { KnownAtUtc = null };
+
+        await processor.BackfillSymbolAsync(
+            "AAPL",
+            new FixedMarketDataProvider([beforeSplitRefresh]),
+            default);
+        await processor.BackfillSymbolAsync(
+            "AAPL",
+            new FixedMarketDataProvider([afterSplitRefresh]),
+            default);
+
+        var state = await processor.GetCompletedStateAsync("AAPL", clock.GetUtcNow());
+        Assert.Equal(50m, Assert.Single(state.BarsByTimeframe["1m"]).Close);
+    }
+
+    [Fact]
+    public async Task RestWarmup_DoesNotReplaceOverlappingBufferedLiveBar()
+    {
+        var timestamp = Utc(2026, 8, 27, 14, 30);
+        var clock = new FixedTimeProvider(timestamp.AddMinutes(5));
+        var processor = CreateProcessor(NullCandleStore.Instance, clock);
+        Activate(processor, 4);
+        var liveBar = Bar("AAPL", timestamp, 100m) with
+        {
+            KnownAtUtc = timestamp.AddMinutes(1)
+        };
+        Assert.Equal(MarketBarDisposition.Accepted, (await processor.ProcessAsync(
+            Event(liveBar, MarketBarEventKind.CompletedBar, liveBar.KnownAtUtc.Value, 4))).Disposition);
+
+        await processor.BackfillSymbolAsync(
+            "AAPL",
+            new FixedMarketDataProvider([liveBar with { Close = 50m, KnownAtUtc = null }]),
+            default);
+
+        var state = await processor.GetCompletedStateAsync("AAPL", clock.GetUtcNow());
+        Assert.Equal(100m, Assert.Single(state.BarsByTimeframe["1m"]).Close);
+    }
+
+    [Fact]
     public async Task RestWarmup_DoesNotPersistCurrentIncompleteProviderBar()
     {
         var barStart = Utc(2026, 8, 27, 14, 30);
@@ -576,6 +638,218 @@ public sealed class StreamingMarketStateProcessorTests
     }
 
     [Fact]
+    public async Task ReplayAsync_AppliesProviderRevisionOnlyWhenItBecameKnown()
+    {
+        var timestamp = Utc(2026, 8, 27, 14, 30);
+        var original = Bar("NVDA", timestamp, 180m) with
+        {
+            KnownAtUtc = timestamp.AddMinutes(1)
+        };
+        var revision = original with
+        {
+            Close = 181m,
+            KnownAtUtc = timestamp.AddMinutes(2)
+        };
+        var events = new List<MarketBarEvent>();
+        await foreach (var marketEvent in new MarketDataReplayAdapter().ReplayAsync(
+                           [revision, original],
+                           "alpaca",
+                           "sip"))
+        {
+            events.Add(marketEvent);
+        }
+
+        var processor = CreateProcessor(
+            NullCandleStore.Instance,
+            new FixedTimeProvider(timestamp.AddMinutes(3)));
+        Assert.Equal(MarketBarEventKind.Replay, events[0].Kind);
+        Assert.Equal(MarketBarDisposition.Accepted, (await processor.ProcessAsync(events[0])).Disposition);
+        var beforeRevision = await processor.GetCompletedStateAsync(
+            "NVDA",
+            timestamp.AddMinutes(1).AddSeconds(30));
+
+        Assert.Equal(MarketBarEventKind.ReplayRevision, events[1].Kind);
+        Assert.Equal(MarketBarDisposition.RevisionAccepted, (await processor.ProcessAsync(events[1])).Disposition);
+        var earlierStateAfterRevisionWasAccepted = await processor.GetCompletedStateAsync(
+            "NVDA",
+            timestamp.AddMinutes(1).AddSeconds(30));
+        var afterRevision = await processor.GetCompletedStateAsync("NVDA", timestamp.AddMinutes(3));
+
+        Assert.Equal(180m, Assert.Single(beforeRevision.BarsByTimeframe["1m"]).Close);
+        Assert.Equal(180m, Assert.Single(earlierStateAfterRevisionWasAccepted.BarsByTimeframe["1m"]).Close);
+        Assert.Equal(181m, Assert.Single(afterRevision.BarsByTimeframe["1m"]).Close);
+    }
+
+    [Fact]
+    public async Task ReplayStoreAsync_PreservesDurableRevisionOrderAndEarlierAsOfState()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "tradingflow-revision-replay-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var timestamp = Utc(2026, 8, 27, 14, 30);
+            var store = new LocalFileCandleStore(root);
+            var clock = new FixedTimeProvider(timestamp.AddMinutes(3));
+            var live = CreateProcessor(store, clock);
+            Activate(live, 11);
+            var original = Bar("NVDA", timestamp, 180m) with
+            {
+                KnownAtUtc = timestamp.AddMinutes(1)
+            };
+            var revision = original with
+            {
+                Close = 181m,
+                KnownAtUtc = timestamp.AddMinutes(2)
+            };
+
+            Assert.Equal(MarketBarDisposition.Accepted, (await live.ProcessAsync(
+                Event(original, MarketBarEventKind.CompletedBar, original.KnownAtUtc.Value, 11))).Disposition);
+            Assert.Equal(MarketBarDisposition.RevisionAccepted, (await live.ProcessAsync(
+                Event(revision, MarketBarEventKind.ProviderRevision, revision.KnownAtUtc.Value, 11))).Disposition);
+
+            var request = new CandleStoreReadRequest(
+                "market-state",
+                "shared",
+                "alpaca-sip",
+                "NVDA",
+                "1m",
+                timestamp,
+                timestamp.AddMinutes(3),
+                "stream");
+            var replayed = CreateProcessor(NullCandleStore.Instance, clock);
+            var replayEvents = new List<MarketBarEvent>();
+            var dispositions = new List<MarketBarDisposition>();
+            await foreach (var marketEvent in new MarketDataReplayAdapter().ReplayStoreAsync(
+                               store,
+                               request,
+                               "alpaca",
+                               "sip"))
+            {
+                replayEvents.Add(marketEvent);
+                dispositions.Add((await replayed.ProcessAsync(marketEvent)).Disposition);
+            }
+
+            Assert.Collection(
+                replayEvents,
+                value =>
+                {
+                    Assert.Equal(MarketBarEventKind.Replay, value.Kind);
+                    Assert.Equal(original.KnownAtUtc, value.ObservedAtUtc);
+                },
+                value =>
+                {
+                    Assert.Equal(MarketBarEventKind.ReplayRevision, value.Kind);
+                    Assert.Equal(revision.KnownAtUtc, value.ObservedAtUtc);
+                });
+            Assert.Equal(
+                [MarketBarDisposition.Accepted, MarketBarDisposition.RevisionAccepted],
+                dispositions);
+            var beforeRevision = await replayed.GetCompletedStateAsync(
+                "NVDA",
+                timestamp.AddMinutes(1).AddSeconds(30));
+            var afterRevision = await replayed.GetCompletedStateAsync(
+                "NVDA",
+                timestamp.AddMinutes(3));
+
+            Assert.Equal(180m, Assert.Single(beforeRevision.BarsByTimeframe["1m"]).Close);
+            Assert.Equal(181m, Assert.Single(afterRevision.BarsByTimeframe["1m"]).Close);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RestartWithProductionRecoveryDepth_PreservesSameTimeRvol()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "tradingflow-stream-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var now = Utc(2026, 8, 28, 14, 32);
+            var clock = new FixedTimeProvider(now);
+            var store = new LocalFileCandleStore(root);
+            var live = CreateProcessor(store, clock, recoveryLookbackDays: 45);
+            Activate(live, 7);
+            var start = Utc(2026, 7, 30, 14, 30);
+            var bars = new List<OhlcvBar>();
+            var tradeDate = start;
+            while (bars.Count < 21)
+            {
+                if (tradeDate.DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday)
+                {
+                    bars.Add(Bar("NVDA", tradeDate, 180m + bars.Count) with
+                    {
+                        Volume = bars.Count == 20 ? 2_000m : 1_000m
+                    });
+                }
+
+                tradeDate = tradeDate.AddDays(1);
+            }
+
+            foreach (var bar in bars)
+            {
+                Assert.Equal(MarketBarDisposition.Accepted, (await live.ProcessAsync(
+                    Event(bar, MarketBarEventKind.CompletedBar, bar.Timestamp.AddMinutes(1), 7))).Disposition);
+            }
+
+            var liveState = await live.GetCompletedStateAsync("NVDA", now);
+            var evidenceEngine = new TradingFlow.Engine.Indicators.IndicatorEngine(
+                new TradingFlow.Engine.Indicators.MarketEvidenceProfile(
+                    "restart_reconstruction_test_v1",
+                    20,
+                    20,
+                    "America/New_York"));
+            var liveRvol = evidenceEngine
+                .Compute(liveState.BarsByTimeframe["1m"])[^1]
+                .RelativeVolume;
+
+            var restarted = CreateProcessor(store, clock, recoveryLookbackDays: 45);
+            await restarted.EnsureSymbolReadyAsync("NVDA", default);
+            var recoveredState = await restarted.GetCompletedStateAsync("NVDA", now);
+            var recoveredRvol = evidenceEngine
+                .Compute(recoveredState.BarsByTimeframe["1m"])[^1]
+                .RelativeVolume;
+
+            Assert.Equal(2m, liveRvol);
+            Assert.Equal(liveRvol, recoveredRvol);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ProcessAsync_WhenLiveFeedDiffersFromWarmState_RejectsAndRequiresRepair()
+    {
+        var clock = new FixedTimeProvider(Utc(2026, 8, 27, 14, 32));
+        var processor = CreateProcessor(NullCandleStore.Instance, clock);
+        var warm = Bar("AAPL", Utc(2026, 8, 27, 14, 30), 100m);
+        await processor.BackfillSymbolAsync(
+            "AAPL",
+            new FixedMarketDataProvider([warm]),
+            default);
+        var incoming = Bar("AAPL", Utc(2026, 8, 27, 14, 31), 101m) with { DataFeed = "iex" };
+        var result = await processor.ProcessAsync(new MarketBarEvent(
+            "alpaca",
+            "iex",
+            incoming,
+            MarketBarEventKind.CompletedBar,
+            incoming.Timestamp.AddMinutes(1),
+            1));
+
+        Assert.Equal(MarketBarDisposition.Invalid, result.Disposition);
+        Assert.Contains("does not match warm-state feed", result.Detail, StringComparison.Ordinal);
+        Assert.True(processor.RequiresRepair("AAPL"));
+    }
+
+    [Fact]
     public void Resample_OneHourBarsNeverMixRegularAndPostmarketSessions()
     {
         var timezone = ResolveNewYork();
@@ -597,7 +871,7 @@ public sealed class StreamingMarketStateProcessorTests
     private static StreamingMarketStateProcessor CreateProcessor(
         ICandleStore store,
         TimeProvider clock,
-        int recoveryLookbackDays = 10,
+        int recoveryLookbackDays = 45,
         int symbolPipelineCapacity = 32) =>
         CreateReadyProcessor(
             store,
@@ -638,7 +912,18 @@ public sealed class StreamingMarketStateProcessorTests
         long fence) => new("alpaca", "sip", bar, kind, observedAt, fence);
 
     private static OhlcvBar Bar(string ticker, DateTimeOffset timestamp, decimal close) =>
-        new(ticker, timestamp, "1m", close - 1m, close + 1m, close - 2m, close, 1_000m);
+        new(
+            ticker,
+            timestamp,
+            "1m",
+            close - 1m,
+            close + 1m,
+            close - 2m,
+            close,
+            1_000m,
+            "sip",
+            "all",
+            CoverageVerifiedThroughUtc: timestamp.AddMinutes(1));
 
     private static DateTimeOffset Utc(int year, int month, int day, int hour, int minute) =>
         new(year, month, day, hour, minute, 0, TimeSpan.Zero);

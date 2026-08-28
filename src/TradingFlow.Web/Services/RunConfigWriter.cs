@@ -717,7 +717,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  setup_type: {strategy.EntryRules.SetupType}");
         yaml.AppendLine($"  enable_short: {strategy.EntryRules.EnableShort.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  min_volume_spike: {strategy.EntryRules.MinVolumeSpike.ToString(CultureInfo.InvariantCulture)}");
-        yaml.AppendLine($"  min_volume_spike_source: {strategy.EntryRules.MinVolumeSpikeSource}");
+        yaml.AppendLine($"  min_volume_spike_source: {strategy.EntryRules.MinVolumeSpikeSource.ToConfigValue()}");
         yaml.AppendLine($"  volume_confirmation_mode: {strategy.EntryRules.VolumeConfirmationMode}");
         AppendOptionalDecimal(yaml, "  min_volume_liquidity_floor", strategy.EntryRules.MinVolumeLiquidityFloor);
         yaml.AppendLine($"  min_entry_rsi: {strategy.EntryRules.MinEntryRsi.ToString(CultureInfo.InvariantCulture)}");
@@ -782,7 +782,6 @@ public sealed class RunConfigWriter
         AppendOptionalDecimal(yaml, "  min_day_gain_pct", strategy.EntryRules.MinDayGainPct);
         AppendOptionalDecimal(yaml, "  min_gap_up_pct", strategy.EntryRules.MinGapUpPct);
         AppendOptionalDecimal(yaml, "  min_session_gain_pct", strategy.EntryRules.MinSessionGainPct);
-        AppendOptionalDecimal(yaml, "  min_session_relative_volume", strategy.EntryRules.MinSessionRelativeVolume);
         AppendOptionalDecimal(yaml, "  max_pre_entry_session_range_pct", strategy.EntryRules.MaxPreEntrySessionRangePct);
         AppendOptionalDecimal(yaml, "  max_entry_pullback_from_session_high_pct", strategy.EntryRules.MaxEntryPullbackFromSessionHighPct);
         yaml.AppendLine($"  require_positive_news: {strategy.EntryRules.RequirePositiveNews.ToString().ToLowerInvariant()}");

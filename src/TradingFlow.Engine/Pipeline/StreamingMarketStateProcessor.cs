@@ -6,6 +6,7 @@ using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Market;
 
 namespace TradingFlow.Engine.Pipeline;
@@ -28,10 +29,13 @@ public sealed class StreamingMarketStateProcessor
     private readonly StreamingMarketStateOptions options;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<StreamingMarketStateProcessor> logger;
-    private readonly Indicators.IIndicatorCalculator indicatorCalculator;
+    private Indicators.IIndicatorCalculator indicatorCalculator;
+    private BarResampler barResampler;
     private long fencingFloor;
     private long activeOwnershipFence;
     private long snapshotReadyFence;
+
+    public int RecoveryLookbackDays => options.RecoveryLookbackDays;
 
     public StreamingMarketStateProcessor(
         ICandleStore candleStore,
@@ -45,7 +49,7 @@ public sealed class StreamingMarketStateProcessor
             options,
             timeProvider,
             logger,
-            new Indicators.IndicatorEngine())
+            new IndicatorEngine())
     {
     }
 
@@ -67,7 +71,27 @@ public sealed class StreamingMarketStateProcessor
         this.timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
         this.indicatorCalculator = indicatorCalculator ?? throw new ArgumentNullException(nameof(indicatorCalculator));
+        barResampler = new BarResampler();
         options.Validate();
+    }
+
+    /// <summary>
+    /// Atomically installs an authoritative exchange calendar for both indicator
+    /// evidence and timeframe aggregation. The stream owner calls this before it
+    /// marks snapshots ready and refreshes it while the lease remains active.
+    /// </summary>
+    public void UpdateMarketSessionSchedules(
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules)
+    {
+        ArgumentNullException.ThrowIfNull(schedules);
+        if (schedules.Count == 0)
+        {
+            throw new ArgumentException("At least one authoritative market-session schedule is required.", nameof(schedules));
+        }
+
+        var profile = MarketEvidenceProfile.ProductionDefault.WithSessionSchedules(schedules);
+        Volatile.Write(ref indicatorCalculator, new IndicatorEngine(profile));
+        Volatile.Write(ref barResampler, new BarResampler(profile));
     }
 
     /// <summary>
@@ -196,8 +220,11 @@ public sealed class StreamingMarketStateProcessor
                                                    CanonicalMarketBarValidator.IsCompletedAsOf(bar, end))
                                      .OrderBy(value => value.Timestamp))
                         {
-                            pipeline.Bars[bar.Timestamp] = bar;
+                            pipeline.Bars[bar.Timestamp] = [bar];
                         }
+
+                        pipeline.DataFeed = ResolveSingleFeed(
+                            pipeline.Bars.Values.Select(versions => versions[^1]));
 
                         DetectUnconfirmedGaps(pipeline);
                         TrimRetention(pipeline);
@@ -309,11 +336,36 @@ public sealed class StreamingMarketStateProcessor
                 {
                     // Buffered live bars win over overlapping REST history at the
                     // subscribe/backfill boundary.
-                    var missing = incoming
-                        .Where(bar => !pipeline.Bars.ContainsKey(bar.Timestamp))
+                    var incomingFeed = ResolveSingleFeed(incoming);
+                    var effectiveIncomingFeed = incomingFeed is null or "unspecified"
+                        ? pipeline.DataFeed ?? "unspecified"
+                        : incomingFeed;
+                    if (pipeline.DataFeed is not null && incomingFeed is not null &&
+                        !pipeline.DataFeed.Equals("unspecified", StringComparison.Ordinal) &&
+                        !incomingFeed.Equals("unspecified", StringComparison.Ordinal) &&
+                        !pipeline.DataFeed.Equals(incomingFeed, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            $"Market-data feed mismatch for {symbol}: cached={pipeline.DataFeed}, backfill={incomingFeed}.");
+                    }
+
+                    var normalizedIncoming = incoming
+                        .Select(bar => NormalizeFeed(bar.DataFeed) == "unspecified" &&
+                            !effectiveIncomingFeed.Equals("unspecified", StringComparison.Ordinal)
+                                ? bar with { DataFeed = effectiveIncomingFeed }
+                                : bar)
+                        .Select(bar => providerConfirmsSparseNoTradeIntervals &&
+                            bar.CoverageVerifiedThroughUtc is null
+                                ? bar with { CoverageVerifiedThroughUtc = backfillEndUtc.ToUniversalTime() }
+                                : bar)
+                        .ToArray();
+                    var missing = normalizedIncoming
+                        .Where(bar => !pipeline.Bars.TryGetValue(bar.Timestamp, out var versions) ||
+                            versions[^1].DataFeed.Equals("unspecified", StringComparison.OrdinalIgnoreCase) ||
+                            versions[^1].KnownAtUtc is null)
                         .OrderBy(bar => bar.Timestamp)
                         .ToArray();
-                    var incomingTimestamps = incoming
+                    var incomingTimestamps = normalizedIncoming
                         .Select(bar => bar.Timestamp.ToUniversalTime())
                         .ToHashSet();
                     pipeline.PendingMissingMinutes.ExceptWith(incomingTimestamps);
@@ -329,9 +381,11 @@ public sealed class StreamingMarketStateProcessor
                             cancellationToken);
                         foreach (var bar in missing)
                         {
-                            pipeline.Bars[bar.Timestamp] = bar;
+                            pipeline.Bars[bar.Timestamp] = [bar];
                         }
                     }
+
+                    pipeline.DataFeed = effectiveIncomingFeed;
 
                     DetectUnconfirmedGaps(pipeline);
 
@@ -409,15 +463,16 @@ public sealed class StreamingMarketStateProcessor
             return null;
         }
 
+        var currentResampler = Volatile.Read(ref barResampler);
         if (IsExtendedSessionActive(asOfUtc) && bars.Any(pair =>
-                !HasLatestCompletedTimeframe(pair.Value, pair.Key, asOfUtc)))
+                !HasLatestCompletedTimeframe(pair.Value, pair.Key, asOfUtc, currentResampler)))
         {
             return null;
         }
 
         var snapshots = bars.ToDictionary(
             pair => pair.Key,
-            pair => (IReadOnlyList<IndicatorSnapshot>)indicatorCalculator.Compute(pair.Value),
+            pair => (IReadOnlyList<IndicatorSnapshot>)Volatile.Read(ref indicatorCalculator).Compute(pair.Value),
             StringComparer.OrdinalIgnoreCase);
         if (!SnapshotFenceIsCurrent(snapshotFence))
         {
@@ -552,14 +607,16 @@ public sealed class StreamingMarketStateProcessor
     {
         var utc = asOfUtc.ToUniversalTime();
         var baseBars = pipeline.Bars.Values
-            .Where(bar => bar.Timestamp.AddMinutes(1) <= utc)
+            .Select(versions => SelectVersionKnownAsOf(versions, utc))
+            .Where(bar => bar is not null && bar.Timestamp.AddMinutes(1) <= utc)
+            .Select(bar => bar!)
             .OrderBy(bar => bar.Timestamp)
             .ToArray();
         var byTimeframe = new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase)
         {
             ["1m"] = baseBars
         };
-        var resampler = new BarResampler();
+        var resampler = Volatile.Read(ref barResampler);
         foreach (var timeframe in options.DerivedTimeframes
                      .Where(value => !value.Equals("1m", StringComparison.OrdinalIgnoreCase))
                      .Distinct(StringComparer.OrdinalIgnoreCase))
@@ -646,7 +703,36 @@ public sealed class StreamingMarketStateProcessor
                 validationFailure);
         }
 
-        if (marketEvent.Kind != MarketBarEventKind.Replay)
+        var eventFeed = NormalizeFeed(marketEvent.Feed);
+        var barFeed = NormalizeFeed(bar.DataFeed);
+        if (barFeed.Equals("unspecified", StringComparison.Ordinal))
+        {
+            bar = bar with { DataFeed = eventFeed };
+            barFeed = eventFeed;
+        }
+
+        if (!barFeed.Equals(eventFeed, StringComparison.Ordinal))
+        {
+            return Result(
+                MarketBarDisposition.Invalid,
+                bar,
+                $"Market event feed '{eventFeed}' does not match bar feed '{barFeed}'.");
+        }
+
+        if (pipeline.DataFeed is not null &&
+            !pipeline.DataFeed.Equals("unspecified", StringComparison.Ordinal) &&
+            !pipeline.DataFeed.Equals(eventFeed, StringComparison.Ordinal))
+        {
+            pipeline.NeedsRepair = true;
+            return Result(
+                MarketBarDisposition.Invalid,
+                bar,
+                $"Live feed '{eventFeed}' does not match warm-state feed '{pipeline.DataFeed}'.");
+        }
+
+        pipeline.DataFeed = eventFeed;
+
+        if (marketEvent.Kind is not (MarketBarEventKind.Replay or MarketBarEventKind.ReplayRevision))
         {
             if (marketEvent.FencingToken <= 0)
             {
@@ -672,14 +758,14 @@ public sealed class StreamingMarketStateProcessor
             pipeline.FencingToken = Math.Max(pipeline.FencingToken, marketEvent.FencingToken);
         }
 
-        if (pipeline.Bars.TryGetValue(bar.Timestamp, out var existing))
+        if (pipeline.Bars.TryGetValue(bar.Timestamp, out var versions))
         {
-            if (existing == bar)
+            if (versions.Any(existing => existing == bar))
             {
                 return Result(MarketBarDisposition.Duplicate, bar, "Identical logical bar already exists.");
             }
 
-            if (marketEvent.Kind != MarketBarEventKind.ProviderRevision)
+            if (marketEvent.Kind is not (MarketBarEventKind.ProviderRevision or MarketBarEventKind.ReplayRevision))
             {
                 return Result(MarketBarDisposition.ConflictingDuplicate, bar, "A non-revision event conflicts with a completed bar.");
             }
@@ -693,9 +779,11 @@ public sealed class StreamingMarketStateProcessor
             }
 
             await PersistIfLiveAsync(marketEvent, bar, cancellationToken);
-            pipeline.Bars[bar.Timestamp] = bar;
+            versions.Add(bar);
+            versions.Sort(static (left, right) =>
+                ResolveKnownAtUtc(left).CompareTo(ResolveKnownAtUtc(right)));
             TrimRetention(pipeline);
-            return Result(MarketBarDisposition.RevisionAccepted, bar, "Provider revision replaced the completed bar.");
+            return Result(MarketBarDisposition.RevisionAccepted, bar, "Provider revision added a point-in-time bar version.");
         }
 
         if (pipeline.Bars.Count > 0 && bar.Timestamp < pipeline.Bars.Keys.Max())
@@ -704,7 +792,7 @@ public sealed class StreamingMarketStateProcessor
             return Result(MarketBarDisposition.OutOfOrder, bar, "Late non-matching logical bar cannot rewrite completed history.");
         }
 
-        if (marketEvent.Kind == MarketBarEventKind.ProviderRevision)
+        if (marketEvent.Kind is MarketBarEventKind.ProviderRevision or MarketBarEventKind.ReplayRevision)
         {
             RequireRestReconciliation(pipeline, bar.Timestamp);
             return Result(MarketBarDisposition.OutOfOrder, bar, "Revision has no original completed bar to revise.");
@@ -715,11 +803,11 @@ public sealed class StreamingMarketStateProcessor
         pipeline.PendingMissingMinutes.Remove(bar.Timestamp);
         pipeline.ConfirmedNoTradeMinutes.Remove(bar.Timestamp);
         await PersistIfLiveAsync(marketEvent, bar, cancellationToken);
-        pipeline.Bars[bar.Timestamp] = bar;
+        pipeline.Bars[bar.Timestamp] = [bar];
         TrimRetention(pipeline);
         if (gapDetected)
         {
-            if (marketEvent.Kind != MarketBarEventKind.Replay)
+            if (marketEvent.Kind is not (MarketBarEventKind.Replay or MarketBarEventKind.ReplayRevision))
             {
                 RecordMissingMinutes(pipeline, latestTimestamp!.Value, bar.Timestamp);
                 pipeline.NeedsRepair = true;
@@ -738,7 +826,7 @@ public sealed class StreamingMarketStateProcessor
         MarketBarEvent marketEvent,
         OhlcvBar bar,
         CancellationToken cancellationToken) =>
-        marketEvent.Kind == MarketBarEventKind.Replay
+        marketEvent.Kind is MarketBarEventKind.Replay or MarketBarEventKind.ReplayRevision
             ? Task.CompletedTask
             : candleStore.UpsertBarsAsync(
                 new CandleStoreWriteRequest(
@@ -747,6 +835,21 @@ public sealed class StreamingMarketStateProcessor
                     [bar],
                     marketEvent.FencingToken),
                 cancellationToken);
+
+    private static OhlcvBar? SelectVersionKnownAsOf(
+        IReadOnlyList<OhlcvBar> versions,
+        DateTimeOffset asOfUtc)
+    {
+        var utc = asOfUtc.ToUniversalTime();
+        return versions
+            .Where(version => ResolveKnownAtUtc(version) <= utc)
+            .OrderBy(ResolveKnownAtUtc)
+            .LastOrDefault();
+    }
+
+    private static DateTimeOffset ResolveKnownAtUtc(OhlcvBar bar) =>
+        bar.KnownAtUtc?.ToUniversalTime() ??
+        bar.Timestamp.ToUniversalTime().Add(TimeframeParser.Parse(bar.Timeframe));
 
     private SymbolPipeline GetPipeline(string symbol)
     {
@@ -946,7 +1049,8 @@ public sealed class StreamingMarketStateProcessor
     private static bool HasLatestCompletedTimeframe(
         IReadOnlyList<OhlcvBar> bars,
         string timeframe,
-        DateTimeOffset asOfUtc)
+        DateTimeOffset asOfUtc,
+        BarResampler resampler)
     {
         if (bars.Count == 0)
         {
@@ -959,7 +1063,6 @@ public sealed class StreamingMarketStateProcessor
             return true;
         }
 
-        var resampler = new BarResampler();
         var current = resampler.GetBucketWindow(asOfUtc.ToUniversalTime().AddTicks(-1), timeframe);
         DateTimeOffset expectedStart;
         if (current.EndUtc <= asOfUtc.ToUniversalTime())
@@ -996,6 +1099,24 @@ public sealed class StreamingMarketStateProcessor
         MarketBarDisposition disposition,
         OhlcvBar bar,
         string detail) => new(disposition, bar.Ticker, bar.Timestamp, detail);
+
+    private static string? ResolveSingleFeed(IEnumerable<OhlcvBar> bars)
+    {
+        var feeds = bars
+            .Select(bar => NormalizeFeed(bar.DataFeed))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (feeds.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Market state contains mixed data feeds: {String.Join(", ", feeds)}.");
+        }
+
+        return feeds.SingleOrDefault();
+    }
+
+    private static string NormalizeFeed(string? feed) =>
+        String.IsNullOrWhiteSpace(feed) ? "unspecified" : feed.Trim().ToLowerInvariant();
 
     private static long AdvanceMaximum(ref long location, long candidate)
     {
@@ -1055,12 +1176,13 @@ public sealed class StreamingMarketStateProcessor
 
         public string Symbol { get; }
         public ActionBlock<Func<Task>> Block { get; }
-        public SortedDictionary<DateTimeOffset, OhlcvBar> Bars { get; } = [];
+        public SortedDictionary<DateTimeOffset, List<OhlcvBar>> Bars { get; } = [];
         public HashSet<DateTimeOffset> PendingMissingMinutes { get; } = [];
         public HashSet<DateTimeOffset> ConfirmedNoTradeMinutes { get; } = [];
         public long FencingToken { get; set; }
         public bool IsReady { get; set; }
         public bool NeedsRepair { get; set; }
+        public string? DataFeed { get; set; }
         public bool IsEvicting => Volatile.Read(ref isEvicting) != 0;
         public TaskCompletionSource EvictionCompletion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);

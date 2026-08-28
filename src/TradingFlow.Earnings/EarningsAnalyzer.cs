@@ -25,13 +25,21 @@ public sealed class EarningsAnalyzer
         "earnings preview", "ahead of earnings", "what to expect", "set to report", "expected to report"
     ];
 
-    private readonly IndicatorEngine indicators;
+    private IndicatorEngine indicators;
     private readonly EarningsMonitorOptions options;
 
     public EarningsAnalyzer(IndicatorEngine indicators, EarningsMonitorOptions options)
     {
         this.indicators = indicators;
         this.options = options;
+    }
+
+    public void UpdateMarketSessionSchedules(
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules)
+    {
+        ArgumentNullException.ThrowIfNull(schedules);
+        var profile = MarketEvidenceProfile.ProductionDefault.WithSessionSchedules(schedules);
+        Volatile.Write(ref indicators, new IndicatorEngine(profile));
     }
 
     public EarningsAnalysisSnapshot Analyze(
@@ -138,7 +146,7 @@ public sealed class EarningsAnalyzer
                 availableReferenceClose);
         }
 
-        var snapshots = indicators.Compute(completedBars);
+        var snapshots = Volatile.Read(ref indicators).Compute(completedBars);
         var latest = snapshots[^1];
         var referenceHigh = preReleaseBars.Max(bar => bar.High);
         var referenceClose = preReleaseBars[^1].Close;

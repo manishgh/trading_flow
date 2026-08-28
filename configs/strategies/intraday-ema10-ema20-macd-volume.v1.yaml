@@ -9,7 +9,6 @@ entry_rules:
   min_volume_spike: 2.0
   min_volume_spike_source: cumulative_same_time
   volume_confirmation_mode: hard_gate
-  min_session_relative_volume:
   require_volume_sma_rising: false
   volume_sma_period: 5
   volume_sma_rising_lookback_bars: 3

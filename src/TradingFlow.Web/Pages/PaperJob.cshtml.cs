@@ -136,12 +136,18 @@ public sealed class PaperJobModel : PageModel
                     close = point.Close,
                     rsi = point.Rsi,
                     volume = point.Volume,
-                    averageVolume = point.SlotAverageVolume,
-                    cumulativeAverageVolume = point.CumulativeAverageVolume,
+                    slotMedianVolume = point.SlotMedianVolume,
+                    cumulativeSameTimeMedianVolume = point.CumulativeSameTimeMedianVolume,
                     relativeVolume = point.RelativeVolume,
                     relativeVolumeSampleCount = point.RelativeVolumeSampleCount,
                     slotRelativeVolume = point.SlotRelativeVolume,
-                    sessionRelativeVolume = point.SessionRelativeVolume,
+                    slotRelativeVolumeSampleCount = point.SlotRelativeVolumeSampleCount,
+                    relativeVolumeSource = point.RelativeVolumeSource,
+                    marketEvidenceProfileVersion = point.MarketEvidenceProfileVersion,
+                    relativeVolumeCohort = point.RelativeVolumeCohort,
+                    dataFeed = point.DataFeed,
+                    adjustmentPolicy = point.AdjustmentPolicy,
+                    marketEvidenceReliability = point.MarketEvidenceReliability,
                     vwap = point.Vwap
                 })
                 .ToArray(),
@@ -319,13 +325,18 @@ public class ChartDataPoint
     public string Timeframe { get; set; } = String.Empty;
     public decimal Close { get; set; }
     public decimal Atr { get; set; }
-    public decimal RelativeVolume { get; set; }
-    public decimal SlotRelativeVolume { get; set; }
-    public decimal SessionRelativeVolume { get; set; }
-    public decimal SlotAverageVolume { get; set; }
-    public decimal CumulativeAverageVolume { get; set; }
-    public decimal AverageSessionVolume { get; set; }
+    public decimal? RelativeVolume { get; set; }
+    public decimal? SlotRelativeVolume { get; set; }
+    public string RelativeVolumeSource { get; set; } = String.Empty;
+    public decimal? SlotMedianVolume { get; set; }
+    public decimal? CumulativeSameTimeMedianVolume { get; set; }
     public int RelativeVolumeSampleCount { get; set; }
+    public int SlotRelativeVolumeSampleCount { get; set; }
+    public string MarketEvidenceProfileVersion { get; set; } = String.Empty;
+    public string RelativeVolumeCohort { get; set; } = String.Empty;
+    public string DataFeed { get; set; } = String.Empty;
+    public string AdjustmentPolicy { get; set; } = String.Empty;
+    public string MarketEvidenceReliability { get; set; } = String.Empty;
     public decimal Volume { get; set; }
     public decimal? Rsi { get; set; }
     public decimal? Vwap { get; set; }

@@ -773,13 +773,12 @@ public static class MobileApiEndpoints
             BollingerMiddle: null,
             BollingerUpper: null,
             BollingerLower: null,
-            RelativeVolume: request.SessionRelativeVolume,
+            RelativeVolume: request.CumulativeSameTimeRelativeVolume,
             MacdLine: request.MacdHistogram,
             MacdSignal: 0m,
             MacdHistogram: request.MacdHistogram,
             Catalyst: BuildRequestCatalyst(request, ticker, timestamp),
-            Ema10: request.Ema10,
-            SessionRelativeVolume: request.SessionRelativeVolume);
+            Ema10: request.Ema10);
         IndicatorSnapshot? previous = null;
         if (request.PreviousMacdHistogram is not null || request.PreviousVolume is not null)
         {
@@ -805,7 +804,7 @@ public static class MobileApiEndpoints
             evaluation.Reason,
             evaluation.Score,
             evaluation.SessionGainPct,
-            evaluation.SessionRelativeVolume,
+            evaluation.CumulativeSameTimeRelativeVolume,
             evaluation.VwapExtensionAtr,
             evaluation.NewsHeadline,
             evaluation.NewsUrl,

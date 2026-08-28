@@ -24,11 +24,9 @@ public sealed record IndicatorSnapshot(
     decimal? Sma20 = null,
     decimal? Sma50 = null,
     decimal? SlotRelativeVolume = null,
-    decimal? SessionRelativeVolume = null,
     decimal? Ema10 = null,
-    decimal? SlotAverageVolume = null,
-    decimal? CumulativeAverageVolume = null,
-    decimal? AverageSessionVolume = null,
+    decimal? SlotMedianVolume = null,
+    decimal? CumulativeSameTimeMedianVolume = null,
     int RelativeVolumeSampleCount = 0,
     decimal? Sma150 = null,
     decimal? Sma200 = null,
@@ -38,4 +36,9 @@ public sealed record IndicatorSnapshot(
     // Short-period RSI (Connors RSI(2)) for the mean-reversion archetype's oversold stretch gate.
     decimal? Rsi2 = null,
     int SlotRelativeVolumeSampleCount = 0,
-    int SessionRelativeVolumeSampleCount = 0);
+    string? MarketEvidenceProfileVersion = null,
+    string? RelativeVolumeCohort = null,
+    int RelativeVolumeMinimumSamples = 0,
+    string? DataFeed = null,
+    string? AdjustmentPolicy = null,
+    string? MarketEvidenceReliability = null);

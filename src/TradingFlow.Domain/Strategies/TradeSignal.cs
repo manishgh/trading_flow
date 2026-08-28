@@ -112,7 +112,6 @@ public sealed record TradeSignal(
     bool IsSma50AboveSma150 = false,
     bool IsSma150AboveSma200 = false,
     bool IsPriceAboveEma5 = false,
-    decimal? SessionRelativeVolume = null,
     decimal? SlotRelativeVolume = null,
     bool IsVolumeSmaRising = false,
     decimal? VolumeSma = null,

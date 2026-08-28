@@ -40,8 +40,6 @@ public sealed class RollingCandleCacheWarmer
     {
         WriteIndented = true
     };
-    private readonly IndicatorEngine indicatorEngine = new();
-
     public async Task<RollingCandleWarmResult> WarmAsync(
         IMarketDataProvider provider,
         RollingCandleWarmRequest request,
@@ -74,6 +72,8 @@ public sealed class RollingCandleCacheWarmer
 
         var outputRoot = Path.GetFullPath(request.OutputRoot);
         var start = request.End.AddDays(-request.LookbackDays);
+        var indicatorEngine = new IndicatorEngine(
+            await ResolveMarketEvidenceProfileAsync(provider, start, request.End, cancellationToken));
         var barsByKey = new Dictionary<(string Ticker, string Timeframe), List<OhlcvBar>>();
 
         await foreach (var bar in provider.GetBarsAsync(tickers, timeframes, start, request.End, cancellationToken))
@@ -142,6 +142,37 @@ public sealed class RollingCandleCacheWarmer
         return result;
     }
 
+    private static async Task<MarketEvidenceProfile> ResolveMarketEvidenceProfileAsync(
+        IMarketDataProvider provider,
+        DateTimeOffset start,
+        DateTimeOffset end,
+        CancellationToken cancellationToken)
+    {
+        if (provider is not IMarketSessionScheduleProvider scheduleProvider)
+        {
+            return MarketEvidenceProfile.ProductionDefault;
+        }
+
+        var exchangeTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        var localStart = TimeZoneInfo.ConvertTime(start, exchangeTimeZone);
+        var localEnd = TimeZoneInfo.ConvertTime(end, exchangeTimeZone);
+        var firstDate = DateOnly.FromDateTime(localStart.DateTime).AddDays(-1);
+        var lastDate = DateOnly.FromDateTime(localEnd.DateTime).AddDays(1);
+        var schedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(
+            firstDate,
+            lastDate,
+            cancellationToken);
+
+        return new MarketEvidenceProfile(
+            MarketEvidenceProfile.ProductionVersion,
+            MarketEvidenceProfile.DefaultLookbackSessions,
+            MarketEvidenceProfile.DefaultMinimumValidSamples,
+            "America/New_York",
+            schedules,
+            MarketEvidenceOperationalRules.Production,
+            allowStandardWeekdayFallback: false);
+    }
+
     private static async Task WriteIndicatorsAtomicAsync(
         string path,
         IReadOnlyCollection<IndicatorSnapshot> snapshots,
@@ -155,14 +186,14 @@ public sealed class RollingCandleCacheWarmer
             await using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
             {
                 await writer.WriteLineAsync(
-                    "ticker,timestamp,timeframe,close,volume,vwap,rsi,atr,ema10,ema20,ema50,ema200,bollinger_middle,bollinger_upper,bollinger_lower,relative_volume,slot_relative_volume,session_relative_volume,slot_average_volume,cumulative_average_volume,average_session_volume,relative_volume_sample_count,macd_line,macd_signal,macd_histogram,adx,obv".AsMemory(),
+                    "ticker,timestamp,timeframe,close,volume,vwap,rsi,atr,ema10,ema20,ema50,ema200,bollinger_middle,bollinger_upper,bollinger_lower,cumulative_same_time_rvol,slot_bar_rvol,slot_median_volume,cumulative_same_time_median_volume,cumulative_same_time_sample_count,slot_bar_sample_count,market_evidence_profile,market_volume_cohort,data_feed,adjustment_policy,evidence_reliability,macd_line,macd_signal,macd_histogram,adx,obv".AsMemory(),
                     cancellationToken);
                 foreach (var snapshot in snapshots.OrderBy(x => x.Timestamp))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     await writer.WriteLineAsync(
                         FormattableString.Invariant(
-                            $"{snapshot.Ticker},{snapshot.Timestamp:O},{snapshot.Timeframe},{snapshot.CurrentPrice},{snapshot.CurrentVolume},{FormatNullable(snapshot.Vwap)},{FormatNullable(snapshot.Rsi)},{FormatNullable(snapshot.Atr)},{FormatNullable(snapshot.Ema10)},{FormatNullable(snapshot.Ema20)},{FormatNullable(snapshot.Ema50)},{FormatNullable(snapshot.Ema200)},{FormatNullable(snapshot.BollingerMiddle)},{FormatNullable(snapshot.BollingerUpper)},{FormatNullable(snapshot.BollingerLower)},{FormatNullable(snapshot.RelativeVolume)},{FormatNullable(snapshot.SlotRelativeVolume)},{FormatNullable(snapshot.SessionRelativeVolume)},{FormatNullable(snapshot.SlotAverageVolume)},{FormatNullable(snapshot.CumulativeAverageVolume)},{FormatNullable(snapshot.AverageSessionVolume)},{snapshot.RelativeVolumeSampleCount},{FormatNullable(snapshot.MacdLine)},{FormatNullable(snapshot.MacdSignal)},{FormatNullable(snapshot.MacdHistogram)},{FormatNullable(snapshot.Adx)},{FormatNullable(snapshot.Obv)}").AsMemory(),
+                            $"{snapshot.Ticker},{snapshot.Timestamp:O},{snapshot.Timeframe},{snapshot.CurrentPrice},{snapshot.CurrentVolume},{FormatNullable(snapshot.Vwap)},{FormatNullable(snapshot.Rsi)},{FormatNullable(snapshot.Atr)},{FormatNullable(snapshot.Ema10)},{FormatNullable(snapshot.Ema20)},{FormatNullable(snapshot.Ema50)},{FormatNullable(snapshot.Ema200)},{FormatNullable(snapshot.BollingerMiddle)},{FormatNullable(snapshot.BollingerUpper)},{FormatNullable(snapshot.BollingerLower)},{FormatNullable(snapshot.RelativeVolume)},{FormatNullable(snapshot.SlotRelativeVolume)},{FormatNullable(snapshot.SlotMedianVolume)},{FormatNullable(snapshot.CumulativeSameTimeMedianVolume)},{snapshot.RelativeVolumeSampleCount},{snapshot.SlotRelativeVolumeSampleCount},{snapshot.MarketEvidenceProfileVersion},{snapshot.RelativeVolumeCohort},{snapshot.DataFeed},{snapshot.AdjustmentPolicy},{snapshot.MarketEvidenceReliability},{FormatNullable(snapshot.MacdLine)},{FormatNullable(snapshot.MacdSignal)},{FormatNullable(snapshot.MacdHistogram)},{FormatNullable(snapshot.Adx)},{FormatNullable(snapshot.Obv)}").AsMemory(),
                         cancellationToken);
                 }
             }

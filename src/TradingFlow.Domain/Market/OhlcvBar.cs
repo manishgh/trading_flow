@@ -8,5 +8,8 @@ public sealed record OhlcvBar(
     decimal High,
     decimal Low,
     decimal Close,
-    decimal Volume);
-
+    decimal Volume,
+    string DataFeed = "unspecified",
+    string AdjustmentPolicy = "unspecified",
+    DateTimeOffset? KnownAtUtc = null,
+    DateTimeOffset? CoverageVerifiedThroughUtc = null);

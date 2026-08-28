@@ -4,6 +4,7 @@ using TradingFlow.Alpaca;
 using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Pipeline;
 
@@ -308,6 +309,8 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         var workTracker = new ConnectionWorkTracker((operation, exception) =>
             logger.LogError(exception, "Provider-connection work failed. Operation={Operation}", operation));
         var renewal = RenewLeaseAsync(leaseState, connectionCts);
+        await RefreshMarketCalendarAsync(connectionCts.Token);
+        var calendarRefresh = RefreshMarketCalendarLoopAsync(connectionCts.Token);
         Task receive = Task.CompletedTask;
         Task subscriptions = Task.CompletedTask;
         var drained = false;
@@ -364,7 +367,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                 activeSubscriptions,
                 workTracker,
                 connectionCts.Token);
-            var completed = await Task.WhenAny(receive, renewal, subscriptions);
+            var completed = await Task.WhenAny(receive, renewal, subscriptions, calendarRefresh);
             await completed;
         }
         finally
@@ -377,7 +380,8 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             var connectionTasks = Task.WhenAll(
                 ObserveConnectionTaskAsync(receive, "receive"),
                 ObserveConnectionTaskAsync(renewal, "lease-renewal"),
-                ObserveConnectionTaskAsync(subscriptions, "subscription-forwarding"));
+                ObserveConnectionTaskAsync(subscriptions, "subscription-forwarding"),
+                ObserveConnectionTaskAsync(calendarRefresh, "market-calendar-refresh"));
             try
             {
                 Volatile.Write(ref runtimeStage, "draining_connection_work");
@@ -428,6 +432,39 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                     "The prior provider connection or lease could not be retired safely; automatic reconnect is disabled for this host instance.");
             }
         }
+    }
+
+    private async Task RefreshMarketCalendarLoopAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromHours(6), timeProvider);
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            await RefreshMarketCalendarAsync(cancellationToken);
+        }
+    }
+
+    private async Task RefreshMarketCalendarAsync(CancellationToken cancellationToken)
+    {
+        if (marketDataProvider.Value is not IMarketSessionScheduleProvider scheduleProvider)
+        {
+            throw new InvalidOperationException(
+                "The active Alpaca market-data provider does not expose an authoritative exchange calendar.");
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var start = DateOnly.FromDateTime(now.UtcDateTime.Date)
+            .AddDays(-marketState.RecoveryLookbackDays - 10);
+        var end = DateOnly.FromDateTime(now.UtcDateTime.Date).AddDays(35);
+        var schedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(
+            start,
+            end,
+            cancellationToken);
+        marketState.UpdateMarketSessionSchedules(schedules);
+        logger.LogInformation(
+            "Loaded {ScheduleCount} authoritative Alpaca market-session schedules for {StartDate} through {EndDate}.",
+            schedules.Count,
+            start,
+            end);
     }
 
     private async Task RevalidateLeaseOwnershipAsync(

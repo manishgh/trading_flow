@@ -961,12 +961,6 @@ public sealed partial class BacktestRunner(
 
             diagnostics.EvaluatedBarCount++;
             var entryRelativeVolume = StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, snapshot);
-            if (entryRelativeVolume is null)
-            {
-                diagnostics.IncrementRejection("missing_indicator_warmup_or_null");
-                continue;
-            }
-
             if (!_sessionClock.ValidateExecutionWindow(snapshot.Timestamp, strategy.Timeframe, strategy.Session))
             {
                 diagnostics.IncrementRejection("outside_session_window");
@@ -980,13 +974,6 @@ public sealed partial class BacktestRunner(
                 continue;
             }
 
-            var volumeRejection = _decisionBrain.GetVolumeConfirmationRejection(strategy, snapshot, entryRelativeVolume.Value);
-            if (volumeRejection is not null)
-            {
-                diagnostics.IncrementRejection(volumeRejection);
-                continue;
-            }
-
             var signal = _signalGenerator.CreateTradeSignal(strategy, bars, snapshots, i);
             if (signal is null)
             {
@@ -995,10 +982,10 @@ public sealed partial class BacktestRunner(
             }
 
             var longRejection = AllowsLong(strategy)
-                ? _decisionBrain.GetLongEntryRejection(strategy, signal, snapshot, entryRelativeVolume.Value)
+                ? _decisionBrain.GetLongEntryRejection(strategy, signal, snapshot, entryRelativeVolume)
                 : "direction_not_long";
             var shortRejection = AllowsShort(strategy)
-                ? _decisionBrain.GetShortEntryRejection(strategy, signal, snapshot, entryRelativeVolume.Value)
+                ? _decisionBrain.GetShortEntryRejection(strategy, signal, snapshot, entryRelativeVolume)
                 : "direction_not_short";
             if (longRejection is not null && shortRejection is not null)
             {

@@ -142,7 +142,6 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "entry_rules.require_rollover_close_below_prior_low", false),
                 RequirePriceAboveEma10: OptionalBool(map, "entry_rules.require_price_above_ema10", false),
                 RequireEma10AboveEma20: OptionalBool(map, "entry_rules.require_ema10_above_ema20", false),
-                MinSessionRelativeVolume: OptionalDecimal(map, "entry_rules.min_session_relative_volume"),
                 MinGapUpPct: OptionalDecimal(map, "entry_rules.min_gap_up_pct"),
                 AnchorType: OptionalNullableString(map, "entry_rules.anchor_type"),
                 AvwapProximityPct: OptionalDecimal(map, "entry_rules.avwap_proximity_pct"),
@@ -173,7 +172,8 @@ public sealed class SimpleYamlReader
                 MaxPerTickerDailyFailedTrades: OptionalInt(map, "risk_guards.per_ticker_daily.max_failed_trades", 0),
                 MaxPerTickerDailyLossR: OptionalDecimal(map, "risk_guards.per_ticker_daily.max_loss_r"),
                 MaxPerTickerDailyLossPctOfAccount: OptionalDecimal(map, "risk_guards.per_ticker_daily.max_loss_pct_of_account"),
-                MinVolumeSpikeSource: OptionalString(map, "entry_rules.min_volume_spike_source", "cumulative_same_time"),
+                MinVolumeSpikeSource: RelativeVolumeMeasureParser.Parse(
+                    OptionalString(map, "entry_rules.min_volume_spike_source", "cumulative_same_time")),
                 VolumeConfirmationMode: OptionalString(map, "entry_rules.volume_confirmation_mode", "hard_gate"),
                 MinVolumeLiquidityFloor: OptionalDecimal(map, "entry_rules.min_volume_liquidity_floor"),
                 MaxCatalystConfirmationBars: OptionalNullableInt(map, "entry_rules.max_catalyst_confirmation_bars"),

@@ -68,7 +68,9 @@ public sealed class CsvMarketDataProvider(string normalizedRoot) : IMarketDataPr
                 GetDecimal(fields, index, "high"),
                 GetDecimal(fields, index, "low"),
                 GetDecimal(fields, index, "close"),
-                GetDecimal(fields, index, "volume"));
+                GetDecimal(fields, index, "volume"),
+                "csv",
+                "file_declared");
         }
     }
 

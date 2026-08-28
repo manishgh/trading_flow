@@ -337,3 +337,47 @@ Important rules:
 - Alpaca batched reads fetch many symbols per timeframe, then fan out into candle events.
 - `TradingFlow.Web` does not compute indicators or strategy decisions; it resolves config/credentials and calls module APIs.
 
+### Market Evidence And RVOL
+
+`IndicatorEngine` applies the immutable `us_equities_same_time_rvol_v1` profile.
+Production participation evidence requires one SIP feed and `adjustment=all`; mixed,
+unknown, or unexpected provenance produces no RVOL. The primary strategy value is
+current cumulative cohort volume through the completed bar divided by the median at
+the same New York exchange clock time over the exact 20 prior exchange sessions.
+Slot-bar RVOL is calculated separately for local acceleration. Overnight, premarket,
+regular, and postmarket cohorts never share samples. The Alpaca calendar is required
+in production so holidays and early closes fail closed instead of being inferred.
+Provider-confirmed missing-trade minutes carry cumulative volume forward but never
+create a synthetic bar or exact-slot sample.
+
+Historical cache manifests bind every reusable slice to its exact UTC range, provider,
+feed, adjustment, schema, checksum, and coverage. Candle revisions retain their
+provider-known timestamp; local as-of reads and replay therefore cannot expose a
+correction before it was available to the running strategy.
+
+Cache data files are immutable and versioned. The manifest is the sole commit marker,
+so a process interruption cannot overwrite the data referenced by the last committed
+manifest. Publication and cleanup for each ticker/timeframe or calendar manifest are
+serialized by a cross-process filesystem lock with cancellation and a 30-second upper
+bound; cleanup validates manifest identity, exact filename shape, and path containment.
+
+Adjusted candle snapshots expire under the versioned 24-hour freshness policy or
+immediately when their explicit restatement revision changes. The provider calendar
+uses a separate crash-safe, checksummed cache: `use_cache` can replay a fully covered
+authoritative range offline, while `refresh` must replace it from the provider. Cache
+wrappers preserve the inner provider's calendar, completeness, and provenance
+capabilities, so backtest and direct Alpaca paths run the same evidence contract.
+
+Every strategy selects its measure through the typed `RelativeVolumeMeasure` value.
+The shared `StrategyDecisionBrain` owns readiness and threshold rejection for
+backtest, paper/live, API evaluation, wishlist monitoring, and mobile automation.
+Finviz `vendor_reported_rvol` is retained only on discovery membership evidence and
+has no reference path into engine/backtest strategy code.
+
+Wishlist observation adds its symbols to the same reference-counted Alpaca stream and
+reads `IMarketStateSnapshotProvider`; it never creates a parallel REST polling loop.
+The observer isolates failures per ticker and fingerprints every field consumed by the
+wishlist evaluator, including prior-bar momentum and same-time RVOL. Unchanged evidence
+is not reevaluated, while an accepted revision to an earlier bar/baseline changes the
+fingerprint and is evaluated once.
+

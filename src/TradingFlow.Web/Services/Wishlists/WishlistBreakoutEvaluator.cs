@@ -12,6 +12,7 @@ public sealed record WishlistMarketSnapshot(
 
 public sealed record WishlistBreakoutEvaluation(
     string Ticker,
+    DateTimeOffset SourceBarTimestampUtc,
     bool ShouldAlert,
     string SignalType,
     string Severity,
@@ -19,7 +20,7 @@ public sealed record WishlistBreakoutEvaluation(
     string Reason,
     decimal Score,
     decimal? SessionGainPct,
-    decimal? SessionRelativeVolume,
+    decimal? CumulativeSameTimeRelativeVolume,
     decimal? VwapExtensionAtr,
     string SnapshotJson,
     string? NewsHeadline,
@@ -28,7 +29,7 @@ public sealed record WishlistBreakoutEvaluation(
 
 public sealed record WishlistBreakoutEvaluatorOptions(
     decimal MinSessionGainPct = 1.5m,
-    decimal MinSessionRelativeVolume = 1.2m,
+    decimal MinCumulativeSameTimeRelativeVolume = 1.2m,
     decimal MinBreakoutPct = 0.15m,
     decimal MaxVwapExtensionAtr = 3.5m);
 
@@ -62,8 +63,8 @@ public sealed class WishlistBreakoutEvaluator
         var emaAligned = snapshot.Ema10 is { } ema10 && snapshot.Ema20 is { } ema20 && ema10 >= ema20;
         var priceAboveSupport = snapshot.Vwap is { } vwap && snapshot.CurrentPrice >= vwap &&
             (snapshot.Ema10 is null || snapshot.CurrentPrice >= snapshot.Ema10.Value);
-        var participationConfirmed = snapshot.SessionRelativeVolume is { } sessionRvol && sessionRvol >= options.MinSessionRelativeVolume ||
-            input.Previous is { } previous && snapshot.CurrentVolume > previous.CurrentVolume;
+        var participationConfirmed = snapshot.RelativeVolume is { } sessionRvol &&
+            sessionRvol >= options.MinCumulativeSameTimeRelativeVolume;
         var breakoutConfirmed = breakoutPct is { } breakout && breakout >= options.MinBreakoutPct ||
             sessionGainPct is { } sessionGain && sessionGain >= options.MinSessionGainPct;
         var notTooExtended = vwapExtensionAtr is null || vwapExtensionAtr <= options.MaxVwapExtensionAtr;
@@ -79,12 +80,13 @@ public sealed class WishlistBreakoutEvaluator
             breakoutConfirmed,
             notTooExtended,
             sessionGainPct,
-            snapshot.SessionRelativeVolume,
+            snapshot.RelativeVolume,
             vwapExtensionAtr,
             snapshot.Catalyst);
 
         return new WishlistBreakoutEvaluation(
             ticker,
+            snapshot.Timestamp.ToUniversalTime(),
             shouldAlert,
             shouldAlert ? "wishlist_breakout" : "wishlist_watch_rejected",
             shouldAlert ? ResolveSeverity(score) : "info",
@@ -92,7 +94,7 @@ public sealed class WishlistBreakoutEvaluator
             reason,
             score,
             sessionGainPct,
-            snapshot.SessionRelativeVolume,
+            snapshot.RelativeVolume,
             vwapExtensionAtr,
             JsonSerializer.Serialize(new
             {
@@ -104,7 +106,7 @@ public sealed class WishlistBreakoutEvaluator
                 snapshot.Ema10,
                 snapshot.Ema20,
                 snapshot.MacdHistogram,
-                snapshot.SessionRelativeVolume,
+                cumulativeSameTimeRelativeVolume = snapshot.RelativeVolume,
                 catalyst = snapshot.Catalyst is null ? null : new
                 {
                     snapshot.Catalyst.Headline,
@@ -159,7 +161,7 @@ public sealed class WishlistBreakoutEvaluator
         bool breakoutConfirmed,
         bool notTooExtended,
         decimal? sessionGainPct,
-        decimal? sessionRelativeVolume,
+        decimal? cumulativeSameTimeRelativeVolume,
         decimal? vwapExtensionAtr,
         CatalystEvent? catalyst)
     {
@@ -168,17 +170,22 @@ public sealed class WishlistBreakoutEvaluator
             var catalystText = catalyst is null
                 ? " No matched news catalyst."
                 : $" News match: {catalyst.Headline} ({catalyst.Provider ?? "news"}).";
-            return $"Breakout watch: price holds VWAP/EMA10, EMA10>=EMA20, MACD histogram bullish/improving, participation confirmed. Session gain={Format(sessionGainPct)}%, RVOL={Format(sessionRelativeVolume)}, VWAP extension ATR={Format(vwapExtensionAtr)}.{catalystText}";
+            return $"Breakout watch: price holds VWAP/EMA10, EMA10>=EMA20, MACD histogram bullish/improving, participation confirmed. Session gain={Format(sessionGainPct)}%, cumulative same-time RVOL={Format(cumulativeSameTimeRelativeVolume)}, VWAP extension ATR={Format(vwapExtensionAtr)}.{catalystText}";
         }
 
         var failures = new List<string>();
         if (!priceAboveSupport) failures.Add("price below VWAP/EMA10 support");
         if (!emaAligned) failures.Add("EMA10 below EMA20");
         if (!macdImproving) failures.Add("MACD histogram not bullish/improving");
-        if (!participationConfirmed) failures.Add("participation not confirmed");
+        if (!participationConfirmed)
+        {
+            failures.Add(cumulativeSameTimeRelativeVolume is null
+                ? "cumulative same-time RVOL unavailable"
+                : "cumulative same-time RVOL below minimum");
+        }
         if (!breakoutConfirmed) failures.Add("no breakout/session gain confirmation");
         if (!notTooExtended) failures.Add("VWAP/ATR extension too high");
-        return $"No alert: {String.Join(", ", failures)}. Session gain={Format(sessionGainPct)}%, RVOL={Format(sessionRelativeVolume)}, VWAP extension ATR={Format(vwapExtensionAtr)}.";
+        return $"No alert: {String.Join(", ", failures)}. Session gain={Format(sessionGainPct)}%, cumulative same-time RVOL={Format(cumulativeSameTimeRelativeVolume)}, VWAP extension ATR={Format(vwapExtensionAtr)}.";
     }
 
     private static string Format(decimal? value) => value.HasValue ? value.Value.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture) : "n/a";

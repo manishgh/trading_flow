@@ -36,6 +36,38 @@ No.,Ticker,Company,Rel Volume,Price
     }
 
     [Fact]
+    public async Task GetScreenerSnapshotAsync_PreservesNormalizedQueryAndArchiveProvenance()
+    {
+        using var client = new FinvizClient(
+            new HttpClient(new CsvHandler("""
+No.,Ticker,Company,Rel Volume
+1,SPCE,Virgin Galactic,2.35
+""")),
+            new FinvizOptions(new Uri("https://finviz.com"), "test-token"),
+            CreateArchiveWriter());
+
+        var snapshot = await client.GetScreenerSnapshotAsync(
+            "https://finviz.com/screener.ashx?v=111&f=sh_relvol_o2&auth=discard-me",
+            CancellationToken.None);
+
+        Assert.Equal("v=111&f=sh_relvol_o2", snapshot.NormalizedQuery);
+        Assert.StartsWith("raw-archive:", snapshot.RawReference, StringComparison.Ordinal);
+        Assert.Equal("SPCE", Assert.Single(snapshot.Rows).Ticker);
+        Assert.Equal(2.35m, snapshot.Rows[0].RelativeVolume);
+
+        var manifestPath = Assert.Single(Directory.EnumerateFiles(
+            archiveRoot,
+            "*.manifest.json",
+            SearchOption.AllDirectories));
+        var manifest = JsonSerializer.Deserialize<RawArchiveManifest>(
+            await File.ReadAllTextAsync(manifestPath),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(manifest);
+        Assert.Equal(manifest.ReceivedAtUtc, snapshot.ReceivedAtUtc);
+        Assert.Equal($"raw-archive:{manifest.ArchiveId}", snapshot.RawReference);
+    }
+
+    [Fact]
     public async Task GetScreenerTickersAsync_PreservesExistingTickerOnlyContract()
     {
         using var client = new FinvizClient(

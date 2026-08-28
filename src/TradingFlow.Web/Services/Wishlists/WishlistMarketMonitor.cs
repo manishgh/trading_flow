@@ -11,11 +11,21 @@ public sealed class WishlistMarketMonitor
 {
     private readonly IWishlistRepository wishlists;
     private readonly WishlistBreakoutEvaluator evaluator;
+    private readonly TimeProvider timeProvider;
 
     public WishlistMarketMonitor(IWishlistRepository wishlists, WishlistBreakoutEvaluator evaluator)
+        : this(wishlists, evaluator, TimeProvider.System)
+    {
+    }
+
+    public WishlistMarketMonitor(
+        IWishlistRepository wishlists,
+        WishlistBreakoutEvaluator evaluator,
+        TimeProvider timeProvider)
     {
         this.wishlists = wishlists;
         this.evaluator = evaluator;
+        this.timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<WishlistBreakoutEvaluation>> EvaluateAsync(
@@ -44,14 +54,23 @@ public sealed class WishlistMarketMonitor
     {
         var evaluations = await EvaluateAsync(wishlistId, snapshotsByTicker, cancellationToken);
         var persisted = new List<WishlistSignal>();
-        var dedupeWindowStart = DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMinutes(15));
+        var now = timeProvider.GetUtcNow();
 
         foreach (var evaluation in evaluations.Where(evaluation => evaluation.ShouldAlert))
         {
-            var recent = await wishlists.GetSignalsAsync(wishlistId, evaluation.Ticker, dedupeWindowStart, 20, cancellationToken);
+            var dedupeWindowStart = evaluation.SourceBarTimestampUtc < now.Subtract(TimeSpan.FromMinutes(15))
+                ? evaluation.SourceBarTimestampUtc
+                : now.Subtract(TimeSpan.FromMinutes(15));
+            var recent = await wishlists.GetSignalsAsync(
+                wishlistId,
+                evaluation.Ticker,
+                dedupeWindowStart,
+                100,
+                cancellationToken);
             var duplicate = recent.Any(signal =>
                 signal.SignalType.Equals(evaluation.SignalType, StringComparison.OrdinalIgnoreCase) &&
-                !signal.Acknowledged);
+                (String.Equals(signal.SnapshotJson, evaluation.SnapshotJson, StringComparison.Ordinal) ||
+                 (!signal.Acknowledged && signal.DetectedAtUtc >= now.Subtract(TimeSpan.FromMinutes(15)))));
             if (duplicate)
             {
                 continue;
@@ -63,7 +82,7 @@ public sealed class WishlistMarketMonitor
                 Ticker = evaluation.Ticker,
                 SignalType = evaluation.SignalType,
                 Severity = evaluation.Severity,
-                DetectedAtUtc = DateTimeOffset.UtcNow,
+                DetectedAtUtc = now,
                 Price = evaluation.Price,
                 Reason = evaluation.Reason,
                 SnapshotJson = evaluation.SnapshotJson,

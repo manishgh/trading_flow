@@ -119,33 +119,6 @@ public sealed partial class LiveRunner
         }
     }
 
-    private static string BuildSignalAuditJson(
-        TradeSignal signal,
-        decimal relativeVolumeUsed,
-        string relativeVolumeSource,
-        decimal? calculatedRelativeVolume,
-        decimal? slotRelativeVolume,
-        decimal? sessionRelativeVolume,
-        decimal? slotAverageVolume,
-        decimal? cumulativeAverageVolume,
-        decimal? averageSessionVolume,
-        int relativeVolumeSampleCount)
-    {
-        return JsonSerializer.Serialize(new
-        {
-            signal,
-            relativeVolumeUsed,
-            relativeVolumeSource,
-            calculatedRelativeVolume,
-            slotRelativeVolume,
-            sessionRelativeVolume,
-            slotAverageVolume,
-            cumulativeAverageVolume,
-            averageSessionVolume,
-            relativeVolumeSampleCount
-        });
-    }
-
     private static string ResolveExchangeTimezone(IReadOnlyCollection<StrategyDefinition> strategies)
     {
         return strategies

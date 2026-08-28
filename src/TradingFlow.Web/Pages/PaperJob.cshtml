@@ -79,16 +79,16 @@
                     const metrics = data.metrics ?? [];
                     metricsEmpty.hidden = metrics.length !== 0;
                     metricsTable.hidden = metrics.length === 0;
-                    metricsBody.innerHTML = metrics.map(point => `<tr>
+                    metricsBody.innerHTML = metrics.map(point => `<tr title="${escapeHtml(`Profile: ${point.marketEvidenceProfileVersion ?? 'unknown'}; cohort: ${point.relativeVolumeCohort ?? 'unknown'}; feed: ${point.dataFeed ?? 'unknown'}; adjustment: ${point.adjustmentPolicy ?? 'unknown'}; reliability: ${point.marketEvidenceReliability ?? 'unknown'}`)}">
                         <td>${escapeHtml(point.time)}</td>
                         <td><strong>${escapeHtml(point.ticker)}</strong></td>
                         <td>${escapeHtml(point.timeframe)}</td>
                         <td>${formatCurrency(point.close)}</td>
                         <td>${formatDecimal(point.rsi)}</td>
                         <td>${formatWholeNumber(point.volume)}</td>
-                        <td>${formatWholeNumber(point.averageVolume)}</td>
+                        <td>${formatWholeNumber(point.slotMedianVolume)}</td>
                         <td>${formatDecimal(point.slotRelativeVolume)}</td>
-                        <td>${formatWholeNumber(point.cumulativeAverageVolume)}</td>
+                        <td>${formatWholeNumber(point.cumulativeSameTimeMedianVolume)}</td>
                         <td>${formatDecimal(point.relativeVolume)}</td>
                         <td>${formatWholeNumber(point.relativeVolumeSampleCount)}</td>
                         <td>${formatCurrency(point.vwap)}</td>
@@ -337,10 +337,10 @@ else
                         <th>Close Price</th>
                         <th>RSI (14)</th>
                         <th>Volume</th>
-                        <th title="Average volume for this same ticker, timeframe, and exchange-time candle slot from prior sessions. Diagnostic only.">Slot Avg Vol</th>
-                        <th title="Current candle volume divided by the same slot average. Diagnostic only; not the primary strategy RVOL.">Slot RVOL</th>
-                        <th title="Average cumulative session volume at this same exchange-time candle slot from prior sessions. This is the denominator for strategy RVOL.">Cumul Avg Vol</th>
-                        <th title="Primary strategy RVOL: current session cumulative volume divided by average cumulative session volume at this same exchange-time slot across prior sessions.">RVOL</th>
+                        <th title="Median volume for this same ticker, timeframe, market-session cohort, and New York-time candle slot across prior sessions. Diagnostic only.">Slot Median Vol</th>
+                        <th title="Current completed candle volume divided by the same-slot median. Diagnostic acceleration evidence; not the primary participation gate.">Slot RVOL</th>
+                        <th title="Median cumulative cohort volume through this same New York-time slot across prior sessions. This is the denominator for strategy RVOL.">Cumul Median Vol</th>
+                        <th title="Primary strategy RVOL: current cohort cumulative volume divided by the historical median through the same New York-time slot.">Same-time RVOL</th>
                         <th title="Number of prior same-time sessions used for the RVOL baseline.">Samples</th>
                         <th>VWAP</th>
                     </tr>
@@ -348,17 +348,17 @@ else
                 <tbody id="liveMetricsBody">
                     @foreach (var point in Model.ChartDataList.OrderBy(x => x.Ticker))
                     {
-                        <tr>
+                        <tr title="Profile: @point.MarketEvidenceProfileVersion; cohort: @point.RelativeVolumeCohort; feed: @point.DataFeed; adjustment: @point.AdjustmentPolicy; reliability: @point.MarketEvidenceReliability">
                             <td>@Model.FormatMetricTimestamp(point.Timestamp, point.Timeframe)</td>
                             <td><strong>@point.Ticker</strong></td>
                             <td>@point.Timeframe</td>
                             <td>@point.Close.ToString("C2")</td>
                             <td>@(point.Rsi?.ToString("F2") ?? "N/A")</td>
                             <td>@point.Volume.ToString("N0")</td>
-                            <td>@point.SlotAverageVolume.ToString("N0")</td>
-                            <td>@point.SlotRelativeVolume.ToString("F2")</td>
-                            <td>@point.CumulativeAverageVolume.ToString("N0")</td>
-                            <td>@point.RelativeVolume.ToString("F2")</td>
+                            <td>@(point.SlotMedianVolume?.ToString("N0") ?? "n/a")</td>
+                            <td>@(point.SlotRelativeVolume?.ToString("F2") ?? "N/A")</td>
+                            <td>@(point.CumulativeSameTimeMedianVolume?.ToString("N0") ?? "n/a")</td>
+                            <td>@(point.RelativeVolume?.ToString("F2") ?? "N/A")</td>
                             <td>@point.RelativeVolumeSampleCount</td>
                             <td>@(point.Vwap?.ToString("C2") ?? "N/A")</td>
                         </tr>

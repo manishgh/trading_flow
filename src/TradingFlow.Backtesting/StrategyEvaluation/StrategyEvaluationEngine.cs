@@ -121,7 +121,7 @@ public sealed class StrategyEvaluationEngine
             strategy,
             signal,
             latest,
-            StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, latest) ?? 0m);
+            StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, latest));
         if (entryRejection is not null)
         {
             return StrategyTickerEvaluation.FromSnapshot(ticker, latest, "Rejected", entryRejection, signal);
@@ -135,7 +135,6 @@ public sealed class StrategyEvaluationEngine
         var missing = new List<string>();
         if (snapshot.Rsi is null) missing.Add("rsi");
         if (snapshot.Atr is null) missing.Add("atr");
-        if (snapshot.RelativeVolume is null) missing.Add("relative_volume");
         if (snapshot.Vwap is null) missing.Add("vwap");
         if (snapshot.BollingerMiddle is null) missing.Add("bollinger_middle");
         if (snapshot.MacdHistogram is null) missing.Add("macd_histogram");
@@ -220,7 +219,7 @@ public sealed record StrategyTickerEvaluation(
     decimal? Rsi,
     decimal? Atr,
     decimal? Volume,
-    decimal? SlotAverageVolume,
+    decimal? SlotMedianVolume,
     decimal? RelativeVolume,
     decimal? Vwap,
     decimal? Ema20,
@@ -245,7 +244,7 @@ public sealed record StrategyTickerEvaluation(
             snapshot.Rsi,
             snapshot.Atr,
             snapshot.CurrentVolume,
-            snapshot.SlotAverageVolume,
+            snapshot.SlotMedianVolume,
             snapshot.RelativeVolume,
             snapshot.Vwap,
             snapshot.Ema20,

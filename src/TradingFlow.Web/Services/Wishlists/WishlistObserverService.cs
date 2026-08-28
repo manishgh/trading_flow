@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Hosting;
-using TradingFlow.Alpaca;
-using TradingFlow.Data.News;
+using System.Collections.Concurrent;
+using System.Text.Json;
+using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Market;
+using TradingFlow.Domain.News;
 using TradingFlow.Domain.Wishlists;
-using TradingFlow.Engine.Indicators;
+using TradingFlow.Engine.Pipeline;
 
 namespace TradingFlow.Web.Services.Wishlists;
 
@@ -14,51 +16,65 @@ namespace TradingFlow.Web.Services.Wishlists;
 /// </summary>
 public sealed class WishlistObserverService : BackgroundService
 {
+    private static readonly Guid ObservationScope =
+        Guid.Parse("d1a12e6e-20f8-42f8-8c1d-5166d80b3fc8");
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan LookbackWindow = TimeSpan.FromDays(5);
     private static readonly TimeSpan NewsWindow = TimeSpan.FromHours(4);
     private static readonly TimeZoneInfo ExchangeTimeZone = ResolveExchangeTimeZone();
 
     private readonly IWishlistRepository wishlists;
     private readonly WishlistMarketMonitor monitor;
-    private readonly SqliteNewsFeedRepository newsRepository;
-    private readonly AlpacaCredentialProvider alpacaCredentials;
-    private readonly IndicatorEngine indicatorEngine = new();
+    private readonly INewsFeedRepository newsRepository;
+    private readonly IDiscoverySubscriptionSink subscriptions;
+    private readonly IMarketStateSnapshotProvider marketState;
+    private readonly TimeProvider timeProvider;
     private readonly ILogger<WishlistObserverService> logger;
+    private readonly ConcurrentDictionary<(Guid WishlistId, string Ticker), string> lastEvaluatedEvidence = [];
 
     public WishlistObserverService(
         IWishlistRepository wishlists,
         WishlistMarketMonitor monitor,
-        SqliteNewsFeedRepository newsRepository,
-        AlpacaCredentialProvider alpacaCredentials,
+        INewsFeedRepository newsRepository,
+        IDiscoverySubscriptionSink subscriptions,
+        IMarketStateSnapshotProvider marketState,
+        TimeProvider timeProvider,
         ILogger<WishlistObserverService> logger)
     {
         this.wishlists = wishlists;
         this.monitor = monitor;
         this.newsRepository = newsRepository;
-        this.alpacaCredentials = alpacaCredentials;
+        this.subscriptions = subscriptions;
+        this.marketState = marketState;
+        this.timeProvider = timeProvider;
         this.logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await Task.Delay(TimeSpan.FromSeconds(8), stoppingToken);
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            await Task.Delay(TimeSpan.FromSeconds(8), stoppingToken);
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await ObserveOnceAsync(stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(exception, "Wishlist observer iteration failed.");
-            }
+                try
+                {
+                    await ObserveOnceAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    logger.LogWarning(exception, "Wishlist observer iteration failed.");
+                }
 
-            await Task.Delay(PollInterval, stoppingToken);
+                await Task.Delay(PollInterval, stoppingToken);
+            }
+        }
+        finally
+        {
+            await subscriptions.RemoveScopeAsync(ObservationScope, CancellationToken.None);
         }
     }
 
@@ -69,12 +85,7 @@ public sealed class WishlistObserverService : BackgroundService
             .ToArray();
         if (observed.Length == 0)
         {
-            return;
-        }
-
-        if (!alpacaCredentials.IsConfigured)
-        {
-            logger.LogWarning("Wishlist observer skipped because Alpaca credentials are not configured.");
+            await subscriptions.RemoveScopeAsync(ObservationScope, cancellationToken);
             return;
         }
 
@@ -87,46 +98,78 @@ public sealed class WishlistObserverService : BackgroundService
             .ToArray();
         if (tickers.Length == 0)
         {
+            await subscriptions.RemoveScopeAsync(ObservationScope, cancellationToken);
             return;
         }
 
-        var end = DateTimeOffset.UtcNow;
-        var start = end.Subtract(LookbackWindow);
-        var provider = new AlpacaMarketDataProvider(
-            new HttpClient(),
-            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
-            {
-                KeyId = alpacaCredentials.KeyId,
-                SecretKey = alpacaCredentials.SecretKey,
-                MarketDataFeed = "sip"
-            });
-
-        var barsByTicker = new Dictionary<string, List<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
-        await foreach (var bar in provider.GetBarsAsync(tickers, new[] { "1m" }, start, end, cancellationToken))
+        await subscriptions.ReplaceScopeAsync(ObservationScope, tickers, cancellationToken);
+        var end = timeProvider.GetUtcNow();
+        var preparedByTicker = new Dictionary<string, PreparedWishlistSnapshot>(StringComparer.OrdinalIgnoreCase);
+        var failedTickerCount = 0;
+        foreach (var ticker in tickers)
         {
-            if (!barsByTicker.TryGetValue(bar.Ticker, out var bars))
+            try
             {
-                bars = new List<OhlcvBar>();
-                barsByTicker[bar.Ticker] = bars;
-            }
-
-            bars.Add(bar);
-        }
-
-        foreach (var wishlist in observed)
-        {
-            var snapshots = new Dictionary<string, WishlistMarketSnapshot>(StringComparer.OrdinalIgnoreCase);
-            foreach (var ticker in wishlist.Items.Where(item => item.Active).Select(item => item.Ticker))
-            {
-                if (!barsByTicker.TryGetValue(ticker, out var bars) || bars.Count < 35)
+                var state = await marketState.GetTickerStateAsync(
+                    ticker,
+                    ["1m"],
+                    minimumBarsPerTimeframe: 35,
+                    asOfUtc: end,
+                    cancellationToken: cancellationToken);
+                if (state is null)
                 {
                     continue;
                 }
 
-                var snapshot = await BuildSnapshotAsync(ticker, bars, cancellationToken);
-                if (snapshot is not null)
+                var prepared = await BuildSnapshotAsync(ticker, state, cancellationToken);
+                if (prepared is not null)
                 {
-                    snapshots[ticker] = snapshot;
+                    preparedByTicker[ticker] = prepared;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                failedTickerCount++;
+                logger.LogWarning(
+                    exception,
+                    "Wishlist observer could not prepare market evidence for {Ticker}; other tickers will continue.",
+                    ticker);
+            }
+        }
+
+        var activeKeys = observed
+            .SelectMany(wishlist => wishlist.Items
+                .Where(item => item.Active)
+                .Select(item => (wishlist.Id, item.Ticker.Trim().ToUpperInvariant())))
+            .ToHashSet();
+        foreach (var existing in lastEvaluatedEvidence.Keys.Where(key => !activeKeys.Contains(key)))
+        {
+            lastEvaluatedEvidence.TryRemove(existing, out _);
+        }
+
+        var evaluatedTickerCount = 0;
+        foreach (var wishlist in observed)
+        {
+            var snapshots = new Dictionary<string, WishlistMarketSnapshot>(StringComparer.OrdinalIgnoreCase);
+            var fingerprints = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var ticker in wishlist.Items.Where(item => item.Active).Select(item => item.Ticker))
+            {
+                var normalizedTicker = ticker.Trim().ToUpperInvariant();
+                if (!preparedByTicker.TryGetValue(normalizedTicker, out var prepared))
+                {
+                    continue;
+                }
+
+                var key = (wishlist.Id, normalizedTicker);
+                if (!lastEvaluatedEvidence.TryGetValue(key, out var priorFingerprint) ||
+                    !String.Equals(priorFingerprint, prepared.EvidenceFingerprint, StringComparison.Ordinal))
+                {
+                    snapshots[normalizedTicker] = prepared.Snapshot;
+                    fingerprints[normalizedTicker] = prepared.EvidenceFingerprint;
                 }
             }
 
@@ -136,6 +179,12 @@ public sealed class WishlistObserverService : BackgroundService
             }
 
             var result = await monitor.EvaluateAndPersistAlertsAsync(wishlist.Id, snapshots, cancellationToken);
+            evaluatedTickerCount += snapshots.Count;
+            foreach (var fingerprint in fingerprints)
+            {
+                lastEvaluatedEvidence[(wishlist.Id, fingerprint.Key)] = fingerprint.Value;
+            }
+
             if (result.PersistedSignals.Count > 0)
             {
                 logger.LogInformation(
@@ -144,16 +193,24 @@ public sealed class WishlistObserverService : BackgroundService
                     wishlist.Name);
             }
         }
+
+        logger.LogInformation(
+            "Wishlist observer completed. Requested={RequestedTickerCount}, ready={ReadyTickerCount}, evaluated={EvaluatedTickerCount}, unavailable_or_warming={UnavailableTickerCount}, failed={FailedTickerCount}.",
+            tickers.Length,
+            preparedByTicker.Count,
+            evaluatedTickerCount,
+            tickers.Length - preparedByTicker.Count - failedTickerCount,
+            failedTickerCount);
     }
 
-    private async Task<WishlistMarketSnapshot?> BuildSnapshotAsync(
+    private async Task<PreparedWishlistSnapshot?> BuildSnapshotAsync(
         string ticker,
-        IReadOnlyList<OhlcvBar> inputBars,
+        TickerMarketState marketState,
         CancellationToken cancellationToken)
     {
-        var bars = inputBars.OrderBy(bar => bar.Timestamp).ToArray();
-        var snapshots = indicatorEngine.Compute(bars);
-        if (snapshots.Count < 2)
+        var bars = marketState.BarsByTimeframe.GetValueOrDefault("1m") ?? [];
+        var snapshots = marketState.SnapshotsByTimeframe.GetValueOrDefault("1m") ?? [];
+        if (bars.Count == 0 || snapshots.Count < 2)
         {
             return null;
         }
@@ -166,7 +223,7 @@ public sealed class WishlistObserverService : BackgroundService
             current = current with { Catalyst = catalyst };
         }
 
-        var recentHigh = bars.Take(Math.Max(0, bars.Length - 1)).TakeLast(30).Select(bar => (decimal?)bar.High).Max();
+        var recentHigh = bars.Take(Math.Max(0, bars.Count - 1)).TakeLast(30).Select(bar => (decimal?)bar.High).Max();
         var currentSession = ToExchangeDate(current.Timestamp);
         var sessionOpen = bars
             .Where(bar => ToExchangeDate(bar.Timestamp) == currentSession)
@@ -174,12 +231,17 @@ public sealed class WishlistObserverService : BackgroundService
             .Select(bar => (decimal?)bar.Open)
             .FirstOrDefault();
 
-        return new WishlistMarketSnapshot(ticker, current, previous, recentHigh, sessionOpen);
+        var snapshot = new WishlistMarketSnapshot(ticker, current, previous, recentHigh, sessionOpen);
+        return new PreparedWishlistSnapshot(snapshot, BuildEvidenceFingerprint(snapshot));
     }
 
     private async Task<CatalystEvent?> GetLatestCatalystAsync(string ticker, CancellationToken cancellationToken)
     {
-        var recent = await newsRepository.GetRecentAsync(DateTimeOffset.UtcNow.Subtract(NewsWindow), 10, ticker, cancellationToken);
+        var recent = await newsRepository.GetRecentAsync(
+            timeProvider.GetUtcNow().Subtract(NewsWindow),
+            10,
+            ticker,
+            cancellationToken);
         var item = recent.FirstOrDefault(news => news.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase))
             ?? recent.FirstOrDefault(news => news.Ticker.Equals("MARKET", StringComparison.OrdinalIgnoreCase));
         if (item is null)
@@ -205,6 +267,38 @@ public sealed class WishlistObserverService : BackgroundService
         return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, ExchangeTimeZone).DateTime);
     }
 
+    private static string BuildEvidenceFingerprint(WishlistMarketSnapshot input) =>
+        JsonSerializer.Serialize(new
+        {
+            current = DecisionFields(input.Current),
+            previousMacdHistogram = input.Previous?.MacdHistogram,
+            input.RecentHigh,
+            input.SessionOpen
+        });
+
+    private static object DecisionFields(IndicatorSnapshot snapshot) => new
+    {
+        timestampUtc = snapshot.Timestamp.ToUniversalTime(),
+        snapshot.CurrentPrice,
+        snapshot.CurrentVolume,
+        snapshot.Vwap,
+        snapshot.Atr,
+        snapshot.Ema10,
+        snapshot.Ema20,
+        snapshot.MacdHistogram,
+        snapshot.RelativeVolume,
+        catalyst = snapshot.Catalyst is null ? null : new
+        {
+            timestampUtc = snapshot.Catalyst.Timestamp.ToUniversalTime(),
+            snapshot.Catalyst.Headline,
+            snapshot.Catalyst.Provider,
+            snapshot.Catalyst.Source,
+            snapshot.Catalyst.Url,
+            snapshot.Catalyst.SentimentScore,
+            receivedAtUtc = snapshot.Catalyst.ReceivedAt?.ToUniversalTime()
+        }
+    };
+
     private static TimeZoneInfo ResolveExchangeTimeZone()
     {
         try
@@ -216,4 +310,8 @@ public sealed class WishlistObserverService : BackgroundService
             return TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
         }
     }
+
+    private sealed record PreparedWishlistSnapshot(
+        WishlistMarketSnapshot Snapshot,
+        string EvidenceFingerprint);
 }

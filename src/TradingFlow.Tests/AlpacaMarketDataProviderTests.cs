@@ -8,6 +8,26 @@ namespace TradingFlow.Tests;
 public class AlpacaMarketDataProviderTests
 {
     [Fact]
+    public void MarketDataProvenance_IsExplicitAndContainsNoCredentials()
+    {
+        var provider = new AlpacaMarketDataProvider(
+            new HttpClient(),
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+            {
+                KeyId = "secret-key-id",
+                SecretKey = "secret-key-value",
+                MarketDataFeed = "sip"
+            });
+
+        var provenance = provider.MarketDataProvenance;
+
+        Assert.Equal("alpaca_historical_bars_v2", provenance.ProviderIdentity);
+        Assert.Equal("sip", provenance.DataFeed);
+        Assert.Equal("all", provenance.AdjustmentPolicy);
+        Assert.DoesNotContain("secret", String.Join('|', provenance.ProviderIdentity, provenance.DataFeed, provenance.AdjustmentPolicy));
+    }
+
+    [Fact]
     public void ProviderDeclaresDocumentedNoTradeIntervalOmissionSemantics()
     {
         using var httpClient = new HttpClient(new PagedBarsHandler());
@@ -161,6 +181,14 @@ public class AlpacaMarketDataProviderTests
         Assert.Contains("AMD", bars.Select(x => x.Ticker));
         Assert.Contains("MU", bars.Select(x => x.Ticker));
         Assert.Contains("NVDA", bars.Select(x => x.Ticker));
+        Assert.All(bars, bar =>
+        {
+            Assert.Equal("sip", bar.DataFeed);
+            Assert.Equal("all", bar.AdjustmentPolicy);
+            Assert.Equal(
+                new DateTimeOffset(2026, 6, 8, 21, 0, 0, TimeSpan.Zero),
+                bar.CoverageVerifiedThroughUtc);
+        });
     }
 
     [Fact]

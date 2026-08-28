@@ -26,8 +26,18 @@ public sealed record CandleStoreWriteRequest(
 public sealed class StaleCandleStoreWriteException(string message) : InvalidOperationException(message);
 
 /// <summary>
-/// Reads previously persisted candles for one ticker/timeframe window.
-/// Store implementations can decide whether to merge multiple physical sources.
+/// Controls whether a candle read returns one effective bar per logical
+/// timestamp or every persisted point-in-time version for deterministic replay.
+/// </summary>
+public enum CandleStoreReadMode
+{
+    EffectiveBars,
+    AllVersions
+}
+
+/// <summary>
+/// Reads previously persisted candles for one ticker/timeframe window. Effective
+/// reads collapse revisions; all-version reads preserve them for replay.
 /// </summary>
 public sealed record CandleStoreReadRequest(
     string Scope,
@@ -37,7 +47,9 @@ public sealed record CandleStoreReadRequest(
     string Timeframe,
     DateTimeOffset Start,
     DateTimeOffset End,
-    string? Source = null);
+    string? Source = null,
+    DateTimeOffset? AsOfUtc = null,
+    CandleStoreReadMode ReadMode = CandleStoreReadMode.EffectiveBars);
 
 /// <summary>
 /// Persistence boundary for candle history produced while a backtest or
@@ -54,7 +66,7 @@ public interface ICandleStore
     Task UpsertBarsAsync(CandleStoreWriteRequest request, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Returns ordered, de-duplicated bars for the requested ticker/timeframe.
+    /// Returns bars ordered according to the request's explicit read mode.
     /// </summary>
     Task<IReadOnlyList<OhlcvBar>> ReadBarsAsync(CandleStoreReadRequest request, CancellationToken cancellationToken);
 }

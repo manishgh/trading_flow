@@ -1440,7 +1440,8 @@ public class LiveRunnerIntegrationTests
                 MaxVwapExtensionAtr: null,
                 OpeningRangeMinutes: 0,
                 RecentHighLookbackBars: 20,
-                VolatilityContractionLookbackBars: 10),
+                VolatilityContractionLookbackBars: 10,
+                VolumeConfirmationMode: "none"),
             Confluence: new ConfluenceRules(confluenceEnabled, confluenceTimeframe, confluenceEmaPeriod, confluenceMacdFilter),
             ExitRules: new ExitRules(
                 1.0m,
@@ -1466,13 +1467,14 @@ public class LiveRunnerIntegrationTests
         var bars = new List<OhlcvBar>();
         for (var day = 0; day < 7; day++)
         {
+            var sessionStart = AddWeekdays(start, day);
             for (var i = 0; i < 96; i++)
             {
                 var sequence = (day * 96) + i;
                 var close = 100m + sequence * 0.01m;
                 bars.Add(new OhlcvBar(
                     ticker,
-                    start.AddDays(day).AddMinutes(i * 5),
+                    sessionStart.AddMinutes(i * 5),
                     "5m",
                     close - 0.05m,
                     close + 0.25m,
@@ -1483,6 +1485,21 @@ public class LiveRunnerIntegrationTests
         }
 
         return bars;
+    }
+
+    private static DateTimeOffset AddWeekdays(DateTimeOffset start, int weekdays)
+    {
+        var result = start;
+        for (var remaining = weekdays; remaining > 0;)
+        {
+            result = result.AddDays(1);
+            if (result.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+            {
+                remaining--;
+            }
+        }
+
+        return result;
     }
 
     private static IReadOnlyList<OhlcvBar> CreateOneMinuteBars(

@@ -9,10 +9,12 @@ namespace TradingFlow.Tests;
 public class BasicStrategyEvaluatorTests
 {
     private readonly BasicStrategyEvaluator _evaluator;
+    private readonly StrategyDecisionBrain _decisionBrain;
 
     public BasicStrategyEvaluatorTests()
     {
         _evaluator = new BasicStrategyEvaluator();
+        _decisionBrain = new StrategyDecisionBrain();
     }
 
     private StrategyDefinition CreateBaseStrategy()
@@ -81,6 +83,30 @@ public class BasicStrategyEvaluatorTests
         );
     }
 
+    private static IndicatorSnapshot CreateVolumeSnapshot(decimal relativeVolume) => new(
+        "AAPL",
+        DateTimeOffset.Parse("2026-08-03T14:00:00Z"),
+        "15m",
+        150m,
+        10_000m,
+        149m,
+        50m,
+        2.5m,
+        148m,
+        147m,
+        140m,
+        null,
+        null,
+        null,
+        relativeVolume,
+        1m,
+        0.5m,
+        0.5m,
+        RelativeVolumeSampleCount: 20,
+        MarketEvidenceProfileVersion: "test_rvol_v1",
+        RelativeVolumeCohort: "regular",
+        RelativeVolumeMinimumSamples: 20);
+
     [Fact]
     public void GetLongEntryRejection_WhenVolumeIsLiquidityFloor_AllowsSoftConfirmationBelowTarget()
     {
@@ -94,7 +120,8 @@ public class BasicStrategyEvaluatorTests
             }
         };
 
-        var rejection = _evaluator.GetLongEntryRejection(strategy, CreateBaseSignal(), relativeVolume: 0.60m);
+        var rejection = _decisionBrain.GetLongEntryRejection(
+            strategy, CreateBaseSignal(), CreateVolumeSnapshot(0.60m), 0.60m);
 
         Assert.Null(rejection);
     }
@@ -112,9 +139,12 @@ public class BasicStrategyEvaluatorTests
             }
         };
 
-        var rejection = _evaluator.GetLongEntryRejection(strategy, CreateBaseSignal(), relativeVolume: 0.10m);
+        var rejection = _decisionBrain.GetLongEntryRejection(
+            strategy, CreateBaseSignal(), CreateVolumeSnapshot(0.10m), 0.10m);
 
-        Assert.Equal("volume_liquidity_floor_below_minimum (Actual: 0.10, Required: 0.15)", rejection);
+        Assert.NotNull(rejection);
+        Assert.Contains("volume_liquidity_floor_below_minimum", rejection);
+        Assert.Contains("Source: cumulative_same_time", rejection);
     }
 
     [Fact]
@@ -129,7 +159,8 @@ public class BasicStrategyEvaluatorTests
             }
         };
 
-        var rejection = _evaluator.GetLongEntryRejection(strategy, CreateBaseSignal(), relativeVolume: 0.60m);
+        var rejection = _decisionBrain.GetLongEntryRejection(
+            strategy, CreateBaseSignal(), CreateVolumeSnapshot(0.60m), 0.60m);
 
         Assert.Null(rejection);
     }
@@ -264,48 +295,12 @@ public class BasicStrategyEvaluatorTests
         var strategy = CreateBaseStrategy();
         var signal = CreateBaseSignal();
 
-        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 1.0m);
+        var rejection = _decisionBrain.GetLongEntryRejection(
+            strategy, signal, CreateVolumeSnapshot(1.0m), 1.0m);
 
         Assert.NotNull(rejection);
-        Assert.Equal("relative_volume_below_minimum (Actual: 1.00, Required: 1.50)", rejection);
-    }
-
-    [Fact]
-    public void GetLongEntryRejection_WhenSessionRelativeVolumeTooLow_ReturnsFormattedString()
-    {
-        var baseStrategy = CreateBaseStrategy();
-        var strategy = baseStrategy with
-        {
-            EntryRules = baseStrategy.EntryRules with
-            {
-                MinVolumeSpike = 0.0m,
-                MinSessionRelativeVolume = 2.0m
-            }
-        };
-        var signal = CreateBaseSignal() with { SessionRelativeVolume = 1.2m };
-
-        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 3.0m);
-
-        Assert.Equal("session_relative_volume_below_minimum (Actual: 1.20, Required: 2.00)", rejection);
-    }
-
-    [Fact]
-    public void GetLongEntryRejection_WhenSessionRelativeVolumeMeetsMinimum_ReturnsNull()
-    {
-        var baseStrategy = CreateBaseStrategy();
-        var strategy = baseStrategy with
-        {
-            EntryRules = baseStrategy.EntryRules with
-            {
-                MinVolumeSpike = 0.0m,
-                MinSessionRelativeVolume = 2.0m
-            }
-        };
-        var signal = CreateBaseSignal() with { SessionRelativeVolume = 2.1m };
-
-        var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 0.5m);
-
-        Assert.Null(rejection);
+        Assert.Contains("relative_volume_below_minimum", rejection);
+        Assert.Contains("Source: cumulative_same_time", rejection);
     }
 
     [Fact]
@@ -1123,7 +1118,6 @@ public class BasicStrategyEvaluatorTests
             {
                 SetupType = "vwap_reclaim_trap",
                 MinVolumeSpike = 0.0m,
-                MinSessionRelativeVolume = 1.0m,
                 RequirePriceAboveVwap = true,
                 RequirePriorFlushBelowVwapBars = 3,
                 VwapReclaimMaxBarsSinceFlush = 12,
@@ -1136,8 +1130,7 @@ public class BasicStrategyEvaluatorTests
             PriorFlushBelowVwapBars = 3,
             BarsSinceVwapFlush = 4,
             ReclaimVolumeRatio = 2.0m,
-            IsAboveVwap = true,
-            SessionRelativeVolume = 1.2m
+            IsAboveVwap = true
         };
 
         var rejection = _evaluator.GetLongEntryRejection(strategy, signal, relativeVolume: 2.0m);

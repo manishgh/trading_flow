@@ -43,9 +43,23 @@ public sealed record ScreenerSyncResult(
 {
     public bool Succeeded => Error is null;
 
+    /// <summary>
+    /// Provider values retained for discovery display and audit only. Strategy
+    /// admission must calculate RVOL from Alpaca market evidence.
+    /// </summary>
+    public IReadOnlyList<ScreenerSymbolResult> SymbolDetails { get; init; } = [];
+
+    public DateTimeOffset? ProviderTimestampUtc { get; init; }
+
+    public string? RawReference { get; init; }
+
     public static ScreenerSyncResult Failed(ScreenerScope scope, string name, string query, string error) =>
         new(scope, name, query, [], [], DateTimeOffset.UtcNow, null, error);
 }
+
+public sealed record ScreenerSymbolResult(
+    string Symbol,
+    decimal? VendorReportedRvol);
 
 /// <summary>
 /// Point-in-time screener read used when resolving an immutable run universe.
@@ -131,17 +145,23 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             return ScreenerSyncResult.Failed(scope, name, String.Empty, "No screener filter could be read from that input.");
         }
 
-        IReadOnlyList<string> symbols;
+        FinvizScreenerSnapshot snapshot;
+        IReadOnlyList<ScreenerSymbolResult> symbolDetails;
         try
         {
             using var client = new FinvizClient(
                 new HttpClient(),
                 FinvizOptions.CreateDefault() with { AuthToken = token },
                 rawArchiveWriter);
-            symbols = (await client.GetScreenerTickersAsync(query, cancellationToken))
-                .Where(ticker => !String.IsNullOrWhiteSpace(ticker))
-                .Select(ticker => ticker.Trim().ToUpperInvariant())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+            snapshot = await client.GetScreenerSnapshotAsync(query, cancellationToken);
+            symbolDetails = snapshot.Rows
+                .Where(row => !String.IsNullOrWhiteSpace(row.Ticker))
+                .Select(row => new ScreenerSymbolResult(
+                    row.Ticker.Trim().ToUpperInvariant(),
+                    row.RelativeVolume))
+                .GroupBy(row => row.Symbol, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.Last())
+                .OrderBy(row => row.Symbol, StringComparer.Ordinal)
                 .Take(250)
                 .ToArray();
         }
@@ -150,6 +170,8 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             logger.LogWarning(exception, "Finviz screener read failed for {Query}.", query);
             return ScreenerSyncResult.Failed(scope, name, query, $"Finviz read failed: {exception.Message}");
         }
+
+        var symbols = symbolDetails.Select(row => row.Symbol).ToArray();
 
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (wishlistId is { } id)
@@ -165,12 +187,17 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
         var result = new ScreenerSyncResult(
             scope,
             name,
-            query,
+            snapshot.NormalizedQuery,
             symbols,
             symbols.Where(symbol => !existing.Contains(symbol)).ToArray(),
             timeProvider.GetUtcNow(),
             sessionKey,
-            null);
+            null)
+        {
+            SymbolDetails = symbolDetails,
+            ProviderTimestampUtc = snapshot.ReceivedAtUtc,
+            RawReference = $"finviz:{snapshot.NormalizedQuery}|{snapshot.RawReference}"
+        };
 
         if (sessionKey is not null)
         {

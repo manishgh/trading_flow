@@ -316,14 +316,12 @@ internal sealed class FinvizDiscoverySource(
     public override async Task<DiscoveryCapture> CaptureAsync(CancellationToken cancellationToken)
     {
         var observedAt = TimeProvider.GetUtcNow();
-        if (initialSymbols.Count > 0 && await repository.GetSourceVersionAsync(
+        var mayUseRunStartFallback = initialSymbols.Count > 0 &&
+            await repository.GetSourceVersionAsync(
                 scopeId,
                 SourceKind,
                 SourceKey,
-                cancellationToken) == 0)
-        {
-            return Capture(observedAt, initialSymbols, rawReference: $"finviz:{SourceKey}:run-start");
-        }
+                cancellationToken) == 0;
 
         var scope = Horizon.Equals("swing", StringComparison.OrdinalIgnoreCase)
             ? ScreenerScope.Swing
@@ -331,14 +329,31 @@ internal sealed class FinvizDiscoverySource(
         var result = await screener.PreviewAsync(SourceKey, scope, wishlistId, cancellationToken);
         if (!result.Succeeded)
         {
+            if (mayUseRunStartFallback)
+            {
+                return Capture(
+                    observedAt,
+                    initialSymbols,
+                    rawReference: $"finviz:{SourceKey}:run-start-fallback");
+            }
+
             throw new InvalidOperationException(result.Error ?? "Finviz discovery refresh failed.");
         }
 
-        return Capture(
+        var observations = result.SymbolDetails.Count > 0
+            ? result.SymbolDetails.Select(item => new DiscoverySymbolObservation(
+                    item.Symbol,
+                    System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, decimal?>
+                    {
+                        ["vendor_reported_rvol"] = item.VendorReportedRvol
+                    })))
+                .ToArray()
+            : result.Symbols.Select(symbol => new DiscoverySymbolObservation(symbol)).ToArray();
+        return CaptureObservations(
             result.SyncedAtUtc,
-            result.Symbols,
-            providerTimestampUtc: result.SyncedAtUtc,
-            rawReference: $"finviz:{result.NormalizedQuery}");
+            observations,
+            providerTimestampUtc: result.ProviderTimestampUtc ?? result.SyncedAtUtc,
+            rawReference: result.RawReference ?? $"finviz:{result.NormalizedQuery}");
     }
 }
 

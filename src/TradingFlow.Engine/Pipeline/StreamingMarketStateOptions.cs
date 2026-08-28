@@ -1,5 +1,7 @@
 namespace TradingFlow.Engine.Pipeline;
 
+using TradingFlow.Engine.Indicators;
+
 public sealed record StreamingMarketStateOptions(
     int SymbolPipelineCapacity,
     int RevisionAcceptanceMinutes,
@@ -9,8 +11,8 @@ public sealed record StreamingMarketStateOptions(
 {
     public static StreamingMarketStateOptions Default { get; } = new(
         256,
-        2,
-        10,
+        MarketEvidenceOperationalRules.Production.RevisionAcceptanceMinutes,
+        MarketEvidenceOperationalRules.Production.RecoveryLookbackDays,
         ["5m", "15m", "1h", "4h"],
         3);
 

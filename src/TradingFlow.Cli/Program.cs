@@ -1032,7 +1032,7 @@ if (args.Length > 0 && args[0].Equals("evaluate-entry", StringComparison.Ordinal
             result.Rsi,
             result.Atr,
             result.Volume,
-            result.SlotAverageVolume,
+            result.SlotMedianVolume,
             result.RelativeVolume,
             result.Vwap,
             result.Ema20,

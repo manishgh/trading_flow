@@ -37,7 +37,7 @@ public class StrategyEvaluationServiceTests
             Assert.Equal("NVTS", result.Ticker);
             Assert.Equal("Rejected", result.Decision);
             Assert.StartsWith("confluence_price_below_ema50", result.Reason);
-            Assert.NotNull(result.RelativeVolume);
+            Assert.Null(result.RelativeVolume);
             Assert.NotNull(result.Signal);
         }
         finally
@@ -146,6 +146,7 @@ direction: long
 entry_rules:
   setup_type: momentum
   min_volume_spike: 0.0
+  volume_confirmation_mode: none
   min_entry_rsi: 0.0
   max_entry_rsi: 100.0
   trend_filter: none

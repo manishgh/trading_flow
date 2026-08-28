@@ -190,6 +190,28 @@ the latest completed 1-minute bar is more than three minutes stale during the ac
 04:00-20:00 ET session. Detailed evidence is in
 [Phase 2 verification](docs/verification/strategy-flow-phase-2.md).
 
+Strategy RVOL now comes only from the versioned Alpaca SIP market-evidence profile.
+The primary gate is cumulative volume through the same New York exchange clock time
+divided by the median of the exact 20 prior exchange sessions; exact-slot RVOL is retained only as local
+acceleration evidence. Premarket, regular, postmarket, and overnight cohorts are
+isolated. A baseline with fewer than 20 valid SIP/`adjustment=all` sessions fails as
+`rvol_baseline_not_ready`. Finviz RVOL is persisted only as discovery metadata and
+cannot alter a strategy decision. See
+[Phase 3 verification](docs/verification/strategy-flow-phase-3.md).
+
+Backtest cache wrappers preserve Alpaca's calendar, completeness, and provenance
+contracts. Authoritative calendars are checksummed and reusable offline; adjusted
+candle slices carry a versioned 24-hour freshness boundary and explicit restatement
+revision so split-restated history is not silently reused forever. Versioned immutable
+data files are published before an atomic manifest switch under a cancellable,
+30-second-bounded cross-process lock, preserving the last committed slice through a
+writer interruption.
+
+Observed wishlists reuse the single hosted Alpaca stream and its warmed market state.
+They do not poll 45 days of REST data every minute. Ticker failures are isolated, and
+alerts are idempotent for unchanged complete decision evidence while accepted provider
+revisions remain eligible for reevaluation.
+
 The Web host clears platform-specific default logging providers and writes structured
 JSON to standard output. Local runs and containers therefore use the same portable
 logging path, and lack of Windows Event Log privileges cannot terminate background

@@ -40,6 +40,19 @@ public sealed partial class FinvizClient : IDisposable
 
     public async Task<IReadOnlyList<FinvizScreenerRow>> GetScreenerRowsAsync(string filterQuery, CancellationToken cancellationToken = default)
     {
+        var snapshot = await GetScreenerSnapshotAsync(filterQuery, cancellationToken);
+        return snapshot.Rows;
+    }
+
+    /// <summary>
+    /// Reads a Finviz screen together with the immutable archive identity and
+    /// receipt timestamp. These values are discovery provenance, not strategy
+    /// evidence.
+    /// </summary>
+    public async Task<FinvizScreenerSnapshot> GetScreenerSnapshotAsync(
+        string filterQuery,
+        CancellationToken cancellationToken = default)
+    {
         var normalizedFilterQuery = NormalizeScreenerFilterQuery(filterQuery);
         var separator = String.IsNullOrWhiteSpace(normalizedFilterQuery) ? "" : "&";
         var url = $"/export?{normalizedFilterQuery}{separator}auth={_options.AuthToken}";
@@ -49,7 +62,11 @@ public sealed partial class FinvizClient : IDisposable
             "csv",
             CreateQueryPresetId(normalizedFilterQuery),
             cancellationToken);
-        return ParseScreenerCsv(archived.Text);
+        return new FinvizScreenerSnapshot(
+            ParseScreenerCsv(archived.Text),
+            archived.Receipt.Manifest.ReceivedAtUtc,
+            normalizedFilterQuery,
+            $"raw-archive:{archived.Receipt.Manifest.ArchiveId}");
     }
 
     private static IReadOnlyList<FinvizScreenerRow> ParseScreenerCsv(string csvContent)

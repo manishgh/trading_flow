@@ -362,11 +362,19 @@ var marketStateStreamOptions = new AlpacaMarketStateStreamOptions(
 marketStateStreamOptions.Validate();
 builder.Services.AddSingleton(marketStateStreamOptions);
 var streamingMarketStateOptions = new TradingFlow.Engine.Pipeline.StreamingMarketStateOptions(
-    ParsePositiveInteger(builder.Configuration["TradingFlow:MarketState:SymbolPipelineCapacity"], 256),
-    ParsePositiveInteger(builder.Configuration["TradingFlow:MarketState:RevisionAcceptanceMinutes"], 2),
-    ParsePositiveInteger(builder.Configuration["TradingFlow:MarketState:RecoveryLookbackDays"], 10),
-    ["5m", "15m", "1h", "4h"],
-    ParsePositiveInteger(builder.Configuration["TradingFlow:MarketState:ActiveSessionStalenessMinutes"], 3));
+    ParsePositiveInteger(
+        builder.Configuration["TradingFlow:MarketState:SymbolPipelineCapacity"],
+        TradingFlow.Engine.Pipeline.StreamingMarketStateOptions.Default.SymbolPipelineCapacity),
+    ParsePositiveInteger(
+        builder.Configuration["TradingFlow:MarketState:RevisionAcceptanceMinutes"],
+        TradingFlow.Engine.Pipeline.StreamingMarketStateOptions.Default.RevisionAcceptanceMinutes),
+    ParsePositiveInteger(
+        builder.Configuration["TradingFlow:MarketState:RecoveryLookbackDays"],
+        TradingFlow.Engine.Pipeline.StreamingMarketStateOptions.Default.RecoveryLookbackDays),
+    TradingFlow.Engine.Pipeline.StreamingMarketStateOptions.Default.DerivedTimeframes,
+    ParsePositiveInteger(
+        builder.Configuration["TradingFlow:MarketState:ActiveSessionStalenessMinutes"],
+        TradingFlow.Engine.Pipeline.StreamingMarketStateOptions.Default.ActiveSessionStalenessMinutes));
 streamingMarketStateOptions.Validate();
 builder.Services.AddSingleton(streamingMarketStateOptions);
 builder.Services.AddSingleton(serviceProvider => new TradingFlow.Engine.Pipeline.StreamingMarketStateProcessor(

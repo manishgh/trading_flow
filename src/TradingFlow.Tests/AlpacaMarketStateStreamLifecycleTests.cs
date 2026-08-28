@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using TradingFlow.Alpaca;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Pipeline;
 using TradingFlow.Web.Services;
 
@@ -375,7 +376,7 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
             Task.FromResult<IReadOnlyList<OhlcvBar>>([]);
     }
 
-    private sealed class EmptyMarketDataProvider : IMarketDataProvider
+    private sealed class EmptyMarketDataProvider : IMarketDataProvider, IMarketSessionScheduleProvider
     {
         public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
             IReadOnlyCollection<string> tickers,
@@ -386,6 +387,23 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
         {
             await Task.CompletedTask;
             yield break;
+        }
+
+        public Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadMarketSessionSchedulesAsync(
+            DateOnly startDateInclusive,
+            DateOnly endDateInclusive,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var schedules = new Dictionary<DateOnly, MarketSessionSchedule>();
+            for (var date = startDateInclusive; date <= endDateInclusive; date = date.AddDays(1))
+            {
+                schedules[date] = date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday
+                    ? MarketSessionSchedule.Closed(date)
+                    : MarketSessionSchedule.RegularDay(date);
+            }
+
+            return Task.FromResult<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>>(schedules);
         }
     }
 }

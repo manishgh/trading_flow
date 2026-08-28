@@ -221,7 +221,6 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         return path switch
         {
             "entry_rules.min_volume_spike" => strategy with { EntryRules = strategy.EntryRules with { MinVolumeSpike = Convert.ToDecimal(value) } },
-            "entry_rules.min_session_relative_volume" => strategy with { EntryRules = strategy.EntryRules with { MinSessionRelativeVolume = Convert.ToDecimal(value) } },
             "entry_rules.min_entry_rsi" => strategy with { EntryRules = strategy.EntryRules with { MinEntryRsi = Convert.ToDecimal(value) } },
             "entry_rules.max_entry_rsi" => strategy with { EntryRules = strategy.EntryRules with { MaxEntryRsi = Convert.ToDecimal(value) } },
             "entry_rules.max_vwap_extension_atr" => strategy with { EntryRules = strategy.EntryRules with { MaxVwapExtensionAtr = Convert.ToDecimal(value) } },

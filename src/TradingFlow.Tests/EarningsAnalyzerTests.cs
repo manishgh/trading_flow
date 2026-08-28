@@ -97,12 +97,12 @@ public sealed class EarningsAnalyzerTests
             MinimumSlotRelativeVolume = 1.5m,
             ReferenceBarCount = 40
         };
-        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), options);
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), options);
         var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
         var now = DateTimeOffset.Parse("2026-07-31T14:35:00Z");
         var calendarEvent = CreateEvent(eventTime, epsSurprise: 8m, revenueSurprise: 4m);
         var bars = CreateBars(eventTime);
-        bars.Add(new OhlcvBar("TEST", now.AddMinutes(1), "5m", 999m, 1000m, 998m, 999m, 10000m));
+        bars.Add(new OhlcvBar("TEST", now.AddMinutes(1), "5m", 999m, 1000m, 998m, 999m, 10000m, "sip", "all"));
         var news = new PersistedNewsItem
         {
             Id = "news-1",
@@ -128,7 +128,7 @@ public sealed class EarningsAnalyzerTests
     [Fact]
     public void Analyze_DoesNotConfirmVolumeUntilSameSlotBaselineIsFullyWarm()
     {
-        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
         var bars = CreateBars(eventTime, historyDays: 20);
 
@@ -152,7 +152,7 @@ public sealed class EarningsAnalyzerTests
     [Fact]
     public void Analyze_DoesNotCallMixedEarningsPositive()
     {
-        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
         var result = analyzer.Analyze(
             CreateEvent(eventTime, epsSurprise: 8m, revenueSurprise: -4m),
@@ -167,7 +167,7 @@ public sealed class EarningsAnalyzerTests
     [Fact]
     public void Analyze_UsesReportedEpsSurpriseWhenAdjustedSurpriseIsUnavailable()
     {
-        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
         var calendarEvent = CreateEvent(eventTime, epsSurprise: null, revenueSurprise: 4m);
         calendarEvent.ReportedEpsSurprisePercent = 6m;
@@ -196,7 +196,7 @@ public sealed class EarningsAnalyzerTests
     [Fact]
     public void Analyze_IgnoresPreviewArticleAndUsesFirstActualResultNews()
     {
-        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
         var previewTime = eventTime.AddHours(-1);
         var resultTime = eventTime.AddMinutes(5);
@@ -233,7 +233,7 @@ public sealed class EarningsAnalyzerTests
     [Fact]
     public void Analyze_ReconcilesMissingCalendarActualsFromStructuredNewsHeadline()
     {
-        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var scheduled = DateTimeOffset.Parse("2026-08-03T12:30:00Z");
         var published = DateTimeOffset.Parse("2026-08-03T10:33:56Z");
         var calendarEvent = CreateEvent(scheduled, epsSurprise: null, revenueSurprise: null);
@@ -263,7 +263,7 @@ public sealed class EarningsAnalyzerTests
     [Fact]
     public void Analyze_DoesNotUseGenericMoverArticleAsResultClock()
     {
-        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var eventTime = DateTimeOffset.Parse("2026-08-03T12:30:00Z");
         var calendarEvent = CreateEvent(eventTime, epsSurprise: 24.25m, revenueSurprise: 4.73m);
         calendarEvent.ResultFirstSeenAtUtc = eventTime;
@@ -290,7 +290,7 @@ public sealed class EarningsAnalyzerTests
     [Fact]
     public void Analyze_AnchorsOnTheCompanyReleaseHeadlineNotTheLaterCommentary()
     {
-        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var scheduled = DateTimeOffset.Parse("2026-08-03T12:30:00Z");
         var calendarEvent = CreateEvent(scheduled, epsSurprise: null, revenueSurprise: null);
         calendarEvent.CompanyName = "Test Corp";
@@ -325,7 +325,7 @@ public sealed class EarningsAnalyzerTests
     [Fact]
     public void Analyze_AwaitingReleaseIncludesLatestCompletedPreEarningsPrice()
     {
-        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var eventTime = DateTimeOffset.Parse("2026-08-01T20:00:00Z");
         var now = eventTime.AddHours(-2);
         var bars = CreateBars(eventTime)
@@ -352,7 +352,7 @@ public sealed class EarningsAnalyzerTests
         string nowText,
         string expectedSession)
     {
-        var analyzer = new EarningsAnalyzer(new IndicatorEngine(), EarningsMonitorOptions.Default);
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var eventTime = DateTimeOffset.Parse(eventTimeText);
         var now = DateTimeOffset.Parse(nowText);
 
@@ -385,6 +385,14 @@ public sealed class EarningsAnalyzerTests
         Provider = "finviz"
     };
 
+    private static IndicatorEngine CreateIndicatorEngine() =>
+        new(new MarketEvidenceProfile(
+            "earnings_unit_test_calendar_v1",
+            MarketEvidenceProfile.DefaultLookbackSessions,
+            MarketEvidenceProfile.DefaultMinimumValidSamples,
+            "America/New_York",
+            allowStandardWeekdayFallback: true));
+
     private static List<OhlcvBar> CreateBars(DateTimeOffset eventTime, int historyDays = 70)
     {
         var bars = new List<OhlcvBar>();
@@ -400,7 +408,7 @@ public sealed class EarningsAnalyzerTests
                     ? 112m + postReleaseIndex * postReleaseIndex * 0.04m
                     : 98m + index * 0.01m;
                 var volume = postRelease ? 400m : 100m;
-                bars.Add(new OhlcvBar("TEST", timestamp, "5m", price - 0.1m, price + 0.2m, price - 0.2m, price, volume));
+                bars.Add(new OhlcvBar("TEST", timestamp, "5m", price - 0.1m, price + 0.2m, price - 0.2m, price, volume, "sip", "all"));
             }
         }
 

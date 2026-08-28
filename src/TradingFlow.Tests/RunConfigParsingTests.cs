@@ -231,9 +231,8 @@ public sealed class RunConfigParsingTests
         Assert.Equal("1m", strategy.Timeframe);
         Assert.Equal("1m", strategy.Execution.Timeframe);
         Assert.Equal(2.0m, strategy.EntryRules.MinVolumeSpike);
-        Assert.Equal("cumulative_same_time", strategy.EntryRules.MinVolumeSpikeSource);
+        Assert.Equal(TradingFlow.Domain.Strategies.RelativeVolumeMeasure.CumulativeSameTime, strategy.EntryRules.MinVolumeSpikeSource);
         Assert.Equal("hard_gate", strategy.EntryRules.VolumeConfirmationMode);
-        Assert.Null(strategy.EntryRules.MinSessionRelativeVolume);
         Assert.False(strategy.EntryRules.RequirePriceAboveVwap);
         Assert.False(strategy.EntryRules.RequirePriceAboveEma10);
         Assert.False(strategy.EntryRules.RequirePriceAboveEma20);
@@ -263,7 +262,7 @@ public sealed class RunConfigParsingTests
         Assert.Equal("TOP1 Intraday - EMA10/20 MACD Volume V1", strategy.StrategyName);
         Assert.Equal("indicator_stack", strategy.EntryRules.SetupType);
         Assert.Equal(2.0m, strategy.EntryRules.MinVolumeSpike);
-        Assert.Equal("cumulative_same_time", strategy.EntryRules.MinVolumeSpikeSource);
+        Assert.Equal(TradingFlow.Domain.Strategies.RelativeVolumeMeasure.CumulativeSameTime, strategy.EntryRules.MinVolumeSpikeSource);
         Assert.True(strategy.EntryRules.RequireEma10AboveEma20);
         Assert.True(strategy.EntryRules.RequireMacdHistogramPositive);
         Assert.False(strategy.EntryRules.RequirePriceAboveVwap);
@@ -360,7 +359,8 @@ public sealed class RunConfigParsingTests
             .ResolvedStrategy;
         Assert.Equal("lance_breitstein_intraday_tactics", breitstein.Source);
         Assert.Equal("vwap_reclaim_trap", breitstein.EntryRules.SetupType);
-        Assert.Equal(2.0m, breitstein.EntryRules.MinSessionRelativeVolume);
+        Assert.Equal(2.0m, breitstein.EntryRules.MinVolumeSpike);
+        Assert.Equal(TradingFlow.Domain.Strategies.RelativeVolumeMeasure.CumulativeSameTime, breitstein.EntryRules.MinVolumeSpikeSource);
         Assert.Equal(3, breitstein.EntryRules.RequirePriorFlushBelowVwapBars);
         Assert.Equal(12, breitstein.EntryRules.VwapReclaimMaxBarsSinceFlush);
         Assert.Equal(1.50m, breitstein.EntryRules.MinReclaimVolumeRatio);

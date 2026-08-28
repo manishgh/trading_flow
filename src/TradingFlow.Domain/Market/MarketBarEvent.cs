@@ -4,7 +4,8 @@ public enum MarketBarEventKind
 {
     CompletedBar,
     ProviderRevision,
-    Replay
+    Replay,
+    ReplayRevision
 }
 
 /// <summary>
@@ -31,7 +32,9 @@ public sealed record MarketBarEvent(
                     Bar.High.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     Bar.Low.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     Bar.Close.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    Bar.Volume.ToString(System.Globalization.CultureInfo.InvariantCulture)))))
+                    Bar.Volume.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    Feed.Trim().ToLowerInvariant(),
+                    Bar.AdjustmentPolicy.Trim().ToLowerInvariant()))))
         .ToLowerInvariant();
 }
 

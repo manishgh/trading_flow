@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -8,12 +10,15 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Indicators;
 
 namespace TradingFlow.Alpaca;
 
 public sealed class AlpacaMarketDataProvider :
     IMarketDataProvider,
-    IMarketDataCompletenessProvider
+    IMarketDataCompletenessProvider,
+    IMarketSessionScheduleProvider,
+    IMarketDataProvenanceProvider
 {
     private readonly HttpClient _httpClient;
     private readonly AlpacaOptions _options;
@@ -21,6 +26,11 @@ public sealed class AlpacaMarketDataProvider :
     private readonly Polly.Bulkhead.AsyncBulkheadPolicy<HttpResponseMessage> _bulkhead = TradingFlow.Domain.Http.RateLimiterFactory.CreateBulkhead(10, 50);
 
     public bool OmittedIntradayIntervalsMeanNoQualifyingTrades => true;
+
+    public MarketDataProvenance MarketDataProvenance => new(
+        "alpaca_historical_bars_v2",
+        _marketDataFeed,
+        "all");
 
     public AlpacaMarketDataProvider(
         HttpClient httpClient,
@@ -71,6 +81,71 @@ public sealed class AlpacaMarketDataProvider :
         }
     }
 
+    /// <summary>
+    /// Loads Alpaca's official market calendar from the profile-specific trading endpoint.
+    /// Alpaca returns open sessions only, so omissions are converted to explicit closed dates
+    /// after the complete response has been validated against the requested range.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadMarketSessionSchedulesAsync(
+        DateOnly startDateInclusive,
+        DateOnly endDateInclusive,
+        CancellationToken cancellationToken)
+    {
+        if (endDateInclusive < startDateInclusive)
+        {
+            throw new ArgumentException(
+                "Market-session schedule end date must be on or after the start date.",
+                nameof(endDateInclusive));
+        }
+
+        var start = startDateInclusive.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var end = endDateInclusive.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var tradingEndpoint = AlpacaEndpointResolver.Resolve(_options.Profile).TradingRest;
+        var requestUri = new Uri(
+            tradingEndpoint,
+            $"/v2/calendar?start={Uri.EscapeDataString(start)}&end={Uri.EscapeDataString(end)}");
+
+        using var response = await SendWithRetriesAsync(requestUri.AbsoluteUri, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(cancellationToken);
+            var providerDetail = String.IsNullOrWhiteSpace(error) ? "No provider detail." : error.Trim();
+            throw new InvalidOperationException(
+                $"Alpaca trading-calendar lookup failed with HTTP {(int)response.StatusCode}: {providerDetail}");
+        }
+
+        var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+        Dictionary<DateOnly, MarketSessionSchedule> openSchedules;
+        try
+        {
+            openSchedules = ParseCalendarResponse(payload, startDateInclusive, endDateInclusive);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException(
+                "Alpaca trading-calendar response was not valid JSON.",
+                exception);
+        }
+
+        var completeRange = new Dictionary<DateOnly, MarketSessionSchedule>();
+        var current = startDateInclusive;
+        while (true)
+        {
+            completeRange[current] = openSchedules.TryGetValue(current, out var schedule)
+                ? schedule
+                : MarketSessionSchedule.Closed(current);
+
+            if (current == endDateInclusive)
+            {
+                break;
+            }
+
+            current = current.AddDays(1);
+        }
+
+        return new ReadOnlyDictionary<DateOnly, MarketSessionSchedule>(completeRange);
+    }
+
     private async Task<List<OhlcvBar>> FetchBatchWithFallbackAsync(
         string[] tickerBatch,
         string timeframe,
@@ -110,6 +185,10 @@ public sealed class AlpacaMarketDataProvider :
         CancellationToken cancellationToken)
     {
         var results = new List<OhlcvBar>();
+        var coverageVerifiedThroughUtc = DateTimeOffset.Parse(
+            endStr,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
         var symbols = String.Join(
             ",",
             tickerBatch
@@ -150,7 +229,11 @@ public sealed class AlpacaMarketDataProvider :
                             bar.GetProperty("h").GetDecimal(),
                             bar.GetProperty("l").GetDecimal(),
                             bar.GetProperty("c").GetDecimal(),
-                            bar.GetProperty("v").GetDecimal()
+                            bar.GetProperty("v").GetDecimal(),
+                            _marketDataFeed,
+                            "all",
+                            KnownAtUtc: null,
+                            CoverageVerifiedThroughUtc: coverageVerifiedThroughUtc
                         ));
                     }
                 }
@@ -195,6 +278,87 @@ public sealed class AlpacaMarketDataProvider :
         }
 
         throw new HttpRequestException($"Alpaca API request failed after retries: {url}");
+    }
+
+    private static Dictionary<DateOnly, MarketSessionSchedule> ParseCalendarResponse(
+        string payload,
+        DateOnly startDateInclusive,
+        DateOnly endDateInclusive)
+    {
+        using var document = JsonDocument.Parse(payload);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("Alpaca trading-calendar response must be a JSON array.");
+        }
+
+        var schedules = new Dictionary<DateOnly, MarketSessionSchedule>();
+        foreach (var item in document.RootElement.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidOperationException("Every Alpaca trading-calendar entry must be a JSON object.");
+            }
+
+            var tradeDate = ParseRequiredDate(item);
+            if (tradeDate < startDateInclusive || tradeDate > endDateInclusive)
+            {
+                throw new InvalidOperationException(
+                    $"Alpaca trading-calendar returned {tradeDate:yyyy-MM-dd} outside the requested " +
+                    $"range {startDateInclusive:yyyy-MM-dd} through {endDateInclusive:yyyy-MM-dd}.");
+            }
+
+            var open = ParseRequiredTime(item, "open", tradeDate);
+            var close = ParseRequiredTime(item, "close", tradeDate);
+            if (close <= open)
+            {
+                throw new InvalidOperationException(
+                    $"Alpaca trading-calendar entry {tradeDate:yyyy-MM-dd} must close after it opens.");
+            }
+
+            if (!schedules.TryAdd(tradeDate, new MarketSessionSchedule(tradeDate, true, open, close)))
+            {
+                throw new InvalidOperationException(
+                    $"Alpaca trading-calendar returned duplicate date {tradeDate:yyyy-MM-dd}.");
+            }
+        }
+
+        return schedules;
+    }
+
+    private static DateOnly ParseRequiredDate(JsonElement item)
+    {
+        if (!item.TryGetProperty("date", out var property) ||
+            property.ValueKind != JsonValueKind.String ||
+            !DateOnly.TryParseExact(
+                property.GetString(),
+                "yyyy-MM-dd",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var tradeDate))
+        {
+            throw new InvalidOperationException(
+                "Every Alpaca trading-calendar entry requires a valid date in yyyy-MM-dd format.");
+        }
+
+        return tradeDate;
+    }
+
+    private static TimeOnly ParseRequiredTime(JsonElement item, string propertyName, DateOnly tradeDate)
+    {
+        if (!item.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.String ||
+            !TimeOnly.TryParseExact(
+                property.GetString(),
+                ["H:mm", "HH:mm", "H:mm:ss", "HH:mm:ss"],
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var time))
+        {
+            throw new InvalidOperationException(
+                $"Alpaca trading-calendar entry {tradeDate:yyyy-MM-dd} requires a valid {propertyName} time.");
+        }
+
+        return time;
     }
 
 }

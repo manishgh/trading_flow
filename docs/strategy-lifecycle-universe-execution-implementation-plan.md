@@ -1,6 +1,6 @@
 # Strategy Lifecycle, Universe, And Execution Implementation Plan
 
-**Status:** Phases 0, 1, and 2 complete. Phase 3 has not started.
+**Status:** Phases 0 through 3 complete. Phase 4 has not started.
 
 **Prepared:** 2026-08-27
 
@@ -593,6 +593,27 @@ stale-owner, and backpressured events fail explicitly. See
 **Accept:** identical Alpaca candles produce identical decisions with or without
 Finviz metadata; insufficient history fails with `rvol_baseline_not_ready`; source
 search tests prove no strategy gate consumes the legacy full-session denominator.
+
+**Implemented 2026-08-28:** The versioned `us_equities_same_time_rvol_v1` profile
+uses a 20-session median cumulative same-clock baseline and an independent exact-slot
+median. Only the exact requested prior exchange sessions participate. Overnight,
+premarket, regular, postmarket, and daily cohorts are isolated in New York exchange
+time; authoritative Alpaca calendar boundaries make early closes, holidays, and DST
+deterministic.
+Only completed Alpaca SIP bars with `adjustment=all` can produce production RVOL.
+Missing, mixed, or wrong provenance and fewer than 20 valid samples fail closed as
+`rvol_baseline_not_ready`. Finviz `vendor_reported_rvol` is durable discovery metadata
+with provider/archive provenance and has no strategy-decision path. Typed strategy
+configuration permits only `cumulative_same_time` or `slot_bar`; the legacy whole-day
+denominator was removed. Provider coverage proves whether a sparse no-trade interval
+is comparable; it is never inferred from a missing bar. Point-in-time replay retains
+accepted provider revisions, and cache manifests bind UTC range, provider/feed,
+adjustment, schema, checksum, and coverage. A 45-day restart window reconstructs the
+same RVOL baseline. Wishlist monitoring consumes the shared hosted stream rather than
+polling Alpaca REST, isolates ticker failures, and reevaluates only when complete
+decision evidence changes. Candle and calendar caches publish immutable versioned data
+before atomically switching a manifest under a bounded cross-process lock.
+See [Phase 3 verification](verification/strategy-flow-phase-3.md).
 
 ### Phase 4 - One decision kernel
 

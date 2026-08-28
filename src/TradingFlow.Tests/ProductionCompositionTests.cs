@@ -162,6 +162,59 @@ public sealed class ProductionCompositionTests
         Assert.DoesNotContain("AddEventLog", program, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void StrategyDecisionSources_ContainNoVendorOrLegacyFullSessionRvolGate()
+    {
+        var root = TestRepository.FindRoot();
+        var productionSources = Directory
+            .EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains("TradingFlow.Tests", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        foreach (var source in productionSources)
+        {
+            var contents = File.ReadAllText(source);
+            Assert.DoesNotContain("SessionRelativeVolume", contents, StringComparison.Ordinal);
+            Assert.DoesNotContain("AverageSessionVolume", contents, StringComparison.Ordinal);
+            Assert.DoesNotContain("MinSessionRelativeVolume", contents, StringComparison.Ordinal);
+            Assert.DoesNotContain("min_session_relative_volume", contents, StringComparison.Ordinal);
+            Assert.DoesNotContain("finviz_style", contents, StringComparison.Ordinal);
+        }
+
+        var decisionSources = new[]
+        {
+            Path.Combine(root, "src", "TradingFlow.Engine", "Strategies"),
+            Path.Combine(root, "src", "TradingFlow.Backtesting")
+        }.SelectMany(path => Directory.EnumerateFiles(path, "*.cs", SearchOption.AllDirectories));
+        foreach (var source in decisionSources)
+        {
+            Assert.DoesNotContain(
+                "VendorReportedRvol",
+                File.ReadAllText(source),
+                StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void WishlistObservation_ConsumesSharedStreamStateWithoutRestPolling()
+    {
+        var root = TestRepository.FindRoot();
+        var observerPath = Path.Combine(
+            root,
+            "src",
+            "TradingFlow.Web",
+            "Services",
+            "Wishlists",
+            "WishlistObserverService.cs");
+        var source = File.ReadAllText(observerPath);
+
+        Assert.Contains("IDiscoverySubscriptionSink", source, StringComparison.Ordinal);
+        Assert.Contains("IMarketStateSnapshotProvider", source, StringComparison.Ordinal);
+        Assert.Contains("ReplaceScopeAsync", source, StringComparison.Ordinal);
+        Assert.Contains("GetTickerStateAsync", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("AlpacaMarketDataProvider", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetBarsAsync", source, StringComparison.Ordinal);
+    }
+
     private static Type ResolveHostedServiceType(ServiceDescriptor descriptor)
     {
         if (descriptor.ImplementationType is not null)

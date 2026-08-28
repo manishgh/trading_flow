@@ -168,9 +168,9 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
     }
 
     /// <summary>
-    /// Reads all physical sources for a ticker/timeframe window and de-duplicates
-    /// by timestamp so callers do not need to know whether bars came from the
-    /// provider feed or a derived timeframe folder.
+    /// Reads all physical sources for a ticker/timeframe window. Normal reads
+    /// select one effective version per timestamp; replay reads preserve every
+    /// distinct version in availability order.
     /// </summary>
     public async Task<IReadOnlyList<OhlcvBar>> ReadBarsAsync(CandleStoreReadRequest request, CancellationToken cancellationToken)
     {
@@ -192,8 +192,11 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
 
                 await foreach (var bar in ReadFileAsync(source, cancellationToken))
                 {
+                    var knownAt = bar.KnownAtUtc?.ToUniversalTime() ??
+                        bar.Timestamp.ToUniversalTime().Add(TradingFlow.Engine.Market.TimeframeParser.Parse(bar.Timeframe));
                     if (bar.Timestamp >= request.Start &&
                         bar.Timestamp <= request.End &&
+                        (request.AsOfUtc is null || knownAt <= request.AsOfUtc.Value.ToUniversalTime()) &&
                         bar.Ticker.Equals(request.Ticker, StringComparison.OrdinalIgnoreCase) &&
                         bar.Timeframe.Equals(request.Timeframe, StringComparison.OrdinalIgnoreCase))
                     {
@@ -203,12 +206,26 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
             }
         }
 
-        return bars
+        var orderedVersions = bars
+            .Distinct()
+            .OrderBy(bar => bar.Timestamp)
+            .ThenBy(ResolveKnownAtUtc)
+            .ToArray();
+        if (request.ReadMode == CandleStoreReadMode.AllVersions)
+        {
+            return orderedVersions;
+        }
+
+        return orderedVersions
             .GroupBy(bar => bar.Timestamp)
             .Select(group => group.Last())
-            .OrderBy(bar => bar.Timestamp)
             .ToArray();
     }
+
+    private static DateTimeOffset ResolveKnownAtUtc(OhlcvBar bar) =>
+        bar.KnownAtUtc?.ToUniversalTime() ??
+        bar.Timestamp.ToUniversalTime().Add(
+            TradingFlow.Engine.Market.TimeframeParser.Parse(bar.Timeframe));
 
     private static async Task AppendFileAsync(
         string path,
@@ -241,7 +258,11 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
                 normalized.High,
                 normalized.Low,
                 normalized.Close,
-                normalized.Volume);
+                normalized.Volume,
+                normalized.DataFeed,
+                normalized.AdjustmentPolicy,
+                normalized.KnownAtUtc,
+                normalized.CoverageVerifiedThroughUtc);
             await writer.WriteLineAsync(
                 JsonSerializer.Serialize(dto, JsonOptions).AsMemory(),
                 cancellationToken);
@@ -331,7 +352,11 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
                 dto.High,
                 dto.Low,
                 dto.Close,
-                dto.Volume);
+                dto.Volume,
+                dto.DataFeed,
+                dto.AdjustmentPolicy,
+                dto.KnownAtUtc,
+                dto.CoverageVerifiedThroughUtc);
             line = nextLine;
         }
     }
@@ -455,7 +480,11 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
                         bar.High,
                         bar.Low,
                         bar.Close,
-                        bar.Volume);
+                        bar.Volume,
+                        bar.DataFeed,
+                        bar.AdjustmentPolicy,
+                        bar.KnownAtUtc,
+                        bar.CoverageVerifiedThroughUtc);
                     await writer.WriteLineAsync(JsonSerializer.Serialize(dto, JsonOptions).AsMemory(), cancellationToken);
                 }
 
@@ -726,7 +755,11 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
         decimal High,
         decimal Low,
         decimal Close,
-        decimal Volume);
+        decimal Volume,
+        string DataFeed = "unspecified",
+        string AdjustmentPolicy = "unspecified",
+        DateTimeOffset? KnownAtUtc = null,
+        DateTimeOffset? CoverageVerifiedThroughUtc = null);
 
     private sealed record CandleArchiveManifest(
         string ManifestId,

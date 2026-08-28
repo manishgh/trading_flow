@@ -100,6 +100,11 @@ public sealed class EarningsMonitor
             // Fetch wider than we analyze. The provider posts after-close actuals well after the
             // report date has passed, so a window that starts at today would never collect them.
             var calendarFrom = from.AddDays(-options.RecentResultLookbackDays);
+            var marketSchedules = await marketState.LoadMarketSessionSchedulesAsync(
+                exchangeToday.AddDays(-options.IntradayLookbackDays - 10),
+                to.AddDays(1),
+                timeout.Token);
+            analyzer.UpdateMarketSessionSchedules(marketSchedules);
 
             if (forceCalendarRefresh ||
                 lastCalendarRefreshUtc is null ||

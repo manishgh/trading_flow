@@ -1,4 +1,5 @@
 using Moq;
+using System.Text.Json;
 using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Earnings;
 using TradingFlow.Domain.News;
@@ -9,6 +10,72 @@ namespace TradingFlow.Tests;
 
 public sealed class DiscoverySourceAdapterTests
 {
+    [Fact]
+    public async Task FinvizSource_PreservesVendorRvolAndProviderProvenanceAsDiscoveryMetadata()
+    {
+        var syncedAt = Utc(2026, 8, 27, 14, 0);
+        var providerTimestamp = syncedAt.AddSeconds(-2);
+        var repository = new Mock<IDiscoveryRepository>(MockBehavior.Strict);
+        repository
+            .Setup(value => value.GetSourceVersionAsync(
+                It.IsAny<Guid>(),
+                DiscoverySourceKinds.Finviz,
+                "v=111&f=sh_relvol_o2",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        var screener = new Mock<IScreenerSnapshotSource>(MockBehavior.Strict);
+        screener
+            .Setup(source => source.PreviewAsync(
+                "v=111&f=sh_relvol_o2",
+                ScreenerScope.Intraday,
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScreenerSyncResult(
+                ScreenerScope.Intraday,
+                "relative-volume screen",
+                "v=111&f=sh_relvol_o2",
+                ["RGTI", "POET"],
+                ["RGTI", "POET"],
+                syncedAt,
+                "2026-08-27",
+                null)
+            {
+                SymbolDetails =
+                [
+                    new ScreenerSymbolResult("RGTI", 2.75m),
+                    new ScreenerSymbolResult("POET", null)
+                ],
+                ProviderTimestampUtc = providerTimestamp,
+                RawReference = "finviz:v=111&f=sh_relvol_o2|raw-archive:finviz-snapshot-42"
+            });
+        var source = new FinvizDiscoverySource(
+            Guid.NewGuid(),
+            "v=111&f=sh_relvol_o2",
+            ["STALE"],
+            "intraday",
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(3),
+            null,
+            repository.Object,
+            screener.Object,
+            new FixedTimeProvider(syncedAt));
+
+        var capture = await source.CaptureAsync(default);
+
+        Assert.Equal(providerTimestamp, capture.ProviderTimestampUtc);
+        Assert.Equal(
+            "finviz:v=111&f=sh_relvol_o2|raw-archive:finviz-snapshot-42",
+            capture.RawReference);
+        var rgti = Assert.Single(capture.Symbols, item => item.Symbol == "RGTI");
+        using var rgtiMetadata = JsonDocument.Parse(rgti.MetadataJson);
+        Assert.Equal(2.75m, rgtiMetadata.RootElement.GetProperty("vendor_reported_rvol").GetDecimal());
+        var poet = Assert.Single(capture.Symbols, item => item.Symbol == "POET");
+        using var poetMetadata = JsonDocument.Parse(poet.MetadataJson);
+        Assert.Equal(JsonValueKind.Null, poetMetadata.RootElement.GetProperty("vendor_reported_rvol").ValueKind);
+        repository.VerifyAll();
+        screener.VerifyAll();
+    }
+
     [Fact]
     public async Task NewsSource_RefreshesOnlyAllowedTickerAndPreservesArticleEvidence()
     {

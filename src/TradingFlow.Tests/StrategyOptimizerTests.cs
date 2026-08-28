@@ -24,7 +24,7 @@ public class StrategyOptimizerTests
 
         strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
             optimizer,
-            [strategy, "entry_rules.min_session_relative_volume", 0.25m])!;
+            [strategy, "entry_rules.min_volume_spike", 0.25m])!;
         strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
             optimizer,
             [strategy, "entry_rules.min_session_gain_pct", 1.5m])!;
@@ -44,7 +44,7 @@ public class StrategyOptimizerTests
             optimizer,
             [strategy, "entry_rules.min_volume_sma_rise_pct", 15.0m])!;
 
-        Assert.Equal(0.25m, strategy.EntryRules.MinSessionRelativeVolume);
+        Assert.Equal(0.25m, strategy.EntryRules.MinVolumeSpike);
         Assert.Equal(1.5m, strategy.EntryRules.MinSessionGainPct);
         Assert.Equal(8.0m, strategy.EntryRules.MaxPreEntrySessionRangePct);
         Assert.Equal(3.0m, strategy.EntryRules.MaxEntryPullbackFromSessionHighPct);

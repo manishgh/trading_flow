@@ -7,25 +7,31 @@ namespace TradingFlow.Tests;
 public sealed class StrategyDecisionBrainTests
 {
     [Fact]
-    public void ResolveEntryRelativeVolume_WhenConfiguredForFinvizStyle_UsesSessionRelativeVolume()
+    public void RelativeVolumeMeasureParser_WhenVendorOrLegacySourceIsConfigured_RejectsIt()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            RelativeVolumeMeasureParser.Parse("finviz_style"));
+
+        Assert.Contains("Unsupported min_volume_spike_source", exception.Message);
+    }
+
+    [Fact]
+    public void ResolveEntryRelativeVolume_WhenSlotBarIsConfigured_UsesSlotEvidence()
     {
         var strategy = CreateStrategy() with
         {
             EntryRules = CreateStrategy().EntryRules with
             {
-                MinVolumeSpikeSource = "finviz_style"
+                MinVolumeSpikeSource = RelativeVolumeMeasure.SlotBar
             }
         };
         var snapshot = CreateSnapshot() with
         {
             RelativeVolume = 0.10m,
-            SlotRelativeVolume = 0.20m,
-            SessionRelativeVolume = 2.50m
+            SlotRelativeVolume = 2.50m
         };
 
-        var value = StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, snapshot);
-
-        Assert.Equal(2.50m, value);
+        Assert.Equal(2.50m, StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, snapshot));
     }
 
     [Fact]
@@ -37,16 +43,15 @@ public sealed class StrategyDecisionBrainTests
             EntryRules = CreateStrategy().EntryRules with
             {
                 MinVolumeSpike = 2.0m,
-                MinVolumeSpikeSource = "cumulative_same_time",
+                MinVolumeSpikeSource = RelativeVolumeMeasure.CumulativeSameTime,
                 VolumeConfirmationMode = "hard_gate"
             }
         };
         var snapshot = CreateSnapshot() with
         {
             CurrentVolume = 1_250m,
-            CumulativeAverageVolume = 10_000m,
-            SlotAverageVolume = 600m,
-            AverageSessionVolume = 100_000m,
+            CumulativeSameTimeMedianVolume = 10_000m,
+            SlotMedianVolume = 600m,
             RelativeVolumeSampleCount = 60
         };
 
@@ -75,6 +80,37 @@ public sealed class StrategyDecisionBrainTests
         var rejection = brain.GetLongEntryRejection(strategy, CreateSignal(), CreateSnapshot(), 0.10m);
 
         Assert.Null(rejection);
+    }
+
+    [Fact]
+    public void GetLongEntryRejection_WhenBaselineHasNineteenOfTwentySessions_FailsWithReadinessReason()
+    {
+        var brain = new StrategyDecisionBrain();
+        var strategy = CreateStrategy() with
+        {
+            EntryRules = CreateStrategy().EntryRules with
+            {
+                MinVolumeSpike = 2.0m,
+                MinVolumeSpikeSource = RelativeVolumeMeasure.CumulativeSameTime,
+                VolumeConfirmationMode = "hard_gate"
+            }
+        };
+        var snapshot = CreateSnapshot() with
+        {
+            RelativeVolume = null,
+            RelativeVolumeSampleCount = 19,
+            RelativeVolumeMinimumSamples = 20,
+            DataFeed = "sip",
+            MarketEvidenceReliability = "verified_same_feed"
+        };
+
+        var rejection = brain.GetLongEntryRejection(strategy, CreateSignal(), snapshot, null);
+
+        Assert.NotNull(rejection);
+        Assert.StartsWith("rvol_baseline_not_ready", rejection, StringComparison.Ordinal);
+        Assert.Contains("Samples: 19", rejection);
+        Assert.Contains("Required: 20", rejection);
+        Assert.Contains("DataFeed: sip", rejection);
     }
 
     private static StrategyDefinition CreateStrategy()
@@ -131,11 +167,13 @@ public sealed class StrategyDecisionBrainTests
             0.0m,
             0.1m,
             SlotRelativeVolume: 0.4m,
-            SessionRelativeVolume: 0.8m,
-            SlotAverageVolume: 2_500m,
-            CumulativeAverageVolume: 20_000m,
-            AverageSessionVolume: 200_000m,
-            RelativeVolumeSampleCount: 60);
+            SlotMedianVolume: 2_500m,
+            CumulativeSameTimeMedianVolume: 20_000m,
+            RelativeVolumeSampleCount: 60,
+            SlotRelativeVolumeSampleCount: 60,
+            MarketEvidenceProfileVersion: "test_rvol_v1",
+            RelativeVolumeCohort: "regular",
+            RelativeVolumeMinimumSamples: 20);
     }
 
     private static TradeSignal CreateSignal()

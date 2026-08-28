@@ -302,6 +302,69 @@ public sealed class LocalFileCandleStoreTests
         }
     }
 
+    [Fact]
+    public async Task ReadBarsAsync_SelectsLatestRevisionKnownByRequestedAsOfTime()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "trading-flow-candles", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new LocalFileCandleStore(root);
+            var context = new CandleStoreContext("paper", "market-state", "alpaca-sip");
+            var timestamp = new DateTimeOffset(2026, 8, 27, 14, 30, 0, TimeSpan.Zero);
+            var original = CreateBar("AAPL", "1m", timestamp, 100m) with
+            {
+                DataFeed = "sip",
+                AdjustmentPolicy = "all",
+                KnownAtUtc = timestamp.AddMinutes(1)
+            };
+            var revision = original with
+            {
+                Close = 101m,
+                KnownAtUtc = timestamp.AddMinutes(2)
+            };
+
+            await store.UpsertBarsAsync(
+                new CandleStoreWriteRequest(context, "stream", [original], FencingToken: 8),
+                default);
+            await store.UpsertBarsAsync(
+                new CandleStoreWriteRequest(context, "stream", [revision], FencingToken: 8),
+                default);
+
+            var beforeRevision = await store.ReadBarsAsync(
+                new CandleStoreReadRequest(
+                    "paper", "market-state", "alpaca-sip", "AAPL", "1m",
+                    timestamp, timestamp.AddMinutes(3), "stream",
+                    AsOfUtc: timestamp.AddMinutes(1).AddSeconds(30)),
+                default);
+            var afterRevision = await store.ReadBarsAsync(
+                new CandleStoreReadRequest(
+                    "paper", "market-state", "alpaca-sip", "AAPL", "1m",
+                    timestamp, timestamp.AddMinutes(3), "stream",
+                    AsOfUtc: timestamp.AddMinutes(3)),
+                default);
+            var allVersions = await store.ReadBarsAsync(
+                new CandleStoreReadRequest(
+                    "paper", "market-state", "alpaca-sip", "AAPL", "1m",
+                    timestamp, timestamp.AddMinutes(3), "stream",
+                    ReadMode: CandleStoreReadMode.AllVersions),
+                default);
+
+            Assert.Equal(100m, Assert.Single(beforeRevision).Close);
+            Assert.Equal(101m, Assert.Single(afterRevision).Close);
+            Assert.Collection(
+                allVersions,
+                value => Assert.Equal(100m, value.Close),
+                value => Assert.Equal(101m, value.Close));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static OhlcvBar CreateBar(string ticker, string timeframe, DateTimeOffset timestamp, decimal close)
     {
         return new OhlcvBar(

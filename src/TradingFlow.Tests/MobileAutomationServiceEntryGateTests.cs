@@ -40,15 +40,17 @@ public sealed class MobileAutomationServiceEntryGateTests
             Sma20: 8.95m,
             Sma50: 8.40m,
             SlotRelativeVolume: 1.52m,
-            SessionRelativeVolume: 0.33m,
             Ema10: 8.95m,
-            SlotAverageVolume: 49854.04m,
-            CumulativeAverageVolume: 117000m,
-            AverageSessionVolume: 350000m,
+            SlotMedianVolume: 49854.04m,
+            CumulativeSameTimeMedianVolume: 117000m,
             RelativeVolumeSampleCount: 63,
             Sma150: 7.50m,
             Sma200: 7.10m,
-            Ema5: 9.05m);
+            Ema5: 9.05m,
+            SlotRelativeVolumeSampleCount: 63,
+            MarketEvidenceProfileVersion: "test_rvol_v1",
+            RelativeVolumeCohort: "premarket",
+            RelativeVolumeMinimumSamples: 20);
 
         var signal = CreatePassingSignal() with
         {
@@ -58,7 +60,6 @@ public sealed class MobileAutomationServiceEntryGateTests
             CurrentVolume = snapshot.CurrentVolume,
             CurrentRsi = snapshot.Rsi!.Value,
             CurrentAtr = snapshot.Atr!.Value,
-            SessionRelativeVolume = snapshot.SessionRelativeVolume,
             SlotRelativeVolume = snapshot.SlotRelativeVolume,
             VolumeSma = 90216.8m,
             PreviousVolumeSma = 53543.4m,
@@ -67,7 +68,9 @@ public sealed class MobileAutomationServiceEntryGateTests
 
         var rejection = service.GetLongEntryGateRejection(strategy, snapshot, signal);
 
-        Assert.Equal("relative_volume_below_minimum (Actual: 0.65, Required: 2.00)", rejection);
+        Assert.NotNull(rejection);
+        Assert.Contains("relative_volume_below_minimum", rejection);
+        Assert.Contains("Source: cumulative_same_time", rejection);
     }
 
     private static TradeSignal CreatePassingSignal()

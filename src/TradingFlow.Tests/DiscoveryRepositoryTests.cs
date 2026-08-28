@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 using TradingFlow.Backtesting.Discovery;
 using TradingFlow.Data.Context;
 using TradingFlow.Data.Discovery;
@@ -9,6 +10,38 @@ namespace TradingFlow.Tests;
 
 public sealed class DiscoveryRepositoryTests
 {
+    [Fact]
+    public async Task FinvizSnapshot_RoundTripsVendorRvolAndSourceProvenance()
+    {
+        await using var database = await DiscoveryTestDatabase.CreateAsync();
+        var repository = database.CreateRepository();
+        var scopeId = Guid.NewGuid();
+        var observedAt = new DateTimeOffset(2026, 8, 27, 14, 0, 0, TimeSpan.Zero);
+        var providerTimestamp = observedAt.AddSeconds(-2);
+        await repository.CommitSnapshotAsync(new DiscoverySnapshotRequest(
+            scopeId,
+            Guid.NewGuid(),
+            DiscoverySourceKinds.Finviz,
+            "v=111&f=sh_relvol_o2",
+            "intraday",
+            observedAt,
+            observedAt.AddMinutes(3),
+            0,
+            [new DiscoverySymbolObservation("RGTI", "{\"vendor_reported_rvol\":2.75}")],
+            ProviderTimestampUtc: providerTimestamp,
+            RawReference: "finviz:v=111&f=sh_relvol_o2|raw-archive:finviz-snapshot-42"));
+
+        var active = Assert.Single(await repository.GetActiveAsync(scopeId, observedAt, default));
+        var evidence = Assert.Single(active.Sources);
+        using var metadata = JsonDocument.Parse(evidence.MetadataJson);
+        Assert.Equal(2.75m, metadata.RootElement.GetProperty("vendor_reported_rvol").GetDecimal());
+        Assert.Equal(providerTimestamp, evidence.ProviderTimestampUtc);
+        Assert.Equal(
+            "finviz:v=111&f=sh_relvol_o2|raw-archive:finviz-snapshot-42",
+            evidence.RawReference);
+        Assert.Equal("v=111&f=sh_relvol_o2", evidence.SourceKey);
+    }
+
     [Fact]
     public async Task ConcurrentIdenticalSnapshot_CreatesOneAggregateAndOneSourceMembership()
     {
