@@ -13,6 +13,8 @@ using TradingFlow.Data.Catalysts;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Risk;
+using TradingFlow.Domain.Discovery;
+using TradingFlow.Domain.Persistence;
 
 namespace TradingFlow.Backtesting;
 
@@ -25,6 +27,7 @@ public sealed partial class LiveRunner
         string ticker,
         TickerMarketState marketState,
         CatalystStreamer catalystStreamer,
+        ActiveDiscoveryAggregate? discoveryAggregate,
         IReadOnlyCollection<string> activeTickers,
         IReadOnlyCollection<ActiveBrokerOrder> openOrders,
         IReadOnlyCollection<BrokerPosition> openPositions,
@@ -70,12 +73,13 @@ public sealed partial class LiveRunner
         var snapshotsByTimeframe = marketState.SnapshotsByTimeframe
             .ToDictionary(x => x.Key, x => x.Value.ToList(), StringComparer.OrdinalIgnoreCase);
 
+        IReadOnlyList<CatalystEvent> catalysts = [];
         if (run.News.Enabled)
         {
             var allBars = barsByTimeframe.Values.SelectMany(x => x).ToArray();
             if (allBars.Length > 0)
             {
-                var catalysts = await catalystStreamer.LoadTickerCatalystsAsync(
+                catalysts = await catalystStreamer.LoadTickerCatalystsAsync(
                     ticker,
                     allBars.Min(x => x.Timestamp),
                     allBars.Max(x => x.Timestamp),
@@ -87,7 +91,7 @@ public sealed partial class LiveRunner
             }
         }
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         var completedBarsByTimeframe = barsByTimeframe.ToDictionary(
             pair => pair.Key,
             pair => pair.Value
@@ -220,168 +224,147 @@ public sealed partial class LiveRunner
                 continue;
             }
 
-            // L2 regime gate (doctrine §2): block NEW entries when the strategy's regime is off today
-            // (e.g. SPY below its 50-day SMA). Exits above are unaffected, so open positions are still
-            // managed in any regime. Uses the same no-lookahead gate the backtest applies.
-            if (strategy.Regime is { IsActive: true } regimeRule)
-            {
-                var regimeOn = await _regimeGate.IsRegimeOnAsync(
+            var regimeOn = strategy.Regime is not { IsActive: true } regimeRule ||
+                await _regimeGate.IsRegimeOnAsync(
                     regimeRule,
                     provider,
                     run.Intervals,
-                    DateTimeOffset.UtcNow,
+                    now,
                     cancellationToken);
-                if (!regimeOn)
-                {
-                    var regimeReason = $"regime_off ({regimeRule.BenchmarkSymbol} not above {regimeRule.SmaPeriod}d SMA)";
-                    logger.LogDebug("Skipping {Ticker} entry for {Strategy}: {Reason}.", ticker, strategy.StrategyName, regimeReason);
-                    if (_auditRepo != null)
-                    {
-                        await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
-                        {
-                            RunName = run.RunName,
-                            Ticker = ticker,
-                            StrategyName = strategy.StrategyName,
-                            Timestamp = DateTimeOffset.UtcNow,
-                            Decision = "Rejected",
-                            RejectionReason = regimeReason,
-                            SignalJson = JsonSerializer.Serialize(new
-                            {
-                                ticker,
-                                strategy = strategy.StrategyName,
-                                benchmark = regimeRule.BenchmarkSymbol,
-                                smaPeriod = regimeRule.SmaPeriod
-                            })
-                        }, cancellationToken);
-                    }
 
-                    continue;
-                }
+            if (_candidateDecisions is null || _executionRunContext is null)
+            {
+                throw new InvalidOperationException(
+                    "Live strategy admission requires durable candidate persistence and execution provenance.");
             }
 
-            // Evaluate signal
-            var signal = _signalGenerator.CreateTradeSignal(strategy, barsList, snapshots, snapshots.Count - 1);
-            if (signal != null)
+            if (!runtimeStrategies.TryGetValue(strategy, out var runtimeStrategy))
             {
-                var signalJson = StrategyDecisionBrain.BuildSignalAuditJson(
-                    signal,
-                    effectiveRelativeVolume,
-                    relativeVolumeSource,
-                    lastSnapshot);
-                var decisionTimestamp = DateTimeOffset.UtcNow;
+                throw new UnauthorizedAccessException(
+                    $"Strategy '{strategy.StrategyId}' has no exact runtime authorization identity.");
+            }
 
-                var signalAvailableTimestamp = lastSnapshot.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
-                var confluenceRejection = _signalGenerator.GetConfluenceRejection(strategy, signalAvailableTimestamp, completedSnapshotsByTimeframe);
-                if (confluenceRejection is not null)
+            var decisionTimestamp = now;
+            var setupAvailableAtUtc = lastSnapshot.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
+            var candidateExpiresAtUtc = setupAvailableAtUtc.Add(ParseTimeframe(strategy.Timeframe));
+            var sourceDiscovery = discoveryAggregate is null
+                ? StrategyDecisionRequestAssembler.CreateConfiguredLiveDiscovery(
+                    _executionRunContext.RunId,
+                    ticker,
+                    _executionRunContext.StartedAtUtc,
+                    candidateExpiresAtUtc)
+                : StrategyDecisionRequestAssembler.CreateLiveDiscovery(discoveryAggregate);
+            var discovery = sourceDiscovery with
+            {
+                IsPersisted = false,
+                ExpiresAtUtc = sourceDiscovery.ExpiresAtUtc < candidateExpiresAtUtc
+                    ? sourceDiscovery.ExpiresAtUtc
+                    : candidateExpiresAtUtc
+            };
+            var universeEvidence = new StrategyEligibilityEvidence(
+                discovery.IsActive,
+                discoveryAggregate is null ? "configured_run_universe" : "durable_discovery_universe",
+                discovery.AggregateId.ToString("N"),
+                discovery.ObservedAtUtc,
+                JsonSerializer.Serialize(new
                 {
-                    if (_auditRepo != null)
+                    eligible = discovery.IsActive,
+                    discovery.AggregateId,
+                    discovery.AggregateVersion,
+                    discovery.Sources
+                }));
+            var regimeEvidence = new StrategyEligibilityEvidence(
+                regimeOn,
+                "shared_regime_gate",
+                strategy.Regime is { IsActive: true }
+                    ? $"{strategy.Regime.BenchmarkSymbol}:{strategy.Regime.SmaPeriod}:{now:O}"
+                    : $"not-required:{now:O}",
+                now,
+                JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime }));
+            var setupKey = StrategyDecisionRequestAssembler.CreateSetupKey(
+                strategy.StrategyId,
+                strategy.Timeframe,
+                lastSnapshot.Timestamp);
+            var decisionRequest = StrategyDecisionRequestAssembler.Create(
+                runtimeStrategy,
+                ticker,
+                completedBarsByTimeframe.ToDictionary(
+                    pair => pair.Key,
+                    pair => (IReadOnlyList<OhlcvBar>)pair.Value,
+                    StringComparer.OrdinalIgnoreCase),
+                completedSnapshotsByTimeframe,
+                catalysts,
+                now,
+                discovery,
+                universeEvidence,
+                regimeEvidence,
+                StrategyCandidateState.Discovered,
+                0,
+                setupKey,
+                setupAvailableAtUtc,
+                candidateExpiresAtUtc,
+                run.Engine.IndicatorWarmupBars,
+                _executionRunContext.RunId);
+            var persistedDecision = await _candidateDecisions.EvaluateAsync(
+                CreateProductionRun(_executionRunContext),
+                decisionRequest,
+                cancellationToken);
+            if (persistedDecision.WasAlreadyTerminal || persistedDecision.Decision is null)
+            {
+                continue;
+            }
+
+            var decision = persistedDecision.Decision;
+            var signalJson = decision.CanonicalDecisionJson;
+            if (!persistedDecision.IsNewTrigger ||
+                decision.Signal is not { } signal ||
+                decision.OrderPlan is not { } canonicalOrderPlan)
+            {
+                var reason = decision.NoEntryReason ?? decision.State.ToString();
+                progress?.Report($"Evaluated {strategy.StrategyName} for {ticker}: {reason}.");
+                if (_auditRepo is not null)
+                {
+                    await _auditRepo.SaveAuditAsync(new DecisionAuditRecord
                     {
-                        await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
-                        {
-                            RunName = run.RunName,
-                            Ticker = ticker,
-                            StrategyName = strategy.StrategyName,
-                            Timestamp = decisionTimestamp,
-                            Decision = "Rejected",
-                            RejectionReason = confluenceRejection,
-                            SignalJson = signalJson
-                        }, cancellationToken);
-                    }
-                    continue;
+                        RunName = run.RunName,
+                        Ticker = ticker,
+                        StrategyName = strategy.StrategyName,
+                        Timestamp = decisionTimestamp,
+                        Decision = decision.State == StrategyCandidateState.Armed ? "Armed" : "Rejected",
+                        RejectionReason = reason,
+                        SignalJson = signalJson
+                    }, cancellationToken);
                 }
 
-                var relativeVolume = effectiveRelativeVolume;
-                var rejectionReason = _decisionBrain.GetLongEntryRejection(strategy, signal, lastSnapshot, relativeVolume, relativeVolumeSource);
+                continue;
+            }
 
-                if (rejectionReason != null)
+            if (!canonicalOrderPlan.Direction.Equals("long", StringComparison.OrdinalIgnoreCase))
+            {
+                const string reason = "live_short_execution_not_authorized";
+                if (_auditRepo is not null)
                 {
-                    if (_auditRepo != null)
+                    await _auditRepo.SaveAuditAsync(new DecisionAuditRecord
                     {
-                        await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
-                        {
-                            RunName = run.RunName,
-                            Ticker = ticker,
-                            StrategyName = strategy.StrategyName,
-                            Timestamp = decisionTimestamp,
-                            Decision = "Rejected",
-                            RejectionReason = rejectionReason,
-                            SignalJson = signalJson
-                        }, cancellationToken);
-                    }
-                    continue;
+                        RunName = run.RunName,
+                        Ticker = ticker,
+                        StrategyName = strategy.StrategyName,
+                        Timestamp = decisionTimestamp,
+                        Decision = "Rejected",
+                        RejectionReason = reason,
+                        SignalJson = signalJson
+                    }, cancellationToken);
                 }
 
-                const string signalDirection = "long";
+                continue;
+            }
 
-                // Check News Veto
-                if (run.News.Enabled)
-                {
-                    progress?.Report($"Checking recent news sentiment for {ticker}...");
-                    var recentNews = await catalystStreamer.LoadTickerCatalystsAsync(ticker, DateTimeOffset.UtcNow.AddMinutes(-run.News.VetoTtlMinutes), DateTimeOffset.UtcNow, cancellationToken);
-                    var badNews = recentNews.FirstOrDefault(c => c.SentimentScore <= run.News.VetoNegativeThreshold);
-                    if (badNews != null)
-                    {
-                        var vetoMsg = $"VETOED: Negative news detected ({badNews.SentimentScore:F2}): {badNews.Headline}";
-                        logger.LogWarning(
-                            "News veto for {Ticker} {StrategyName}: {VetoMessage}",
-                            ticker,
-                            strategy.StrategyName,
-                            vetoMsg);
-                        progress?.Report(vetoMsg);
-                        _auditor.LogEvent(ticker, strategy.StrategyName, lastSnapshot.Timestamp, ExecutionState.OrderRejected, vetoMsg);
+            var signalDirection = canonicalOrderPlan.Direction;
 
-                        if (_auditRepo != null)
-                        {
-                            await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
-                            {
-                                RunName = run.RunName,
-                                Ticker = ticker,
-                                StrategyName = strategy.StrategyName,
-                                Timestamp = decisionTimestamp,
-                                Decision = "Rejected",
-                                RejectionReason = "news_veto",
-                                SignalJson = signalJson
-                            }, cancellationToken);
-                        }
-                        continue;
-                    }
-                }
-
-                var executionResolution = ResolveExecutionOrderSignal(
-                    strategy,
-                    signal,
-                    completedBarsByTimeframe,
-                    completedSnapshotsByTimeframe);
-                var orderSignal = executionResolution.Signal;
-                if (!executionResolution.Plan.IsReady ||
-                    orderSignal is null ||
-                    executionResolution.Plan.StopContextIndex is not { } stopContextIndex)
-                {
-                    var reason = executionResolution.Plan.RejectionReason ??
-                        $"execution_timeframe_missing (ExecutionTimeframe: {strategy.Execution.Timeframe})";
-                    logger.LogWarning(
-                        "Skipping {Ticker} {StrategyName}; execution timeframe {ExecutionTimeframe} has no usable snapshot.",
-                        ticker,
-                        strategy.StrategyName,
-                        strategy.Execution.Timeframe);
-                    progress?.Report($"Skipped {ticker}: {reason}");
-
-                    if (_auditRepo != null)
-                    {
-                        await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
-                        {
-                            RunName = run.RunName,
-                            Ticker = ticker,
-                            StrategyName = strategy.StrategyName,
-                            Timestamp = decisionTimestamp,
-                            Decision = "Rejected",
-                            RejectionReason = reason,
-                            SignalJson = signalJson
-                        }, cancellationToken);
-                    }
-
-                    continue;
-                }
+            var orderSignal = StrategyDecisionRequestAssembler.CreateExecutionSignal(
+                signal,
+                canonicalOrderPlan,
+                completedSnapshotsByTimeframe[strategy.Execution.Timeframe]);
 
                 var msg = $"LIVE SIGNAL: {strategy.StrategyName} {ticker} {signalDirection} at {signal.CurrentPrice} (execution {strategy.Execution.Timeframe}: {orderSignal.CurrentPrice})";
                 logger.LogInformation(
@@ -433,22 +416,17 @@ public sealed partial class LiveRunner
                     }
 
                     var account = await accountProvider.GetAccountSnapshotAsync(cancellationToken);
-                    var orderPlan = new StrategyOrderPlanner().Plan(
+                    var finalizedOrderPlan = new StrategyOrderPlanner().Plan(
                         new StrategyOrderPlanningRequest(
-                            strategy,
-                            signal,
+                            canonicalOrderPlan,
                             orderSignal,
-                            PlannedOrderSide.Long,
                             account.Equity,
                             new OrderPlanningRiskLimits(
                                 run.Portfolio.AccountRiskBudgetPct,
                                 run.Portfolio.MaxPositionNotionalPct),
                             run.Portfolio.FixedBuyFee,
-                            run.Portfolio.FixedSellFee,
-                            stopContextIndex,
-                            executionBars,
-                            executionSnapshots));
-                    var order = orderPlan.Order;
+                            run.Portfolio.FixedSellFee));
+                    var order = finalizedOrderPlan.Order;
 
                     if (order != null)
                     {
@@ -462,12 +440,6 @@ public sealed partial class LiveRunner
                                     "Order submission is not armed because the durable submission service or execution provenance is unavailable.");
                             }
 
-                            if (!runtimeStrategies.TryGetValue(strategy, out var runtimeStrategy))
-                            {
-                                throw new UnauthorizedAccessException(
-                                    $"Strategy '{strategy.StrategyId}' has no exact runtime authorization identity.");
-                            }
-
                             progress?.Report($"Submitting Bracket Order: {shares} shares of {ticker}...");
                             var intentId = OrderIntentIdFactory.Create(
                                 _executionRunContext.RunId,
@@ -478,15 +450,17 @@ public sealed partial class LiveRunner
                             var submission = await _orderSubmissionService.SubmitBracketOrderAsync(
                                 new BracketOrderSubmission(
                                     intentId,
-                                    new ValidatedEntryCandidate(
-                                        intentId,
-                                        DiscoverySource: "strategy_signal",
-                                        Horizon: strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)
-                                            ? "swing"
-                                            : "intraday",
-                                        DiscoveredAtUtc: decisionTimestamp,
-                                        RevalidatedAtUtc: decisionTimestamp,
-                                        SetupEvidenceJson: signalJson),
+                                     new ValidatedEntryCandidate(
+                                         persistedDecision.Candidate.CandidateId,
+                                         DiscoverySource: persistedDecision.Candidate.DiscoverySource,
+                                         Horizon: strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)
+                                             ? "swing"
+                                             : "intraday",
+                                         DiscoveredAtUtc: persistedDecision.Candidate.DiscoveredAtUtc,
+                                         RevalidatedAtUtc: persistedDecision.Candidate.RevalidatedAtUtc,
+                                         SetupEvidenceJson: signalJson,
+                                         CandidateVersion: persistedDecision.Candidate.Version,
+                                         SemanticDecisionSha256: persistedDecision.Candidate.SemanticDecisionSha256),
                                     _executionRunContext,
                                     strategy.StrategyId,
                                     Side: "buy",
@@ -547,8 +521,8 @@ public sealed partial class LiveRunner
                     }
                     else
                     {
-                        var reason = orderPlan.RiskRejection?.Reason ??
-                            orderPlan.StopRejectionReason ??
+                        var reason = finalizedOrderPlan.RiskRejection?.Reason ??
+                            finalizedOrderPlan.StopRejectionReason ??
                             "order_risk_plan_rejected";
                         logger.LogWarning(
                             "Order risk plan rejected for {Ticker} {StrategyName}: {Reason}",
@@ -573,39 +547,6 @@ public sealed partial class LiveRunner
                         }
                     }
                 }
-            }
-            else
-            {
-                progress?.Report($"Evaluated {strategy.StrategyName} for {ticker}: No signal generated.");
-                if (_auditRepo != null)
-                {
-                    await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
-                    {
-                        RunName = run.RunName,
-                        Ticker = ticker,
-                        StrategyName = strategy.StrategyName,
-                        Timestamp = DateTimeOffset.UtcNow,
-                        Decision = "NoSignal",
-                        RejectionReason = "no_signal_generated",
-                        SignalJson = JsonSerializer.Serialize(new
-                        {
-                            ticker,
-                            strategy = strategy.StrategyName,
-                            timestamp = lastSnapshot.Timestamp,
-                            timeframe = lastSnapshot.Timeframe,
-                            close = lastSnapshot.CurrentPrice,
-                            volume = lastSnapshot.CurrentVolume,
-                            relativeVolume = effectiveRelativeVolume,
-                            relativeVolumeSource,
-                            calculatedRelativeVolume = lastSnapshot.RelativeVolume,
-                            slotRelativeVolume = lastSnapshot.SlotRelativeVolume,
-                            slotRelativeVolumeSampleCount = lastSnapshot.SlotRelativeVolumeSampleCount,
-                            marketEvidenceProfileVersion = lastSnapshot.MarketEvidenceProfileVersion,
-                            relativeVolumeCohort = lastSnapshot.RelativeVolumeCohort
-                        })
-                    }, cancellationToken);
-                }
-            }
         }
         }
         finally
@@ -624,54 +565,16 @@ public sealed partial class LiveRunner
         }
     }
 
-    private (TradeSignal? Signal, CompletedBarExecutionPlan Plan) ResolveExecutionOrderSignal(
-        StrategyDefinition strategy,
-        TradeSignal signal,
-        IReadOnlyDictionary<string, List<OhlcvBar>> barsByTimeframe,
-        IReadOnlyDictionary<string, IReadOnlyList<IndicatorSnapshot>> snapshotsByTimeframe)
+    private static ProductionRun CreateProductionRun(ExecutionRunContext context) => new()
     {
-        if (!barsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionBars) ||
-            executionBars.Count == 0 ||
-            !snapshotsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots) ||
-            executionSnapshots.Count == 0)
-        {
-            return (
-                null,
-                CompletedBarExecutionPlan.Rejected(
-                    $"execution_timeframe_missing (ExecutionTimeframe: {strategy.Execution.Timeframe})"));
-        }
-
-        var plan = _executionPlanner.Plan(
-            new CompletedBarExecutionRequest(
-                strategy,
-                signal,
-                PlannedOrderSide.Long,
-                executionBars,
-                executionSnapshots,
-                timestamp => _sessionClock.ValidateExecutionWindow(
-                    timestamp,
-                    strategy.Execution.Timeframe,
-                    strategy.Session),
-                RequireKnownFillBar: false));
-        if (!plan.IsReady || plan.StopContextIndex is not { } contextIndex)
-        {
-            return (null, plan);
-        }
-
-        var executionSnapshot = executionSnapshots[contextIndex];
-
-        return (
-            signal with
-            {
-                Timestamp = executionSnapshot.Timestamp,
-                Timeframe = executionSnapshot.Timeframe,
-                CurrentPrice = executionSnapshot.CurrentPrice,
-                CurrentVolume = executionSnapshot.CurrentVolume,
-                CurrentRsi = executionSnapshot.Rsi ?? signal.CurrentRsi,
-                CurrentAtr = executionSnapshot.Atr ?? signal.CurrentAtr
-            },
-            plan);
-    }
+        RunId = context.RunId,
+        SchemaVersion = 1,
+        ConfigHash = context.ConfigHash,
+        CodeVersion = context.CodeVersion,
+        Profile = context.Profile,
+        Status = "running",
+        StartedAtUtc = context.StartedAtUtc
+    };
 
     private static string ResolveEntryOrderType(BacktestRunConfig run) =>
         String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)

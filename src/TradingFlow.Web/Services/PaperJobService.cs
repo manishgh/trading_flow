@@ -34,6 +34,7 @@ public sealed class PaperJobService
     private readonly ConfigCatalogService configCatalog;
     private readonly IPaperDiscoverySessionFactory? discoverySessionFactory;
     private readonly TradingFlow.Engine.Pipeline.IMarketStateSnapshotProvider? marketStateSnapshots;
+    private readonly TradingFlow.Domain.Persistence.ICandidateRepository? candidateRepository;
 
     private readonly IServiceScopeFactory _scopeFactory;
 
@@ -56,7 +57,8 @@ public sealed class PaperJobService
         IOrderLifecycleService? orderLifecycleService = null,
         ConfigCatalogService? configCatalog = null,
         IPaperDiscoverySessionFactory? discoverySessionFactory = null,
-        TradingFlow.Engine.Pipeline.IMarketStateSnapshotProvider? marketStateSnapshots = null)
+        TradingFlow.Engine.Pipeline.IMarketStateSnapshotProvider? marketStateSnapshots = null,
+        TradingFlow.Domain.Persistence.ICandidateRepository? candidateRepository = null)
     {
         this.yamlReader = yamlReader;
         _scopeFactory = scopeFactory;
@@ -78,6 +80,7 @@ public sealed class PaperJobService
             ?? throw new ArgumentNullException(nameof(configCatalog));
         this.discoverySessionFactory = discoverySessionFactory;
         this.marketStateSnapshots = marketStateSnapshots;
+        this.candidateRepository = candidateRepository;
     }
 
     public async Task InitializeAsync()
@@ -440,7 +443,8 @@ public sealed class PaperJobService
                 .Select(strategy => new AuthorizedRuntimeStrategy(
                     strategy.Manifest.Identity,
                     strategy.Manifest.SelectionMode,
-                    strategy.Definition))
+                    strategy.Definition,
+                    strategy.Manifest.AdmissionProfile))
                 .ToArray();
             var executionRunContext = ExecutionRunContextFactory.Create(
                 job.JobId,
@@ -476,7 +480,8 @@ public sealed class PaperJobService
                 executionRunContext,
                 orderLifecycleService,
                 discoverySession,
-                marketStateSnapshots);
+                marketStateSnapshots,
+                candidateRepository);
 
             var progress = new Progress<string>(msg =>
             {

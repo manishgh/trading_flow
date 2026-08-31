@@ -1,15 +1,23 @@
+using System.Text.Json;
+using TradingFlow.Backtesting;
+using TradingFlow.Data.Catalysts;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
+using TradingFlow.Domain.Orders;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
+using TradingFlow.Engine.Risk;
+using TradingFlow.Engine.Strategies;
 
 namespace TradingFlow.Web.Services;
 
-// Entry preparation and market-state loading for an automation session: candle-pipeline warmup,
-// timeframe resolution, signal-gate evaluation (validate vs immediate entry), and execution-bar
-// signal resolution. Split into a partial file for readability; behavior is unchanged.
+// Entry preparation and market-state loading for an automation session. Strategy-gated
+// alerts go through the same immutable decision request and persisted candidate lifecycle
+// as paper/live runs. Operator-direct alerts are a separately labelled policy override.
 public sealed partial class MobileAutomationService
 {
     private async Task<TickerMarketState> LoadTickerStateAsync(
@@ -132,12 +140,18 @@ public sealed partial class MobileAutomationService
             strategy.EntryRules.RequirePriceAboveSma200Daily;
     }
 
-    private PreparedEntryExecution PrepareEntryExecution(
+    private async Task<PreparedEntryExecution> PrepareStrategyEntryExecutionAsync(
         BacktestRunConfig runConfig,
-        StrategyDefinition strategy,
-        string ticker,
-        TickerMarketState state)
+        AuthorizedRuntimeStrategy runtimeStrategy,
+        MutableAutomationSession session,
+        TickerMarketState state,
+        IMarketDataProvider provider,
+        ExecutionRunContext runContext,
+        DateTimeOffset decisionAtUtc,
+        CancellationToken cancellationToken)
     {
+        var strategy = runtimeStrategy.Definition;
+        var ticker = session.Ticker;
         if (!state.SnapshotsByTimeframe.TryGetValue(strategy.Timeframe, out var strategySnapshots) ||
             strategySnapshots.Count == 0 ||
             !state.BarsByTimeframe.TryGetValue(strategy.Timeframe, out var strategyBars) ||
@@ -146,74 +160,159 @@ public sealed partial class MobileAutomationService
             throw new InvalidOperationException($"Strategy timeframe {strategy.Timeframe} is unavailable for {ticker}.");
         }
 
+        if (candidateDecisions is null)
+        {
+            throw new InvalidOperationException(
+                "Mobile strategy admission requires durable candidate persistence.");
+        }
+
+        var catalysts = await new CatalystStreamer(runtimeFactory.CreateNewsProvider(runConfig))
+            .LoadTickerCatalystsAsync(
+                ticker,
+                state.AllBars.Min(bar => bar.Timestamp),
+                decisionAtUtc,
+                cancellationToken);
+        var regimeOn = strategy.Regime is not { IsActive: true } regimeRule ||
+            await regimeGate.IsRegimeOnAsync(
+                regimeRule,
+                provider,
+                runConfig.Intervals,
+                decisionAtUtc,
+                cancellationToken);
         var latest = strategySnapshots[^1];
-        var readiness = GetSignalReadinessRejection(latest);
-        if (readiness is not null)
+        var setupDuration = TimeframeParser.Parse(strategy.Timeframe);
+        var setupAvailableAtUtc = latest.Timestamp.Add(setupDuration).ToUniversalTime();
+        var candidateExpiresAtUtc = setupAvailableAtUtc.Add(setupDuration);
+        var discovery = StrategyDecisionRequestAssembler.CreateAlertDiscovery(
+            runContext.RunId,
+            ticker,
+            session.Source,
+            session.CreatedAt.ToUniversalTime(),
+            candidateExpiresAtUtc);
+        var universeEvidence = new StrategyEligibilityEvidence(
+            true,
+            "mobile_alert_universe",
+            discovery.AggregateId.ToString("N"),
+            decisionAtUtc,
+            JsonSerializer.Serialize(new
+            {
+                eligible = true,
+                session.Source,
+                session.SourcePackage,
+                session.SourceTitle
+            }));
+        var regimeEvidence = new StrategyEligibilityEvidence(
+            regimeOn,
+            "shared_regime_gate",
+            strategy.Regime is { IsActive: true }
+                ? $"{strategy.Regime.BenchmarkSymbol}:{strategy.Regime.SmaPeriod}:{decisionAtUtc:O}"
+                : $"not-required:{decisionAtUtc:O}",
+            decisionAtUtc,
+            JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime }));
+        var setupKey = $"{strategy.StrategyId}:{latest.Timestamp.ToUniversalTime():O}";
+        var request = StrategyDecisionRequestAssembler.Create(
+            runtimeStrategy,
+            ticker,
+            state.BarsByTimeframe,
+            state.SnapshotsByTimeframe,
+            catalysts,
+            decisionAtUtc,
+            discovery,
+            universeEvidence,
+            regimeEvidence,
+            StrategyCandidateState.Discovered,
+            0,
+            setupKey,
+            setupAvailableAtUtc,
+            candidateExpiresAtUtc,
+            runConfig.Engine.IndicatorWarmupBars,
+            runContext.RunId);
+        var persisted = await candidateDecisions.EvaluateAsync(
+            CreateProductionRun(runContext),
+            request,
+            cancellationToken);
+        if (!persisted.IsNewTrigger ||
+            persisted.Decision?.Signal is not { } signal ||
+            persisted.Decision.OrderPlan is not { } orderPlan)
         {
-            throw new InvalidOperationException(readiness);
+            throw new InvalidOperationException(
+                persisted.Decision?.NoEntryReason ??
+                (persisted.WasAlreadyTerminal
+                    ? $"candidate_already_{persisted.Candidate.State.ToString().ToLowerInvariant()}"
+                    : $"candidate_{persisted.Candidate.State.ToString().ToLowerInvariant()}"));
         }
 
-        var signal = signalGenerator.CreateTradeSignal(strategy, strategyBars, strategySnapshots, strategySnapshots.Count - 1)
-            ?? throw new InvalidOperationException($"No trade signal could be prepared for {ticker}.");
-
-        var signalAvailableAt = latest.Timestamp.Add(TimeframeParser.Parse(strategy.Timeframe));
-        var confluenceRejection = signalGenerator.GetConfluenceRejection(strategy, signalAvailableAt, state.SnapshotsByTimeframe);
-        if (confluenceRejection is not null)
+        if (!state.SnapshotsByTimeframe.TryGetValue(orderPlan.ExecutionTimeframe, out var executionSnapshots))
         {
-            throw new InvalidOperationException(confluenceRejection);
+            throw new InvalidOperationException(
+                $"Execution timeframe {orderPlan.ExecutionTimeframe} is unavailable for {ticker}.");
         }
 
-        var entryRejection = GetLongEntryGateRejection(strategy, latest, signal);
-        if (entryRejection is not null)
-        {
-            throw new InvalidOperationException(entryRejection);
-        }
-
-        var executionSignal = ResolveExecutionOrderSignal(strategy, signal, state.SnapshotsByTimeframe)
-            ?? throw new InvalidOperationException($"Execution timeframe {strategy.Execution.Timeframe} is unavailable for {ticker}.");
-
-        return new PreparedEntryExecution(signal, executionSignal);
+        var executionSignal = StrategyDecisionRequestAssembler.CreateExecutionSignal(
+            signal,
+            orderPlan,
+            executionSnapshots);
+        return new PreparedEntryExecution(
+            signal,
+            executionSignal,
+            new ValidatedEntryCandidate(
+                persisted.Candidate.CandidateId,
+                persisted.Candidate.DiscoverySource,
+                persisted.Candidate.Horizon,
+                persisted.Candidate.DiscoveredAtUtc,
+                persisted.Candidate.RevalidatedAtUtc,
+                persisted.Decision.CanonicalDecisionJson,
+                persisted.Candidate.Version,
+                persisted.Candidate.SemanticDecisionSha256),
+            OperatorOverride: false,
+            OrderPlan: orderPlan);
     }
 
-    private PreparedEntryExecution PrepareAutomationEntryExecution(
+    private async Task<PreparedEntryExecution> PrepareAutomationEntryExecutionAsync(
         BacktestRunConfig runConfig,
-        StrategyDefinition strategy,
+        AuthorizedRuntimeStrategy runtimeStrategy,
         MutableAutomationSession session,
         TickerMarketState state,
-        string entryMode)
+        IMarketDataProvider provider,
+        ExecutionRunContext runContext,
+        string entryMode,
+        DateTimeOffset decisionAtUtc,
+        CancellationToken cancellationToken)
     {
-        if (entryMode.Equals("immediate_paper", StringComparison.OrdinalIgnoreCase))
+        if (entryMode.Equals("operator_direct", StringComparison.OrdinalIgnoreCase))
         {
-            return PrepareImmediateEntryExecution(strategy, session.Ticker, state);
+            if (manualEntryOptions.Policy != ManualEntryPolicy.OperatorDirect)
+            {
+                throw new InvalidOperationException(
+                    "Operator-direct mobile entry is disabled by manual_entry_policy.");
+            }
+
+            return PrepareOperatorDirectEntry(
+                runtimeStrategy,
+                session,
+                state,
+                decisionAtUtc);
         }
 
-        try
-        {
-            return PrepareEntryExecution(runConfig, strategy, session.Ticker, state);
-        }
-        catch (InvalidOperationException exception) when (CanFallbackToStockPulseImmediateEntry(session, exception))
-        {
-            session.Report(
-                "entry_fallback",
-                "Stock Pulse alert had usable price/ATR state but RVOL was unavailable. Entering paper trade and letting guardian manage exits.");
-            return PrepareImmediateEntryExecution(strategy, session.Ticker, state);
-        }
+        return await PrepareStrategyEntryExecutionAsync(
+            runConfig,
+            runtimeStrategy,
+            session,
+            state,
+            provider,
+            runContext,
+            decisionAtUtc,
+            cancellationToken);
     }
 
-    private static bool CanFallbackToStockPulseImmediateEntry(MutableAutomationSession session, InvalidOperationException exception)
+    private static PreparedEntryExecution PrepareOperatorDirectEntry(
+        AuthorizedRuntimeStrategy runtimeStrategy,
+        MutableAutomationSession session,
+        TickerMarketState state,
+        DateTimeOffset decisionAtUtc)
     {
-        return session.Source.Equals("notification", StringComparison.OrdinalIgnoreCase) &&
-            exception.Message.Contains("relative_volume", StringComparison.OrdinalIgnoreCase) &&
-            !exception.Message.Contains("atr", StringComparison.OrdinalIgnoreCase) &&
-            !exception.Message.Contains("vwap", StringComparison.OrdinalIgnoreCase) &&
-            !exception.Message.Contains("macd", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private PreparedEntryExecution PrepareImmediateEntryExecution(
-        StrategyDefinition strategy,
-        string ticker,
-        TickerMarketState state)
-    {
+        var strategy = runtimeStrategy.Definition;
+        var ticker = session.Ticker;
         if (!state.SnapshotsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots) ||
             executionSnapshots.Count == 0)
         {
@@ -226,75 +325,110 @@ public sealed partial class MobileAutomationService
             throw new InvalidOperationException("signal_missing_indicators (atr)");
         }
 
-        var signal = new TradeSignal(
-            Ticker: ticker,
-            Timestamp: latest.Timestamp,
-            Timeframe: latest.Timeframe,
-            CurrentPrice: latest.CurrentPrice,
-            CurrentVolume: latest.CurrentVolume,
-            CurrentRsi: latest.Rsi ?? 50m,
-            CurrentAtr: latest.Atr.Value,
-            IsAboveVwap: latest.Vwap is not null && latest.CurrentPrice >= latest.Vwap.Value,
-            IsVwapPullback: false,
-            IsVwapReclaim: false,
-            IsVwapRejection: false,
-            IsEma20Pullback: false,
-            IsOpeningRangeBreakout: false,
-            IsOpeningRangeBreakdown: false,
-            IsRecentHighBreakout: false,
-            IsRecentLowBreakdown: false,
-            IsVolatilityContraction: false,
-            IsPriceAboveEma20: latest.Ema20 is not null && latest.CurrentPrice >= latest.Ema20.Value,
-            IsPriceAboveEma50: latest.Ema50 is not null && latest.CurrentPrice >= latest.Ema50.Value,
-            IsEma20AboveEma50: latest.Ema20 is not null && latest.Ema50 is not null && latest.Ema20.Value >= latest.Ema50.Value,
-            VwapExtensionAtr: latest.Vwap is not null && latest.Atr is > 0m
-                ? (latest.CurrentPrice - latest.Vwap.Value) / latest.Atr.Value
-                : null,
-            IsAboveBollingerMiddle: latest.BollingerMiddle is not null && latest.CurrentPrice >= latest.BollingerMiddle.Value,
-            IsMacdHistogramPositive: latest.MacdHistogram is > 0m,
-            IsMacdNotBearish: latest.MacdHistogram is null or >= 0m,
-            IsPriceAboveEma10: latest.Ema10 is not null && latest.CurrentPrice >= latest.Ema10.Value,
-            IsEma10AboveEma20: latest.Ema10 is not null && latest.Ema20 is not null && latest.Ema10.Value >= latest.Ema20.Value,
-            SlotRelativeVolume: latest.SlotRelativeVolume,
-            Catalyst: latest.Catalyst);
-
-        return new PreparedEntryExecution(signal, signal);
+        return new PreparedEntryExecution(
+            null,
+            null,
+            new ValidatedEntryCandidate(
+                session.SessionId,
+                "operator_alert",
+                strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) ? "swing" : "intraday",
+                session.CreatedAt.ToUniversalTime(),
+                decisionAtUtc,
+                JsonSerializer.Serialize(new
+                {
+                    operatorOverride = true,
+                    session.Source,
+                    session.SourcePackage,
+                    session.SourceTitle,
+                    exitGuardianStrategy = strategy.StrategyId,
+                    exitPolicyIdentity = runtimeStrategy.Identity,
+                    latest.Timestamp,
+                    latest.CurrentPrice,
+                    latest.Atr
+                })),
+            OperatorOverride: true,
+            OperatorSnapshot: latest);
     }
 
-    private static string NormalizeEntryMode(string? entryMode)
+    private static FinalizedOrder PrepareStrategyOrder(
+        BacktestRunConfig runConfig,
+        string ticker,
+        decimal accountEquity,
+        PreparedEntryExecution execution)
+    {
+        var orderPlan = new StrategyOrderPlanner().Plan(
+            new StrategyOrderPlanningRequest(
+                execution.OrderPlan
+                    ?? throw new InvalidOperationException("Persisted canonical order plan is unavailable."),
+                execution.ExecutionSignal
+                    ?? throw new InvalidOperationException("Persisted execution signal is unavailable."),
+                accountEquity,
+                new OrderPlanningRiskLimits(
+                    runConfig.Portfolio.AccountRiskBudgetPct,
+                    runConfig.Portfolio.MaxPositionNotionalPct),
+                runConfig.Portfolio.FixedBuyFee,
+                runConfig.Portfolio.FixedSellFee));
+        return orderPlan.Order
+            ?? throw new InvalidOperationException(
+                orderPlan.RiskRejection?.Reason ??
+                orderPlan.StopRejectionReason ??
+                $"Unable to build an order risk plan for {ticker}.");
+    }
+
+    private static FinalizedOrder PrepareOperatorDirectOrder(
+        BacktestRunConfig runConfig,
+        StrategyDefinition guardianStrategy,
+        string ticker,
+        decimal accountEquity,
+        IndicatorSnapshot snapshot)
+    {
+        var atr = snapshot.Atr is > 0m
+            ? snapshot.Atr.Value
+            : throw new InvalidOperationException("Operator-direct entry requires a positive ATR.");
+        var riskPlan = new SharedOrderRiskPlanner().Plan(
+            new OrderPlanningRequest(
+                ticker,
+                PlannedOrderSide.Long,
+                accountEquity,
+                snapshot.CurrentPrice,
+                PlannedStopRequest.FromAtr(atr, guardianStrategy.ExitRules.StopAtrMultiple),
+                new OrderPlanningRiskLimits(
+                    runConfig.Portfolio.AccountRiskBudgetPct,
+                    runConfig.Portfolio.MaxPositionNotionalPct),
+                new EstimatedOrderExecutionCosts(
+                    guardianStrategy.Execution.SlippageBps,
+                    runConfig.Portfolio.FixedBuyFee,
+                    runConfig.Portfolio.FixedSellFee)));
+        var planned = riskPlan.Order
+            ?? throw new InvalidOperationException(
+                riskPlan.Rejection?.Reason ?? $"Unable to risk-size operator entry for {ticker}.");
+        var triggerRiskPerShare = planned.EstimatedEntryPrice - planned.StopTriggerPrice;
+        var takeProfit = planned.EstimatedEntryPrice +
+            triggerRiskPerShare * guardianStrategy.ExitRules.TargetRMultiple;
+        return new FinalizedOrder(
+            planned.Symbol,
+            $"Operator Alert Entry / {guardianStrategy.StrategyName} Exit",
+            planned.Quantity,
+            Decimal.Round(planned.EstimatedEntryPrice, 4),
+            Decimal.Round(planned.StopTriggerPrice, 4),
+            Decimal.Round(takeProfit, 4),
+            snapshot.Timestamp);
+    }
+
+    internal static string NormalizeEntryMode(string? entryMode)
     {
         if (String.IsNullOrWhiteSpace(entryMode))
         {
             return "validate_strategy";
         }
 
-        return entryMode.Trim().Equals("immediate_paper", StringComparison.OrdinalIgnoreCase)
-            ? "immediate_paper"
-            : "validate_strategy";
-    }
-
-    private static string? GetSignalReadinessRejection(IndicatorSnapshot snapshot)
-    {
-        var missing = new List<string>();
-        if (snapshot.Rsi is null) missing.Add("rsi");
-        if (snapshot.Atr is null) missing.Add("atr");
-        if (snapshot.Vwap is null) missing.Add("vwap");
-        if (snapshot.BollingerMiddle is null) missing.Add("bollinger_middle");
-        if (snapshot.MacdHistogram is null) missing.Add("macd_histogram");
-        return missing.Count == 0 ? null : $"signal_missing_indicators ({string.Join(", ", missing)})";
-    }
-
-    internal string? GetLongEntryGateRejection(
-        StrategyDefinition strategy,
-        IndicatorSnapshot snapshot,
-        TradeSignal signal)
-    {
-        var relativeVolume = TradingFlow.Engine.Strategies.StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, snapshot);
-        return strategyDecisionBrain.GetLongEntryRejection(
-            strategy,
-            signal,
-            snapshot,
-            relativeVolume);
+        return entryMode.Trim().ToLowerInvariant() switch
+        {
+            "validate_strategy" => "validate_strategy",
+            "operator_direct" => "operator_direct",
+            _ => throw new InvalidOperationException(
+                "Entry mode must be validate_strategy or operator_direct.")
+        };
     }
 
     private static string[] ResolveRequiredTimeframes(StrategyDefinition strategy)
@@ -312,44 +446,16 @@ public sealed partial class MobileAutomationService
         return timeframes.ToArray();
     }
 
-    private static TradeSignal? ResolveExecutionOrderSignal(
-        StrategyDefinition strategy,
-        TradeSignal signal,
-        IReadOnlyDictionary<string, IReadOnlyList<IndicatorSnapshot>> snapshotsByTimeframe)
+    private static ProductionRun CreateProductionRun(ExecutionRunContext context) => new()
     {
-        if (strategy.Execution.Timeframe.Equals(strategy.Timeframe, StringComparison.OrdinalIgnoreCase))
-        {
-            return signal;
-        }
-
-        if (!snapshotsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots) ||
-            executionSnapshots.Count == 0)
-        {
-            return null;
-        }
-
-        var orderedSnapshots = executionSnapshots.OrderBy(snapshot => snapshot.Timestamp).ToArray();
-        var signalCloseTimestamp = signal.Timestamp.Add(TimeframeParser.Parse(strategy.Timeframe));
-        var executionSnapshot = orderedSnapshots.FirstOrDefault(snapshot => snapshot.Timestamp >= signalCloseTimestamp)
-            ?? orderedSnapshots.LastOrDefault(snapshot => snapshot.Timestamp >= signal.Timestamp);
-
-        if (executionSnapshot is null)
-        {
-            return null;
-        }
-
-        return signal with
-        {
-            Timestamp = executionSnapshot.Timestamp,
-            Timeframe = executionSnapshot.Timeframe,
-            CurrentPrice = executionSnapshot.CurrentPrice,
-            CurrentVolume = executionSnapshot.CurrentVolume,
-            CurrentRsi = executionSnapshot.Rsi ?? signal.CurrentRsi,
-            CurrentAtr = signal.CurrentAtr > 0m
-                ? signal.CurrentAtr
-                : executionSnapshot.Atr ?? signal.CurrentAtr
-        };
-    }
+        RunId = context.RunId,
+        SchemaVersion = 1,
+        ConfigHash = context.ConfigHash,
+        CodeVersion = context.CodeVersion,
+        Profile = context.Profile,
+        Status = "running",
+        StartedAtUtc = context.StartedAtUtc
+    };
 
     private static int FindFirstBarIndexAtOrAfter(IReadOnlyList<OhlcvBar> bars, DateTimeOffset timestamp)
     {

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using System.Text.Json;
 using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
@@ -10,6 +11,82 @@ namespace TradingFlow.Tests;
 
 public sealed class OrderSubmissionServiceTests
 {
+    [Fact]
+    public void OperatorOverrideAuthorization_StrategyGatedPolicyCannotIssue()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            OperatorOverrideAuthorization.Issue(
+                new ManualEntryOptions(ManualEntryPolicy.StrategyGated),
+                "test-operator",
+                "explicit test override",
+                DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
+    public async Task SubmitBracketOrderAsync_OperatorOverrideCannotUseLiveProfile()
+    {
+        var repository = new RecordingIntentRepository();
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        var service = CreateService(repository);
+        var now = DateTimeOffset.UtcNow;
+        var submission = CreateSubmission(Guid.NewGuid()) with
+        {
+            RunContext = CreateSubmission(Guid.NewGuid()).RunContext with { Profile = "live" },
+            StrategyIdentity = null,
+            StrategySelectionMode = null,
+            OperatorOverride = OperatorOverrideAuthorization.Issue(
+                new ManualEntryOptions(ManualEntryPolicy.OperatorDirect),
+                "test-operator",
+                "explicit test override",
+                now)
+        };
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None));
+
+        Assert.Contains("only in the paper profile", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, repository.ReservationAttempts);
+        broker.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task SubmitBracketOrderAsync_OperatorOverridePersistsExplicitExitPolicyIdentity()
+    {
+        var repository = new RecordingIntentRepository();
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        SetupRegularSession(broker);
+        broker
+            .Setup(client => client.SubmitOrderAsync(
+                It.IsAny<BrokerEntryOrder>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BrokerOrderReceipt("operator-order-1", DateTimeOffset.UtcNow));
+        var now = DateTimeOffset.UtcNow;
+        var submission = CreateSubmission(Guid.NewGuid()) with
+        {
+            StrategyIdentity = null,
+            StrategySelectionMode = null,
+            OperatorOverride = OperatorOverrideAuthorization.Issue(
+                new ManualEntryOptions(ManualEntryPolicy.OperatorDirect),
+                "test-operator",
+                "explicit test override",
+                now),
+            ExitPolicyIdentity = TestStrategyIdentity
+        };
+
+        await CreateService(repository).SubmitBracketOrderAsync(
+            submission,
+            broker.Object,
+            CancellationToken.None);
+
+        Assert.NotNull(repository.Intent);
+        using var request = JsonDocument.Parse(repository.Intent!.RequestJson);
+        var exitPolicy = request.RootElement.GetProperty("exitPolicyIdentity");
+        Assert.Equal(TestStrategyIdentity.StrategyId, exitPolicy.GetProperty("StrategyId").GetString());
+        Assert.Equal(TestStrategyIdentity.SemanticVersion, exitPolicy.GetProperty("SemanticVersion").GetString());
+        Assert.Equal(TestStrategyIdentity.ContentSha256, exitPolicy.GetProperty("ContentSha256").GetString());
+        broker.VerifyAll();
+    }
+
     [Fact]
     public async Task SubmitProtectiveStopAsync_BypassesEntryBlock_ButStillWritesIntentBeforeBrokerCall()
     {
@@ -543,7 +620,7 @@ public sealed class OrderSubmissionServiceTests
     {
         private CandidateRecord? candidate;
 
-        public Task<CandidateRecord> UpsertValidatedAsync(
+        public Task<CandidateRecord> UpsertDiscoveryAsync(
             ProductionRun run,
             CandidateRecord value,
             CancellationToken cancellationToken = default)
@@ -552,10 +629,25 @@ public sealed class OrderSubmissionServiceTests
             return Task.FromResult(value);
         }
 
+        public Task<CandidateRecord> ApplyDecisionAsync(
+            ProductionRun run,
+            Guid candidateId,
+            int expectedVersion,
+            string semanticDecisionSha256,
+            DateTimeOffset expiresAtUtc,
+            IReadOnlyList<CandidateTransitionAppendRequest> transitions,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(candidate ?? throw new InvalidOperationException("Candidate was not persisted."));
+
         public Task<CandidateRecord?> GetAsync(
             Guid candidateId,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(candidate?.CandidateId == candidateId ? candidate : null);
+
+        public Task<IReadOnlyList<CandidateTransitionRecord>> GetTransitionsAsync(
+            Guid candidateId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<CandidateTransitionRecord>>([]);
     }
 
     private sealed class PassThroughEntryGateChain : IEntryGateChain

@@ -40,6 +40,7 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
     public DbSet<ReconciliationRecord> Reconciliations => Set<ReconciliationRecord>();
     public DbSet<PositionEventRecord> PositionEvents => Set<PositionEventRecord>();
     public DbSet<CandidateRecord> Candidates => Set<CandidateRecord>();
+    public DbSet<CandidateTransitionRecord> CandidateTransitions => Set<CandidateTransitionRecord>();
     public DbSet<CatalystResultRecord> CatalystResults => Set<CatalystResultRecord>();
     public DbSet<EarningsCalendarEvent> EarningsCalendarEvents => Set<EarningsCalendarEvent>();
     public DbSet<EarningsAnalysisSnapshot> EarningsAnalysisSnapshots => Set<EarningsAnalysisSnapshot>();

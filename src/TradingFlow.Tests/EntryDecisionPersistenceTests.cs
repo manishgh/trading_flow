@@ -4,13 +4,14 @@ using TradingFlow.Data.Context;
 using TradingFlow.Data.Orders;
 using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Strategies;
 
 namespace TradingFlow.Tests;
 
 public sealed class EntryDecisionPersistenceTests
 {
     [Fact]
-    public async Task CandidateRepository_UpdatesRevalidationEvidenceWithoutChangingIdentity()
+    public async Task CandidateRepository_DoesNotMutatePersistedDiscoveryEvidenceOnReplay()
     {
         await using var database = await TestDatabase.CreateAsync();
         var repository = new SqliteCandidateRepository(database.Factory);
@@ -19,7 +20,7 @@ public sealed class EntryDecisionPersistenceTests
         var candidateId = Guid.NewGuid();
         var original = CreateCandidate(run, candidateId, discoveredAt, discoveredAt, 100m, 5m);
 
-        await repository.UpsertValidatedAsync(run, original);
+        await repository.UpsertDiscoveryAsync(run, original);
         var refreshed = CreateCandidate(
             run,
             candidateId,
@@ -27,15 +28,15 @@ public sealed class EntryDecisionPersistenceTests
             discoveredAt.AddSeconds(15),
             101m,
             3m);
-        await repository.UpsertValidatedAsync(run, refreshed);
+        await repository.UpsertDiscoveryAsync(run, refreshed);
 
         var stored = await repository.GetAsync(candidateId);
         Assert.NotNull(stored);
         Assert.Equal(candidateId, stored.CandidateId);
         Assert.Equal(discoveredAt, stored.DiscoveredAtUtc);
-        Assert.Equal(discoveredAt.AddSeconds(15), stored.RevalidatedAtUtc);
-        Assert.Equal(101m, stored.LastPrice);
-        Assert.Equal(3m, stored.SpreadBps);
+        Assert.Equal(discoveredAt, stored.RevalidatedAtUtc);
+        Assert.Equal(100m, stored.LastPrice);
+        Assert.Equal(5m, stored.SpreadBps);
         await using var context = await database.Factory.CreateDbContextAsync();
         Assert.Equal(1, await context.Candidates.CountAsync());
         Assert.Equal(1, await context.ProductionRuns.CountAsync());
@@ -50,7 +51,7 @@ public sealed class EntryDecisionPersistenceTests
         var run = CreateRun();
         var now = new DateTimeOffset(2026, 7, 22, 14, 0, 0, TimeSpan.Zero);
         var candidate = CreateCandidate(run, Guid.NewGuid(), now, now, 100m, 5m);
-        await candidateRepository.UpsertValidatedAsync(run, candidate);
+        await candidateRepository.UpsertDiscoveryAsync(run, candidate);
         var requests = new[]
         {
             new GateEvaluationAppendRequest(
@@ -142,7 +143,14 @@ public sealed class EntryDecisionPersistenceTests
             SpreadBps = spreadBps,
             SetupScoresJson = "{}",
             SelectedStrategy = "intraday.test.v1",
-            State = "SETUP_VALID",
+            StrategyContentSha256 = new string('b', 64),
+            AdmissionProfileId = "default-deterministic-v1",
+            AdmissionProfileVersion = "1.0.0",
+            SetupKey = "intraday.test.v1:2026-07-22T14:00:00.0000000+00:00",
+            DiscoveryWindowStartUtc = discoveredAt,
+            DiscoveryWindowEndUtc = discoveredAt.AddMinutes(30),
+            State = StrategyCandidateState.Discovered,
+            ExpiresAtUtc = discoveredAt.AddMinutes(30),
             RejectReasonsJson = "[]"
         };
 

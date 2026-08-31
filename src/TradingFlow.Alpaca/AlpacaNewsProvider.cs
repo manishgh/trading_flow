@@ -16,7 +16,10 @@ namespace TradingFlow.Alpaca;
 
 public sealed class AlpacaNewsProvider : ICatalystProvider
 {
-    private sealed record CachedArticleSentiment(decimal Score);
+    private sealed record CachedArticleSentiment(
+        decimal Score,
+        string AnalyzerName,
+        DateTimeOffset ClassifiedAtUtc);
     private sealed record ReceivedNewsArticle(NewsArticle Article, DateTimeOffset FirstSeenAt);
     private const int PageLimit = 50;
     private const int MaxPages = 10;
@@ -104,14 +107,15 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
                     continue;
                 }
 
-                var cacheKey = $"{ProviderName}:{article.Id}";
+                var articleIdentity = $"{ProviderName}:{article.Id}";
+                var sentimentCacheKey = BuildSentimentCacheKey(article);
                 var firstSeenAt = ArticleFirstSeenCache.AddOrUpdate(
-                    cacheKey,
+                    articleIdentity,
                     receivedAt,
                     (_, existing) => existing <= receivedAt ? existing : receivedAt);
-                if (ArticleSentimentCache.TryGetValue(cacheKey, out var cachedSentiment))
+                if (ArticleSentimentCache.TryGetValue(sentimentCacheKey, out var cachedSentiment))
                 {
-                    events.Add(BuildCatalystEvent(ticker, article, cachedSentiment.Score, firstSeenAt));
+                    events.Add(BuildCatalystEvent(ticker, article, cachedSentiment, firstSeenAt));
                     continue;
                 }
 
@@ -163,7 +167,7 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         var cacheKey = BuildSentimentCacheKey(article);
         if (ArticleSentimentCache.TryGetValue(cacheKey, out var cachedSentiment))
         {
-            return BuildCatalystEvent(ticker, article, cachedSentiment.Score, receivedArticle.FirstSeenAt);
+            return BuildCatalystEvent(ticker, article, cachedSentiment, receivedArticle.FirstSeenAt);
         }
 
         await throttle.WaitAsync(cancellationToken);
@@ -171,12 +175,16 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         {
             if (ArticleSentimentCache.TryGetValue(cacheKey, out cachedSentiment))
             {
-                return BuildCatalystEvent(ticker, article, cachedSentiment.Score, receivedArticle.FirstSeenAt);
+                return BuildCatalystEvent(ticker, article, cachedSentiment, receivedArticle.FirstSeenAt);
             }
 
             var sentiment = await _sentimentAnalyzer.AnalyzeAsync(article, cancellationToken);
-            ArticleSentimentCache.TryAdd(cacheKey, new CachedArticleSentiment(sentiment.Score));
-            return BuildCatalystEvent(ticker, article, sentiment.Score, receivedArticle.FirstSeenAt);
+            var assessed = new CachedArticleSentiment(
+                sentiment.Score,
+                sentiment.AnalyzerName,
+                DateTimeOffset.UtcNow);
+            ArticleSentimentCache.TryAdd(cacheKey, assessed);
+            return BuildCatalystEvent(ticker, article, assessed, receivedArticle.FirstSeenAt);
         }
         finally
         {
@@ -185,14 +193,21 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
     }
 
 
-    private static CatalystEvent BuildCatalystEvent(string ticker, NewsArticle article, decimal sentimentScore, DateTimeOffset receivedAt)
+    private static CatalystEvent BuildCatalystEvent(
+        string ticker,
+        NewsArticle article,
+        CachedArticleSentiment sentiment,
+        DateTimeOffset receivedAt)
     {
+        var decisionAvailableAt = receivedAt >= sentiment.ClassifiedAtUtc
+            ? receivedAt
+            : sentiment.ClassifiedAtUtc;
         return new CatalystEvent(
             ticker.ToUpperInvariant(),
             article.CreatedAt,
             CatalystType.NewsReport,
             article.Headline,
-            sentimentScore,
+            sentiment.Score,
             article.Provider,
             article.Id,
             article.Summary,
@@ -200,7 +215,10 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
             article.Url,
             receivedAt,
             article.UpdatedAt,
-            CatalystAvailabilityEvidence.ProviderTimestampOnly);
+            CatalystAvailabilityEvidence.ObservedReceiptTime,
+            decisionAvailableAt,
+            CatalystAvailabilityEvidence.NewsAndAssessmentObservedTime,
+            sentiment.AnalyzerName);
     }
 
     private string BuildSentimentCacheKey(NewsArticle article) =>

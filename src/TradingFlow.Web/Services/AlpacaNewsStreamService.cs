@@ -76,6 +76,7 @@ public class AlpacaNewsStreamService : BackgroundService
 
     private async Task ProcessMessageAsync(JsonElement element, CancellationToken cancellationToken)
     {
+        var receivedAt = DateTimeOffset.UtcNow;
         // Alpaca stream messages have format {"T":"n", "headline":"...", "symbols":["AAPL"], ...}
         if (!element.TryGetProperty("T", out var typeElement) || typeElement.GetString() != "n")
         {
@@ -104,7 +105,7 @@ public class AlpacaNewsStreamService : BackgroundService
 
         // Analyze sentiment once for the article
         var sentiment = await _sentimentAnalyzer.AnalyzeAsync(article, cancellationToken);
-        var receivedAt = DateTimeOffset.UtcNow;
+        var decisionAvailableAt = DateTimeOffset.UtcNow;
         
         var events = symbols.Select(ticker => new CatalystEvent(
             ticker.ToUpperInvariant(),
@@ -119,7 +120,10 @@ public class AlpacaNewsStreamService : BackgroundService
             article.Url,
             receivedAt,
             article.UpdatedAt,
-            CatalystAvailabilityEvidence.ProviderTimestampOnly
+            CatalystAvailabilityEvidence.ObservedReceiptTime,
+            decisionAvailableAt,
+            CatalystAvailabilityEvidence.NewsAndAssessmentObservedTime,
+            sentiment.AnalyzerName
         )).ToArray();
 
         if (events.Length > 0)

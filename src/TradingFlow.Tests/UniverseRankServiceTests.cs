@@ -10,8 +10,8 @@ namespace TradingFlow.Tests;
 
 /// <summary>
 /// The desk ranks a universe, not a symbol. These cover the two properties the
-/// ranking has to keep: a model veto demotes rather than removes, and every
-/// score can be taken apart into the factors that produced it.
+/// ranking has to keep: advisory model evidence cannot alter operational order,
+/// and every operational score can be taken apart into its factors.
 /// </summary>
 public sealed class UniverseRankServiceTests : IDisposable
 {
@@ -43,10 +43,8 @@ public sealed class UniverseRankServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task RankAsync_VetoDemotesTheCandidateInsteadOfRemovingIt()
+    public async Task RankAsync_PredictorConflictIsAdvisoryAndDoesNotPenalizeCandidate()
     {
-        // The whole point of the flat penalty: a disagreement has to stay on the
-        // desk where an operator can see it, not vanish from the universe.
         var service = CreateService(SignalFor("MU", "avoid_entry"));
 
         var run = await service.RankAsync(
@@ -62,9 +60,11 @@ public sealed class UniverseRankServiceTests : IDisposable
 
         var row = Assert.Single(run.Rows);
         Assert.Equal(AgreementFlag.Conflict, row.Agreement);
-        Assert.True(row.IsVetoed);
-        Assert.Equal(UniverseRankConfig.Default.VetoPenalty, row.VetoPenalty);
-        Assert.Equal(row.Factors.Sum(factor => factor.Contribution) - row.VetoPenalty, row.Score);
+        Assert.False(row.IsVetoed);
+        Assert.Equal(0m, row.VetoPenalty);
+        Assert.Equal(row.Factors.Sum(factor => factor.Contribution), row.Score);
+        Assert.Equal(0m, row.Factors.Single(factor => factor.Key == "model_edge").Contribution);
+        Assert.Equal(0m, row.Factors.Single(factor => factor.Key == "market_structure").Contribution);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public sealed class UniverseRankServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task RankAsync_UsesTheHorizonWeightSetFromConfig()
+    public async Task RankAsync_AdvisoryFactorsHaveZeroWeightForEveryHorizon()
     {
         var service = CreateService(SignalFor("MU", "watch_for_entry"));
         var config = UniverseRankConfig.Default;
@@ -146,8 +146,37 @@ public sealed class UniverseRankServiceTests : IDisposable
         var intraday = await RankSingleAsync(service, config, "intraday");
         var swing = await RankSingleAsync(service, config, "swing");
 
-        Assert.Equal(config.Intraday.ModelEdge, intraday.Factors.Single(factor => factor.Key == "model_edge").Weight);
-        Assert.Equal(config.Swing.ModelEdge, swing.Factors.Single(factor => factor.Key == "model_edge").Weight);
+        Assert.Equal(0m, intraday.Factors.Single(factor => factor.Key == "model_edge").Weight);
+        Assert.Equal(0m, intraday.Factors.Single(factor => factor.Key == "market_structure").Weight);
+        Assert.Equal(0m, swing.Factors.Single(factor => factor.Key == "model_edge").Weight);
+        Assert.Equal(0m, swing.Factors.Single(factor => factor.Key == "market_structure").Weight);
+    }
+
+    [Fact]
+    public async Task RankAsync_PredictorDirectionAndAvailabilityCannotChangeOperationalOrder()
+    {
+        var rows = new[]
+        {
+            EligibleRow("AAA", spreadBps: 2m),
+            EligibleRow("BBB", spreadBps: 2m)
+        };
+        var conflicting = CreateService(
+            SignalFor("AAA", "avoid_entry"),
+            SignalFor("BBB", "watch_for_entry"));
+        var unavailable = CreateService(
+            handler: new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
+
+        var withPredictions = await conflicting.RankAsync(
+            rows, UniverseRankConfig.Default, "intraday", "unified", "auto",
+            EmptySet, EmptySet, "wishlist:test", CancellationToken.None);
+        var withoutPredictions = await unavailable.RankAsync(
+            rows, UniverseRankConfig.Default, "intraday", "unified", "auto",
+            EmptySet, EmptySet, "wishlist:test", CancellationToken.None);
+
+        Assert.Equal(["AAA", "BBB"], withPredictions.Rows.Select(row => row.Ticker));
+        Assert.Equal(
+            withoutPredictions.Rows.Select(row => (row.Ticker, row.Score)),
+            withPredictions.Rows.Select(row => (row.Ticker, row.Score)));
     }
 
     [Fact]

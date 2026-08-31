@@ -30,7 +30,8 @@ public sealed record CatalystEvent(
     DateTimeOffset? UpdatedAt = null,
     string? AvailabilityEvidence = null,
     DateTimeOffset? DecisionAvailableAt = null,
-    string? DecisionAvailabilityEvidence = null
+    string? DecisionAvailabilityEvidence = null,
+    string? ClassificationVersion = null
 );
 
 public static class CatalystAvailabilityEvidence

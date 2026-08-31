@@ -82,6 +82,13 @@ public sealed class AlpacaNewsProviderTests : IDisposable
         Assert.Equal("Management cited stronger datacenter orders.", catalysts[0].Summary);
         Assert.NotNull(catalysts[0].ReceivedAt);
         Assert.InRange(catalysts[0].ReceivedAt!.Value, beforeFetch.AddSeconds(-1), afterFetch.AddSeconds(1));
+        Assert.NotNull(catalysts[0].DecisionAvailableAt);
+        Assert.True(catalysts[0].DecisionAvailableAt >= catalysts[0].ReceivedAt);
+        Assert.Equal(CatalystAvailabilityEvidence.ObservedReceiptTime, catalysts[0].AvailabilityEvidence);
+        Assert.Equal(
+            CatalystAvailabilityEvidence.NewsAndAssessmentObservedTime,
+            catalysts[0].DecisionAvailabilityEvidence);
+        Assert.Equal("test", catalysts[0].ClassificationVersion);
         Assert.Equal(2, analyzer.CallCount);
     }
 

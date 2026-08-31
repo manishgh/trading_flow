@@ -36,9 +36,9 @@ public class StrategyEvaluationServiceTests
             var result = Assert.Single(response.Results);
             Assert.Equal("NVTS", result.Ticker);
             Assert.Equal("Rejected", result.Decision);
-            Assert.StartsWith("confluence_price_below_ema50", result.Reason);
+            Assert.Equal("outside_session_window", result.Reason);
             Assert.Null(result.RelativeVolume);
-            Assert.NotNull(result.Signal);
+            Assert.Null(result.Signal);
         }
         finally
         {
@@ -202,7 +202,9 @@ session:
                                 close + 0.2m,
                                 close - 0.2m,
                                 close,
-                                100000m + bar);
+                                100000m + bar,
+                                "sip",
+                                "all");
                             await Task.Yield();
                         }
                     }

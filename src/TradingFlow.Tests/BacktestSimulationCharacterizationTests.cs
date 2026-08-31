@@ -4,6 +4,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Risk;
+using TradingFlow.Engine.Strategies;
 
 namespace TradingFlow.Tests;
 
@@ -42,12 +43,11 @@ public sealed class BacktestSimulationCharacterizationTests
     public void ResolveTakeProfitPrice_LongAndShort_AreExactMirrorsAcrossEntry()
     {
         var strategy = AtrStopStrategy();
-        var snapshot = Snapshot("2026-06-01T13:35:00Z");
         const decimal stopDistance = 2m;
         var targetR = strategy.ExitRules.TargetRMultiple;
 
-        var targetLong = InvokeResolveTakeProfit(strategy, "long", stopDistance, snapshot);
-        var targetShort = InvokeResolveTakeProfit(strategy, "short", stopDistance, snapshot);
+        var targetLong = InvokeResolveTakeProfit(strategy, "long", stopDistance);
+        var targetShort = InvokeResolveTakeProfit(strategy, "short", stopDistance);
 
         Assert.Equal(EntryPrice + (stopDistance * targetR), targetLong);
         Assert.Equal(EntryPrice - (stopDistance * targetR), targetShort);
@@ -84,15 +84,35 @@ public sealed class BacktestSimulationCharacterizationTests
     private static decimal InvokeResolveTakeProfit(
         StrategyDefinition strategy,
         string direction,
-        decimal stopDistance,
-        IndicatorSnapshot snapshot)
+        decimal stopDistance)
     {
         var method = typeof(BacktestRunner).GetMethod(
             "ResolveTakeProfitPrice",
             BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(method);
 
-        var raw = method!.Invoke(null, [strategy, direction, EntryPrice, stopDistance, snapshot]);
+        var observedAt = DateTimeOffset.Parse(
+            "2026-06-01T13:35:00Z",
+            System.Globalization.CultureInfo.InvariantCulture);
+        var canonicalOrderPlan = new StrategyOrderPlan(
+            strategy.StrategyId,
+            strategy.StrategyName,
+            direction,
+            observedAt,
+            observedAt,
+            strategy.Execution.Timeframe,
+            0,
+            EntryPrice,
+            direction.Equals("short", StringComparison.OrdinalIgnoreCase)
+                ? EntryPrice + stopDistance
+                : EntryPrice - stopDistance,
+            strategy.ExitRules.TargetRMultiple,
+            strategy.ExitRules.ProfitTargetMode,
+            null,
+            strategy.Execution.SlippageBps,
+            observedAt.AddMinutes(5));
+
+        var raw = method!.Invoke(null, [canonicalOrderPlan, EntryPrice, stopDistance]);
         Assert.NotNull(raw);
         return (decimal)raw!;
     }

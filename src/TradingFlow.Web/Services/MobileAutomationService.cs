@@ -4,6 +4,7 @@ using TradingFlow.Domain.Audit;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
@@ -25,7 +26,8 @@ namespace TradingFlow.Web.Services;
 public sealed partial class MobileAutomationService
 {
     private readonly ConcurrentDictionary<Guid, MutableAutomationSession> sessions = new();
-    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> cancellationTokens = new();
+    private readonly MobileAutomationSessionCoordinator sessionCoordinator = new();
+    private readonly SemaphoreSlim persistenceSync = new(1, 1);
     private readonly SimpleYamlReader yamlReader;
     private readonly PaperRuntimeFactory runtimeFactory;
     private readonly ProjectPaths paths;
@@ -34,12 +36,14 @@ public sealed partial class MobileAutomationService
     private readonly IDecisionAuditRepository? auditRepo;
     private readonly ILogger<MobileAutomationService> logger;
     private readonly ICandleStore candleStore;
-    private readonly SignalGenerator signalGenerator = new();
-    private readonly StrategyDecisionBrain strategyDecisionBrain = new();
     private readonly PositionGuardianEngine positionGuardianEngine = new();
     private readonly IOrderSubmissionService? orderSubmissionService;
     private readonly IOrderLifecycleService? orderLifecycleService;
     private readonly ConfigCatalogService configCatalog;
+    private readonly IStrategyCandidateDecisionOrchestrator? candidateDecisions;
+    private readonly ManualEntryOptions manualEntryOptions;
+    private readonly TimeProvider timeProvider;
+    private readonly TradingFlow.Engine.Regime.RegimeGateService regimeGate = new();
 
     public MobileAutomationService(
         SimpleYamlReader yamlReader,
@@ -52,7 +56,10 @@ public sealed partial class MobileAutomationService
         IOrderStateRepository? orderRepo = null,
         IDecisionAuditRepository? auditRepo = null,
         IOrderSubmissionService? orderSubmissionService = null,
-        IOrderLifecycleService? orderLifecycleService = null)
+        IOrderLifecycleService? orderLifecycleService = null,
+        ICandidateRepository? candidateRepository = null,
+        ManualEntryOptions? manualEntryOptions = null,
+        TimeProvider? timeProvider = null)
     {
         this.yamlReader = yamlReader;
         this.runtimeFactory = runtimeFactory;
@@ -65,6 +72,11 @@ public sealed partial class MobileAutomationService
         this.auditRepo = auditRepo;
         this.orderSubmissionService = orderSubmissionService;
         this.orderLifecycleService = orderLifecycleService;
+        candidateDecisions = candidateRepository is null
+            ? null
+            : new StrategyCandidateDecisionOrchestrator(new StrategyDecisionKernel(), candidateRepository);
+        this.manualEntryOptions = manualEntryOptions ?? new ManualEntryOptions(ManualEntryPolicy.StrategyGated);
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -75,9 +87,12 @@ public sealed partial class MobileAutomationService
             var session = MutableAutomationSession.FromSnapshot(snapshot);
             if (session.Status is "queued" or "starting" or "running")
             {
-                session.Status = "interrupted";
-                session.FinishedAt = DateTimeOffset.UtcNow;
-                session.Report("interrupted", "Backend restarted before the automation session completed.");
+                session.Update(current =>
+                {
+                    current.Status = "interrupted";
+                    current.FinishedAt = DateTimeOffset.UtcNow;
+                    current.Report("interrupted", "Backend restarted before the automation session completed.");
+                });
             }
 
             sessions[session.SessionId] = session;
@@ -133,17 +148,25 @@ public sealed partial class MobileAutomationService
             request.SourceMessage,
             DateTimeOffset.UtcNow);
 
-        if (sessions.Values.Any(x =>
-                x.Ticker.Equals(normalizedTicker, StringComparison.OrdinalIgnoreCase) &&
-                x.Status is "queued" or "starting" or "running"))
+        var ownedCancellation = sessionCoordinator.Reserve(session.SessionId, normalizedTicker);
+        if (!sessions.TryAdd(session.SessionId, session))
         {
-            throw new InvalidOperationException($"An active mobile automation session already exists for {normalizedTicker}.");
+            sessionCoordinator.Release(session.SessionId);
+            throw new InvalidOperationException("Unable to register the reserved automation session.");
         }
 
-        sessions[session.SessionId] = session;
         var entryMode = NormalizeEntryMode(request.EntryMode);
         session.Report("queued", $"Queued {request.Source} automation for {normalizedTicker}. EntryMode={entryMode}.");
-        await PersistAsync(cancellationToken);
+        try
+        {
+            await PersistAsync(CancellationToken.None);
+        }
+        catch
+        {
+            sessions.TryRemove(session.SessionId, out _);
+            sessionCoordinator.Release(session.SessionId);
+            throw;
+        }
 
         _ = Task.Run(() => RunAsync(
             session,
@@ -151,22 +174,25 @@ public sealed partial class MobileAutomationService
             new AuthorizedRuntimeStrategy(
                 selectedStrategy.Identity,
                 StrategySelectionMode.RunPaperShadow,
-                strategy),
+                strategy,
+                selectedStrategy.Artifact.AdmissionProfile),
             entryMode,
-            cancellationToken), cancellationToken);
+            ownedCancellation), CancellationToken.None);
         return session.ToSnapshot();
     }
 
     public void Cancel(Guid sessionId)
     {
-        if (!cancellationTokens.TryGetValue(sessionId, out var cts) || !sessions.TryGetValue(sessionId, out var session))
+        if (!sessions.TryGetValue(sessionId, out var session) || !sessionCoordinator.TryCancel(sessionId))
         {
             return;
         }
 
-        cts.Cancel();
-        session.Status = "cancelled";
-        session.Report("cancelled", "User cancelled the automation session.");
+        session.Update(current =>
+        {
+            current.Status = "cancelled";
+            current.Report("cancelled", "User cancelled the automation session.");
+        });
         _ = PersistAsync();
     }
 
@@ -192,7 +218,7 @@ public sealed partial class MobileAutomationService
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(10));
-            var quantity = session.ShareQuantity ?? 0;
+            var quantity = session.ToSnapshot().ShareQuantity ?? 0;
             if (quantity <= 0)
             {
                 session.Report("close_rejected", $"Cannot close {session.Ticker}; session quantity is unavailable.");
@@ -205,16 +231,15 @@ public sealed partial class MobileAutomationService
             var closed = await brokerClient.ClosePositionAsync(session.Ticker, quantity, cts.Token);
             if (closed)
             {
-                if (cancellationTokens.TryGetValue(sessionId, out var monitorCts))
+                sessionCoordinator.TryCancel(sessionId);
+                session.Update(current =>
                 {
-                    monitorCts.Cancel();
-                }
-
-                session.Status = "completed";
-                session.FinishedAt = DateTimeOffset.UtcNow;
-                session.ExitSubmittedAt = DateTimeOffset.UtcNow;
-                session.ExitReason = "manual_sell";
-                session.Report("completed", $"Manually sold {session.Ticker} from Running Trades.");
+                    current.Status = "completed";
+                    current.FinishedAt = DateTimeOffset.UtcNow;
+                    current.ExitSubmittedAt = DateTimeOffset.UtcNow;
+                    current.ExitReason = "manual_sell";
+                    current.Report("completed", $"Manually sold {current.Ticker} from Running Trades.");
+                });
                 await PersistAsync(cancellationToken);
             }
 
@@ -239,20 +264,22 @@ public sealed partial class MobileAutomationService
         BacktestRunConfig runConfig,
         AuthorizedRuntimeStrategy runtimeStrategy,
         string entryMode,
-        CancellationToken outerCancellationToken)
+        CancellationTokenSource ownedCancellation)
     {
         var strategy = runtimeStrategy.Definition;
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(outerCancellationToken);
-        cancellationTokens[session.SessionId] = linkedCts;
-        var cancellationToken = linkedCts.Token;
-
-        session.Status = "starting";
-        session.StartedAt = DateTimeOffset.UtcNow;
-        session.Report("starting", $"Preparing market state for {session.Ticker}.");
-        await PersistAsync(cancellationToken);
+        var cancellationToken = ownedCancellation.Token;
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            session.Update(current =>
+            {
+                current.Status = "starting";
+                current.StartedAt = DateTimeOffset.UtcNow;
+                current.Report("starting", $"Preparing market state for {current.Ticker}.");
+            });
+            await PersistAsync(cancellationToken);
+
             var marketDataProvider = runtimeFactory.CreateProvider(runConfig);
             var brokerClient = runtimeFactory.CreateBrokerClient(runConfig);
             using var providerDisposable = marketDataProvider as IDisposable;
@@ -264,7 +291,23 @@ public sealed partial class MobileAutomationService
             }
 
             var state = await LoadTickerStateAsync(runConfig, strategy, session.Ticker, marketDataProvider, cancellationToken);
-            var execution = PrepareAutomationEntryExecution(runConfig, strategy, session, state, entryMode);
+            var decisionAtUtc = timeProvider.GetUtcNow();
+            var startedAt = session.ToSnapshot().StartedAt ?? decisionAtUtc;
+            var executionRunContext = ExecutionRunContextFactory.Create(
+                session.SessionId,
+                runConfig.Mode,
+                new { Run = runConfig, Strategy = strategy, EntryMode = entryMode },
+                startedAt);
+            var execution = await PrepareAutomationEntryExecutionAsync(
+                runConfig,
+                runtimeStrategy,
+                session,
+                state,
+                marketDataProvider,
+                executionRunContext,
+                entryMode,
+                decisionAtUtc,
+                cancellationToken);
 
             if (brokerClient is not IBrokerAccountProvider accountProvider)
             {
@@ -282,29 +325,19 @@ public sealed partial class MobileAutomationService
             }
 
             var account = await accountProvider.GetAccountSnapshotAsync(cancellationToken);
-            var orderPlan = new StrategyOrderPlanner().Plan(
-                new StrategyOrderPlanningRequest(
+            var order = execution.OperatorOverride
+                ? PrepareOperatorDirectOrder(
+                    runConfig,
                     strategy,
-                    execution.Signal,
-                    execution.ExecutionSignal,
-                    PlannedOrderSide.Long,
+                    session.Ticker,
                     account.Equity,
-                    new OrderPlanningRiskLimits(
-                        runConfig.Portfolio.AccountRiskBudgetPct,
-                        runConfig.Portfolio.MaxPositionNotionalPct),
-                    runConfig.Portfolio.FixedBuyFee,
-                    runConfig.Portfolio.FixedSellFee,
-                    executionSnapshots.Count - 1,
-                    executionBars,
-                    executionSnapshots));
-            var order = orderPlan.Order;
-            if (order is null)
-            {
-                throw new InvalidOperationException(
-                    orderPlan.RiskRejection?.Reason ??
-                    orderPlan.StopRejectionReason ??
-                    $"Unable to build an order risk plan for {session.Ticker}.");
-            }
+                    execution.OperatorSnapshot
+                        ?? throw new InvalidOperationException("Operator entry snapshot is unavailable."))
+                : PrepareStrategyOrder(
+                    runConfig,
+                    session.Ticker,
+                    account.Equity,
+                    execution);
 
             if (orderSubmissionService is null)
             {
@@ -313,26 +346,13 @@ public sealed partial class MobileAutomationService
             }
 
             session.Report("submitting_entry", $"Submitting entry for {session.Ticker} from {session.Source}. EntryMode={entryMode}.");
-            var submittedAt = DateTimeOffset.UtcNow;
-            var executionRunContext = ExecutionRunContextFactory.Create(
-                session.SessionId,
-                runConfig.Mode,
-                new { Run = runConfig, Strategy = strategy },
-                session.StartedAt ?? submittedAt);
+            var submittedAt = timeProvider.GetUtcNow();
             var submission = await orderSubmissionService.SubmitBracketOrderAsync(
                 new BracketOrderSubmission(
                     session.SessionId,
-                    new ValidatedEntryCandidate(
-                        session.SessionId,
-                        DiscoverySource: session.Source,
-                        Horizon: strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)
-                            ? "swing"
-                            : "intraday",
-                        DiscoveredAtUtc: execution.ExecutionSignal.Timestamp,
-                        RevalidatedAtUtc: submittedAt,
-                        SetupEvidenceJson: JsonSerializer.Serialize(execution.ExecutionSignal)),
+                    execution.Candidate,
                     executionRunContext,
-                    strategy.StrategyId,
+                    execution.OperatorOverride ? "OPERATOR-ALERT-ENTRY" : strategy.StrategyId,
                     Side: "buy",
                     OrderType: ResolveEntryOrderType(runConfig),
                     TimeInForce: ResolveEntryTimeInForce(runConfig),
@@ -340,20 +360,33 @@ public sealed partial class MobileAutomationService
                     submittedAt,
                     order,
                     AllowExtendedHoursTrading: runConfig.Execution.AllowExtendedHoursTrading,
-                    StrategyIdentity: runtimeStrategy.Identity,
-                    StrategySelectionMode: runtimeStrategy.SelectionMode),
+                    StrategyIdentity: execution.OperatorOverride ? null : runtimeStrategy.Identity,
+                    StrategySelectionMode: execution.OperatorOverride ? null : runtimeStrategy.SelectionMode,
+                    OperatorOverride: execution.OperatorOverride
+                        ? OperatorOverrideAuthorization.Issue(
+                            manualEntryOptions,
+                            "mobile_automation",
+                            $"Explicit operator-direct alert from {session.Source}",
+                            submittedAt)
+                        : null,
+                    ExitPolicyIdentity: execution.OperatorOverride
+                        ? runtimeStrategy.Identity
+                        : null),
                 brokerClient,
                 cancellationToken);
             var orderId = submission.BrokerOrderId;
-            session.Status = "running";
-            session.EntryOrderId = orderId;
-            session.EntryPrice = order.LimitPrice;
-            session.StopLossPrice = order.StopLossPrice;
-            session.TakeProfitPrice = order.TakeProfitPrice;
-            session.ShareQuantity = order.ShareQuantity;
-            session.EntrySubmittedAt = DateTimeOffset.UtcNow;
-            session.ExitSafetyOrdersSubmitted = !submission.SubmittedOutsideRegularHours;
-            session.Report("running", $"Entry submitted: {order.ShareQuantity} shares of {session.Ticker} at {order.LimitPrice:F2}.");
+            session.Update(current =>
+            {
+                current.Status = "running";
+                current.EntryOrderId = orderId;
+                current.EntryPrice = order.LimitPrice;
+                current.StopLossPrice = order.StopLossPrice;
+                current.TakeProfitPrice = order.TakeProfitPrice;
+                current.ShareQuantity = order.ShareQuantity;
+                current.EntrySubmittedAt = DateTimeOffset.UtcNow;
+                current.ExitSafetyOrdersSubmitted = !submission.SubmittedOutsideRegularHours;
+                current.Report("running", $"Entry submitted: {order.ShareQuantity} shares of {current.Ticker} at {order.LimitPrice:F2}.");
+            });
             await PersistAsync(cancellationToken);
 
             if (orderRepo is not null)
@@ -380,31 +413,46 @@ public sealed partial class MobileAutomationService
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            session.Status = "cancelled";
-            session.FinishedAt = DateTimeOffset.UtcNow;
-            session.Report("cancelled", $"Automation cancelled for {session.Ticker}.");
+            session.Update(current =>
+            {
+                current.Status = "cancelled";
+                current.FinishedAt = DateTimeOffset.UtcNow;
+                current.Report("cancelled", $"Automation cancelled for {current.Ticker}.");
+            });
             await PersistAsync();
         }
         catch (Exception exception)
         {
             logger.LogError(exception, "Mobile automation session {SessionId} failed for {Ticker}.", session.SessionId, session.Ticker);
-            session.Status = "failed";
-            session.ErrorMessage = exception.Message;
-            session.FinishedAt = DateTimeOffset.UtcNow;
-            session.Report("failed", exception.Message);
+            session.Update(current =>
+            {
+                current.Status = "failed";
+                current.ErrorMessage = exception.Message;
+                current.FinishedAt = DateTimeOffset.UtcNow;
+                current.Report("failed", exception.Message);
+            });
             await PersistAsync();
         }
         finally
         {
-            cancellationTokens.TryRemove(session.SessionId, out _);
+            sessionCoordinator.Release(session.SessionId);
             await PersistAsync();
         }
     }
 
-    private Task PersistAsync(CancellationToken cancellationToken = default)
+    private async Task PersistAsync(CancellationToken cancellationToken = default)
     {
-        PruneExpiredSessions();
-        return sessionStore.SaveAsync(sessions.Values.Select(x => x.ToSnapshot()).ToArray(), cancellationToken);
+        await persistenceSync.WaitAsync(cancellationToken);
+        try
+        {
+            PruneExpiredSessions();
+            var snapshot = sessions.Values.Select(x => x.ToSnapshot()).ToArray();
+            await sessionStore.SaveAsync(snapshot, cancellationToken);
+        }
+        finally
+        {
+            persistenceSync.Release();
+        }
     }
 
     private void PruneExpiredSessions()
@@ -419,7 +467,13 @@ public sealed partial class MobileAutomationService
         }
     }
 
-    private sealed record PreparedEntryExecution(TradeSignal Signal, TradeSignal ExecutionSignal);
+    private sealed record PreparedEntryExecution(
+        TradeSignal? Signal,
+        TradeSignal? ExecutionSignal,
+        ValidatedEntryCandidate Candidate,
+        bool OperatorOverride,
+        IndicatorSnapshot? OperatorSnapshot = null,
+        StrategyOrderPlan? OrderPlan = null);
 
     private static string ResolveEntryOrderType(BacktestRunConfig run) =>
         String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)
@@ -431,8 +485,9 @@ public sealed partial class MobileAutomationService
             ? "day"
             : "gtc";
 
-    private sealed class MutableAutomationSession
+    internal sealed class MutableAutomationSession
     {
+        private readonly object sync = new();
         private readonly List<string> events = new();
 
         public MutableAutomationSession(
@@ -486,45 +541,61 @@ public sealed partial class MobileAutomationService
         public string? ExitReason { get; set; }
         public bool ExitSafetyOrdersSubmitted { get; set; }
 
+        public void Update(Action<MutableAutomationSession> mutation)
+        {
+            ArgumentNullException.ThrowIfNull(mutation);
+            lock (sync)
+            {
+                mutation(this);
+            }
+        }
+
         public void Report(string stage, string message)
         {
-            CurrentStage = stage;
-            events.Add($"{DateTimeOffset.Now:HH:mm:ss} {stage}: {message}");
-            if (events.Count > 80)
+            lock (sync)
             {
-                events.RemoveAt(0);
+                CurrentStage = stage;
+                events.Add($"{DateTimeOffset.Now:HH:mm:ss} {stage}: {message}");
+                if (events.Count > 80)
+                {
+                    events.RemoveAt(0);
+                }
             }
         }
 
         public MobileAutomationSessionSnapshot ToSnapshot()
         {
-            return new MobileAutomationSessionSnapshot(
-                SessionId,
-                RunName,
-                ConfigPath,
-                StrategyPath,
-                Ticker,
-                Source,
-                SourcePackage,
-                Status,
-                CreatedAt,
-                StartedAt,
-                FinishedAt,
-                EntrySubmittedAt,
-                ExitSubmittedAt,
-                ErrorMessage,
-                CurrentStage,
-                EntryOrderId,
-                EntryPrice,
-                StopLossPrice,
-                TakeProfitPrice,
-                ShareQuantity,
-                LastObservedPrice,
-                UnrealizedPl,
-                ExitReason,
-                events.ToArray(),
-                SourceTitle,
-                SourceMessage);
+            lock (sync)
+            {
+                return new MobileAutomationSessionSnapshot(
+                    SessionId,
+                    RunName,
+                    ConfigPath,
+                    StrategyPath,
+                    Ticker,
+                    Source,
+                    SourcePackage,
+                    Status,
+                    CreatedAt,
+                    StartedAt,
+                    FinishedAt,
+                    EntrySubmittedAt,
+                    ExitSubmittedAt,
+                    ErrorMessage,
+                    CurrentStage,
+                    EntryOrderId,
+                    EntryPrice,
+                    StopLossPrice,
+                    TakeProfitPrice,
+                    ShareQuantity,
+                    LastObservedPrice,
+                    UnrealizedPl,
+                    ExitReason,
+                    events.ToArray(),
+                    SourceTitle,
+                    SourceMessage,
+                    ExitSafetyOrdersSubmitted);
+            }
         }
 
         public static MutableAutomationSession FromSnapshot(MobileAutomationSessionSnapshot snapshot)
@@ -555,7 +626,8 @@ public sealed partial class MobileAutomationService
                 ShareQuantity = snapshot.ShareQuantity,
                 LastObservedPrice = snapshot.LastObservedPrice,
                 UnrealizedPl = snapshot.UnrealizedPl,
-                ExitReason = snapshot.ExitReason
+                ExitReason = snapshot.ExitReason,
+                ExitSafetyOrdersSubmitted = snapshot.ExitSafetyOrdersSubmitted
             };
 
             foreach (var item in snapshot.Events)

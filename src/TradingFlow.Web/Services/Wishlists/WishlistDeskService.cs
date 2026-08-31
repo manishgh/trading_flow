@@ -187,9 +187,9 @@ public sealed record WishlistDeskRow(
 
     public bool HasNews => LatestNews is not null;
 
-    public string EligibilityLabel => LatestSignal is null ? "Watching" : "Eligible";
+    public string EligibilityLabel => LatestSignal is null ? "Watching" : "Observed setup";
 
-    public string EligibilityReason => LatestSignal?.Reason ?? "Waiting for VWAP/EMA/MACD/volume conditions.";
+    public string EligibilityReason => LatestSignal?.Reason ?? "Waiting for observational VWAP/EMA/MACD/volume conditions.";
 
     /// <summary>Inside mid, rendered as the grid's Last column.</summary>
     public decimal? LastPrice => Quote.MidPrice;

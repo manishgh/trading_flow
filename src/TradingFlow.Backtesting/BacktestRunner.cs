@@ -37,12 +37,9 @@ public sealed partial class BacktestRunner(
 {
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
     private readonly IRawArchiveWriter? _rawArchiveWriter = rawArchiveWriter;
-    private readonly StrategyDecisionBrain _decisionBrain = new();
     private readonly StrategySessionClock _sessionClock = new();
     private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
     private readonly BacktestValidator _validator = new();
-    private readonly SignalGenerator _signalGenerator = new();
-    private readonly CompletedBarExecutionPlanner _executionPlanner = new();
     private readonly TradingFlow.Engine.Execution.ExecutionAuditor _auditor = new();
 
     public async Task<BacktestResult> RunAsync(
@@ -334,7 +331,7 @@ public sealed partial class BacktestRunner(
                 workItemCancellation.CancelAfter(strategyWorkItemTimeout);
                 try
                 {
-                    strategyTickerBatches.Add(ProcessPreparedStrategyTicker(
+                    strategyTickerBatches.Add(await ProcessPreparedStrategyTickerAsync(
                         run,
                         tickerContexts,
                         workItem.Strategy,
@@ -393,6 +390,18 @@ public sealed partial class BacktestRunner(
             .SelectMany(x => x.CandidateTrades)
             .OrderBy(x => x.EntryTimestamp)
             .ThenBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var candidateDecisionAudit = batches
+            .SelectMany(batch => batch.CandidateDecisionAudit)
+            .OrderBy(item => item.Candidate.DiscoveredAtUtc)
+            .ThenBy(item => item.Candidate.Symbol, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Candidate.CandidateId)
+            .ToArray();
+        var candidateAuditJournals = batches
+            .Select(batch => batch.CandidateAuditJournalPath)
+            .Where(path => !String.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Cast<string>()
             .ToArray();
         var candidateDiagnostics = batches.Select(batch => batch.Diagnostics).ToArray();
         var strategyResults = BuildStrategyResults(
@@ -460,27 +469,34 @@ public sealed partial class BacktestRunner(
             missedMoves,
             Array.Empty<FinalizedOrder>(),
             unifiedPortfolio,
-            universePromotion);
+            universePromotion,
+            CandidateDecisionAudit: candidateDecisionAudit);
 
         result = result with
         {
             ResultPath = await WriteResultAsync(resultPath, result, run.Artifacts, cancellationToken)
         };
+        foreach (var journalPath in candidateAuditJournals)
+        {
+            try
+            {
+                File.Delete(journalPath);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                progress?.Report(BacktestProgress.StageOnly(
+                    "cleanup_warning",
+                    $"Result is complete, but candidate audit spool cleanup failed for {Path.GetFileName(journalPath)}: {exception.Message}"));
+            }
+        }
         progress?.Report(BacktestProgress.StageOnly("completed", "Backtest completed."));
         return result;
     }
 
     private static StrategyDefinition[] ApplyRunSessionPolicy(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
     {
-        return strategies
-            .Select(strategy => strategy with
-            {
-                Session = strategy.Session with
-                {
-                    UseExtendedHours = run.Execution.AllowExtendedHoursTrading
-                }
-            })
-            .ToArray();
+        _ = run;
+        return strategies.ToArray();
     }
 
     private static void ValidateRun(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
@@ -667,6 +683,7 @@ public sealed partial class BacktestRunner(
                     .Where(bar => bar.Timestamp >= windowStart && bar.Timestamp <= windowEnd)
                     .ToArray(),
                 tickerState.BarsByTimeframe.Values.Sum(x => x.Count),
+                catalysts,
                 null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -679,7 +696,7 @@ public sealed partial class BacktestRunner(
         }
     }
 
-    private StrategyTickerBacktestBatch ProcessPreparedStrategyTicker(
+    private async Task<StrategyTickerBacktestBatch> ProcessPreparedStrategyTickerAsync(
         BacktestRunConfig run,
         IReadOnlyDictionary<string, PreparedTickerEvaluationContext> tickerContexts,
         StrategyDefinition strategy,
@@ -690,6 +707,7 @@ public sealed partial class BacktestRunner(
         RegimeCalendar? regimeCalendar,
         CancellationToken cancellationToken)
     {
+        BacktestCandidateJournal? candidateJournal = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -709,6 +727,8 @@ public sealed partial class BacktestRunner(
                     true,
                     null,
                     Array.Empty<BacktestCandidateTrade>(),
+                    Array.Empty<BacktestCandidateDecisionAudit>(),
+                    null,
                     StrategyCandidateDiagnostics.MissingTimeframe(strategy, "missing_signal_timeframe"));
             }
 
@@ -722,6 +742,8 @@ public sealed partial class BacktestRunner(
                     true,
                     null,
                     Array.Empty<BacktestCandidateTrade>(),
+                    Array.Empty<BacktestCandidateDecisionAudit>(),
+                    null,
                     StrategyCandidateDiagnostics.MissingTimeframe(strategy, "missing_execution_timeframe"));
             }
 
@@ -738,18 +760,24 @@ public sealed partial class BacktestRunner(
                     $"{run.Engine.IndicatorWarmupBars} required. Increase time_window.warmup_lookback_days.");
             }
 
-            var evaluation = CreateStrategyCandidates(
+            candidateJournal = new BacktestCandidateJournal(
+                CreateCandidateAuditJournalPath(run, strategy, ticker));
+
+            var evaluation = await CreateStrategyCandidatesAsync(
                 run,
                 strategy,
                 strategyBars,
                 strategySnapshots,
                 executionBars,
                 executionSnapshots,
+                context.BarsByTimeframe,
                 context.SnapshotsByTimeframe,
+                context.Catalysts,
                 windowStart,
                 windowEnd,
                 universeMembership,
                 regimeCalendar,
+                candidateJournal,
                 cancellationToken);
 
             return new StrategyTickerBacktestBatch(
@@ -759,6 +787,8 @@ public sealed partial class BacktestRunner(
                 true,
                 null,
                 evaluation.Candidates,
+                evaluation.CandidateDecisionAudit,
+                candidateJournal.DurableJournalPath,
                 evaluation.Diagnostics);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -767,7 +797,16 @@ public sealed partial class BacktestRunner(
         }
         catch (Exception exception) when (!run.Engine.FailFast)
         {
-            return StrategyTickerBacktestBatch.Failed(ticker, strategy, exception.Message);
+            return StrategyTickerBacktestBatch.Failed(
+                ticker,
+                strategy,
+                exception.Message,
+                candidateJournal?.Snapshot() ?? [],
+                candidateJournal?.DurableJournalPath);
+        }
+        finally
+        {
+            candidateJournal?.Dispose();
         }
     }
 
@@ -831,18 +870,22 @@ public sealed partial class BacktestRunner(
                     continue;
                 }
 
-                var strategyEvaluation = CreateStrategyCandidates(
+                using var candidateJournal = new BacktestCandidateJournal();
+                var strategyEvaluation = await CreateStrategyCandidatesAsync(
                     run,
                     strategy,
                     strategyBars,
                     strategySnapshots,
                     executionBars,
                     executionSnapshots,
+                    barsByTimeframe,
                     readonlySnapshots,
+                    catalysts,
                     windowStart,
                     windowEnd,
                     null,
                     null,
+                    candidateJournal,
                     cancellationToken);
                 candidates.AddRange(strategyEvaluation.Candidates);
                 diagnostics.Add(strategyEvaluation.Diagnostics);
@@ -926,23 +969,36 @@ public sealed partial class BacktestRunner(
         return index;
     }
 
-    private StrategyCandidateEvaluation CreateStrategyCandidates(
+    private async Task<StrategyCandidateEvaluation> CreateStrategyCandidatesAsync(
         BacktestRunConfig run,
         StrategyDefinition strategy,
         IReadOnlyList<OhlcvBar> bars,
         IReadOnlyList<IndicatorSnapshot> snapshots,
         IReadOnlyList<OhlcvBar> executionBars,
         IReadOnlyList<IndicatorSnapshot> executionSnapshots,
+        IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> barsByTimeframe,
         IReadOnlyDictionary<string, IReadOnlyList<IndicatorSnapshot>> snapshotsByTimeframe,
+        IReadOnlyCollection<CatalystEvent> catalysts,
         DateTimeOffset evaluationStart,
         DateTimeOffset evaluationEnd,
         UniverseMembership? universeMembership,
         RegimeCalendar? regimeCalendar,
+        BacktestCandidateJournal candidateJournal,
         CancellationToken cancellationToken)
     {
         var candidates = new List<BacktestCandidateTrade>();
         var diagnostics = new StrategyCandidateDiagnostics(strategy.StrategyId, strategy.StrategyName);
         var startIndex = Math.Max(run.Engine.IndicatorWarmupBars, 1);
+        var runtimeStrategy = StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(
+            strategy,
+            strategyArtifacts);
+        var candidateDecisions = new StrategyCandidateDecisionOrchestrator(
+            new StrategyDecisionKernel(),
+            candidateJournal);
+        var simulationRun = BacktestCandidateJournal.CreateRun(
+            new { Run = run, Strategy = runtimeStrategy.Identity, Ticker = snapshots[0].Ticker },
+            $"{run.RunName}:{runtimeStrategy.Identity.StrategyId}:{snapshots[0].Ticker}",
+            evaluationStart);
 
         for (var i = startIndex; i < snapshots.Count - 1; i++)
         {
@@ -960,99 +1016,148 @@ public sealed partial class BacktestRunner(
             }
 
             diagnostics.EvaluatedBarCount++;
-            var entryRelativeVolume = StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, snapshot);
-            if (!_sessionClock.ValidateExecutionWindow(snapshot.Timestamp, strategy.Timeframe, strategy.Session))
+            var discoveryExpiry = snapshots[i + 1].Timestamp.Add(ParseTimeframe(strategy.Timeframe));
+            if (discoveryExpiry > evaluationEnd)
             {
-                diagnostics.IncrementRejection("outside_session_window");
+                discoveryExpiry = evaluationEnd;
+            }
+
+            if (discoveryExpiry <= signalAvailableTimestamp)
+            {
+                diagnostics.IncrementRejection("candidate_window_not_available");
                 continue;
             }
 
-            var confluenceRejection = _signalGenerator.GetConfluenceRejection(strategy, signalAvailableTimestamp, snapshotsByTimeframe);
-            if (confluenceRejection is not null)
-            {
-                diagnostics.IncrementRejection(confluenceRejection);
-                continue;
-            }
+            var setupKey = StrategyDecisionRequestAssembler.CreateSetupKey(
+                strategy.StrategyId,
+                strategy.Timeframe,
+                snapshot.Timestamp);
+            var discovery = StrategyDecisionRequestAssembler.CreateBacktestDiscovery(
+                snapshot.Ticker,
+                setupKey,
+                signalAvailableTimestamp,
+                discoveryExpiry);
+            var decisionTimes = executionBars
+                .Select(bar => bar.Timestamp.Add(ParseTimeframe(strategy.Execution.Timeframe)))
+                .Where(timestamp => timestamp >= signalAvailableTimestamp &&
+                    timestamp < discoveryExpiry &&
+                    timestamp <= evaluationEnd)
+                .Prepend(signalAvailableTimestamp)
+                .Distinct()
+                .OrderBy(timestamp => timestamp)
+                .ToArray();
+            var candidateState = StrategyCandidateState.DataWarming;
+            string? lastReason = null;
+            var candidateCreated = false;
 
-            var signal = _signalGenerator.CreateTradeSignal(strategy, bars, snapshots, i);
-            if (signal is null)
+            foreach (var decisionTime in decisionTimes)
             {
-                diagnostics.IncrementRejection("missing_indicator_warmup_or_null");
-                continue;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
+                var nextEntryIndex = FindNextValidExecutionBarIndex(
+                    executionBars,
+                    FindFirstBarIndexAtOrAfter(executionBars, decisionTime),
+                    strategy);
+                var eligibilityDay = nextEntryIndex < executionBars.Count
+                    ? DateOnly.FromDateTime(executionBars[nextEntryIndex].Timestamp.UtcDateTime)
+                    : DateOnly.FromDateTime(decisionTime.UtcDateTime);
+                var universeEligible = universeMembership is null ||
+                    universeMembership.IsMember(snapshot.Ticker, eligibilityDay);
+                var regimeEligible = regimeCalendar is null || regimeCalendar.IsOn(eligibilityDay);
+                var universeEvidence = new StrategyEligibilityEvidence(
+                    universeEligible,
+                    universeMembership is null ? "static_run_universe" : "historical_universe_membership",
+                    $"{snapshot.Ticker}:{eligibilityDay:yyyy-MM-dd}",
+                    decisionTime,
+                    JsonSerializer.Serialize(new { snapshot.Ticker, eligibilityDay, universeEligible }));
+                var regimeEvidence = new StrategyEligibilityEvidence(
+                    regimeEligible,
+                    regimeCalendar is null ? "strategy_has_no_regime_gate" : "historical_regime_calendar",
+                    $"{strategy.StrategyId}:{eligibilityDay:yyyy-MM-dd}",
+                    decisionTime,
+                    JsonSerializer.Serialize(new { strategy.StrategyId, eligibilityDay, regimeEligible }));
+                var request = StrategyDecisionRequestAssembler.Create(
+                    runtimeStrategy,
+                    snapshot.Ticker,
+                    barsByTimeframe,
+                    snapshotsByTimeframe,
+                    catalysts,
+                    decisionTime,
+                    discovery,
+                    universeEvidence,
+                    regimeEvidence,
+                    candidateState,
+                    0,
+                    setupKey,
+                    signalAvailableTimestamp,
+                    discoveryExpiry,
+                    run.Engine.IndicatorWarmupBars,
+                    simulationRun.RunId);
+                var persistedDecision = await candidateDecisions.EvaluateAsync(
+                    simulationRun,
+                    request,
+                    cancellationToken);
+                var decision = persistedDecision.Decision
+                    ?? throw new InvalidOperationException(
+                        "Backtest candidate became terminal before its current decision was evaluated.");
+                candidateState = persistedDecision.Candidate.State;
+                lastReason = decision.NoEntryReason;
+                if (!decision.IsTriggered ||
+                    decision.OrderPlan is not { } canonicalOrderPlan ||
+                    decision.Signal is not { } signal)
+                {
+                    if (decision.State is StrategyCandidateState.Rejected or
+                        StrategyCandidateState.Expired or
+                        StrategyCandidateState.DataError)
+                    {
+                        break;
+                    }
 
-            var longRejection = AllowsLong(strategy)
-                ? _decisionBrain.GetLongEntryRejection(strategy, signal, snapshot, entryRelativeVolume)
-                : "direction_not_long";
-            var shortRejection = AllowsShort(strategy)
-                ? _decisionBrain.GetShortEntryRejection(strategy, signal, snapshot, entryRelativeVolume)
-                : "direction_not_short";
-            if (longRejection is not null && shortRejection is not null)
-            {
-                diagnostics.IncrementRejection(ChoosePrimaryRejection(longRejection, shortRejection));
-                continue;
-            }
+                    continue;
+                }
 
-            var direction = longRejection is null ? "long" : "short";
-            var entryPlan = _executionPlanner.Plan(
-                new CompletedBarExecutionRequest(
+                var plannedEntryIndex = FindNextValidExecutionBarIndex(
+                    executionBars,
+                    FindFirstBarIndexAtOrAfter(executionBars, canonicalOrderPlan.TriggeredAtUtc),
+                    strategy);
+                if (plannedEntryIndex >= executionBars.Count ||
+                    executionBars[plannedEntryIndex].Timestamp >= discoveryExpiry)
+                {
+                    lastReason = "no_next_executable_bar_before_expiry";
+                    break;
+                }
+
+                var candidate = CreateCandidate(
+                    run,
                     strategy,
                     signal,
-                    direction.Equals("short", StringComparison.OrdinalIgnoreCase)
-                        ? PlannedOrderSide.Short
-                        : PlannedOrderSide.Long,
+                    canonicalOrderPlan,
                     executionBars,
                     executionSnapshots,
-                    timestamp => _sessionClock.ValidateExecutionWindow(
-                        timestamp,
-                        strategy.Execution.Timeframe,
-                        strategy.Session),
-                    RequireKnownFillBar: true));
-            if (!entryPlan.IsReady ||
-                entryPlan.EntryIndex is not { } plannedEntryIndex ||
-                entryPlan.StopContextIndex is not { } stopContextIndex)
-            {
-                diagnostics.IncrementRejection(
-                    entryPlan.RejectionReason ?? "execution_plan_not_ready");
-                continue;
+                    _auditor,
+                    cancellationToken,
+                    plannedEntryIndex);
+                if (candidate is null)
+                {
+                    lastReason = "no_next_bar_or_invalid_stop";
+                    break;
+                }
+
+                candidates.Add(candidate.Value.Candidate);
+                candidateCreated = true;
+                break;
             }
 
-            var entryDay = DateOnly.FromDateTime(executionBars[plannedEntryIndex].Timestamp.UtcDateTime);
-            if (universeMembership is not null &&
-                !universeMembership.IsMember(signal.Ticker, entryDay))
+            if (!candidateCreated)
             {
-                diagnostics.IncrementRejection("universe_not_eligible_on_entry_day");
-                continue;
+                diagnostics.IncrementRejection(lastReason ?? "execution_trigger_not_ready");
             }
-
-            if (regimeCalendar is not null && !regimeCalendar.IsOn(entryDay))
-            {
-                diagnostics.IncrementRejection("market_regime_off_on_entry_day");
-                continue;
-            }
-
-            var candidate = CreateCandidate(
-                run,
-                strategy,
-                signal,
-                direction,
-                executionBars,
-                executionSnapshots,
-                _auditor,
-                cancellationToken,
-                plannedEntryIndex,
-                stopContextIndex);
-            if (candidate is null)
-            {
-                diagnostics.IncrementRejection("no_next_bar_or_invalid_stop");
-                continue;
-            }
-
-            candidates.Add(candidate.Value.Candidate);
         }
 
         diagnostics.CandidateTradeCount = candidates.Count;
-        return new StrategyCandidateEvaluation(candidates, diagnostics);
+        return new StrategyCandidateEvaluation(
+            candidates,
+            candidateJournal.Snapshot(),
+            diagnostics);
     }
 
     private static string GetResultPath(BacktestRunConfig run)
@@ -1060,6 +1165,23 @@ public sealed partial class BacktestRunner(
         var owner = Environment.GetEnvironmentVariable("TRADINGFLOW_RESULT_OWNER");
         var safeOwner = String.IsNullOrWhiteSpace(owner) ? "shared" : SanitizePathSegment(owner);
         return Path.Combine(run.ResultsRoot, safeOwner, "portfolio", $"{run.RunName}.json");
+    }
+
+    private static string CreateCandidateAuditJournalPath(
+        BacktestRunConfig run,
+        StrategyDefinition strategy,
+        string ticker)
+    {
+        var owner = Environment.GetEnvironmentVariable("TRADINGFLOW_RESULT_OWNER");
+        var safeOwner = String.IsNullOrWhiteSpace(owner) ? "shared" : SanitizePathSegment(owner);
+        var directory = Path.Combine(
+            run.ResultsRoot,
+            ".candidate-journal",
+            safeOwner,
+            SanitizePathSegment(run.RunName));
+        return Path.Combine(
+            directory,
+            $"{SanitizePathSegment(strategy.StrategyId)}-{SanitizePathSegment(ticker)}-{Guid.NewGuid():N}.ndjson");
     }
 
     private async Task<string> WriteResultAsync(
@@ -1073,6 +1195,18 @@ public sealed partial class BacktestRunner(
         var persistedResult = BacktestArtifactProjector.Project(
             result with { ResultPath = exclusivePath },
             artifacts);
+        var candidateAuditPath = Path.ChangeExtension(exclusivePath, ".candidate-decisions.json");
+        await _artifactWriter.WriteTextExclusiveAsync(
+            candidateAuditPath,
+            JsonSerializer.Serialize(
+                result.CandidateDecisionAudit ?? Array.Empty<BacktestCandidateDecisionAudit>(),
+                new JsonSerializerOptions { WriteIndented = true }),
+            cancellationToken);
+        persistedResult = persistedResult with
+        {
+            CandidateDecisionAuditPath = candidateAuditPath,
+            CandidateDecisionAudit = Array.Empty<BacktestCandidateDecisionAudit>()
+        };
         await _artifactWriter.WriteTextExclusiveAsync(
             exclusivePath,
             JsonSerializer.Serialize(persistedResult, new JsonSerializerOptions { WriteIndented = true }),
@@ -1082,7 +1216,7 @@ public sealed partial class BacktestRunner(
 
     private static string ReserveResultPath(string resultPath)
     {
-        if (!File.Exists(resultPath))
+        if (IsResultPathAvailable(resultPath))
         {
             return resultPath;
         }
@@ -1093,7 +1227,7 @@ public sealed partial class BacktestRunner(
         for (var index = 1; index < 10_000; index++)
         {
             var candidate = Path.Combine(directory, $"{fileName}-{index:0000}{extension}");
-            if (!File.Exists(candidate))
+            if (IsResultPathAvailable(candidate))
             {
                 return candidate;
             }
@@ -1101,6 +1235,10 @@ public sealed partial class BacktestRunner(
 
         throw new IOException($"Could not reserve a unique result path for {resultPath}.");
     }
+
+    private static bool IsResultPathAvailable(string path) =>
+        !File.Exists(path) &&
+        !File.Exists(Path.ChangeExtension(path, ".candidate-decisions.json"));
 
     private static string SanitizePathSegment(string value)
     {
@@ -1207,6 +1345,7 @@ internal sealed record PreparedTickerEvaluationContext(
     IReadOnlyDictionary<string, IReadOnlyList<IndicatorSnapshot>> SnapshotsByTimeframe,
     IReadOnlyList<OhlcvBar> ProcessedBars,
     int TotalPreparedBarCount,
+    IReadOnlyList<CatalystEvent> Catalysts,
     string? ErrorMessage)
 {
     public static PreparedTickerEvaluationContext Failed(string ticker, string errorMessage)
@@ -1217,6 +1356,7 @@ internal sealed record PreparedTickerEvaluationContext(
             new Dictionary<string, IReadOnlyList<IndicatorSnapshot>>(StringComparer.OrdinalIgnoreCase),
             Array.Empty<OhlcvBar>(),
             0,
+            Array.Empty<CatalystEvent>(),
             errorMessage);
     }
 }
@@ -1232,9 +1372,16 @@ internal sealed record StrategyTickerBacktestBatch(
     bool Succeeded,
     string? ErrorMessage,
     IReadOnlyList<BacktestCandidateTrade> CandidateTrades,
+    IReadOnlyList<BacktestCandidateDecisionAudit> CandidateDecisionAudit,
+    string? CandidateAuditJournalPath,
     StrategyCandidateDiagnostics Diagnostics)
 {
-    public static StrategyTickerBacktestBatch Failed(string ticker, StrategyDefinition strategy, string errorMessage)
+    public static StrategyTickerBacktestBatch Failed(
+        string ticker,
+        StrategyDefinition strategy,
+        string errorMessage,
+        IReadOnlyList<BacktestCandidateDecisionAudit>? candidateDecisionAudit = null,
+        string? candidateAuditJournalPath = null)
     {
         var diagnostics = StrategyCandidateDiagnostics.MissingTimeframe(strategy, $"strategy_ticker_failed ({errorMessage})");
         return new StrategyTickerBacktestBatch(
@@ -1244,12 +1391,15 @@ internal sealed record StrategyTickerBacktestBatch(
             false,
             errorMessage,
             Array.Empty<BacktestCandidateTrade>(),
+            candidateDecisionAudit ?? Array.Empty<BacktestCandidateDecisionAudit>(),
+            candidateAuditJournalPath,
             diagnostics);
     }
 }
 
 internal sealed record StrategyCandidateEvaluation(
     IReadOnlyList<BacktestCandidateTrade> Candidates,
+    IReadOnlyList<BacktestCandidateDecisionAudit> CandidateDecisionAudit,
     StrategyCandidateDiagnostics Diagnostics);
 
 internal sealed class StrategyCandidateDiagnostics(

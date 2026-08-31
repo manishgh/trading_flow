@@ -1,4 +1,5 @@
 using TradingFlow.Domain.Execution;
+using TradingFlow.Domain.Strategies;
 
 namespace TradingFlow.Domain.Persistence;
 
@@ -41,8 +42,31 @@ public sealed class CandidateRecord : OperationalRecord
     public decimal? MarketConfirmationScore { get; set; }
     public string SetupScoresJson { get; set; } = "{}";
     public string? SelectedStrategy { get; set; }
-    public string State { get; set; } = string.Empty;
+    public string StrategyContentSha256 { get; set; } = string.Empty;
+    public string AdmissionProfileId { get; set; } = string.Empty;
+    public string AdmissionProfileVersion { get; set; } = string.Empty;
+    public string SetupKey { get; set; } = string.Empty;
+    public DateTimeOffset DiscoveryWindowStartUtc { get; set; }
+    public DateTimeOffset DiscoveryWindowEndUtc { get; set; }
+    public StrategyCandidateState State { get; set; }
+    public int Version { get; set; }
+    public DateTimeOffset ExpiresAtUtc { get; set; }
+    public string SemanticDecisionSha256 { get; set; } = string.Empty;
     public string RejectReasonsJson { get; set; } = "[]";
+}
+
+public sealed class CandidateTransitionRecord : OperationalRecord
+{
+    public long TransitionId { get; set; }
+    public Guid CandidateId { get; set; }
+    public int Sequence { get; set; }
+    public StrategyCandidateState PreviousState { get; set; }
+    public StrategyCandidateState NewState { get; set; }
+    public DateTimeOffset OccurredAtUtc { get; set; }
+    public string ReasonCode { get; set; } = string.Empty;
+    public string Source { get; set; } = string.Empty;
+    public string SemanticDecisionSha256 { get; set; } = string.Empty;
+    public string EvidenceJson { get; set; } = string.Empty;
 }
 
 public sealed class CatalystResultRecord : OperationalRecord

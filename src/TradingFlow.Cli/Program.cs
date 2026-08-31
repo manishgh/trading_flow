@@ -990,7 +990,12 @@ if (args.Length > 0 && args[0].Equals("evaluate-entry", StringComparison.Ordinal
 
     var reader = new SimpleYamlReader();
     var entryRunConfig = reader.ReadBacktestRun(entryConfigPath);
-    var strategy = reader.ReadStrategy(strategyPath);
+    var runtimeStrategy = new StrategyRunArtifactValidator(
+        reader,
+        CreateStrategyArtifactCatalog(reader))
+        .ReadAndValidateRuntimeArtifact(
+            strategyPath,
+            TradingFlow.Domain.Strategies.StrategySelectionMode.DiagnosticReplay);
     var requestedTickers = !String.IsNullOrWhiteSpace(ticker)
         ? new[] { ticker.Trim().ToUpperInvariant() }
         : tickersCsv?
@@ -1009,7 +1014,7 @@ if (args.Length > 0 && args[0].Equals("evaluate-entry", StringComparison.Ordinal
             end),
         CreateProvider(entryRunConfig),
         entryRunConfig,
-        strategy,
+        runtimeStrategy,
         strategyPath,
         CancellationToken.None);
 

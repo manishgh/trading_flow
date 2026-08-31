@@ -206,7 +206,7 @@ else
                                     <th scope="col">Name</th>
                                     <th scope="col">Horizon</th>
                                     <th scope="col">Filter</th>
-                                    <th scope="col">Verified</th>
+                                    <th scope="col">Predictor review (advisory)</th>
                                     <th scope="col"><span class="visually-hidden">Delete</span></th>
                                 </tr>
                             </thead>
@@ -217,9 +217,8 @@ else
                                         <td><strong>@preset.Name</strong></td>
                                         <td><span class="tag tag-neutral">@preset.Category</span></td>
                                         <td class="mono">@preset.FilterQuery</td>
-                                        @* Verification is a model score against what the screen
-                                           returned. Unverified is not a failure - it means nobody
-                                           has scored it yet. *@
+                                        @* Predictor review is advisory and cannot authorize,
+                                           prioritize, or veto a strategy candidate. *@
                                         <td class="@(preset.IsVerified ? null : "unknown")">
                                             @if (preset.IsVerified)
                                             {

@@ -53,7 +53,7 @@ public sealed class IndicatorEngine : IIndicatorCalculator
             dataFeed,
             mixedAdjustmentPolicy,
             adjustmentPolicy);
-        var volumeEvidence = marketEvidenceReliability == "verified_same_provenance"
+        var volumeEvidence = marketEvidenceReliability == "verified_same_feed"
             ? ComputeVolumeEvidence(bars)
             : VolumeEvidenceSeries.Unavailable(bars.Length);
         var vwap = ComputeVwap(bars);
@@ -546,7 +546,7 @@ public sealed class IndicatorEngine : IIndicatorCalculator
         return adjustmentPolicy.Equals(
             marketEvidenceProfile.OperationalRules.RequiredAdjustmentPolicy,
             StringComparison.OrdinalIgnoreCase)
-            ? "verified_same_provenance"
+            ? "verified_same_feed"
             : "unexpected_adjustment_policy";
     }
 

@@ -25,6 +25,7 @@ public sealed class DatabaseMigrationTests
         "reconciliations",
         "position_events",
         "candidates",
+        "candidate_transitions",
         "catalyst_results"
     ];
 
@@ -58,6 +59,13 @@ public sealed class DatabaseMigrationTests
         var positionColumns = await ReadColumnsAsync(connection, "position_events");
         Assert.Contains("strategy_id", positionColumns);
         Assert.Contains("execution_strategy_id", positionColumns);
+        var candidateColumns = await ReadColumnsAsync(connection, "candidates");
+        Assert.Contains("strategy_content_sha256", candidateColumns);
+        Assert.Contains("admission_profile_id", candidateColumns);
+        Assert.Contains("setup_key", candidateColumns);
+        Assert.Contains("discovery_window_start_utc", candidateColumns);
+        Assert.Contains("discovery_window_end_utc", candidateColumns);
+        Assert.Contains("semantic_decision_sha256", candidateColumns);
         var earningsAnalysisColumns = await ReadColumnsAsync(connection, "EarningsAnalysisSnapshots");
         Assert.Contains("EffectiveEpsActual", earningsAnalysisColumns);
         Assert.Contains("EffectiveRevenueActualMillions", earningsAnalysisColumns);
@@ -164,6 +172,54 @@ public sealed class DatabaseMigrationTests
     }
 
     [Fact]
+    public async Task CandidateLifecycleMigration_ExpiresLegacyCandidateAndMarksItsProvenanceExplicitly()
+    {
+        await using var connection = await OpenInMemoryAsync();
+        var runId = Guid.NewGuid();
+        var candidateId = Guid.NewGuid();
+        const string emptyJson = "{}";
+
+        await using (var previousDb = CreateContext(connection))
+        {
+            var migrator = previousDb.GetService<IMigrator>();
+            await migrator.MigrateAsync("20260827204546_AddDurableMarketState");
+            await ExecuteAsync(
+                connection,
+                $"""
+                INSERT INTO runs
+                    (run_id, profile, status, started_at_utc, schema_version, config_hash, code_version)
+                VALUES
+                    ('{runId}', 'paper', 'running', '2026-08-27T13:00:00.0000000+00:00', 1, '{new string('a', 64)}', '{new string('b', 40)}');
+
+                INSERT INTO candidates
+                    (candidate_id, symbol, discovered_at_utc, revalidated_at_utc,
+                     discovery_source, finviz_preset, horizon, setup_scores_json,
+                     selected_strategy, state, reject_reasons_json,
+                     run_id, schema_version, config_hash, code_version)
+                VALUES
+                    ('{candidateId}', 'MSFT', '2026-08-27T13:00:00.0000000+00:00',
+                     '2026-08-27T13:05:00.0000000+00:00', 'legacy-screen', '', 'swing', '{emptyJson}',
+                     'legacy-strategy', 'Armed', '[]', '{runId}', 1,
+                     '{new string('a', 64)}', '{new string('b', 40)}');
+                """);
+            await migrator.MigrateAsync();
+        }
+
+        await using var upgradedDb = CreateContext(connection);
+        var candidate = await upgradedDb.Candidates.AsNoTracking().SingleAsync();
+
+        Assert.Equal(TradingFlow.Domain.Strategies.StrategyCandidateState.Expired, candidate.State);
+        Assert.Equal("legacy-expired-history", candidate.AdmissionProfileId);
+        Assert.Equal($"legacy:{candidateId}", candidate.SetupKey);
+        Assert.Equal(new string('0', 64), candidate.StrategyContentSha256);
+        Assert.Equal(new string('0', 64), candidate.SemanticDecisionSha256);
+        Assert.Equal(candidate.DiscoveredAtUtc, candidate.DiscoveryWindowStartUtc);
+        Assert.Equal(candidate.RevalidatedAtUtc, candidate.DiscoveryWindowEndUtc);
+        Assert.Equal(candidate.RevalidatedAtUtc, candidate.ExpiresAtUtc);
+        Assert.Empty(await upgradedDb.Database.GetPendingMigrationsAsync());
+    }
+
+    [Fact]
     public async Task InitializeAsync_UnrecognizedPartialSchema_FailsWithoutCreatingMigrationHistory()
     {
         await using var connection = await OpenInMemoryAsync();
@@ -184,7 +240,7 @@ public sealed class DatabaseMigrationTests
             .Where(type => !type.IsAbstract && typeof(OperationalRecord).IsAssignableFrom(type))
             .ToArray();
 
-        Assert.Equal(10, recordTypes.Length);
+        Assert.Equal(11, recordTypes.Length);
         var defects = recordTypes
             .SelectMany(type => type.GetProperties().Select(property => (Type: type, Property: property)))
             .Where(item => item.Property.PropertyType == typeof(double)

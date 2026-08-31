@@ -90,6 +90,21 @@ public sealed record StrategyAdmissionProfile(
     string RiskPolicy,
     string ExecutionTimingPolicy);
 
+public static class StrategyAdmissionProfiles
+{
+    public static StrategyAdmissionProfile DeterministicV1 { get; } = new(
+        "default-deterministic-v1",
+        "1.0.0",
+        "simple-yaml-strict-v1",
+        new StrategyIndicatorProfile(
+            "Skender.Stock.Indicators",
+            "2.7.1",
+            "TradingFlow.DerivedIndicators",
+            "1.0.0"),
+        "account-risk-budget-v1",
+        "completed-bar-next-executable-bar-v1");
+}
+
 public sealed record CanonicalStrategyDocument(
     string StrategyId,
     string SemanticVersion,
@@ -217,7 +232,8 @@ public sealed record ValidatedStrategyRunArtifact(
 public sealed record AuthorizedRuntimeStrategy(
     StrategyArtifactIdentity Identity,
     StrategySelectionMode SelectionMode,
-    StrategyDefinition Definition);
+    StrategyDefinition Definition,
+    StrategyAdmissionProfile AdmissionProfile);
 
 public sealed record StrategyRunArtifactManifest(
     int SchemaVersion,

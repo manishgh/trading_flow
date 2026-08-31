@@ -18,7 +18,7 @@
         <div class="desk-evidence-head">
             <h2 class="@(Model.Compact ? "sub-heading" : "section-heading")">TradingFlow decision</h2>
             <span class="tag @(row.HasSignal ? "tag-accent" : "tag-neutral")" data-selected-signal-badge>
-                @(row.HasSignal ? "ELIGIBLE" : row.HasQuote ? "WATCHING" : "BLOCKED")
+                @(row.HasSignal ? "OBSERVED SETUP" : row.HasQuote ? "WATCHING" : "NO QUOTE")
             </span>
         </div>
         <p class="desk-evidence-copy" data-selected-signal-reason>@row.EligibilityReason</p>
@@ -34,7 +34,7 @@
             <dt>Severity</dt>
             <dd>@(row.LatestSignal?.Severity ?? "—")</dd>
             <dt>Authority</dt>
-            <dd>Authoritative for entry</dd>
+            <dd>Decision support only</dd>
         </dl>
     </div>
 

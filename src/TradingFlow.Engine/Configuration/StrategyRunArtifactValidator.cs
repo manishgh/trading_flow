@@ -31,6 +31,54 @@ public sealed class StrategyRunArtifactValidator(
     public StrategyDefinition ReadAndValidatePaper(string strategyPath)
         => ReadAndValidatePaperArtifact(strategyPath).Definition;
 
+    public AuthorizedRuntimeStrategy ReadAndValidateRuntimeArtifact(
+        string strategyPath,
+        StrategySelectionMode requiredMode)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(strategyPath);
+        var fullPath = Path.GetFullPath(strategyPath);
+        var manifestPath = fullPath + ".artifact.json";
+        if (File.Exists(manifestPath))
+        {
+            var manifest = DeserializeManifest(manifestPath);
+            var definition = ReadAndValidate(fullPath, requiredMode);
+            return new AuthorizedRuntimeStrategy(
+                manifest.Identity,
+                manifest.SelectionMode,
+                definition,
+                manifest.AdmissionProfile);
+        }
+
+        var artifact = strategyArtifacts.RequireSourcePath(fullPath);
+        var resolved = ReadAndValidate(fullPath, requiredMode);
+        return new AuthorizedRuntimeStrategy(
+            artifact.Identity,
+            requiredMode,
+            resolved,
+            artifact.AdmissionProfile);
+    }
+
+    public static AuthorizedRuntimeStrategy CreateDiagnosticRuntimeStrategy(
+        StrategyDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        const string semanticVersion = "0.0.0-diagnostic";
+        var profile = StrategyAdmissionProfiles.DeterministicV1;
+        var identity = new StrategyArtifactIdentity(
+            definition.StrategyId,
+            semanticVersion,
+            EvidenceCanonicalJson.ComputeSha256(new CanonicalStrategyDocument(
+                definition.StrategyId,
+                semanticVersion,
+                definition,
+                profile)));
+        return new AuthorizedRuntimeStrategy(
+            identity,
+            StrategySelectionMode.DiagnosticReplay,
+            definition,
+            profile);
+    }
+
     public ValidatedStrategyRunArtifact ReadAndValidatePaperArtifact(string strategyPath)
     {
         var manifest = ValidatePaperSnapshot(strategyPath);

@@ -1,6 +1,7 @@
 using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Execution;
 
 namespace TradingFlow.Tests;
@@ -93,13 +94,35 @@ public sealed class EntryGateChainTests
         Assert.Equal(1, statuses.ReleaseCalls);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_TriggeredCandidateWithoutMatchingTransition_IsRejectedBeforeMarketObservation()
+    {
+        var fixture = new Fixture(includeTriggerTransition: false);
+
+        var exception = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
+            fixture.Chain.ExecuteAsync(
+                fixture.Submission,
+                fixture.Broker,
+                _ => Task.FromResult("must-not-submit")));
+
+        Assert.Equal(EntryGateSlot.CandidateState, exception.Slot);
+        Assert.Equal(3, fixture.Evaluations.Requests.Count);
+        Assert.False(fixture.Evaluations.Requests[^1].Passed);
+        Assert.Equal(0, fixture.Broker.AccountCalls);
+        Assert.Equal(0, fixture.Broker.PositionCalls);
+        Assert.Equal(0, fixture.Broker.OpenOrderCalls);
+    }
+
     private sealed class Fixture
     {
         public Fixture(
             SecurityTradingState tradingState = SecurityTradingState.TradingObserved,
-            ISecurityTradingStatusProvider? tradingStatusProvider = null)
+            ISecurityTradingStatusProvider? tradingStatusProvider = null,
+            bool includeTriggerTransition = true)
         {
             var candidateId = Guid.NewGuid();
+            const int candidateVersion = 3;
+            var semanticDecisionSha256 = new string('c', 64);
             var runContext = new ExecutionRunContext(
                 Guid.NewGuid(),
                 "paper",
@@ -114,7 +137,9 @@ public sealed class EntryGateChainTests
                     "intraday",
                     Now.AddMinutes(-1),
                     Now.AddSeconds(-1),
-                    "{}"),
+                    "{}",
+                    candidateVersion,
+                    semanticDecisionSha256),
                 runContext,
                 "INTRADAY-V1",
                 "buy",
@@ -133,8 +158,17 @@ public sealed class EntryGateChainTests
                 DiscoverySource = "strategy_signal",
                 Horizon = "intraday",
                 SelectedStrategy = "INTRADAY-V1",
-                State = "SETUP_VALID"
-            });
+                StrategyContentSha256 = new string('d', 64),
+                AdmissionProfileId = "test-profile",
+                AdmissionProfileVersion = "1.0.0",
+                SetupKey = "INTRADAY-V1:2026-07-22T14:34:00.0000000+00:00",
+                DiscoveryWindowStartUtc = Now.AddMinutes(-1),
+                DiscoveryWindowEndUtc = Now.AddMinutes(5),
+                State = StrategyCandidateState.Triggered,
+                Version = candidateVersion,
+                ExpiresAtUtc = Now.AddMinutes(5),
+                SemanticDecisionSha256 = semanticDecisionSha256
+            }, includeTriggerTransition);
             Evaluations = new RecordingGateEvaluationRepository();
             Broker = new TestBroker(Now);
             Chain = new EntryGateChain(
@@ -194,17 +228,50 @@ public sealed class EntryGateChainTests
             new(symbol, SecurityTradingState.Unknown, null, null, null, Now);
     }
 
-    private sealed class MemoryCandidateRepository(CandidateRecord candidate) : ICandidateRepository
+    private sealed class MemoryCandidateRepository(
+        CandidateRecord candidate,
+        bool includeTriggerTransition) : ICandidateRepository
     {
-        public Task<CandidateRecord> UpsertValidatedAsync(
+        public Task<CandidateRecord> UpsertDiscoveryAsync(
             ProductionRun run,
             CandidateRecord value,
             CancellationToken cancellationToken = default) => Task.FromResult(value);
+
+        public Task<CandidateRecord> ApplyDecisionAsync(
+            ProductionRun run,
+            Guid candidateId,
+            int expectedVersion,
+            string semanticDecisionSha256,
+            DateTimeOffset expiresAtUtc,
+            IReadOnlyList<CandidateTransitionAppendRequest> transitions,
+            CancellationToken cancellationToken = default) => Task.FromResult(candidate);
 
         public Task<CandidateRecord?> GetAsync(
             Guid candidateId,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(candidate.CandidateId == candidateId ? candidate : null);
+
+        public Task<IReadOnlyList<CandidateTransitionRecord>> GetTransitionsAsync(
+            Guid candidateId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<CandidateTransitionRecord>>(
+                candidate.CandidateId != candidateId || !includeTriggerTransition
+                    ? []
+                    :
+                    [
+                        new CandidateTransitionRecord
+                        {
+                            CandidateId = candidate.CandidateId,
+                            Sequence = candidate.Version,
+                            PreviousState = StrategyCandidateState.Armed,
+                            NewState = StrategyCandidateState.Triggered,
+                            OccurredAtUtc = candidate.RevalidatedAtUtc,
+                            ReasonCode = "execution_trigger_satisfied",
+                            Source = "strategy_decision_kernel",
+                            SemanticDecisionSha256 = candidate.SemanticDecisionSha256,
+                            EvidenceJson = "{}"
+                        }
+                    ]);
     }
 
     private sealed class RecordingGateEvaluationRepository : IGateEvaluationRepository

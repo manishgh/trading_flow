@@ -1,5 +1,7 @@
 ﻿using TradingFlow.Domain.Orders;
 
+using TradingFlow.Domain.Persistence;
+
 namespace TradingFlow.Domain.Backtesting;
 
 public sealed record BacktestResult(
@@ -29,7 +31,13 @@ public sealed record BacktestResult(
     IReadOnlyList<MissedMoveAudit> MissedMoves,
     IReadOnlyList<FinalizedOrder> AcceptedOrders,
     UnifiedPortfolioBacktestResult? UnifiedPortfolio = null,
-    UniversePromotionEligibility? UniversePromotion = null);
+    UniversePromotionEligibility? UniversePromotion = null,
+    string? CandidateDecisionAuditPath = null,
+    IReadOnlyList<BacktestCandidateDecisionAudit>? CandidateDecisionAudit = null);
+
+public sealed record BacktestCandidateDecisionAudit(
+    CandidateRecord Candidate,
+    IReadOnlyList<CandidateTransitionRecord> Transitions);
 
 public sealed record WinnerStrategySummary(
     string StrategyId,

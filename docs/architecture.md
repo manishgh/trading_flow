@@ -15,18 +15,19 @@ flowchart LR
     Blob["TradingFlow candle archive"] --> S
     S --> TF["Required Timeframe Builder"]
     TF --> I["Indicator Engine"]
-    I --> Q["Strategy Admission + Trigger"]
-    Q --> C["Strategy Brain"]
+    I --> K["Strategy Decision Kernel"]
 
-    News["Alpaca / Finviz / Go News Sidecar"] --> V["Event/Sentiment Veto"]
-    V --> C
+    News["Alpaca / Finviz / Go News Sidecar"] --> PT["Point-in-Time Catalyst Snapshot"]
+    PT --> K
+    D --> K
 
     FE["Finviz Earnings Calendar"] --> EM["Earnings Monitor"]
     News --> EM
     S --> EM
     EM --> EA["Advisory Earnings API"]
 
-    C --> R["Risk Engine"]
+    K --> J["Candidate Transition Journal"]
+    J --> R["Risk Engine"]
     R --> O{"Mode Router"}
     O --> B["Backtest Simulator"]
     O --> P["Alpaca Paper Router"]
@@ -45,14 +46,49 @@ Backtest, paper, and live modes should all use the same strategy evaluation path
 OHLCV candles
   -> required timeframe derivation
   -> indicator snapshots
-  -> confluence gate
-  -> strategy signal
-  -> entry validation
+  + persisted discovery/universe/regime evidence
+  + point-in-time catalyst revisions
+  -> immutable strategy admission profile
+  -> shared decision kernel
+  -> Discovered / DataWarming / Qualified / Armed / Triggered journal
+  -> canonical pre-risk order plan
+  -> twelve entry gates
   -> portfolio/risk sizing
   -> simulated, paper, or live execution sink
 ```
 
-The source and sink change by mode. The brain does not.
+The source, candidate-journal implementation, and execution sink change by mode.
+The strategy artifact, semantic decision kernel, transition graph, completed-bar
+timing, and reasons do not. Backtests use an isolated in-memory candidate journal;
+every discovery/decision is also flushed to a per-worker recovery journal before
+evaluation continues. Paper/live use the SQLite operational journal. Completed
+backtests atomically publish the candidate records and transition evidence in a
+dedicated decision-audit sidecar and remove the recovery spools; interrupted workers
+leave their uniquely named spools for diagnosis.
+Candidate IDs include the owning run, so parallel runs cannot consume or revalidate
+each other's setup.
+
+The kernel's canonical order plan freezes strategy direction, trigger reference,
+completed pre-fill stop, target policy/reference, slippage, and expiry. Account risk,
+portfolio reservations, broker intent creation, fills, and position protection remain
+downstream responsibilities. Transactional `Triggered -> Consumed` with order intent
+creation is the first Phase 5 boundary and is not claimed by Phase 4.
+
+Provider publication, receipt, update, and sentiment-completion timestamps remain
+separate. A catalyst can influence a decision only at its recorded decision-known
+time. Missing receipt, classification-version, or decision-availability evidence
+fails closed; provider publication time is never promoted into receipt evidence.
+Adapter provenance remains in canonical audit JSON but cannot alter the semantic
+decision hash.
+
+Wishlist setup observations and Market Predictor output are decision-support views.
+They do not qualify, prioritize for execution, veto, or authorize an order. Manual
+operator entry is a typed, paper-only policy; a selected strategy manages its exit
+but the override cannot claim strategy authorization.
+
+Short decisions are supported for deterministic research parity. Paper/live short
+execution remains explicitly fail-closed until Phase 5 supplies short-specific broker,
+borrow, risk, protection, and reconciliation invariants.
 
 ## Operating Boundary Enforcement
 
@@ -282,6 +318,11 @@ same `OrderLifecycleService`; cumulative partial fills and cancel requests are
 append-only events. Mutable paper-order rows remain UI projections and must not be
 used to infer terminal broker state. In particular, absence from an open-order
 snapshot is not evidence of fill, cancellation, rejection, or expiry.
+
+At the current Phase 4 checkpoint, the triggered candidate and order-intent write are
+not yet one transaction. Phase 5 adds atomic candidate consumption, a unique candidate
+to intent invariant, portfolio reservations, and idempotent terminal outcomes before
+this path may be treated as the final production order boundary.
 
 Every broker position is also subject to the EXE-09 protective-order invariant.
 Startup and periodic account reconciliation, plus an immediate REST cross-check after

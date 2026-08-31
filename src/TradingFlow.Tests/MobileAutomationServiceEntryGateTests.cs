@@ -1,8 +1,3 @@
-﻿using Microsoft.Extensions.Configuration;
-using TradingFlow.Domain.Market;
-using TradingFlow.Domain.Strategies;
-using TradingFlow.Engine.Configuration;
-using TradingFlow.Engine.Storage;
 using TradingFlow.Web.Services;
 
 namespace TradingFlow.Tests;
@@ -10,138 +5,149 @@ namespace TradingFlow.Tests;
 public sealed class MobileAutomationServiceEntryGateTests
 {
     [Fact]
-    public void GetLongEntryGateRejection_WhenV8RelativeVolumeIsTooLow_RejectsNotificationStyleEntry()
+    public void SessionCoordinator_RejectsConcurrentOwnershipOfTheSameTicker()
     {
-        var root = FindRepositoryRoot();
-        var service = CreateService(root);
-        var reader = new SimpleYamlReader();
-        var strategy = reader.ReadStrategy(Path.Combine(root, "configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"));
+        var coordinator = new MobileAutomationSessionCoordinator();
+        var firstSession = Guid.NewGuid();
+        var firstCancellation = coordinator.Reserve(firstSession, "rgti");
 
-        var snapshot = new IndicatorSnapshot(
-            "TDIC",
-            new DateTimeOffset(2026, 6, 16, 12, 27, 0, TimeSpan.Zero),
-            "1m",
-            9.17m,
-            75856m,
-            10.87m,
-            59.65m,
-            0.35m,
-            8.77m,
-            8.43m,
-            8.10m,
-            8.90m,
-            10.10m,
-            7.70m,
-            0.65m,
-            0.12m,
-            0.03m,
-            0.08m,
-            Sma10: 9.00m,
-            Sma20: 8.95m,
-            Sma50: 8.40m,
-            SlotRelativeVolume: 1.52m,
-            Ema10: 8.95m,
-            SlotMedianVolume: 49854.04m,
-            CumulativeSameTimeMedianVolume: 117000m,
-            RelativeVolumeSampleCount: 63,
-            Sma150: 7.50m,
-            Sma200: 7.10m,
-            Ema5: 9.05m,
-            SlotRelativeVolumeSampleCount: 63,
-            MarketEvidenceProfileVersion: "test_rvol_v1",
-            RelativeVolumeCohort: "premarket",
-            RelativeVolumeMinimumSamples: 20);
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            coordinator.Reserve(Guid.NewGuid(), "RGTI"));
 
-        var signal = CreatePassingSignal() with
+        Assert.Contains("already exists for RGTI", exception.Message, StringComparison.Ordinal);
+        Assert.False(firstCancellation.IsCancellationRequested);
+        Assert.True(coordinator.IsReserved(firstSession));
+        coordinator.Release(firstSession);
+    }
+
+    [Fact]
+    public void SessionCoordinator_CancelsImmediatelyAndAllowsOwnershipAfterRelease()
+    {
+        var coordinator = new MobileAutomationSessionCoordinator();
+        var firstSession = Guid.NewGuid();
+        var firstCancellation = coordinator.Reserve(firstSession, "POET");
+
+        Assert.True(coordinator.TryCancel(firstSession));
+        Assert.True(firstCancellation.IsCancellationRequested);
+
+        coordinator.Release(firstSession);
+        Assert.False(coordinator.IsReserved(firstSession));
+        Assert.False(coordinator.TryCancel(firstSession));
+
+        var replacementSession = Guid.NewGuid();
+        coordinator.Reserve(replacementSession, "POET");
+        Assert.True(coordinator.IsReserved(replacementSession));
+        coordinator.Release(replacementSession);
+    }
+
+    [Fact]
+    public async Task SessionCoordinator_AllowsOnlyOneParallelReservationPerTicker()
+    {
+        var coordinator = new MobileAutomationSessionCoordinator();
+        var attempts = Enumerable.Range(0, 16)
+            .Select(_ => Task.Run(() =>
+            {
+                var sessionId = Guid.NewGuid();
+                try
+                {
+                    coordinator.Reserve(sessionId, "MXL");
+                    return sessionId;
+                }
+                catch (InvalidOperationException)
+                {
+                    return Guid.Empty;
+                }
+            }))
+            .ToArray();
+
+        var winners = (await Task.WhenAll(attempts)).Where(x => x != Guid.Empty).ToArray();
+
+        var winner = Assert.Single(winners);
+        Assert.True(coordinator.IsReserved(winner));
+        coordinator.Release(winner);
+    }
+
+    [Fact]
+    public async Task SessionState_SupportsConcurrentMutationAndSnapshotsWithoutRegressingAudit()
+    {
+        var session = new MobileAutomationService.MutableAutomationSession(
+            Guid.NewGuid(),
+            "mobile-session",
+            "paper.yaml",
+            "strategy.yaml",
+            "RGTI",
+            "notification",
+            "com.stockpulse",
+            "RGTI alert",
+            "RGTI is moving",
+            DateTimeOffset.UtcNow);
+
+        var writer = Task.Run(() =>
         {
-            Ticker = "TDIC",
-            Timestamp = snapshot.Timestamp,
-            CurrentPrice = snapshot.CurrentPrice,
-            CurrentVolume = snapshot.CurrentVolume,
-            CurrentRsi = snapshot.Rsi!.Value,
-            CurrentAtr = snapshot.Atr!.Value,
-            SlotRelativeVolume = snapshot.SlotRelativeVolume,
-            VolumeSma = 90216.8m,
-            PreviousVolumeSma = 53543.4m,
-            VolumeSmaRisePct = 68.49m
-        };
+            for (var index = 0; index < 1_000; index++)
+            {
+                session.Update(current =>
+                {
+                    current.Status = "running";
+                    current.LastObservedPrice = index;
+                    current.Report("monitoring", $"event-{index}");
+                });
+            }
+        });
+        var reader = Task.Run(() =>
+        {
+            for (var index = 0; index < 1_000; index++)
+            {
+                var snapshot = session.ToSnapshot();
+                Assert.InRange(snapshot.Events.Count, 0, 80);
+            }
+        });
 
-        var rejection = service.GetLongEntryGateRejection(strategy, snapshot, signal);
+        await Task.WhenAll(writer, reader);
 
-        Assert.NotNull(rejection);
-        Assert.Contains("relative_volume_below_minimum", rejection);
-        Assert.Contains("Source: cumulative_same_time", rejection);
+        var final = session.ToSnapshot();
+        Assert.Equal("running", final.Status);
+        Assert.Equal(999m, final.LastObservedPrice);
+        Assert.Equal(80, final.Events.Count);
+        Assert.EndsWith("event-999", final.Events[^1], StringComparison.Ordinal);
     }
 
-    private static TradeSignal CreatePassingSignal()
+    [Theory]
+    [InlineData(null, "validate_strategy")]
+    [InlineData("", "validate_strategy")]
+    [InlineData("validate_strategy", "validate_strategy")]
+    [InlineData("operator_direct", "operator_direct")]
+    public void NormalizeEntryMode_AcceptsOnlyExplicitModes(string? value, string expected)
     {
-        return new TradeSignal(
-            "TEST",
-            DateTimeOffset.UtcNow,
-            "1m",
-            10m,
-            100000m,
-            60m,
-            0.5m,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            true,
-            true,
-            true,
-            0.1m,
-            true,
-            true,
-            true,
-            IsAboveSessionOpen: true,
-            CloseLocationValue: 0.80m,
-            IsPriceAboveEma10: true,
-            IsEma10AboveEma20: true,
-            IsPriceAboveSma20: true,
-            IsPriceAboveSma50: true,
-            IsSma10AboveSma20: true,
-            IsSma20AboveSma50: true,
-            IsPriceAboveSma150: true,
-            IsPriceAboveSma200: true);
+        Assert.Equal(expected, MobileAutomationService.NormalizeEntryMode(value));
     }
 
-    private static MobileAutomationService CreateService(string root)
+    [Theory]
+    [InlineData("immediate_paper")]
+    [InlineData("bypass")]
+    [InlineData("strategy")]
+    public void NormalizeEntryMode_RejectsLegacyOrAmbiguousModes(string value)
     {
-        var configuration = new ConfigurationBuilder().Build();
-        var credentialProvider = new AlpacaCredentialProvider(configuration);
-        var paths = new ProjectPaths(root);
-        return new MobileAutomationService(
-            new SimpleYamlReader(),
-            new PaperRuntimeFactory(credentialProvider, paths),
-            paths,
-            new MobileAutomationSessionStore(paths, AtomicFileArtifactWriter.Instance),
-            CreateConfigCatalog(root));
+        Assert.Throws<InvalidOperationException>(() =>
+            MobileAutomationService.NormalizeEntryMode(value));
     }
 
-    private static ConfigCatalogService CreateConfigCatalog(string root)
+    [Fact]
+    public void MobileEntryPreparation_HasNoSyntheticStrategyOrSilentFallback()
     {
-        var reader = new SimpleYamlReader();
-        var catalog = new StrategyArtifactCatalog(
-            root,
-            Path.Combine(root, "configs", "strategy-catalog.json"),
-            reader);
-        return new ConfigCatalogService(
-            new ProjectPaths(root),
-            reader,
-            catalog,
-            new StrategyExperimentArtifactStore(
-                Path.Combine(Path.GetTempPath(), "trading-flow-mobile-entry-experiments", Guid.NewGuid().ToString("N")),
-                catalog,
-                reader,
-                AtomicFileArtifactWriter.Instance),
-            new StrategyAuthorizationTestRegistry());
+        var source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "TradingFlow.Web",
+            "Services",
+            "MobileAutomationService.EntryPreparation.cs"));
+
+        Assert.DoesNotContain("CanFallbackToStockPulseImmediateEntry", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("PrepareImmediateEntryExecution", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("new TradeSignal(", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("StrategyDecisionBrain", source, StringComparison.Ordinal);
+        Assert.Contains("StrategyDecisionRequestAssembler.Create(", source, StringComparison.Ordinal);
+        Assert.Contains("candidateDecisions.EvaluateAsync(", source, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

@@ -1,21 +1,17 @@
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Strategies;
 
 namespace TradingFlow.Engine.Risk;
 
 public sealed record StrategyOrderPlanningRequest(
-    StrategyDefinition Strategy,
-    TradeSignal StrategySignal,
+    StrategyOrderPlan OrderPlan,
     TradeSignal ExecutionSignal,
-    PlannedOrderSide Side,
     decimal AccountEquity,
     OrderPlanningRiskLimits RiskLimits,
     decimal FixedEntryFee,
     decimal FixedExitFee,
-    int StopContextIndex,
-    IReadOnlyList<OhlcvBar> ExecutionBars,
-    IReadOnlyList<IndicatorSnapshot> ExecutionSnapshots,
     decimal? RequestedNotional = null);
 
 public sealed record StrategyOrderPlanningResult(
@@ -27,48 +23,34 @@ public sealed record StrategyOrderPlanningResult(
 }
 
 /// <summary>
-/// Produces the same initial stop, risk sizing, and bracket prices for paper/live
-/// callers. Backtests use the same stop resolver and order-risk planner around
-/// their simulated fill price.
+/// Applies account risk to the immutable order plan emitted by the decision
+/// kernel. It must not recalculate strategy direction or the pre-fill stop.
 /// </summary>
 public sealed class StrategyOrderPlanner
 {
-    private readonly StrategyInitialStopResolver stopResolver = new();
     private readonly SharedOrderRiskPlanner riskPlanner = new();
 
     public StrategyOrderPlanningResult Plan(StrategyOrderPlanningRequest request)
     {
-        var stopSignal = request.StrategySignal with
-        {
-            CurrentAtr = request.ExecutionSignal.CurrentAtr
-        };
-        var stopResult = stopResolver.Resolve(
-            new StrategyInitialStopRequest(
-                request.Strategy,
-                stopSignal,
-                request.Side,
-                request.ExecutionSignal.CurrentPrice,
-                request.StopContextIndex,
-                request.ExecutionBars,
-                request.ExecutionSnapshots));
-        if (!stopResult.IsResolved || stopResult.Stop is null)
-        {
-            return new StrategyOrderPlanningResult(
-                null,
-                null,
-                stopResult.RejectionReason ?? "initial_stop_unresolved");
-        }
+        var side = request.OrderPlan.Direction.Equals("short", StringComparison.OrdinalIgnoreCase)
+            ? PlannedOrderSide.Short
+            : request.OrderPlan.Direction.Equals("long", StringComparison.OrdinalIgnoreCase)
+                ? PlannedOrderSide.Long
+                : throw new InvalidOperationException(
+                    $"Unsupported canonical order direction '{request.OrderPlan.Direction}'.");
 
         var riskResult = riskPlanner.Plan(
             new OrderPlanningRequest(
                 request.ExecutionSignal.Ticker,
-                request.Side,
+                side,
                 request.AccountEquity,
                 request.ExecutionSignal.CurrentPrice,
-                stopResult.Stop,
+                PlannedStopRequest.FromResolvedPrice(
+                    PlannedStopKind.Structural,
+                    request.OrderPlan.InitialStopPrice),
                 request.RiskLimits,
                 new EstimatedOrderExecutionCosts(
-                    request.Strategy.Execution.SlippageBps,
+                    request.OrderPlan.SlippageBps,
                     request.FixedEntryFee,
                     request.FixedExitFee),
                 request.RequestedNotional));
@@ -83,25 +65,32 @@ public sealed class StrategyOrderPlanner
         var planned = riskResult.Order;
         var triggerRiskPerShare = Math.Abs(
             planned.EstimatedEntryPrice - planned.StopTriggerPrice);
-        var takeProfitPrice = request.Side == PlannedOrderSide.Short
-            ? planned.EstimatedEntryPrice -
-                (triggerRiskPerShare * request.Strategy.ExitRules.TargetRMultiple)
-            : planned.EstimatedEntryPrice +
-                (triggerRiskPerShare * request.Strategy.ExitRules.TargetRMultiple);
-        if (takeProfitPrice <= 0m)
+        var takeProfitPrice = request.OrderPlan.ProfitTargetMode.Equals(
+            "vwap",
+            StringComparison.OrdinalIgnoreCase)
+                ? request.OrderPlan.ProfitTargetReferencePrice ?? 0m
+                : side == PlannedOrderSide.Short
+                    ? planned.EstimatedEntryPrice -
+                        (triggerRiskPerShare * request.OrderPlan.TargetRMultiple)
+                    : planned.EstimatedEntryPrice +
+                        (triggerRiskPerShare * request.OrderPlan.TargetRMultiple);
+        var targetOnCorrectSide = side == PlannedOrderSide.Short
+            ? takeProfitPrice < planned.EstimatedEntryPrice
+            : takeProfitPrice > planned.EstimatedEntryPrice;
+        if (takeProfitPrice <= 0m || !targetOnCorrectSide)
         {
             return new StrategyOrderPlanningResult(
                 null,
                 new OrderPlanRejection(
                     OrderPlanRejectionCode.InvalidStop,
-                    "The configured target produces a non-positive take-profit price."),
+                    "The configured target is non-positive or is on the wrong side of the planned entry."),
                 null);
         }
 
         return new StrategyOrderPlanningResult(
             new FinalizedOrder(
                 planned.Symbol,
-                request.Strategy.StrategyName,
+                request.OrderPlan.StrategyName,
                 planned.Quantity,
                 Decimal.Round(planned.EstimatedEntryPrice, 4),
                 Decimal.Round(planned.StopTriggerPrice, 4),

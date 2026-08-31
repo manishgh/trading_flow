@@ -12,20 +12,16 @@ namespace TradingFlow.Backtesting.StrategyEvaluation;
 public sealed class StrategyEvaluationEngine
 {
     private readonly CandlePipelineEngine candlePipeline = new();
-    private readonly SignalGenerator signalGenerator = new();
-    // One brain: route the preview evaluation through the same StrategyDecisionBrain the backtest and
-    // live runners use, so "what would this strategy do now" matches the real accept/reject decision
-    // (including volume confirmation), not a divergent subset.
-    private readonly StrategyDecisionBrain decisionBrain = new();
 
     public async Task<StrategyEvaluationResponse> EvaluateAsync(
         StrategyEvaluationRequest request,
         IMarketDataProvider provider,
         BacktestRunConfig runConfig,
-        StrategyDefinition strategy,
+        AuthorizedRuntimeStrategy runtimeStrategy,
         string strategyPath,
         CancellationToken cancellationToken)
     {
+        var strategy = runtimeStrategy.Definition;
         var tickers = ResolveTickers(request.Tickers, runConfig.Tickers);
         var lookbackDays = request.LookbackDays <= 0 ? runConfig.TimeWindow.LookbackDays : request.LookbackDays;
         var end = request.End ?? DateTimeOffset.UtcNow;
@@ -56,9 +52,13 @@ public sealed class StrategyEvaluationEngine
             provider,
             cancellationToken);
 
-        var results = tickers
-            .Select(ticker => EvaluateTicker(ticker, strategy, marketState))
-            .ToArray();
+        var results = await Task.WhenAll(tickers
+            .Select(ticker => EvaluateTickerAsync(
+                ticker,
+                runtimeStrategy,
+                marketState,
+                end.ToUniversalTime(),
+                runConfig)));
 
         return new StrategyEvaluationResponse(
             runConfig.RunName,
@@ -72,11 +72,14 @@ public sealed class StrategyEvaluationEngine
             FormatProfiler(TradingFlow.Domain.Logging.ApiProfiler.GetSummary("Alpaca")));
     }
 
-    private StrategyTickerEvaluation EvaluateTicker(
+    private async Task<StrategyTickerEvaluation> EvaluateTickerAsync(
         string ticker,
-        StrategyDefinition strategy,
-        CandlePipelineResult marketState)
+        AuthorizedRuntimeStrategy runtimeStrategy,
+        CandlePipelineResult marketState,
+        DateTimeOffset asOfUtc,
+        BacktestRunConfig runConfig)
     {
+        var strategy = runtimeStrategy.Definition;
         if (!marketState.TickerStates.TryGetValue(ticker, out var tickerState))
         {
             var reason = marketState.Failures.TryGetValue(ticker, out var failure)
@@ -92,53 +95,80 @@ public sealed class StrategyEvaluationEngine
         }
 
         var latest = strategySnapshots[^1];
-        var readinessReason = GetSignalReadinessRejection(latest);
-        if (readinessReason is not null)
+        var setupAvailableAt = latest.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
+        var decisionTime = asOfUtc >= setupAvailableAt ? asOfUtc : setupAvailableAt;
+        var expiresAt = decisionTime.Add(ParseTimeframe(strategy.Timeframe));
+        var setupKey = $"preview:{strategy.StrategyId}:{latest.Timestamp:O}";
+        var candidateJournal = new BacktestCandidateJournal();
+        var candidateDecisions = new StrategyCandidateDecisionOrchestrator(
+            new StrategyDecisionKernel(),
+            candidateJournal);
+        var simulationRun = BacktestCandidateJournal.CreateRun(
+            new { Run = runConfig, Strategy = runtimeStrategy.Identity, Ticker = ticker },
+            $"preview:{runConfig.RunName}:{runtimeStrategy.Identity.StrategyId}:{ticker}",
+            setupAvailableAt);
+        var discovery = StrategyDecisionRequestAssembler.CreateBacktestDiscovery(
+            ticker,
+            setupKey,
+            setupAvailableAt,
+            expiresAt);
+        var universe = new StrategyEligibilityEvidence(
+            true,
+            "diagnostic_preview",
+            $"preview-universe:{ticker}",
+            decisionTime,
+            "{\"diagnosticOnly\":true}");
+        var regime = new StrategyEligibilityEvidence(
+            true,
+            "diagnostic_preview",
+            $"preview-regime:{ticker}",
+            decisionTime,
+            "{\"diagnosticOnly\":true}");
+
+        try
         {
-            return StrategyTickerEvaluation.FromSnapshot(ticker, latest, "NoSignal", readinessReason, null);
+            var decisionRequest = StrategyDecisionRequestAssembler.Create(
+                runtimeStrategy,
+                ticker,
+                tickerState.BarsByTimeframe,
+                tickerState.SnapshotsByTimeframe,
+                [],
+                decisionTime,
+                discovery,
+                universe,
+                regime,
+                StrategyCandidateState.DataWarming,
+                0,
+                setupKey,
+                setupAvailableAt,
+                expiresAt,
+                runConfig.Engine.IndicatorWarmupBars,
+                simulationRun.RunId);
+            var persisted = await candidateDecisions.EvaluateAsync(
+                simulationRun,
+                decisionRequest);
+            var decision = persisted.Decision
+                ?? throw new InvalidOperationException(
+                    "Diagnostic candidate became terminal before its current decision was evaluated.");
+            var label = decision.IsTriggered
+                ? "Accepted"
+                : decision.State == StrategyCandidateState.Armed ? "Armed" : "Rejected";
+            return StrategyTickerEvaluation.FromSnapshot(
+                ticker,
+                latest,
+                label,
+                decision.NoEntryReason,
+                decision.Signal);
         }
-
-        if (!tickerState.BarsByTimeframe.TryGetValue(strategy.Timeframe, out var strategyBars) ||
-            strategyBars.Count == 0)
+        catch (InvalidOperationException exception)
         {
-            return StrategyTickerEvaluation.NoData(ticker, strategy.Timeframe, "missing_strategy_timeframe_bars");
+            return StrategyTickerEvaluation.FromSnapshot(
+                ticker,
+                latest,
+                "Rejected",
+                exception.Message,
+                null);
         }
-
-        var signal = signalGenerator.CreateTradeSignal(strategy, strategyBars, strategySnapshots, strategySnapshots.Count - 1);
-        if (signal is null)
-        {
-            return StrategyTickerEvaluation.FromSnapshot(ticker, latest, "NoSignal", "no_signal_generated", null);
-        }
-
-        var signalAvailableAt = latest.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
-        var confluenceRejection = signalGenerator.GetConfluenceRejection(strategy, signalAvailableAt, tickerState.SnapshotsByTimeframe);
-        if (confluenceRejection is not null)
-        {
-            return StrategyTickerEvaluation.FromSnapshot(ticker, latest, "Rejected", confluenceRejection, signal);
-        }
-
-        var entryRejection = decisionBrain.GetLongEntryRejection(
-            strategy,
-            signal,
-            latest,
-            StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, latest));
-        if (entryRejection is not null)
-        {
-            return StrategyTickerEvaluation.FromSnapshot(ticker, latest, "Rejected", entryRejection, signal);
-        }
-
-        return StrategyTickerEvaluation.FromSnapshot(ticker, latest, "Accepted", null, signal);
-    }
-
-    private static string? GetSignalReadinessRejection(IndicatorSnapshot snapshot)
-    {
-        var missing = new List<string>();
-        if (snapshot.Rsi is null) missing.Add("rsi");
-        if (snapshot.Atr is null) missing.Add("atr");
-        if (snapshot.Vwap is null) missing.Add("vwap");
-        if (snapshot.BollingerMiddle is null) missing.Add("bollinger_middle");
-        if (snapshot.MacdHistogram is null) missing.Add("macd_histogram");
-        return missing.Count == 0 ? null : $"signal_missing_indicators ({String.Join(", ", missing)})";
     }
 
     private static string[] ResolveTickers(IReadOnlyList<string>? requestedTickers, IReadOnlyList<string> configTickers)

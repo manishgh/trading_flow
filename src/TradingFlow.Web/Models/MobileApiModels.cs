@@ -180,7 +180,8 @@ public sealed record MobileAutomationSessionSnapshot(
     string? ExitReason,
     IReadOnlyList<string> Events,
     string? SourceTitle,
-    string? SourceMessage);
+    string? SourceMessage,
+    bool ExitSafetyOrdersSubmitted = false);
 
 public sealed record MobileWishlistResponse(
     Guid Id,

@@ -32,14 +32,12 @@ public sealed partial class LiveRunner(
     IOrderLifecycleService? orderLifecycleService = null,
     ILiveDiscoverySession? discoverySession = null,
     IMarketStateSnapshotProvider? marketStateSnapshots = null,
+    TradingFlow.Domain.Persistence.ICandidateRepository? candidateRepository = null,
+    TimeProvider? timeProvider = null,
     TimeSpan? iterationInterval = null)
 {
-    private readonly SignalGenerator _signalGenerator = new();
-    private readonly StrategyDecisionBrain _decisionBrain = new();
     private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
     private readonly TechnicalExecutionEngine _technicalExecutionEngine = new();
-    private readonly CompletedBarExecutionPlanner _executionPlanner = new();
-    private readonly TradingFlow.Engine.Sessions.StrategySessionClock _sessionClock = new();
     private readonly ExecutionAuditor _auditor = new();
     private readonly IBrokerClient? _brokerClient = brokerClient;
     private readonly TradingFlow.Domain.Locking.ITickerLockService? _lockService = lockService;
@@ -51,6 +49,10 @@ public sealed partial class LiveRunner(
     private readonly IOrderLifecycleService? _orderLifecycleService = orderLifecycleService;
     private readonly ILiveDiscoverySession? _discoverySession = discoverySession;
     private readonly IMarketStateSnapshotProvider? _marketStateSnapshots = marketStateSnapshots;
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly IStrategyCandidateDecisionOrchestrator? _candidateDecisions = candidateRepository is null
+        ? null
+        : new StrategyCandidateDecisionOrchestrator(new StrategyDecisionKernel(), candidateRepository);
     private readonly TimeSpan _iterationInterval = ResolveIterationInterval(iterationInterval);
     private readonly TradingFlow.Engine.Regime.RegimeGateService _regimeGate = new();
     private IReadOnlyDictionary<StrategyDefinition, AuthorizedRuntimeStrategy> runtimeStrategies =
@@ -64,10 +66,6 @@ public sealed partial class LiveRunner(
     {
         ArgumentNullException.ThrowIfNull(strategies);
         var effectiveStrategies = strategies
-            .Select(strategy => strategy with
-            {
-                Definition = ApplyRunSessionPolicy(run, [strategy.Definition]).Single()
-            })
             .ToArray();
         var authorizations = effectiveStrategies.ToDictionary(
             strategy => strategy.Definition,
@@ -122,6 +120,7 @@ public sealed partial class LiveRunner(
 
         var configuredTickers = new HashSet<string>(run.Tickers ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
         var lastDiscoveryTickers = new HashSet<string>(configuredTickers, StringComparer.OrdinalIgnoreCase);
+        var lastDiscoveryMembers = new Dictionary<string, ActiveDiscoveryAggregate>(StringComparer.OrdinalIgnoreCase);
         var lastConfirmedExposureTickers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         IReadOnlyList<ActiveBrokerOrder> lastConfirmedOpenOrders = Array.Empty<ActiveBrokerOrder>();
         IReadOnlyList<BrokerPosition> lastConfirmedOpenPositions = Array.Empty<BrokerPosition>();
@@ -162,8 +161,8 @@ public sealed partial class LiveRunner(
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            logger.LogInformation("LiveRunner iteration starting at {Time}", DateTimeOffset.UtcNow);
-            progress?.Report($"LiveRunner iteration starting at {FormatLocalTime(DateTimeOffset.UtcNow)}");
+            logger.LogInformation("LiveRunner iteration starting at {Time}", _timeProvider.GetUtcNow());
+            progress?.Report($"LiveRunner iteration starting at {FormatLocalTime(_timeProvider.GetUtcNow())}");
 
             var discoveryTickers = new HashSet<string>(lastDiscoveryTickers, StringComparer.OrdinalIgnoreCase);
             if (_discoverySession is not null)
@@ -172,6 +171,10 @@ public sealed partial class LiveRunner(
                 {
                     var discovery = await _discoverySession.RefreshAsync(cancellationToken);
                     discoveryTickers = discovery.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    lastDiscoveryMembers = discovery.Members.ToDictionary(
+                        member => member.Symbol,
+                        member => member,
+                        StringComparer.OrdinalIgnoreCase);
                     lastDiscoveryTickers = new HashSet<string>(discoveryTickers, StringComparer.OrdinalIgnoreCase);
                     if (discovery.Added.Count > 0 || discovery.Dropped.Count > 0)
                     {
@@ -200,7 +203,7 @@ public sealed partial class LiveRunner(
                 }
             }
 
-            var end = DateTimeOffset.UtcNow;
+            var end = _timeProvider.GetUtcNow();
 
             var maxLookbackDays = run.TimeWindow.WarmupLookbackDays > 0
                 ? run.TimeWindow.WarmupLookbackDays
@@ -534,13 +537,16 @@ public sealed partial class LiveRunner(
                                 throw new InvalidOperationException(reason);
                             }
 
-                            await ProcessTickerLiveAsync(
-                                run,
-                                strategies,
-                                ticker,
-                                tickerState,
-                                catalystStreamer,
-                                activeTickerSnapshot,
+                             await ProcessTickerLiveAsync(
+                                 run,
+                                 strategies,
+                                 ticker,
+                                 tickerState,
+                                 catalystStreamer,
+                                 lastDiscoveryMembers.TryGetValue(ticker, out var discoveryMember)
+                                     ? discoveryMember
+                                     : null,
+                                 activeTickerSnapshot,
                                 openOrdersSnapshot,
                                 openPositionsSnapshot,
                                 brokerStateConfirmedForOrderDecisions,

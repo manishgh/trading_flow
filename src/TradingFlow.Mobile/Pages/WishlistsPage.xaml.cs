@@ -159,7 +159,7 @@ public partial class WishlistsPage : ContentPage
 
             return watchScope switch
             {
-                "signal" => card.StatusText.Contains("Eligible", StringComparison.OrdinalIgnoreCase),
+                "signal" => card.StatusText.Contains("Observed setup", StringComparison.OrdinalIgnoreCase),
                 "trade" => !String.IsNullOrWhiteSpace(card.TradeText),
                 "news" => card.HasNewsLink,
                 _ => true
@@ -774,7 +774,7 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
 
     public void ApplySignal(MobileWishlistSignalResponse signal)
     {
-        ApplyStatus("Eligible", signal.Reason);
+        ApplyStatus("Observed setup", signal.Reason);
     }
 
     public void ClearSignal()
@@ -793,7 +793,7 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
         EligibilityReason = String.IsNullOrWhiteSpace(reason)
             ? "Waiting for VWAP/EMA/MACD/volume conditions."
             : reason;
-        StatusColor = StatusText.Equals("Eligible", StringComparison.OrdinalIgnoreCase)
+        StatusColor = StatusText.Equals("Observed setup", StringComparison.OrdinalIgnoreCase)
             ? ThemePalette.Positive
             : StatusText.Equals("In trade", StringComparison.OrdinalIgnoreCase)
                 ? ThemePalette.AccentStrong

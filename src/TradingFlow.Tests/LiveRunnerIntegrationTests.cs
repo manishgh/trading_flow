@@ -8,9 +8,11 @@ using TradingFlow.Domain.Locking;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Research;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Execution;
+using TradingFlow.Engine.Strategies;
 
 namespace TradingFlow.Tests;
 
@@ -426,7 +428,12 @@ public class LiveRunnerIntegrationTests
                 .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
                 .Returns(Task.CompletedTask);
 
-            var runner = CreateRunner(provider.Object, lockService: null, auditRepo);
+            var runner = CreateRunner(
+                provider.Object,
+                lockService: null,
+                auditRepo,
+                timeProvider: new FixedTimeProvider(
+                    new DateTimeOffset(2026, 8, 26, 19, 56, 0, TimeSpan.Zero)));
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var progress = new Progress<string>(message =>
             {
@@ -485,7 +492,12 @@ public class LiveRunnerIntegrationTests
                 .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
                 .Returns(Task.CompletedTask);
 
-            var runner = CreateRunner(provider.Object, lockService: null, auditRepo);
+            var runner = CreateRunner(
+                provider.Object,
+                lockService: null,
+                auditRepo,
+                timeProvider: new FixedTimeProvider(
+                    new DateTimeOffset(2026, 8, 26, 19, 56, 0, TimeSpan.Zero)));
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var progress = new Progress<string>(message =>
             {
@@ -832,10 +844,14 @@ public class LiveRunnerIntegrationTests
                 lockService: null,
                 brokerClient: broker.Object,
                 orderStateRepository: orderRepo.Object,
-                orderSubmissionService: CreatePassThroughSubmissionService());
+                orderSubmissionService: CreatePassThroughSubmissionService(),
+                timeProvider: new FixedTimeProvider(
+                    new DateTimeOffset(2026, 8, 26, 19, 56, 0, TimeSpan.Zero)));
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var progressMessages = new System.Collections.Concurrent.ConcurrentQueue<string>();
             var progress = new Progress<string>(message =>
             {
+                progressMessages.Enqueue(message);
                 if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
                 {
                     cts.Cancel();
@@ -849,7 +865,7 @@ public class LiveRunnerIntegrationTests
                 cts,
                 progress);
 
-            Assert.NotNull(submittedOrder);
+            Assert.True(submittedOrder is not null, String.Join(Environment.NewLine, progressMessages));
             Assert.Equal(decimal.Round(executionClose * 1.0001m, 4), submittedOrder.LimitPrice);
         }
         finally
@@ -1180,6 +1196,7 @@ public class LiveRunnerIntegrationTests
         IOrderLifecycleService? orderLifecycleService = null,
         ICatalystProvider? catalystProvider = null,
         ILiveDiscoverySession? discoverySession = null,
+        TimeProvider? timeProvider = null,
         TimeSpan? iterationInterval = null)
     {
         var defaultOrderRepo = new Mock<IOrderStateRepository>();
@@ -1203,16 +1220,17 @@ public class LiveRunnerIntegrationTests
             auditRepo.Object,
             NullLogger<LiveRunner>.Instance,
             orderSubmissionService: orderSubmissionService,
-            executionRunContext: orderSubmissionService is null
-                ? null
-                : new ExecutionRunContext(
-                    Guid.Parse("10000000-0000-0000-0000-000000000001"),
-                    "paper",
-                    new string('a', 64),
-                    new string('b', 40),
-                    new DateTimeOffset(2026, 7, 21, 13, 0, 0, TimeSpan.Zero)),
+            executionRunContext: new ExecutionRunContext(
+                Guid.Parse("10000000-0000-0000-0000-000000000001"),
+                "paper",
+                new string('a', 64),
+                new string('b', 40),
+                new DateTimeOffset(2026, 7, 21, 13, 0, 0, TimeSpan.Zero)),
             orderLifecycleService: orderLifecycleService,
             discoverySession: discoverySession,
+            candidateRepository: new MemoryCandidateRepository(),
+            timeProvider: timeProvider ?? new FixedTimeProvider(
+                new DateTimeOffset(2026, 8, 26, 21, 31, 0, TimeSpan.Zero)),
             iterationInterval: iterationInterval);
     }
 
@@ -1257,19 +1275,130 @@ public class LiveRunnerIntegrationTests
         try
         {
             var authorized = strategies
-                .Select((strategy, index) => new AuthorizedRuntimeStrategy(
-                    new StrategyArtifactIdentity(
-                        $"test.live-runner.{index}",
-                        "1.0.0",
-                        new string((char)('a' + index), 64)),
-                    StrategySelectionMode.RunPaperShadow,
-                    strategy))
+                .Select(strategy =>
+                {
+                    const string semanticVersion = "1.0.0";
+                    var identity = new StrategyArtifactIdentity(
+                        strategy.StrategyId,
+                        semanticVersion,
+                        EvidenceCanonicalJson.ComputeSha256(new CanonicalStrategyDocument(
+                            strategy.StrategyId,
+                            semanticVersion,
+                            strategy,
+                            StrategyAdmissionProfiles.DeterministicV1)));
+                    return new AuthorizedRuntimeStrategy(
+                        identity,
+                        StrategySelectionMode.RunPaperShadow,
+                        strategy,
+                        StrategyAdmissionProfiles.DeterministicV1);
+                })
                 .ToArray();
             await runner.RunAsync(run, authorized, cts.Token, progress);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
         }
+    }
+
+    private sealed class MemoryCandidateRepository : ICandidateRepository
+    {
+        private readonly object sync = new();
+        private readonly Dictionary<Guid, CandidateRecord> candidates = [];
+        private readonly Dictionary<Guid, List<CandidateTransitionRecord>> transitions = [];
+
+        public Task<CandidateRecord> UpsertDiscoveryAsync(
+            ProductionRun run,
+            CandidateRecord candidate,
+            CancellationToken cancellationToken = default)
+        {
+            lock (sync)
+            {
+                if (!candidates.TryGetValue(candidate.CandidateId, out var existing))
+                {
+                    candidates[candidate.CandidateId] = candidate;
+                    return Task.FromResult(candidate);
+                }
+
+                existing.RevalidatedAtUtc = candidate.RevalidatedAtUtc;
+                existing.ExpiresAtUtc = candidate.ExpiresAtUtc;
+                return Task.FromResult(existing);
+            }
+        }
+
+        public Task<CandidateRecord> ApplyDecisionAsync(
+            ProductionRun run,
+            Guid candidateId,
+            int expectedVersion,
+            string semanticDecisionSha256,
+            DateTimeOffset expiresAtUtc,
+            IReadOnlyList<CandidateTransitionAppendRequest> appended,
+            CancellationToken cancellationToken = default)
+        {
+            lock (sync)
+            {
+                var candidate = candidates[candidateId];
+                Assert.Equal(expectedVersion, candidate.Version);
+                var history = transitions.GetValueOrDefault(candidateId);
+                if (history is null)
+                {
+                    history = [];
+                    transitions[candidateId] = history;
+                }
+
+                foreach (var transition in appended)
+                {
+                    StrategyCandidateStateMachine.RequireTransition(candidate.State, transition.NewState);
+                    candidate.Version++;
+                    history.Add(new CandidateTransitionRecord
+                    {
+                        CandidateId = candidateId,
+                        Sequence = candidate.Version,
+                        PreviousState = candidate.State,
+                        NewState = transition.NewState,
+                        OccurredAtUtc = transition.OccurredAtUtc,
+                        ReasonCode = transition.ReasonCode,
+                        Source = transition.Source,
+                        SemanticDecisionSha256 = semanticDecisionSha256,
+                        EvidenceJson = transition.EvidenceJson,
+                        RunId = run.RunId,
+                        ConfigHash = run.ConfigHash,
+                        CodeVersion = run.CodeVersion
+                    });
+                    candidate.State = transition.NewState;
+                }
+
+                candidate.SemanticDecisionSha256 = semanticDecisionSha256;
+                candidate.ExpiresAtUtc = expiresAtUtc;
+                candidate.RevalidatedAtUtc = appended[^1].OccurredAtUtc;
+                return Task.FromResult(candidate);
+            }
+        }
+
+        public Task<CandidateRecord?> GetAsync(
+            Guid candidateId,
+            CancellationToken cancellationToken = default)
+        {
+            lock (sync)
+            {
+                return Task.FromResult(candidates.GetValueOrDefault(candidateId));
+            }
+        }
+
+        public Task<IReadOnlyList<CandidateTransitionRecord>> GetTransitionsAsync(
+            Guid candidateId,
+            CancellationToken cancellationToken = default)
+        {
+            lock (sync)
+            {
+                return Task.FromResult<IReadOnlyList<CandidateTransitionRecord>>(
+                    transitions.GetValueOrDefault(candidateId)?.ToArray() ?? []);
+            }
+        }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     private sealed class ScriptedLiveDiscoverySession(IEnumerable<IReadOnlyList<string>> snapshots)
@@ -1582,7 +1711,12 @@ public class LiveRunnerIntegrationTests
         foreach (var bar in bars)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            yield return bar;
+            yield return bar with
+            {
+                DataFeed = "sip",
+                AdjustmentPolicy = "all",
+                KnownAtUtc = bar.Timestamp.Add(TradingFlow.Engine.Market.TimeframeParser.Parse(bar.Timeframe))
+            };
             await Task.Yield();
         }
     }

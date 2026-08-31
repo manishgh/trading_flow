@@ -26,6 +26,7 @@ public sealed partial class MobileAutomationService
 
         while (!cancellationToken.IsCancellationRequested)
         {
+            var sessionSnapshot = session.ToSnapshot();
             var openPositions = await brokerClient.GetOpenPositionsAsync(cancellationToken);
             var position = openPositions.FirstOrDefault(x =>
                 x.Ticker.Equals(session.Ticker, StringComparison.OrdinalIgnoreCase) &&
@@ -47,7 +48,8 @@ public sealed partial class MobileAutomationService
 
             if (position is null)
             {
-                if (session.EntryOrderId is not null && openOrders.Any(x => x.OrderId == session.EntryOrderId))
+                if (sessionSnapshot.EntryOrderId is not null &&
+                    openOrders.Any(x => x.OrderId == sessionSnapshot.EntryOrderId))
                 {
                     session.Report("waiting_fill", $"Waiting for {session.Ticker} entry order to fill.");
                     await PersistAsync(cancellationToken);
@@ -55,9 +57,12 @@ public sealed partial class MobileAutomationService
                     continue;
                 }
 
-                session.Status = "completed";
-                session.FinishedAt = DateTimeOffset.UtcNow;
-                session.Report("completed", $"No open position remains for {session.Ticker}. Session finished.");
+                session.Update(current =>
+                {
+                    current.Status = "completed";
+                    current.FinishedAt = DateTimeOffset.UtcNow;
+                    current.Report("completed", $"No open position remains for {current.Ticker}. Session finished.");
+                });
                 await PersistAsync(cancellationToken);
                 return;
             }
@@ -76,7 +81,8 @@ public sealed partial class MobileAutomationService
                 continue;
             }
 
-            var entryTimestamp = session.EntrySubmittedAt ?? session.StartedAt ?? DateTimeOffset.UtcNow;
+            sessionSnapshot = session.ToSnapshot();
+            var entryTimestamp = sessionSnapshot.EntrySubmittedAt ?? sessionSnapshot.StartedAt ?? DateTimeOffset.UtcNow;
             var entryIndex = FindFirstBarIndexAtOrAfter(executionBars, entryTimestamp);
             if (entryIndex >= executionBars.Count)
             {
@@ -84,7 +90,7 @@ public sealed partial class MobileAutomationService
                 continue;
             }
 
-            var entryPrice = position.EntryPrice > 0m ? position.EntryPrice : session.EntryPrice ?? 0m;
+            var entryPrice = position.EntryPrice > 0m ? position.EntryPrice : sessionSnapshot.EntryPrice ?? 0m;
             if (entryPrice <= 0m)
             {
                 session.Report("monitoring", $"Entry price unavailable for {session.Ticker}; retrying.");
@@ -93,7 +99,7 @@ public sealed partial class MobileAutomationService
                 continue;
             }
 
-            var stopLoss = session.StopLossPrice ?? (entryPrice - ((executionSnapshots[^1].Atr ?? 0m) * strategy.ExitRules.StopAtrMultiple));
+            var stopLoss = sessionSnapshot.StopLossPrice ?? (entryPrice - ((executionSnapshots[^1].Atr ?? 0m) * strategy.ExitRules.StopAtrMultiple));
             var stopDistance = entryPrice - stopLoss;
             if (stopDistance <= 0m)
             {
@@ -103,7 +109,7 @@ public sealed partial class MobileAutomationService
                 continue;
             }
 
-            var takeProfit = session.TakeProfitPrice ?? (entryPrice + (stopDistance * strategy.ExitRules.TargetRMultiple));
+            var takeProfit = sessionSnapshot.TakeProfitPrice ?? (entryPrice + (stopDistance * strategy.ExitRules.TargetRMultiple));
             var guardianDecision = positionGuardianEngine.EvaluateLong(
                 strategy,
                 executionBars,
@@ -130,7 +136,7 @@ public sealed partial class MobileAutomationService
                     }
                 }
 
-                var closeQuantity = session.ShareQuantity ?? (int)Math.Floor(position.Qty);
+                var closeQuantity = sessionSnapshot.ShareQuantity ?? (int)Math.Floor(position.Qty);
                 if (closeQuantity <= 0)
                 {
                     session.Report("exit_rejected", $"Exit triggered for {session.Ticker}, but close quantity was unavailable.");
@@ -142,11 +148,14 @@ public sealed partial class MobileAutomationService
                 var closed = await brokerClient.ClosePositionAsync(session.Ticker, closeQuantity, cancellationToken);
                 if (closed)
                 {
-                    session.Status = "completed";
-                    session.FinishedAt = DateTimeOffset.UtcNow;
-                    session.ExitReason = guardianDecision.Reason;
-                    session.ExitSubmittedAt = DateTimeOffset.UtcNow;
-                    session.Report("completed", $"Closed {session.Ticker} on {guardianDecision.Reason} at ~{guardianDecision.ExitPrice?.ToString("F2") ?? "market"}.");
+                    session.Update(current =>
+                    {
+                        current.Status = "completed";
+                        current.FinishedAt = DateTimeOffset.UtcNow;
+                        current.ExitReason = guardianDecision.Reason;
+                        current.ExitSubmittedAt = DateTimeOffset.UtcNow;
+                        current.Report("completed", $"Closed {current.Ticker} on {guardianDecision.Reason} at ~{guardianDecision.ExitPrice?.ToString("F2") ?? "market"}.");
+                    });
                     await PersistAsync(cancellationToken);
 
                     if (auditRepo is not null)
@@ -188,9 +197,12 @@ public sealed partial class MobileAutomationService
                     cancellationToken);
             }
 
-            session.LastObservedPrice = position.CurrentPrice;
-            session.UnrealizedPl = position.UnrealizedPl;
-            session.Report("monitoring", $"Holding {session.Ticker}. Last {position.CurrentPrice:F2}, unrealized {position.UnrealizedPl:F2}. Guardian={guardianDecision.Reason}.");
+            session.Update(current =>
+            {
+                current.LastObservedPrice = position.CurrentPrice;
+                current.UnrealizedPl = position.UnrealizedPl;
+                current.Report("monitoring", $"Holding {current.Ticker}. Last {position.CurrentPrice:F2}, unrealized {position.UnrealizedPl:F2}. Guardian={guardianDecision.Reason}.");
+            });
             await PersistAsync(cancellationToken);
             await Task.Delay(pollingInterval, cancellationToken);
         }
@@ -228,21 +240,25 @@ public sealed partial class MobileAutomationService
         BrokerPosition position,
         CancellationToken cancellationToken)
     {
-        if (!runConfig.Execution.AllowExtendedHoursTrading || session.ExitSafetyOrdersSubmitted)
+        var sessionSnapshot = session.ToSnapshot();
+        if (!runConfig.Execution.AllowExtendedHoursTrading || sessionSnapshot.ExitSafetyOrdersSubmitted)
         {
             return;
         }
 
-        var stopLoss = session.StopLossPrice;
-        var takeProfit = session.TakeProfitPrice;
+        var stopLoss = sessionSnapshot.StopLossPrice;
+        var takeProfit = sessionSnapshot.TakeProfitPrice;
         if (stopLoss is null || takeProfit is null)
         {
             return;
         }
 
         await brokerClient.SubmitExitOrdersAsync(session.Ticker, (int)position.Qty, stopLoss.Value, takeProfit.Value, cancellationToken);
-        session.ExitSafetyOrdersSubmitted = true;
-        session.Report("monitoring", $"Submitted safety OCO exits for {session.Ticker}.");
+        session.Update(current =>
+        {
+            current.ExitSafetyOrdersSubmitted = true;
+            current.Report("monitoring", $"Submitted safety OCO exits for {current.Ticker}.");
+        });
         await PersistAsync(cancellationToken);
     }
 
@@ -255,9 +271,10 @@ public sealed partial class MobileAutomationService
         decimal calculatedStopLossPrice,
         CancellationToken cancellationToken)
     {
+        var sessionSnapshot = session.ToSnapshot();
         if (!strategy.ExitRules.EnableAtrTrailingStop ||
             calculatedStopLossPrice <= initialStopLossPrice ||
-            calculatedStopLossPrice <= (session.StopLossPrice ?? initialStopLossPrice) + 0.01m)
+            calculatedStopLossPrice <= (sessionSnapshot.StopLossPrice ?? initialStopLossPrice) + 0.01m)
         {
             return;
         }
@@ -288,8 +305,11 @@ public sealed partial class MobileAutomationService
             return;
         }
 
-        session.StopLossPrice = calculatedStopLossPrice;
-        session.Report("monitoring", $"Raised broker trailing stop for {session.Ticker} to {calculatedStopLossPrice:F2}.");
+        session.Update(current =>
+        {
+            current.StopLossPrice = calculatedStopLossPrice;
+            current.Report("monitoring", $"Raised broker trailing stop for {current.Ticker} to {calculatedStopLossPrice:F2}.");
+        });
         await PersistAsync(cancellationToken);
     }
 

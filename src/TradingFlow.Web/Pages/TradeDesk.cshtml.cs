@@ -135,7 +135,7 @@ public sealed class TradeDeskModel : PageModel
     public static IReadOnlyList<(string Key, string Label)> Filters { get; } =
     [
         ("all", "All"),
-        ("signal", "Signals"),
+        ("signal", "Observed setups"),
         ("trade", "In trade"),
         ("screener", "Screener"),
         ("disagree", "Disagree")
@@ -474,7 +474,7 @@ public sealed class TradeDeskModel : PageModel
         new("bidask", "Bid / Ask", "quote-column", "Inside bid and ask with quoted sizes.", false, true),
         new("spread", "Spread", "spread-column", "Inside spread in basis points.", false, true, true),
         new("rvol", "RVOL", "rvol-column", "Relative volume against the same time of day.", true, false, true),
-        new("eligibility", "TradingFlow", "eligibility-column", "TradingFlow verdict and its reason.", false, true),
+        new("eligibility", "Setup watch", "eligibility-column", "Non-authorizing technical observation and its reason.", false, true),
         new("predictor", "Predictor", "predictor-column", "Model signal, probability and horizon.", false, true),
         new("sync", "Sync", "sync-column", "Whether the verdict and the model agree.", false, true),
         new("pl", "Position", "position-column", "Tracked position and open P/L.", false, true, true),
@@ -593,9 +593,8 @@ public sealed class TradeDeskModel : PageModel
     private static bool MatchesFilter(RankedDeskRow row, string? source) => source?.ToLowerInvariant() switch
     {
         "trade" => row.Row.HasTrade,
-        // Signals is "tradable now": the technicals triggered on the completed bar
-        // and the model is not standing against it.
-        "signal" => row.Row.HasSignal && row.Agreement != AgreementFlag.Conflict,
+        // Predictor disagreement is advisory and cannot hide observed technical setups.
+        "signal" => row.Row.HasSignal,
         "screener" => row.FromScreener,
         "disagree" => row.Agreement == AgreementFlag.Conflict,
         _ => true

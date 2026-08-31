@@ -48,13 +48,12 @@ public sealed partial class BacktestRunner
         BacktestRunConfig run,
         StrategyDefinition strategy,
         TradeSignal signal,
-        string direction,
+        StrategyOrderPlan canonicalOrderPlan,
         IReadOnlyList<OhlcvBar> bars,
         IReadOnlyList<IndicatorSnapshot> snapshots,
         TradingFlow.Engine.Execution.ExecutionAuditor auditor,
         CancellationToken cancellationToken,
-        int? plannedEntryIndex = null,
-        int? plannedStopContextIndex = null)
+        int? plannedEntryIndex = null)
     {
         var signalCloseTimestamp = signal.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
         var entryIndex = plannedEntryIndex ?? FindFirstBarIndexAtOrAfter(bars, signalCloseTimestamp);
@@ -63,7 +62,7 @@ public sealed partial class BacktestRunner
             return null;
         }
 
-        var stopContextIndex = plannedStopContextIndex ?? entryIndex - 1;
+        var stopContextIndex = canonicalOrderPlan.StopContextIndex;
         if (stopContextIndex < 0 ||
             stopContextIndex >= entryIndex ||
             stopContextIndex >= snapshots.Count)
@@ -74,12 +73,13 @@ public sealed partial class BacktestRunner
         var entryBar = bars[entryIndex];
         var stopContextSnapshot = snapshots[stopContextIndex];
         var relativeVolume = stopContextSnapshot.RelativeVolume ?? 1.0m;
-        if (direction.Equals("short", StringComparison.OrdinalIgnoreCase))
+        if (canonicalOrderPlan.Direction.Equals("short", StringComparison.OrdinalIgnoreCase))
         {
             return CreateShortCandidate(
                 run,
                 strategy,
                 signal,
+                canonicalOrderPlan,
                 entryIndex,
                 stopContextIndex,
                 bars,
@@ -93,31 +93,18 @@ public sealed partial class BacktestRunner
         var approximateTradeAmount = run.Portfolio.StartingCapital / run.Portfolio.MaxConcurrentPositions;
         var entryPrice = TradingFlow.Engine.Risk.DynamicSlippageModel.ApplyLongSlippage(entryBar.Open, relativeVolume, strategy.Execution.SlippageBps, approximateTradeAmount);
 
-        var stopResult = new StrategyInitialStopResolver().Resolve(
-            new StrategyInitialStopRequest(
-                strategy,
-                signal,
-                PlannedOrderSide.Long,
-                entryPrice,
-                stopContextIndex,
-                bars,
-                snapshots));
-        if (!stopResult.IsResolved ||
-            stopResult.StopPrice is not { } resolvedStopPrice ||
-            stopResult.StopDistance is not { } resolvedStopDistance)
+        var initialStopLossPrice = canonicalOrderPlan.InitialStopPrice;
+        var stopDistance = entryPrice - initialStopLossPrice;
+        if (initialStopLossPrice <= 0m || stopDistance <= 0m)
         {
             return null;
         }
 
-        var initialStopLossPrice = resolvedStopPrice;
-        var stopDistance = resolvedStopDistance;
         var currentStopLossPrice = initialStopLossPrice;
         var takeProfitPrice = ResolveTakeProfitPrice(
-            strategy,
-            "long",
+            canonicalOrderPlan,
             entryPrice,
-            stopDistance,
-            stopContextSnapshot);
+            stopDistance);
         if (takeProfitPrice <= entryPrice)
         {
             return null;
@@ -336,6 +323,7 @@ public sealed partial class BacktestRunner
         BacktestRunConfig run,
         StrategyDefinition strategy,
         TradeSignal signal,
+        StrategyOrderPlan canonicalOrderPlan,
         int entryIndex,
         int stopContextIndex,
         IReadOnlyList<OhlcvBar> bars,
@@ -347,31 +335,18 @@ public sealed partial class BacktestRunner
         var entryBar = bars[entryIndex];
         var approximateTradeAmount = run.Portfolio.StartingCapital / run.Portfolio.MaxConcurrentPositions;
         var entryPrice = ApplyShortEntrySlippage(entryBar.Open, relativeVolume, strategy, approximateTradeAmount);
-        var stopResult = new StrategyInitialStopResolver().Resolve(
-            new StrategyInitialStopRequest(
-                strategy,
-                signal,
-                PlannedOrderSide.Short,
-                entryPrice,
-                stopContextIndex,
-                bars,
-                snapshots));
-        if (!stopResult.IsResolved ||
-            stopResult.StopPrice is not { } resolvedStopPrice ||
-            stopResult.StopDistance is not { } resolvedStopDistance)
+        var initialStopLossPrice = canonicalOrderPlan.InitialStopPrice;
+        var stopDistance = initialStopLossPrice - entryPrice;
+        if (initialStopLossPrice <= 0m || stopDistance <= 0m)
         {
             return null;
         }
 
-        var initialStopLossPrice = resolvedStopPrice;
-        var stopDistance = resolvedStopDistance;
         var currentStopLossPrice = initialStopLossPrice;
         var takeProfitPrice = ResolveTakeProfitPrice(
-            strategy,
-            "short",
+            canonicalOrderPlan,
             entryPrice,
-            stopDistance,
-            snapshots[stopContextIndex]);
+            stopDistance);
         if (takeProfitPrice <= 0 || takeProfitPrice >= entryPrice)
         {
             return null;
@@ -868,21 +843,19 @@ public sealed partial class BacktestRunner
     }
 
     private static decimal ResolveTakeProfitPrice(
-        StrategyDefinition strategy,
-        string direction,
+        StrategyOrderPlan orderPlan,
         decimal entryPrice,
-        decimal stopDistance,
-        IndicatorSnapshot entrySnapshot)
+        decimal stopDistance)
     {
-        var mode = NormalizeRuleName(strategy.ExitRules.ProfitTargetMode);
-        if (mode == "vwap" && entrySnapshot.Vwap is { } vwap)
+        var mode = NormalizeRuleName(orderPlan.ProfitTargetMode);
+        if (mode == "vwap" && orderPlan.ProfitTargetReferencePrice is { } vwap)
         {
             return vwap;
         }
 
-        return direction.Equals("short", StringComparison.OrdinalIgnoreCase)
-            ? entryPrice - (stopDistance * strategy.ExitRules.TargetRMultiple)
-            : entryPrice + (stopDistance * strategy.ExitRules.TargetRMultiple);
+        return orderPlan.Direction.Equals("short", StringComparison.OrdinalIgnoreCase)
+            ? entryPrice - (stopDistance * orderPlan.TargetRMultiple)
+            : entryPrice + (stopDistance * orderPlan.TargetRMultiple);
     }
 
     private static bool ShouldExitFailedBreakout(

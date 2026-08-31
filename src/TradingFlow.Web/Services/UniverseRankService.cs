@@ -5,17 +5,16 @@ using TradingFlow.Web.Services.Wishlists;
 namespace TradingFlow.Web.Services;
 
 /// <summary>
-/// Whether TradingFlow's eligibility verdict and the model's evidence point the
-/// same way. This is a reading, never an authority: eligibility decides whether
-/// an entry may be taken, and a conflict is shown so the operator can see the
-/// disagreement rather than have it resolved for them.
+/// Whether TradingFlow's observational setup and the model's advisory evidence
+/// point the same way. This comparison never authorizes or blocks an entry; only
+/// a persisted strategy-kernel candidate can do that.
 /// </summary>
 public enum AgreementFlag
 {
     /// <summary>Eligibility and the model point the same way.</summary>
     Agree,
 
-    /// <summary>Eligible, but the model signal is opposite.</summary>
+    /// <summary>An observed setup exists, but the model signal is opposite.</summary>
     Conflict,
 
     /// <summary>Either side is neutral, unscored or not ready.</summary>
@@ -72,7 +71,10 @@ public sealed record RankedDeskRow(
 {
     public string Ticker => Row.Ticker;
 
-    /// <summary>Whether the model opposed an otherwise eligible technical verdict.</summary>
+    /// <summary>
+    /// Retained for audit compatibility. Advisory evidence never imposes an
+    /// operational penalty, so this is always false for newly ranked rows.
+    /// </summary>
     public bool IsVetoed => VetoPenalty > 0m;
 
     public string AgreementLabel => Agreement switch
@@ -96,11 +98,11 @@ public sealed record RankedDeskRow(
     public string AgreementNote => Agreement switch
     {
         AgreementFlag.Agree =>
-            "TradingFlow eligibility and the predictor point the same way. Eligibility remains authoritative for entry.",
+            "The observed setup and predictor point the same way. Strategy admission remains authoritative for entry.",
         AgreementFlag.Conflict =>
-            "Technicals are eligible and the predictor says stand aside. The disagreement is recorded, not resolved: eligibility still authorises the entry.",
+            "An observational setup exists and the predictor says stand aside. The disagreement is advisory and does not authorize or block entry.",
         _ =>
-            "One side is neutral or has no valid evidence, so the two cannot be compared. Eligibility remains authoritative for entry."
+            "One side is neutral or has no valid evidence. Strategy admission remains authoritative for entry."
     };
 }
 
@@ -121,8 +123,8 @@ public sealed record UniverseRankingRun(
 /// whole set in one pass and returns an ordered list with per-symbol factor
 /// contributions. Per-symbol prediction is one input, not the ranking.
 ///
-/// A model veto subtracts a flat penalty rather than removing the candidate. A
-/// removed row cannot be argued with; a demoted row with a CONFLICT flag can.
+/// Predictor evidence is fetched and displayed as an advisory comparison only.
+/// Its availability, direction, and value cannot change operational score or order.
 /// </summary>
 public sealed class UniverseRankService
 {
@@ -205,25 +207,22 @@ public sealed class UniverseRankService
             }
 
             var fromScreener = screenerSymbols.Contains(row.Ticker);
-            var catalystKind = ResolveCatalystKind(row, result, earningsSymbols, fromScreener);
+            var catalystKind = ResolveCatalystKind(row, earningsSymbols, fromScreener);
             var direction = ResolveDirection(result);
             var eligible = row.HasSignal;
             var agreement = ResolveAgreement(eligible, direction);
 
             var factors = new List<RankFactor>(5)
             {
-                BuildModelEdge(result, horizon, weights.ModelEdge),
-                BuildMarketStructure(row, result, horizon, weights.MarketStructure),
+                BuildModelEdge(result, horizon),
+                BuildMarketStructure(result, horizon),
                 BuildCatalyst(catalystKind, config, weights.Catalyst),
                 BuildTechnicalState(row, weights.TechnicalState),
                 BuildLiquidity(row, config, weights.Liquidity)
             };
 
-            // The veto is applied only where the two sides genuinely disagree:
-            // eligible technicals against an opposing model. A neutral model is
-            // not a veto, and neither is an unreadable one.
-            var veto = agreement == AgreementFlag.Conflict ? config.VetoPenalty : 0m;
-            var score = factors.Sum(factor => factor.Contribution) - veto;
+            const decimal veto = 0m;
+            var score = factors.Sum(factor => factor.Contribution);
 
             scored.Add(new RankedDeskRow(
                 row,
@@ -263,11 +262,10 @@ public sealed class UniverseRankService
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Direction-adjusted model probability. An opposing signal is scored as its
-    /// complement rather than as a raw probability, so a confident "stand aside"
-    /// lowers the rank instead of raising it.
+    /// Direction-adjusted model probability shown for operator context. Weight and
+    /// contribution are deliberately zero: the predictor is advisory only.
     /// </summary>
-    private static RankFactor BuildModelEdge(MarketPredictorResult result, string horizon, decimal weight)
+    private static RankFactor BuildModelEdge(MarketPredictorResult result, string horizon)
     {
         var intraday = horizon.Equals("intraday", StringComparison.OrdinalIgnoreCase);
         var probability = intraday
@@ -279,7 +277,7 @@ public sealed class UniverseRankService
                 "model_edge",
                 "Model edge",
                 null,
-                weight,
+                0m,
                 0m,
                 result.AvailabilityReason ?? "No probability was returned for this horizon.");
         }
@@ -300,40 +298,37 @@ public sealed class UniverseRankService
             "model_edge",
             "Model edge",
             adjusted,
-            weight,
-            adjusted * weight,
+            0m,
+            0m,
             $"{result.FinalSignal} · p={probability.Value:0.000}{(intraday && result.Intraday?.DownsideProbability is { } d ? $" · downside {d:0.000}" : String.Empty)}");
     }
 
     /// <summary>
-    /// RVOL intraday, trend quality swing. Relative volume comes from the model
-    /// payload where the indicator engine has not produced one for this row; a
-    /// value of 1.0 is an ordinary day and scores 0.5.
+    /// Predictor-provided market context shown for operator reference. It is not
+    /// authoritative market evidence and contributes zero to operational rank.
     /// </summary>
     private static RankFactor BuildMarketStructure(
-        WishlistDeskRow row,
         MarketPredictorResult result,
-        string horizon,
-        decimal weight)
+        string horizon)
     {
         if (horizon.Equals("intraday", StringComparison.OrdinalIgnoreCase))
         {
             var rvol = result.Intraday?.RelativeVolume;
             if (rvol is null)
             {
-                return new RankFactor("market_structure", "Market structure", null, weight, 0m, "No relative volume available.");
+                return new RankFactor("market_structure", "Advisory market context", null, 0m, 0m, "No advisory relative volume available.");
             }
 
             // 1.0x is ordinary and scores 0.5; 3.0x and above saturates at 1.0.
             var value = Clamp(rvol.Value / 3m + 0.166m);
-            return new RankFactor("market_structure", "Market structure", value, weight, value * weight, $"RVOL {rvol.Value:0.00}x");
+            return new RankFactor("market_structure", "Advisory market context", value, 0m, 0m, $"Predictor RVOL {rvol.Value:0.00}x (advisory)");
         }
 
         var volumeZ = result.Swing?.VolumeZ20;
         var return1D = result.Swing?.Return1D;
         if (volumeZ is null && return1D is null)
         {
-            return new RankFactor("market_structure", "Market structure", null, weight, 0m, "No trend-quality inputs available.");
+            return new RankFactor("market_structure", "Advisory market context", null, 0m, 0m, "No advisory trend-quality inputs available.");
         }
 
         // Trend quality: a positive 20-day volume z-score with a positive
@@ -343,11 +338,11 @@ public sealed class UniverseRankService
         var quality = Clamp(zComponent * 0.6m + returnComponent * 0.4m);
         return new RankFactor(
             "market_structure",
-            "Market structure",
+            "Advisory market context",
             quality,
-            weight,
-            quality * weight,
-            $"volume z20 {(volumeZ is { } zz ? zz.ToString("0.00") : "unknown")} · 1d return {(return1D is { } rr ? rr.ToString("P2") : "unknown")}");
+            0m,
+            0m,
+            $"Predictor volume z20 {(volumeZ is { } zz ? zz.ToString("0.00") : "unknown")} · 1d return {(return1D is { } rr ? rr.ToString("P2") : "unknown")} (advisory)");
     }
 
     private static RankFactor BuildCatalyst(string kind, UniverseRankConfig config, decimal weight)
@@ -357,13 +352,13 @@ public sealed class UniverseRankService
     }
 
     /// <summary>
-    /// The evaluator's own verdict. Eligible is a completed-bar trigger; watching
-    /// is a candidate that has not triggered; blocked is a rejected one.
+    /// The wishlist observer's non-authorizing state. An observed setup is useful
+    /// for attention, but it is not a strategy-qualified candidate.
     /// </summary>
     private static RankFactor BuildTechnicalState(WishlistDeskRow row, decimal weight)
     {
         var (value, label) = row.HasSignal
-            ? (1.0m, "eligible")
+            ? (1.0m, "observed setup")
             : row.HasQuote
                 ? (0.42m, "watching")
                 : (0.1m, "blocked - no quote");
@@ -430,8 +425,8 @@ public sealed class UniverseRankService
     }
 
     /// <summary>
-    /// AGREE when both point the same way, CONFLICT when eligibility says go and
-    /// the model says stand aside, PARTIAL when either side is neutral.
+    /// AGREE when both observations point the same way, CONFLICT when the setup
+    /// observer fires and the model says stand aside, PARTIAL when either is neutral.
     /// </summary>
     public static AgreementFlag ResolveAgreement(bool eligible, ModelDirection direction) => direction switch
     {
@@ -446,26 +441,12 @@ public sealed class UniverseRankService
     /// </summary>
     private static string ResolveCatalystKind(
         WishlistDeskRow row,
-        MarketPredictorResult result,
         IReadOnlySet<string> earningsSymbols,
         bool fromScreener)
     {
         if (earningsSymbols.Contains(row.Ticker))
         {
             return UniverseRankConfig.EarningsCatalyst;
-        }
-
-        var catalyst = result.Intraday?.Catalyst ?? result.Swing?.Catalyst;
-        if (catalyst is not null && catalyst.EventCount > 0)
-        {
-            // The predictor's catalyst status names the kind it scored; a filing
-            // is distinguished from a headline because they decay differently.
-            if (catalyst.Status.Contains("filing", StringComparison.OrdinalIgnoreCase) ||
-                catalyst.Status.Contains("sec", StringComparison.OrdinalIgnoreCase))
-            {
-                return UniverseRankConfig.FilingCatalyst;
-            }
-            return UniverseRankConfig.NewsCatalyst;
         }
 
         if (row.HasNews)

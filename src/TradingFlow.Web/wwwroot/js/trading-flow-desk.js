@@ -88,7 +88,7 @@ function applyActivity(payload) {
         const signal = signalByTicker.get(ticker);
         rows.forEach(row => {
             row.querySelectorAll("[data-signal-badge]").forEach(node => {
-                setText(node, signal ? "Eligible" : "Watching");
+                setText(node, signal ? "Observed setup" : "Watching");
                 node.classList.toggle("eligible", Boolean(signal));
                 node.classList.toggle("watching", !signal);
             });
@@ -118,7 +118,7 @@ function patchSelectedSignal(signal) {
     setText(document.querySelector("[data-selected-signal-reason]"), signal.reason || "No reason supplied.");
     setText(document.querySelector("[data-selected-signal-time]"), signal.detectedAtText || signal.detectedAt || "Timestamp unavailable");
     document.querySelectorAll("[data-selected-signal-badge]").forEach(node => {
-        setText(node, "Eligible");
+        setText(node, "Observed setup");
         node.classList.add("eligible");
         node.classList.remove("watching");
     });
@@ -268,7 +268,7 @@ function notifySignal(signal) {
     // The shared chrome owns the toast and the notification permission, so the
     // alerts toggle in the header governs both from one place.
     window.TradingFlow?.toast(`${signal.ticker} · ${signal.signalType}`, signal.reason);
-    window.TradingFlow?.notify(`${signal.ticker} actionable signal`, `${signal.signalType}: ${signal.reason}`);
+    window.TradingFlow?.notify(`${signal.ticker} observed setup`, `${signal.signalType}: ${signal.reason}`);
 }
 
 function refreshFreshness() {

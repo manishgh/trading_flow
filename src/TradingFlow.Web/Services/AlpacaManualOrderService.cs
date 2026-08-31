@@ -262,7 +262,11 @@ public sealed class AlpacaManualOrderService : IDisposable
                     takeProfitPrice.Value,
                     now),
                 AllowExtendedHoursTrading: allowExtendedHoursTrading,
-                OperatorOverride: true),
+                OperatorOverride: OperatorOverrideAuthorization.Issue(
+                    manualEntryOptions,
+                    "wishlist_operator",
+                    "Explicit operator-direct wishlist buy",
+                    now)),
             broker,
             cancellationToken);
 

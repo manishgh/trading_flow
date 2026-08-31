@@ -18,6 +18,7 @@ internal static class ProductionPersistenceModelConfiguration
         ConfigureReconciliations(modelBuilder.Entity<ReconciliationRecord>());
         ConfigurePositionEvents(modelBuilder.Entity<PositionEventRecord>());
         ConfigureCandidates(modelBuilder.Entity<CandidateRecord>());
+        ConfigureCandidateTransitions(modelBuilder.Entity<CandidateTransitionRecord>());
         ConfigureCatalystResults(modelBuilder.Entity<CatalystResultRecord>());
 
         foreach (var entityType in modelBuilder.Model.GetEntityTypes()
@@ -168,13 +169,41 @@ internal static class ProductionPersistenceModelConfiguration
         entity.Property(record => record.FinvizPreset).HasMaxLength(120).IsRequired();
         entity.Property(record => record.Horizon).HasMaxLength(20).IsRequired();
         entity.Property(record => record.SelectedStrategy).HasMaxLength(120);
-        entity.Property(record => record.State).HasMaxLength(40).IsRequired();
+        entity.Property(record => record.StrategyContentSha256).HasMaxLength(64).IsRequired();
+        entity.Property(record => record.AdmissionProfileId).HasMaxLength(120).IsRequired();
+        entity.Property(record => record.AdmissionProfileVersion).HasMaxLength(40).IsRequired();
+        entity.Property(record => record.SetupKey).HasMaxLength(300).IsRequired();
+        entity.Property(record => record.DiscoveryWindowStartUtc).IsRequired();
+        entity.Property(record => record.DiscoveryWindowEndUtc).IsRequired();
+        entity.Property(record => record.State).HasConversion<string>().HasMaxLength(40).IsRequired();
+        entity.Property(record => record.Version).IsConcurrencyToken();
+        entity.Property(record => record.SemanticDecisionSha256).HasMaxLength(64).IsRequired();
         entity.Property(record => record.RevalidatedAtUtc).IsRequired();
+        entity.Property(record => record.ExpiresAtUtc).IsRequired();
         entity.Property(record => record.SetupScoresJson).IsRequired();
         entity.Property(record => record.RejectReasonsJson).IsRequired();
         entity.HasIndex(record => new { record.Symbol, record.DiscoveredAtUtc });
         entity.HasIndex(record => new { record.Horizon, record.State });
         entity.HasIndex(record => record.CatalystResultId);
+    }
+
+    private static void ConfigureCandidateTransitions(EntityTypeBuilder<CandidateTransitionRecord> entity)
+    {
+        entity.ToTable("candidate_transitions");
+        entity.HasKey(record => record.TransitionId);
+        ConfigureProvenance(entity);
+        entity.Property(record => record.PreviousState).HasConversion<string>().HasMaxLength(40).IsRequired();
+        entity.Property(record => record.NewState).HasConversion<string>().HasMaxLength(40).IsRequired();
+        entity.Property(record => record.ReasonCode).HasMaxLength(200).IsRequired();
+        entity.Property(record => record.Source).HasMaxLength(80).IsRequired();
+        entity.Property(record => record.SemanticDecisionSha256).HasMaxLength(64).IsRequired();
+        entity.Property(record => record.EvidenceJson).IsRequired();
+        entity.HasIndex(record => new { record.CandidateId, record.Sequence }).IsUnique();
+        entity.HasIndex(record => record.SemanticDecisionSha256);
+        entity.HasOne<CandidateRecord>()
+            .WithMany()
+            .HasForeignKey(record => record.CandidateId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 
     private static void ConfigureCatalystResults(EntityTypeBuilder<CatalystResultRecord> entity)

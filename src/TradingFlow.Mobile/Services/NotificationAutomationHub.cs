@@ -275,8 +275,8 @@ public sealed class NotificationAutomationHub
     private static string ResolveEntryMode()
     {
         var configuredMode = Preferences.Get("TradingFlowAutomationEntryMode", "validate_strategy");
-        return configuredMode.Equals("immediate_paper", StringComparison.OrdinalIgnoreCase)
-            ? "immediate_paper"
+        return configuredMode.Equals("operator_direct", StringComparison.OrdinalIgnoreCase)
+            ? "operator_direct"
             : "validate_strategy";
     }
 

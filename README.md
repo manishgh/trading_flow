@@ -199,6 +199,27 @@ isolated. A baseline with fewer than 20 valid SIP/`adjustment=all` sessions fail
 cannot alter a strategy decision. See
 [Phase 3 verification](docs/verification/strategy-flow-phase-3.md).
 
+Strategy admission and triggering now run through one immutable decision contract in
+backtest, paper, and mobile automation. A candidate is scoped to its owning run,
+journaled before evaluation, and advances only through the typed
+`Discovered -> DataWarming -> Qualified -> Armed -> Triggered` graph. Paper/live use
+the durable SQLite journal; each parallel backtest worker uses isolated in-memory
+state plus a write-through NDJSON recovery journal. Completed backtests publish the
+full candidate and transition audit as an atomic `*.candidate-decisions.json`
+sidecar, then remove the recovery spools. Interrupted workers leave their flushed
+spools under the result root for diagnosis. The kernel freezes direction, trigger,
+pre-fill stop, target policy, slippage, and expiry in one canonical pre-risk order
+plan. The order gate requires both the current `Triggered` row and its matching
+transition sequence and semantic hash.
+
+News is not a separate live veto. Provider publication/update, observed receipt, and
+sentiment-completion timestamps become a point-in-time catalyst snapshot consumed by
+the same kernel. Catalyst evidence without observed receipt, classification version,
+and decision-availability chronology is excluded rather than inferred from provider
+publication time. Wishlist observations and Market Predictor output are explicitly
+advisory and cannot change candidate state or execution priority. See
+[Phase 4 verification](docs/verification/strategy-flow-phase-4.md).
+
 Backtest cache wrappers preserve Alpaca's calendar, completeness, and provenance
 contracts. Authoritative calendars are checksummed and reusable offline; adjusted
 candle slices carry a versioned 24-hour freshness boundary and explicit restatement

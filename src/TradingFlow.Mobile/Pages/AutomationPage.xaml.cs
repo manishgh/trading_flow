@@ -16,6 +16,7 @@ public partial class AutomationPage : ContentPage
     private MobileCatalogResponse? catalog;
     private IReadOnlyList<MobileStrategyOption> longStrategies = Array.Empty<MobileStrategyOption>();
     private MobileAutomationSessionSnapshot? selectedSession;
+    private bool restoringSavedMode;
 
     public AutomationPage()
     {
@@ -132,7 +133,13 @@ public partial class AutomationPage : ContentPage
     {
         modeChoices.Clear();
         modeChoices.Add(new ModeChoice("Off — capture alerts only", ModeKind.Disabled, null));
-        modeChoices.Add(new ModeChoice("Direct enter (auto-forward)", ModeKind.Direct, null));
+        foreach (var strategy in longStrategies)
+        {
+            modeChoices.Add(new ModeChoice(
+                $"Direct enter · exit by {strategy.StrategyName}",
+                ModeKind.Direct,
+                strategy));
+        }
         foreach (var strategy in longStrategies)
         {
             modeChoices.Add(new ModeChoice($"{strategy.StrategyName} (validate)", ModeKind.Strategy, strategy));
@@ -144,7 +151,7 @@ public partial class AutomationPage : ContentPage
     private void RestoreSavedMode()
     {
         var autoForward = Preferences.Get("TradingFlowAutomationAutoForward", false);
-        var entryMode = Preferences.Get("TradingFlowAutomationEntryMode", "immediate_paper");
+        var entryMode = Preferences.Get("TradingFlowAutomationEntryMode", "validate_strategy");
         var strategyPath = Preferences.Get("TradingFlowAutomationStrategyPath", string.Empty);
 
         ModeChoice? choice;
@@ -155,14 +162,27 @@ public partial class AutomationPage : ContentPage
         else if (entryMode.Equals("validate_strategy", StringComparison.OrdinalIgnoreCase))
         {
             choice = modeChoices.FirstOrDefault(x =>
+                x.Kind == ModeKind.Strategy &&
                 x.Strategy is not null && x.Strategy.Path.Equals(strategyPath, StringComparison.OrdinalIgnoreCase));
         }
         else
         {
-            choice = modeChoices.FirstOrDefault(x => x.Kind == ModeKind.Direct);
+            choice = modeChoices.FirstOrDefault(x =>
+                x.Kind == ModeKind.Direct &&
+                x.Strategy is not null &&
+                x.Strategy.Path.Equals(strategyPath, StringComparison.OrdinalIgnoreCase));
         }
 
-        ModePicker.SelectedItem = choice ?? modeChoices.FirstOrDefault();
+        restoringSavedMode = true;
+        try
+        {
+            ModePicker.SelectedItem = choice ?? modeChoices.FirstOrDefault(x => x.Kind == ModeKind.Disabled);
+            UpdateModeHint();
+        }
+        finally
+        {
+            restoringSavedMode = false;
+        }
     }
 
     private ModeChoice? SelectedMode => ModePicker.SelectedItem as ModeChoice ?? modeChoices.FirstOrDefault();
@@ -170,7 +190,10 @@ public partial class AutomationPage : ContentPage
     private void OnModeChanged(object? sender, EventArgs e)
     {
         UpdateModeHint();
-        PersistMode();
+        if (!restoringSavedMode)
+        {
+            PersistMode();
+        }
     }
 
     private void PersistMode()
@@ -182,9 +205,9 @@ public partial class AutomationPage : ContentPage
         }
 
         Preferences.Set("TradingFlowAutomationAutoForward", mode.Kind != ModeKind.Disabled);
-        Preferences.Set("TradingFlowAutomationEntryMode", mode.Kind == ModeKind.Strategy ? "validate_strategy" : "immediate_paper");
+        Preferences.Set("TradingFlowAutomationEntryMode", mode.Kind == ModeKind.Strategy ? "validate_strategy" : "operator_direct");
 
-        var strategyPath = mode.Strategy?.Path ?? longStrategies.FirstOrDefault()?.Path;
+        var strategyPath = mode.Strategy?.Path;
         if (!string.IsNullOrWhiteSpace(strategyPath))
         {
             Preferences.Set("TradingFlowAutomationStrategyPath", strategyPath);
@@ -197,9 +220,9 @@ public partial class AutomationPage : ContentPage
         EntryModeHintLabel.Text = mode?.Kind switch
         {
             ModeKind.Disabled => "Automation off. Alerts are captured but nothing trades.",
-            ModeKind.Direct => longStrategies.FirstOrDefault() is { } exit
-                ? $"Enters immediately on each alert; {exit.StrategyName} manages the exit."
-                : "Enters immediately on each alert; the strategy engine manages the exit.",
+            ModeKind.Direct => mode.Strategy is { } exit
+                ? $"Operator-direct entry; immutable exit guardian: {exit.StrategyName}."
+                : "Choose an explicit exit guardian before direct entry can be enabled.",
             ModeKind.Strategy => $"Validates {mode.Strategy!.StrategyName} entry on each alert, then it manages the exit.",
             _ => string.Empty
         };

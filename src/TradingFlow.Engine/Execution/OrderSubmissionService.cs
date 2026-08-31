@@ -12,7 +12,9 @@ public sealed record ValidatedEntryCandidate(
     string Horizon,
     DateTimeOffset DiscoveredAtUtc,
     DateTimeOffset RevalidatedAtUtc,
-    string SetupEvidenceJson);
+    string SetupEvidenceJson,
+    int CandidateVersion = 0,
+    string SemanticDecisionSha256 = "");
 
 public sealed record BracketOrderSubmission(
     Guid IntentId,
@@ -28,7 +30,8 @@ public sealed record BracketOrderSubmission(
     bool AllowExtendedHoursTrading = false,
     StrategyArtifactIdentity? StrategyIdentity = null,
     StrategySelectionMode? StrategySelectionMode = null,
-    bool OperatorOverride = false);
+    OperatorOverrideAuthorization? OperatorOverride = null,
+    StrategyArtifactIdentity? ExitPolicyIdentity = null);
 
 public sealed record OrderSubmissionResult(
     string BrokerOrderId,
@@ -97,11 +100,6 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         ArgumentNullException.ThrowIfNull(submission);
         ArgumentNullException.ThrowIfNull(brokerClient);
         Validate(submission);
-        var run = ToRun(submission.RunContext);
-        await candidateRepository.UpsertValidatedAsync(
-            run,
-            ToCandidate(submission, run),
-            cancellationToken);
         return await entryGates.ExecuteAsync(
             submission,
             brokerClient,
@@ -147,8 +145,14 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         bool submitOutsideRegularHours,
         CancellationToken cancellationToken)
     {
-        if (submission.OperatorOverride)
+        if (submission.OperatorOverride is not null)
         {
+            if (!submission.RunContext.Profile.Equals("paper", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Operator-direct entries are permitted only in the paper profile.");
+            }
+
             if (submission.StrategyIdentity is not null || submission.StrategySelectionMode is not null)
             {
                 throw new InvalidOperationException(
@@ -186,7 +190,11 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             submission.AllowExtendedHoursTrading,
             strategyIdentity = submission.StrategyIdentity,
             strategySelectionMode = submission.StrategySelectionMode,
-            submission.OperatorOverride,
+            operatorOverride = submission.OperatorOverride is not null,
+            operatorOverrideActor = submission.OperatorOverride?.Actor,
+            operatorOverrideReason = submission.OperatorOverride?.Reason,
+            operatorOverrideIssuedAtUtc = submission.OperatorOverride?.IssuedAtUtc,
+            exitPolicyIdentity = submission.ExitPolicyIdentity,
             submitOutsideRegularHours,
             submission.SessionDate
         });
@@ -195,7 +203,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             run,
             new OrderIntentReservation(
                 submission.IntentId,
-                submission.Candidate.CandidateId,
+                submission.OperatorOverride is not null ? null : submission.Candidate.CandidateId,
                 submission.StrategyId,
                 submission.Order.Ticker.Trim().ToUpperInvariant(),
                 NormalizeSide(submission.Side),
@@ -434,6 +442,21 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 "Run, candidate, and intent identity are required before order submission.");
         }
 
+        if (submission.OperatorOverride is not null)
+        {
+            if (!submission.RunContext.Profile.Equals("paper", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Operator-direct entries are permitted only in the paper profile.");
+            }
+
+            if (submission.StrategyIdentity is not null || submission.StrategySelectionMode is not null)
+            {
+                throw new InvalidOperationException(
+                    "An operator override cannot also claim strategy execution authorization.");
+            }
+        }
+
         if (submission.Candidate.RevalidatedAtUtc == default ||
             submission.Candidate.DiscoveredAtUtc == default ||
             String.IsNullOrWhiteSpace(submission.Candidate.DiscoverySource) ||
@@ -477,28 +500,6 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             throw new InvalidOperationException("Execution run provenance is invalid.");
         }
     }
-
-    private static CandidateRecord ToCandidate(
-        BracketOrderSubmission submission,
-        ProductionRun run) => new()
-        {
-            CandidateId = submission.Candidate.CandidateId,
-            Symbol = submission.Order.Ticker.Trim().ToUpperInvariant(),
-            DiscoveredAtUtc = submission.Candidate.DiscoveredAtUtc.ToUniversalTime(),
-            RevalidatedAtUtc = submission.Candidate.RevalidatedAtUtc.ToUniversalTime(),
-            DiscoverySource = submission.Candidate.DiscoverySource.Trim(),
-            FinvizPreset = String.Empty,
-            Horizon = submission.Candidate.Horizon.Trim().ToLowerInvariant(),
-            LastPrice = submission.Order.LimitPrice,
-            SetupScoresJson = submission.Candidate.SetupEvidenceJson,
-            SelectedStrategy = submission.StrategyId,
-            State = "SETUP_VALID",
-            RejectReasonsJson = "[]",
-            RunId = run.RunId,
-            SchemaVersion = run.SchemaVersion,
-            ConfigHash = run.ConfigHash,
-            CodeVersion = run.CodeVersion
-        };
 
     private static ProductionRun ToRun(ExecutionRunContext context) => new()
     {

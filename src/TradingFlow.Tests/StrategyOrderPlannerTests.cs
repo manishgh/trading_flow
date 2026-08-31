@@ -1,6 +1,7 @@
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Risk;
+using TradingFlow.Engine.Strategies;
 
 namespace TradingFlow.Tests;
 
@@ -11,21 +12,16 @@ public sealed class StrategyOrderPlannerTests
     {
         var strategy = CreateStrategy(stopAtrMultiple: 2m);
         var signal = CreateSignal(price: 100m, atr: 1m);
-        var context = CreateMarketContext();
+        var orderPlan = CreateOrderPlan(strategy, initialStopPrice: 98m);
 
         var result = new StrategyOrderPlanner().Plan(
             new StrategyOrderPlanningRequest(
-                strategy,
+                orderPlan,
                 signal,
-                signal,
-                PlannedOrderSide.Long,
                 100_000m,
                 new OrderPlanningRiskLimits(1m, 100m),
                 0m,
-                0m,
-                0,
-                context.Bars,
-                context.Snapshots));
+                0m));
 
         Assert.True(result.IsAccepted);
         Assert.Equal(500, result.Order?.ShareQuantity);
@@ -38,21 +34,16 @@ public sealed class StrategyOrderPlannerTests
     {
         var strategy = CreateStrategy(stopAtrMultiple: 1m);
         var signal = CreateSignal(price: 100m, atr: 1m);
-        var context = CreateMarketContext();
+        var orderPlan = CreateOrderPlan(strategy, initialStopPrice: 99m);
 
         var result = new StrategyOrderPlanner().Plan(
             new StrategyOrderPlanningRequest(
-                strategy,
+                orderPlan,
                 signal,
-                signal,
-                PlannedOrderSide.Long,
                 100_000m,
                 new OrderPlanningRiskLimits(1m, 100m),
                 0m,
-                0m,
-                0,
-                context.Bars,
-                context.Snapshots));
+                0m));
 
         Assert.True(result.IsAccepted);
         Assert.Equal(1_000, result.Order?.ShareQuantity);
@@ -127,6 +118,28 @@ public sealed class StrategyOrderPlannerTests
             IsAboveBollingerMiddle: true,
             IsMacdHistogramPositive: true,
             IsMacdNotBearish: true);
+
+    private static StrategyOrderPlan CreateOrderPlan(
+        StrategyDefinition strategy,
+        decimal initialStopPrice)
+    {
+        var triggeredAt = DateTimeOffset.Parse("2026-06-08T13:35:00Z");
+        return new StrategyOrderPlan(
+            strategy.StrategyId,
+            strategy.StrategyName,
+            "long",
+            triggeredAt,
+            triggeredAt,
+            strategy.Execution.Timeframe,
+            0,
+            100m,
+            initialStopPrice,
+            strategy.ExitRules.TargetRMultiple,
+            strategy.ExitRules.ProfitTargetMode,
+            null,
+            strategy.Execution.SlippageBps,
+            triggeredAt.AddMinutes(5));
+    }
 
     private static (
         IReadOnlyList<OhlcvBar> Bars,

@@ -978,7 +978,7 @@ public sealed record MobileWishlistDeskRowResponse(
     MobileNewsItem? LatestNews,
     MobileRunningTrade? Trade)
 {
-    public string StatusText => HasTrade ? "In trade" : HasSignal ? "Eligible" : "Watching";
+    public string StatusText => HasTrade ? "In trade" : HasSignal ? "Observed setup" : "Watching";
 
     public string DetailText => HasTrade && Trade is not null
         ? Trade.PlText
@@ -1403,7 +1403,8 @@ public sealed record MobileAutomationSessionSnapshot(
     string? ExitReason,
     IReadOnlyList<string> Events,
     string? SourceTitle,
-    string? SourceMessage)
+    string? SourceMessage,
+    bool ExitSafetyOrdersSubmitted = false)
 {
     public string ProgressText => $"{Ticker} {Status} - {CurrentStage}";
     public string LatestEvent => Events.LastOrDefault() ?? "No events yet.";

@@ -113,12 +113,33 @@ public sealed class EntryGateChain(
             new { session = session?.Session.ToString(), session?.TradeDate, error = calendarError },
             now, cancellationToken);
 
-        var candidate = await candidates.GetAsync(submission.Candidate.CandidateId, cancellationToken);
+        var candidate = submission.OperatorOverride is not null
+            ? null
+            : await candidates.GetAsync(submission.Candidate.CandidateId, cancellationToken);
+        var candidateTransitions = candidate is null
+            ? []
+            : await candidates.GetTransitionsAsync(candidate.CandidateId, cancellationToken);
+        var persistedTrigger = candidateTransitions.LastOrDefault(transition =>
+            transition.NewState == TradingFlow.Domain.Strategies.StrategyCandidateState.Triggered &&
+            transition.Sequence == candidate?.Version &&
+            transition.SemanticDecisionSha256.Equals(
+                submission.Candidate.SemanticDecisionSha256,
+                StringComparison.Ordinal));
         var candidateAge = candidate is null ? (TimeSpan?)null : now - candidate.RevalidatedAtUtc.ToUniversalTime();
-        var candidateValid = candidate is not null &&
-            candidate.State.Equals("SETUP_VALID", StringComparison.Ordinal) &&
+        var candidateValid = submission.OperatorOverride is not null ||
+            candidate is not null &&
+            candidate.State == TradingFlow.Domain.Strategies.StrategyCandidateState.Triggered &&
+            persistedTrigger is not null &&
             candidate.Symbol.Equals(submission.Order.Ticker, StringComparison.OrdinalIgnoreCase) &&
             candidate.SelectedStrategy?.Equals(submission.StrategyId, StringComparison.Ordinal) == true &&
+            candidate.Version == submission.Candidate.CandidateVersion &&
+            candidate.SemanticDecisionSha256.Equals(
+                submission.Candidate.SemanticDecisionSha256,
+                StringComparison.Ordinal) &&
+            (submission.StrategyIdentity is null || candidate.StrategyContentSha256.Equals(
+                submission.StrategyIdentity.ContentSha256,
+                StringComparison.Ordinal)) &&
+            candidate.ExpiresAtUtc > now &&
             candidateAge is { } age && age >= TimeSpan.Zero && age <= options.SetupMaxAge;
         await RequireAsync(
             submission, results, EntryGateSlot.CandidateState,
@@ -126,8 +147,19 @@ public sealed class EntryGateChain(
             new
             {
                 available = candidate is not null,
+                operatorOverride = submission.OperatorOverride is not null,
+                operatorOverrideActor = submission.OperatorOverride?.Actor,
+                operatorOverrideReason = submission.OperatorOverride?.Reason,
                 candidate?.State,
                 candidate?.RevalidatedAtUtc,
+                candidate?.ExpiresAtUtc,
+                candidate?.Version,
+                triggerTransitionPersisted = persistedTrigger is not null,
+                triggerTransitionSequence = persistedTrigger?.Sequence,
+                submittedVersion = submission.Candidate.CandidateVersion,
+                semanticDecisionMatches = candidate?.SemanticDecisionSha256.Equals(
+                    submission.Candidate.SemanticDecisionSha256,
+                    StringComparison.Ordinal),
                 candidateAgeMs = candidateAge?.TotalMilliseconds,
                 maxAgeMs = options.SetupMaxAge.TotalMilliseconds,
                 symbolMatches = candidate?.Symbol.Equals(submission.Order.Ticker, StringComparison.OrdinalIgnoreCase),

@@ -58,10 +58,10 @@
     };
 
     static string Verdict(bool hasSignal, bool hasQuote) =>
-        hasSignal ? "ELIGIBLE" : hasQuote ? "WATCHING" : "BLOCKED";
+        hasSignal ? "OBSERVED SETUP" : hasQuote ? "WATCHING" : "NO QUOTE";
 
     static string ShortVerdict(bool hasSignal, bool hasQuote) =>
-        hasSignal ? "ELIG" : hasQuote ? "WATCH" : "BLOCK";
+        hasSignal ? "SETUP" : hasQuote ? "WATCH" : "NO QUOTE";
 }
 
 @if (!Model.EnvironmentState.IsEnabled)
@@ -318,7 +318,7 @@
         <span class="metric-value @SignedClass(Model.TotalPl)">@SignedMoney(Model.TotalPl)</span>
     </div>
     <div>
-        <span class="micro-label">Eligible</span>
+        <span class="micro-label">Observed setups</span>
         <span class="metric-value">@Model.CountFor("signal")</span>
     </div>
     <div class="@(status.AdmissionStatus == "allowed" ? null : "is-attention")">
