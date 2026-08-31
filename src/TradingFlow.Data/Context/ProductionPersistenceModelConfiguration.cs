@@ -47,6 +47,7 @@ internal static class ProductionPersistenceModelConfiguration
         entity.ToTable("order_intents");
         entity.HasKey(record => record.IntentId);
         ConfigureProvenance(entity);
+        entity.Property(record => record.Kind).HasConversion<string>().HasMaxLength(40).IsRequired();
         entity.Property(record => record.ClientOrderId).HasMaxLength(100).IsRequired();
         entity.Property(record => record.StrategyId).HasMaxLength(120).IsRequired();
         entity.Property(record => record.Symbol).HasMaxLength(20).IsRequired();
@@ -63,8 +64,17 @@ internal static class ProductionPersistenceModelConfiguration
             record.SessionDate,
             record.SequenceNumber
         }).IsUnique();
-        entity.HasIndex(record => record.CandidateId);
+        entity.HasIndex(record => record.CandidateId)
+            .HasFilter("candidate_id IS NOT NULL")
+            .IsUnique();
         entity.HasIndex(record => new { record.Symbol, record.CreatedAtUtc });
+        entity.Property(record => record.CandidateSemanticDecisionSha256).HasMaxLength(64);
+        entity.Property(record => record.CandidateTriggeredEvidenceSha256).HasMaxLength(64);
+        entity.Property(record => record.CandidateConsumptionEvidenceSha256).HasMaxLength(64);
+        entity.HasOne<CandidateRecord>()
+            .WithMany()
+            .HasForeignKey(record => record.CandidateId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 
     private static void ConfigureOrderEvents(EntityTypeBuilder<OrderEventRecord> entity)

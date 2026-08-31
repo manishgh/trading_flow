@@ -10,6 +10,9 @@ namespace TradingFlow.Tests;
 
 public sealed class EntryDecisionPersistenceTests
 {
+    private static readonly DateTimeOffset GateTime =
+        new(2026, 7, 22, 14, 30, 0, TimeSpan.Zero);
+
     [Fact]
     public async Task CandidateRepository_DoesNotMutatePersistedDiscoveryEvidenceOnReplay()
     {
@@ -109,6 +112,209 @@ public sealed class EntryDecisionPersistenceTests
         Assert.Empty(await context.ProductionRuns.AsNoTracking().ToArrayAsync());
     }
 
+    [Fact]
+    public async Task GateEvaluationRepository_RejectionAtomicallyRiskBlocksTriggeredCandidate()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        var run = CreateRun();
+        var candidateId = Guid.NewGuid();
+        var semanticHash = new string('c', 64);
+        await SeedTriggeredCandidateAsync(database.Factory, run, candidateId, semanticHash, GateTime.AddMinutes(5));
+        var repository = new SqliteGateEvaluationRepository(
+            database.Factory,
+            new FixedTimeProvider(GateTime));
+        var requests = RejectedGatePrefix(candidateId, GateTime);
+        var rejection = new CandidateGateRejection(
+            candidateId,
+            3,
+            semanticHash,
+            "MSFT",
+            "intraday.test.v1",
+            "calendar_window",
+            RejectCode.REJECT_SETUP_INVALID);
+
+        var saved = await repository.AppendBatchAsync(run, requests, rejection);
+        var replayed = await repository.AppendBatchAsync(run, requests, rejection);
+
+        Assert.Equal(2, saved.Count);
+        Assert.Equal(2, replayed.Count);
+        await using var context = await database.Factory.CreateDbContextAsync();
+        var candidate = await context.Candidates.AsNoTracking().SingleAsync();
+        var transitions = await context.CandidateTransitions
+            .AsNoTracking()
+            .OrderBy(item => item.Sequence)
+            .ToArrayAsync();
+        Assert.Equal(StrategyCandidateState.RiskBlocked, candidate.State);
+        Assert.Equal(4, candidate.Version);
+        Assert.Equal(GateTime, candidate.RevalidatedAtUtc);
+        Assert.Equal(2, transitions.Length);
+        Assert.Equal(StrategyCandidateState.RiskBlocked, transitions[^1].NewState);
+        Assert.Equal("candidate_blocked_by_entry_gate", transitions[^1].ReasonCode);
+        Assert.Equal(4, await context.GateEvaluations.CountAsync());
+        Assert.All(
+            await context.GateEvaluations.AsNoTracking().ToArrayAsync(),
+            evaluation => Assert.Equal(GateTime, evaluation.EvaluatedAtUtc));
+    }
+
+    [Fact]
+    public async Task GateEvaluationRepository_ExpiredCandidate_CommitsExpiredOutcome()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        var run = CreateRun();
+        var candidateId = Guid.NewGuid();
+        var semanticHash = new string('c', 64);
+        await SeedTriggeredCandidateAsync(database.Factory, run, candidateId, semanticHash, GateTime.AddTicks(-1));
+        var repository = new SqliteGateEvaluationRepository(
+            database.Factory,
+            new FixedTimeProvider(GateTime));
+
+        await repository.AppendBatchAsync(
+            run,
+            RejectedGatePrefix(candidateId, GateTime),
+            new CandidateGateRejection(
+                candidateId,
+                3,
+                semanticHash,
+                "MSFT",
+                "intraday.test.v1",
+                "calendar_window",
+                RejectCode.REJECT_SETUP_INVALID));
+
+        await using var context = await database.Factory.CreateDbContextAsync();
+        var candidate = await context.Candidates.AsNoTracking().SingleAsync();
+        var terminal = await context.CandidateTransitions
+            .AsNoTracking()
+            .OrderBy(item => item.Sequence)
+            .LastAsync();
+        Assert.Equal(StrategyCandidateState.Expired, candidate.State);
+        Assert.Equal(StrategyCandidateState.Expired, terminal.NewState);
+        Assert.Equal("candidate_expired_during_entry_gates", terminal.ReasonCode);
+    }
+
+    [Fact]
+    public async Task GateEvaluationRepository_MissingTriggeredTransition_RollsBackGateAudit()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        var run = CreateRun();
+        var candidateId = Guid.NewGuid();
+        var semanticHash = new string('c', 64);
+        await SeedTriggeredCandidateAsync(
+            database.Factory,
+            run,
+            candidateId,
+            semanticHash,
+            GateTime.AddMinutes(5),
+            includeTransition: false);
+        var repository = new SqliteGateEvaluationRepository(
+            database.Factory,
+            new FixedTimeProvider(GateTime));
+
+        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => repository.AppendBatchAsync(
+            run,
+            RejectedGatePrefix(candidateId, GateTime),
+            new CandidateGateRejection(
+                candidateId,
+                3,
+                semanticHash,
+                "MSFT",
+                "intraday.test.v1",
+                "calendar_window",
+                RejectCode.REJECT_SETUP_INVALID)));
+
+        await using var context = await database.Factory.CreateDbContextAsync();
+        Assert.Empty(await context.GateEvaluations.AsNoTracking().ToArrayAsync());
+        var candidate = await context.Candidates.AsNoTracking().SingleAsync();
+        Assert.Equal(StrategyCandidateState.Triggered, candidate.State);
+        Assert.Equal(3, candidate.Version);
+    }
+
+    [Fact]
+    public async Task GateEvaluationRepository_MismatchedSubmissionIdentity_AuditsWithoutBlockingCandidate()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        var run = CreateRun();
+        var candidateId = Guid.NewGuid();
+        var semanticHash = new string('c', 64);
+        await SeedTriggeredCandidateAsync(database.Factory, run, candidateId, semanticHash, GateTime.AddMinutes(5));
+        var repository = new SqliteGateEvaluationRepository(
+            database.Factory,
+            new FixedTimeProvider(GateTime));
+
+        await repository.AppendBatchAsync(
+            run,
+            RejectedGatePrefix(candidateId, GateTime),
+            new CandidateGateRejection(
+                candidateId,
+                3,
+                semanticHash,
+                "AAPL",
+                "intraday.test.v1",
+                "calendar_window",
+                RejectCode.REJECT_SETUP_INVALID));
+
+        await using var context = await database.Factory.CreateDbContextAsync();
+        var candidate = await context.Candidates.AsNoTracking().SingleAsync();
+        Assert.Equal(StrategyCandidateState.Triggered, candidate.State);
+        Assert.Equal(3, candidate.Version);
+        Assert.Single(await context.CandidateTransitions.AsNoTracking().ToArrayAsync());
+        Assert.Equal(2, await context.GateEvaluations.CountAsync());
+    }
+
+    private static GateEvaluationAppendRequest[] RejectedGatePrefix(
+        Guid candidateId,
+        DateTimeOffset evaluatedAtUtc) =>
+    [
+        new(candidateId, null, 1, "system_state", true, null, evaluatedAtUtc, "{\"allowed\":true}"),
+        new(candidateId, null, 2, "calendar_window", false,
+            RejectCode.REJECT_SETUP_INVALID, evaluatedAtUtc, "{\"session\":\"closed\"}")
+    ];
+
+    private static async Task SeedTriggeredCandidateAsync(
+        IDbContextFactory<TradingFlowDbContext> factory,
+        ProductionRun run,
+        Guid candidateId,
+        string semanticHash,
+        DateTimeOffset expiresAtUtc,
+        bool includeTransition = true)
+    {
+        var candidateRepository = new SqliteCandidateRepository(factory);
+        var candidate = CreateCandidate(
+            run,
+            candidateId,
+            GateTime.AddMinutes(-1),
+            GateTime.AddSeconds(-1),
+            100m,
+            5m);
+        await candidateRepository.UpsertDiscoveryAsync(run, candidate);
+        await using var context = await factory.CreateDbContextAsync();
+        var persisted = await context.Candidates.SingleAsync(record => record.CandidateId == candidateId);
+        persisted.State = StrategyCandidateState.Triggered;
+        persisted.Version = 3;
+        persisted.ExpiresAtUtc = expiresAtUtc;
+        persisted.SemanticDecisionSha256 = semanticHash;
+        if (includeTransition)
+        {
+            context.CandidateTransitions.Add(new CandidateTransitionRecord
+            {
+                CandidateId = candidateId,
+                Sequence = 3,
+                PreviousState = StrategyCandidateState.Armed,
+                NewState = StrategyCandidateState.Triggered,
+                OccurredAtUtc = GateTime.AddSeconds(-1),
+                ReasonCode = "execution_trigger_satisfied",
+                Source = "strategy_decision_kernel",
+                SemanticDecisionSha256 = semanticHash,
+                EvidenceJson = "{}",
+                RunId = run.RunId,
+                SchemaVersion = run.SchemaVersion,
+                ConfigHash = run.ConfigHash,
+                CodeVersion = run.CodeVersion
+            });
+        }
+
+        await context.SaveChangesAsync();
+    }
+
     private static ProductionRun CreateRun() => new()
     {
         RunId = Guid.NewGuid(),
@@ -187,5 +393,10 @@ public sealed class EntryDecisionPersistenceTests
         DbContextOptions<TradingFlowDbContext> options) : IDbContextFactory<TradingFlowDbContext>
     {
         public TradingFlowDbContext CreateDbContext() => new(options);
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset timestampUtc) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => timestampUtc;
     }
 }

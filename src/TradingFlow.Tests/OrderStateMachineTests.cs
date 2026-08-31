@@ -481,6 +481,9 @@ public sealed class SqliteOrderEventRepositoryTests
 
     private sealed class OrderEventTestDatabase : IAsyncDisposable
     {
+        private static readonly DateTimeOffset IntentCreatedAtUtc =
+            new(2026, 7, 21, 14, 30, 0, TimeSpan.Zero);
+
         private readonly string root;
         private readonly DbContextOptions<TradingFlowDbContext> options;
 
@@ -492,7 +495,9 @@ public sealed class SqliteOrderEventRepositoryTests
             this.root = root;
             this.options = options;
             ContextFactory = contextFactory;
-            Intents = new SqliteOrderIntentRepository(contextFactory);
+            Intents = new SqliteOrderIntentRepository(
+                contextFactory,
+                new FixedTimeProvider(IntentCreatedAtUtc));
             Events = new SqliteOrderEventRepository(contextFactory);
         }
 
@@ -518,7 +523,7 @@ public sealed class SqliteOrderEventRepositoryTests
 
         public TradingFlowDbContext CreateContext() => new(options);
 
-        public Task<OrderIntentRecord> ReserveAsync()
+        public async Task<OrderIntentRecord> ReserveAsync()
         {
             var run = new ProductionRun
             {
@@ -532,6 +537,7 @@ public sealed class SqliteOrderEventRepositoryTests
             };
             var reservation = new OrderIntentReservation(
                 Guid.NewGuid(),
+                Kind: OrderIntentKind.OperatorEntry,
                 CandidateId: null,
                 StrategyId: "SWGA",
                 Symbol: "MSFT",
@@ -542,9 +548,9 @@ public sealed class SqliteOrderEventRepositoryTests
                 LimitPrice: 100m,
                 StopPrice: 98m,
                 SessionDate: new DateOnly(2026, 7, 21),
-                CreatedAtUtc: new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero),
+                CreatedAtUtc: IntentCreatedAtUtc,
                 RequestJson: "{\"symbol\":\"MSFT\",\"quantity\":10}");
-            return Intents.ReserveAsync(run, reservation);
+            return (await Intents.ReserveAsync(run, reservation)).Intent;
         }
 
         public OrderTransitionRequest CreateTransition(
@@ -601,5 +607,10 @@ public sealed class SqliteOrderEventRepositoryTests
         public Task<TradingFlowDbContext> CreateDbContextAsync(
             CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset timestampUtc) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => timestampUtc;
     }
 }

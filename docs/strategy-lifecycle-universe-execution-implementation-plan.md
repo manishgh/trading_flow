@@ -1,6 +1,16 @@
 # Strategy Lifecycle, Universe, And Execution Implementation Plan
 
-**Status:** Phases 0 through 4 complete. Phase 5 has not started.
+**Status:** Phases 0 through 4 complete. Phase 5 is in progress. Its atomic
+candidate/order-intent and terminal gate-outcome checkpoint is complete; portfolio
+risk reservation, recoverable dispatch, full protective ownership, and the shared
+execution simulator remain open.
+
+The completed Phase 5 checkpoint also binds strategy authorization and provider
+session evidence inside the entry-gate transaction boundary, terminalizes a candidate
+that expires before intent reservation, and gives protective-stop repairs a
+deterministic position-generation identity. It intentionally fails closed for a
+durable unsent `INTENT` or uncertain `SUBMITTED` order until the recoverable
+dispatcher checkpoint is implemented.
 
 **Prepared:** 2026-08-27
 

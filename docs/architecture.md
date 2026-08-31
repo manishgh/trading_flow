@@ -70,9 +70,27 @@ each other's setup.
 
 The kernel's canonical order plan freezes strategy direction, trigger reference,
 completed pre-fill stop, target policy/reference, slippage, and expiry. Account risk,
-portfolio reservations, broker intent creation, fills, and position protection remain
-downstream responsibilities. Transactional `Triggered -> Consumed` with order intent
-creation is the first Phase 5 boundary and is not claimed by Phase 4.
+portfolio reservations, fills, and position protection remain downstream
+responsibilities. The first Phase 5 checkpoint now atomically commits
+`Triggered -> Consumed`, the immutable order intent, its initial `INTENT` event, and
+the evidence hashes that bind them. A database invariant permits only one intent per
+candidate. An exact candidate that expires before reservation is atomically moved to
+`Expired` without creating an intent. Strategy authorization and authoritative
+provider-session evidence are resolved in the ordered gate chain; the provider trade
+date, rather than a caller timestamp, owns the session-scoped intent identity.
+
+Protective-stop reconciliation derives one deterministic owner intent per persisted
+position generation, symbol, side, and replacement revision. A nonterminal owner is
+reused when it is absent from a potentially stale broker snapshot, preventing changed
+prices from creating a sibling stop. Broker-visible active coverage may add a
+deterministic supplemental revision for only the remaining deficit. Canceled or
+rejected owners may advance. A filled owner advances only after fresh broker queries
+confirm both the fill and the exact remaining position. Broker/local quantity
+mismatches continue through protective handling under EXE-08/09 while globally
+blocking new entries. Durable dispatch recovery,
+portfolio-risk reservation, and
+complete partial-fill protection remain open Phase 5 boundaries and are not implied
+by this checkpoint.
 
 Provider publication, receipt, update, and sentiment-completion timestamps remain
 separate. A catalyst can influence a decision only at its recorded decision-known
@@ -319,10 +337,20 @@ append-only events. Mutable paper-order rows remain UI projections and must not 
 used to infer terminal broker state. In particular, absence from an open-order
 snapshot is not evidence of fill, cancellation, rejection, or expiry.
 
-At the current Phase 4 checkpoint, the triggered candidate and order-intent write are
-not yet one transaction. Phase 5 adds atomic candidate consumption, a unique candidate
-to intent invariant, portfolio reservations, and idempotent terminal outcomes before
-this path may be treated as the final production order boundary.
+The current Phase 5 checkpoint consumes an exact, unexpired `Triggered` candidate and
+creates its order intent in one immediate SQLite transaction. The compare-and-swap
+binds run, candidate version, symbol, strategy, semantic decision hash, and persisted
+trigger evidence. Exact intent replays verify the stored consumption evidence; a
+different intent cannot reuse the candidate. Rejected entry-gate prefixes commit with
+an idempotent `RiskBlocked` or `Expired` transition in the same transaction. Operator
+overrides are audited but do not mutate strategy candidates.
+
+This is not yet the final production order boundary. Portfolio buying-power/heat/slot
+reservation is not atomic with the intent; a durable dispatcher and complete recovery
+policy for stranded `INTENT`/`SUBMITTED` work remain; protective intents do not yet
+carry full parent position/fill ownership; and the deterministic shared execution
+simulator is still outstanding. Paper/live short entry remains fail-closed. Extended
+hours remains an explicit provider-validated limit/DAY option and defaults off.
 
 Every broker position is also subject to the EXE-09 protective-order invariant.
 Startup and periodic account reconciliation, plus an immediate REST cross-check after

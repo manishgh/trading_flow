@@ -73,6 +73,16 @@ public sealed class DatabaseMigrationTests
         var identityColumns = await ReadColumnsAsync(connection, "AspNetUsers");
         Assert.Contains("PasswordHash", identityColumns);
         Assert.DoesNotContain("Password", identityColumns);
+        Assert.Equal(
+            1,
+            await ScalarLongAsync(
+                connection,
+                "SELECT \"unique\" FROM pragma_index_list('order_intents') WHERE name = 'IX_order_intents_candidate_id';"));
+        Assert.Equal(
+            1,
+            await ScalarLongAsync(
+                connection,
+                "SELECT partial FROM pragma_index_list('order_intents') WHERE name = 'IX_order_intents_candidate_id';"));
     }
 
     [Fact]

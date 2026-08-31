@@ -14,6 +14,10 @@ public sealed record ActiveOrderIntent(
 /// </summary>
 public interface IOrderIntentRepository
 {
+    Task<OrderIntentRecord?> GetByIntentIdAsync(
+        Guid intentId,
+        CancellationToken cancellationToken = default);
+
     Task<OrderIntentRecord?> GetByClientOrderIdAsync(
         string clientOrderId,
         CancellationToken cancellationToken = default);
@@ -23,13 +27,46 @@ public interface IOrderIntentRepository
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Atomically creates the owning run and reserves one immutable intent. Repeating the
-    /// same intent ID returns the original row and therefore the original client order ID.
+    /// Atomically creates the owning run and reserves one immutable intent. A strategy
+    /// reservation consumes its Triggered candidate in the same transaction. Repeating
+    /// the same intent ID returns the original row and therefore the original client
+    /// order ID.
     /// </summary>
-    Task<OrderIntentRecord> ReserveAsync(
+    Task<OrderIntentReservationResult> ReserveAsync(
         ProductionRun run,
         OrderIntentReservation reservation,
         CancellationToken cancellationToken = default);
+}
+
+public sealed record OrderIntentReservationResult(
+    OrderIntentRecord Intent,
+    bool Created,
+    string OwningRunStatus);
+
+public sealed class CandidateOrderIntentConflictException(
+    Guid candidateId,
+    Guid requestedIntentId,
+    Guid? owningIntentId = null,
+    Exception? innerException = null) : InvalidOperationException(
+        owningIntentId is { } owner
+            ? $"Candidate {candidateId:N} is already owned by intent {owner:N}; intent {requestedIntentId:N} was rejected."
+            : $"Candidate {candidateId:N} could not be reserved by intent {requestedIntentId:N} because another intent won the reservation.",
+        innerException)
+{
+    public Guid CandidateId { get; } = candidateId;
+    public Guid RequestedIntentId { get; } = requestedIntentId;
+    public Guid? OwningIntentId { get; } = owningIntentId;
+}
+
+public sealed class ExpiredCandidateOrderIntentException(
+    Guid candidateId,
+    Guid requestedIntentId,
+    DateTimeOffset expiredAtUtc) : InvalidOperationException(
+        $"Candidate {candidateId:N} expired at {expiredAtUtc:O} before intent {requestedIntentId:N} could consume it.")
+{
+    public Guid CandidateId { get; } = candidateId;
+    public Guid RequestedIntentId { get; } = requestedIntentId;
+    public DateTimeOffset ExpiredAtUtc { get; } = expiredAtUtc;
 }
 
 /// <summary>
@@ -38,6 +75,7 @@ public interface IOrderIntentRepository
 /// </summary>
 public sealed record OrderIntentReservation(
     Guid IntentId,
+    OrderIntentKind Kind,
     Guid? CandidateId,
     string StrategyId,
     string Symbol,
@@ -49,4 +87,6 @@ public sealed record OrderIntentReservation(
     decimal? StopPrice,
     DateOnly SessionDate,
     DateTimeOffset CreatedAtUtc,
-    string RequestJson);
+    string RequestJson,
+    int? CandidateExpectedVersion = null,
+    string? CandidateSemanticDecisionSha256 = null);

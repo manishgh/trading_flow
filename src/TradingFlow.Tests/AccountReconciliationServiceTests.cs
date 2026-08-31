@@ -33,6 +33,7 @@ public sealed class AccountReconciliationServiceTests
         Assert.Equal("reconcile_mismatch", mismatch.Status);
         Assert.Contains(mismatch.Differences, item => item.Kind == "position_quantity" && item.Key == "MSFT");
         Assert.Contains(mismatch.Differences, item => item.Kind == "missing_protective_order" && item.Key == "MSFT");
+        Assert.Contains("MSFT", fixture.Protector.Symbols);
         Assert.False(fixture.Admission.GetSnapshot().EntriesAllowed);
         Assert.Contains(fixture.Admission.GetSnapshot().Blocks, block => block.Code == "RECONCILE_MISMATCH");
 

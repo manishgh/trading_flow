@@ -1,9 +1,17 @@
+using TradingFlow.Domain.Orders;
+
 namespace TradingFlow.Domain.Persistence;
 
 public sealed class OrderIntentRecord : OperationalRecord
 {
     public Guid IntentId { get; set; }
+    public OrderIntentKind Kind { get; set; }
     public Guid? CandidateId { get; set; }
+    public int? CandidateTriggeredVersion { get; set; }
+    public int? CandidateConsumedVersion { get; set; }
+    public string? CandidateSemanticDecisionSha256 { get; set; }
+    public string? CandidateTriggeredEvidenceSha256 { get; set; }
+    public string? CandidateConsumptionEvidenceSha256 { get; set; }
     public string ClientOrderId { get; set; } = string.Empty;
     public string StrategyId { get; set; } = string.Empty;
     public string Symbol { get; set; } = string.Empty;

@@ -43,6 +43,470 @@ public sealed class ProtectiveOrderInvariantServiceTests
         Assert.Equal("sell", captured.Side);
         Assert.Equal(10m, captured.Quantity);
         Assert.Equal(98m, captured.StopPrice);
+        Assert.Equal("ledger:1:SWGA-B-MSFT-20260721-001-12345678", captured.PositionGenerationIdentity);
+        Assert.Equal(
+            ProtectiveOrderIntentIdFactory.Create(
+                "MSFT",
+                "sell",
+                captured.PositionGenerationIdentity,
+                captured.ProtectionRevision),
+            captured.IntentId);
+    }
+
+    [Fact]
+    public async Task RepeatedMissingCoverage_UsesSameProtectiveIntentIdentity()
+    {
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var local = Snapshot("MSFT", 10m, "entry-client-id", 100m, "buy", now);
+        var intents = new Mock<IOrderIntentRepository>();
+        intents.Setup(repository => repository.GetByClientOrderIdAsync(local.LatestClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord { StopPrice = 98m });
+        var positions = new Mock<IPositionLedgerRepository>();
+        positions.Setup(repository => repository.GetCurrentAsync("MSFT", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(local);
+        var submitted = new List<ProtectiveStopSubmission>();
+        var submissions = new Mock<IOrderSubmissionService>();
+        submissions.Setup(service => service.SubmitProtectiveStopAsync(
+                It.IsAny<ProtectiveStopSubmission>(), It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>()))
+            .Callback<ProtectiveStopSubmission, IBrokerClient, CancellationToken>((submission, _, _) => submitted.Add(submission))
+            .ReturnsAsync(new OrderSubmissionResult("stop-1", "client-stop-1", Guid.NewGuid(), now));
+        var service = CreateService(intents.Object, positions.Object, submissions.Object, new EmptyMarketDataProvider(), now);
+        var brokerPosition = new BrokerPosition("MSFT", "long", 10m, 100m, 101m, 10m);
+
+        await service.EnsureAsync(Mock.Of<IBrokerClient>(), [brokerPosition], []);
+        await service.EnsureAsync(Mock.Of<IBrokerClient>(), [brokerPosition], []);
+
+        Assert.Equal(2, submitted.Count);
+        Assert.Equal(submitted[0].IntentId, submitted[1].IntentId);
+        Assert.Equal(submitted[0].PositionGenerationIdentity, submitted[1].PositionGenerationIdentity);
+        Assert.Equal(submitted[0].SessionDate, submitted[1].SessionDate);
+    }
+
+    [Fact]
+    public async Task TerminalProtectiveOwner_CreatesDeterministicReplacementRevision()
+    {
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var local = Snapshot("MSFT", 10m, "entry-client-id", 100m, "buy", now);
+        const string generation = "ledger:1:entry-client-id";
+        var firstIntentId = ProtectiveOrderIntentIdFactory.Create(
+            "MSFT", "sell", generation, protectionRevision: 0);
+        var intents = new Mock<IOrderIntentRepository>();
+        intents.Setup(repository => repository.GetByClientOrderIdAsync(
+                local.LatestClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord { StopPrice = 98m });
+        intents.Setup(repository => repository.GetByIntentIdAsync(
+                It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid intentId, CancellationToken _) =>
+                intentId == firstIntentId
+                    ? new OrderIntentRecord
+                    {
+                        IntentId = firstIntentId,
+                        Kind = OrderIntentKind.ProtectiveStop,
+                        ClientOrderId = "BACKSTOP-S-MSFT-20260721-001-11111111",
+                        Symbol = "MSFT",
+                        Side = "sell",
+                        RequestedQuantity = 10m,
+                        StopPrice = 98m,
+                        SessionDate = new DateOnly(2026, 7, 21),
+                        CreatedAtUtc = now
+                    }
+                    : null);
+        var orderEvents = new Mock<IOrderEventRepository>();
+        orderEvents.Setup(repository => repository.GetCurrentAsync(
+                "BACKSTOP-S-MSFT-20260721-001-11111111",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderStateSnapshot(
+                Guid.NewGuid(),
+                "BACKSTOP-S-MSFT-20260721-001-11111111",
+                "broker-stop-1",
+                OrderState.Canceled,
+                now,
+                now,
+                null,
+                null,
+                2));
+        var positions = new Mock<IPositionLedgerRepository>();
+        positions.Setup(repository => repository.GetCurrentAsync(
+                "MSFT", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(local);
+        ProtectiveStopSubmission? captured = null;
+        var submissions = new Mock<IOrderSubmissionService>();
+        submissions.Setup(service => service.SubmitProtectiveStopAsync(
+                It.IsAny<ProtectiveStopSubmission>(),
+                It.IsAny<IBrokerClient>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<ProtectiveStopSubmission, IBrokerClient, CancellationToken>(
+                (submission, _, _) => captured = submission)
+            .ReturnsAsync(new OrderSubmissionResult(
+                "broker-stop-2",
+                "BACKSTOP-S-MSFT-20260721-002-22222222",
+                Guid.NewGuid(),
+                now));
+        var service = CreateService(
+            intents.Object,
+            positions.Object,
+            submissions.Object,
+            new EmptyMarketDataProvider(),
+            now,
+            orderEvents.Object);
+
+        var repair = Assert.Single(await service.EnsureAsync(
+            Mock.Of<IBrokerClient>(),
+            [new BrokerPosition("MSFT", "long", 10m, 100m, 101m, 10m)],
+            []));
+
+        Assert.True(repair.Succeeded);
+        Assert.NotNull(captured);
+        Assert.Equal(1, captured.ProtectionRevision);
+        Assert.Equal(
+            ProtectiveOrderIntentIdFactory.Create(
+                "MSFT", "sell", generation, protectionRevision: 1),
+            captured.IntentId);
+    }
+
+    [Fact]
+    public async Task FilledProtectiveOwner_WithoutBrokerConfirmation_DoesNotAdvance()
+    {
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var local = Snapshot("MSFT", 10m, "entry-client-id", 100m, "buy", now);
+        const string generation = "ledger:1:entry-client-id";
+        const string clientOrderId = "BACKSTOP-S-MSFT-20260721-001-11111111";
+        var ownerId = ProtectiveOrderIntentIdFactory.Create(
+            "MSFT", "sell", generation, protectionRevision: 0);
+        var intents = new Mock<IOrderIntentRepository>();
+        intents.Setup(repository => repository.GetByIntentIdAsync(
+                ownerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord
+            {
+                IntentId = ownerId,
+                Kind = OrderIntentKind.ProtectiveStop,
+                ClientOrderId = clientOrderId,
+                Symbol = "MSFT",
+                Side = "sell",
+                RequestedQuantity = 10m,
+                StopPrice = 98m,
+                SessionDate = new DateOnly(2026, 7, 21),
+                CreatedAtUtc = now
+            });
+        var orderEvents = new Mock<IOrderEventRepository>();
+        orderEvents.Setup(repository => repository.GetCurrentAsync(
+                clientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderStateSnapshot(
+                Guid.NewGuid(),
+                clientOrderId,
+                "broker-stop-1",
+                OrderState.Filled,
+                now,
+                now,
+                10m,
+                98m,
+                2));
+        var positions = new Mock<IPositionLedgerRepository>();
+        positions.Setup(repository => repository.GetCurrentAsync(
+                "MSFT", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(local);
+        var submissions = new Mock<IOrderSubmissionService>(MockBehavior.Strict);
+        var service = CreateService(
+            intents.Object,
+            positions.Object,
+            submissions.Object,
+            new EmptyMarketDataProvider(),
+            now,
+            orderEvents.Object);
+
+        var repair = Assert.Single(await service.EnsureAsync(
+            Mock.Of<IBrokerClient>(),
+            [new BrokerPosition("MSFT", "long", 10m, 100m, 101m, 10m)],
+            []));
+
+        Assert.False(repair.Succeeded);
+        Assert.Contains("requires broker-confirmed fill and exact remaining position", repair.Detail, StringComparison.Ordinal);
+        submissions.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task FilledProtectiveOwner_WithBrokerConfirmedRemainingPosition_AdvancesRevision()
+    {
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var local = Snapshot("MSFT", 4m, "entry-client-id", 100m, "buy", now);
+        const string generation = "ledger:1:entry-client-id";
+        const string clientOrderId = "BACKSTOP-S-MSFT-20260721-001-11111111";
+        var ownerId = ProtectiveOrderIntentIdFactory.Create(
+            "MSFT", "sell", generation, protectionRevision: 0);
+        var intents = new Mock<IOrderIntentRepository>();
+        intents.Setup(repository => repository.GetByIntentIdAsync(
+                It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid intentId, CancellationToken _) =>
+                intentId == ownerId
+                    ? new OrderIntentRecord
+                    {
+                        IntentId = ownerId,
+                        Kind = OrderIntentKind.ProtectiveStop,
+                        ClientOrderId = clientOrderId,
+                        Symbol = "MSFT",
+                        Side = "sell",
+                        RequestedQuantity = 6m,
+                        StopPrice = 98m,
+                        SessionDate = new DateOnly(2026, 7, 21),
+                        CreatedAtUtc = now
+                    }
+                    : null);
+        intents.Setup(repository => repository.GetByClientOrderIdAsync(
+                local.LatestClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord { StopPrice = 98m });
+        var orderEvents = new Mock<IOrderEventRepository>();
+        orderEvents.Setup(repository => repository.GetCurrentAsync(
+                clientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderStateSnapshot(
+                Guid.NewGuid(),
+                clientOrderId,
+                "broker-stop-1",
+                OrderState.Filled,
+                now,
+                now,
+                6m,
+                98m,
+                2));
+        var positions = new Mock<IPositionLedgerRepository>();
+        positions.Setup(repository => repository.GetCurrentAsync(
+                "MSFT", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(local);
+        ProtectiveStopSubmission? captured = null;
+        var submissions = new Mock<IOrderSubmissionService>();
+        submissions.Setup(service => service.SubmitProtectiveStopAsync(
+                It.IsAny<ProtectiveStopSubmission>(),
+                It.IsAny<IBrokerClient>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<ProtectiveStopSubmission, IBrokerClient, CancellationToken>(
+                (submission, _, _) => captured = submission)
+            .ReturnsAsync(new OrderSubmissionResult(
+                "broker-stop-2",
+                "BACKSTOP-S-MSFT-20260721-002-22222222",
+                Guid.NewGuid(),
+                now));
+        var brokerPosition = new BrokerPosition("MSFT", "long", 4m, 100m, 101m, 4m);
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker.Setup(client => client.GetOrderByClientOrderIdAsync(
+                clientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ActiveBrokerOrder(
+                "broker-stop-1",
+                "MSFT",
+                "sell",
+                "filled",
+                "stop",
+                null,
+                98m,
+                6m,
+                now,
+                clientOrderId,
+                6m,
+                98m,
+                now));
+        broker.Setup(client => client.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([brokerPosition]);
+        var service = CreateService(
+            intents.Object,
+            positions.Object,
+            submissions.Object,
+            new EmptyMarketDataProvider(),
+            now,
+            orderEvents.Object);
+
+        var repair = Assert.Single(await service.EnsureAsync(
+            broker.Object,
+            [brokerPosition],
+            []));
+
+        Assert.True(repair.Succeeded);
+        Assert.NotNull(captured);
+        Assert.Equal(4m, captured.Quantity);
+        Assert.Equal(1, captured.ProtectionRevision);
+        broker.VerifyAll();
+    }
+
+    [Fact]
+    public async Task VisibleActiveOwner_WithCoverageDeficit_CreatesSupplementalRevision()
+    {
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var local = Snapshot("MSFT", 10m, "entry-client-id", 100m, "buy", now);
+        const string generation = "ledger:1:entry-client-id";
+        const string firstClientOrderId = "BACKSTOP-S-MSFT-20260721-001-11111111";
+        var firstIntentId = ProtectiveOrderIntentIdFactory.Create(
+            "MSFT", "sell", generation, protectionRevision: 0);
+        var intents = new Mock<IOrderIntentRepository>();
+        intents.Setup(repository => repository.GetByClientOrderIdAsync(
+                local.LatestClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord { StopPrice = 98m });
+        intents.Setup(repository => repository.GetByIntentIdAsync(
+                It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid intentId, CancellationToken _) =>
+                intentId == firstIntentId
+                    ? new OrderIntentRecord
+                    {
+                        IntentId = firstIntentId,
+                        Kind = OrderIntentKind.ProtectiveStop,
+                        ClientOrderId = firstClientOrderId,
+                        Symbol = "MSFT",
+                        Side = "sell",
+                        RequestedQuantity = 6m,
+                        StopPrice = 98m,
+                        SessionDate = new DateOnly(2026, 7, 21),
+                        CreatedAtUtc = now
+                    }
+                    : null);
+        var orderEvents = new Mock<IOrderEventRepository>();
+        orderEvents.Setup(repository => repository.GetCurrentAsync(
+                firstClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderStateSnapshot(
+                Guid.NewGuid(),
+                firstClientOrderId,
+                "broker-stop-1",
+                OrderState.Acked,
+                now,
+                now,
+                null,
+                null,
+                2));
+        var positions = new Mock<IPositionLedgerRepository>();
+        positions.Setup(repository => repository.GetCurrentAsync(
+                "MSFT", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(local);
+        ProtectiveStopSubmission? captured = null;
+        var submissions = new Mock<IOrderSubmissionService>();
+        submissions.Setup(service => service.SubmitProtectiveStopAsync(
+                It.IsAny<ProtectiveStopSubmission>(),
+                It.IsAny<IBrokerClient>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<ProtectiveStopSubmission, IBrokerClient, CancellationToken>(
+                (submission, _, _) => captured = submission)
+            .ReturnsAsync(new OrderSubmissionResult(
+                "broker-stop-2",
+                "BACKSTOP-S-MSFT-20260721-002-22222222",
+                Guid.NewGuid(),
+                now));
+        var service = CreateService(
+            intents.Object,
+            positions.Object,
+            submissions.Object,
+            new EmptyMarketDataProvider(),
+            now,
+            orderEvents.Object);
+        var visibleOwner = new ActiveBrokerOrder(
+            "broker-stop-1",
+            "MSFT",
+            "sell",
+            "new",
+            "stop",
+            null,
+            98m,
+            6m,
+            now,
+            firstClientOrderId,
+            0m,
+            null,
+            now);
+
+        var repair = Assert.Single(await service.EnsureAsync(
+            Mock.Of<IBrokerClient>(),
+            [new BrokerPosition("MSFT", "long", 10m, 100m, 101m, 10m)],
+            [visibleOwner]));
+
+        Assert.True(repair.Succeeded);
+        Assert.NotNull(captured);
+        Assert.Equal(4m, captured.Quantity);
+        Assert.Equal(1, captured.ProtectionRevision);
+        Assert.Equal(
+            ProtectiveOrderIntentIdFactory.Create(
+                "MSFT", "sell", generation, protectionRevision: 1),
+            captured.IntentId);
+    }
+
+    [Fact]
+    public async Task AmbiguousSubmission_WithChangedPriceAndCoverage_ReusesOriginalProtectionOwner()
+    {
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var bars = Enumerable.Range(0, 80)
+            .Select(index => new OhlcvBar(
+                "MSFT",
+                now.AddDays(index - 80),
+                "1d",
+                100m,
+                102m,
+                99m,
+                101m,
+                1_000_000m))
+            .ToArray();
+        OrderIntentRecord? persisted = null;
+        var intents = new Mock<IOrderIntentRepository>();
+        intents.Setup(repository => repository.GetByIntentIdAsync(
+                It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => persisted);
+        var positions = new Mock<IPositionLedgerRepository>();
+        positions.Setup(repository => repository.GetCurrentAsync(
+                "MSFT", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PositionLedgerSnapshot?)null);
+        var attempts = new List<ProtectiveStopSubmission>();
+        var submissions = new Mock<IOrderSubmissionService>();
+        submissions.Setup(service => service.SubmitProtectiveStopAsync(
+                It.IsAny<ProtectiveStopSubmission>(),
+                It.IsAny<IBrokerClient>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<ProtectiveStopSubmission, IBrokerClient, CancellationToken>((submission, _, _) =>
+            {
+                attempts.Add(submission);
+                persisted ??= new OrderIntentRecord
+                {
+                    IntentId = submission.IntentId,
+                    Kind = OrderIntentKind.ProtectiveStop,
+                    ClientOrderId = "BACKSTOP-S-MSFT-20260721-001-12345678",
+                    Symbol = submission.Symbol,
+                    Side = submission.Side,
+                    RequestedQuantity = submission.Quantity,
+                    StopPrice = submission.StopPrice,
+                    SessionDate = submission.SessionDate,
+                    CreatedAtUtc = submission.CreatedAtUtc
+                };
+            })
+            .ThrowsAsync(new TimeoutException("Broker response was not received."));
+        var orderEvents = new Mock<IOrderEventRepository>();
+        orderEvents.Setup(repository => repository.GetCurrentAsync(
+                It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string clientOrderId, CancellationToken _) =>
+                new OrderStateSnapshot(
+                    Guid.NewGuid(),
+                    clientOrderId,
+                    null,
+                    OrderState.Submitted,
+                    now,
+                    null,
+                    null,
+                    null,
+                    1));
+        var service = CreateService(
+            intents.Object,
+            positions.Object,
+            submissions.Object,
+            new FixedMarketDataProvider(bars),
+            now,
+            orderEvents.Object);
+
+        var first = Assert.Single(await service.EnsureAsync(
+            Mock.Of<IBrokerClient>(),
+            [new BrokerPosition("MSFT", "long", 10m, 100m, 100m, 0m)],
+            []));
+        var second = Assert.Single(await service.EnsureAsync(
+            Mock.Of<IBrokerClient>(),
+            [new BrokerPosition("MSFT", "long", 10m, 100m, 99m, -10m)],
+            [BrokerOrder("MSFT", "sell", "stop", 4m, 95m)]));
+
+        Assert.False(first.Succeeded);
+        Assert.False(second.Succeeded);
+        Assert.Equal(2, attempts.Count);
+        Assert.Equal(attempts[0].IntentId, attempts[1].IntentId);
+        Assert.Equal(attempts[0].Quantity, attempts[1].Quantity);
+        Assert.Equal(attempts[0].StopPrice, attempts[1].StopPrice);
+        Assert.Equal(attempts[0].SessionDate, attempts[1].SessionDate);
+        Assert.Equal(attempts[0].ProtectionRevision, attempts[1].ProtectionRevision);
     }
 
     [Fact]
@@ -239,7 +703,8 @@ public sealed class ProtectiveOrderInvariantServiceTests
         IPositionLedgerRepository positions,
         IOrderSubmissionService submissions,
         IMarketDataProvider marketData,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        IOrderEventRepository? orderEvents = null)
     {
         var run = new ProductionRun
         {
@@ -252,6 +717,7 @@ public sealed class ProtectiveOrderInvariantServiceTests
         };
         return new ProtectiveOrderInvariantService(
             intents,
+            orderEvents ?? Mock.Of<IOrderEventRepository>(),
             positions,
             submissions,
             new Lazy<IMarketDataProvider>(() => marketData),

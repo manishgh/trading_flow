@@ -43,6 +43,7 @@ public interface IProtectiveOrderInvariantService
 /// </summary>
 public sealed class ProtectiveOrderInvariantService(
     IOrderIntentRepository intents,
+    IOrderEventRepository orderEvents,
     IPositionLedgerRepository positions,
     IOrderSubmissionService submissions,
     Lazy<IMarketDataProvider> marketData,
@@ -108,19 +109,55 @@ public sealed class ProtectiveOrderInvariantService(
 
             try
             {
-                var quantity = Math.Abs(position.Qty) - coverage;
+                var currentCoverageDeficit = Math.Abs(position.Qty) - coverage;
+                if (currentCoverageDeficit != Decimal.Truncate(currentCoverageDeficit))
+                {
+                    throw new InvalidOperationException(
+                        "Alpaca does not support fractional-quantity GTC stop orders.");
+                }
+
+                var localPosition = await positions.GetCurrentAsync(symbol, cancellationToken);
+                var positionGenerationIdentity = localPosition is not null
+                    ? $"ledger:{localPosition.PositionEventId}:{localPosition.LatestClientOrderId}"
+                    : FormattableString.Invariant(
+                        $"broker:{position.Side}:{position.EntryPrice:G29}:{position.Qty:G29}");
+                var now = timeProvider.GetUtcNow();
+                var run = runContext.Run;
+                var protectiveSide = OppositeOrderSide(position);
+                var owner = await ResolveProtectionOwnerAsync(
+                    broker,
+                    position,
+                    symbol,
+                    protectiveSide,
+                    positionGenerationIdentity,
+                    effectiveOrders,
+                    cancellationToken);
+                var intentId = owner.IntentId;
+                var existingIntent = owner.Intent;
+                if (existingIntent is not null &&
+                    (existingIntent.Kind != OrderIntentKind.ProtectiveStop ||
+                     !existingIntent.Symbol.Equals(symbol, StringComparison.Ordinal) ||
+                     !existingIntent.Side.Equals(protectiveSide, StringComparison.Ordinal)))
+                {
+                    throw new InvalidOperationException(
+                        $"Protective owner {intentId:N} does not match position generation '{positionGenerationIdentity}'.");
+                }
+
+                // Once a position generation owns a protective intent, every retry
+                // reuses its immutable coverage request. Broker/order reconciliation
+                // must resolve that owner before later market snapshots may resize it.
+                var quantity = existingIntent?.RequestedQuantity ?? currentCoverageDeficit;
+                var stopPrice = existingIntent?.StopPrice ??
+                    await ResolveStopPriceAsync(position, localPosition, cancellationToken);
                 if (quantity != Decimal.Truncate(quantity))
                 {
                     throw new InvalidOperationException(
                         "Alpaca does not support fractional-quantity GTC stop orders.");
                 }
 
-                var stopPrice = await ResolveStopPriceAsync(position, cancellationToken);
-                var now = timeProvider.GetUtcNow();
-                var run = runContext.Run;
                 var result = await submissions.SubmitProtectiveStopAsync(
                     new ProtectiveStopSubmission(
-                        Guid.NewGuid(),
+                        intentId,
                         new ExecutionRunContext(
                             run.RunId,
                             run.Profile,
@@ -128,11 +165,16 @@ public sealed class ProtectiveOrderInvariantService(
                             run.CodeVersion,
                             run.StartedAtUtc),
                         symbol,
-                        OppositeOrderSide(position),
+                        protectiveSide,
                         quantity,
                         stopPrice,
-                        ExecutionRunContextFactory.ResolveSessionDate(now, ExchangeTimezone),
-                        now),
+                        existingIntent?.SessionDate ??
+                            ExecutionRunContextFactory.ResolveSessionDate(
+                                localPosition?.BrokerTimestampUtc ?? now,
+                                ExchangeTimezone),
+                        existingIntent?.CreatedAtUtc ?? now,
+                        positionGenerationIdentity,
+                        owner.Revision),
                     broker,
                     cancellationToken);
                 repairs.Add(new ProtectiveOrderRepair(
@@ -166,12 +208,81 @@ public sealed class ProtectiveOrderInvariantService(
             .Where(order => IsProtectiveFor(position, order))
             .Sum(RemainingQuantity);
 
+    private async Task<ProtectionOwner> ResolveProtectionOwnerAsync(
+        IBrokerClient broker,
+        BrokerPosition expectedPosition,
+        string symbol,
+        string side,
+        string positionGenerationIdentity,
+        IReadOnlyList<ActiveBrokerOrder> openOrders,
+        CancellationToken cancellationToken)
+    {
+        for (var revision = 0; revision < 10_000; revision++)
+        {
+            var intentId = ProtectiveOrderIntentIdFactory.Create(
+                symbol,
+                side,
+                positionGenerationIdentity,
+                revision);
+            var intent = await intents.GetByIntentIdAsync(intentId, cancellationToken);
+            if (intent is null)
+            {
+                return new ProtectionOwner(intentId, revision, null);
+            }
+
+            if (intent.Kind != OrderIntentKind.ProtectiveStop ||
+                !intent.Symbol.Equals(symbol, StringComparison.Ordinal) ||
+                !intent.Side.Equals(side, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Protective owner {intentId:N} does not match position generation '{positionGenerationIdentity}'.");
+            }
+
+            var state = await orderEvents.GetCurrentAsync(intent.ClientOrderId, cancellationToken)
+                ?? throw new InvalidOperationException(
+                    $"Protective owner {intent.ClientOrderId} has no lifecycle state.");
+            if (state.State == OrderState.Filled)
+            {
+                var brokerOrder = await broker.GetOrderByClientOrderIdAsync(
+                    intent.ClientOrderId,
+                    cancellationToken);
+                var brokerConfirmsFill = brokerOrder is not null &&
+                    brokerOrder.Status.Equals("filled", StringComparison.OrdinalIgnoreCase);
+                var refreshedPositions = await broker.GetOpenPositionsAsync(cancellationToken) ?? [];
+                var refreshedPosition = refreshedPositions
+                    .SingleOrDefault(position =>
+                        NormalizeSymbol(position.Ticker) == symbol &&
+                        position.Side.Equals(expectedPosition.Side, StringComparison.OrdinalIgnoreCase));
+                var brokerConfirmsRemainingPosition = refreshedPosition is not null &&
+                    Math.Abs(refreshedPosition.Qty) == Math.Abs(expectedPosition.Qty);
+                if (!brokerConfirmsFill || !brokerConfirmsRemainingPosition)
+                {
+                    throw new InvalidOperationException(
+                        $"Filled protective owner {intent.ClientOrderId} requires broker-confirmed fill and exact remaining position before replacement.");
+                }
+            }
+
+            var visibleAtBroker = openOrders.Any(order =>
+                order.ClientOrderId.Equals(intent.ClientOrderId, StringComparison.Ordinal) &&
+                NormalizeSymbol(order.Ticker) == symbol &&
+                order.Side.Equals(side, StringComparison.OrdinalIgnoreCase) &&
+                IsRestingStop(order));
+            if (!OrderStateMachine.IsTerminal(state.State) && !visibleAtBroker)
+            {
+                return new ProtectionOwner(intentId, revision, intent);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Protective replacement history exceeded the supported bound for {symbol}.");
+    }
+
     private async Task<decimal> ResolveStopPriceAsync(
         BrokerPosition brokerPosition,
+        PositionLedgerSnapshot? localPosition,
         CancellationToken cancellationToken)
     {
         var symbol = NormalizeSymbol(brokerPosition.Ticker);
-        var localPosition = await positions.GetCurrentAsync(symbol, cancellationToken);
         if (localPosition is not null &&
             !String.IsNullOrWhiteSpace(localPosition.LatestClientOrderId))
         {
@@ -268,4 +379,9 @@ public sealed class ProtectiveOrderInvariantService(
         !String.IsNullOrWhiteSpace(symbol)
             ? symbol.Trim().ToUpperInvariant()
             : throw new InvalidOperationException("Position symbol is required.");
+
+    private sealed record ProtectionOwner(
+        Guid IntentId,
+        int Revision,
+        OrderIntentRecord? Intent);
 }

@@ -10,27 +10,35 @@ public sealed class EntryGateChainTests
 {
     private static readonly DateTimeOffset Now =
         new(2026, 7, 22, 14, 30, 0, TimeSpan.Zero);
+    private static readonly StrategyArtifactIdentity StrategyIdentity =
+        new("INTRADAY-V1", "1.0.0", new string('d', 64));
 
     [Fact]
     public async Task ExecuteAsync_AllEvidencePasses_PersistsTwelveOrderedGatesBeforeSubmission()
     {
         var fixture = new Fixture();
         var submitted = false;
+        EntryGateApproval? approval = null;
 
         var result = await fixture.Chain.ExecuteAsync(
             fixture.Submission,
             fixture.Broker,
-            _ =>
+            (value, _) =>
             {
                 Assert.Equal(12, fixture.Evaluations.Requests.Count);
+                approval = value;
                 submitted = true;
                 return Task.FromResult("submitted");
             });
 
         Assert.True(submitted);
+        Assert.NotNull(approval);
+        Assert.Equal(new DateOnly(2026, 7, 22), approval!.TradeDate);
+        Assert.False(approval.SubmitOutsideRegularHours);
         Assert.Equal("submitted", result);
         Assert.Equal(Enumerable.Range(1, 12), fixture.Evaluations.Requests.Select(item => item.GateOrder));
         Assert.All(fixture.Evaluations.Requests, item => Assert.True(item.Passed));
+        Assert.Null(fixture.Evaluations.CandidateRejection);
         Assert.Equal(1, fixture.Broker.AccountCalls);
         Assert.Equal(1, fixture.Broker.PositionCalls);
         Assert.Equal(1, fixture.Broker.OpenOrderCalls);
@@ -45,11 +53,14 @@ public sealed class EntryGateChainTests
             fixture.Chain.ExecuteAsync(
                 fixture.Submission,
                 fixture.Broker,
-                _ => Task.FromResult("must-not-submit")));
+                (_, _) => Task.FromResult("must-not-submit")));
 
         Assert.Equal(EntryGateSlot.HaltOrLuld, exception.Slot);
         Assert.Equal(4, fixture.Evaluations.Requests.Count);
         Assert.False(fixture.Evaluations.Requests[^1].Passed);
+        Assert.NotNull(fixture.Evaluations.CandidateRejection);
+        Assert.Equal("halt_or_luld", fixture.Evaluations.CandidateRejection!.FailedGateName);
+        Assert.Equal(RejectCode.REJECT_HALT_OR_LULD, fixture.Evaluations.CandidateRejection.RejectCode);
         Assert.Equal(0, fixture.Broker.AccountCalls);
         Assert.Equal(0, fixture.Broker.PositionCalls);
         Assert.Equal(0, fixture.Broker.OpenOrderCalls);
@@ -68,7 +79,7 @@ public sealed class EntryGateChainTests
             fixture.Chain.ExecuteAsync(
                 fixture.Submission,
                 fixture.Broker,
-                _ => Task.FromResult("must-not-submit")));
+                (_, _) => Task.FromResult("must-not-submit")));
 
         Assert.Equal(EntryGateSlot.QuoteAge, exception.Slot);
         Assert.Equal(5, fixture.Evaluations.Requests.Count);
@@ -88,7 +99,7 @@ public sealed class EntryGateChainTests
             fixture.Chain.ExecuteAsync(
                 fixture.Submission,
                 fixture.Broker,
-                _ => Task.FromResult("must-not-submit")));
+                (_, _) => Task.FromResult("must-not-submit")));
 
         Assert.Equal(1, statuses.EnsureCalls);
         Assert.Equal(1, statuses.ReleaseCalls);
@@ -103,7 +114,7 @@ public sealed class EntryGateChainTests
             fixture.Chain.ExecuteAsync(
                 fixture.Submission,
                 fixture.Broker,
-                _ => Task.FromResult("must-not-submit")));
+                (_, _) => Task.FromResult("must-not-submit")));
 
         Assert.Equal(EntryGateSlot.CandidateState, exception.Slot);
         Assert.Equal(3, fixture.Evaluations.Requests.Count);
@@ -113,12 +124,72 @@ public sealed class EntryGateChainTests
         Assert.Equal(0, fixture.Broker.OpenOrderCalls);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_OperatorOverrideRejection_DoesNotRequestCandidateTransition()
+    {
+        var fixture = new Fixture(
+            SecurityTradingState.Halted,
+            operatorOverride: true);
+
+        await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
+            fixture.Chain.ExecuteAsync(
+                fixture.Submission,
+                fixture.Broker,
+                (_, _) => Task.FromResult("must-not-submit")));
+
+        Assert.Null(fixture.Evaluations.CandidateRejection);
+        Assert.False(fixture.Evaluations.Requests[^1].Passed);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SuspendedStrategy_IsRejectedInCandidateGateAndTerminalized()
+    {
+        var fixture = new Fixture();
+        await fixture.Authorizations.SuspendPaperExperimentAsync(
+            StrategyIdentity,
+            "suspend-for-test",
+            "test-grant",
+            "test-operator",
+            Now,
+            "Block new entries.");
+
+        var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
+            fixture.Chain.ExecuteAsync(
+                fixture.Submission,
+                fixture.Broker,
+                (_, _) => Task.FromResult("must-not-submit")));
+
+        Assert.Equal(EntryGateSlot.CandidateState, error.Slot);
+        Assert.NotNull(fixture.Evaluations.CandidateRejection);
+        Assert.Contains("strategyAuthorizationError", fixture.Evaluations.Requests[^1].InputsJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UsesServerClockForProviderSessionLookup()
+    {
+        var fixture = new Fixture();
+        fixture.Submission = fixture.Submission with
+        {
+            CreatedAtUtc = Now.AddDays(-2),
+            SessionDate = new DateOnly(2026, 7, 20)
+        };
+
+        var approval = await fixture.Chain.ExecuteAsync(
+            fixture.Submission,
+            fixture.Broker,
+            (value, _) => Task.FromResult(value));
+
+        Assert.Equal(Now, fixture.Broker.LastSessionRequestUtc);
+        Assert.Equal(new DateOnly(2026, 7, 22), approval.TradeDate);
+    }
+
     private sealed class Fixture
     {
         public Fixture(
             SecurityTradingState tradingState = SecurityTradingState.TradingObserved,
             ISecurityTradingStatusProvider? tradingStatusProvider = null,
-            bool includeTriggerTransition = true)
+            bool includeTriggerTransition = true,
+            bool operatorOverride = false)
         {
             var candidateId = Guid.NewGuid();
             const int candidateVersion = 3;
@@ -148,7 +219,16 @@ public sealed class EntryGateChainTests
                 new DateOnly(2026, 7, 22),
                 Now,
                 new FinalizedOrder(
-                    "MSFT", "test", 10, 100m, 98m, 104m, Now, String.Empty));
+                    "MSFT", "test", 10, 100m, 98m, 104m, Now, String.Empty),
+                StrategyIdentity: operatorOverride ? null : StrategyIdentity,
+                StrategySelectionMode: operatorOverride ? null : StrategySelectionMode.RunPaperShadow,
+                OperatorOverride: operatorOverride
+                    ? OperatorOverrideAuthorization.Issue(
+                        new ManualEntryOptions(ManualEntryPolicy.OperatorDirect),
+                        "test-operator",
+                        "test override",
+                        Now)
+                    : null);
             Candidates = new MemoryCandidateRepository(new CandidateRecord
             {
                 CandidateId = candidateId,
@@ -170,20 +250,25 @@ public sealed class EntryGateChainTests
                 SemanticDecisionSha256 = semanticDecisionSha256
             }, includeTriggerTransition);
             Evaluations = new RecordingGateEvaluationRepository();
+            Authorizations = new StrategyAuthorizationTestRegistry();
+            Authorizations.Seed(StrategyIdentity, StrategyExecutionAuthorization.PaperExperiment);
+            Authorizations.Seed(StrategyIdentity, StrategyExecutionAuthorization.PaperShadow);
             Broker = new TestBroker(Now);
             Chain = new EntryGateChain(
                 new EntryAdmissionControl(),
                 new PassThroughPositionConflictGuard(),
                 Candidates,
                 Evaluations,
+                Authorizations,
                 tradingStatusProvider ?? new FixedTradingStatusProvider(tradingState, Now),
                 new EntryGateOptions(20, 2_000, 20m, 15m, 15m, 100m, 75m, 1, 3),
                 new FixedTimeProvider(Now));
         }
 
-        public BracketOrderSubmission Submission { get; }
+        public BracketOrderSubmission Submission { get; set; }
         public MemoryCandidateRepository Candidates { get; }
         public RecordingGateEvaluationRepository Evaluations { get; }
+        public StrategyAuthorizationTestRegistry Authorizations { get; }
         public TestBroker Broker { get; }
         public EntryGateChain Chain { get; }
     }
@@ -278,12 +363,16 @@ public sealed class EntryGateChainTests
     {
         public IReadOnlyList<GateEvaluationAppendRequest> Requests { get; private set; } = [];
 
+        public CandidateGateRejection? CandidateRejection { get; private set; }
+
         public Task<IReadOnlyList<GateEvaluationRecord>> AppendBatchAsync(
             ProductionRun run,
             IReadOnlyList<GateEvaluationAppendRequest> evaluations,
+            CandidateGateRejection? candidateRejection = null,
             CancellationToken cancellationToken = default)
         {
             Requests = evaluations.ToArray();
+            CandidateRejection = candidateRejection;
             return Task.FromResult<IReadOnlyList<GateEvaluationRecord>>([]);
         }
     }
@@ -311,13 +400,17 @@ public sealed class EntryGateChainTests
         public int AccountCalls { get; private set; }
         public int PositionCalls { get; private set; }
         public int OpenOrderCalls { get; private set; }
+        public DateTimeOffset? LastSessionRequestUtc { get; private set; }
 
         public Task<TradingSessionSnapshot> GetSessionAsync(
             DateTimeOffset timestampUtc,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new TradingSessionSnapshot(
+            CancellationToken cancellationToken)
+        {
+            LastSessionRequestUtc = timestampUtc;
+            return Task.FromResult(new TradingSessionSnapshot(
                 new DateOnly(2026, 7, 22), EquityTradingSession.Regular,
                 timestampUtc, timestampUtc.AddHours(-1), timestampUtc.AddHours(5)));
+        }
 
         public Task<AssetTradingEligibility?> GetEligibilityAsync(
             string symbol,

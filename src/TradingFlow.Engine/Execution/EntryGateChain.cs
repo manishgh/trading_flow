@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Strategies;
 
 namespace TradingFlow.Engine.Execution;
 
@@ -50,9 +51,14 @@ public interface IEntryGateChain
     Task<T> ExecuteAsync<T>(
         BracketOrderSubmission submission,
         IBrokerClient brokerClient,
-        Func<CancellationToken, Task<T>> submit,
+        Func<EntryGateApproval, CancellationToken, Task<T>> submit,
         CancellationToken cancellationToken = default);
 }
+
+public sealed record EntryGateApproval(
+    DateOnly TradeDate,
+    EquityTradingSession Session,
+    bool SubmitOutsideRegularHours);
 
 /// <summary>
 /// Collects authoritative evidence lazily in binding order, persists every evaluated
@@ -63,6 +69,7 @@ public sealed class EntryGateChain(
     IPositionConflictGuard positionConflict,
     ICandidateRepository candidates,
     IGateEvaluationRepository evaluations,
+    IStrategyAuthorizationPolicy strategyAuthorizations,
     ISecurityTradingStatusProvider tradingStatuses,
     EntryGateOptions options,
     TimeProvider timeProvider) : IEntryGateChain
@@ -70,7 +77,7 @@ public sealed class EntryGateChain(
     public async Task<T> ExecuteAsync<T>(
         BracketOrderSubmission submission,
         IBrokerClient brokerClient,
-        Func<CancellationToken, Task<T>> submit,
+        Func<EntryGateApproval, CancellationToken, Task<T>> submit,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(submission);
@@ -89,7 +96,7 @@ public sealed class EntryGateChain(
         string? calendarError = null;
         try
         {
-            session = await brokerClient.GetSessionAsync(submission.CreatedAtUtc, cancellationToken);
+            session = await brokerClient.GetSessionAsync(now, cancellationToken);
             ExtendedHoursOrderPolicy.Validate(
                 session,
                 submission.OrderType,
@@ -126,8 +133,32 @@ public sealed class EntryGateChain(
                 submission.Candidate.SemanticDecisionSha256,
                 StringComparison.Ordinal));
         var candidateAge = candidate is null ? (TimeSpan?)null : now - candidate.RevalidatedAtUtc.ToUniversalTime();
+        StrategyEntryAdmission? strategyAdmission = null;
+        string? strategyAuthorizationError = null;
+        if (submission.OperatorOverride is null)
+        {
+            try
+            {
+                strategyAdmission = await strategyAuthorizations.AdmitNewEntryAsync(
+                    submission.StrategyIdentity
+                        ?? throw new UnauthorizedAccessException(
+                            "Strategy-routed entry has no immutable strategy identity."),
+                    submission.StrategySelectionMode
+                        ?? throw new UnauthorizedAccessException(
+                            "Strategy-routed entry has no explicit execution mode."),
+                    submission.IntentId,
+                    now,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                strategyAuthorizationError = exception.Message;
+            }
+        }
+
         var candidateValid = submission.OperatorOverride is not null ||
             candidate is not null &&
+            strategyAuthorizationError is null &&
             candidate.State == TradingFlow.Domain.Strategies.StrategyCandidateState.Triggered &&
             persistedTrigger is not null &&
             candidate.Symbol.Equals(submission.Order.Ticker, StringComparison.OrdinalIgnoreCase) &&
@@ -150,6 +181,9 @@ public sealed class EntryGateChain(
                 operatorOverride = submission.OperatorOverride is not null,
                 operatorOverrideActor = submission.OperatorOverride?.Actor,
                 operatorOverrideReason = submission.OperatorOverride?.Reason,
+                strategySelectionMode = strategyAdmission?.SelectionMode.ToString(),
+                strategyGrantDecisionId = strategyAdmission?.GrantDecisionId,
+                strategyAuthorizationError,
                 candidate?.State,
                 candidate?.RevalidatedAtUtc,
                 candidate?.ExpiresAtUtc,
@@ -373,8 +407,13 @@ public sealed class EntryGateChain(
                         duplicateOrders.Length == 0, RejectCode.REJECT_DUPLICATE_EVENT,
                         new { duplicateOrders }, now, token);
 
-                    await PersistAsync(submission, results, token);
-                    return await submit(token);
+                    await PersistAsync(submission, results, candidateRejection: null, token);
+                    return await submit(
+                        new EntryGateApproval(
+                            session!.TradeDate,
+                            session.Session,
+                            session.Session != EquityTradingSession.Regular),
+                        token);
                 },
                 cancellationToken);
         }
@@ -383,7 +422,11 @@ public sealed class EntryGateChain(
             results.Add(Result(
                 submission, EntryGateSlot.PositionConflict, false, exception.RejectCode,
                 new { error = exception.Message }, now));
-            await PersistAsync(submission, results, cancellationToken);
+            await PersistAsync(
+                submission,
+                results,
+                CreateCandidateRejection(submission, EntryGateSlot.PositionConflict, exception.RejectCode),
+                cancellationToken);
             throw new EntryGateRejectedException(
                 EntryGateSlot.PositionConflict,
                 exception.RejectCode,
@@ -450,7 +493,11 @@ public sealed class EntryGateChain(
             return;
         }
 
-        await PersistAsync(submission, results, cancellationToken);
+        await PersistAsync(
+            submission,
+            results,
+            CreateCandidateRejection(submission, slot, rejectCode),
+            cancellationToken);
         throw new EntryGateRejectedException(
             slot,
             rejectCode,
@@ -460,8 +507,28 @@ public sealed class EntryGateChain(
     private Task PersistAsync(
         BracketOrderSubmission submission,
         IReadOnlyList<GateEvaluationAppendRequest> results,
+        CandidateGateRejection? candidateRejection,
         CancellationToken cancellationToken) =>
-        evaluations.AppendBatchAsync(ToRun(submission.RunContext), results, cancellationToken);
+        evaluations.AppendBatchAsync(
+            ToRun(submission.RunContext),
+            results,
+            candidateRejection,
+            cancellationToken);
+
+    private static CandidateGateRejection? CreateCandidateRejection(
+        BracketOrderSubmission submission,
+        EntryGateSlot slot,
+        RejectCode rejectCode) =>
+        submission.OperatorOverride is not null
+            ? null
+            : new CandidateGateRejection(
+                submission.Candidate.CandidateId,
+                submission.Candidate.CandidateVersion,
+                submission.Candidate.SemanticDecisionSha256,
+                submission.Order.Ticker.Trim().ToUpperInvariant(),
+                submission.StrategyId,
+                GateName(slot),
+                rejectCode);
 
     private static GateEvaluationAppendRequest Result(
         BracketOrderSubmission submission,

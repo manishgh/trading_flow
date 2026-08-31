@@ -48,7 +48,9 @@ public sealed record ProtectiveStopSubmission(
     decimal Quantity,
     decimal StopPrice,
     DateOnly SessionDate,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    string PositionGenerationIdentity,
+    int ProtectionRevision);
 
 public interface IOrderSubmissionService
 {
@@ -71,24 +73,18 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
 {
     private readonly IOrderIntentRepository intentRepository;
     private readonly IOrderEventRepository eventRepository;
-    private readonly ICandidateRepository candidateRepository;
     private readonly IEntryGateChain entryGates;
-    private readonly IStrategyAuthorizationPolicy strategyAuthorizations;
     private readonly ILogger<OrderSubmissionService> logger;
 
     public OrderSubmissionService(
         IOrderIntentRepository intentRepository,
         IOrderEventRepository eventRepository,
-        ICandidateRepository candidateRepository,
         IEntryGateChain entryGates,
-        IStrategyAuthorizationPolicy strategyAuthorizations,
         ILogger<OrderSubmissionService> logger)
     {
         this.intentRepository = intentRepository;
         this.eventRepository = eventRepository;
-        this.candidateRepository = candidateRepository;
         this.entryGates = entryGates;
-        this.strategyAuthorizations = strategyAuthorizations;
         this.logger = logger;
     }
 
@@ -100,48 +96,35 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         ArgumentNullException.ThrowIfNull(submission);
         ArgumentNullException.ThrowIfNull(brokerClient);
         Validate(submission);
+        var existingIntent = await intentRepository.GetByIntentIdAsync(
+            submission.IntentId,
+            cancellationToken);
+        if (existingIntent is not null)
+        {
+            return await SubmitBracketOrderCoreAsync(
+                submission,
+                brokerClient,
+                existingIntent.SessionDate,
+                ResolveSubmittedOutsideRegularHours(existingIntent.RequestJson, fallback: false),
+                cancellationToken);
+        }
+
         return await entryGates.ExecuteAsync(
             submission,
             brokerClient,
-            async token =>
-            {
-                var session = await ValidateTradingSessionAsync(submission, brokerClient, token);
-                return await SubmitBracketOrderCoreAsync(
-                    submission,
-                    brokerClient,
-                    session.Session != EquityTradingSession.Regular,
-                    token);
-            },
+            (approval, token) => SubmitBracketOrderCoreAsync(
+                submission,
+                brokerClient,
+                approval.TradeDate,
+                approval.SubmitOutsideRegularHours,
+                token),
             cancellationToken);
-    }
-
-    private static async Task<TradingSessionSnapshot> ValidateTradingSessionAsync(
-        BracketOrderSubmission submission,
-        IBrokerClient brokerClient,
-        CancellationToken cancellationToken)
-    {
-        var session = await brokerClient.GetSessionAsync(submission.CreatedAtUtc, cancellationToken);
-        ExtendedHoursOrderPolicy.Validate(
-            session,
-            submission.OrderType,
-            submission.TimeInForce,
-            submission.AllowExtendedHoursTrading);
-        if (session.Session != EquityTradingSession.Overnight)
-        {
-            return session;
-        }
-
-        var eligibility = await brokerClient.GetEligibilityAsync(
-            submission.Order.Ticker,
-            cancellationToken);
-        ExtendedHoursOrderPolicy.ValidateOvernightAsset(submission.Order.Ticker, eligibility);
-
-        return session;
     }
 
     private async Task<OrderSubmissionResult> SubmitBracketOrderCoreAsync(
         BracketOrderSubmission submission,
         IBrokerClient brokerClient,
+        DateOnly sessionDate,
         bool submitOutsideRegularHours,
         CancellationToken cancellationToken)
     {
@@ -159,22 +142,6 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                     "An operator override cannot also claim strategy execution authorization.");
             }
         }
-        else
-        {
-            var identity = submission.StrategyIdentity
-                ?? throw new UnauthorizedAccessException(
-                    "Strategy-routed entry has no immutable strategy identity.");
-            var selectionMode = submission.StrategySelectionMode
-                ?? throw new UnauthorizedAccessException(
-                    "Strategy-routed entry has no explicit execution mode.");
-            _ = await strategyAuthorizations.AdmitNewEntryAsync(
-                identity,
-                selectionMode,
-                submission.IntentId,
-                DateTimeOffset.UtcNow,
-                cancellationToken);
-        }
-
         var requestJson = JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
@@ -195,14 +162,27 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             operatorOverrideReason = submission.OperatorOverride?.Reason,
             operatorOverrideIssuedAtUtc = submission.OperatorOverride?.IssuedAtUtc,
             exitPolicyIdentity = submission.ExitPolicyIdentity,
+            candidateId = submission.OperatorOverride is null
+                ? submission.Candidate.CandidateId
+                : (Guid?)null,
+            candidateVersion = submission.OperatorOverride is null
+                ? submission.Candidate.CandidateVersion
+                : (int?)null,
+            candidateSemanticDecisionSha256 = submission.OperatorOverride is null
+                ? submission.Candidate.SemanticDecisionSha256
+                : null,
+            requestedAtUtc = submission.CreatedAtUtc.ToUniversalTime(),
             submitOutsideRegularHours,
-            submission.SessionDate
+            sessionDate
         });
         var run = ToRun(submission.RunContext);
-        var intent = await intentRepository.ReserveAsync(
+        var reservationResult = await intentRepository.ReserveAsync(
             run,
             new OrderIntentReservation(
                 submission.IntentId,
+                submission.OperatorOverride is null
+                    ? OrderIntentKind.StrategyEntry
+                    : OrderIntentKind.OperatorEntry,
                 submission.OperatorOverride is not null ? null : submission.Candidate.CandidateId,
                 submission.StrategyId,
                 submission.Order.Ticker.Trim().ToUpperInvariant(),
@@ -212,10 +192,17 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 submission.Order.ShareQuantity,
                 submission.Order.LimitPrice,
                 submission.Order.StopLossPrice,
-                submission.SessionDate,
+                sessionDate,
                 submission.CreatedAtUtc.ToUniversalTime(),
-                requestJson),
+                requestJson,
+                CandidateExpectedVersion: submission.OperatorOverride is null
+                    ? submission.Candidate.CandidateVersion
+                    : null,
+                CandidateSemanticDecisionSha256: submission.OperatorOverride is null
+                    ? submission.Candidate.SemanticDecisionSha256
+                    : null),
             cancellationToken);
+        var intent = reservationResult.Intent;
 
         var current = await eventRepository.GetCurrentAsync(intent.ClientOrderId, cancellationToken)
             ?? throw new InvalidOperationException(
@@ -250,6 +237,18 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         {
             throw new InvalidOperationException(
                 $"Order '{intent.ClientOrderId}' cannot be submitted from terminal/state {current.State.ToStorageValue()}.");
+        }
+
+        if (!reservationResult.Created)
+        {
+            throw new InvalidOperationException(
+                $"Order '{intent.ClientOrderId}' has a durable unsent intent and requires dispatcher recovery before broker submission.");
+        }
+
+        if (!reservationResult.OwningRunStatus.Equals("running", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Order '{intent.ClientOrderId}' belongs to run state '{reservationResult.OwningRunStatus}' and cannot begin broker submission.");
         }
 
         var submitted = await eventRepository.TransitionAsync(
@@ -328,6 +327,8 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             timeInForce = "gtc",
             quantity = submission.Quantity,
             stopPrice = submission.StopPrice,
+            submission.PositionGenerationIdentity,
+            submission.ProtectionRevision,
             submission.SessionDate
         });
         var run = new ProductionRun
@@ -340,10 +341,11 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             Status = "running",
             StartedAtUtc = submission.RunContext.StartedAtUtc
         };
-        var intent = await intentRepository.ReserveAsync(
+        var reservationResult = await intentRepository.ReserveAsync(
             run,
             new OrderIntentReservation(
                 submission.IntentId,
+                OrderIntentKind.ProtectiveStop,
                 null,
                 "BACKSTOP",
                 symbol,
@@ -357,6 +359,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 submission.CreatedAtUtc.ToUniversalTime(),
                 requestJson),
             cancellationToken);
+        var intent = reservationResult.Intent;
 
         var current = await eventRepository.GetCurrentAsync(intent.ClientOrderId, cancellationToken)
             ?? throw new InvalidOperationException(
@@ -380,6 +383,18 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         {
             throw new InvalidOperationException(
                 $"Protective order '{intent.ClientOrderId}' is in state {current.State.ToStorageValue()} and must reconcile before retry.");
+        }
+
+        if (!reservationResult.OwningRunStatus.Equals("running", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Protective order '{intent.ClientOrderId}' belongs to run state '{reservationResult.OwningRunStatus}' and cannot begin broker submission.");
+        }
+
+        if (!reservationResult.Created)
+        {
+            throw new InvalidOperationException(
+                $"Protective order '{intent.ClientOrderId}' has a durable unsent intent and requires dispatcher recovery before broker submission.");
         }
 
         var submitted = await eventRepository.TransitionAsync(
@@ -536,6 +551,13 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         {
             throw new InvalidOperationException(
                 "A GTC protective stop requires run/intent identity, symbol, positive whole-share quantity, and stop price.");
+        }
+
+        if (String.IsNullOrWhiteSpace(submission.PositionGenerationIdentity) ||
+            submission.ProtectionRevision < 0)
+        {
+            throw new InvalidOperationException(
+                "A protective stop requires its persisted position-generation identity and non-negative replacement revision.");
         }
 
         _ = NormalizeSide(submission.Side);

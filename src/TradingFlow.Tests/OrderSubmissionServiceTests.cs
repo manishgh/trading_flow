@@ -54,7 +54,6 @@ public sealed class OrderSubmissionServiceTests
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
-        SetupRegularSession(broker);
         broker
             .Setup(client => client.SubmitOrderAsync(
                 It.IsAny<BrokerEntryOrder>(),
@@ -106,9 +105,7 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
-            new RecordingCandidateRepository(),
             new PassThroughEntryGateChain(),
-            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
         var context = ExecutionRunContextFactory.Create(
             Guid.NewGuid(), "paper", new { test = true }, DateTimeOffset.UtcNow, typeof(OrderSubmissionServiceTests).Assembly);
@@ -116,7 +113,7 @@ public sealed class OrderSubmissionServiceTests
         var result = await service.SubmitProtectiveStopAsync(
             new ProtectiveStopSubmission(
                 Guid.NewGuid(), context, "MSFT", "sell", 10m, 98m,
-                new DateOnly(2026, 7, 21), DateTimeOffset.UtcNow),
+                new DateOnly(2026, 7, 21), DateTimeOffset.UtcNow, "ledger:1:entry-1", 0),
             broker.Object,
             CancellationToken.None);
 
@@ -132,7 +129,6 @@ public sealed class OrderSubmissionServiceTests
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
-        SetupRegularSession(broker);
         BrokerEntryOrder? brokerOrder = null;
         var brokerAcceptedAt = new DateTimeOffset(2026, 7, 21, 14, 35, 1, TimeSpan.Zero);
         broker
@@ -147,9 +143,7 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
-            new RecordingCandidateRepository(),
             new PassThroughEntryGateChain(),
-            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -162,6 +156,13 @@ public sealed class OrderSubmissionServiceTests
         Assert.Equal(brokerAcceptedAt, result.BrokerAcceptedAtUtc);
         Assert.Equal(OrderState.Acked, events.State);
         Assert.Equal([OrderState.Submitted, OrderState.Acked], events.AppliedStates);
+        Assert.NotNull(repository.Reservation);
+        Assert.Equal(submission.Candidate.CandidateId, repository.Reservation!.CandidateId);
+        Assert.Equal(submission.Candidate.CandidateVersion, repository.Reservation.CandidateExpectedVersion);
+        Assert.Equal(
+            submission.Candidate.SemanticDecisionSha256,
+            repository.Reservation.CandidateSemanticDecisionSha256);
+        Assert.Equal(OrderIntentKind.StrategyEntry, repository.Reservation.Kind);
         broker.VerifyAll();
     }
 
@@ -173,9 +174,7 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             new RecordingEventRepository(repository),
-            new RecordingCandidateRepository(),
             new RejectingEntryGateChain(),
-            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
@@ -196,9 +195,9 @@ public sealed class OrderSubmissionServiceTests
     {
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
+        var gates = new PassThroughEntryGateChain();
         var submittedClientIds = new List<string>();
         var broker = new Mock<IBrokerClient>();
-        SetupRegularSession(broker);
         broker
             .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
             .Callback<BrokerEntryOrder, CancellationToken>((order, _) => submittedClientIds.Add(order.Order.ClientOrderId))
@@ -206,9 +205,7 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
-            new RecordingCandidateRepository(),
-            new PassThroughEntryGateChain(),
-            CreateAuthorizationRegistry(),
+            gates,
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -216,6 +213,7 @@ public sealed class OrderSubmissionServiceTests
         await service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None);
 
         Assert.Equal(2, repository.ReservationAttempts);
+        Assert.Equal(1, gates.Calls);
         Assert.Single(submittedClientIds);
         broker.Verify(
             client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
@@ -223,50 +221,41 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_RevocationBlocksNewIntentButAllowsPreviouslyAdmittedIntent()
+    public async Task SubmitProtectiveStopAsync_UncertainRetry_ReusesIntentAndDoesNotCallBrokerTwice()
     {
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
-        var authorizations = CreateAuthorizationRegistry();
-        var broker = new Mock<IBrokerClient>();
-        SetupRegularSession(broker);
-        broker
-            .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BrokerOrderReceipt("broker-order-admitted", DateTimeOffset.UtcNow));
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker.Setup(client => client.SubmitProtectiveStopAsync(
+                It.IsAny<ProtectiveStopOrder>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new TimeoutException("Broker response was not received."));
         var service = new OrderSubmissionService(
             repository,
             events,
-            new RecordingCandidateRepository(),
             new PassThroughEntryGateChain(),
-            authorizations,
             NullLogger<OrderSubmissionService>.Instance);
-        var admittedIntent = Guid.NewGuid();
-        _ = await authorizations.AdmitNewEntryAsync(
-            TestStrategyIdentity,
-            StrategySelectionMode.RunPaperShadow,
-            admittedIntent,
-            DateTimeOffset.UtcNow);
-        await authorizations.SuspendPaperExperimentAsync(
-            TestStrategyIdentity,
-            "suspend-identity-for-test",
-            "test-grant",
-            "test-operator",
+        var context = ExecutionRunContextFactory.Create(
+            Guid.NewGuid(), "paper", new { test = true }, DateTimeOffset.UtcNow, typeof(OrderSubmissionServiceTests).Assembly);
+        var submission = new ProtectiveStopSubmission(
+            Guid.NewGuid(),
+            context,
+            "MSFT",
+            "sell",
+            10m,
+            98m,
+            new DateOnly(2026, 7, 21),
             DateTimeOffset.UtcNow,
-            "Block new entries.");
+            "ledger:1:entry-1",
+            0);
 
-        var accepted = await service.SubmitBracketOrderAsync(
-            CreateSubmission(admittedIntent),
-            broker.Object,
-            CancellationToken.None);
-        Assert.Equal("broker-order-admitted", accepted.BrokerOrderId);
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            service.SubmitProtectiveStopAsync(submission, broker.Object, CancellationToken.None));
+        var retry = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SubmitProtectiveStopAsync(submission, broker.Object, CancellationToken.None));
 
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
-            service.SubmitBracketOrderAsync(
-                CreateSubmission(Guid.NewGuid()),
-                broker.Object,
-                CancellationToken.None));
+        Assert.Contains("must reconcile", retry.Message, StringComparison.Ordinal);
         broker.Verify(
-            client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
+            client => client.SubmitProtectiveStopAsync(It.IsAny<ProtectiveStopOrder>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -276,16 +265,13 @@ public sealed class OrderSubmissionServiceTests
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
-        SetupRegularSession(broker);
         broker
             .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new TimeoutException("Broker response was not received."));
         var service = new OrderSubmissionService(
             repository,
             events,
-            new RecordingCandidateRepository(),
             new PassThroughEntryGateChain(),
-            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
@@ -302,6 +288,141 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
+    public async Task SubmitBracketOrderAsync_ExistingIntentFromCompletedRun_DoesNotCallBroker()
+    {
+        var repository = new RecordingIntentRepository { OwningRunStatus = "completed" };
+        var events = new RecordingEventRepository(repository);
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        var service = new OrderSubmissionService(
+            repository,
+            events,
+            new PassThroughEntryGateChain(),
+            NullLogger<OrderSubmissionService>.Instance);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SubmitBracketOrderAsync(
+                CreateSubmission(Guid.NewGuid()),
+                broker.Object,
+                CancellationToken.None));
+
+        Assert.Contains("run state 'completed'", error.Message, StringComparison.Ordinal);
+        Assert.Equal(OrderState.Intent, events.State);
+        broker.Verify(
+            client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SubmitProtectiveStopAsync_ExistingIntentFromCompletedRun_DoesNotCallBroker()
+    {
+        var repository = new RecordingIntentRepository { OwningRunStatus = "completed" };
+        var events = new RecordingEventRepository(repository);
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        var service = new OrderSubmissionService(
+            repository,
+            events,
+            new PassThroughEntryGateChain(),
+            NullLogger<OrderSubmissionService>.Instance);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SubmitProtectiveStopAsync(
+                new ProtectiveStopSubmission(
+                    Guid.NewGuid(),
+                    CreateSubmission(Guid.NewGuid()).RunContext,
+                    "MSFT",
+                    "sell",
+                    10m,
+                    98m,
+                    new DateOnly(2026, 7, 21),
+                    new DateTimeOffset(2026, 7, 21, 14, 35, 0, TimeSpan.Zero),
+                    "ledger:1:entry-1",
+                    0),
+                broker.Object,
+                CancellationToken.None));
+
+        Assert.Contains("run state 'completed'", error.Message, StringComparison.Ordinal);
+        Assert.Equal(OrderState.Intent, events.State);
+        broker.Verify(
+            client => client.SubmitProtectiveStopAsync(It.IsAny<ProtectiveStopOrder>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SubmitProtectiveStopAsync_DurableUnsentIntent_RequiresDispatcherRecovery()
+    {
+        var repository = new RecordingIntentRepository();
+        var events = new RecordingEventRepository(repository);
+        var context = CreateSubmission(Guid.NewGuid()).RunContext;
+        var intentId = Guid.NewGuid();
+        var createdAt = new DateTimeOffset(2026, 7, 21, 14, 35, 0, TimeSpan.Zero);
+        var submission = new ProtectiveStopSubmission(
+            intentId,
+            context,
+            "MSFT",
+            "sell",
+            10m,
+            98m,
+            new DateOnly(2026, 7, 21),
+            createdAt,
+            "ledger:1:entry-1",
+            0);
+        var requestJson = JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            strategyId = "BACKSTOP",
+            symbol = "MSFT",
+            side = "sell",
+            orderType = "stop",
+            timeInForce = "gtc",
+            quantity = 10m,
+            stopPrice = 98m,
+            submission.PositionGenerationIdentity,
+            submission.ProtectionRevision,
+            submission.SessionDate
+        });
+        await repository.ReserveAsync(
+            new ProductionRun
+            {
+                RunId = context.RunId,
+                Profile = context.Profile,
+                Status = "running",
+                StartedAtUtc = context.StartedAtUtc,
+                ConfigHash = context.ConfigHash,
+                CodeVersion = context.CodeVersion
+            },
+            new OrderIntentReservation(
+                intentId,
+                OrderIntentKind.ProtectiveStop,
+                null,
+                "BACKSTOP",
+                "MSFT",
+                "sell",
+                "stop",
+                "gtc",
+                10m,
+                null,
+                98m,
+                submission.SessionDate,
+                createdAt,
+                requestJson));
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        var service = new OrderSubmissionService(
+            repository,
+            events,
+            new PassThroughEntryGateChain(),
+            NullLogger<OrderSubmissionService>.Instance);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SubmitProtectiveStopAsync(submission, broker.Object, CancellationToken.None));
+
+        Assert.Contains("dispatcher recovery", error.Message, StringComparison.Ordinal);
+        broker.Verify(
+            client => client.SubmitProtectiveStopAsync(
+                It.IsAny<ProtectiveStopOrder>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task SubmitBracketOrderAsync_EntryAdmissionBlocked_DoesNotPersistOrCallBroker()
     {
         var repository = new RecordingIntentRepository();
@@ -310,13 +431,11 @@ public sealed class OrderSubmissionServiceTests
         var service = new OrderSubmissionService(
             repository,
             events,
-            new RecordingCandidateRepository(),
             new RejectingEntryGateChain(
                 new EntryGateRejectedException(
                     EntryGateSlot.SystemState,
                     RejectCode.REJECT_DEGRADED_DATA,
                     "stream down")),
-            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
@@ -335,7 +454,6 @@ public sealed class OrderSubmissionServiceTests
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
-        SetupRegularSession(broker);
         BrokerEntryOrder? submitted = null;
         broker
             .Setup(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
@@ -359,16 +477,12 @@ public sealed class OrderSubmissionServiceTests
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
-        broker
-            .Setup(client => client.GetSessionAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTimeOffset timestamp, CancellationToken _) =>
-                new TradingSessionSnapshot(
-                    new DateOnly(2026, 7, 21),
-                    EquityTradingSession.Premarket,
-                    timestamp,
-                    timestamp.AddHours(1),
-                    timestamp.AddHours(7.5)));
-        var service = CreateService(repository);
+        var service = new OrderSubmissionService(
+            repository,
+            new RecordingEventRepository(repository),
+            new RejectingEntryGateChain(new InvalidOperationException(
+                "Equity entry rejected during premarket because allow_extended_hours_trading is false.")),
+            NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.SubmitBracketOrderAsync(
@@ -386,16 +500,12 @@ public sealed class OrderSubmissionServiceTests
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
-        broker
-            .Setup(client => client.GetSessionAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTimeOffset timestamp, CancellationToken _) =>
-                new TradingSessionSnapshot(
-                    new DateOnly(2026, 7, 22),
-                    EquityTradingSession.Overnight,
-                    timestamp,
-                    timestamp.AddHours(12),
-                    timestamp.AddHours(18.5)));
-        var service = CreateService(repository);
+        var service = new OrderSubmissionService(
+            repository,
+            new RecordingEventRepository(repository),
+            new RejectingEntryGateChain(new InvalidOperationException(
+                "Extended-hours order contract does not support broker-protected bracket orders.")),
+            NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid()) with { AllowExtendedHoursTrading = true };
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -411,16 +521,12 @@ public sealed class OrderSubmissionServiceTests
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
-        broker
-            .Setup(client => client.GetSessionAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTimeOffset timestamp, CancellationToken _) =>
-                new TradingSessionSnapshot(
-                    new DateOnly(2026, 7, 21),
-                    EquityTradingSession.AfterHours,
-                    timestamp,
-                    timestamp.AddHours(-8),
-                    timestamp.AddHours(-1)));
-        var service = CreateService(repository);
+        var service = new OrderSubmissionService(
+            repository,
+            new RecordingEventRepository(repository),
+            new RejectingEntryGateChain(new InvalidOperationException(
+                "Extended-hours order contract does not support broker-protected bracket orders.")),
+            NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.SubmitBracketOrderAsync(
@@ -511,7 +617,9 @@ public sealed class OrderSubmissionServiceTests
                 "swing",
                 new DateTimeOffset(2026, 7, 21, 14, 34, 0, TimeSpan.Zero),
                 new DateTimeOffset(2026, 7, 21, 14, 35, 0, TimeSpan.Zero),
-                "{}"),
+                "{}",
+                CandidateVersion: 4,
+                SemanticDecisionSha256: new string('d', 64)),
             runContext,
             "SWGA",
             "buy",
@@ -524,26 +632,11 @@ public sealed class OrderSubmissionServiceTests
             StrategySelectionMode: StrategySelectionMode.RunPaperShadow);
     }
 
-    private static void SetupRegularSession(Mock<IBrokerClient> broker)
-    {
-        broker
-            .Setup(client => client.GetSessionAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTimeOffset timestamp, CancellationToken _) =>
-                new TradingSessionSnapshot(
-                    DateOnly.FromDateTime(timestamp.UtcDateTime),
-                    EquityTradingSession.Regular,
-                    timestamp,
-                    timestamp.AddHours(-1),
-                    timestamp.AddHours(5)));
-    }
-
     private static OrderSubmissionService CreateService(RecordingIntentRepository repository) =>
         new(
             repository,
             new RecordingEventRepository(repository),
-            new RecordingCandidateRepository(),
             new PassThroughEntryGateChain(),
-            CreateAuthorizationRegistry(),
             NullLogger<OrderSubmissionService>.Instance);
 
     private static readonly StrategyArtifactIdentity TestStrategyIdentity = new(
@@ -551,21 +644,22 @@ public sealed class OrderSubmissionServiceTests
         "1.0.0",
         new string('c', 64));
 
-    private static StrategyAuthorizationTestRegistry CreateAuthorizationRegistry()
-    {
-        var registry = new StrategyAuthorizationTestRegistry();
-        registry.Seed(TestStrategyIdentity, StrategyExecutionAuthorization.PaperExperiment);
-        registry.Seed(TestStrategyIdentity, StrategyExecutionAuthorization.PaperShadow);
-        return registry;
-    }
-
     private sealed class RecordingIntentRepository : IOrderIntentRepository
     {
         public OrderIntentRecord? Intent { get; private set; }
 
+        public OrderIntentReservation? Reservation { get; private set; }
+
         public bool ReservationCompleted { get; private set; }
 
         public int ReservationAttempts { get; private set; }
+
+        public string OwningRunStatus { get; set; } = "running";
+
+        public Task<OrderIntentRecord?> GetByIntentIdAsync(
+            Guid intentId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Intent?.IntentId == intentId ? Intent : null);
 
         public Task<OrderIntentRecord?> GetByClientOrderIdAsync(
             string clientOrderId,
@@ -578,15 +672,22 @@ public sealed class OrderSubmissionServiceTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<ActiveOrderIntent>>([]);
 
-        public Task<OrderIntentRecord> ReserveAsync(
+        public Task<OrderIntentReservationResult> ReserveAsync(
             ProductionRun run,
             OrderIntentReservation reservation,
             CancellationToken cancellationToken = default)
         {
             ReservationAttempts++;
+            Reservation = reservation;
+            var created = Intent is null;
             Intent ??= new OrderIntentRecord
             {
                 IntentId = reservation.IntentId,
+                Kind = reservation.Kind,
+                CandidateId = reservation.CandidateId,
+                CandidateTriggeredVersion = reservation.CandidateExpectedVersion,
+                CandidateConsumedVersion = reservation.CandidateExpectedVersion + 1,
+                CandidateSemanticDecisionSha256 = reservation.CandidateSemanticDecisionSha256,
                 RunId = run.RunId,
                 SchemaVersion = run.SchemaVersion,
                 ConfigHash = run.ConfigHash,
@@ -612,52 +713,28 @@ public sealed class OrderSubmissionServiceTests
                 RequestJson = reservation.RequestJson
             };
             ReservationCompleted = true;
-            return Task.FromResult(Intent);
+            return Task.FromResult(new OrderIntentReservationResult(Intent, created, OwningRunStatus));
         }
-    }
-
-    private sealed class RecordingCandidateRepository : ICandidateRepository
-    {
-        private CandidateRecord? candidate;
-
-        public Task<CandidateRecord> UpsertDiscoveryAsync(
-            ProductionRun run,
-            CandidateRecord value,
-            CancellationToken cancellationToken = default)
-        {
-            candidate = value;
-            return Task.FromResult(value);
-        }
-
-        public Task<CandidateRecord> ApplyDecisionAsync(
-            ProductionRun run,
-            Guid candidateId,
-            int expectedVersion,
-            string semanticDecisionSha256,
-            DateTimeOffset expiresAtUtc,
-            IReadOnlyList<CandidateTransitionAppendRequest> transitions,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(candidate ?? throw new InvalidOperationException("Candidate was not persisted."));
-
-        public Task<CandidateRecord?> GetAsync(
-            Guid candidateId,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(candidate?.CandidateId == candidateId ? candidate : null);
-
-        public Task<IReadOnlyList<CandidateTransitionRecord>> GetTransitionsAsync(
-            Guid candidateId,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<CandidateTransitionRecord>>([]);
     }
 
     private sealed class PassThroughEntryGateChain : IEntryGateChain
     {
+        public int Calls { get; private set; }
+
         public Task<T> ExecuteAsync<T>(
             BracketOrderSubmission submission,
             IBrokerClient brokerClient,
-            Func<CancellationToken, Task<T>> submit,
-            CancellationToken cancellationToken = default) =>
-            submit(cancellationToken);
+            Func<EntryGateApproval, CancellationToken, Task<T>> submit,
+            CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return submit(
+                new EntryGateApproval(
+                    submission.SessionDate,
+                    EquityTradingSession.Regular,
+                    SubmitOutsideRegularHours: false),
+                cancellationToken);
+        }
     }
 
     private sealed class RejectingEntryGateChain(Exception? exception = null) : IEntryGateChain
@@ -665,7 +742,7 @@ public sealed class OrderSubmissionServiceTests
         public Task<T> ExecuteAsync<T>(
             BracketOrderSubmission submission,
             IBrokerClient brokerClient,
-            Func<CancellationToken, Task<T>> submit,
+            Func<EntryGateApproval, CancellationToken, Task<T>> submit,
             CancellationToken cancellationToken = default) =>
             throw exception ?? new EntryGateRejectedException(
                 EntryGateSlot.PositionConflict,
