@@ -27,6 +27,26 @@ var serializerOptions = new JsonSerializerOptions
 };
 serializerOptions.Converters.Add(new JsonStringEnumConverter());
 
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.SharedNewsImportCommand.Name, StringComparison.Ordinal))
+{
+    using var cancellation = new CancellationTokenSource();
+    ConsoleCancelEventHandler cancelHandler = (_, signal) =>
+    {
+        signal.Cancel = true;
+        cancellation.Cancel();
+    };
+    Console.CancelKeyPress += cancelHandler;
+    try
+    {
+        Environment.ExitCode = TradingFlow.Cli.SharedNewsImportCommand.Run(args[1..], Console.Out, Console.Error, cancellation.Token);
+    }
+    finally
+    {
+        Console.CancelKeyPress -= cancelHandler;
+    }
+    return;
+}
+
 if (args.Length > 0 &&
     args[0].Equals("evidence-inventory", StringComparison.OrdinalIgnoreCase))
 {

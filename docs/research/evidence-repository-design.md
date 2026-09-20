@@ -45,11 +45,32 @@ collection under one configured local root. It requires durable attempt intents,
 immutable v1 receipt bundles, committed results and verified restart. Attempts are
 logical transport attempts: internal HTTP retries and crash recovery do not imply
 exactly-once requests. This is local root ownership, not provider-wide fencing.
-TradingFlow's importer remains wire-compatible; automatic discovery, durable
-consumer acknowledgement, desk/strategy feed migration and normalized catalog
-admission are not completed by this checkpoint. Existing desk REST and news-stream
-consumers remain unchanged. Receipt pins must come from trusted publication
-provenance, not from hashing an untrusted incoming manifest.
+TradingFlow's importer remains wire-compatible. The explicit `import-shared-news`
+command verifies a pinned collection plan and its existing attempt chain, then
+publishes exact raw receipt bytes into a separate durable inbox. The atomic inbox
+bundle is the acknowledgement: repeated imports verify existing bytes and become
+no-ops; corrupted acknowledgements fail rather than being overwritten. An orphan
+receipt without its producer result remains ambiguous and cannot be imported.
+Automatic polling, desk/strategy feed migration and normalized catalog admission
+are not implemented. Existing desk REST and news-stream consumers stay unchanged.
+
+The configured source root and its authorized writers must be independently trusted.
+A plan hash verifies consistency, not authentication of later results. The current
+adapter supports Windows fixed local disks only, sharing the Python producer's
+nonqueueing byte-range lock. It reads source artifacts without modifying them but
+needs read/write access to the existing source lock file. Source and inbox roots
+must be disjoint, have no reparse points, and cannot be transparently relocated.
+This is not a distributed/cloud-storage adapter or proof of filesystem permissions.
+
+Consumer limits cap the whole verified publication, including previously imported
+receipts: defaults are 10,000 attempts, 1,000 received pages and 64 MiB retained
+bytes; the hard retained-byte ceiling is 256 MiB. They are not next-N batch limits.
+Budget rejection occurs before new receipts are acknowledged. Cancellation can
+leave already committed inbox bundles; restart verifies those and continues.
+Window `complete` means provider pagination terminated, not complete news coverage.
+Raw import never creates normalized `EvidenceSourceObservation`, changes desk feeds,
+or authorizes a model/strategy/order. Inbox acknowledgement does not authorize
+deleting the original collection evidence.
 
 Raw evidence supports both one-to-three-week swing and the separate open-ended
 investment cohort. Shared collection does not select investment forecast horizons

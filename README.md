@@ -79,6 +79,27 @@ $env:FINBERT_SENTIMENT_URL = "http://127.0.0.1:8088"
 
 See `sidecars/finbert-sentiment/README.md` for installation and Docker instructions.
 
+### Shared Raw News Import
+
+The desk can explicitly import Market Predictor's committed raw news publications
+without another provider request. This is a separate Windows local-disk inbox,
+not a replacement for the current news feed or normalized research catalog.
+
+```powershell
+dotnet run --project src/TradingFlow.Cli -- import-shared-news --trusted-collector-root C:\project\market-predictor\data\raw\shared_news --plan-sha256 <independently-recorded-plan-sha256> --inbox C:\project\trading_flow\data\shared_news_inbox
+```
+
+The operator must independently trust the source location and its writers; hashes
+do not authenticate them. Retain the plan pin separately, not by discovering a
+manifest and trusting its own computed hash. Restart preserves original receipt
+times and verifies durable acknowledgements rather than duplicating imports.
+`--help` lists whole-publication limits. Exit 0 means terminal pagination and raw
+import success; exit 2 means rejection or incomplete collection (inspect the
+structured report); cancellation returns 130. A failed/cancelled operation may
+retain already committed bundles. No result grants coverage or trading admission.
+See [Evidence Repository Design](docs/research/evidence-repository-design.md) for
+trust, storage, limits and ownership boundaries.
+
 ## Earnings Calendar
 
 The `/Earnings` web page and Android `Earnings` tab show every Finviz earnings event available
