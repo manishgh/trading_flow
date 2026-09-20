@@ -95,7 +95,7 @@ public sealed class ManualOrderTicketServiceTests
         return new ManualOrderTicketService(
             market,
             new ManualEntryOptions(policy),
-            new EntryGateOptions(20, 2_000, 100m, 15m, 25m, 100m, 100m, 20, 20),
+            new EntryGateOptions(20, 2_000, 100m, 15m, 25m, 100m, 20),
             admission.Object,
             new TradingEnvironmentService(),
             new FixedTimeProvider(Now),
@@ -122,7 +122,7 @@ public sealed class ManualOrderTicketServiceTests
     }
 
     private static ManualOrderDraft Draft() => new(
-        "MSFT", "buy", 10m, 100.20m, 99m, 104m, "intraday", false);
+        "MSFT", "buy", 10m, 100.20m, 99m, 104m, "swing", false);
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {

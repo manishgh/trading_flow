@@ -5,7 +5,7 @@ namespace TradingFlow.Engine.Risk;
 /// would actually get from a real broker. Two effects that flat-fee/unbounded-size backtests
 /// miss: you cannot fill more than a small share of a bar's real volume, and US equity sells
 /// carry regulatory pass-through costs (SEC fee + FINRA TAF). See
-/// docs/edge-recovery-master-plan.md phase 0.3.
+/// Shared deterministic execution-realism model for research and runtime planning.
 /// </summary>
 public static class ExecutionRealismModel
 {
@@ -15,13 +15,11 @@ public static class ExecutionRealismModel
     /// </summary>
     public static int CapQuantityByParticipation(int requestedQuantity, decimal entryBarVolume, decimal maxParticipationPct)
     {
-        if (maxParticipationPct <= 0m || entryBarVolume <= 0m)
-        {
-            return requestedQuantity;
-        }
-
-        var cap = (int)Math.Floor(entryBarVolume * (maxParticipationPct / 100m));
-        return Math.Min(requestedQuantity, Math.Max(cap, 0));
+        return DeterministicExecutionSimulator.CalculateFillableQuantity(
+            requestedQuantity,
+            entryBarVolume,
+            maxParticipationPct,
+            missingVolumeFailsClosed: false);
     }
 
     /// <summary>
@@ -35,24 +33,11 @@ public static class ExecutionRealismModel
         decimal finraTafPerShare,
         decimal finraTafCap)
     {
-        var fees = 0m;
-
-        if (secFeeRate > 0m && sellProceeds > 0m)
-        {
-            fees += sellProceeds * secFeeRate;
-        }
-
-        if (finraTafPerShare > 0m && shares > 0)
-        {
-            var taf = shares * finraTafPerShare;
-            if (finraTafCap > 0m)
-            {
-                taf = Math.Min(taf, finraTafCap);
-            }
-
-            fees += taf;
-        }
-
-        return fees;
+        return DeterministicExecutionSimulator.CalculateRegulatoryFees(
+            sellProceeds,
+            shares,
+            secFeeRate,
+            finraTafPerShare,
+            finraTafCap);
     }
 }

@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using TradingFlow.Data.Identity;
 using TradingFlow.Domain.Locking;
-using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Domain.Earnings;
@@ -20,8 +19,6 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
     }
 
     public DbSet<TickerLockEntity> TickerLocks => Set<TickerLockEntity>();
-    public DbSet<PersistedOrder> Orders => Set<PersistedOrder>();
-
     public DbSet<TradingFlow.Domain.Audit.DecisionAuditRecord> DecisionAudits => Set<TradingFlow.Domain.Audit.DecisionAuditRecord>();
     public DbSet<TradingFlow.Domain.Jobs.PersistedJob> Jobs => Set<TradingFlow.Domain.Jobs.PersistedJob>();
     public DbSet<TradingFlow.Domain.News.PersistedNewsItem> NewsItems => Set<TradingFlow.Domain.News.PersistedNewsItem>();
@@ -34,6 +31,8 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
     public DbSet<ProductionRun> ProductionRuns => Set<ProductionRun>();
     public DbSet<OrderIntentRecord> OrderIntents => Set<OrderIntentRecord>();
     public DbSet<OrderEventRecord> OrderEvents => Set<OrderEventRecord>();
+    public DbSet<ProtectiveStopReplacementRecord> ProtectiveStopReplacements => Set<ProtectiveStopReplacementRecord>();
+    public DbSet<PortfolioRiskReservationRecord> PortfolioRiskReservations => Set<PortfolioRiskReservationRecord>();
     public DbSet<GateEvaluationRecord> GateEvaluations => Set<GateEvaluationRecord>();
     public DbSet<RiskEventRecord> RiskEvents => Set<RiskEventRecord>();
     public DbSet<KillSwitchEventRecord> KillSwitchEvents => Set<KillSwitchEventRecord>();
@@ -48,6 +47,10 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
     public DbSet<DiscoveryAggregateRecord> DiscoveryAggregates => Set<DiscoveryAggregateRecord>();
     public DbSet<DiscoverySourceMembershipRecord> DiscoverySourceMemberships => Set<DiscoverySourceMembershipRecord>();
     public DbSet<MarketStreamLeaseRecord> MarketStreamLeases => Set<MarketStreamLeaseRecord>();
+    public DbSet<UniversePreviewRecord> UniversePreviews => Set<UniversePreviewRecord>();
+    public DbSet<CandidateRunRequestRecord> CandidateRunRequests => Set<CandidateRunRequestRecord>();
+    public DbSet<ApplicationEventRecord> ApplicationEvents => Set<ApplicationEventRecord>();
+    public DbSet<OrderPreviewRecord> OrderPreviews => Set<OrderPreviewRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -137,6 +140,56 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
             entity.HasIndex(lease => lease.ExpiresAtUtc);
         });
 
+        modelBuilder.Entity<UniversePreviewRecord>(entity =>
+        {
+            entity.ToTable("universe_previews");
+            entity.HasKey(item => item.UniverseSnapshotId);
+            entity.Property(item => item.Horizon).HasMaxLength(20).IsRequired();
+            entity.Property(item => item.RequestSha256).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.ContentSha256).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.PreviewJson).IsRequired();
+            entity.HasIndex(item => item.ExpiresAtUtc);
+        });
+
+        modelBuilder.Entity<CandidateRunRequestRecord>(entity =>
+        {
+            entity.ToTable("candidate_run_requests");
+            entity.HasKey(item => item.IdempotencyKey);
+            entity.Property(item => item.IdempotencyKey).HasMaxLength(160);
+            entity.Property(item => item.RequestSha256).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.Mode).HasMaxLength(40).IsRequired();
+            entity.Property(item => item.StrategyIdentitiesJson).IsRequired();
+            entity.HasIndex(item => item.CandidateRunId).IsUnique();
+            entity.HasIndex(item => item.UniverseSnapshotId);
+        });
+
+        modelBuilder.Entity<ApplicationEventRecord>(entity =>
+        {
+            entity.ToTable("application_events");
+            entity.HasKey(item => item.EventSequence);
+            entity.Property(item => item.EventSequence).ValueGeneratedOnAdd();
+            entity.Property(item => item.StreamName).HasMaxLength(200).IsRequired();
+            entity.Property(item => item.EventType).HasMaxLength(80).IsRequired();
+            entity.Property(item => item.PayloadJson).IsRequired();
+            entity.HasIndex(item => new { item.StreamName, item.EventSequence });
+        });
+
+        modelBuilder.Entity<OrderPreviewRecord>(entity =>
+        {
+            entity.ToTable("order_previews");
+            entity.HasKey(item => item.PreviewId);
+            entity.Property(item => item.TokenSha256).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.RequestSha256).HasMaxLength(64).IsRequired();
+            entity.Property(item => item.IdempotencyKey).HasMaxLength(160).IsRequired();
+            entity.Property(item => item.Status).HasMaxLength(30).IsRequired();
+            entity.Property(item => item.RequestJson).IsRequired();
+            entity.Property(item => item.PreviewJson).IsRequired();
+            entity.Property(item => item.Version).IsConcurrencyToken();
+            entity.HasIndex(item => item.TokenSha256).IsUnique();
+            entity.HasIndex(item => item.IdempotencyKey).IsUnique();
+            entity.HasIndex(item => item.ExpiresAtUtc);
+        });
+
         modelBuilder.ConfigureProductionPersistence();
 
         modelBuilder.Entity<TickerLockEntity>(entity =>
@@ -145,22 +198,6 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
             entity.Property(e => e.Ticker).HasMaxLength(50);
             entity.Property(e => e.PodId).HasMaxLength(100).IsRequired();
             entity.HasIndex(e => e.ExpiresAt);
-        });
-
-        modelBuilder.Entity<PersistedOrder>(entity =>
-        {
-            entity.HasKey(e => e.OrderId);
-            entity.Property(e => e.OrderId).HasMaxLength(100);
-            entity.Property(e => e.Ticker).HasMaxLength(50).IsRequired();
-            entity.Property(e => e.RunName).HasMaxLength(100).IsRequired();
-            entity.Property(e => e.ClientOrderId).HasMaxLength(100).IsRequired();
-            entity.Property(e => e.StrategyName).HasMaxLength(100).IsRequired();
-            entity.Property(e => e.Status).HasMaxLength(50).IsRequired();
-
-            entity.HasIndex(e => e.Ticker);
-            entity.HasIndex(e => e.RunName);
-            entity.HasIndex(e => e.ClientOrderId);
-            entity.HasIndex(e => e.Status);
         });
 
         modelBuilder.Entity<TradingFlow.Domain.Audit.DecisionAuditRecord>(entity =>
@@ -178,12 +215,16 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
         modelBuilder.Entity<TradingFlow.Domain.Jobs.PersistedJob>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.Property(e => e.JobType).HasMaxLength(32).IsRequired();
             entity.Property(e => e.RunName).HasMaxLength(100).IsRequired();
             entity.Property(e => e.ConfigPath).HasMaxLength(500).IsRequired();
+            entity.Property(e => e.RequestJson).IsRequired();
+            entity.Property(e => e.ResultReference).HasMaxLength(1000);
+            entity.Property(e => e.LeaseOwner).HasMaxLength(100);
             entity.Property(e => e.Status).HasMaxLength(50).IsRequired();
 
-            entity.HasIndex(e => e.RunName).IsUnique();
-            entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => new { e.JobType, e.RunName }).IsUnique();
+            entity.HasIndex(e => new { e.JobType, e.Status, e.LeaseExpiresAtUtcTicks, e.CreatedAtUtcTicks });
         });
 
         modelBuilder.Entity<TradingFlow.Domain.News.PersistedNewsItem>(entity =>

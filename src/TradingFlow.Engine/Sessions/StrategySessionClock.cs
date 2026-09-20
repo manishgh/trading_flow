@@ -103,45 +103,6 @@ public sealed class StrategySessionClock
         return timeOfDay < cutOffTime;
     }
 
-    public bool ShouldFlattenBeforeSessionClose(DateTimeOffset timestamp, string timeframe, SessionRules sessionRules)
-    {
-        if (sessionRules.IsContinuousMarket || TimeframeParser.IsDailyOrHigher(timeframe))
-        {
-            return false;
-        }
-
-        var exchangeTime = ConvertToExchangeTime(timestamp, sessionRules.ExchangeTimezone).DateTime;
-        if (exchangeTime.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
-        {
-            return false;
-        }
-
-        var timeOfDay = exchangeTime.TimeOfDay;
-        if (sessionRules.UseExtendedHours)
-        {
-            if (exchangeTime.DayOfWeek != DayOfWeek.Friday)
-            {
-                return false;
-            }
-
-            if (timeOfDay < PremarketOpenTime || timeOfDay > PostmarketCloseTime)
-            {
-                return false;
-            }
-
-            var finalExtendedExitTime = PostmarketCloseTime.Subtract(TimeframeParser.Parse(timeframe));
-            return timeOfDay >= finalExtendedExitTime;
-        }
-
-        if (timeOfDay < OpenTime || timeOfDay > CloseTime)
-        {
-            return false;
-        }
-
-        var finalExitTime = CloseTime.Subtract(TimeframeParser.Parse(timeframe));
-        return timeOfDay >= finalExitTime;
-    }
-
     private static DateTimeOffset ConvertToExchangeTime(DateTimeOffset timestamp, string timezoneId)
     {
         var zone = ResolveTimezone(timezoneId);

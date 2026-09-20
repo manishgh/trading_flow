@@ -62,6 +62,7 @@ public sealed class AlpacaTradeUpdateParserTests
                 "event": "fill",
                 "execution_id": "execution-1",
                 "qty": "10",
+                "price": "100.50",
                 "position_qty": "10",
                 "order": {
                   "id": "broker-1",
@@ -84,6 +85,7 @@ public sealed class AlpacaTradeUpdateParserTests
         Assert.Equal("MSFT", update.Ticker);
         Assert.Equal("buy", update.Side);
         Assert.Equal(10m, update.LastFillQuantity);
+        Assert.Equal(100.50m, update.LastFillPrice);
         Assert.Equal(10m, update.PositionQuantity);
         Assert.Equal("execution-1", update.ExecutionId);
         Assert.Equal(new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero), update.Timestamp);

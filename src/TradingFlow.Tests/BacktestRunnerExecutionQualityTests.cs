@@ -45,6 +45,49 @@ public class BacktestRunnerExecutionQualityTests
     }
 
     [Fact]
+    public void BuildPortfolioTrades_ParticipationLimitedEntry_RecordsRequestedAndFilledQuantity()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "BuildPortfolioTrades",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var strategy = ConfirmedEntryStrategy();
+        var portfolio = new PortfolioConfig(
+            StartingCapital: 10_000m,
+            AccountRiskBudgetPct: 1m,
+            MaxPositionNotionalPct: 100m,
+            MaxConcurrentPositions: 1,
+            FixedBuyFee: 0m,
+            FixedSellFee: 0m,
+            MaxOpenTradesPerTicker: 1,
+            PreventOverlappingTickerPositions: false,
+            MaxBarParticipationPct: 5m);
+        var candidate = Candidate(
+            "AAA",
+            "2026-06-02T13:31:00Z",
+            "2026-06-02T13:40:00Z",
+            10m,
+            9m,
+            12m,
+            "take_profit") with
+        {
+            EntryLiquidityEvidenceVolume = 1_000m
+        };
+
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(
+            null, [portfolio, strategy, new[] { candidate }, null, null])!;
+
+        var trade = Assert.Single(trades);
+        Assert.Equal(100, trade.RequestedShareQuantity);
+        Assert.Equal(50, trade.ShareQuantity);
+        Assert.Equal("partial_fill_remainder_canceled", trade.EntryFillStatus);
+        Assert.Equal(5m, trade.EntryEstimatedParticipationPct);
+        Assert.Equal(candidate.StrategyId, trade.StrategyId);
+        Assert.Equal(candidate.CandidateId, trade.CandidateId);
+    }
+
+    [Fact]
     public void ResolveSecretForTesting_LoadsLocalAlpacaSettings_WhenEnvironmentIsMissing()
     {
         var settingsPath = CreateTemporaryAlpacaSettings("local-test-key");
@@ -162,8 +205,6 @@ public class BacktestRunnerExecutionQualityTests
             true,
             false,
             true,
-            false,
-            true,
             true,
             false,
             false,
@@ -237,93 +278,6 @@ public class BacktestRunnerExecutionQualityTests
     }
 
     [Fact]
-    public void BuildPortfolioTrades_WhenTickerDailyLossGuardTrips_SkipsLaterSameTickerCandidateOnly()
-    {
-        var method = typeof(BacktestRunner).GetMethod(
-            "BuildPortfolioTrades",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        Assert.NotNull(method);
-
-        var baseStrategy = ConfirmedEntryStrategy();
-        var strategy = baseStrategy with
-        {
-            EntryRules = baseStrategy.EntryRules with
-            {
-                EnablePerTickerDailyLossGuard = true,
-                MaxPerTickerDailyFailedTrades = 1,
-                MaxPerTickerDailyLossR = 1.0m,
-                MaxPerTickerDailyLossPctOfAccount = 1.0m
-            }
-        };
-        var portfolio = new PortfolioConfig(
-            StartingCapital: 10_000m,
-            AccountRiskBudgetPct: 1.0m,
-            MaxPositionNotionalPct: 100m,
-            MaxConcurrentPositions: 5,
-            FixedBuyFee: 1m,
-            FixedSellFee: 1m,
-            MaxOpenTradesPerTicker: 1,
-            PreventOverlappingTickerPositions: true);
-        var candidates = new[]
-        {
-            Candidate("LOSS", "2026-06-01T13:31:00Z", "2026-06-01T13:32:00Z", 10m, 9m, 9m, "stop_loss"),
-            Candidate("LOSS", "2026-06-01T13:35:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit"),
-            Candidate("OKAY", "2026-06-01T13:36:00Z", "2026-06-01T13:41:00Z", 10m, 9m, 12m, "take_profit")
-        };
-
-        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(null, [portfolio, strategy, candidates, null, null])!;
-
-        Assert.Equal(2, trades.Count);
-        Assert.Single(trades, trade => trade.Ticker == "LOSS");
-        Assert.Single(trades, trade => trade.Ticker == "OKAY");
-        Assert.DoesNotContain(trades, trade => trade.Ticker == "LOSS" && trade.NetProfit > 0);
-    }
-
-    [Fact]
-    public void BuildPortfolioTrades_MaxEntriesPerTickerPerDay_CountsAcceptedTradesOnly()
-    {
-        var method = typeof(BacktestRunner).GetMethod(
-            "BuildPortfolioTrades",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        Assert.NotNull(method);
-
-        var baseStrategy = ConfirmedEntryStrategy();
-        var strategy = baseStrategy with
-        {
-            EntryRules = baseStrategy.EntryRules with
-            {
-                MaxEntriesPerTickerPerDay = 1
-            }
-        };
-        var portfolio = new PortfolioConfig(
-            StartingCapital: 10_000m,
-            AccountRiskBudgetPct: 1.0m,
-            MaxPositionNotionalPct: 100m,
-            MaxConcurrentPositions: 5,
-            FixedBuyFee: 0m,
-            FixedSellFee: 0m,
-            MaxOpenTradesPerTicker: 1,
-            PreventOverlappingTickerPositions: false);
-        var candidates = new[]
-        {
-            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:32:00Z", 10m, 9m, 12m, "take_profit"),
-            Candidate("AAA", "2026-06-01T13:35:00Z", "2026-06-01T13:36:00Z", 10m, 9m, 12m, "take_profit"),
-            Candidate("AAA", "2026-06-02T13:31:00Z", "2026-06-02T13:32:00Z", 10m, 9m, 12m, "take_profit")
-        };
-
-        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(
-            null, [portfolio, strategy, candidates, null, null])!;
-
-        Assert.Equal(2, trades.Count);
-        Assert.Single(
-            trades,
-            trade => ToNewYorkDate(trade.EntryTimestamp) == new DateOnly(2026, 6, 1));
-        Assert.Single(
-            trades,
-            trade => ToNewYorkDate(trade.EntryTimestamp) == new DateOnly(2026, 6, 2));
-    }
-
-    [Fact]
     public void BuildPortfolioTrades_EqualTimestampCandidates_UsesStableTickerOrdering()
     {
         var method = typeof(BacktestRunner).GetMethod(
@@ -383,8 +337,8 @@ public class BacktestRunnerExecutionQualityTests
             PreventOverlappingTickerPositions: true);
         var candidates = new[]
         {
-            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit", "First", 1m),
-            Candidate("ZZZ", "2026-06-01T13:31:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit", "Second", 2m)
+            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit", "First", 1m, first.StrategyId),
+            Candidate("ZZZ", "2026-06-01T13:31:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit", "Second", 2m, second.StrategyId)
         };
 
         var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(
@@ -397,7 +351,7 @@ public class BacktestRunnerExecutionQualityTests
     }
 
     [Fact]
-    public void BuildUnifiedPortfolioTrades_SameTickerAndTimestamp_DoesNotAssumeSameBarExitOrder()
+    public void BuildUnifiedPortfolioTrades_SameBarEntryAndExit_FailsClosedAsAmbiguous()
     {
         var method = typeof(BacktestRunner).GetMethod(
             "BuildUnifiedPortfolioTrades",
@@ -425,16 +379,55 @@ public class BacktestRunnerExecutionQualityTests
             PreventOverlappingTickerPositions: true);
         var candidates = new[]
         {
-            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:31:00Z", 10m, 9m, 12m, "stop_loss", "First", 2m),
-            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:31:00Z", 10m, 9m, 12m, "stop_loss", "Second", 1m)
+            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:31:00Z", 10m, 9m, 12m, "stop_loss", "First", 2m, first.StrategyId),
+            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:31:00Z", 10m, 9m, 12m, "stop_loss", "Second", 1m, second.StrategyId)
         };
 
         var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(
             null,
             [portfolio, new[] { first, second }, candidates, null, null])!;
 
-        var trade = Assert.Single(trades);
-        Assert.Equal("First", trade.StrategyName);
+        Assert.Empty(trades);
+    }
+
+    [Fact]
+    public void BuildUnifiedPortfolioTrades_ResolvesVersionsByStrategyIdNotDisplayName()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "BuildUnifiedPortfolioTrades",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var first = ConfirmedEntryStrategy() with
+        {
+            StrategyId = "strategy.shared.v1",
+            StrategyName = "Shared Display Name"
+        };
+        var second = ConfirmedEntryStrategy() with
+        {
+            StrategyId = "strategy.shared.v2",
+            StrategyName = "Shared Display Name"
+        };
+        var portfolio = new PortfolioConfig(
+            StartingCapital: 10_000m,
+            AccountRiskBudgetPct: 1m,
+            MaxPositionNotionalPct: 100m,
+            MaxConcurrentPositions: 1,
+            FixedBuyFee: 0m,
+            FixedSellFee: 0m,
+            MaxOpenTradesPerTicker: 1,
+            PreventOverlappingTickerPositions: true);
+        var candidates = new[]
+        {
+            Candidate("AAA", "2026-06-01T13:31:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit", first.StrategyName, 1m, first.StrategyId),
+            Candidate("ZZZ", "2026-06-01T13:31:00Z", "2026-06-01T13:40:00Z", 10m, 9m, 12m, "take_profit", second.StrategyName, 2m, second.StrategyId)
+        };
+
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(
+            null,
+            [portfolio, new[] { first, second }, candidates, null, null])!;
+
+        Assert.Equal("ZZZ", Assert.Single(trades).Ticker);
     }
 
     [Fact]
@@ -454,6 +447,129 @@ public class BacktestRunnerExecutionQualityTests
         Assert.NotNull(best);
         Assert.Equal("active-loss", best.StrategyId);
     }
+
+    [Fact]
+    public void PublishedEconomics_IncompleteExecutionSuppressesTradeAndPerformanceClaims()
+    {
+        var trade = new BacktestTrade(
+            "AAA",
+            "Strategy",
+            "long",
+            DateTimeOffset.Parse("2026-06-01T13:30:00Z"),
+            DateTimeOffset.Parse("2026-06-01T14:00:00Z"),
+            10,
+            10m,
+            11m,
+            9m,
+            12m,
+            "take_profit",
+            10m,
+            2m,
+            8m,
+            CandidateId: "candidate-1");
+        var strategy = StrategyResult("winner", "Winner", 8m, 0.08m, 1m, 1, 1, 0) with
+        {
+            CompletedTrades = [trade]
+        };
+        var winner = new WinnerStrategySummary(
+            strategy.StrategyId,
+            strategy.StrategyName,
+            strategy.EndingCapital,
+            strategy.NetProfit,
+            strategy.TotalReturnPct,
+            strategy.AverageDailyReturnPct,
+            strategy.MaxDrawdownPct,
+            strategy.AcceptedTradeCount,
+            strategy.RejectedTradeCount);
+
+        var summary = BacktestRunner.BuildPublishedEconomicSummary(
+            10_000m,
+            strategy,
+            winner,
+            economicResultsComplete: false);
+
+        Assert.Equal(10_000m, summary.EndingCapital);
+        Assert.Equal(0m, summary.NetProfit);
+        Assert.Equal(0m, summary.TotalReturnPct);
+        Assert.Equal(0m, summary.MaxDrawdownPct);
+        Assert.Null(summary.Winner);
+        Assert.Equal(0, summary.WinningTradeCount);
+        Assert.Empty(summary.CompletedTrades);
+    }
+
+    [Fact]
+    public void IncompleteUnifiedExecution_InvalidatesNestedEconomicProjections()
+    {
+        var strategy = StrategyResult("winner", "Winner", 8m, 0.08m, 1m, 1, 1, 0) with
+        {
+            EconomicResultsComplete = true
+        };
+        var unified = new UnifiedPortfolioBacktestResult(
+            10_000m,
+            10_008m,
+            8m,
+            0.08m,
+            1m,
+            1,
+            1,
+            0,
+            1,
+            0,
+            Array.Empty<BacktestTrade>(),
+            EconomicResultsComplete: true);
+
+        var suppressedStrategy = BacktestRunner.SuppressStrategyEconomicClaims(strategy);
+        var suppressedUnified = BacktestRunner.SuppressUnifiedPortfolioEconomicClaims(unified);
+
+        Assert.False(suppressedStrategy.EconomicResultsComplete);
+        Assert.Equal(strategy.StartingCapital, suppressedStrategy.EndingCapital);
+        Assert.Equal(0m, suppressedStrategy.NetProfit);
+        Assert.Empty(suppressedStrategy.CompletedTrades);
+        Assert.False(suppressedUnified.EconomicResultsComplete);
+        Assert.Equal(unified.StartingCapital, suppressedUnified.EndingCapital);
+        Assert.Equal(0m, suppressedUnified.NetProfit);
+        Assert.Empty(suppressedUnified.CompletedTrades);
+    }
+
+    [Fact]
+    public void ReplayRetentionLimit_AppliesAcrossPreparedMarketAndBenchmarkBars()
+    {
+        BacktestRunner.EnsureReplayRetentionLimit(
+            retainedBars: 90,
+            additionalBars: 10,
+            maximumBars: 100);
+
+        var exception = Assert.Throws<BacktestReplayRetentionLimitExceededException>(() =>
+            BacktestRunner.EnsureReplayRetentionLimit(
+                retainedBars: 90,
+                additionalBars: 11,
+                maximumBars: 100));
+
+        Assert.Contains("max_retained_replay_bars", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StrategyWorkItemLimit_RejectsMatrixBeforeMaterialization()
+    {
+        BacktestRunner.EnsureStrategyWorkItemLimit(100, 10, 1_000);
+
+        var exception = Assert.Throws<BacktestWorkItemLimitExceededException>(() =>
+            BacktestRunner.EnsureStrategyWorkItemLimit(101, 10, 1_000));
+
+        Assert.Contains("max_strategy_work_items", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RetainedCandidateBudget_FailsClosedAtConfiguredLimit()
+    {
+        var budget = new RetainedCandidateBudget(1);
+        budget.Reserve();
+
+        var exception = Assert.Throws<BacktestCandidateRetentionLimitExceededException>(budget.Reserve);
+
+        Assert.Contains("max_retained_candidates", exception.Message, StringComparison.Ordinal);
+    }
+
     private static IndicatorSnapshot Snapshot(string timestamp)
     {
         return new IndicatorSnapshot(
@@ -487,7 +603,7 @@ public class BacktestRunnerExecutionQualityTests
             "5m",
             "long",
             new EntryRules(
-                "ross_gap_go_bull_flag",
+                "swing_reclaim",
                 2m,
                 0m,
                 100m,
@@ -502,15 +618,10 @@ public class BacktestRunnerExecutionQualityTests
                 3m,
                 5,
                 8,
-                6,
                 EnableEntryBarConfirmation: true,
                 MinEntryBarCloseLocationValue: 0.55m,
                 RejectEntryBarCloseLocationBelowMinimum: true,
-                RejectEntryBarBreaksSignalMidpoint: true,
-                MaxVwapExtensionPctForDirectEntry: 4m,
-                ExtendedVwapMinEntryBarCloseLocationValue: 0.70m,
-                MaxBollingerPositionForDirectEntry: 1.05m,
-                ExtendedBollingerMinEntryBarCloseLocationValue: 0.70m),
+                RejectEntryBarBreaksSignalMidpoint: true),
             new ConfluenceRules(false, "15m", 50, "none"),
             new ExitRules(3m, 3.5m, 6.5m, true, 3m, 2m, false, false, false, 2),
             new ExecutionRules(
@@ -576,7 +687,8 @@ public class BacktestRunnerExecutionQualityTests
         decimal exit,
         string exitReason,
         string strategyName = "Confirmed Entry Test",
-        decimal selectionScore = 0m)
+        decimal selectionScore = 0m,
+        string strategyId = "")
     {
         return new BacktestCandidateTrade(
             ticker,
@@ -590,7 +702,9 @@ public class BacktestRunnerExecutionQualityTests
             exit,
             exitReason,
             Math.Abs(entry - stop),
-            SelectionScore: selectionScore);
+            SelectionScore: selectionScore,
+            StrategyId: strategyId,
+            CandidateId: $"{strategyId}:{ticker}:{entryTimestamp}:{exitTimestamp}");
     }
 
     private static DateOnly ToNewYorkDate(DateTimeOffset timestamp)

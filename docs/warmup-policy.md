@@ -1,43 +1,41 @@
 # Warm-Up Policy
 
-TradingFlow separates the evaluation window from the data warm-up window.
-Strategies should never trade on warm-up bars; warm-up exists only to seed
-indicators, rolling volume baselines, and paper/live recovery state.
+TradingFlow supports swing strategies only. Warm-up reconstructs indicator state
+before evaluation; warm-up bars are never eligible for signals or fills.
 
-## Minimums
+## Daily Swing State
 
-- Intraday strategies need at least 1 prior trading day before live decisions.
-- Swing strategies need at least 1 prior trading week before live decisions.
-- Relative-volume strategies should use more history when available. The
-  indicator engine compares current cumulative/slot/session volume with up to
-  63 prior comparable sessions, so 60-90 calendar days is a better practical
-  intraday warm-up when we can fetch it.
-- Swing trend strategies that use daily SMA/EMA context require at least 260
-  completed trading bars. The shipped profiles request 400 calendar days so
-  weekends, holidays, and indicator stabilization do not under-warm SMA200.
+- Maintain at least 260 completed daily bars for strategies using SMA200, its slope,
+  or similarly long recursive indicators.
+- The retained profiles request 400 calendar days to cover weekends, holidays, and
+  stabilization margin.
+- A later-listed security is eligible once its own real history satisfies the chosen
+  strategy. History is never synthesized before listing.
 
-## Current Config Defaults
+## Sub-Daily Swing Confirmation
 
-- Paper intraday: `configs/paper/alpaca-paper.yaml`
-  - `lookback_days: 10`
-  - `warmup_lookback_days: 90`
-  - downloads `1m`, `5m`, `15m`, `1h`, `1d`
-- Paper swing: `configs/paper/alpaca-paper-swing.yaml`
+Completed `1h`, `15m`, or `5m` bars may be warmed when a swing strategy explicitly
+uses them for entry confirmation or execution timing. The required depth is based on
+the longest declared indicator plus stabilization margin. This state does not define
+a separate trading horizon.
+
+## Current Defaults
+
+- Paper: `configs/paper/alpaca-paper.yaml`
   - `lookback_days: 260`
   - `warmup_lookback_days: 400`
-  - downloads `1h`, `1d`
-- Intraday backtest profile: `configs/backtest/intraday-backtest-profile.yaml`
-  - `lookback_days: 60`
-  - `warmup_lookback_days: 90`
-- Swing backtest profile: `configs/backtest/swing-backtest-profile.yaml`
-  - `lookback_days: 180`
+  - downloads `1h` and `1d`
+- Backtest: `configs/backtest/swing-backtest-profile.yaml`
+  - diagnostic `lookback_days: 180`
   - `warmup_lookback_days: 400`
+  - downloads `1h` and `1d`
 
-## Runtime Behavior
+## Rolling Maintenance
 
-Backtests fetch from `evaluation_start - warmup_lookback_days` through the end
-of the evaluation window, but only bars at or after the evaluation start can
-generate trades. Paper/live fetches the rolling warm-up window on each
-iteration, computes indicators over the full set, and evaluates only the latest
-bar. The candle store can persist those bars locally for recovery and later
-blob archival.
+Paper/live warm state is restored from historical REST data, then maintained with
+completed stream bars. After each session the store appends the completed daily bar,
+trims beyond retention, and persists atomically. Backfill and stream overlap must be
+deduplicated by `(symbol, timeframe, timestamp)` and checked for a gap.
+
+The current local warm-up state is stored under `data/warmup/`. Production archive
+copies are asynchronous and must never block the hot signal or broker path.

@@ -1,11 +1,11 @@
-# Automated US Equities Trading System — Production Specification Addendum v1.0
+# Automated US Equities Swing Trading System — Production Specification v1.0
 
-**Status:** Binding engineering specification (companion to `automated_us_equities_trading_research_design.md`, hereafter "Base Spec")
+**Status:** Binding standalone engineering specification
 **Date:** 20 July 2026
-**Scope:** Day trading (intraday) AND swing trading (multi-session) on US-listed equities via Finviz Elite + Alpaca
-**Purpose:** Close every gap in the Base Spec, define the swing module, define production operations, and provide a machine-auditable requirement set so Claude Code can verify that the implemented system adheres to this design.
+**Scope:** Swing trading (multi-session) on US-listed equities via Finviz Elite + Alpaca
+**Purpose:** Define the swing product, production operations, and a machine-auditable requirement set for verifying implementation adherence.
 
-> Research framing carries over from the Base Spec: nothing here asserts profitability. This document defines correctness, safety, and completeness of the *system*, not the edge of any strategy.
+> Nothing here asserts profitability. This document defines correctness, safety, and completeness of the *system*, not the edge of any strategy.
 
 ---
 
@@ -31,7 +31,6 @@ Every requirement has a stable ID: `<DOMAIN>-<NN>` (e.g., `RSK-04`). IDs are nev
 | EXE | Order management and execution |
 | RSK | Risk engine and kill switches |
 | SWG | Swing trading module |
-| DAY | Day trading module deltas (beyond Base Spec) |
 | PER | Persistence and research store |
 | OPS | Operations, deployment, environments |
 | TST | Testing and CI gates |
@@ -48,21 +47,21 @@ Every requirement has a stable ID: `<DOMAIN>-<NN>` (e.g., `RSK-04`). IDs are nev
 
 **CFG-04 (MUST NOT):** No parameter may exist in code without appearing in Appendix A. The audit (AUD-03) checks this bidirectionally.
 
-### 0.4 Relationship to Base Spec
+### 0.4 Document authority
 
-Where this addendum and the Base Spec conflict, this addendum wins. Base Spec sections referenced as `[BS §n]`.
+This document is the standalone production contract. Research methodology and current promotion decisions are documented separately under `docs/research/` and cannot weaken these requirements.
 
 ---
 
 ## 1. ACC — Account, regulatory, and broker constraints
 
-### 1.1 Pattern Day Trader (PDT)
+### 1.1 Pattern Day Trader (PDT) compliance
 
-**ACC-01 (MUST):** The system MUST model the PDT rule: a margin account with equity below USD 25,000 is limited to 3 day trades within any 5 rolling business days. A "day trade" is opening and closing (in whole or part) a position in the same symbol within the same trading day, in a margin account.
+**ACC-01 (MUST):** The system is swing-only, but MUST model the PDT rule because a protective exit, partial-fill abort, or invalidation can close a swing entry in the same session. A margin account with equity below USD 25,000 is limited to 3 same-session round trips within any 5 rolling business days.
 
 **ACC-02 (MUST):** The risk engine MUST maintain its own rolling day-trade counter (`pdt_internal_count`) derived from fill records, AND cross-check the broker's values (`daytrade_count`, `pattern_day_trader` from the Alpaca account endpoint) at startup and at least every `pdt_recheck_interval_s` (default 300 s). If the two counters disagree, the stricter value governs and an alert fires.
 
-**ACC-03 (MUST):** Pre-order gate: if account equity < `pdt_equity_floor` (default 25,500 USD — includes a 500 USD buffer) AND the prospective order could become the 4th day trade in the rolling window, the order MUST be blocked with reject code `REJECT_PDT_LIMIT`. Blocking is fail-closed: if equity or counter data is unavailable, the order is blocked.
+**ACC-03 (MUST):** Pre-order gate: if account equity < `pdt_equity_floor` (default 25,500 USD — includes a 500 USD buffer) AND a same-session protective exit could become the 4th counted round trip in the rolling window, the swing entry MUST be blocked with reject code `REJECT_PDT_LIMIT`. Blocking is fail-closed when equity or counter data is unavailable.
 
 **ACC-04 (MUST):** Closing an existing position is never blocked by ACC-03. Risk exits always execute; PDT status is recorded on the exit record for research.
 
@@ -70,9 +69,9 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 ### 1.2 Buying power and overnight exposure
 
-**ACC-06 (MUST):** Day-trade buying power and overnight (Reg T) buying power MUST be modeled separately. Intraday positions are checked against day-trade buying power; any position designated `swing` (see §7) is checked against overnight buying power at entry time, not at hold time.
+**ACC-06 (MUST):** Every entry is designated `swing` and MUST be checked against overnight (Reg T) buying power at entry time. Day-trade buying power MUST NOT be used for admission or sizing.
 
-**ACC-07 (MUST):** Default self-imposed caps (stricter than broker limits): `max_gross_exposure_intraday_pct` default 100% of equity; `max_gross_exposure_overnight_pct` default 75% of equity. The engine MUST enforce its own caps even when the broker would permit more leverage.
+**ACC-07 (MUST):** The self-imposed `max_gross_exposure_overnight_pct` cap defaults to 75% of equity. The engine MUST enforce this cap even when the broker would permit more leverage.
 
 **ACC-08 (MUST):** Margin interest accrual on overnight debit balances MUST be estimated daily and written to the research journal as a cost line item for swing trades.
 
@@ -96,11 +95,11 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 ### 2.1 Feed requirements
 
-**DATA-01 (MUST):** Production operation (paper Phase 2 onward and all live phases) REQUIRES the Alpaca consolidated SIP feed (Algo Trader Plus subscription or equivalent). At startup the system MUST authenticate against `wss://stream.data.alpaca.markets/v2/sip`; authentication failure → refuse to start. Rationale: the free plan is IEX-only, limited to 30 trade/quote symbol subscriptions, 200 REST calls/min, and blocks recent-SIP REST queries — all incompatible with the Base Spec's spread gates, quote-age gates, halt detection, and 30–150-candidate monitoring.
+**DATA-01 (MUST):** Production operation (paper Phase 2 onward and all live phases) REQUIRES the Alpaca consolidated SIP feed (Algo Trader Plus subscription or equivalent). At startup the system MUST authenticate against `wss://stream.data.alpaca.markets/v2/sip`; authentication failure → refuse to start. Rationale: the free plan is IEX-only, limited to 30 trade/quote symbol subscriptions, 200 REST calls/min, and blocks recent-SIP REST queries — all incompatible with required spread gates, quote-age gates, halt detection, and 30–150-candidate monitoring.
 
 **DATA-02 (MUST):** `data_feed` MUST be recorded on every bar, quote, trade, snapshot, and derived feature row. Mixed-feed computation of any single feature is a defect.
 
-**DATA-03 (MUST):** Same-time RVOL [BS §9.2]: numerator (today's volume-so-far) and denominator (median same-clock-time volume over `rvol_lookback_sessions`, default 20) MUST be computed from the same feed. A startup self-test MUST verify feed identity of the historical cache versus the live stream and refuse to compute RVOL on mismatch.
+**DATA-03 (MUST):** Same-time RVOL numerator (today's volume-so-far) and denominator (median same-clock-time volume over `rvol_lookback_sessions`, default 20) MUST be computed from the same feed. A startup self-test MUST verify feed identity of the historical cache versus the live stream and refuse to compute RVOL on mismatch.
 
 **DATA-04 (MUST):** IEX-degraded mode: if config `allow_iex_fallback` (default `false`) is enabled for development, then spread_bps, quote-age, depth, halt state, and same-time RVOL MUST be marked `reliability = "degraded"`, all reject rules that depend on them MUST be disabled rather than fed bad data, and **no orders may be submitted** (`degraded_mode_trading = false`, not configurable upward in `live` profile).
 
@@ -130,29 +129,29 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 **DATA-14 (MUST):** Every ingested record stores both the exchange/source timestamp and the local receive timestamp (nanosecond precision where provided). Derived latency (`recv - source`) is monitored; p99 above `data_latency_alert_ms` (default 1,500 ms) alerts.
 
-**DATA-15 (MUST):** Host clock discipline: NTP-synchronized; measured drift beyond `clock_drift_max_ms` (default 250 ms) fires the clock-drift kill switch [BS §14].
+**DATA-15 (MUST):** Host clock discipline: NTP-synchronized; measured drift beyond `clock_drift_max_ms` (default 250 ms) fires the clock-drift kill switch defined by RSK-03.
 
 ---
 
 ## 3. CAL — Calendar, sessions, time
 
-**CAL-01 (MUST):** All scheduling MUST be driven by the Alpaca trading-calendar API, fetched daily at `calendar_fetch_time` (default 03:30 ET) and cached. The static schedule table [BS §6] defines *offsets and windows relative to that day's official open/close*, not absolute times.
+**CAL-01 (MUST):** All scheduling MUST be driven by the Alpaca trading-calendar API, fetched daily at `calendar_fetch_time` (default 03:30 ET) and cached. Schedule configuration defines offsets and windows relative to that day's official open/close, not absolute times.
 
-**CAL-02 (MUST):** Early-close days: all post-open windows MUST be recomputed from the actual close. The closing-session model (Base Spec 15:00–15:50 and SWG close-window logic) MUST be skipped entirely when the session is shorter than `min_session_hours_for_close_model` (default 6.0 h). Day-trade positions MUST be flattened no later than `eod_flatten_offset_min` (default 10 min) before the actual close.
+**CAL-02 (MUST):** Early-close days: all post-open windows MUST be recomputed from the actual close. Swing close-window logic MUST be skipped entirely when the session is shorter than `min_session_hours_for_close_model` (default 6.0 h). Swing positions are not flattened merely because a regular session ends.
 
 **CAL-03 (MUST):** Non-trading days: the scheduler runs data-maintenance jobs only; no scans, no orders. Half-day and holiday determinations come only from CAL-01, never from a hard-coded list.
 
-**CAL-04 (MUST):** All internal timestamps are stored in UTC with timezone-aware types; all market logic converts through the IANA `America/New_York` zone at evaluation time. Hard-coded UTC offsets anywhere are a defect [BS §6].
+**CAL-04 (MUST):** All internal timestamps are stored in UTC with timezone-aware types; all market logic converts through the IANA `America/New_York` zone at evaluation time. Hard-coded UTC offsets anywhere are a defect.
 
 **CAL-05 (MUST):** DST-transition self-test: on the first run after any US DST change, a startup assertion verifies that "09:30 America/New_York" maps to the expected UTC instant from the calendar API.
 
 **CAL-06 (MUST):** Corporate actions: nightly (after CAL-01 fetch) the system MUST pull corporate actions (splits, cash/stock dividends, symbol changes, mergers) for the universe. Effects:
-1. `previous_regular_session_close` used in the live gap formula [BS §5.3] MUST be the adjusted close when an action is effective that morning.
-2. If adjustment data is missing or ambiguous for a symbol with an action effective today → `REJECT_CORPORATE_ACTION` (new reject code, added to the [BS §10] enum) and exclusion from that day's candidate set.
+1. `previous_regular_session_close` used in the live gap formula MUST be the adjusted close when an action is effective that morning.
+2. If adjustment data is missing or ambiguous for a symbol with an action effective today → `REJECT_CORPORATE_ACTION` and exclusion from that day's candidate set.
 3. Historical caches (DATA-13) MUST be re-adjusted the night an action lands.
 4. Symbol changes MUST migrate open swing positions' internal records to the new symbol after broker reconciliation.
 
-**CAL-07 (MUST):** Earnings calendar: the system MUST ingest, nightly, the upcoming earnings dates (source: Finviz export `Earnings Date` column; config `earnings_calendar_source`). This feeds the MVP event-anchored discovery (DAY-02) and the swing earnings-proximity exit (SWG-14). If a symbol's earnings date is unknown, swing entries in that symbol are blocked (`REJECT_UNKNOWN_EARNINGS_DATE`) — fail closed.
+**CAL-07 (MUST):** Earnings calendar: the system MUST ingest, nightly, the upcoming earnings dates (source: Finviz export `Earnings Date` column; config `earnings_calendar_source`). This feeds swing event discovery and the earnings-proximity exit (SWG-14). If a symbol's earnings date is unknown, swing entries in that symbol are blocked (`REJECT_UNKNOWN_EARNINGS_DATE`) — fail closed.
 
 ---
 
@@ -164,9 +163,9 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 **FVZ-03 (MUST):** Every pull is archived raw (byte-exact CSV) with pull timestamp, preset ID, and HTTP metadata before any parsing (PER-02). Parsing always operates on the archived copy.
 
-**FVZ-04 (MUST):** Preset definitions [BS §5] MUST live in version-controlled config (one file per preset: filter map + sort + expected columns), referenced by `finviz_preset` name in the Candidate record [BS §16]. Editing a preset changes its version string, which is journaled.
+**FVZ-04 (MUST):** Preset definitions MUST live in version-controlled config (one file per preset: filter map + sort + expected columns), referenced by `finviz_preset` name in the Candidate record. Editing a preset changes its version string, which is journaled.
 
-**FVZ-05 (MUST):** Derived-not-trusted rule: fields that the Base Spec says to compute internally (premarket gap, premarket dollar volume, spread) MUST NOT be taken from the Finviz export even when present. Finviz fields are discovery hints only; every trading-relevant number is recomputed from Alpaca data. The only Finviz fields consumed downstream: symbol, exchange, sector/industry (for FVZ-07), earnings date (CAL-07), and preset membership.
+**FVZ-05 (MUST):** Derived-not-trusted rule: premarket gap, premarket dollar volume, spread, and other trading evidence MUST NOT be taken from the Finviz export even when present. Finviz fields are discovery hints only; every trading-relevant number is recomputed from Alpaca data. The only Finviz fields consumed downstream: symbol, exchange, sector/industry (for FVZ-07), earnings date (CAL-07), and preset membership.
 
 **FVZ-06 (MUST):** Phase 0 rate-limit calibration procedure (because Finviz publishes no precise limits): starting at 120 s intervals, halve toward 30 s over ≥5 sessions while logging HTTP status, latency, and any throttle/captcha responses; the production `finviz_min_interval_s` is then set to 2× the lowest interval that produced zero throttle events across 3 consecutive sessions. The calibration log is retained as evidence.
 
@@ -180,16 +179,16 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 **NWS-01 (MUST):** News arrives via the Alpaca news WebSocket stream (primary) and REST backfill (recovery + historical). Every article stores: provider article ID, canonical URL, headline, summary/body, symbols, `created_at`, `updated_at`, first local ingest timestamp, and raw payload (PER-02).
 
-**NWS-02 (MUST):** Single-wire honesty: the news source is Benzinga-via-Alpaca. All "freshness" and "first published" semantics MUST be defined and journaled as *first seen on this wire*, and the catalyst object field is named `first_seen_at`, not `first_published_at`, replacing the field in [BS §8.4].
+**NWS-02 (MUST):** Single-wire honesty: the news source is Benzinga-via-Alpaca. All "freshness" and "first published" semantics MUST be defined and journaled as *first seen on this wire*, and the catalyst object field is named `first_seen_at`, not `first_published_at`.
 
 **NWS-03 (MUST):** Latency measurement (Phase 0 onward): the distribution of `ingest_ts − created_at` is recorded per day; p50 above `news_latency_alert_s` (default 90 s) alerts, and the current day's p50 is stored on every CatalystResult so freshness scores can be interpreted later.
 
-**NWS-04 (MUST):** Deduplication pipeline, in order: (1) exact provider article ID; (2) canonical-URL match; (3) normalized-headline hash (case/punctuation/whitespace-folded); (4) fuzzy similarity on headline+lead using the configured method `dedup_method` (default: cosine similarity on embeddings) with threshold `dedup_similarity_threshold` (default 0.92) over a `dedup_window_hours` (default 72 h) window per symbol. A match links `duplicate_of` and applies the staleness penalty [BS §8.3]; it never silently drops the record.
+**NWS-04 (MUST):** Deduplication pipeline, in order: (1) exact provider article ID; (2) canonical-URL match; (3) normalized-headline hash (case/punctuation/whitespace-folded); (4) fuzzy similarity on headline+lead using the configured method `dedup_method` (default: cosine similarity on embeddings) with threshold `dedup_similarity_threshold` (default 0.92) over a `dedup_window_hours` (default 72 h) window per symbol. A match links `duplicate_of` and applies the configured staleness penalty; it never silently drops the record.
 
-### 5.2 Catalyst classification mechanism (fills [BS §8], which defined scores but no mechanism)
+### 5.2 Catalyst classification mechanism
 
 **NWS-05 (MUST):** Two-stage classifier:
-- **Stage 1 — deterministic rules:** category assignment [BS §8.1 taxonomy] via a version-controlled rule set (keyword/regex + structured cues such as "8-K", "guidance", "downgrade"), plus source-reliability scoring from a version-controlled source table. Stage 1 alone MUST be able to produce a conservative CatalystResult.
+- **Stage 1 — deterministic rules:** category assignment via a version-controlled taxonomy and rule set (keyword/regex + structured cues such as "8-K", "guidance", "downgrade"), plus source-reliability scoring from a version-controlled source table. Stage 1 alone MUST be able to produce a conservative CatalystResult.
 - **Stage 2 — LLM scorer:** materiality, novelty (in combination with NWS-04 output), directional clarity, direction, and a one-paragraph explanation. Requirements: fixed model ID from config `catalyst_llm_model`; temperature 0; strict JSON-schema output validated on receipt; the exact prompt stored in the repo with a version string; `prompt_version` + `prompt_hash` + `model_id` stored on every CatalystResult; response cache keyed on `(article_id, prompt_version, model_id)` so identical inputs always yield identical stored scores.
 
 **NWS-06 (MUST):** Fail-closed fallback: if Stage 2 errors, times out (`catalyst_llm_timeout_s`, default 8 s), or returns schema-invalid output after 1 retry, the article gets a Stage-1-only CatalystResult with `llm_status = failed`, and any candidate whose trade decision depends on that article is blocked from automated entry (`REJECT_AMBIGUOUS_DIRECTION`). LLM failure never silently downgrades to a guessed score.
@@ -200,7 +199,7 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 ### 5.3 Score model corrections
 
-**NWS-09 (MUST):** The **surprise-magnitude component is removed from v1** because no consensus-estimates source exists in the current stack [Base Spec gap]. The v1 catalyst score weights are: materiality 30, novelty 25, directional clarity 20, source reliability 15, freshness 10 (sum 100). This supersedes [BS §8.2]. A config flag `estimates_source` (default `none`) reserves the v2 path: when a licensed estimates source is configured, surprise is reinstated at weight 20 with the [BS §8.2] distribution, gated behind its own validation.
+**NWS-09 (MUST):** The **surprise-magnitude component is removed from v1** because no consensus-estimates source exists in the current stack. The v1 catalyst score weights are: materiality 30, novelty 25, directional clarity 20, source reliability 15, freshness 10 (sum 100). A config flag `estimates_source` (default `none`) reserves the v2 path: when a licensed estimates source is configured, surprise may be reinstated only behind its own validation and a versioned weight definition.
 
 **NWS-10 (MUST):** Component persistence: every CatalystResult stores all raw component values, penalties applied, dedup evidence, and Stage-1/Stage-2 provenance — never only the composite (see PER-04).
 
@@ -210,7 +209,7 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 **NWS-12 (MUST):** Acceptance gate before any paper trading uses catalyst scores: on the held-out portion of NWS-11, Stage-1+2 must achieve category accuracy ≥ `catalyst_min_category_acc` (default 0.85) and direction accuracy on clear-direction articles ≥ `catalyst_min_direction_acc` (default 0.90). Failing the gate blocks Phase 2 for catalyst-dependent strategies; results are stored as evidence.
 
-**NWS-13 (MUST):** Contradiction handling [BS §8.3]: two non-duplicate articles for the same symbol within `contradiction_window_min` (default 120 min) with opposite direction and both `materiality ≥ 0.5` → symbol marked `AMBIGUOUS`, automated entries blocked for `ambiguity_cooloff_min` (default 240 min) (`REJECT_AMBIGUOUS_DIRECTION`).
+**NWS-13 (MUST):** Contradiction handling: two non-duplicate articles for the same symbol within `contradiction_window_min` (default 120 min) with opposite direction and both `materiality ≥ 0.5` → symbol marked `AMBIGUOUS`, automated entries blocked for `ambiguity_cooloff_min` (default 240 min) (`REJECT_AMBIGUOUS_DIRECTION`).
 
 ---
 
@@ -226,15 +225,15 @@ Where this addendum and the Base Spec conflict, this addendum wins. Base Spec se
 
 ### 6.2 Pre-trade gate sequence
 
-**EXE-04 (MUST):** The [BS §14] entry-control list is implemented as an **ordered, short-circuiting gate chain**, every gate producing a pass/fail with a reject code, all results journaled even on pass. Order: (1) system state (no kill switch, not degraded, not stale); (2) calendar window valid for the strategy; (3) candidate state = SETUP_VALID and revalidated within `setup_max_age_s` (default 20 s); (4) halt/LULD = TRADING; (5) quote age ≤ `quote_max_age_ms`; (6) spread ≤ strategy `max_spread_bps`; (7) ACC gates (PDT, buying power, shortability); (8) position-conflict check (EXE-10); (9) sizing valid (EXE-05/06); (10) exposure limits (RSK); (11) expected-slippage estimate ≤ `max_expected_slippage_bps`; (12) duplicate-order check against open orders. Any fail → no order, reject journaled.
+**EXE-04 (MUST):** Entry controls are implemented as an **ordered, short-circuiting gate chain**, every gate producing a pass/fail with a reject code, all results journaled even on pass. Order: (1) system state (no kill switch, not degraded, not stale); (2) calendar window valid for the strategy; (3) candidate state = SETUP_VALID and revalidated within `setup_max_age_s` (default 20 s); (4) halt/LULD = TRADING; (5) quote age ≤ `quote_max_age_ms`; (6) spread ≤ strategy `max_spread_bps`; (7) ACC gates (PDT, buying power, shortability); (8) position-conflict check (EXE-10); (9) sizing valid (EXE-05/06); (10) exposure limits (RSK); (11) expected-slippage estimate ≤ `max_expected_slippage_bps`; (12) duplicate-order check against open orders. Any fail → no order, reject journaled.
 
 Manual buy entry uses `manual_entry_policy`. `strategy_gated` requires a freshly validated strategy candidate. `operator_direct` is a paper-only operator override that still runs every system, provider-session, halt, quote, spread, account, position, sizing, exposure, slippage, duplicate-order, durable-intent, and protective-order control. The live-v1 profile locks this parameter to `strategy_gated`.
 
 ### 6.3 Sizing
 
-**EXE-05 (MUST):** Base formula [BS §14] `shares = floor(per_trade_risk_dollars / (entry − stop))` with a mandatory **minimum stop distance**: `stop_distance ≥ max(min_stop_spread_mult × current_spread, min_stop_atr_frac × ATR_ref)` where defaults are `min_stop_spread_mult = 4`, `min_stop_atr_frac = 0.25`, and `ATR_ref` is intraday-scaled daily ATR for day trades and daily ATR(14) for swing. If the strategy's natural stop is closer than the floor, the floor distance is used for sizing (not for the stop placement), shrinking size.
+**EXE-05 (MUST):** Base formula `shares = floor(per_trade_risk_dollars / (entry − stop))` with a mandatory **minimum stop distance**: `stop_distance ≥ max(min_stop_spread_mult × current_spread, min_stop_atr_frac × daily ATR(14))`, where defaults are `min_stop_spread_mult = 4` and `min_stop_atr_frac = 0.25`. If the strategy's natural stop is closer than the floor, the floor distance is used for sizing (not for stop placement), shrinking size.
 
-**EXE-06 (MUST):** Caps applied after EXE-05, all of: `max_notional_per_trade_pct` of equity (default 15%); participation caps — shares ≤ `max_pct_adv` (default 1%) of 20-session median daily volume AND, for day entries, notional ≤ `max_pct_recent_dollar_vol` (default 5%) of trailing 5-minute dollar volume; available buying power per ACC-06; portfolio exposure per RSK. The binding cap is journaled.
+**EXE-06 (MUST):** Caps applied after EXE-05, all of: `max_notional_per_trade_pct` of equity (default 15%); shares ≤ `max_pct_adv` (default 1%) of 20-session median daily volume; entry notional ≤ `max_pct_recent_dollar_vol` (default 5%) of trailing 5-minute dollar volume when sub-daily execution data is used; available overnight buying power per ACC-06; portfolio exposure per RSK. The binding cap is journaled.
 
 **EXE-07 (MUST):** Division-by-zero / sign guards: entry ≤ stop for longs (or ≥ for shorts), non-positive risk budget, or missing inputs → hard reject `REJECT_SETUP_INVALID`, never a fallback size.
 
@@ -242,51 +241,51 @@ Manual buy entry uses `manual_entry_policy`. `strategy_gated` requires a freshly
 
 **EXE-08 (MUST):** On startup and every `reconcile_interval_s` (default 60 s): fetch broker positions and open orders; diff against the internal ledger. Any mismatch → state `RECONCILE_MISMATCH`: new entries blocked globally, protective handling of the mismatched symbol (EXE-09 backstops remain), alert with the full diff. Automatic resolution is permitted only for the case "broker has fills the ledger missed" (apply fills); every other case requires manual acknowledgment (`ops ack` command) to clear.
 
-**EXE-09 (MUST):** Protective-order invariant: **every open position MUST have a broker-resting protective stop order at all times**, including during engine downtime. Day trades MAY be managed with engine-side logic, but a hard backstop stop (at the structural stop or `backstop_atr_mult` × ATR beyond it, default 1.5) MUST rest at the broker from fill confirmation until exit. Swing positions use broker-resting GTC stops as the primary stop (SWG-12). An open position detected without a resting protective order → immediate alert + auto-place backstop + RECONCILE_MISMATCH review.
+**EXE-09 (MUST):** Protective-order invariant: **every open swing position MUST have a broker-resting protective stop order at all times**, including during engine downtime. A hard backstop stop (at the structural stop or `backstop_atr_mult` × ATR beyond it, default 1.5) MUST rest at the broker from fill confirmation until exit. An open position detected without a resting protective order → immediate alert + auto-place backstop + RECONCILE_MISMATCH review.
 
 **EXE-10 (MUST):** Position-conflict rule: at most one open position per symbol across all strategies (`allow_multi_strategy_same_symbol = false`, not raisable in v1), because broker positions net per account and per-strategy attribution would otherwise be unverifiable. The OMS maintains a strategy-tagged internal position ledger (via EXE-01 IDs) reconciled to the broker's net position.
 
 **EXE-11 (MUST):** Extended-hours trading is controlled by `allow_extended_hours_trading` and defaults to `false` in every profile. When disabled, entries outside the provider-reported regular session MUST fail closed. Enabling the toggle permits the engine to evaluate only explicit limit + time-in-force DAY entries and MUST NOT convert another order type, but it does not waive EXE-09. If the broker cannot attach broker-resting stop protection to the entry in the current session, submission MUST fail closed. Alpaca currently accepts only standalone DAY limit equity orders outside regular hours and does not support bracket orders there, so TradingFlow MUST reject extended-hours entries until a provider-native protected contract is available. Session classification MUST use Alpaca's trading calendar, including holidays and early closes. Overnight evaluation additionally requires a current asset response with `status=active`, `tradable=true`, and `overnight_tradable=true`. Market-data ingestion and indicator warm-up are independent of this execution permission.
 
-**EXE-12 (MUST):** Cancel/replace: modifications use the broker replace endpoint where available; a replace that fails MUST leave the resolved state journaled (original live, or canceled) after re-query — never assumed. Trailing stops MUST NOT be combined inside bracket/OCO structures unless a Phase-0 broker-behavior test demonstrates and documents the exact semantics [BS §14].
+**EXE-12 (MUST):** Cancel/replace: modifications use the broker replace endpoint where available; a replace that fails MUST leave the resolved state journaled (original live, or canceled) after re-query — never assumed. Trailing stops MUST NOT be combined inside bracket/OCO structures unless a Phase-0 broker-behavior test demonstrates and documents the exact semantics.
 
-**EXE-13 (MUST):** Graceful shutdown: on SIGTERM the engine (1) stops accepting signals, (2) cancels non-protective open orders, (3) verifies EXE-09 backstops exist for all positions, (4) flushes journals, (5) exits. `shutdown_flatten` config (default: `true` for day positions, `false` for swing positions) controls whether positions are closed on shutdown.
+**EXE-13 (MUST):** Graceful shutdown: on SIGTERM the engine (1) stops accepting signals, (2) cancels non-protective open orders, (3) verifies EXE-09 backstops exist for all positions, (4) flushes journals, (5) exits. `shutdown_flatten_swing` defaults to `false` and controls whether protected swing positions are closed during shutdown.
 
 ---
 
 ## 7. RSK — Risk engine and kill switches
 
-**RSK-01 (MUST):** Limits, all enforced pre-trade and monitored continuously, each a named config: per-trade risk `per_trade_risk_pct` (default 0.5% of equity, separate `per_trade_risk_pct_swing` default 0.5%); daily realized+unrealized loss `max_daily_loss_pct` (default 2%); weekly `max_weekly_loss_pct` (default 4%); consecutive losing day trades `max_consecutive_losses` (default 3 → no new day entries until next session); simultaneous positions `max_positions_day` (default 1 in v1), `max_positions_swing` (default 3 in v1); gross/net exposure per ACC-07.
+**RSK-01 (MUST):** Limits, all enforced pre-trade and monitored continuously, each a named config: swing per-trade risk `per_trade_risk_pct_swing` (default 0.5% of equity); daily realized+unrealized loss `max_daily_loss_pct` (default 2%); weekly `max_weekly_loss_pct` (default 4%); consecutive losing trades `max_consecutive_losses` (default 3); simultaneous positions `max_positions_swing` (default 3 in v1); gross/net exposure per ACC-07.
 
-**RSK-02 (MUST):** Daily-loss breach behavior: cancel all non-protective orders, flatten all **day** positions, block all new entries (day and swing) until next session, alert, require manual re-arm for same-day override (override MUST NOT exist in `live` profile).
+**RSK-02 (MUST):** Daily-loss breach behavior: cancel all non-protective orders, preserve broker-resting protection for existing swing positions, block all new entries until the next session, and alert. Any discretionary flatten uses the explicit kill policy; no same-day live override exists.
 
-**RSK-03 (MUST):** Kill-switch catalog [BS §14] with concrete triggers — each MUST be implemented, individually testable (TST-05), and journaled on fire: DATA_STALE (DATA-07/08); news-stream down > `news_stream_down_max_s` (default 120 s) → block catalyst-dependent entries only; order-update-stream down > 30 s → block all entries; ≥ `max_order_rejects` (default 3) broker rejections in 5 min → block entries; unexpected position (EXE-08) → RECONCILE_MISMATCH; clock drift (DATA-15); market-wide halt (DATA-10 on SPY as sentinel + status feed) → block entries, review positions; account mismatch (ACC-12) → refuse to run; manual emergency stop (RSK-04).
+**RSK-03 (MUST):** Kill-switch catalog with concrete triggers — each MUST be implemented, individually testable (TST-05), and journaled on fire: DATA_STALE (DATA-07/08); news-stream down > `news_stream_down_max_s` (default 120 s) → block catalyst-dependent entries only; order-update-stream down > 30 s → block all entries; ≥ `max_order_rejects` (default 3) broker rejections in 5 min → block entries; unexpected position (EXE-08) → RECONCILE_MISMATCH; clock drift (DATA-15); market-wide halt (DATA-10 on SPY as sentinel + status feed) → block entries, review positions; account mismatch (ACC-12) → refuse to run; manual emergency stop (RSK-04).
 
-**RSK-04 (MUST):** Manual kill: a local command and a break-glass file flag (`/run/trading/KILL`) both trigger: cancel non-protective orders, optionally flatten per `manual_kill_flatten` (default true for day, prompt for swing), halt engine. Checked at least every 2 s.
+**RSK-04 (MUST):** Manual kill: a local command and a break-glass file flag (`/run/trading/KILL`) both trigger: cancel non-protective orders, optionally flatten protected swing positions per `manual_kill_flatten`, and halt the engine. Checked at least every 2 s.
 
 **RSK-05 (MUST):** Re-arm discipline: any fired kill switch requires an explicit operator acknowledgment recorded in the journal (who/when/reason) before entries resume. Auto-re-arm is prohibited in `live`.
 
-**RSK-06 (MUST):** All risk arithmetic uses equity marked from broker account data refreshed ≤ 60 s old; if unavailable, the last-known value minus a `equity_staleness_haircut_pct` (default 5%) haircut is used for limit checks (conservative), and entries beyond 5 min of staleness are blocked.
+**RSK-06 (MUST):** All risk arithmetic uses an authoritative broker account snapshot no older than `account_snapshot_max_age_s` (default 60 s). A missing or stale snapshot blocks the entry before risk reservation; v1 does not estimate equity or apply a fallback haircut.
 
 ---
 
-## 8. SWG — Swing trading module (new; extends the system beyond the intraday Base Spec)
+## 8. SWG — Swing trading module
 
 ### 8.1 Placement in the architecture
 
-**SWG-01 (MUST):** Swing is a **separate strategy engine instance** sharing the discovery, catalyst, market-confirmation, risk, order-management, and journal infrastructure — consistent with [BS §3.3]: swing hypotheses are never merged into intraday scoring formulas, and each swing strategy gets its own rank list [BS §10].
+**SWG-01 (MUST):** Swing is the only trading strategy horizon. Every swing strategy shares discovery, catalyst, market-confirmation, risk, order-management, and journal infrastructure while retaining its own hypothesis, parameters, and rank list.
 
-**SWG-02 (MUST):** The candidate state machine [BS §15] is reused with one added state for swing: `HOLDING_OVERNIGHT` (between MANAGING and EXIT_PENDING), entered at each session close while the position remains open, journaled with the end-of-day mark, unrealized P&L, and overnight risk snapshot.
+**SWG-02 (MUST):** The candidate state machine includes `HOLDING_OVERNIGHT` (between MANAGING and EXIT_PENDING), entered at each session close while the position remains open, journaled with the end-of-day mark, unrealized P&L, and overnight risk snapshot.
 
 ### 8.2 Universe and data
 
-**SWG-03 (MUST):** Swing universe = Base Spec universe [BS §4] with identical v1 thresholds (price > $10, cap > $2B, avg vol > 1M). Daily bars (corporate-action adjusted, DATA-13) are the primary decision data; intraday data is used only for entry/exit execution quality.
+**SWG-03 (MUST):** Swing universe uses the v1 thresholds (price > $10, cap > $2B, avg vol > 1M). Daily bars (corporate-action adjusted, DATA-13) are the primary decision data; completed 1h, 15m, or 5m bars may only confirm or time entry/exit execution.
 
-**SWG-04 (MUST):** Swing discovery runs on the post-close scan (16:30 window per CAL-01 offsets) and pre-open review (08:45), using the same Finviz presets plus the earnings calendar (CAL-07). Swing candidates carry `horizon = "swing"` and never enter the day-trading ranking, and vice versa.
+**SWG-04 (MUST):** Swing discovery runs on the post-close scan (16:30 window per CAL-01 offsets) and pre-open review (08:45), using Finviz presets plus the earnings calendar (CAL-07). Every candidate carries `horizon = "swing"`; any other strategy horizon fails closed before candidate admission.
 
-### 8.3 v1 swing strategy families (research hypotheses, parametrized — same epistemic status as [BS §11])
+### 8.3 v1 swing strategy families (research hypotheses, parametrized)
 
-**SWG-05 (MUST):** Exactly two swing families exist in v1; each is validated independently [BS §17], and only one may be live-enabled at a time until both pass their own gates (`swing_enabled_strategies` config).
+**SWG-05 (MUST):** Exactly two swing families exist in v1; each is validated independently under the research promotion protocol, and only one may be live-enabled at a time until both pass their own gates (`swing_enabled_strategies` config).
 
 **SWG-06 — Family SWG-A, post-earnings drift continuation (long, v1):**
 - Signal day T conditions (evaluated at T close): fresh earnings/guidance catalyst with catalyst_score ≥ `swga_min_catalyst` (default 70) and direction positive; gap and total day return positive; close in the top `swga_close_range_pct` (default 25%) of the day's range; same-time RVOL at close ≥ `swga_min_rvol` (default 2.0); market-confirmation score ≥ `swga_min_confirm` (default 60).
@@ -297,16 +296,16 @@ Manual buy entry uses `manual_entry_policy`. `strategy_gated` requires a freshly
 **SWG-07 — Family SWG-B, trend pullback (long, v1):**
 - Context: 20-session MA rising over `swgb_ma_slope_lookback` (default 5) sessions; price above 50-session MA; no SWG-A-style fresh negative catalyst (catalyst engine consulted as a veto, not a driver).
 - Setup: pullback touching the 20-session MA zone within `swgb_ma_zone_atr` (default 0.5 × ATR14) with contracting volume (`swgb_pullback_vol_ratio` default ≤ 0.8 vs 20-session average).
-- Trigger: next session trades above prior session high; enter intraday on that break within 09:45–15:45, spread gate per EXE-04.
+- Trigger: next session trades above prior session high; use a completed sub-daily bar to enter on that break within 09:45–15:45, with the spread gate from EXE-04.
 - Stop: below pullback low − `swgb_stop_atr_frac` (default 0.25) × ATR14. Exits: `swgb_target_r` (default 2.5 R), time exit `swgb_max_hold_sessions` (default 15), close below 20-session MA by > 0.5 × ATR.
 
-### 8.4 Overnight risk (the defining difference from day trading)
+### 8.4 Overnight risk
 
 **SWG-08 (MUST):** Gap-through-stop sizing: swing size MUST satisfy both the stop-based formula (EXE-05) **and** a gap-stress constraint: `shares × (gap_stress_atr_mult × ATR14) ≤ swing_gap_risk_budget_pct × equity`, defaults `gap_stress_atr_mult = 2.0`, `swing_gap_risk_budget_pct = 1.0%`. The smaller size governs. Rationale: overnight stops do not bound loss; sizing must assume the stop can be gapped through.
 
 **SWG-09 (MUST):** Aggregate overnight limits: total swing notional ≤ ACC-07 overnight cap; sum of per-position gap-stress risk ≤ `swing_portfolio_gap_budget_pct` (default 3% of equity); at most `swing_max_per_sector` (default 2) positions per sector ETF mapping (FVZ-07).
 
-**SWG-10 (MUST):** Day-trading buying power MUST NOT be used to justify swing size (ACC-06). The entry gate computes overnight buying power as if the position were held from that instant.
+**SWG-10 (MUST):** The entry gate computes overnight buying power as if the position were held from that instant. No alternate same-session buying-power path exists.
 
 ### 8.5 Swing order and stop mechanics
 
@@ -322,19 +321,7 @@ Manual buy entry uses `manual_entry_policy`. `strategy_gated` requires a freshly
 
 ### 8.6 Swing research protocol
 
-**SWG-16 (MUST):** Swing labels extend [BS §17.1]: post-signal returns at 1/3/5/10 sessions; overnight-gap distribution while held; probability of +1R before −1R at daily resolution; stop-gap frequency and magnitude; borrow/margin cost drag. Validation split, bias controls, and phase gates from [BS §17–18] apply unchanged; swing has its own Phase 0–3 progression independent of the day module.
-
----
-
-## 9. DAY — Day trading module deltas (beyond Base Spec)
-
-**DAY-01 (MUST):** Everything in [BS §5–11, §14, §19] remains binding for the day module, as amended by this addendum (feed, gates, sizing floors, PDT, calendar).
-
-**DAY-02 (MUST):** MVP discovery is **event-anchored**: each evening the engine builds tomorrow's primary watch set from the earnings calendar (CAL-07) filtered to the universe — reporters after today's close and before tomorrow's open. Finviz screening continues in parallel as the capture path for [BS §8.5] cohorts 2–6 and as a cross-check that no calendar-known reporter was missed. Discrepancies (screened mover with earnings not on the calendar) are journaled as calendar-coverage defects.
-
-**DAY-03 (MUST):** Day positions are always flattened by the CAL-02 end-of-day deadline; a day position can never convert to a swing position (`allow_day_to_swing_conversion = false`, not raisable in v1). Conversion would bypass SWG-08 sizing and SWG-14 earnings checks.
-
-**DAY-04 (MUST):** The [BS §10] reject enum is extended system-wide with: `REJECT_PDT_LIMIT`, `REJECT_CORPORATE_ACTION`, `REJECT_UNKNOWN_EARNINGS_DATE`, `REJECT_DEGRADED_DATA`, `REJECT_RECONCILE_LOCK`, `REJECT_BUDGET_EXHAUSTED` (NWS-07), `REJECT_PARTICIPATION_CAP` (EXE-06).
+**SWG-16 (MUST):** Swing labels include post-signal returns at 1/3/5/10 sessions; overnight-gap distribution while held; probability of +1R before −1R at daily resolution; stop-gap frequency and magnitude; borrow/margin cost drag. Validation split, bias controls, and phase gates apply to each swing hypothesis independently.
 
 ---
 
@@ -344,9 +331,9 @@ Manual buy entry uses `manual_entry_policy`. `strategy_gated` requires a freshly
 
 **PER-02 (MUST):** Raw-before-parse: Finviz CSVs (FVZ-03), news payloads (NWS-01), broker responses are archived byte-exact before interpretation. Reprocessing MUST be possible from raw archives alone.
 
-**PER-03 (MUST):** Timestamps per [BS §13.2] plus: gate-evaluation timestamps (EXE-04), kill-switch fire/ack timestamps, reconciliation snapshots, overnight marks (SWG-02).
+**PER-03 (MUST):** Persist source, receive, decision, submission, acknowledgement, fill, gate-evaluation, kill-switch fire/ack, reconciliation-snapshot, and overnight-mark timestamps in UTC.
 
-**PER-04 (MUST):** Component features, never only composites: every scored object persists all raw inputs and component values so any weight in [BS §8.2/9.4/10] and NWS-09 can be refit offline without re-collecting data.
+**PER-04 (MUST):** Component features, never only composites: every scored object persists all raw inputs and component values so any configured weight, including NWS-09, can be refit offline without re-collecting data.
 
 **PER-05 (MUST):** Durability: operational store writes for order intents (EXE-01) are synchronous (fsync/committed) before the network call to the broker. Backups daily; restore procedure tested quarterly (TST-08). Retention: raw ≥ 24 months, operational and journal indefinitely.
 
@@ -386,9 +373,9 @@ Manual buy entry uses `manual_entry_policy`. `strategy_gated` requires a freshly
 
 **TST-05 (MUST):** Every kill switch (RSK-03) has an automated trigger test in the paper environment.
 
-**TST-06 (MUST):** Backtest-integrity tests encode [BS §17.2] as executable checks where possible: e.g., assertion that no feature timestamp postdates its decision timestamp in any journal row (continuous, in production too); feed-tag uniformity per feature; first-seen (not updated) news timestamps in event studies.
+**TST-06 (MUST):** Backtest-integrity tests assert that no feature timestamp postdates its decision timestamp in any journal row (continuous, in production too), feed tags are uniform per feature, and event studies use first-seen rather than updated news timestamps.
 
-**TST-07 (MUST):** CI gates on every merge: unit + property tests green; replay determinism (TST-02); secret scan; config↔Appendix-A bidirectional completeness check (CFG-04); reject-code enum synchronized between code and this spec (DAY-04).
+**TST-07 (MUST):** Verification gates on every merge: unit + property tests green; replay determinism (TST-02); secret scan; config↔Appendix-A bidirectional completeness check (CFG-04); reject-code enum synchronized between code and this spec.
 
 **TST-08 (MUST):** Quarterly restore drill from backups into a scratch environment, verifying journal row counts and a sample of order chains.
 
@@ -396,7 +383,29 @@ Manual buy entry uses `manual_entry_policy`. `strategy_gated` requires a freshly
 
 ## 13. AUD — Adherence audit protocol (for Claude Code)
 
-**AUD-01 (MUST):** The repository MUST contain this file at `docs/spec/automated_trading_production_spec_v1.md` and the Base Spec alongside it. The audit treats both as the requirement source, with this file taking precedence (§0.4).
+### 13.1 Canonical reject-code vocabulary
+
+The persisted and API-visible reject-code enum contains exactly:
+
+- `REJECT_WIDE_SPREAD`
+- `REJECT_LOW_DOLLAR_VOLUME`
+- `REJECT_STALE_NEWS`
+- `REJECT_AMBIGUOUS_DIRECTION`
+- `REJECT_NO_SIP_DATA`
+- `REJECT_HALT_OR_LULD`
+- `REJECT_ALREADY_EXTENDED`
+- `REJECT_NO_SHORT_AVAILABILITY`
+- `REJECT_DUPLICATE_EVENT`
+- `REJECT_SETUP_INVALID`
+- `REJECT_PDT_LIMIT`
+- `REJECT_CORPORATE_ACTION`
+- `REJECT_UNKNOWN_EARNINGS_DATE`
+- `REJECT_DEGRADED_DATA`
+- `REJECT_RECONCILE_LOCK`
+- `REJECT_BUDGET_EXHAUSTED`
+- `REJECT_PARTICIPATION_CAP`
+
+**AUD-01 (MUST):** The repository MUST contain this file at `docs/spec/automated_trading_production_spec_v1.md`. The audit treats this file as the production requirement source and the research program as a subordinate evidence protocol.
 
 **AUD-02 (MUST):** Audit output format — one row per requirement ID (every ID in this document; none skipped):
 
@@ -414,8 +423,7 @@ Manual buy entry uses `manual_entry_policy`. `strategy_gated` requires a freshly
 **AUD-04:** Prompt to paste into Claude Code at the repo root:
 
 ```text
-Read docs/spec/automated_trading_production_spec_v1.md and
-docs/spec/automated_us_equities_trading_research_design.md in full.
+Read docs/spec/automated_trading_production_spec_v1.md in full.
 Then audit this repository for adherence.
 
 Rules:
@@ -425,8 +433,8 @@ Rules:
    file:line. If you cannot find evidence, the status is MISSING —
    never assume compliance.
 2. Perform the AUD-03 mechanical checks and report each result.
-3. Then audit the Base Spec sections §4–§19 the same way for anything
-   not superseded by the addendum.
+3. Audit the linked research and operating-boundary documents without allowing
+   them to weaken this production specification.
 4. Output: docs/audit/adherence_report_<date>.md containing the table,
    a BLOCKER summary at the top, and a remediation plan ordered by
    severity. Make no code changes during the audit run.
@@ -445,7 +453,6 @@ Units: s = seconds, ms = milliseconds, bps = basis points, pct = percent of acco
 | account_mode | enum | margin | margin,cash | ACC-05 |
 | pdt_equity_floor | usd | 25500 | ≥25000 | ACC-03 |
 | pdt_recheck_interval_s | int | 300 | 60–900 | ACC-02 |
-| max_gross_exposure_intraday_pct | pct | 100 | 10–200 | ACC-07 |
 | max_gross_exposure_overnight_pct | pct | 75 | 10–100 | ACC-07 |
 | allow_swing_shorts | bool | false | — | ACC-10 |
 | asset_check_max_age_s | int | 3600 | 60–86400 | ACC-11 |
@@ -464,7 +471,6 @@ Units: s = seconds, ms = milliseconds, bps = basis points, pct = percent of acco
 | clock_drift_max_ms | int | 250 | 50–1000 | DATA-15 |
 | calendar_fetch_time | ET time | 03:30 | 00:00–06:00 | CAL-01 |
 | min_session_hours_for_close_model | float | 6.0 | 3–6.5 | CAL-02 |
-| eod_flatten_offset_min | int | 10 | 2–30 | CAL-02 |
 | earnings_calendar_source | enum | finviz | finviz,other | CAL-07 |
 | finviz_min_interval_s | int | 60 (per FVZ-06) | 30–600 | FVZ-02 |
 | finviz_timeout_s | int | 20 | 5–60 | FVZ-02 |
@@ -495,19 +501,29 @@ Units: s = seconds, ms = milliseconds, bps = basis points, pct = percent of acco
 | reconcile_interval_s | int | 60 | 15–300 | EXE-08 |
 | order_orphan_timeout_s | int | 30 | 10–120 | EXE-02 |
 | order_poll_interval_s | int | 15 | 5–60 | EXE-03 |
+| order_dispatch_lease_s | int | 30 | 10–120 | EXE-01 |
+| order_dispatch_recovery_interval_s | int | 5 | 1–30 | EXE-01 |
+| order_dispatch_recovery_parallelism | int | 4 | 1–16 | EXE-01 |
 | backstop_atr_mult | float | 1.5 | 1.0–3.0 | EXE-09 |
 | allow_multi_strategy_same_symbol | bool | false (locked v1) | — | EXE-10 |
 | allow_extended_hours_trading | bool | false | true/false | EXE-11 |
-| shutdown_flatten (day/swing) | bool | true/false | — | EXE-13 |
-| per_trade_risk_pct / _swing | pct | 0.5 / 0.5 | 0.1–2.0 | RSK-01 |
+| shutdown_flatten_swing | bool | false | true/false | EXE-13 |
+| shutdown_timeout_s | int | 30 | 5–120 | EXE-13 |
+| shutdown_exit_fill_confirmation_s | int | 5 | 1–30 | EXE-13 |
+| shutdown_exit_fill_poll_ms | int | 250 | 25–1000 | EXE-13 |
+| shutdown_flat_confirmation_observations | int | 2 | 2–10 | EXE-13 |
+| shutdown_protection_restoration_timeout_s | int | 5 | 1–30 | EXE-13 |
+| shutdown_journal_flush_timeout_s | int | 5 | 1–30 | EXE-13 |
+| shutdown_journal_flush_retry_ms | int | 100 | 25–1000 | EXE-13 |
+| per_trade_risk_pct_swing | pct | 0.5 | 0.1–2.0 | RSK-01 |
+| account_snapshot_max_age_s | int | 60 | 5–300 | RSK-06 |
 | max_daily_loss_pct | pct | 2 | 0.5–5 | RSK-01 |
 | max_weekly_loss_pct | pct | 4 | 1–10 | RSK-01 |
 | max_consecutive_losses | int | 3 | 2–10 | RSK-01 |
-| max_positions_day / _swing | int | 1 / 3 | 1–20 | RSK-01 |
+| max_positions_swing | int | 3 | 1–20 | RSK-01 |
 | news_stream_down_max_s | int | 120 | 30–600 | RSK-03 |
 | max_order_rejects | int | 3 | 1–10 | RSK-03 |
-| manual_kill_flatten | bool | true(day) | — | RSK-04 |
-| equity_staleness_haircut_pct | pct | 5 | 1–20 | RSK-06 |
+| manual_kill_flatten | bool | true | — | RSK-04 |
 | swing_enabled_strategies | list | [SWG-A] | subset | SWG-05 |
 | swga_min_catalyst | score | 70 | 50–95 | SWG-06 |
 | swga_close_range_pct | pct of range | 25 | 10–50 | SWG-06 |
@@ -535,27 +551,26 @@ Units: s = seconds, ms = milliseconds, bps = basis points, pct = percent of acco
 | swg_stop_order_type | enum | stop | stop,stop_limit | SWG-12 |
 | swg_news_exit_materiality | float | 0.7 | 0.5–1.0 | SWG-13 |
 | swg_earnings_buffer_sessions | int | 1 | 1–3 | SWG-14 |
-| allow_day_to_swing_conversion | bool | false (locked v1) | — | DAY-03 |
 | raw_md_sampling | enum | full_subscribed | — | PER-01 |
 
 Every parameter above is tunable only through config + restart (CFG-02); "locked v1" parameters are validated at load and refuse non-default values in the `live` profile.
 
 ---
 
-## Appendix B — Phase gate summary (merged day + swing)
+## Appendix B — Swing phase-gate summary
 
-| Phase | Day module | Swing module | Gate to advance |
-|---|---|---|---|
-| 0 | Passive capture [BS §18] + FVZ-06 calibration + NWS-03 latency + NWS-11 labels + EXE-12 broker-behavior tests | Same capture; daily-bar cache build | Data-quality report; NWS-12 pass; contract validators green ≥ 10 sessions |
-| 1 | Watchlists + reject lists, no orders | Swing signal lists, no orders | Selection metrics [BS §17.4] reviewed; TST-02 determinism green |
-| 2 | Paper trading, 1 strategy | Paper trading, SWG-A only | TST-04/05 drills passed; ≥ 30 sessions paper with zero EXE-09/reconcile violations |
-| 3 | Live, minimal risk, RSK defaults | Live SWG-A after day module stable ≥ 20 live sessions | Operator sign-off per module; separate evidence per strategy |
-| 4 | [BS §18 Phase 4] expansions | SWG-B live; shorts (ACC-10) as its own phase | One dimension at a time, each with its own validation |
+| Phase | Swing capability | Gate to advance |
+|---|---|---|
+| 0 | Passive capture, Finviz calibration, news-latency measurement, catalyst labels, broker-behavior tests, daily-bar cache | Data-quality report; NWS-12 pass; contract validators green for at least 10 sessions |
+| 1 | Watchlists, reject lists, and swing signals; no orders | Selection metrics reviewed; TST-02 determinism green |
+| 2 | Paper trading with one swing strategy | TST-04/05 drills passed; at least 30 sessions paper with zero EXE-09/reconcile violations |
+| 3 | Live with minimal risk and RSK defaults | Operator sign-off and strategy-specific evidence |
+| 4 | Additional swing family or swing shorts as a separate phase | One dimension at a time, each with its own validation |
 
 ---
 
 ## Appendix C — Explicit non-goals (v1)
 
-To leave nothing implied: v1 does NOT include options, futures, crypto, extended-hours execution, day↔swing conversion, multi-account support, sub-$2B market caps, short swing positions, intraday strategy stacking on one symbol, or any ML-fitted ranking weights (weights are fixed config until refit offline from PER-04 data through the [BS §17.3] split).
+To leave nothing implied: v1 does NOT include day-trading strategies, options, futures, crypto, extended-hours entry execution, multi-account support, sub-$2B market caps, short swing positions, or ML-fitted ranking weights. Explicit, eligible limit/DAY exits may reduce risk outside regular hours when the operator enables the extended-hours toggle.
 
 *End of addendum v1.0.*

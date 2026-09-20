@@ -14,7 +14,7 @@ public sealed record EquityPoint(DateOnly Date, decimal Equity, decimal Drawdown
 ///
 /// The equity curve here is <b>realised</b> equity: it is replayed from completed
 /// trades at their exit timestamps, so it is a step function and it understates
-/// intraday drawdown. That is a real limitation, not a rounding detail - a
+/// within-bar drawdown. That is a real limitation, not a rounding detail - a
 /// strategy that went deeply underwater inside a position and recovered before
 /// exit will look smooth here. The screen labels the axis accordingly. Emitting
 /// a true per-bar curve from the run would replace this; see design/api-gaps.md.

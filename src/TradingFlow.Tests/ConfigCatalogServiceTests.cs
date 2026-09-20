@@ -21,8 +21,12 @@ public sealed class ConfigCatalogServiceTests
 
         var strategies = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest);
 
-        Assert.Equal(6, strategies.Count);
-        Assert.Contains(strategies, strategy => strategy.FileName == "intraday-ema10-ema20-macd-volume.v1.yaml" && strategy.Audit is null);
+        Assert.Equal(2, strategies.Count);
+        Assert.Contains(strategies, strategy =>
+            strategy.FileName == "minervini-trend-template-vcp.v4-trend-rider.yaml" && strategy.Audit is null);
+        Assert.Contains(strategies, strategy =>
+            strategy.FileName == "swing-connors-rsi2-oversold.bt-v3.yaml" && strategy.Audit is null);
+        Assert.All(strategies, strategy => Assert.Equal("1d", strategy.Definition.Timeframe));
         Assert.All(strategies, strategy => Assert.Equal(StrategyLifecycleState.Research, strategy.Lifecycle));
         Assert.DoesNotContain(strategies, strategy =>
             strategy.FileName == "brian_shannon_mta_avwap_strategies.yaml");
@@ -57,10 +61,8 @@ public sealed class ConfigCatalogServiceTests
             CreateExperimentStore(repoRoot, reader),
             new StrategyAuthorizationTestRegistry());
 
-        var intraday = catalog.GetConfig(Path.Combine(repoRoot, "configs", "paper", "alpaca-paper.yaml"));
-        var swing = catalog.GetConfig(Path.Combine(repoRoot, "configs", "paper", "alpaca-paper-swing.yaml"));
+        var swing = catalog.GetConfig(Path.Combine(repoRoot, "configs", "paper", "alpaca-paper.yaml"));
 
-        Assert.Empty(intraday.Strategies);
         Assert.Empty(swing.Strategies);
     }
 
@@ -78,7 +80,7 @@ public sealed class ConfigCatalogServiceTests
                 repoRoot,
                 "configs",
                 "backtest",
-                "intraday-backtest-profile.yaml");
+                "swing-backtest-profile.yaml");
             var yaml = File.ReadAllText(sourceConfig);
             yaml = Regex.Replace(
                 yaml,

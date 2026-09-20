@@ -65,7 +65,7 @@ public static class CanonicalMarketBarValidator
         if (duration < TimeSpan.FromDays(1) &&
             bar.Timestamp.ToUniversalTime().Ticks % TimeSpan.TicksPerMinute != 0)
         {
-            failure = "Intraday candle timestamps must be minute-aligned.";
+            failure = "Sub-daily candle timestamps must be minute-aligned.";
             return false;
         }
 

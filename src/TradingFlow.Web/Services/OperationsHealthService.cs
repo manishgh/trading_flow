@@ -99,6 +99,7 @@ public sealed class OperationsHealthService
     private readonly AlpacaCredentialProvider credentials;
     private readonly IOrderSynchronizationCoordinator synchronization;
     private readonly IAccountReconciliationService reconciliation;
+    private readonly IOrderDispatchRecoveryHealth dispatchRecovery;
     private readonly IEntryAdmissionControl admission;
     private readonly MarketPredictorHttpClient marketPredictor;
     private readonly RawArchiveOptions rawArchiveOptions;
@@ -113,6 +114,7 @@ public sealed class OperationsHealthService
         AlpacaCredentialProvider credentials,
         IOrderSynchronizationCoordinator synchronization,
         IAccountReconciliationService reconciliation,
+        IOrderDispatchRecoveryHealth dispatchRecovery,
         IEntryAdmissionControl admission,
         MarketPredictorHttpClient marketPredictor,
         RawArchiveOptions rawArchiveOptions,
@@ -126,6 +128,7 @@ public sealed class OperationsHealthService
         this.credentials = credentials;
         this.synchronization = synchronization;
         this.reconciliation = reconciliation;
+        this.dispatchRecovery = dispatchRecovery;
         this.admission = admission;
         this.marketPredictor = marketPredictor;
         this.rawArchiveOptions = rawArchiveOptions;
@@ -163,6 +166,7 @@ public sealed class OperationsHealthService
             BuildCalendarRow(session, now),
             BuildQuoteRow(status, now),
             BuildOrderStreamRow(now),
+            BuildDispatchRecoveryRow(),
             BuildReconciliationRow(),
             BuildEntryGateRow(admissionSnapshot, now),
             BuildPredictorRow(model, now),
@@ -263,6 +267,19 @@ public sealed class OperationsHealthService
             health.LastCompletedAtUtc);
     }
 
+    private SubsystemHealth BuildDispatchRecoveryRow()
+    {
+        var recovery = dispatchRecovery.GetHealth();
+        var healthy = recovery.InitialCycleCompleted && recovery.Healthy;
+        return new SubsystemHealth(
+            "Order recovery",
+            "OrderDispatchRecoveryHostedService",
+            healthy ? SubsystemState.Healthy : SubsystemState.Failing,
+            healthy ? "Current" : recovery.InitialCycleCompleted ? "Failing" : "Starting",
+            recovery.Detail,
+            recovery.LastCompletedAtUtc);
+    }
+
     private static SubsystemHealth BuildEntryGateRow(EntryAdmissionSnapshot snapshot, DateTimeOffset now)
     {
         return new SubsystemHealth(
@@ -285,7 +302,7 @@ public sealed class OperationsHealthService
             "MarketPredictorHttpClient",
             notConfigured ? SubsystemState.NotApplicable : ready ? SubsystemState.Healthy : SubsystemState.Failing,
             notConfigured ? "Not configured" : ready ? "Ready" : "Attention",
-            $"{model.Detail} Contract market_predictor.prediction.v1; modes swing, intraday, unified. " +
+            $"{model.Detail} Contract market_predictor.prediction.v1; swing evidence only. " +
             "Model output is read-only evidence and cannot authorise an entry.",
             now);
     }

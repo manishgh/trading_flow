@@ -52,7 +52,7 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
                 limit,
                 stop,
                 target,
-                HorizonPicker.SelectedItem?.ToString() ?? "intraday",
+                HorizonPicker.SelectedItem?.ToString() ?? "swing",
                 ExtendedHoursCheckBox.IsChecked));
             if (preview is null)
             {

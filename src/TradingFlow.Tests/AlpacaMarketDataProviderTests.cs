@@ -40,7 +40,7 @@ public class AlpacaMarketDataProviderTests
             });
 
         var completeness = Assert.IsAssignableFrom<IMarketDataCompletenessProvider>(provider);
-        Assert.True(completeness.OmittedIntradayIntervalsMeanNoQualifyingTrades);
+        Assert.True(completeness.OmittedSubDailyIntervalsMeanNoQualifyingTrades);
     }
 
     [Fact]

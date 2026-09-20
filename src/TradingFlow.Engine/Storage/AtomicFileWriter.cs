@@ -8,6 +8,9 @@ public interface IArtifactWriter
 
     Task WriteTextExclusiveAsync(string path, string content, CancellationToken cancellationToken = default);
 
+    Task WriteStreamExclusiveAsync(string path, Func<Stream, CancellationToken, Task> write,
+        CancellationToken cancellationToken = default);
+
     void WriteText(string path, string content);
 }
 
@@ -93,7 +96,24 @@ public sealed class AtomicFileArtifactWriter : IArtifactWriter
 
     public async Task WriteTextExclusiveAsync(string path, string content, CancellationToken cancellationToken = default)
     {
+        await WriteStreamExclusiveAsync(path, async (stream, token) =>
+        {
+            await using var writer = new StreamWriter(stream, Utf8NoBom, leaveOpen: true);
+            await writer.WriteAsync(content.AsMemory(), token);
+            await writer.FlushAsync(token);
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Streams large artifacts into a private file and publishes only after a durable
+    /// flush. Producer failure or cancellation never exposes partial result content.
+    /// </summary>
+    public async Task WriteStreamExclusiveAsync(string path, Func<Stream, CancellationToken, Task> write,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(write);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!String.IsNullOrWhiteSpace(directory))
@@ -111,13 +131,13 @@ public sealed class AtomicFileArtifactWriter : IArtifactWriter
                 FileShare.None,
                 bufferSize: 16 * 1024,
                 options: FileOptions.WriteThrough | FileOptions.Asynchronous))
-            await using (var writer = new StreamWriter(stream, Utf8NoBom))
             {
-                await writer.WriteAsync(content.AsMemory(), cancellationToken);
-                await writer.FlushAsync(cancellationToken);
+                await write(stream, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
                 stream.Flush(flushToDisk: true);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporaryPath, path, overwrite: false);
         }
         finally

@@ -16,7 +16,7 @@ public sealed class OrderTicketModel(
     [BindProperty(SupportsGet = true)] public decimal LimitPrice { get; set; }
     [BindProperty] public decimal StopLossPrice { get; set; }
     [BindProperty] public decimal TakeProfitPrice { get; set; }
-    [BindProperty] public string Horizon { get; set; } = "intraday";
+    [BindProperty] public string Horizon { get; set; } = "swing";
     [BindProperty] public string OrderType { get; set; } = "limit";
     [BindProperty] public decimal? TriggerPrice { get; set; }
     [BindProperty] public string TimeInForce { get; set; } = "day";

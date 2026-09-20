@@ -6,28 +6,6 @@ requirement in the binding production specification. A deviation does not waive 
 
 ## Active Deviations
 
-### D3 - Swing-first strategy scope
-
-- **Status:** Active
-- **Decision date:** 2026-07-21
-- **Owner:** TradingFlow
-- **Affected requirements:** DAY infrastructure and SWG strategy-family rollout
-- **Decision:** Build and validate the production safety infrastructure for both day
-  and swing trading, but promote swing strategies first. Day-trading strategy
-  families remain disabled in production until their research evidence satisfies the
-  promotion gates.
-- **Rationale:** The repository has stronger retained evidence for the V4 trend and
-  catalyst-drift swing families than for the current day-trading experiments. Enabling
-  unvalidated day strategies would confuse infrastructure completeness with evidence
-  of an edge.
-- **Controls:** PDT accounting, day-position classification, session flattening, risk
-  limits, execution gates, and audit support are still implemented. Strategy configs
-  cannot convert a day position into a swing hold or the reverse.
-- **Review point:** S9 strategy-family registration and every subsequent strategy
-  promotion review.
-- **Removal criteria:** At least one day strategy passes the repository's backtest,
-  paper-trading, cost, drawdown, and audit promotion gates.
-
 ### D4 - Production host remains abstract until operations phase
 
 - **Status:** Active

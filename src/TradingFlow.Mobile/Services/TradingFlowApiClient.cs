@@ -120,82 +120,82 @@ public sealed class TradingFlowApiClient
 
     public Task<MobileCatalogResponse?> GetCatalogAsync(CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<MobileCatalogResponse>($"{BaseUrl}/api/mobile/catalog", cancellationToken);
+        return httpClient.GetFromJsonAsync<MobileCatalogResponse>($"{BaseUrl}/api/v1/catalog", cancellationToken);
     }
 
     public Task<IReadOnlyList<BacktestJobSnapshot>?> GetPaperJobsAsync(CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<IReadOnlyList<BacktestJobSnapshot>>($"{BaseUrl}/api/mobile/paper/jobs", cancellationToken);
+        return httpClient.GetFromJsonAsync<IReadOnlyList<BacktestJobSnapshot>>($"{BaseUrl}/api/v1/paper/jobs", cancellationToken);
     }
 
     public Task<IReadOnlyList<MobileAutomationSessionSnapshot>?> GetAutomationSessionsAsync(CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<IReadOnlyList<MobileAutomationSessionSnapshot>>($"{BaseUrl}/api/mobile/automation/sessions", cancellationToken);
+        return httpClient.GetFromJsonAsync<IReadOnlyList<MobileAutomationSessionSnapshot>>($"{BaseUrl}/api/v1/automation/sessions", cancellationToken);
     }
 
     public Task<MobileAutomationSessionSnapshot?> GetAutomationSessionAsync(Guid sessionId, CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<MobileAutomationSessionSnapshot>($"{BaseUrl}/api/mobile/automation/sessions/{sessionId}", cancellationToken);
+        return httpClient.GetFromJsonAsync<MobileAutomationSessionSnapshot>($"{BaseUrl}/api/v1/automation/sessions/{sessionId}", cancellationToken);
     }
 
     public Task<BacktestJobSnapshot?> GetPaperJobAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<BacktestJobSnapshot>($"{BaseUrl}/api/mobile/paper/jobs/{jobId}", cancellationToken);
+        return httpClient.GetFromJsonAsync<BacktestJobSnapshot>($"{BaseUrl}/api/v1/paper/jobs/{jobId}", cancellationToken);
     }
 
     public async Task<BacktestJobSnapshot?> StartPaperRunAsync(MobilePaperRunRequest request, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/paper/runs", request, cancellationToken);
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/paper/runs", request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<BacktestJobSnapshot>(cancellationToken);
     }
 
     public async Task CancelPaperJobAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/paper/jobs/{jobId}/cancel", null, cancellationToken);
+        using var response = await httpClient.PostAsync($"{BaseUrl}/api/v1/paper/jobs/{jobId}/cancel", null, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
     public async Task CancelBrokerOrdersAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/paper/jobs/{jobId}/cancel-broker-orders", null, cancellationToken);
+        using var response = await httpClient.PostAsync($"{BaseUrl}/api/v1/paper/jobs/{jobId}/cancel-broker-orders", null, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
     public async Task<MobileAutomationSessionSnapshot?> StartAutomationEntryAsync(MobileAutomationStartRequest request, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/automation/entry", request, cancellationToken);
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/automation/entry", request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<MobileAutomationSessionSnapshot>(cancellationToken);
     }
 
     public async Task CancelAutomationSessionAsync(Guid sessionId, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/automation/sessions/{sessionId}/cancel", null, cancellationToken);
+        using var response = await httpClient.PostAsync($"{BaseUrl}/api/v1/automation/sessions/{sessionId}/cancel", null, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
     public Task<IReadOnlyList<BacktestJobSnapshot>?> GetBacktestJobsAsync(CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<IReadOnlyList<BacktestJobSnapshot>>($"{BaseUrl}/api/mobile/backtests/jobs", cancellationToken);
+        return httpClient.GetFromJsonAsync<IReadOnlyList<BacktestJobSnapshot>>($"{BaseUrl}/api/v1/backtests/jobs", cancellationToken);
     }
 
     public async Task<BacktestJobSnapshot?> StartBacktestRunAsync(MobileBacktestRunRequest request, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/backtests/runs", request, cancellationToken);
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/backtests/runs", request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<BacktestJobSnapshot>(cancellationToken);
     }
 
     public async Task CancelBacktestJobAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/backtests/jobs/{jobId}/cancel", null, cancellationToken);
+        using var response = await httpClient.PostAsync($"{BaseUrl}/api/v1/backtests/jobs/{jobId}/cancel", null, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
     public Task<IReadOnlyList<MobileNotificationItem>?> GetNotificationsAsync(CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<IReadOnlyList<MobileNotificationItem>>($"{BaseUrl}/api/mobile/notifications", cancellationToken);
+        return httpClient.GetFromJsonAsync<IReadOnlyList<MobileNotificationItem>>($"{BaseUrl}/api/v1/notifications", cancellationToken);
     }
 
     public Task<MobileNewsFeedResponse?> GetNewsFeedAsync(
@@ -207,7 +207,7 @@ public sealed class TradingFlowApiClient
         var tickerCsv = Uri.EscapeDataString(String.Join(",", tickers));
         var path = Uri.EscapeDataString(configPath);
         return httpClient.GetFromJsonAsync<MobileNewsFeedResponse>(
-            $"{BaseUrl}/api/mobile/news/latest?configPath={path}&tickers={tickerCsv}&hours={hours}",
+            $"{BaseUrl}/api/v1/news/latest?configPath={path}&tickers={tickerCsv}&hours={hours}",
             cancellationToken);
     }
 
@@ -223,13 +223,13 @@ public sealed class TradingFlowApiClient
         }
 
         return httpClient.GetFromJsonAsync<MobileNewsFeedResponse>(
-            $"{BaseUrl}/api/mobile/news/feed?{query}",
+            $"{BaseUrl}/api/v1/news/feed?{query}",
             cancellationToken);
     }
 
     public async Task RefreshRollingNewsFeedAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/news/refresh", null, cancellationToken);
+        using var response = await httpClient.PostAsync($"{BaseUrl}/api/v1/news/refresh", null, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
@@ -238,13 +238,13 @@ public sealed class TradingFlowApiClient
         string marketCap = "all",
         CancellationToken cancellationToken = default) =>
         httpClient.GetFromJsonAsync<MobileEarningsCalendarResponse>(
-            $"{BaseUrl}/api/mobile/earnings/today-next-business-day?session={Uri.EscapeDataString(session)}&marketCap={Uri.EscapeDataString(marketCap)}",
+            $"{BaseUrl}/api/v1/earnings/today-next-business-day?session={Uri.EscapeDataString(session)}&marketCap={Uri.EscapeDataString(marketCap)}",
             cancellationToken);
 
     public async Task RefreshEarningsAsync(CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsync(
-            $"{BaseUrl}/api/mobile/earnings/refresh",
+            $"{BaseUrl}/api/v1/earnings/refresh",
             null,
             cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
@@ -252,12 +252,12 @@ public sealed class TradingFlowApiClient
 
     public Task<IReadOnlyList<MobileWishlistResponse>?> GetWishlistsAsync(CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<IReadOnlyList<MobileWishlistResponse>>($"{BaseUrl}/api/mobile/wishlists", cancellationToken);
+        return httpClient.GetFromJsonAsync<IReadOnlyList<MobileWishlistResponse>>($"{BaseUrl}/api/v1/wishlists", cancellationToken);
     }
 
     public async Task<MobileWishlistResponse?> SaveWishlistAsync(MobileWishlistSaveRequest request, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/wishlists", request, cancellationToken);
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/wishlists", request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<MobileWishlistResponse>(cancellationToken);
     }
@@ -265,7 +265,7 @@ public sealed class TradingFlowApiClient
     public async Task<MobileWishlistResponse?> SetWishlistObservedAsync(Guid wishlistId, bool isObserved, CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsJsonAsync(
-            $"{BaseUrl}/api/mobile/wishlists/{wishlistId}/observe",
+            $"{BaseUrl}/api/v1/wishlists/{wishlistId}/observe",
             new MobileWishlistObserveRequest(isObserved),
             cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
@@ -274,14 +274,14 @@ public sealed class TradingFlowApiClient
 
     public async Task<MobileWishlistItemResponse?> AddWishlistTickerAsync(Guid wishlistId, MobileWishlistItemRequest request, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/wishlists/{wishlistId}/items", request, cancellationToken);
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/wishlists/{wishlistId}/items", request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<MobileWishlistItemResponse>(cancellationToken);
     }
 
     public async Task DeleteWishlistTickerAsync(Guid wishlistId, string ticker, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.DeleteAsync($"{BaseUrl}/api/mobile/wishlists/{wishlistId}/items/{Uri.EscapeDataString(ticker)}", cancellationToken);
+        using var response = await httpClient.DeleteAsync($"{BaseUrl}/api/v1/wishlists/{wishlistId}/items/{Uri.EscapeDataString(ticker)}", cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
@@ -294,7 +294,7 @@ public sealed class TradingFlowApiClient
         }
 
         return httpClient.GetFromJsonAsync<IReadOnlyList<MobileWishlistSignalResponse>>(
-            $"{BaseUrl}/api/mobile/wishlists/signals?{query}",
+            $"{BaseUrl}/api/v1/wishlists/signals?{query}",
             cancellationToken);
     }
 
@@ -306,21 +306,18 @@ public sealed class TradingFlowApiClient
     {
         var query = $"signalMinutes={signalMinutes}&newsHours={newsHours}";
         return httpClient.GetFromJsonAsync<MobileWishlistDeskResponse>(
-            $"{BaseUrl}/api/mobile/wishlists/{wishlistId}/desk?{query}",
+            $"{BaseUrl}/api/v1/wishlists/{wishlistId}/desk?{query}",
             cancellationToken);
     }
 
     public Task<MobileSymbolIntelligenceResponse?> GetSymbolIntelligenceAsync(
         Guid wishlistId,
         string ticker,
-        string mode = "unified",
-        string horizon = "auto",
         CancellationToken cancellationToken = default)
     {
         var symbol = Uri.EscapeDataString(ticker.Trim().ToUpperInvariant());
-        var query = $"mode={Uri.EscapeDataString(mode)}&horizon={Uri.EscapeDataString(horizon)}";
         return httpClient.GetFromJsonAsync<MobileSymbolIntelligenceResponse>(
-            $"{BaseUrl}/api/mobile/wishlists/{wishlistId}/symbols/{symbol}/intelligence?{query}",
+            $"{BaseUrl}/api/v1/wishlists/{wishlistId}/symbols/{symbol}/intelligence",
             cancellationToken);
     }
 
@@ -328,7 +325,7 @@ public sealed class TradingFlowApiClient
         MobileOrderPreviewRequest request,
         CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/orders/preview", request, cancellationToken);
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/orders/preview", request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<MobileOrderTicketPreview>(cancellationToken);
     }
@@ -338,7 +335,7 @@ public sealed class TradingFlowApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsJsonAsync(
-            $"{BaseUrl}/api/mobile/orders/confirm",
+            $"{BaseUrl}/api/v1/orders/confirm",
             new MobileOrderConfirmRequest(ticketToken),
             cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
@@ -347,21 +344,21 @@ public sealed class TradingFlowApiClient
 
     public async Task AcknowledgeWishlistSignalAsync(Guid signalId, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsync($"{BaseUrl}/api/mobile/wishlists/signals/{signalId}/ack", null, cancellationToken);
+        using var response = await httpClient.PostAsync($"{BaseUrl}/api/v1/wishlists/signals/{signalId}/ack", null, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
     public Task<IReadOnlyList<MobilePaperPositionResponse>?> GetPaperPositionsAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
         return httpClient.GetFromJsonAsync<IReadOnlyList<MobilePaperPositionResponse>>(
-            $"{BaseUrl}/api/mobile/paper/jobs/{jobId}/positions",
+            $"{BaseUrl}/api/v1/paper/jobs/{jobId}/positions",
             cancellationToken);
     }
 
     public Task<MobileRunningTradesResponse?> GetRunningTradesAsync(string source = "all", CancellationToken cancellationToken = default)
     {
         return httpClient.GetFromJsonAsync<MobileRunningTradesResponse>(
-            $"{BaseUrl}/api/mobile/running-trades?source={Uri.EscapeDataString(source)}",
+            $"{BaseUrl}/api/v1/running-trades?source={Uri.EscapeDataString(source)}",
             cancellationToken);
     }
 
@@ -370,14 +367,14 @@ public sealed class TradingFlowApiClient
         CancellationToken cancellationToken = default)
     {
         return httpClient.GetFromJsonAsync<IReadOnlyList<MobileOrderActivityResponse>>(
-            $"{BaseUrl}/api/mobile/orders?limit={Math.Clamp(limit, 1, 500)}",
+            $"{BaseUrl}/api/v1/orders?limit={Math.Clamp(limit, 1, 500)}",
             cancellationToken);
     }
 
     public async Task ClosePaperPositionAsync(Guid jobId, string ticker, CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsync(
-            $"{BaseUrl}/api/mobile/paper/jobs/{jobId}/positions/{Uri.EscapeDataString(ticker)}/close",
+            $"{BaseUrl}/api/v1/paper/jobs/{jobId}/positions/{Uri.EscapeDataString(ticker)}/close",
             null,
             cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
@@ -386,7 +383,7 @@ public sealed class TradingFlowApiClient
     public async Task CloseAutomationPositionAsync(Guid sessionId, CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsync(
-            $"{BaseUrl}/api/mobile/automation/sessions/{sessionId}/close",
+            $"{BaseUrl}/api/v1/automation/sessions/{sessionId}/close",
             null,
             cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
@@ -401,7 +398,7 @@ public sealed class TradingFlowApiClient
         CancellationToken cancellationToken)
     {
         return StreamServerSentEventsAsync(
-            $"{BaseUrl}/api/wishlists/{wishlistId}/quotes/stream",
+            $"{BaseUrl}/api/v1/wishlists/{wishlistId}/quotes/stream",
             async (eventName, data) =>
             {
                 if (!eventName.Equals("quotes", StringComparison.OrdinalIgnoreCase))
@@ -426,7 +423,7 @@ public sealed class TradingFlowApiClient
         CancellationToken cancellationToken)
     {
         return StreamServerSentEventsAsync(
-            $"{BaseUrl}/api/wishlists/{wishlistId}/activity/stream",
+            $"{BaseUrl}/api/v1/wishlists/{wishlistId}/activity/stream",
             async (eventName, data) =>
             {
                 if (!eventName.Equals("activity", StringComparison.OrdinalIgnoreCase))
@@ -499,31 +496,31 @@ public sealed class TradingFlowApiClient
 
     public Task<IReadOnlyList<WarmupTickerIntent>?> GetWarmupWatchlistAsync(CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<IReadOnlyList<WarmupTickerIntent>>($"{BaseUrl}/api/mobile/warmup/watchlist", cancellationToken);
+        return httpClient.GetFromJsonAsync<IReadOnlyList<WarmupTickerIntent>>($"{BaseUrl}/api/v1/warmup/watchlist", cancellationToken);
     }
 
     public Task<IReadOnlyList<WarmupRunRecord>?> GetWarmupRunsAsync(CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<IReadOnlyList<WarmupRunRecord>>($"{BaseUrl}/api/mobile/warmup/runs", cancellationToken);
+        return httpClient.GetFromJsonAsync<IReadOnlyList<WarmupRunRecord>>($"{BaseUrl}/api/v1/warmup/runs", cancellationToken);
     }
 
     public async Task<WarmupAccepted?> AddWarmupWatchlistAsync(WarmupWatchRequest request, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/warmup/watchlist", request, cancellationToken);
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/warmup/watchlist", request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<WarmupAccepted>(cancellationToken);
     }
 
     public async Task<WarmupRunQueued?> RunWarmupNowAsync(WarmupRunNowRequest request, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/mobile/warmup/run-now", request, cancellationToken);
+        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/warmup/run-now", request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<WarmupRunQueued>(cancellationToken);
     }
 
     public async Task RemoveWarmupTickerAsync(string ticker, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.DeleteAsync($"{BaseUrl}/api/mobile/warmup/watchlist/{Uri.EscapeDataString(ticker)}", cancellationToken);
+        using var response = await httpClient.DeleteAsync($"{BaseUrl}/api/v1/warmup/watchlist/{Uri.EscapeDataString(ticker)}", cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
@@ -1078,8 +1075,7 @@ public sealed record MobileModelIntelligenceResponse(
     string? ModelTarget,
     string? ModelArtifactSha256,
     string? ModelTrainingDataEnd,
-    MobileSwingIntelligenceResponse? Swing,
-    MobileIntradayIntelligenceResponse? Intraday)
+    MobileSwingIntelligenceResponse? Swing)
 {
     public string StatusText => AvailabilityStatus == "available"
         ? $"{ReadinessStatus} | {FinalSignal} | {ResolvedHorizon}"
@@ -1110,30 +1106,6 @@ public sealed record MobileSwingIntelligenceResponse(
 
     private static string FormatPercent(decimal? value) => value.HasValue ? value.Value.ToString("P1") : "--";
     private static string Format(decimal? value) => value.HasValue ? value.Value.ToString("0.00") : "--";
-}
-
-public sealed record MobileIntradayIntelligenceResponse(
-    decimal? OpportunityProbability,
-    decimal? DownsideProbability,
-    decimal? DecisionScore,
-    string Signal,
-    int? Rank,
-    decimal? RelativeVolume,
-    decimal? Rsi14,
-    decimal? MacdSignalDiff,
-    decimal? EntryStopPct,
-    decimal? EntryTargetPct,
-    MobileCatalystIntelligenceResponse Catalyst,
-    string ReadinessStatus,
-    IReadOnlyList<string> ReadinessReasons,
-    string? LatestPriceDate,
-    string PriceFeed)
-{
-    public string ProbabilityText => $"Opportunity {FormatPercent(OpportunityProbability)} | downside {FormatPercent(DownsideProbability)}";
-    public string TechnicalText => $"RVOL {Format(RelativeVolume)} | RSI {Format(Rsi14)} | MACD {Format(MacdSignalDiff, "0.0000")}";
-
-    private static string FormatPercent(decimal? value) => value.HasValue ? value.Value.ToString("P1") : "--";
-    private static string Format(decimal? value, string pattern = "0.00") => value.HasValue ? value.Value.ToString(pattern) : "--";
 }
 
 public sealed record MobileCatalystIntelligenceResponse(
@@ -1240,7 +1212,7 @@ public sealed record MobileRunningTrade(
     public string DetailText => $"{SourceLabel} · {Reference}";
 }
 
-// Payload of the /api/wishlists/{id}/quotes/stream SSE feed (one per active ticker).
+// Payload of the /api/v1/wishlists/{id}/quotes/stream SSE feed (one per active ticker).
 public sealed record WishlistQuoteUpdate(
     string Ticker,
     decimal? BidPrice,
@@ -1253,7 +1225,7 @@ public sealed record WishlistQuoteUpdate(
     string? SellCaption,
     DateTimeOffset? Timestamp);
 
-// Payload of the /api/wishlists/{id}/activity/stream SSE feed.
+// Payload of the /api/v1/wishlists/{id}/activity/stream SSE feed.
 public sealed record WishlistActivityUpdate(
     IReadOnlyList<WishlistActivitySignal>? Signals,
     IReadOnlyList<WishlistActivityNews>? News);
@@ -1375,7 +1347,7 @@ public sealed record MobileAutomationStartRequest(
     string? SourceMessage,
     string EntryMode = "validate_strategy",
     bool AllowExtendedHoursTrading = false,
-    string EntryOrderType = "market");
+    string EntryOrderType = "limit");
 
 public sealed record MobileAutomationSessionSnapshot(
     Guid SessionId,
@@ -1404,7 +1376,9 @@ public sealed record MobileAutomationSessionSnapshot(
     IReadOnlyList<string> Events,
     string? SourceTitle,
     string? SourceMessage,
-    bool ExitSafetyOrdersSubmitted = false)
+    bool ExitSafetyOrdersSubmitted = false,
+    string? ExecutionConfigHash = null,
+    string? ExecutionCodeVersion = null)
 {
     public string ProgressText => $"{Ticker} {Status} - {CurrentStage}";
     public string LatestEvent => Events.LastOrDefault() ?? "No events yet.";

@@ -17,7 +17,7 @@ public sealed class AlpacaManualOrderServiceTests
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.SubmitLimitOrderAsync(
-                "MSFT", "buy", 10m, 400m, 396m, 412m, "intraday",
+                "MSFT", "buy", 10m, 400m, 396m, 412m, "swing",
                 CancellationToken.None));
 
         Assert.Contains("strategy-gated", error.Message, StringComparison.Ordinal);
@@ -27,16 +27,16 @@ public sealed class AlpacaManualOrderServiceTests
     [Fact]
     public async Task SubmitLimitOrderAsync_OperatorDirect_UsesCommonProtectedSubmissionPath()
     {
-        BracketOrderSubmission? captured = null;
+        EntryOrderSubmission? captured = null;
         var submissions = new Mock<IOrderSubmissionService>(MockBehavior.Strict);
         submissions
-            .Setup(service => service.SubmitBracketOrderAsync(
-                It.IsAny<BracketOrderSubmission>(),
+            .Setup(service => service.SubmitEntryOrderAsync(
+                It.IsAny<EntryOrderSubmission>(),
                 It.IsAny<IBrokerClient>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<BracketOrderSubmission, IBrokerClient, CancellationToken>(
+            .Callback<EntryOrderSubmission, IBrokerClient, CancellationToken>(
                 (submission, _, _) => captured = submission)
-            .ReturnsAsync((BracketOrderSubmission submission, IBrokerClient _, CancellationToken _) =>
+            .ReturnsAsync((EntryOrderSubmission submission, IBrokerClient _, CancellationToken _) =>
                 new OrderSubmissionResult(
                     "broker-order-1",
                     submission.Order.ClientOrderId,
@@ -67,7 +67,7 @@ public sealed class AlpacaManualOrderServiceTests
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.SubmitLimitOrderAsync(
-                "MSFT", "buy", 10m, 400m, null, null, "intraday",
+                "MSFT", "buy", 10m, 400m, null, null, "swing",
                 CancellationToken.None));
 
         Assert.Contains("requires a stop price", error.Message, StringComparison.Ordinal);

@@ -1,5 +1,4 @@
 using TradingFlow.Mobile.Services;
-using TradingFlow.Mobile.Resources.Styles;
 
 namespace TradingFlow.Mobile.Pages;
 
@@ -7,14 +6,12 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
 {
     private Guid wishlistId;
     private string ticker = String.Empty;
-    private string mode = "unified";
     private bool isLoading;
     private decimal? latestAskPrice;
 
     public SymbolDetailPage()
     {
         InitializeComponent();
-        UpdateModeButtons();
     }
 
     public void ApplyQueryAttributes(IDictionary<string, object> query)
@@ -49,7 +46,7 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
         ErrorLabel.IsVisible = false;
         try
         {
-            var response = await AppServices.Api.GetSymbolIntelligenceAsync(wishlistId, ticker, mode);
+            var response = await AppServices.Api.GetSymbolIntelligenceAsync(wishlistId, ticker);
             if (response is null)
             {
                 throw new InvalidOperationException("Symbol intelligence response was empty.");
@@ -98,26 +95,8 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
             SwingContextLabel.Text = swing.ContextText;
         }
 
-        IntradaySection.IsVisible = model.Intraday is not null;
-        if (model.Intraday is { } intraday)
-        {
-            IntradaySignalLabel.Text = $"Intraday | {intraday.Signal}";
-            IntradayProbabilityLabel.Text = intraday.ProbabilityText;
-            IntradayTechnicalLabel.Text = intraday.TechnicalText;
-        }
-
         ReadinessSection.IsVisible = model.ReadinessReasons.Count > 0;
         ReadinessReasonsLabel.Text = String.Join(Environment.NewLine, model.ReadinessReasons.Select(reason => $"- {reason}"));
-    }
-
-    private async void OnModeSelected(object? sender, EventArgs e)
-    {
-        if (sender is Button { CommandParameter: string selectedMode } && selectedMode != mode)
-        {
-            mode = selectedMode;
-            UpdateModeButtons();
-            await LoadAsync();
-        }
     }
 
     private async void OnRefreshClicked(object? sender, EventArgs e) => await LoadAsync();
@@ -133,12 +112,4 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
             $"{nameof(OrderTicketPage)}?wishlistId={wishlistId}&ticker={Uri.EscapeDataString(ticker)}&limitPrice={latestAskPrice.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
     }
 
-    private void UpdateModeButtons()
-    {
-        var active = ThemePalette.Accent;
-        var inactive = ThemePalette.TextSecondary;
-        UnifiedButton.BackgroundColor = mode == "unified" ? active : inactive;
-        SwingButton.BackgroundColor = mode == "swing" ? active : inactive;
-        IntradayButton.BackgroundColor = mode == "intraday" ? active : inactive;
-    }
 }

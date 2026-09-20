@@ -4,7 +4,7 @@ namespace TradingFlow.Domain.Backtesting;
 /// Gate that decides whether a backtested strategy is allowed into the promoted
 /// runtime catalog. It exists to stop the v1..v10 overfitting treadmill: a strategy
 /// tuned on a tiny basket can show a great full-window number while failing every
-/// honest robustness check. See docs/edge-recovery-master-plan.md phase 0.2.
+/// honest robustness check under the research promotion protocol.
 /// </summary>
 public sealed record PromotionCriteria(
     int MinAcceptedTrades = 30,

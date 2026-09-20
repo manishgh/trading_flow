@@ -1,7 +1,12 @@
 using System.Collections.Concurrent;
 using System.Runtime;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using TradingFlow.Application.Jobs;
 using TradingFlow.Backtesting;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Jobs;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Web.Models;
 
@@ -11,6 +16,8 @@ public interface IBacktestRunExecutor
 {
     Task<BacktestResult> RunAsync(
         string configPath,
+        string resultPath,
+        DateTimeOffset evaluationCutoffUtc,
         CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress = null);
 }
@@ -19,11 +26,11 @@ public sealed class BacktestRunExecutor(BacktestRunner runner) : IBacktestRunExe
 {
     public Task<BacktestResult> RunAsync(
         string configPath,
+        string resultPath,
+        DateTimeOffset evaluationCutoffUtc,
         CancellationToken cancellationToken,
-        IProgress<BacktestProgress>? progress = null)
-    {
-        return runner.RunAsync(configPath, cancellationToken, progress);
-    }
+        IProgress<BacktestProgress>? progress = null) =>
+        runner.RunAsync(configPath, resultPath, evaluationCutoffUtc, cancellationToken, progress);
 }
 
 public enum BacktestCancellationOutcome
@@ -35,65 +42,131 @@ public enum BacktestCancellationOutcome
 
 public sealed record BacktestJobServiceOptions(
     int MaxConcurrentJobs,
+    int MaximumPendingJobs,
     int RetainedTerminalJobs,
     int RetainedRecentTrades,
-    int RetainedMissedMoves)
+    int RetainedMissedMoves,
+    TimeSpan SnapshotInterval)
 {
     public static BacktestJobServiceOptions Default { get; } = new(
         MaxConcurrentJobs: 1,
+        MaximumPendingJobs: 16,
         RetainedTerminalJobs: 20,
         RetainedRecentTrades: 80,
-        RetainedMissedMoves: 100);
+        RetainedMissedMoves: 100,
+        SnapshotInterval: TimeSpan.FromSeconds(1));
 }
 
-public sealed class BacktestJobService
+/// <summary>
+/// Application-facing backtest façade and durable execution handler. Requests are
+/// admitted by the database queue and executed only by the hosted durable worker.
+/// </summary>
+public sealed class BacktestJobService : IDurableJobHandler
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ConcurrentDictionary<Guid, MutableBacktestJob> jobs = new();
-    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> cancellationTokens = new();
-    private readonly SemaphoreSlim executionSlots;
     private readonly IBacktestRunExecutor runner;
+    private readonly IDurableJobRepository repository;
+    private readonly SimpleYamlReader yamlReader;
     private readonly BacktestJobServiceOptions options;
+    private readonly ILogger<BacktestJobService> logger;
 
-    public BacktestJobService(IBacktestRunExecutor runner)
-        : this(runner, BacktestJobServiceOptions.Default)
-    {
-    }
-
-    public BacktestJobService(IBacktestRunExecutor runner, BacktestJobServiceOptions options)
+    public BacktestJobService(
+        IBacktestRunExecutor runner,
+        IDurableJobRepository repository,
+        SimpleYamlReader yamlReader,
+        BacktestJobServiceOptions options,
+        ILogger<BacktestJobService>? logger = null)
     {
         this.runner = runner;
+        this.repository = repository;
+        this.yamlReader = yamlReader;
         this.options = ValidateOptions(options);
-        executionSlots = new SemaphoreSlim(this.options.MaxConcurrentJobs, this.options.MaxConcurrentJobs);
+        this.logger = logger ?? NullLogger<BacktestJobService>.Instance;
     }
 
-    public BacktestJobSnapshot Start(string runName, string configPath)
+    public string JobType => "backtest";
+    public DurableJobRecoveryMode RecoveryMode => DurableJobRecoveryMode.ReplayFromStart;
+
+    public async Task InitializeAsync(CancellationToken cancellationToken)
     {
+        foreach (var persisted in await repository.GetJobsAsync(JobType, cancellationToken))
+        {
+            await PublishResultMarkerAsync(persisted, cancellationToken);
+            jobs[persisted.Id] = MutableBacktestJob.FromPersisted(persisted, JsonOptions);
+        }
+
         PruneTerminalJobs();
-        var job = new MutableBacktestJob(Guid.NewGuid(), runName, configPath, DateTimeOffset.UtcNow);
-        jobs[job.JobId] = job;
-        var cts = new CancellationTokenSource();
-        cancellationTokens[job.JobId] = cts;
-        _ = Task.Run(() => RunAsync(job, cts.Token));
-        return job.ToSnapshot();
     }
 
-    public BacktestCancellationOutcome CancelJob(Guid jobId)
+    public Task RefreshProjectionAsync(CancellationToken cancellationToken) =>
+        InitializeAsync(cancellationToken);
+
+    public async Task<BacktestJobSnapshot> StartAsync(
+        string runName,
+        string configPath,
+        CancellationToken cancellationToken = default)
     {
-        if (!jobs.TryGetValue(jobId, out var job))
+        ArgumentException.ThrowIfNullOrWhiteSpace(runName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
+        var fullConfigPath = Path.GetFullPath(configPath);
+        var runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
+        var request = DurableFileJobRequest.Capture([fullConfigPath, .. runConfig.Strategies]);
+        using (request.AcquireVerifiedReadLease())
+        {
+            runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
+            request.EnsureContains([fullConfigPath, .. runConfig.Strategies]);
+        }
+        var job = new MutableBacktestJob(Guid.NewGuid(), runName, fullConfigPath, DateTimeOffset.UtcNow);
+        var persisted = new PersistedJob
+        {
+            Id = job.JobId,
+            JobType = JobType,
+            RunName = job.RunName,
+            ConfigPath = job.ConfigPath,
+            RequestJson = request.Serialize(),
+            SnapshotJson = JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
+            Status = "queued",
+            CreatedAt = job.CreatedAt
+        };
+
+        if (!await repository.TryEnqueueAsync(persisted, options.MaximumPendingJobs, cancellationToken))
+        {
+            throw new InvalidOperationException(
+                $"The backtest queue already contains its maximum of {options.MaximumPendingJobs} non-terminal jobs.");
+        }
+
+        var projectedJob = jobs.GetOrAdd(job.JobId, job);
+
+        PruneTerminalJobs();
+        return projectedJob.ToSnapshot();
+    }
+
+    public async Task<BacktestCancellationOutcome> CancelJobAsync(
+        Guid jobId,
+        CancellationToken cancellationToken = default)
+    {
+        var stored = await repository.GetJobAsync(jobId, cancellationToken);
+        if (stored is null || !stored.JobType.Equals(JobType, StringComparison.OrdinalIgnoreCase))
         {
             return BacktestCancellationOutcome.NotFound;
         }
 
-        if (!job.RequestCancellation())
+        if (IsTerminalStatus(stored.Status))
         {
             return BacktestCancellationOutcome.AlreadyFinished;
         }
 
-        if (cancellationTokens.TryGetValue(jobId, out var cts))
+        if (!await repository.RequestCancellationAsync(jobId, DateTimeOffset.UtcNow, cancellationToken))
         {
-            cts.Cancel();
+            return BacktestCancellationOutcome.AlreadyFinished;
         }
 
+        var refreshed = await repository.GetJobAsync(jobId, cancellationToken)
+            ?? throw new InvalidOperationException($"Backtest job {jobId:N} disappeared after cancellation.");
+        var job = jobs.GetOrAdd(jobId, _ => MutableBacktestJob.FromPersisted(refreshed, JsonOptions));
+        job.ApplyPersistedState(refreshed);
+        job.Report("cancelling", "Cancellation requested. Waiting for the worker to drain.", null, 0, 0, null);
         return BacktestCancellationOutcome.Accepted;
     }
 
@@ -106,109 +179,179 @@ public sealed class BacktestJobService
             .ToArray();
     }
 
-    public BacktestJobSnapshot? Get(Guid jobId)
+    public BacktestJobSnapshot? Get(Guid jobId) =>
+        jobs.TryGetValue(jobId, out var job) ? job.ToSnapshot() : null;
+
+    public Task RecoverAsync(PersistedJob job, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public async Task<DurableJobCompletion> ExecuteAsync(
+        DurableJobExecutionContext context,
+        CancellationToken cancellationToken)
     {
-        return jobs.TryGetValue(jobId, out var job) ? job.ToSnapshot() : null;
+        var request = DurableFileJobRequest.Deserialize(context.Job.RequestJson);
+        using var inputLease = request.AcquireVerifiedReadLease();
+        var job = jobs.GetOrAdd(
+            context.Job.Id,
+            _ => MutableBacktestJob.FromPersisted(context.Job, JsonOptions));
+        job.MarkRunning(context.Job.StartedAt ?? DateTimeOffset.UtcNow);
+        job.Report("starting", "Backtest durable worker started.", null, 0, 0, null);
+        await context.SaveSnapshotAsync(JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions), cancellationToken);
+
+        var progress = new InlineProgress<BacktestProgress>(update =>
+            job.Report(
+                update.Stage,
+                update.Message,
+                update.Ticker,
+                update.CompletedTickerCount,
+                update.TotalTickerCount,
+                update.StrategyName));
+        var runConfig = yamlReader.ReadBacktestRun(job.ConfigPath);
+        request.EnsureContains([job.ConfigPath, .. runConfig.Strategies]);
+        var attemptResultPath = Path.Combine(
+            runConfig.ResultsRoot,
+            ".durable-attempts",
+            JobType,
+            job.JobId.ToString("N"),
+            context.LeaseToken.ToString("N"),
+            "result.json");
+        var runTask = runner.RunAsync(
+            job.ConfigPath,
+            attemptResultPath,
+            request.CapturedAtUtc,
+            cancellationToken,
+            progress);
+        await PersistWhileRunningAsync(runTask, job, context, cancellationToken);
+        var result = await runTask;
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var projected = ProjectResultForUi(result);
+        var completedAt = DateTimeOffset.UtcNow;
+        var completedSnapshot = job.ToTerminalSnapshot("completed", completedAt, null, projected);
+        return DurableJobCompletion.Completed(
+            JsonSerializer.Serialize(completedSnapshot, JsonOptions),
+            result.ResultPath);
     }
 
-    private async Task RunAsync(MutableBacktestJob job, CancellationToken cancellationToken)
+    public Task OnTerminalPublishedAsync(PersistedJob persisted, CancellationToken cancellationToken)
     {
-        var slotAcquired = false;
+        return ApplyTerminalPublicationAsync(persisted, cancellationToken);
+    }
+
+    private async Task ApplyTerminalPublicationAsync(
+        PersistedJob persisted,
+        CancellationToken cancellationToken)
+    {
+        await PublishResultMarkerAsync(persisted, cancellationToken);
+        var job = jobs.GetOrAdd(
+            persisted.Id,
+            _ => MutableBacktestJob.FromPersisted(persisted, JsonOptions));
+        job.ApplyPersistedState(persisted);
+        if (!String.IsNullOrWhiteSpace(persisted.SnapshotJson))
+        {
+            var snapshot = JsonSerializer.Deserialize<BacktestJobSnapshot>(persisted.SnapshotJson, JsonOptions);
+            if (snapshot is not null)
+            {
+                job.ApplySnapshot(snapshot);
+            }
+        }
+
+        job.ApplyPersistedState(persisted);
+        if (persisted.Status.Equals("cancelled", StringComparison.OrdinalIgnoreCase))
+        {
+            job.Report("cancelled", "Backtest cancelled after execution drained.", null, 0, 0, null);
+        }
+
+        CompactManagedHeap();
+        PruneTerminalJobs();
+    }
+
+    private async Task PublishResultMarkerAsync(PersistedJob persisted, CancellationToken cancellationToken)
+    {
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            job.Report("queued", "Waiting for an available backtest execution slot.", null, 0, 0, null);
-            await executionSlots.WaitAsync(cancellationToken);
-            slotAcquired = true;
-            if (!job.TryMarkRunning())
-            {
-                throw new OperationCanceledException(cancellationToken);
-            }
-
-            job.Report("starting", "Backtest worker started.", null, 0, 0, null);
-            var progress = new InlineProgress<BacktestProgress>(update =>
-                job.Report(update.Stage, update.Message, update.Ticker, update.CompletedTickerCount, update.TotalTickerCount, update.StrategyName));
-            var result = await runner.RunAsync(job.ConfigPath, cancellationToken, progress);
-            cancellationToken.ThrowIfCancellationRequested();
-            job.MarkCompleted(ProjectResultForUi(result));
+            await DurableJobResultPublication.PublishIfCompletedAsync(persisted, cancellationToken);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            job.MarkCancelled();
+            throw;
         }
         catch (Exception exception)
         {
-            job.MarkFailed(exception.Message);
-        }
-        finally
-        {
-            job.MarkFinished();
-            if (cancellationTokens.TryRemove(job.JobId, out var cts))
-            {
-                cts.Dispose();
-            }
-
-            PruneTerminalJobs();
-            if (slotAcquired)
-            {
-                CompactManagedHeap();
-                executionSlots.Release();
-            }
+            logger.LogWarning(
+                exception,
+                "Durable backtest {JobId} result marker is not available yet; projection remains visible and the next refresh will retry.",
+                persisted.Id);
         }
     }
 
-    private static void CompactManagedHeap()
+    private async Task PersistWhileRunningAsync(
+        Task runTask,
+        MutableBacktestJob job,
+        DurableJobExecutionContext context,
+        CancellationToken cancellationToken)
     {
-        // Backtests create short-lived candle, indicator, and news arrays on the large object heap.
-        // Reclaim them at the batch boundary before another queued job can pressure the web host.
-        GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+        while (!runTask.IsCompleted)
+        {
+            var delay = Task.Delay(options.SnapshotInterval, cancellationToken);
+            if (await Task.WhenAny(runTask, delay) == runTask)
+            {
+                break;
+            }
+
+            await context.SaveSnapshotAsync(
+                JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
+                cancellationToken);
+        }
     }
 
-    private BacktestResult ProjectResultForUi(BacktestResult result)
+    private BacktestResult ProjectResultForUi(BacktestResult result) => result with
     {
-        return result with
-        {
-            CompletedTrades = result.CompletedTrades
-                .TakeLast(options.RetainedRecentTrades)
-                .ToArray(),
-            StrategyResults = result.StrategyResults
-                .Select(strategy => strategy with { CompletedTrades = Array.Empty<BacktestTrade>() })
-                .ToArray(),
-            MissedMoves = result.MissedMoves
-                .TakeLast(options.RetainedMissedMoves)
-                .ToArray(),
-            AcceptedOrders = Array.Empty<TradingFlow.Domain.Orders.FinalizedOrder>()
-        };
-    }
+        CompletedTrades = result.CompletedTrades.TakeLast(options.RetainedRecentTrades).ToArray(),
+        StrategyResults = result.StrategyResults
+            .Select(strategy => strategy with { CompletedTrades = Array.Empty<BacktestTrade>() })
+            .ToArray(),
+        MissedMoves = result.MissedMoves.TakeLast(options.RetainedMissedMoves).ToArray(),
+        AcceptedOrders = Array.Empty<TradingFlow.Domain.Orders.FinalizedOrder>(),
+        CandidateDecisionAudit = Array.Empty<BacktestCandidateDecisionAudit>(),
+        ExecutionAudit = Array.Empty<BacktestExecutionAuditEvent>()
+    };
 
     private void PruneTerminalJobs()
     {
-        var terminalJobs = jobs.Values
-            .Where(job => job.IsTerminal)
-            .OrderByDescending(job => job.FinishedAt ?? job.CreatedAt)
-            .Skip(options.RetainedTerminalJobs)
-            .ToArray();
-
-        foreach (var job in terminalJobs)
+        foreach (var job in jobs.Values
+                     .Where(job => job.IsTerminal)
+                     .OrderByDescending(job => job.FinishedAt ?? job.CreatedAt)
+                     .Skip(options.RetainedTerminalJobs))
         {
             jobs.TryRemove(job.JobId, out _);
         }
     }
 
+    private static void CompactManagedHeap()
+    {
+        GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+    }
+
+    private static bool IsTerminalStatus(string status) =>
+        status is "completed" or "failed" or "cancelled" or "interrupted";
+
     private static BacktestJobServiceOptions ValidateOptions(BacktestJobServiceOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        if (options.MaxConcurrentJobs <= 0)
+        if (options.MaxConcurrentJobs <= 0 || options.MaximumPendingJobs <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(options), "MaxConcurrentJobs must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(options), "Backtest worker and queue limits must be positive.");
         }
 
-        if (options.RetainedTerminalJobs < 0
-            || options.RetainedRecentTrades < 0
-            || options.RetainedMissedMoves < 0)
+        if (options.RetainedTerminalJobs < 0 || options.RetainedRecentTrades < 0 || options.RetainedMissedMoves < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Backtest retention limits cannot be negative.");
+        }
+
+        if (options.SnapshotInterval <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "SnapshotInterval must be positive.");
         }
 
         return options;
@@ -224,13 +367,12 @@ public sealed class BacktestJobService
             RunName = runName;
             ConfigPath = configPath;
             CreatedAt = createdAt;
-            Status = "queued";
         }
 
         public Guid JobId { get; }
         public string RunName { get; }
         public string ConfigPath { get; }
-        public string Status { get; private set; }
+        public string Status { get; private set; } = "queued";
         public DateTimeOffset CreatedAt { get; }
         public DateTimeOffset? StartedAt { get; private set; }
         public DateTimeOffset? FinishedAt { get; private set; }
@@ -242,81 +384,68 @@ public sealed class BacktestJobService
         public ConcurrentQueue<string> Events { get; } = new();
         public ConcurrentDictionary<string, MutableStrategyRunGroup> StrategyGroups { get; } = new(StringComparer.OrdinalIgnoreCase);
         public BacktestResult? Result { get; private set; }
-        public bool IsTerminal => Status is "completed" or "failed" or "cancelled";
+        public bool IsTerminal => IsTerminalStatus(Status);
 
-        public bool TryMarkRunning()
+        public static MutableBacktestJob FromPersisted(PersistedJob persisted, JsonSerializerOptions jsonOptions)
+        {
+            var job = new MutableBacktestJob(persisted.Id, persisted.RunName, persisted.ConfigPath, persisted.CreatedAt);
+            if (!String.IsNullOrWhiteSpace(persisted.SnapshotJson))
+            {
+                var snapshot = JsonSerializer.Deserialize<BacktestJobSnapshot>(persisted.SnapshotJson, jsonOptions);
+                if (snapshot is not null)
+                {
+                    job.ApplySnapshot(snapshot);
+                }
+            }
+
+            job.ApplyPersistedState(persisted);
+            return job;
+        }
+
+        public void MarkRunning(DateTimeOffset startedAt)
         {
             lock (stateLock)
             {
-                if (Status != "queued")
-                {
-                    return false;
-                }
-
                 Status = "running";
-                StartedAt = DateTimeOffset.UtcNow;
-                return true;
+                StartedAt ??= startedAt;
             }
         }
 
-        public bool RequestCancellation()
+        public void ApplyPersistedState(PersistedJob persisted)
         {
             lock (stateLock)
             {
-                if (Status is "completed" or "failed" or "cancelled")
+                Status = persisted.Status;
+                StartedAt = persisted.StartedAt;
+                FinishedAt = persisted.FinishedAt;
+                CancellationRequestedAt = persisted.CancellationRequestedAtUtc;
+                ErrorMessage = persisted.ErrorMessage;
+            }
+        }
+
+        public void ApplySnapshot(BacktestJobSnapshot snapshot)
+        {
+            lock (stateLock)
+            {
+                CurrentStage = snapshot.CurrentStage;
+                CompletedTickerCount = snapshot.CompletedTickerCount;
+                TotalTickerCount = snapshot.TotalTickerCount;
+                Result = snapshot.Result;
+                while (Events.TryDequeue(out _)) { }
+                foreach (var entry in snapshot.Events.TakeLast(80))
                 {
-                    return false;
+                    Events.Enqueue(entry);
                 }
-
-                if (Status == "cancelling")
-                {
-                    return true;
-                }
-
-                Status = "cancelling";
-                CancellationRequestedAt = DateTimeOffset.UtcNow;
-                EnqueueEvent("cancelling", "Cancellation requested. Finishing the current safe cancellation point.");
-                return true;
             }
         }
 
-        public void MarkCompleted(BacktestResult result)
-        {
-            lock (stateLock)
-            {
-                Result = result;
-                Status = "completed";
-            }
-        }
-
-        public void MarkCancelled()
-        {
-            lock (stateLock)
-            {
-                Status = "cancelled";
-                EnqueueEvent(CurrentStage, "Backtest cancelled by user.");
-            }
-        }
-
-        public void MarkFailed(string errorMessage)
-        {
-            lock (stateLock)
-            {
-                ErrorMessage = errorMessage;
-                Status = "failed";
-                EnqueueEvent(CurrentStage, $"Backtest failed: {errorMessage}");
-            }
-        }
-
-        public void MarkFinished()
-        {
-            lock (stateLock)
-            {
-                FinishedAt = DateTimeOffset.UtcNow;
-            }
-        }
-
-        public void Report(string stage, string message, string? ticker, int completedTickerCount, int totalTickerCount, string? strategyName)
+        public void Report(
+            string stage,
+            string message,
+            string? ticker,
+            int completedTickerCount,
+            int totalTickerCount,
+            string? strategyName)
         {
             lock (stateLock)
             {
@@ -334,12 +463,18 @@ public sealed class BacktestJobService
 
             if (!String.IsNullOrWhiteSpace(strategyName))
             {
-                var group = StrategyGroups.GetOrAdd(strategyName, name => new MutableStrategyRunGroup(name));
-                group.Report(stage, ticker, message, totalTickerCount);
+                StrategyGroups.GetOrAdd(strategyName, name => new MutableStrategyRunGroup(name))
+                    .Report(stage, ticker, message, totalTickerCount);
             }
         }
 
-        public BacktestJobSnapshot ToSnapshot()
+        public BacktestJobSnapshot ToSnapshot() => ToTerminalSnapshot(Status, FinishedAt, ErrorMessage, Result);
+
+        public BacktestJobSnapshot ToTerminalSnapshot(
+            string status,
+            DateTimeOffset? finishedAt,
+            string? error,
+            BacktestResult? result)
         {
             lock (stateLock)
             {
@@ -347,16 +482,16 @@ public sealed class BacktestJobService
                     JobId,
                     RunName,
                     ConfigPath,
-                    Status,
+                    status,
                     CreatedAt,
                     StartedAt,
-                    FinishedAt,
-                    ErrorMessage,
+                    finishedAt,
+                    error,
                     CurrentStage,
                     CompletedTickerCount,
                     TotalTickerCount,
                     Events.ToArray(),
-                    Result,
+                    result,
                     StrategyGroups.Values
                         .OrderBy(group => group.StrategyName, StringComparer.OrdinalIgnoreCase)
                         .Select(group => group.ToSnapshot())
@@ -379,10 +514,7 @@ public sealed class BacktestJobService
         private readonly object stateLock = new();
         private readonly ConcurrentDictionary<string, byte> completedTickers = new(StringComparer.OrdinalIgnoreCase);
 
-        public MutableStrategyRunGroup(string strategyName)
-        {
-            StrategyName = strategyName;
-        }
+        public MutableStrategyRunGroup(string strategyName) => StrategyName = strategyName;
 
         public string StrategyName { get; }
         public string Status { get; private set; } = "queued";
@@ -415,7 +547,9 @@ public sealed class BacktestJobService
                         completedTickers.TryAdd(ticker, 0);
                     }
 
-                    Status = TotalTickerCount > 0 && completedTickers.Count >= TotalTickerCount ? "completed" : "running";
+                    Status = TotalTickerCount > 0 && completedTickers.Count >= TotalTickerCount
+                        ? "completed"
+                        : "running";
                 }
 
                 var tickerText = String.IsNullOrWhiteSpace(ticker) ? String.Empty : $" [{ticker}]";
@@ -443,9 +577,6 @@ public sealed class BacktestJobService
 
     private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
     {
-        public void Report(T value)
-        {
-            report(value);
-        }
+        public void Report(T value) => report(value);
     }
 }

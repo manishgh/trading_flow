@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\TradingFlow.Contracts\TradingFlow.Contracts.csproj" />
     <ProjectReference Include="..\TradingFlow.Domain\TradingFlow.Domain.csproj" />
     <ProjectReference Include="..\TradingFlow.Engine\TradingFlow.Engine.csproj" />
   </ItemGroup>

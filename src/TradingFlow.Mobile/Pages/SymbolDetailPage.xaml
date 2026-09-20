@@ -38,11 +38,7 @@
                 <Label Text="Read-only prediction evidence. It cannot override TradingFlow strategy or risk gates."
                        Style="{StaticResource Caption}"
                        LineBreakMode="WordWrap" />
-                <Grid ColumnDefinitions="*,*,*" ColumnSpacing="6">
-                    <Button x:Name="UnifiedButton" Text="Unified" CommandParameter="unified" Clicked="OnModeSelected" />
-                    <Button x:Name="SwingButton" Grid.Column="1" Text="Swing" CommandParameter="swing" Clicked="OnModeSelected" />
-                    <Button x:Name="IntradayButton" Grid.Column="2" Text="Intraday" CommandParameter="intraday" Clicked="OnModeSelected" />
-                </Grid>
+                <Label Text="Swing horizon" Style="{StaticResource Caption}" />
                 <Label x:Name="ModelStatusLabel"
                        FontAttributes="Bold" />
                 <Label x:Name="ModelGeneratedLabel" Style="{StaticResource Caption}" />
@@ -57,12 +53,6 @@
                 <Label x:Name="SwingSignalLabel" FontAttributes="Bold" />
                 <Label x:Name="SwingProbabilityLabel" />
                 <Label x:Name="SwingContextLabel" Style="{StaticResource Caption}" LineBreakMode="WordWrap" />
-            </VerticalStackLayout>
-
-            <VerticalStackLayout x:Name="IntradaySection" IsVisible="False" Spacing="4">
-                <Label x:Name="IntradaySignalLabel" FontAttributes="Bold" />
-                <Label x:Name="IntradayProbabilityLabel" />
-                <Label x:Name="IntradayTechnicalLabel" Style="{StaticResource Caption}" LineBreakMode="WordWrap" />
             </VerticalStackLayout>
 
             <VerticalStackLayout x:Name="ReadinessSection" IsVisible="False" Spacing="4">

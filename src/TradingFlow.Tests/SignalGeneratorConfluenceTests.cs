@@ -49,7 +49,7 @@ public sealed class SignalGeneratorConfluenceTests
             1,
             "1h",
             "short",
-            new EntryRules("momentum", 0m, 0m, 100m, "none", "none", false, false, false, false, false, false, null, 60, 20, 10),
+            new EntryRules("momentum", 0m, 0m, 100m, "none", "none", false, false, false, false, false, false, null, 20, 10),
             new ConfluenceRules(true, "1d", 20, macdFilter),
             new ExitRules(1.5m, 3m, 96m, false, 2m, 1m, false, false, false, 1),
             new ExecutionRules("1h", 15m),

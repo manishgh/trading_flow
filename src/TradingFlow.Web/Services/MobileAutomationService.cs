@@ -19,9 +19,8 @@ using TradingFlow.Web.Models;
 namespace TradingFlow.Web.Services;
 
 /// <summary>
-/// Handles Android/mobile-triggered paper entries while keeping exit ownership
-/// on the shared TradingFlow strategy engine. The mobile side decides "enter
-/// now"; this service decides "stay in" or "get out".
+/// Handles Android/mobile-triggered swing paper entries while keeping admission,
+/// sizing, protection, and exit ownership on the shared TradingFlow strategy engine.
 /// </summary>
 public sealed partial class MobileAutomationService
 {
@@ -32,13 +31,13 @@ public sealed partial class MobileAutomationService
     private readonly PaperRuntimeFactory runtimeFactory;
     private readonly ProjectPaths paths;
     private readonly MobileAutomationSessionStore sessionStore;
-    private readonly IOrderStateRepository? orderRepo;
     private readonly IDecisionAuditRepository? auditRepo;
     private readonly ILogger<MobileAutomationService> logger;
     private readonly ICandleStore candleStore;
     private readonly PositionGuardianEngine positionGuardianEngine = new();
     private readonly IOrderSubmissionService? orderSubmissionService;
     private readonly IOrderLifecycleService? orderLifecycleService;
+    private readonly IProtectiveOrderInvariantService? protectiveOrders;
     private readonly ConfigCatalogService configCatalog;
     private readonly IStrategyCandidateDecisionOrchestrator? candidateDecisions;
     private readonly ManualEntryOptions manualEntryOptions;
@@ -53,10 +52,10 @@ public sealed partial class MobileAutomationService
         ConfigCatalogService configCatalog,
         ILogger<MobileAutomationService>? logger = null,
         ICandleStore? candleStore = null,
-        IOrderStateRepository? orderRepo = null,
         IDecisionAuditRepository? auditRepo = null,
         IOrderSubmissionService? orderSubmissionService = null,
         IOrderLifecycleService? orderLifecycleService = null,
+        IProtectiveOrderInvariantService? protectiveOrders = null,
         ICandidateRepository? candidateRepository = null,
         ManualEntryOptions? manualEntryOptions = null,
         TimeProvider? timeProvider = null)
@@ -68,10 +67,10 @@ public sealed partial class MobileAutomationService
         this.configCatalog = configCatalog;
         this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<MobileAutomationService>.Instance;
         this.candleStore = candleStore ?? NullCandleStore.Instance;
-        this.orderRepo = orderRepo;
         this.auditRepo = auditRepo;
         this.orderSubmissionService = orderSubmissionService;
         this.orderLifecycleService = orderLifecycleService;
+        this.protectiveOrders = protectiveOrders;
         candidateDecisions = candidateRepository is null
             ? null
             : new StrategyCandidateDecisionOrchestrator(new StrategyDecisionKernel(), candidateRepository);
@@ -131,9 +130,16 @@ public sealed partial class MobileAutomationService
             paths.ResolveRepositoryPath(request.StrategyPath),
             cancellationToken);
         var strategy = selectedStrategy.Definition;
+        if (!TimeframeParser.IsDailyOrHigher(strategy.Timeframe))
+        {
+            throw new InvalidOperationException(
+                $"Strategy '{strategy.StrategyName}' is not a swing strategy. " +
+                "Mobile automation requires a daily setup timeframe.");
+        }
+
         if (!strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Mobile automation currently supports long intraday paper entries only.");
+            throw new InvalidOperationException("Mobile automation currently supports long swing paper entries only.");
         }
 
         var session = new MutableAutomationSession(
@@ -217,7 +223,7 @@ public sealed partial class MobileAutomationService
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            cts.CancelAfter(TimeSpan.FromSeconds(45));
             var quantity = session.ToSnapshot().ShareQuantity ?? 0;
             if (quantity <= 0)
             {
@@ -226,24 +232,58 @@ public sealed partial class MobileAutomationService
                 return false;
             }
 
-            await CancelOpenSellOrdersForTickerAsync(brokerClient, session.Ticker, cts.Token);
-
-            var closed = await brokerClient.ClosePositionAsync(session.Ticker, quantity, cts.Token);
-            if (closed)
+            if (orderSubmissionService is null)
             {
-                sessionCoordinator.TryCancel(sessionId);
-                session.Update(current =>
-                {
-                    current.Status = "completed";
-                    current.FinishedAt = DateTimeOffset.UtcNow;
-                    current.ExitSubmittedAt = DateTimeOffset.UtcNow;
-                    current.ExitReason = "manual_sell";
-                    current.Report("completed", $"Manually sold {current.Ticker} from Running Trades.");
-                });
-                await PersistAsync(cancellationToken);
+                throw new InvalidOperationException(
+                    "Manual exits require the durable order command service.");
             }
 
-            return closed;
+            var executionRunContext = RequireExecutionRunContext(session);
+            var refreshedPosition = (await brokerClient.GetOpenPositionsAsync(cts.Token))
+                .FirstOrDefault(position =>
+                    position.Ticker.Equals(session.Ticker, StringComparison.OrdinalIgnoreCase) &&
+                    position.Qty > 0m &&
+                    !position.Side.Equals("short", StringComparison.OrdinalIgnoreCase));
+            if (refreshedPosition is null)
+            {
+                session.Report("completed", $"{session.Ticker} is flat; no additional exit was submitted.");
+                await PersistAsync(cancellationToken);
+                return true;
+            }
+
+            quantity = Math.Min(quantity, (int)Math.Floor(refreshedPosition.Qty));
+            var submittedAtUtc = timeProvider.GetUtcNow().ToUniversalTime();
+            OrderSubmissionResult submitted;
+            try
+            {
+                submitted = await orderSubmissionService.SubmitPositionExitAsync(
+                    new PositionExitSubmission(
+                        executionRunContext,
+                        session.Ticker,
+                        quantity,
+                        "manual_sell",
+                        submittedAtUtc,
+                        runConfig.Execution.AllowExtendedHoursTrading),
+                    brokerClient,
+                    cts.Token);
+            }
+            catch (PositionExitNoLongerRequiredException)
+            {
+                session.Report("completed", $"{session.Ticker} became flat while its owned protection was being resolved.");
+                await PersistAsync(cancellationToken);
+                return true;
+            }
+            session.Update(current =>
+            {
+                current.Status = "running";
+                current.ExitSubmittedAt = submittedAtUtc;
+                current.ExitReason = "manual_sell";
+                current.Report(
+                    "exit_submitted",
+                    $"Manual exit submitted for {current.Ticker}. ClientOrderId={submitted.ClientOrderId}.");
+            });
+            await PersistAsync(cancellationToken);
+            return true;
         }
         catch (Exception exception)
         {
@@ -298,6 +338,12 @@ public sealed partial class MobileAutomationService
                 runConfig.Mode,
                 new { Run = runConfig, Strategy = strategy, EntryMode = entryMode },
                 startedAt);
+            session.Update(current =>
+            {
+                current.ExecutionConfigHash = executionRunContext.ConfigHash;
+                current.ExecutionCodeVersion = executionRunContext.CodeVersion;
+            });
+            await PersistAsync(cancellationToken);
             var execution = await PrepareAutomationEntryExecutionAsync(
                 runConfig,
                 runtimeStrategy,
@@ -347,8 +393,8 @@ public sealed partial class MobileAutomationService
 
             session.Report("submitting_entry", $"Submitting entry for {session.Ticker} from {session.Source}. EntryMode={entryMode}.");
             var submittedAt = timeProvider.GetUtcNow();
-            var submission = await orderSubmissionService.SubmitBracketOrderAsync(
-                new BracketOrderSubmission(
+            var submission = await orderSubmissionService.SubmitEntryOrderAsync(
+                new EntryOrderSubmission(
                     session.SessionId,
                     execution.Candidate,
                     executionRunContext,
@@ -389,27 +435,14 @@ public sealed partial class MobileAutomationService
             });
             await PersistAsync(cancellationToken);
 
-            if (orderRepo is not null)
-            {
-                await orderRepo.SaveOrderAsync(new PersistedOrder
-                {
-                    OrderId = orderId,
-                    Ticker = session.Ticker,
-                    RunName = session.RunName,
-                    ClientOrderId = submission.ClientOrderId,
-                    StrategyName = strategy.StrategyName,
-                    Broker = runConfig.Execution.Broker,
-                    Status = submission.SubmittedOutsideRegularHours ? "pending_exit_setup" : "new",
-                    EntryPrice = order.LimitPrice,
-                    StopLossPrice = order.StopLossPrice,
-                    TakeProfitPrice = order.TakeProfitPrice,
-                    ShareQuantity = order.ShareQuantity,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                    UpdatedAt = DateTimeOffset.UtcNow
-                }, cancellationToken);
-            }
-
-            await MonitorExitAsync(session, runConfig, strategy, marketDataProvider, brokerClient, cancellationToken);
+            await MonitorExitAsync(
+                session,
+                runConfig,
+                strategy,
+                executionRunContext,
+                marketDataProvider,
+                brokerClient,
+                cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -485,6 +518,26 @@ public sealed partial class MobileAutomationService
             ? "day"
             : "gtc";
 
+    private static ExecutionRunContext RequireExecutionRunContext(
+        MutableAutomationSession session)
+    {
+        var snapshot = session.ToSnapshot();
+        if (snapshot.StartedAt is null ||
+            snapshot.ExecutionConfigHash is not { Length: 64 } configHash ||
+            String.IsNullOrWhiteSpace(snapshot.ExecutionCodeVersion))
+        {
+            throw new InvalidOperationException(
+                $"Automation session {snapshot.SessionId:N} has no durable execution provenance.");
+        }
+
+        return new ExecutionRunContext(
+            snapshot.SessionId,
+            "paper",
+            configHash,
+            snapshot.ExecutionCodeVersion,
+            snapshot.StartedAt.Value.ToUniversalTime());
+    }
+
     internal sealed class MutableAutomationSession
     {
         private readonly object sync = new();
@@ -540,6 +593,8 @@ public sealed partial class MobileAutomationService
         public decimal? UnrealizedPl { get; set; }
         public string? ExitReason { get; set; }
         public bool ExitSafetyOrdersSubmitted { get; set; }
+        public string? ExecutionConfigHash { get; set; }
+        public string? ExecutionCodeVersion { get; set; }
 
         public void Update(Action<MutableAutomationSession> mutation)
         {
@@ -594,7 +649,9 @@ public sealed partial class MobileAutomationService
                     events.ToArray(),
                     SourceTitle,
                     SourceMessage,
-                    ExitSafetyOrdersSubmitted);
+                    ExitSafetyOrdersSubmitted,
+                    ExecutionConfigHash,
+                    ExecutionCodeVersion);
             }
         }
 
@@ -627,7 +684,9 @@ public sealed partial class MobileAutomationService
                 LastObservedPrice = snapshot.LastObservedPrice,
                 UnrealizedPl = snapshot.UnrealizedPl,
                 ExitReason = snapshot.ExitReason,
-                ExitSafetyOrdersSubmitted = snapshot.ExitSafetyOrdersSubmitted
+                ExitSafetyOrdersSubmitted = snapshot.ExitSafetyOrdersSubmitted,
+                ExecutionConfigHash = snapshot.ExecutionConfigHash,
+                ExecutionCodeVersion = snapshot.ExecutionCodeVersion
             };
 
             foreach (var item in snapshot.Events)

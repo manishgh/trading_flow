@@ -772,54 +772,6 @@ if (args.Length > 0 &&
     return;
 }
 
-if (args.Length > 0 &&
-    args[0].Equals("research-catalyst", StringComparison.OrdinalIgnoreCase))
-{
-    var requestPath = Path.GetFullPath(RequireStringOption(args, "--request"));
-    var catalogPath = Path.GetFullPath(RequireStringOption(args, "--catalog"));
-    var artifactRoot = Path.GetFullPath(RequireStringOption(args, "--artifact-root"));
-    if (!File.Exists(requestPath))
-    {
-        throw new FileNotFoundException(
-            "The frozen catalyst research request was not found.",
-            requestPath);
-    }
-
-    var request = JsonSerializer.Deserialize<CatalogCatalystWorkflowRequest>(
-                      await File.ReadAllTextAsync(requestPath),
-                      new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                  ?? throw new InvalidDataException(
-                      "The frozen catalyst research request is empty.");
-    var artifactStore = new FileSystemImmutableArtifactStore(
-        new ImmutableArtifactStoreOptions(artifactRoot));
-    var catalog = new SqliteEvidenceCatalog(
-        new EvidenceCatalogOptions(catalogPath, EvidenceCatalogOpenMode.OpenExisting),
-        artifactStore);
-    var partitionReader = new ParquetEvidencePartitionDataReader(
-        new EvidenceParquetCodec(),
-        artifactStore);
-    var workflow = new CatalogResearchWorkflow(
-        catalog,
-        partitionReader,
-        new EvidenceResearchRunArtifactPackager(artifactStore));
-    var result = await workflow.RunCatalystDiagnosticAsync(request);
-
-    Console.WriteLine(JsonSerializer.Serialize(new
-    {
-        result.Manifest.ResearchRunId,
-        result.Manifest.StudyId,
-        result.Manifest.EvidenceReady,
-        result.Manifest.ReadinessFailures,
-        result.AlreadyRegistered,
-        result.ClassifierGroundTruthReady,
-        result.Study.ExecutableEvidenceReady,
-        StudyReadinessFailures = result.Study.ReadinessFailures,
-        ObservationCount = result.Study.Report.Observations.Count,
-        ExecutableObservationCount = result.Study.ExecutableObservations.Count
-    }, serializerOptions));
-    return;
-}
-
 if (args.Length > 0 && args[0].Equals("optimize", StringComparison.OrdinalIgnoreCase))
 {
     var optConfigPath = args.Length > 1

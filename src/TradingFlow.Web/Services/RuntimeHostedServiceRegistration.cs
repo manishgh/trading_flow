@@ -19,11 +19,19 @@ public static class RuntimeHostedServiceRegistration
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(options);
+        services.AddSingleton<OrderDispatchRecoveryHostedService>();
+        services.AddSingleton<IOrderDispatchRecoveryHealth>(serviceProvider =>
+            serviceProvider.GetRequiredService<OrderDispatchRecoveryHostedService>());
         if (!options.Enabled)
         {
             return services;
         }
 
+        // Hosted services stop in reverse registration order. Register shutdown
+        // first so all producers and journal writers stop before the final broker
+        // drain and SQLite checkpoint execute.
+        services.AddHostedService<ExecutionShutdownHostedService>();
+        services.AddHostedService<BrokerAccountValidationHostedService>();
         services.AddHostedService(serviceProvider =>
             serviceProvider.GetRequiredService<NewsFeedService>());
         services.AddHostedService<AlpacaNewsStreamService>();
@@ -38,6 +46,11 @@ public static class RuntimeHostedServiceRegistration
         services.AddHostedService(serviceProvider =>
             serviceProvider.GetRequiredService<AlpacaMarketStateStreamService>());
         services.AddHostedService<AlpacaOrderSynchronizationHostedService>();
+        services.AddHostedService(serviceProvider =>
+            serviceProvider.GetRequiredService<OrderDispatchRecoveryHostedService>());
+        // Register durable workers last so host shutdown stops and drains jobs
+        // before their market-data, order, and persistence dependencies.
+        services.AddHostedService<DurableJobWorkerHostedService>();
         return services;
     }
 }

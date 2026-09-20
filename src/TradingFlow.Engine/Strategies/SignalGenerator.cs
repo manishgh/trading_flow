@@ -21,25 +21,26 @@ public sealed partial class SignalGenerator
         var snapshot = snapshots[index];
         var previous = snapshots[index - 1];
         var bar = bars[index];
-        if (snapshot.Rsi is null ||
-            snapshot.Atr is null ||
-            snapshot.Vwap is null ||
-            snapshot.BollingerMiddle is null ||
-            snapshot.MacdHistogram is null)
+        if (snapshot.Atr is null || !HasRequiredEntryIndicators(strategy, snapshot))
         {
             return null;
         }
 
-        var previousHistogram = previous.MacdHistogram ?? snapshot.MacdHistogram.Value;
-        var isAboveVwap = snapshot.CurrentPrice > snapshot.Vwap.Value;
+        var currentRsi = snapshot.Rsi ?? 50m;
+        var currentHistogram = snapshot.MacdHistogram ?? 0m;
+        var previousHistogram = previous.MacdHistogram ?? currentHistogram;
+        var isAboveVwap = snapshot.Vwap is not null && snapshot.CurrentPrice > snapshot.Vwap.Value;
         var isVwapPullback = previous.Vwap is not null &&
+            snapshot.Vwap is not null &&
             previous.CurrentPrice >= previous.Vwap.Value &&
             bar.Low <= snapshot.Vwap.Value &&
             snapshot.CurrentPrice >= snapshot.Vwap.Value;
         var isVwapReclaim = previous.Vwap is not null &&
+            snapshot.Vwap is not null &&
             previous.CurrentPrice < previous.Vwap.Value &&
             snapshot.CurrentPrice >= snapshot.Vwap.Value;
         var isVwapRejection = previous.Vwap is not null &&
+            snapshot.Vwap is not null &&
             previous.CurrentPrice <= previous.Vwap.Value &&
             bar.High >= snapshot.Vwap.Value &&
             snapshot.CurrentPrice <= snapshot.Vwap.Value;
@@ -86,7 +87,7 @@ public sealed partial class SignalGenerator
         var shortAnchoredVwapExtensionAtr = shortAnchoredVwap is null || snapshot.Atr.Value <= 0m
             ? (decimal?)null
             : Math.Abs(snapshot.CurrentPrice - shortAnchoredVwap.Value) / snapshot.Atr.Value;
-        decimal? vwapExtensionAtr = snapshot.Atr.Value <= 0
+        decimal? vwapExtensionAtr = snapshot.Vwap is null || snapshot.Atr.Value <= 0
             ? null
             : Math.Max(0, snapshot.CurrentPrice - snapshot.Vwap.Value) / snapshot.Atr.Value;
         var priceLogTrend = ComputeLogTrend(
@@ -102,15 +103,8 @@ public sealed partial class SignalGenerator
             bar => bar.Volume,
             addOne: true);
         var previousRegularClose = GetPreviousRegularClose(strategy, bars, snapshots, index);
-        var sessionOpen = GetSessionOpen(strategy, bars, snapshots, index);
-        decimal? dayGainPct = previousRegularClose is null ? null : ((snapshot.CurrentPrice / previousRegularClose.Value) - 1m) * 100m;
         decimal? gapUpPct = previousRegularClose is null ? null : ((bar.Open / previousRegularClose.Value) - 1m) * 100m;
-        decimal? sessionGainPct = sessionOpen is null ? null : ((snapshot.CurrentPrice / sessionOpen.Value) - 1m) * 100m;
-        var sessionContext = GetSessionContext(strategy, bars, snapshots, index);
         var catalystContext = GetCatalystContext(snapshot.Catalyst, bars, snapshots, index);
-        var bullFlag = UsesLongSetup(strategy, "ross_gap_go_bull_flag")
-            ? GetBullFlagContext(strategy, bars, index)
-            : (false, null, null, null, null);
         var stepContext = UsesLongSetup(strategy, "step_breakout") || UsesShortSetup(strategy, "step_breakdown")
             ? GetStepBreakoutContext(strategy, bars, snapshots, index)
             : (false, false, null, null, null, null, null, null);
@@ -133,11 +127,7 @@ public sealed partial class SignalGenerator
         var rolloverContext = UsesShortSetup(strategy, "swing_rollover")
             ? GetSwingRolloverContext(strategy, bars, snapshots, index)
             : (false, null, null, null);
-        var premarketContext = GetPremarketContext(strategy, bars, snapshots, index);
-        var minutesAfterRegularOpen = GetMinutesAfterRegularOpen(strategy, snapshots[index].Timestamp);
-        var consecutiveClosesAboveVwap = CountConsecutiveClosesAboveVwap(snapshots, index);
         var bollingerContext = GetBollingerContext(snapshot);
-        var trapContext = GetVwapReclaimTrapContext(strategy, bars, snapshots, index);
         var avwapBounceContext = GetAnchoredVwapBounceContext(strategy, bars, index, anchoredVwap);
         var vcpContext = GetVcpContext(strategy, bars, index);
         var price52WeekContext = Get52WeekPriceContext(bars, index);
@@ -162,148 +152,137 @@ public sealed partial class SignalGenerator
             bars,
             index,
             strategy.EntryRules.PriorEntryGainLookbackBars);
-        var priorDayStructure = GetPriorDayStructure(strategy, bars, snapshots, index);
-        var divergenceContext = GetMacdDivergenceFadeContext(strategy, bars, snapshots, index);
-        var vwapDistanceAtr = snapshot.Atr.Value <= 0m
-            ? (decimal?)null
-            : Math.Abs(snapshot.CurrentPrice - snapshot.Vwap.Value) / snapshot.Atr.Value;
-
         return new TradeSignal(
-            snapshot.Ticker,
-            snapshot.Timestamp,
-            snapshot.Timeframe,
-            snapshot.CurrentPrice,
-            snapshot.CurrentVolume,
-            snapshot.Rsi.Value,
-            snapshot.Atr.Value,
-            isAboveVwap,
-            isVwapPullback,
-            isVwapReclaim,
-            isVwapRejection,
-            isEma20Pullback,
-            IsOpeningRangeBreakout(strategy, bars, snapshots, index),
-            IsOpeningRangeBreakdown(strategy, bars, snapshots, index),
-            IsRecentHighBreakout(strategy, bars, index),
-            IsRecentLowBreakdown(strategy, bars, index),
-            IsVolatilityContraction(strategy, bars, snapshots, index),
-            isPriceAboveEma20,
-            isPriceAboveEma50,
-            isEma20AboveEma50,
-            vwapExtensionAtr,
-            snapshot.CurrentPrice > snapshot.BollingerMiddle.Value,
-            snapshot.MacdHistogram.Value > 0,
-            snapshot.MacdHistogram.Value >= 0 || snapshot.MacdHistogram.Value >= previousHistogram,
-            priceLogTrend?.Slope,
-            priceLogTrend?.R2,
-            volumeLogTrend?.Slope,
-            volumeLogTrend?.R2,
-            IsOpeningDriveContinuation(strategy, bars, snapshots, index),
-            IsAboveSessionOpen(strategy, bars, snapshots, index),
-            IsBelowSessionOpen(strategy, bars, snapshots, index),
-            ComputeCloseLocationValue(bar),
-            dayGainPct,
-            sessionGainPct,
-            sessionContext.RangePct,
-            sessionContext.PullbackFromHighPct,
-            snapshot.Catalyst,
-            catalystContext.AgeHours,
-            catalystContext.PriceMovePct,
-            bullFlag.IsBreakout,
-            IsFlatTopBreakout(strategy, bars, index),
-            bullFlag.PoleMovePct,
-            bullFlag.PullbackDepthPct,
-            bullFlag.PullbackVolumeRatio,
-            bullFlag.BreakoutVolumeRatio,
-            premarketContext.High,
-            premarketContext.Low,
-            premarketContext.Vwap,
-            premarketContext.Volume,
-            premarketContext.RunPct,
-            premarketContext.VwapExtensionPct,
-            premarketContext.IsHighBreak,
-            minutesAfterRegularOpen,
-            consecutiveClosesAboveVwap,
-            (bar.High + bar.Low) / 2m,
-            bollingerContext.Position,
-            bollingerContext.WidthPct,
-            isPriceAboveSma10,
-            isPriceAboveSma20,
-            isPriceAboveSma50,
-            isSma10AboveSma20,
-            isSma20AboveSma50,
-            anchoredVwap,
-            anchoredVwapExtensionAtr,
-            isAboveAnchoredVwap,
-            isBelowAnchoredVwap,
-            shortAnchoredVwap,
-            shortAnchoredVwapExtensionAtr,
-            isBelowShortAnchoredVwap,
-            stepContext.IsBreakout,
-            stepContext.IsBreakdown,
-            stepContext.PriorMovePct,
-            stepContext.PriorDeclinePct,
-            stepContext.BaseDepthPct,
-            stepContext.BaseVolumeRatio,
-            stepContext.BreakoutVolumeRatio,
-            stepContext.BollingerWidthRatio,
-            reclaimContext.IsReclaim,
-            reclaimContext.PullbackDepthPct,
-            reclaimContext.RecentHigh,
-            reclaimContext.PullbackLow,
-            rolloverContext.IsRollover,
-            rolloverContext.AdvancePct,
-            rolloverContext.DropFromHighPct,
-            rolloverContext.RecentHigh,
-            isPriceAboveEma10,
-            isEma10AboveEma20,
-            trapContext.IsTrap,
-            trapContext.PriorFlushBars,
-            trapContext.BarsSinceFlush,
-            trapContext.ReclaimVolumeRatio,
-            avwapBounceContext.IsBounce,
-            avwapBounceContext.ProximityPct,
-            avwapBounceContext.IsPullbackVolumeDryup,
-            avwapBounceContext.BounceVolumeRatio,
-            isEpisodicPivotGap,
-            gapUpPct,
-            vcpContext.IsBreakout,
-            price52WeekContext.PriceVsLowPct,
-            price52WeekContext.PriceVsHighPct,
-            vcpContext.Contractions,
-            vcpContext.IsVolatilityHalving,
-            vcpContext.IsVolumeDryUp,
-            vcpContext.BreakoutVolumeRatio,
-            isPriceAboveSma150,
-            isPriceAboveSma200,
-            isSma50AboveSma150,
-            isSma150AboveSma200,
-            isPriceAboveEma5,
-            snapshot.SlotRelativeVolume,
-            volumeSmaTrend.IsRising,
-            volumeSmaTrend.CurrentSma,
-            volumeSmaTrend.PreviousSma,
-            volumeSmaTrend.RisePct,
-            catalystContext.AgeBars,
-            snapshot.Adx,
-            adxTrend.Previous,
-            adxTrend.IsRising,
-            snapshot.Obv,
-            obvTrend.Previous,
-            obvTrend.IsRising,
-            obvTrend.Change,
-            snapshot.MacdHistogram.Value,
-            priorEntryGainPct,
-            priorDayStructure.IsInsideDay,
-            priorDayStructure.IsNr7,
-            divergenceContext.IsBullishFade,
-            divergenceContext.IsBearishFade,
-            vwapDistanceAtr,
-            reversionContext.IsReclaim,
-            reversionContext.StretchLow,
-            isCatalystDrift,
-            connorsRsi2Context?.IsSignal ?? false,
-            snapshot.Rsi2,
-            vcpContext.StructuralStopPrice);
+            Ticker: snapshot.Ticker,
+            Timestamp: snapshot.Timestamp,
+            Timeframe: snapshot.Timeframe,
+            CurrentPrice: snapshot.CurrentPrice,
+            CurrentVolume: snapshot.CurrentVolume,
+            CurrentRsi: currentRsi,
+            CurrentAtr: snapshot.Atr.Value,
+            IsAboveVwap: isAboveVwap,
+            IsVwapPullback: isVwapPullback,
+            IsVwapReclaim: isVwapReclaim,
+            IsVwapRejection: isVwapRejection,
+            IsEma20Pullback: isEma20Pullback,
+            IsRecentHighBreakout: IsRecentHighBreakout(strategy, bars, index),
+            IsRecentLowBreakdown: IsRecentLowBreakdown(strategy, bars, index),
+            IsVolatilityContraction: IsVolatilityContraction(strategy, bars, snapshots, index),
+            IsPriceAboveEma20: isPriceAboveEma20,
+            IsPriceAboveEma50: isPriceAboveEma50,
+            IsEma20AboveEma50: isEma20AboveEma50,
+            VwapExtensionAtr: vwapExtensionAtr,
+            IsAboveBollingerMiddle: snapshot.BollingerMiddle is not null && snapshot.CurrentPrice > snapshot.BollingerMiddle.Value,
+            IsMacdHistogramPositive: currentHistogram > 0,
+            IsMacdNotBearish: currentHistogram >= 0 || currentHistogram >= previousHistogram,
+            PriceLogSlope: priceLogTrend?.Slope,
+            PriceLogR2: priceLogTrend?.R2,
+            VolumeLogSlope: volumeLogTrend?.Slope,
+            VolumeLogR2: volumeLogTrend?.R2,
+            CloseLocationValue: ComputeCloseLocationValue(bar),
+            Catalyst: snapshot.Catalyst,
+            CatalystAgeHours: catalystContext.AgeHours,
+            CatalystPriceMovePct: catalystContext.PriceMovePct,
+            SignalBarMidpoint: (bar.High + bar.Low) / 2m,
+            BollingerPosition: bollingerContext.Position,
+            BollingerWidthPct: bollingerContext.WidthPct,
+            IsPriceAboveSma10: isPriceAboveSma10,
+            IsPriceAboveSma20: isPriceAboveSma20,
+            IsPriceAboveSma50: isPriceAboveSma50,
+            IsSma10AboveSma20: isSma10AboveSma20,
+            IsSma20AboveSma50: isSma20AboveSma50,
+            AnchoredVwap: anchoredVwap,
+            AnchoredVwapExtensionAtr: anchoredVwapExtensionAtr,
+            IsAboveAnchoredVwap: isAboveAnchoredVwap,
+            IsBelowAnchoredVwap: isBelowAnchoredVwap,
+            ShortAnchoredVwap: shortAnchoredVwap,
+            ShortAnchoredVwapExtensionAtr: shortAnchoredVwapExtensionAtr,
+            IsBelowShortAnchoredVwap: isBelowShortAnchoredVwap,
+            IsStepBreakout: stepContext.IsBreakout,
+            IsStepBreakdown: stepContext.IsBreakdown,
+            StepPriorMovePct: stepContext.PriorMovePct,
+            StepPriorDeclinePct: stepContext.PriorDeclinePct,
+            StepBaseDepthPct: stepContext.BaseDepthPct,
+            StepBaseVolumeRatio: stepContext.BaseVolumeRatio,
+            StepBreakoutVolumeRatio: stepContext.BreakoutVolumeRatio,
+            StepBollingerWidthRatio: stepContext.BollingerWidthRatio,
+            IsSwingReclaim: reclaimContext.IsReclaim,
+            ReclaimPullbackDepthPct: reclaimContext.PullbackDepthPct,
+            ReclaimRecentHigh: reclaimContext.RecentHigh,
+            ReclaimPullbackLow: reclaimContext.PullbackLow,
+            IsSwingRollover: rolloverContext.IsRollover,
+            RolloverAdvancePct: rolloverContext.AdvancePct,
+            RolloverDropFromHighPct: rolloverContext.DropFromHighPct,
+            RolloverRecentHigh: rolloverContext.RecentHigh,
+            IsPriceAboveEma10: isPriceAboveEma10,
+            IsEma10AboveEma20: isEma10AboveEma20,
+            IsAnchoredVwapBounce: avwapBounceContext.IsBounce,
+            AnchoredVwapProximityPct: avwapBounceContext.ProximityPct,
+            IsPullbackVolumeDryup: avwapBounceContext.IsPullbackVolumeDryup,
+            BounceVolumeRatio: avwapBounceContext.BounceVolumeRatio,
+            IsEpisodicPivotGap: isEpisodicPivotGap,
+            GapUpPct: gapUpPct,
+            IsVcpBreakout: vcpContext.IsBreakout,
+            PriceVs52WeekLowPct: price52WeekContext.PriceVsLowPct,
+            PriceVs52WeekHighPct: price52WeekContext.PriceVsHighPct,
+            VolatilityContractions: vcpContext.Contractions,
+            IsVolatilityHalving: vcpContext.IsVolatilityHalving,
+            IsVolumeDryUp: vcpContext.IsVolumeDryUp,
+            BreakoutVolumeRatio: vcpContext.BreakoutVolumeRatio,
+            IsPriceAboveSma150: isPriceAboveSma150,
+            IsPriceAboveSma200: isPriceAboveSma200,
+            IsSma50AboveSma150: isSma50AboveSma150,
+            IsSma150AboveSma200: isSma150AboveSma200,
+            IsPriceAboveEma5: isPriceAboveEma5,
+            SlotRelativeVolume: snapshot.SlotRelativeVolume,
+            IsVolumeSmaRising: volumeSmaTrend.IsRising,
+            VolumeSma: volumeSmaTrend.CurrentSma,
+            PreviousVolumeSma: volumeSmaTrend.PreviousSma,
+            VolumeSmaRisePct: volumeSmaTrend.RisePct,
+            CatalystAgeBars: catalystContext.AgeBars,
+            CurrentAdx: snapshot.Adx,
+            PreviousAdx: adxTrend.Previous,
+            IsAdxRising: adxTrend.IsRising,
+            CurrentObv: snapshot.Obv,
+            PreviousObv: obvTrend.Previous,
+            IsObvRising: obvTrend.IsRising,
+            ObvChange: obvTrend.Change,
+            MacdHistogram: snapshot.MacdHistogram,
+            PriorEntryGainPct: priorEntryGainPct,
+            IsMeanReversionReclaim: reversionContext.IsReclaim,
+            ReversionStretchLow: reversionContext.StretchLow,
+            IsCatalystDrift: isCatalystDrift,
+            IsConnorsRsi2Oversold: connorsRsi2Context?.IsSignal ?? false,
+            CurrentRsi2: snapshot.Rsi2,
+            SetupStructuralStopPrice: vcpContext.StructuralStopPrice);
+    }
+
+    private static bool HasRequiredEntryIndicators(
+        StrategyDefinition strategy,
+        IndicatorSnapshot snapshot)
+    {
+        var rules = strategy.EntryRules;
+        var usesShortEntries = rules.EnableShort &&
+            (strategy.Direction.Equals("short", StringComparison.OrdinalIgnoreCase) ||
+             strategy.Direction.Equals("long_short", StringComparison.OrdinalIgnoreCase) ||
+             strategy.Direction.Equals("both", StringComparison.OrdinalIgnoreCase));
+        var requiresRsi = rules.MinEntryRsi > 0m ||
+            rules.MaxEntryRsi < 100m ||
+            (usesShortEntries && (rules.MinShortEntryRsi is not null || rules.MaxShortEntryRsi is not null));
+        var requiresVwap = rules.RequirePriceAboveVwap ||
+            (usesShortEntries && rules.RequirePriceBelowVwapForShort) ||
+            rules.TrendFilter.Equals("vwap", StringComparison.OrdinalIgnoreCase) ||
+            strategy.ExitRules.InitialStopMode.Contains("vwap", StringComparison.OrdinalIgnoreCase);
+        var requiresBollinger = rules.RequirePriceAboveBollingerMiddle ||
+            rules.EnableLowerBollingerStretch;
+        var requiresMacd = rules.RequireMacdHistogramPositive ||
+            (usesShortEntries && rules.RequireMacdBearishForShort) ||
+            !rules.MacdFilter.Equals("none", StringComparison.OrdinalIgnoreCase);
+
+        return (!requiresRsi || snapshot.Rsi is not null) &&
+            (!requiresVwap || snapshot.Vwap is not null) &&
+            (!requiresBollinger || snapshot.BollingerMiddle is not null) &&
+            (!requiresMacd || snapshot.MacdHistogram is not null);
     }
 
     private static (bool IsRising, decimal? Previous, decimal? Change) GetNullableIndicatorTrend(
@@ -415,56 +394,6 @@ public sealed partial class SignalGenerator
             : (width / snapshot.BollingerMiddle.Value) * 100m;
 
         return (position, widthPct);
-    }
-
-    private static (
-        bool IsTrap,
-        int? PriorFlushBars,
-        int? BarsSinceFlush,
-        decimal? ReclaimVolumeRatio) GetVwapReclaimTrapContext(
-            StrategyDefinition strategy,
-            IReadOnlyList<OhlcvBar> bars,
-            IReadOnlyList<IndicatorSnapshot> snapshots,
-            int index)
-    {
-        var maxBarsSinceFlush = Math.Max(1, strategy.EntryRules.VwapReclaimMaxBarsSinceFlush ?? 12);
-        var start = Math.Max(0, index - maxBarsSinceFlush);
-        var flushIndex = -1;
-        var consecutiveBelow = 0;
-        var bestConsecutiveBelow = 0;
-        for (var i = start; i < index; i++)
-        {
-            if (snapshots[i].Vwap is not null && snapshots[i].CurrentPrice < snapshots[i].Vwap!.Value)
-            {
-                consecutiveBelow++;
-                bestConsecutiveBelow = Math.Max(bestConsecutiveBelow, consecutiveBelow);
-                flushIndex = i;
-            }
-            else
-            {
-                consecutiveBelow = 0;
-            }
-        }
-
-        if (flushIndex < 0)
-        {
-            return (false, bestConsecutiveBelow, null, null);
-        }
-
-        var barsSinceFlush = index - flushIndex;
-        var lookbackStart = Math.Max(0, index - 20);
-        var priorVolumes = bars.Skip(lookbackStart).Take(index - lookbackStart).Select(x => x.Volume).Where(x => x > 0m).ToArray();
-        var averageVolume = priorVolumes.Length == 0 ? 0m : priorVolumes.Average();
-        var reclaimVolumeRatio = averageVolume <= 0m ? (decimal?)null : bars[index].Volume / averageVolume;
-        var requiredFlushBars = strategy.EntryRules.RequirePriorFlushBelowVwapBars ?? 1;
-        var requiredVolumeRatio = strategy.EntryRules.MinReclaimVolumeRatio ?? 0m;
-        var isTrap = snapshots[index].Vwap is not null &&
-            snapshots[index].CurrentPrice > snapshots[index].Vwap!.Value &&
-            bestConsecutiveBelow >= requiredFlushBars &&
-            barsSinceFlush <= maxBarsSinceFlush &&
-            (reclaimVolumeRatio is null || reclaimVolumeRatio.Value >= requiredVolumeRatio);
-
-        return (isTrap, bestConsecutiveBelow, barsSinceFlush, reclaimVolumeRatio);
     }
 
     private static (

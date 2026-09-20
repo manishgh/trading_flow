@@ -16,4 +16,11 @@ public sealed record ActiveBrokerOrder(
     decimal FilledQuantity,
     decimal? FilledAveragePrice,
     DateTimeOffset UpdatedAt,
-    string? ParentClientOrderId = null);
+    string? ParentClientOrderId = null,
+    string? TimeInForce = null,
+    string? OrderClass = null,
+    bool? ExtendedHours = null,
+    decimal? BracketTakeProfitPrice = null,
+    decimal? BracketStopPrice = null,
+    string? ReplacesOrderId = null,
+    string? ReplacedByOrderId = null);

@@ -1,18 +1,26 @@
 namespace TradingFlow.Domain.Persistence;
 
 public sealed record PositionLedgerSnapshot(
+    string AccountId,
     string Symbol,
     decimal Quantity,
     string StrategyId,
     DateTimeOffset BrokerTimestampUtc,
     DateTimeOffset LocalTimestampUtc,
     long PositionEventId,
+    long PositionGenerationEventId,
+    string PositionGenerationClientOrderId,
     string LatestClientOrderId,
     decimal LatestFillPrice,
     string LatestFillSide);
 
+public sealed record RunOwnedPositionLedgerSnapshot(
+    PositionLedgerSnapshot Position,
+    Guid OwningRunId);
+
 public sealed record PositionFillAppendRequest(
     ProductionRun Run,
+    string AccountId,
     string Symbol,
     string ExecutionStrategyId,
     decimal QuantityAfter,
@@ -30,10 +38,12 @@ public sealed record PositionFillAppendRequest(
 public interface IPositionLedgerRepository
 {
     Task<decimal> GetAccountedFillQuantityAsync(
+        string accountId,
         string brokerOrderId,
         CancellationToken cancellationToken = default);
 
     Task<PositionLedgerSnapshot?> GetCurrentAsync(
+        string accountId,
         string symbol,
         CancellationToken cancellationToken = default);
 
@@ -42,5 +52,14 @@ public interface IPositionLedgerRepository
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<PositionLedgerSnapshot>> ListCurrentAsync(
+        string accountId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<RunOwnedPositionLedgerSnapshot>> ListCurrentForRunAsync(
+        Guid runId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<RunOwnedPositionLedgerSnapshot>> ListCurrentOwnersForSymbolAsync(
+        string symbol,
         CancellationToken cancellationToken = default);
 }

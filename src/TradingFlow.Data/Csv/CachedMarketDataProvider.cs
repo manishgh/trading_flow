@@ -61,9 +61,9 @@ public sealed class CachedMarketDataProvider :
     /// Omission semantics are authoritative only when the wrapped provider says so.
     /// An incapable provider remains fail-closed rather than inheriting Alpaca rules.
     /// </summary>
-    public bool OmittedIntradayIntervalsMeanNoQualifyingTrades =>
+    public bool OmittedSubDailyIntervalsMeanNoQualifyingTrades =>
         innerProvider is IMarketDataCompletenessProvider completenessProvider &&
-        completenessProvider.OmittedIntradayIntervalsMeanNoQualifyingTrades;
+        completenessProvider.OmittedSubDailyIntervalsMeanNoQualifyingTrades;
 
     public MarketDataProvenance MarketDataProvenance =>
         innerProvider is IMarketDataProvenanceProvider provenanceProvider

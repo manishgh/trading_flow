@@ -8,7 +8,7 @@ namespace TradingFlow.Engine.Universe;
 /// Point-in-time universe screener. Eligibility on any given day uses only daily bars dated
 /// strictly before that day, so selection can never "know" a stock ran during the window.
 /// Supports a single as-of screen (per-run) and full per-day membership. See
-/// docs/edge-recovery-master-plan.md phase 0.1.
+/// See the point-in-time universe boundary in docs/operating-boundaries.md.
 /// </summary>
 public sealed class HistoricalScreenerUniverseProvider(IMarketDataProvider provider) : IUniverseProvider
 {

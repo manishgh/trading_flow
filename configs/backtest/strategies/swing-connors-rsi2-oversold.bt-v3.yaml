@@ -22,10 +22,8 @@ entry_rules:
   max_reversion_rsi2: 5.0
   portfolio_rank_mode: rsi2_ascending
   max_vwap_extension_atr:
-  opening_range_minutes: 0
   recent_high_lookback_bars: 20
   volatility_contraction_lookback_bars: 25
-  max_entries_per_ticker_per_day: 1
   require_positive_news: false
 regime:
   benchmark: SPY

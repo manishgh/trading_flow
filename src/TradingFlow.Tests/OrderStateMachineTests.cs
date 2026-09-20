@@ -286,14 +286,14 @@ public sealed class SqliteOrderEventRepositoryTests
         await using var database = await OrderEventTestDatabase.CreateAsync();
         var intent = await database.ReserveAsync();
 
-        Assert.Empty(await database.Events.ListReconcilableAsync());
+        Assert.Empty(await database.Events.ListReconcilableAsync("paper-account"));
         await database.TransitionAsync(
             intent,
             OrderState.Intent,
             OrderState.Submitted,
             intent.CreatedAtUtc.AddSeconds(1));
 
-        var active = await database.Events.ListReconcilableAsync();
+        var active = await database.Events.ListReconcilableAsync("paper-account");
         Assert.Single(active);
         Assert.Equal(OrderState.Submitted, active[0].State);
 
@@ -303,7 +303,7 @@ public sealed class SqliteOrderEventRepositoryTests
             OrderState.Rejected,
             intent.CreatedAtUtc.AddSeconds(2));
 
-        Assert.Empty(await database.Events.ListReconcilableAsync());
+        Assert.Empty(await database.Events.ListReconcilableAsync("paper-account"));
     }
 
     [Fact]
@@ -539,6 +539,7 @@ public sealed class SqliteOrderEventRepositoryTests
                 Guid.NewGuid(),
                 Kind: OrderIntentKind.OperatorEntry,
                 CandidateId: null,
+                AccountId: "paper-account",
                 StrategyId: "SWGA",
                 Symbol: "MSFT",
                 Side: "buy",
@@ -549,7 +550,23 @@ public sealed class SqliteOrderEventRepositoryTests
                 StopPrice: 98m,
                 SessionDate: new DateOnly(2026, 7, 21),
                 CreatedAtUtc: IntentCreatedAtUtc,
-                RequestJson: "{\"symbol\":\"MSFT\",\"quantity\":10}");
+                RequestJson: "{\"symbol\":\"MSFT\",\"quantity\":10}",
+                DispatchExpiresAtUtc: IntentCreatedAtUtc.AddMinutes(5),
+                PortfolioRisk: new PortfolioRiskReservationRequest(
+                    "paper-account",
+                    "swing",
+                    100_000m,
+                    100_000m,
+                    0m,
+                    0m,
+                    new HashSet<string>(StringComparer.Ordinal),
+                    1_000m,
+                    20m,
+                    100_000m,
+                    2_000m,
+                    20,
+                    IntentCreatedAtUtc,
+                    IntentCreatedAtUtc));
             return (await Intents.ReserveAsync(run, reservation)).Intent;
         }
 

@@ -1,128 +1,228 @@
+using Microsoft.EntityFrameworkCore;
+using Moq;
+using TradingFlow.Application.Jobs;
 using TradingFlow.Backtesting;
+using TradingFlow.Data.Context;
+using TradingFlow.Data.Jobs;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Jobs;
+using TradingFlow.Engine.Configuration;
 using TradingFlow.Web.Services;
 
 namespace TradingFlow.Tests;
 
-public sealed class BacktestJobServiceTests
+public sealed class BacktestJobServiceTests : IAsyncLifetime
 {
+    private readonly string databasePath = Path.Combine(
+        Path.GetTempPath(),
+        $"trading-flow-backtest-service-{Guid.NewGuid():N}.db");
+    private readonly string testRoot = Path.Combine(
+        Path.GetTempPath(),
+        $"trading-flow-backtest-service-files-{Guid.NewGuid():N}");
+    private SqliteJobRepository repository = null!;
+    private string configPath = null!;
+
+    public async Task InitializeAsync()
+    {
+        var options = new DbContextOptionsBuilder<TradingFlowDbContext>()
+            .UseSqlite($"Data Source={databasePath}")
+            .Options;
+        var factory = new TestContextFactory(options);
+        await using var context = new TradingFlowDbContext(options);
+        await context.Database.EnsureCreatedAsync();
+        repository = new SqliteJobRepository(factory);
+        var sourceConfigsRoot = Path.Combine(TestRepository.FindRoot(), "configs");
+        var copiedConfigsRoot = Path.Combine(testRoot, "configs");
+        CopyDirectory(sourceConfigsRoot, copiedConfigsRoot);
+        configPath = Path.Combine(copiedConfigsRoot, "backtest", "swing-backtest-profile.yaml");
+        var configText = await File.ReadAllTextAsync(configPath);
+        configText = configText.Replace(
+            "results_root: data/backtest/results",
+            $"results_root: {Path.Combine(testRoot, "results").Replace('\\', '/')}",
+            StringComparison.Ordinal);
+        await File.WriteAllTextAsync(configPath, configText);
+    }
+
+    public Task DisposeAsync()
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        if (File.Exists(databasePath)) File.Delete(databasePath);
+        if (Directory.Exists(testRoot)) Directory.Delete(testRoot, recursive: true);
+        return Task.CompletedTask;
+    }
+
     [Fact]
-    public async Task CancelJob_PropagatesCancellationAndPublishesTerminalState()
+    public async Task StartAsync_PersistsQueuedJobWithoutStartingDetachedExecution()
+    {
+        var executor = new ImmediateBacktestExecutor();
+        var service = CreateService(executor);
+
+        var started = await service.StartAsync("queued-only", configPath);
+
+        Assert.Equal("queued", started.Status);
+        Assert.Equal(0, executor.ExecutionCount);
+        Assert.Equal("queued", (await repository.GetJobAsync(started.JobId, CancellationToken.None))!.Status);
+    }
+
+    [Fact]
+    public async Task StartAsync_SucceedsWhenConcurrentRefreshProjectsThePersistedJobFirst()
+    {
+        PersistedJob? persisted = null;
+        BacktestJobService? service = null;
+        var durable = new Mock<IDurableJobRepository>();
+        durable.Setup(candidate => candidate.GetJobsAsync("backtest", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => persisted is null ? [] : [persisted]);
+        durable.Setup(candidate => candidate.TryEnqueueAsync(
+                It.IsAny<PersistedJob>(),
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(async (PersistedJob job, int _, CancellationToken token) =>
+            {
+                persisted = job;
+                await service!.RefreshProjectionAsync(token);
+                return true;
+            });
+        service = CreateService(new ImmediateBacktestExecutor(), durableRepository: durable.Object);
+
+        var started = await service.StartAsync("projection-race", configPath);
+
+        Assert.Equal("queued", started.Status);
+        Assert.Equal(persisted!.Id, started.JobId);
+        Assert.Single(service.List(), job => job.JobId == persisted.Id);
+    }
+
+    [Fact]
+    public async Task Cancellation_RemainsNonTerminalUntilWorkerDrains()
     {
         var executor = new BlockingBacktestExecutor();
-        var service = new BacktestJobService(executor);
-
-        var started = service.Start("cancel-test", "cancel-test.yaml");
+        var service = CreateService(executor);
+        var started = await service.StartAsync("cancel-after-drain", configPath);
+        var processing = ProcessOneAsync(service);
         await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var running = await repository.GetJobAsync(started.JobId, CancellationToken.None);
+        Assert.Equal("running", running!.Status);
+        Assert.NotNull(running.LeaseToken);
 
-        var outcome = service.CancelJob(started.JobId);
-        var cancelled = await WaitForStatusAsync(service, started.JobId, "cancelled");
+        var outcome = await service.CancelJobAsync(started.JobId);
+        await executor.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal(BacktestCancellationOutcome.Accepted, outcome);
-        Assert.Equal("cancelled", cancelled.Status);
-        Assert.NotNull(cancelled.CancellationRequestedAt);
-        Assert.NotNull(cancelled.FinishedAt);
-        Assert.Contains(cancelled.Events, item => item.Contains("Cancellation requested", StringComparison.Ordinal));
-        Assert.Contains(cancelled.Events, item => item.Contains("Backtest cancelled by user", StringComparison.Ordinal));
+        Assert.Equal("cancelling", (await repository.GetJobAsync(started.JobId, CancellationToken.None))!.Status);
+        Assert.False(processing.IsCompleted);
+
+        executor.AllowDrain.TrySetResult();
+        await processing.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal("cancelled", service.Get(started.JobId)!.Status);
     }
 
     [Fact]
-    public async Task Progress_IsVisibleBeforeTheRunReachesItsNextAwait()
+    public async Task QueueCapacity_BoundsDurableWaitingAndRunningJobs()
     {
-        var executor = new BlockingBacktestExecutor();
-        var service = new BacktestJobService(executor);
+        var options = BacktestJobServiceOptions.Default with { MaximumPendingJobs = 1 };
+        var service = CreateService(new BlockingBacktestExecutor(), options);
+        _ = await service.StartAsync("first-capacity", configPath);
 
-        var started = service.Start("progress-test", "progress-test.yaml");
-        await executor.ProgressReported.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        var snapshot = service.Get(started.JobId);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.StartAsync("second-capacity", configPath));
 
-        Assert.NotNull(snapshot);
-        Assert.Equal("running_strategy_ticker", snapshot.CurrentStage);
-        Assert.Equal(3, snapshot.CompletedTickerCount);
-        Assert.Equal(8, snapshot.TotalTickerCount);
-        Assert.Contains(snapshot.Events, item => item.Contains("Evaluating RGTI", StringComparison.Ordinal));
-
-        service.CancelJob(started.JobId);
-        await WaitForStatusAsync(service, started.JobId, "cancelled");
+        Assert.Contains("maximum of 1", error.Message, StringComparison.Ordinal);
+        Assert.Single(await repository.GetJobsAsync("backtest", CancellationToken.None));
     }
 
     [Fact]
-    public async Task StageOnlyProgress_DoesNotEraseCompletedWorkCounts()
+    public async Task Restart_LoadsAndReplaysQueuedJobFromDurableRequest()
     {
-        var executor = new StageOnlyProgressExecutor();
-        var service = new BacktestJobService(executor);
+        var first = CreateService(new ImmediateBacktestExecutor());
+        var started = await first.StartAsync("restart-replay", configPath);
+        var resumedExecutor = new ImmediateBacktestExecutor();
+        var resumed = CreateService(resumedExecutor);
+        await resumed.InitializeAsync(CancellationToken.None);
 
-        var started = service.Start("stage-only-test", "stage-only-test.yaml");
-        await executor.ProgressReported.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        var snapshot = service.Get(started.JobId);
+        await ProcessOneAsync(resumed);
 
-        Assert.NotNull(snapshot);
-        Assert.Equal("building_results", snapshot.CurrentStage);
-        Assert.Equal(8, snapshot.CompletedTickerCount);
-        Assert.Equal(8, snapshot.TotalTickerCount);
-
-        service.CancelJob(started.JobId);
-        await WaitForStatusAsync(service, started.JobId, "cancelled");
+        Assert.Equal(1, resumedExecutor.ExecutionCount);
+        Assert.Equal("completed", resumed.Get(started.JobId)!.Status);
+        Assert.Equal("completed", (await repository.GetJobAsync(started.JobId, CancellationToken.None))!.Status);
     }
 
     [Fact]
-    public void CancelJob_ReturnsNotFoundForUnknownJob()
+    public async Task Execution_UsesFrozenCutoffAndLeaseScopedResultPath()
     {
-        var service = new BacktestJobService(new BlockingBacktestExecutor());
+        var executor = new ImmediateBacktestExecutor();
+        var service = CreateService(executor);
+        var started = await service.StartAsync("frozen-at-enqueue", configPath);
+        var persistedBeforeRun = await repository.GetJobAsync(started.JobId, CancellationToken.None);
+        var request = DurableFileJobRequest.Deserialize(persistedBeforeRun!.RequestJson);
 
-        var outcome = service.CancelJob(Guid.NewGuid());
+        await ProcessOneAsync(service);
 
-        Assert.Equal(BacktestCancellationOutcome.NotFound, outcome);
+        Assert.Equal(request.CapturedAtUtc, executor.EvaluationCutoffUtc);
+        Assert.Contains(started.JobId.ToString("N"), executor.ResultPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(".durable-attempts", executor.ResultPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(
+            executor.ResultPath,
+            (await repository.GetJobAsync(started.JobId, CancellationToken.None))!.ResultReference);
+        Assert.True(DurableJobResultPublication.IsPublished(executor.ResultPath));
     }
 
     [Fact]
-    public async Task ExecutionSlots_KeepHeavyBacktestsSequentialByDefault()
+    public async Task RefreshProjectionAsync_ObservesCompletionPublishedByAnotherProcess()
     {
-        var executor = new CountingBlockingBacktestExecutor();
-        var service = new BacktestJobService(executor);
+        var owner = CreateService(new ImmediateBacktestExecutor());
+        var observer = CreateService(new ImmediateBacktestExecutor());
+        var started = await owner.StartAsync("cross-process-projection", configPath);
+        await observer.InitializeAsync(CancellationToken.None);
+        Assert.Equal("queued", observer.Get(started.JobId)!.Status);
 
-        var first = service.Start("first", "first.yaml");
-        var second = service.Start("second", "second.yaml");
-        await executor.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await Task.Delay(100);
+        await ProcessOneAsync(owner);
+        Assert.Equal("queued", observer.Get(started.JobId)!.Status);
+        await observer.RefreshProjectionAsync(CancellationToken.None);
 
-        Assert.Equal(1, executor.StartCount);
-        var firstSnapshot = service.Get(first.JobId);
-        var secondSnapshot = service.Get(second.JobId);
-        var running = Assert.Single(
-            new[] { firstSnapshot, secondSnapshot },
-            snapshot => snapshot?.Status == "running");
-        var queued = Assert.Single(
-            new[] { firstSnapshot, secondSnapshot },
-            snapshot => snapshot?.Status == "queued");
-
-        service.CancelJob(running!.JobId);
-        await WaitForStatusAsync(service, running.JobId, "cancelled");
-        await executor.SecondStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-
-        Assert.Equal(2, executor.StartCount);
-        service.CancelJob(queued!.JobId);
-        await WaitForStatusAsync(service, queued.JobId, "cancelled");
+        Assert.Equal("completed", observer.Get(started.JobId)!.Status);
     }
 
     [Fact]
-    public async Task TerminalJobRetention_PrunesOldInMemoryResults()
+    public async Task MissingResultMarker_DoesNotHideCompletionAndIsRetriedLater()
     {
-        var options = BacktestJobServiceOptions.Default with { RetainedTerminalJobs = 2 };
-        var service = new BacktestJobService(new ImmediateBacktestExecutor(), options);
-        var first = service.Start("first", "first.yaml");
-        await WaitForStatusAsync(service, first.JobId, "completed");
-        var second = service.Start("second", "second.yaml");
-        await WaitForStatusAsync(service, second.JobId, "completed");
-        var third = service.Start("third", "third.yaml");
-        await WaitForStatusAsync(service, third.JobId, "completed");
+        var owner = CreateService(new ImmediateBacktestExecutor());
+        var started = await owner.StartAsync("marker-retry", configPath);
+        var queuedSnapshot = (await repository.GetJobAsync(started.JobId, CancellationToken.None))!.SnapshotJson;
+        var lease = await repository.TryAcquireAsync(
+            started.JobId,
+            "marker-test",
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromSeconds(30),
+            CancellationToken.None);
+        Assert.NotNull(lease);
+        var resultPath = Path.Combine(
+            testRoot,
+            "results",
+            ".durable-attempts",
+            "backtest",
+            started.JobId.ToString("N"),
+            lease!.LeaseToken.ToString("N"),
+            "result.json");
+        Assert.True(await repository.CompleteAsync(
+            started.JobId,
+            lease.LeaseToken,
+            "completed",
+            queuedSnapshot,
+            resultPath,
+            null,
+            DateTimeOffset.UtcNow,
+            CancellationToken.None));
+        var observer = CreateService(new ImmediateBacktestExecutor());
 
-        var retained = service.List();
+        await observer.InitializeAsync(CancellationToken.None);
 
-        Assert.Equal(2, retained.Count);
-        Assert.Null(service.Get(first.JobId));
-        Assert.NotNull(service.Get(second.JobId));
-        Assert.NotNull(service.Get(third.JobId));
+        Assert.Equal("completed", observer.Get(started.JobId)!.Status);
+        Assert.False(DurableJobResultPublication.IsPublished(resultPath));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
+        await File.WriteAllTextAsync(resultPath, "{}");
+        await observer.RefreshProjectionAsync(CancellationToken.None);
+
+        Assert.True(DurableJobResultPublication.IsPublished(resultPath));
     }
 
     [Fact]
@@ -133,11 +233,13 @@ public sealed class BacktestJobServiceTests
             RetainedRecentTrades = 3,
             RetainedMissedMoves = 2
         };
-        var service = new BacktestJobService(new ImmediateBacktestExecutor(5, 4), options);
+        var service = CreateService(new ImmediateBacktestExecutor(5, 4), options);
+        var started = await service.StartAsync("bounded-result", configPath);
 
-        var started = service.Start("bounded", "bounded.yaml");
-        var completed = await WaitForStatusAsync(service, started.JobId, "completed");
+        await ProcessOneAsync(service);
 
+        var completed = service.Get(started.JobId)!;
+        Assert.Equal("completed", completed.Status);
         Assert.NotNull(completed.Result);
         Assert.Equal(3, completed.Result.CompletedTrades.Count);
         Assert.Equal(2, completed.Result.MissedMoves.Count);
@@ -145,159 +247,141 @@ public sealed class BacktestJobServiceTests
         Assert.Empty(completed.Result.AcceptedOrders);
     }
 
-    private static async Task<TradingFlow.Web.Models.BacktestJobSnapshot> WaitForStatusAsync(
-        BacktestJobService service,
-        Guid jobId,
-        string expectedStatus)
+    [Fact]
+    public async Task ModifiedInput_AfterEnqueueFailsBeforeExecutorRuns()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-        while (!timeout.IsCancellationRequested)
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"trading-flow-durable-config-{Guid.NewGuid():N}");
+        var sourceConfigsRoot = Directory.GetParent(Path.GetDirectoryName(configPath)!)!.FullName;
+        CopyDirectory(sourceConfigsRoot, tempRoot);
+        var copiedConfig = Path.Combine(tempRoot, "backtest", Path.GetFileName(configPath));
+        try
         {
-            var snapshot = service.Get(jobId);
-            if (snapshot?.Status == expectedStatus)
-            {
-                return snapshot;
-            }
+            var executor = new ImmediateBacktestExecutor();
+            var service = CreateService(executor);
+            var started = await service.StartAsync("immutable-input", copiedConfig);
+            await File.AppendAllTextAsync(copiedConfig, Environment.NewLine + "# changed after enqueue");
 
-            await Task.Delay(20, timeout.Token);
+            await ProcessOneAsync(service);
+
+            Assert.Equal(0, executor.ExecutionCount);
+            Assert.Equal("failed", service.Get(started.JobId)!.Status);
+            Assert.Contains("changed after enqueue", service.Get(started.JobId)!.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
         }
 
-        throw new TimeoutException($"Backtest job {jobId} did not reach {expectedStatus}.");
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
     }
+
+    private BacktestJobService CreateService(
+        IBacktestRunExecutor executor,
+        BacktestJobServiceOptions? options = null,
+        IDurableJobRepository? durableRepository = null) =>
+        new(executor, durableRepository ?? repository, new SimpleYamlReader(), options ?? BacktestJobServiceOptions.Default);
+
+    private Task<bool> ProcessOneAsync(BacktestJobService service) =>
+        new DurableJobProcessor(repository).ProcessNextAsync(
+            "test-worker",
+            service,
+            DurableJobWorkerOptions.Default with
+            {
+                LeaseDuration = TimeSpan.FromSeconds(10),
+                HeartbeatInterval = TimeSpan.FromMilliseconds(50),
+                IdlePollInterval = TimeSpan.FromMilliseconds(10)
+            },
+            CancellationToken.None);
 
     private sealed class BlockingBacktestExecutor : IBacktestRunExecutor
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource ProgressReported { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource AllowDrain { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<BacktestResult> RunAsync(
             string configPath,
+            string resultPath,
+            DateTimeOffset evaluationCutoffUtc,
             CancellationToken cancellationToken,
             IProgress<BacktestProgress>? progress = null)
         {
             Started.TrySetResult();
-            progress?.Report(new BacktestProgress(
-                "running_strategy_ticker",
-                "Evaluating RGTI.",
-                "RGTI",
-                3,
-                8,
-                "Test Strategy"));
-            ProgressReported.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            throw new InvalidOperationException("The blocking executor should only finish through cancellation.");
-        }
-    }
-
-    private sealed class StageOnlyProgressExecutor : IBacktestRunExecutor
-    {
-        public TaskCompletionSource ProgressReported { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public async Task<BacktestResult> RunAsync(
-            string configPath,
-            CancellationToken cancellationToken,
-            IProgress<BacktestProgress>? progress = null)
-        {
-            progress?.Report(new BacktestProgress("finished_strategy_ticker", "Finished final work item.", "RGTI", 8, 8, "Test Strategy"));
-            progress?.Report(BacktestProgress.StageOnly("building_results", "Building results."));
-            ProgressReported.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            throw new InvalidOperationException("The stage-only executor should only finish through cancellation.");
-        }
-    }
-
-    private sealed class CountingBlockingBacktestExecutor : IBacktestRunExecutor
-    {
-        private int startCount;
-
-        public int StartCount => Volatile.Read(ref startCount);
-        public TaskCompletionSource FirstStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource SecondStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public async Task<BacktestResult> RunAsync(
-            string configPath,
-            CancellationToken cancellationToken,
-            IProgress<BacktestProgress>? progress = null)
-        {
-            var current = Interlocked.Increment(ref startCount);
-            if (current == 1)
+            progress?.Report(new BacktestProgress("running_strategy_ticker", "Evaluating RGTI.", "RGTI", 3, 8, "Test Strategy"));
+            try
             {
-                FirstStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             }
-            else if (current == 2)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                SecondStarted.TrySetResult();
+                CancellationObserved.TrySetResult();
+                await AllowDrain.Task;
+                throw;
             }
 
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            throw new InvalidOperationException("The counting executor should only finish through cancellation.");
+            throw new InvalidOperationException("The blocking executor should finish only through cancellation.");
         }
     }
 
     private sealed class ImmediateBacktestExecutor(int completedTradeCount = 0, int missedMoveCount = 0) : IBacktestRunExecutor
     {
+        private int executions;
+        public int ExecutionCount => Volatile.Read(ref executions);
+        public string ResultPath { get; private set; } = String.Empty;
+        public DateTimeOffset? EvaluationCutoffUtc { get; private set; }
+
         public Task<BacktestResult> RunAsync(
             string configPath,
+            string resultPath,
+            DateTimeOffset evaluationCutoffUtc,
             CancellationToken cancellationToken,
             IProgress<BacktestProgress>? progress = null)
         {
+            Interlocked.Increment(ref executions);
+            ResultPath = resultPath;
+            EvaluationCutoffUtc = evaluationCutoffUtc;
+            Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
+            File.WriteAllText(resultPath, "{}");
             var now = DateTimeOffset.UtcNow;
             var trades = Enumerable.Repeat<BacktestTrade>(null!, completedTradeCount).ToArray();
             var missedMoves = Enumerable.Repeat<MissedMoveAudit>(null!, missedMoveCount).ToArray();
             var strategy = new StrategyBacktestResult(
-                "test",
-                "Test",
-                "test",
-                100_000m,
-                100_000m,
-                0m,
-                0m,
-                0m,
-                1,
-                0m,
-                0,
-                0,
-                0,
-                0,
-                0,
-                trades);
+                "test", "Test", "test", 100_000m, 100_000m, 0m, 0m, 0m, 1,
+                0m, 0, 0, 0, 0, 0, trades);
             var result = new BacktestResult(
                 Path.GetFileNameWithoutExtension(configPath),
-                $"{configPath}.result.json",
-                now,
-                now,
-                100_000m,
-                100_000m,
-                0m,
-                0m,
-                0m,
-                1,
-                0m,
-                null,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                [strategy],
-                [],
-                CreateValidation(),
-                trades,
-                [],
-                missedMoves,
-                []);
+                resultPath,
+                now, now, 100_000m, 100_000m, 0m, 0m, 0m, 1, 0m, null,
+                0, 0, 0, 0, 0, 0, [strategy], [], CreateValidation(), trades, [], missedMoves, []);
             return Task.FromResult(result);
         }
 
-        private static BacktestValidationReport CreateValidation()
-        {
-            return new BacktestValidationReport(
-                new OutOfSampleValidation(false, 0m, null, []),
-                [],
-                new BenchmarkValidation(false, "", null, []),
-                new DataQualityValidation(0, 0, 0, 0, 0, []),
-                new BiasRiskValidation("test", null, "none", false, false, []));
-        }
+        private static BacktestValidationReport CreateValidation() => new(
+            new OutOfSampleValidation(false, 0m, null, []),
+            [],
+            new BenchmarkValidation(false, "", null, []),
+            new DataQualityValidation(0, 0, 0, 0, 0, []),
+            new BiasRiskValidation("test", null, "none", false, false, []));
+    }
+
+    private sealed class TestContextFactory(DbContextOptions<TradingFlowDbContext> options)
+        : IDbContextFactory<TradingFlowDbContext>
+    {
+        public TradingFlowDbContext CreateDbContext() => new(options);
+        public Task<TradingFlowDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDbContext());
     }
 }

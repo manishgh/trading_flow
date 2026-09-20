@@ -112,7 +112,6 @@ public sealed record UniverseRankingRun(
     DateTimeOffset RankedAtUtc,
     string UniverseSource,
     string Horizon,
-    string Mode,
     string WeightsVersion,
     IReadOnlyList<RankedDeskRow> Rows);
 
@@ -133,12 +132,8 @@ public sealed class UniverseRankService
         // final_signal
         "high_conviction_watch",
         "watch_for_entry",
-        "intraday_watch",
-        // swing.signal
         "strong_bullish_watch",
         "bullish_watch",
-        // intraday.signal
-        "entry_candidate",
         "watch_for_confirmation"
     };
 
@@ -171,8 +166,7 @@ public sealed class UniverseRankService
     /// </summary>
     /// <param name="rows">The resolved universe - wishlist, screener, or both.</param>
     /// <param name="config">Weights from the active profile.</param>
-    /// <param name="horizon">intraday or swing; selects the weight set.</param>
-    /// <param name="mode">Prediction mode passed to the predictor.</param>
+    /// <param name="horizon">Must be swing.</param>
     /// <param name="predictionHorizon">Requested predictor horizon, or auto.</param>
     /// <param name="screenerSymbols">Symbols that came from the active screener result.</param>
     /// <param name="earningsSymbols">Symbols with an earnings print in the monitored window.</param>
@@ -181,7 +175,6 @@ public sealed class UniverseRankService
         IReadOnlyList<WishlistDeskRow> rows,
         UniverseRankConfig config,
         string horizon,
-        string mode,
         string predictionHorizon,
         IReadOnlySet<string> screenerSymbols,
         IReadOnlySet<string> earningsSymbols,
@@ -193,7 +186,6 @@ public sealed class UniverseRankService
             ? new Dictionary<string, MarketPredictorResult>(StringComparer.OrdinalIgnoreCase)
             : await predictor.GetBatchAsync(
                 rows.Select(row => row.Ticker).ToArray(),
-                mode,
                 predictionHorizon,
                 cancellationToken);
 
@@ -203,7 +195,7 @@ public sealed class UniverseRankService
             if (!evidence.TryGetValue(row.Ticker, out var result))
             {
                 result = MarketPredictorResult.Unavailable(
-                    row.Ticker, mode, predictionHorizon, "unavailable", "No prediction was returned for this symbol.");
+                    row.Ticker, "swing", predictionHorizon, "unavailable", "No prediction was returned for this symbol.");
             }
 
             var fromScreener = screenerSymbols.Contains(row.Ticker);
@@ -214,8 +206,8 @@ public sealed class UniverseRankService
 
             var factors = new List<RankFactor>(5)
             {
-                BuildModelEdge(result, horizon),
-                BuildMarketStructure(result, horizon),
+                BuildModelEdge(result),
+                BuildMarketStructure(result),
                 BuildCatalyst(catalystKind, config, weights.Catalyst),
                 BuildTechnicalState(row, weights.TechnicalState),
                 BuildLiquidity(row, config, weights.Liquidity)
@@ -250,7 +242,6 @@ public sealed class UniverseRankService
             timeProvider.GetUtcNow(),
             universeSource,
             horizon,
-            mode,
             config.WeightsVersion,
             ordered);
         await PersistAsync(run, cancellationToken);
@@ -265,12 +256,9 @@ public sealed class UniverseRankService
     /// Direction-adjusted model probability shown for operator context. Weight and
     /// contribution are deliberately zero: the predictor is advisory only.
     /// </summary>
-    private static RankFactor BuildModelEdge(MarketPredictorResult result, string horizon)
+    private static RankFactor BuildModelEdge(MarketPredictorResult result)
     {
-        var intraday = horizon.Equals("intraday", StringComparison.OrdinalIgnoreCase);
-        var probability = intraday
-            ? result.Intraday?.OpportunityProbability
-            : result.Swing?.Probability;
+        var probability = result.Swing?.Probability;
         if (result.AvailabilityStatus != "available" || probability is null)
         {
             return new RankFactor(
@@ -286,44 +274,21 @@ public sealed class UniverseRankService
         var adjusted = direction == ModelDirection.Opposed
             ? 1m - Clamp(probability.Value)
             : Clamp(probability.Value);
-        // A downside probability is only meaningful intraday, where the model
-        // scores both sides; subtracting it keeps a high-opportunity, high-risk
-        // symbol from outranking a clean one.
-        if (intraday && result.Intraday?.DownsideProbability is { } downside)
-        {
-            adjusted = Clamp(adjusted - Clamp(downside) * 0.5m);
-        }
-
         return new RankFactor(
             "model_edge",
             "Model edge",
             adjusted,
             0m,
             0m,
-            $"{result.FinalSignal} · p={probability.Value:0.000}{(intraday && result.Intraday?.DownsideProbability is { } d ? $" · downside {d:0.000}" : String.Empty)}");
+            $"{result.FinalSignal} · p={probability.Value:0.000}");
     }
 
     /// <summary>
     /// Predictor-provided market context shown for operator reference. It is not
     /// authoritative market evidence and contributes zero to operational rank.
     /// </summary>
-    private static RankFactor BuildMarketStructure(
-        MarketPredictorResult result,
-        string horizon)
+    private static RankFactor BuildMarketStructure(MarketPredictorResult result)
     {
-        if (horizon.Equals("intraday", StringComparison.OrdinalIgnoreCase))
-        {
-            var rvol = result.Intraday?.RelativeVolume;
-            if (rvol is null)
-            {
-                return new RankFactor("market_structure", "Advisory market context", null, 0m, 0m, "No advisory relative volume available.");
-            }
-
-            // 1.0x is ordinary and scores 0.5; 3.0x and above saturates at 1.0.
-            var value = Clamp(rvol.Value / 3m + 0.166m);
-            return new RankFactor("market_structure", "Advisory market context", value, 0m, 0m, $"Predictor RVOL {rvol.Value:0.00}x (advisory)");
-        }
-
         var volumeZ = result.Swing?.VolumeZ20;
         var return1D = result.Swing?.Return1D;
         if (volumeZ is null && return1D is null)
@@ -405,7 +370,7 @@ public sealed class UniverseRankService
             return ModelDirection.Opposed;
         }
 
-        foreach (var signal in new[] { result.Intraday?.Signal, result.Swing?.Signal })
+        foreach (var signal in new[] { result.Swing?.Signal })
         {
             if (signal is null)
             {
@@ -484,7 +449,6 @@ public sealed class UniverseRankService
                 rankedAtUtc = run.RankedAtUtc,
                 universeSource = run.UniverseSource,
                 horizon = run.Horizon,
-                mode = run.Mode,
                 weightsVersion = run.WeightsVersion,
                 rows = run.Rows.Select(row => new
                 {

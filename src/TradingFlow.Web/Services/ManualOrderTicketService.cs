@@ -304,9 +304,9 @@ public sealed class ManualOrderTicketService
         {
             throw new InvalidOperationException("Reviewed manual tickets support a protected buy entry or a sell exit.");
         }
-        if (horizon is not ("intraday" or "swing"))
+        if (horizon != "swing")
         {
-            throw new InvalidOperationException("Horizon must be intraday or swing.");
+            throw new InvalidOperationException("Horizon must be swing.");
         }
         var orderType = (draft.OrderType ?? "limit").Trim().ToLowerInvariant();
         var timeInForce = (draft.TimeInForce ?? "day").Trim().ToLowerInvariant();

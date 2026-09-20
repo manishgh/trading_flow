@@ -153,31 +153,6 @@ public sealed record CatalogProviderUpdatedDailyNewsDiagnosticResult(
     EvidenceResearchRunManifest Manifest,
     bool AlreadyRegistered);
 
-public sealed record CatalogCatalystWorkflowRequest(
-    string ResearchRunId,
-    DateTimeOffset CreatedAtUtc,
-    string CodeVersion,
-    CatalogCatalystStudyRequest Study,
-    string ClassifierGroundTruthDatasetId,
-    string ExchangeSessionsDatasetId,
-    EvidenceStudyPartitions StudyPartitions,
-    CatalogResearchAssumptionSet Assumptions)
-{
-    public CatalogResearchPhase Phase { get; init; } =
-        CatalogResearchPhase.DevelopmentValidation;
-
-    public CatalogFrozenTrialIdentity? FrozenTrial { get; init; }
-}
-
-public sealed record CatalogCatalystWorkflowResult(
-    CatalogCatalystStudyResult Study,
-    EvidenceResearchRunManifest Manifest,
-    bool ClassifierGroundTruthReady,
-    bool AlreadyRegistered)
-{
-    public required CatalogResearchPhaseState PhaseState { get; init; }
-}
-
 public static class CatalogResearchTrialBinding
 {
     public const string RequestBindingFormulaKey = "catalog_request_sha256";
@@ -196,19 +171,4 @@ public static class CatalogResearchTrialBinding
         });
     }
 
-    public static string ComputeCatalystRequestSha256(
-        CatalogCatalystWorkflowRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return EvidenceCanonicalJson.ComputeSha256(new
-        {
-            Kind = "catalyst",
-            request.CodeVersion,
-            request.Study,
-            request.ClassifierGroundTruthDatasetId,
-            request.ExchangeSessionsDatasetId,
-            request.StudyPartitions,
-            request.Assumptions
-        });
-    }
 }

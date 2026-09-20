@@ -6,7 +6,7 @@ using TradingFlow.Engine.Market;
 namespace TradingFlow.Engine.Regime;
 
 /// <summary>
-/// Shared Layer-2 regime gate (docs/strategy-design-doctrine.md §2) used by BOTH the backtest and the
+/// Shared market-regime gate used by both the backtest and the
 /// live/paper paths, so a strategy's regime rule (e.g. SPY above its 50-day SMA) is enforced identically
 /// everywhere instead of silently applying only in backtests. Loads benchmark daily bars — resampling a
 /// finer timeframe up to daily when a cache holds no native daily bars — and answers no-lookahead
@@ -21,7 +21,7 @@ public sealed class RegimeGateService
 
     /// <summary>
     /// Loads daily benchmark bars, preferring native daily and otherwise resampling the finest available
-    /// intraday timeframe to daily. Returns an empty list when the benchmark has no data at all.
+    /// sub-daily timeframe to daily. Returns an empty list when the benchmark has no data at all.
     /// </summary>
     public async Task<IReadOnlyList<OhlcvBar>> LoadBenchmarkDailyBarsAsync(
         IMarketDataProvider provider,
@@ -37,17 +37,17 @@ public sealed class RegimeGateService
             return daily;
         }
 
-        // Coarsest intraday first (fewer bars to resample, same daily closes).
-        var intradayTimeframes = availableIntervals
+        // Coarsest sub-daily interval first (fewer bars to resample, same daily closes).
+        var subDailyTimeframes = availableIntervals
             .Where(interval => !TimeframeParser.IsDailyOrHigher(interval))
             .OrderByDescending(interval => TimeframeParser.Parse(interval))
             .ToArray();
-        foreach (var interval in intradayTimeframes)
+        foreach (var interval in subDailyTimeframes)
         {
-            var intraday = await LoadIntervalAsync(provider, benchmarkSymbol, interval, start, end, cancellationToken);
-            if (intraday.Count > 0)
+            var subDaily = await LoadIntervalAsync(provider, benchmarkSymbol, interval, start, end, cancellationToken);
+            if (subDaily.Count > 0)
             {
-                return resampler.Resample(intraday, "1d");
+                return resampler.Resample(subDaily, "1d");
             }
         }
 

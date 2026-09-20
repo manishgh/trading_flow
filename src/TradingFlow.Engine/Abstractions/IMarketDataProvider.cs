@@ -19,5 +19,5 @@ public interface IMarketDataProvider
 /// </summary>
 public interface IMarketDataCompletenessProvider
 {
-    bool OmittedIntradayIntervalsMeanNoQualifyingTrades { get; }
+    bool OmittedSubDailyIntervalsMeanNoQualifyingTrades { get; }
 }

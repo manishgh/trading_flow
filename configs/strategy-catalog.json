@@ -15,36 +15,12 @@
   ],
   "strategies": [
     {
-      "sourcePath": "configs/strategies/brian_shannon_mta_avwap_strategies.yaml",
-      "strategyId": "swing.avwap-bounce",
-      "semanticVersion": "1.0.0",
-      "lifecycle": "archived",
-      "admissionProfileId": "default-deterministic-v1",
-      "reason": "Archived research note; the configured AVWAP stop rule has no faithful engine implementation."
-    },
-    {
-      "sourcePath": "configs/strategies/intraday-ema10-ema20-macd-volume.v1.yaml",
-      "strategyId": "intraday.ema-macd-volume",
-      "semanticVersion": "1.0.0",
-      "lifecycle": "research",
-      "admissionProfileId": "default-deterministic-v1",
-      "reason": "Canonical intraday technical baseline."
-    },
-    {
       "sourcePath": "configs/strategies/kristjan_qullamaggie_stream_methodology.yaml",
-      "strategyId": "intraday.episodic-pivot-gap",
+      "strategyId": "swing.qullamaggie-episodic-pivot",
       "semanticVersion": "1.0.0",
       "lifecycle": "archived",
       "admissionProfileId": "default-deterministic-v1",
-      "reason": "Archived until the event, opening-range trigger, and low-of-day risk are modeled faithfully."
-    },
-    {
-      "sourcePath": "configs/strategies/lance_breitstein_intraday_tactics.yaml",
-      "strategyId": "intraday.vwap-trap-reclaim",
-      "semanticVersion": "1.0.0",
-      "lifecycle": "research",
-      "admissionProfileId": "default-deterministic-v1",
-      "reason": "Retained research hypothesis; not represented as a verified named-trader implementation."
+      "reason": "Daily episodic-pivot swing setup with completed 5-minute entry confirmation."
     },
     {
       "sourcePath": "configs/strategies/minervini-trend-template-vcp.v2.yaml",
@@ -93,30 +69,6 @@
       "lifecycle": "archived",
       "admissionProfileId": "default-deterministic-v1",
       "reason": "Archived mean-reversion family."
-    },
-    {
-      "sourcePath": "configs/backtest/strategies/intraday-atr-compression-breakout.bt-v1.yaml",
-      "strategyId": "intraday.atr-compression-or-breakout",
-      "semanticVersion": "1.0.0",
-      "lifecycle": "research",
-      "admissionProfileId": "default-deterministic-v1",
-      "reason": "Retained structural intraday research hypothesis."
-    },
-    {
-      "sourcePath": "configs/backtest/strategies/intraday-macd-divergence-fade.bt-v1.yaml",
-      "strategyId": "intraday.macd-divergence-fade",
-      "semanticVersion": "1.0.0",
-      "lifecycle": "archived",
-      "admissionProfileId": "default-deterministic-v1",
-      "reason": "Generic divergence fade is excluded by the retained research program."
-    },
-    {
-      "sourcePath": "configs/backtest/strategies/intraday-vwap-momentum-pullback.bt-v1.yaml",
-      "strategyId": "intraday.vwap-momentum-pullback",
-      "semanticVersion": "1.0.0",
-      "lifecycle": "research",
-      "admissionProfileId": "default-deterministic-v1",
-      "reason": "Retained catalyst-context intraday research hypothesis."
     },
     {
       "sourcePath": "configs/backtest/strategies/minervini-trend-template-breakout-proxy.bt-v5.yaml",

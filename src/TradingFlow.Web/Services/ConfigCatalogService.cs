@@ -92,6 +92,7 @@ public sealed class ConfigCatalogService
                     StrategySelectionMode.RunLive => StrategyLifecycleState.Validated,
                     _ => artifact.EffectiveLifecycle
                 }))
+            .Where(option => option.Definition.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
             .ToArray();
     }
 

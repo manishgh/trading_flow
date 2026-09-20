@@ -42,6 +42,7 @@ public sealed class CandidateRecord : OperationalRecord
     public decimal? MarketConfirmationScore { get; set; }
     public string SetupScoresJson { get; set; } = "{}";
     public string? SelectedStrategy { get; set; }
+    public string StrategySemanticVersion { get; set; } = string.Empty;
     public string StrategyContentSha256 { get; set; } = string.Empty;
     public string AdmissionProfileId { get; set; } = string.Empty;
     public string AdmissionProfileVersion { get; set; } = string.Empty;

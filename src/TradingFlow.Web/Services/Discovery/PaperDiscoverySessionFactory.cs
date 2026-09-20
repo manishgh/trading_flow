@@ -323,10 +323,17 @@ internal sealed class FinvizDiscoverySource(
                 SourceKey,
                 cancellationToken) == 0;
 
-        var scope = Horizon.Equals("swing", StringComparison.OrdinalIgnoreCase)
-            ? ScreenerScope.Swing
-            : ScreenerScope.Intraday;
-        var result = await screener.PreviewAsync(SourceKey, scope, wishlistId, cancellationToken);
+        if (!Horizon.Equals("swing", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Unsupported discovery horizon '{Horizon}'. TradingFlow supports swing discovery only.");
+        }
+
+        var result = await screener.PreviewAsync(
+            SourceKey,
+            ScreenerScope.Swing,
+            wishlistId,
+            cancellationToken);
         if (!result.Succeeded)
         {
             if (mayUseRunStartFallback)

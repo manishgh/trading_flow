@@ -2,6 +2,7 @@ using System.Text.Json;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
@@ -22,7 +23,9 @@ public sealed partial class LiveRunner(
     ICatalystProvider? catalystProvider,
     IBrokerClient? brokerClient,
     TradingFlow.Domain.Locking.ITickerLockService? lockService,
-    TradingFlow.Domain.Orders.IOrderStateRepository? orderRepo,
+    IOrderIntentRepository? orderIntents,
+    IOrderEventRepository? orderEvents,
+    IPositionLedgerRepository? positionLedger,
     TradingFlow.Domain.Audit.IDecisionAuditRepository? auditRepo,
     ILogger<LiveRunner> logger,
     IArtifactWriter? artifactWriter = null,
@@ -41,7 +44,9 @@ public sealed partial class LiveRunner(
     private readonly ExecutionAuditor _auditor = new();
     private readonly IBrokerClient? _brokerClient = brokerClient;
     private readonly TradingFlow.Domain.Locking.ITickerLockService? _lockService = lockService;
-    private readonly TradingFlow.Domain.Orders.IOrderStateRepository? _orderRepo = orderRepo;
+    private readonly IOrderIntentRepository? _orderIntents = orderIntents;
+    private readonly IOrderEventRepository? _orderEvents = orderEvents;
+    private readonly IPositionLedgerRepository? _positionLedger = positionLedger;
     private readonly TradingFlow.Domain.Audit.IDecisionAuditRepository? _auditRepo = auditRepo;
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
     private readonly IOrderSubmissionService? _orderSubmissionService = orderSubmissionService;
@@ -102,6 +107,7 @@ public sealed partial class LiveRunner(
         IProgress<string>? progress)
     {
         RunUniverseValidator.RequireResolved(run);
+        RequireSwingStrategies(strategies);
         runtimeStrategies = authorizations;
         logger.LogInformation("Starting LiveRunner for run: {RunName}", run.RunName);
         progress?.Report($"Starting LiveRunner for run: {run.RunName}");
@@ -253,47 +259,6 @@ public sealed partial class LiveRunner(
                         }
                     }
 
-                    // State Reconciliation: Adopt any open orders from the broker that are not in our database
-                    if (_orderRepo != null)
-                    {
-                        foreach (var order in openOrders)
-                        {
-                            var existing = await _orderRepo.GetOrderAsync(order.OrderId, cancellationToken);
-                            if (existing == null)
-                            {
-                                if (!order.Side.Equals("buy", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    logger.LogDebug(
-                                        "Skipping adoption of broker-side exit/order leg {OrderId} for {Ticker}. Side={Side} Type={OrderType}",
-                                        order.OrderId,
-                                        order.Ticker,
-                                        order.Side,
-                                        order.OrderType);
-                                    continue;
-                                }
-
-                                logger.LogInformation("State reconciliation: Adopting orphan broker order {OrderId} for {Ticker}.", order.OrderId, order.Ticker);
-                                progress?.Report($"State reconciliation: Adopting orphan broker order {order.OrderId} for {order.Ticker}.");
-
-                                var newOrder = new TradingFlow.Domain.Orders.PersistedOrder
-                                {
-                                    OrderId = order.OrderId,
-                                    Ticker = order.Ticker,
-                                    RunName = run.RunName,
-                                    ClientOrderId = order.ClientOrderId,
-                                    StrategyName = "AdoptedFromBroker",
-                                    Broker = run.Execution?.Broker ?? "unknown",
-                                    Status = order.Status,
-                                    EntryPrice = order.LimitPrice ?? 0m,
-                                    ShareQuantity = (int)(order.Qty ?? 0m),
-                                    CreatedAt = order.CreatedAt,
-                                    UpdatedAt = DateTimeOffset.UtcNow
-                                };
-                                await _orderRepo.SaveOrderAsync(newOrder, cancellationToken);
-                            }
-                        }
-                    }
-
                     // Active Cancellation logic for unfilled entry orders if configured
                     if (run.Execution != null && "active_cancel".Equals(run.Execution.OrderExpiration, StringComparison.OrdinalIgnoreCase))
                     {
@@ -305,16 +270,24 @@ public sealed partial class LiveRunner(
                             {
                                 logger.LogInformation("Active cancellation: Entry order {OrderId} for {Ticker} is unfilled after 30 minutes. Cancelling...", order.OrderId, order.Ticker);
                                 progress?.Report($"Active cancellation: Entry order {order.OrderId} for {order.Ticker} is unfilled after 30 minutes. Cancelling...");
-                                if (_orderLifecycleService is not null &&
-                                    ClientOrderIdFactory.IsBindingFormat(order.ClientOrderId))
+                                if (_orderSubmissionService is null)
                                 {
-                                    await _orderLifecycleService.RequestCancelAsync(
-                                        order.ClientOrderId,
-                                        order.OrderId,
-                                        cancellationToken);
+                                    throw new InvalidOperationException(
+                                        "Active order expiry requires the common order command service.");
                                 }
 
-                                await _brokerClient.CancelOrderAsync(order.OrderId, cancellationToken);
+                                var cancellation = await _orderSubmissionService.RequestCancelAsync(
+                                    new OrderCancellationSubmission(
+                                        order.ParentClientOrderId ?? order.ClientOrderId,
+                                        order.OrderId,
+                                        "entry_unfilled_after_active_cancel_window",
+                                        _timeProvider.GetUtcNow().ToUniversalTime()),
+                                    _brokerClient,
+                                    cancellationToken);
+                                if (!OrderStateMachine.IsTerminal(cancellation.State))
+                                {
+                                    throw new OrderCancellationPendingException(order.ClientOrderId, order.OrderId);
+                                }
                             }
                         }
                         // Fetch the updated open orders list after cancellations
@@ -342,64 +315,6 @@ public sealed partial class LiveRunner(
                     brokerStateRefreshed = true;
                     brokerStateConfirmedForOrderDecisions = true;
 
-                    // Downward Reconciliation & Extended Hours exit handling
-                    if (_orderRepo != null)
-                    {
-                        var allDbOrders = new List<TradingFlow.Domain.Orders.PersistedOrder>();
-                        foreach (var t in discoveryTickers.Concat(activeExposureTickers).Distinct(StringComparer.OrdinalIgnoreCase))
-                        {
-                            var orders = await _orderRepo.GetActiveOrdersByTickerAsync(t, cancellationToken);
-                            allDbOrders.AddRange(orders);
-                        }
-
-                        foreach (var dbOrder in allDbOrders)
-                        {
-                            var stillOpen = openOrders.Any(o => o.OrderId == dbOrder.OrderId);
-                            var pos = openPositions.FirstOrDefault(p => p.Ticker.Equals(dbOrder.Ticker, StringComparison.OrdinalIgnoreCase));
-
-                            if (!stillOpen)
-                            {
-                                if (dbOrder.Status == "pending_exit_setup" && pos != null)
-                                {
-                                    if (run.Execution != null && run.Execution.AllowExtendedHoursTrading)
-                                    {
-                                        logger.LogInformation("Entry order {OrderId} filled for {Ticker}. Submitting exit OCO order...", dbOrder.OrderId, dbOrder.Ticker);
-                                        progress?.Report($"Entry filled for {dbOrder.Ticker}. Submitting OCO exit bracket...");
-
-                                        try
-                                        {
-                                            var exitIds = await _brokerClient.SubmitExitOrdersAsync(dbOrder.Ticker, dbOrder.ShareQuantity, dbOrder.StopLossPrice, dbOrder.TakeProfitPrice, cancellationToken);
-                                            dbOrder.Status = "exit_submitted";
-                                            dbOrder.UpdatedAt = DateTimeOffset.UtcNow;
-                                            await _orderRepo.SaveOrderAsync(dbOrder, cancellationToken);
-                                            progress?.Report($"Successfully submitted exit orders for {dbOrder.Ticker}.");
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            logger.LogError(ex, "Failed to submit exit orders for {Ticker}", dbOrder.Ticker);
-                                            progress?.Report($"Error submitting exit orders for {dbOrder.Ticker}: {ex.Message}");
-                                        }
-                                    }
-                                }
-                                else if (pos != null)
-                                {
-                                    if (dbOrder.Status != "filled" && dbOrder.Status != "exit_submitted")
-                                    {
-                                        dbOrder.Status = "filled";
-                                        dbOrder.UpdatedAt = DateTimeOffset.UtcNow;
-                                        await _orderRepo.SaveOrderAsync(dbOrder, cancellationToken);
-                                    }
-                                }
-                                else
-                                {
-                                    logger.LogDebug(
-                                        "Order {OrderId} for {Ticker} is absent from the open-order snapshot; terminal state requires an authoritative broker update.",
-                                        dbOrder.OrderId,
-                                        dbOrder.Ticker);
-                                }
-                            }
-                        }
-                    }
                 }
                 catch (Exception ex)
                 {
@@ -579,6 +494,19 @@ public sealed partial class LiveRunner(
             logger.LogInformation("LiveRunner iteration finished. Waiting {PollingInterval}...", pollingInterval);
             progress?.Report($"Iteration finished. Waiting {pollingInterval}...");
             await Task.Delay(pollingInterval, cancellationToken);
+        }
+    }
+
+    private static void RequireSwingStrategies(IEnumerable<StrategyDefinition> strategies)
+    {
+        var unsupported = strategies
+            .Where(strategy => !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
+            .Select(strategy => $"{strategy.StrategyId} ({strategy.Timeframe})")
+            .ToArray();
+        if (unsupported.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Live execution supports daily-primary swing strategies only. Unsupported: {String.Join(", ", unsupported)}.");
         }
     }
 

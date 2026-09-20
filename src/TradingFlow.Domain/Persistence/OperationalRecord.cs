@@ -13,6 +13,8 @@ public abstract class OperationalRecord
 
 public sealed class ProductionRun : OperationalRecord
 {
+    public Guid UniverseSnapshotId { get; set; }
+    public Guid? DecisionRunId { get; set; }
     public string Profile { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public DateTimeOffset StartedAtUtc { get; set; }

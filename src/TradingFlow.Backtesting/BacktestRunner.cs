@@ -40,16 +40,35 @@ public sealed partial class BacktestRunner(
     private readonly StrategySessionClock _sessionClock = new();
     private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
     private readonly BacktestValidator _validator = new();
-    private readonly TradingFlow.Engine.Execution.ExecutionAuditor _auditor = new();
 
     public async Task<BacktestResult> RunAsync(
         string configPath,
         CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress = null)
     {
+        var run = yamlReader.ReadBacktestRun(configPath);
+        return await RunAsync(
+            configPath,
+            GetResultPath(run),
+            DateTimeOffset.UtcNow,
+            cancellationToken,
+            progress);
+    }
+
+    public async Task<BacktestResult> RunAsync(
+        string configPath,
+        string resultPath,
+        DateTimeOffset evaluationCutoffUtc,
+        CancellationToken cancellationToken,
+        IProgress<BacktestProgress>? progress = null)
+    {
         var startedAt = DateTimeOffset.UtcNow;
         progress?.Report(BacktestProgress.StageOnly("loading_config", $"Loading run config {Path.GetFileName(configPath)}."));
         var run = yamlReader.ReadBacktestRun(configPath);
+        if (run.TimeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase))
+        {
+            run = run with { TimeWindow = run.TimeWindow with { End = evaluationCutoffUtc } };
+        }
         progress?.Report(BacktestProgress.StageOnly("loading_strategies", $"Loading {run.Strategies.Count} strategy config(s)."));
         var artifactValidator = new StrategyRunArtifactValidator(yamlReader, strategyArtifacts);
         var strategies = ApplyRunSessionPolicy(
@@ -58,7 +77,7 @@ public sealed partial class BacktestRunner(
                 .Select(path => artifactValidator.ReadAndValidate(path, StrategySelectionMode.Backtest))
                 .ToArray());
 
-        return await RunAsync(run, strategies, startedAt, GetResultPath(run), cancellationToken, progress);
+        return await RunAsync(run, strategies, startedAt, resultPath, cancellationToken, progress);
     }
 
     public async Task<BacktestResult> RunAsync(
@@ -224,7 +243,8 @@ public sealed partial class BacktestRunner(
                 run.Engine.WorkerCount,
                 IncludeExtendedHours: true,
                 ResolveExchangeTimezone(strategies),
-                CreateCandleStoreContext(run)),
+                CreateCandleStoreContext(run),
+                run.Engine.MaxRetainedReplayBars),
             provider,
             cancellationToken,
             new Progress<string>(message => progress?.Report(new BacktestProgress(
@@ -234,7 +254,22 @@ public sealed partial class BacktestRunner(
                 Volatile.Read(ref completedTickerCount),
                 totalTickerCount))));
 
-        var benchmarkBars = await LoadBenchmarkBarsAsync(run, provider, dataStart, windowEnd, cancellationToken);
+        var retainedMarketBarCount = marketState.TickerStates.Values.Sum(state =>
+            state.BarsByTimeframe.Values.Sum(bars => bars.Count));
+        EnsureReplayRetentionLimit(
+            retainedBars: 0,
+            additionalBars: retainedMarketBarCount,
+            run.Engine.MaxRetainedReplayBars);
+
+        var benchmarkBars = ResolvePreparedBenchmarkBars(run, marketState) ??
+            await LoadBenchmarkBarsAsync(
+                run,
+                provider,
+                dataStart,
+                windowEnd,
+                retainedMarketBarCount,
+                run.Engine.MaxRetainedReplayBars,
+                cancellationToken);
         progress?.Report(new BacktestProgress(
             "market_pipeline",
             $"Prepared reusable market state for {marketState.TickerStates.Count}/{totalTickerCount} ticker(s).",
@@ -264,6 +299,23 @@ public sealed partial class BacktestRunner(
     {
         strategies = ApplyRunSessionPolicy(run, strategies);
         ValidateRun(run, strategies);
+        var preparedMarketBarCount = preparedMarket.MarketState.TickerStates.Values.Sum(state =>
+            state.BarsByTimeframe.Values.Sum(bars => bars.Count));
+        var benchmarkAliasesPreparedMarket = preparedMarket.MarketState.TickerStates.Values
+            .SelectMany(state => state.BarsByTimeframe.Values)
+            .Any(bars => ReferenceEquals(bars, preparedMarket.BenchmarkBars));
+        EnsureReplayRetentionLimit(
+            preparedMarketBarCount,
+            benchmarkAliasesPreparedMarket ? 0 : preparedMarket.BenchmarkBars.Count,
+            run.Engine.MaxRetainedReplayBars);
+        using var candidateHypothesisJournal = new ExecutionEventJournal(Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(resultPath))!, ".execution-journal", $"candidate-{Guid.NewGuid():N}.ndjson"));
+        using var portfolioExecutionJournal = new ExecutionEventJournal(Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(resultPath))!, ".execution-journal", $"portfolio-{Guid.NewGuid():N}.ndjson"));
+        var executionAuditor = new ExecutionAuditor(
+            capacity: 1,
+            sink: candidateHypothesisJournal,
+            evidenceScope: "candidate_hypothesis");
         var catalystStreamer = new CatalystStreamer(CreateNewsProvider(run));
 
         var completedTickerCount = 0;
@@ -296,6 +348,11 @@ public sealed partial class BacktestRunner(
             progress?.Report(BacktestProgress.StrategyGroup(strategy.StrategyName, totalTickerCount));
         }
 
+        EnsureStrategyWorkItemLimit(
+            run.Tickers.Count,
+            strategies.Length,
+            run.Engine.MaxStrategyWorkItems);
+        var retainedCandidateBudget = new RetainedCandidateBudget(run.Engine.MaxRetainedCandidates);
         var workItems = run.Tickers
             .SelectMany(ticker => strategies.Select(strategy => new StrategyTickerWorkItem(ticker, strategy)))
             .ToArray();
@@ -329,6 +386,7 @@ public sealed partial class BacktestRunner(
 
                 using var workItemCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
                 workItemCancellation.CancelAfter(strategyWorkItemTimeout);
+                var candidateJournalPath = CreateCandidateAuditJournalPath(run, workItem.Strategy, workItem.Ticker);
                 try
                 {
                     strategyTickerBatches.Add(await ProcessPreparedStrategyTickerAsync(
@@ -342,6 +400,9 @@ public sealed partial class BacktestRunner(
                         regimeCalendars.TryGetValue(workItem.Strategy.StrategyId, out var regimeCalendar)
                             ? regimeCalendar
                             : null,
+                        executionAuditor,
+                        candidateJournalPath,
+                        retainedCandidateBudget,
                         workItemCancellation.Token));
                 }
                 catch (OperationCanceledException) when (!token.IsCancellationRequested)
@@ -349,7 +410,8 @@ public sealed partial class BacktestRunner(
                     strategyTickerBatches.Add(StrategyTickerBacktestBatch.Failed(
                         workItem.Ticker,
                         workItem.Strategy,
-                        $"strategy_ticker_timeout_after_{(int)strategyWorkItemTimeout.TotalSeconds}s"));
+                        $"strategy_ticker_timeout_after_{(int)strategyWorkItemTimeout.TotalSeconds}s",
+                        candidateAuditJournalPath: File.Exists(candidateJournalPath) ? candidateJournalPath : null));
                 }
 
                 var completed = Interlocked.Increment(ref completedWorkItemCount);
@@ -391,12 +453,6 @@ public sealed partial class BacktestRunner(
             .OrderBy(x => x.EntryTimestamp)
             .ThenBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var candidateDecisionAudit = batches
-            .SelectMany(batch => batch.CandidateDecisionAudit)
-            .OrderBy(item => item.Candidate.DiscoveredAtUtc)
-            .ThenBy(item => item.Candidate.Symbol, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(item => item.Candidate.CandidateId)
-            .ToArray();
         var candidateAuditJournals = batches
             .Select(batch => batch.CandidateAuditJournalPath)
             .Where(path => !String.IsNullOrWhiteSpace(path))
@@ -404,6 +460,21 @@ public sealed partial class BacktestRunner(
             .Cast<string>()
             .ToArray();
         var candidateDiagnostics = batches.Select(batch => batch.Diagnostics).ToArray();
+        var unifiedPortfolio = BuildUnifiedPortfolioResult(
+            run.Portfolio,
+            strategies,
+            candidates,
+            allBars,
+            universeMembership,
+            regimeCalendars,
+            portfolioExecutionJournal);
+        var unifiedCompletedTradesForAudit = unifiedPortfolio.CompletedTrades;
+        var economicResultsComplete = unifiedPortfolio.EconomicResultsComplete &&
+            batches.All(batch => batch.Succeeded);
+        if (!economicResultsComplete)
+        {
+            unifiedPortfolio = SuppressUnifiedPortfolioEconomicClaims(unifiedPortfolio);
+        }
         var strategyResults = BuildStrategyResults(
             run.Portfolio,
             strategies,
@@ -412,12 +483,17 @@ public sealed partial class BacktestRunner(
             candidateDiagnostics,
             universeMembership,
             regimeCalendars);
+        if (!economicResultsComplete)
+        {
+            strategyResults = strategyResults
+                .Select(SuppressStrategyEconomicClaims)
+                .ToArray();
+        }
         var diagnostics = BuildDiagnostics(
             strategies,
             strategyResults,
             candidateDiagnostics);
         var bestStrategy = SelectBestActiveStrategy(strategyResults);
-        var completedTrades = bestStrategy?.CompletedTrades ?? Array.Empty<BacktestTrade>();
         var winner = bestStrategy is null
             ? null
             : new WinnerStrategySummary(
@@ -432,12 +508,11 @@ public sealed partial class BacktestRunner(
                 bestStrategy.RejectedTradeCount);
         var validation = _validator.Validate(run, allBars, preparedMarket.BenchmarkBars, strategyResults);
         var missedMoves = BuildMissedMoveAudits(strategies, candidates, allBars);
-        var unifiedPortfolio = BuildUnifiedPortfolioResult(
-            run.Portfolio,
-            strategies,
-            candidates,
-            universeMembership,
-            regimeCalendars);
+        var publishedEconomics = BuildPublishedEconomicSummary(
+            run.Portfolio.StartingCapital,
+            bestStrategy,
+            winner,
+            economicResultsComplete);
         var universePromotion = new UniversePromotionEligibilityValidator()
             .Validate(universePromotionEvidence);
 
@@ -448,35 +523,61 @@ public sealed partial class BacktestRunner(
             startedAt,
             DateTimeOffset.UtcNow,
             run.Portfolio.StartingCapital,
-            bestStrategy?.EndingCapital ?? run.Portfolio.StartingCapital,
-            bestStrategy?.NetProfit ?? 0,
-            bestStrategy?.TotalReturnPct ?? 0,
-            bestStrategy?.AverageDailyReturnPct ?? 0,
+            publishedEconomics.EndingCapital,
+            publishedEconomics.NetProfit,
+            publishedEconomics.TotalReturnPct,
+            publishedEconomics.AverageDailyReturnPct,
             bestStrategy?.TradingDayCount ?? 0,
-            bestStrategy?.MaxDrawdownPct ?? 0,
-            winner,
+            publishedEconomics.MaxDrawdownPct,
+            publishedEconomics.Winner,
             tickerResults.Sum(x => x.ProcessedBarCount),
             bestStrategy?.CandidateTradeCount ?? 0,
             bestStrategy?.AcceptedTradeCount ?? 0,
             bestStrategy?.RejectedTradeCount ?? 0,
-            bestStrategy?.WinningTradeCount ?? 0,
-            bestStrategy?.LosingTradeCount ?? 0,
+            publishedEconomics.WinningTradeCount,
+            publishedEconomics.LosingTradeCount,
             strategyResults,
             tickerResults,
             validation,
-            completedTrades,
+            publishedEconomics.CompletedTrades,
             diagnostics,
             missedMoves,
             Array.Empty<FinalizedOrder>(),
             unifiedPortfolio,
             universePromotion,
-            CandidateDecisionAudit: candidateDecisionAudit);
+            CandidateDecisionAudit: Array.Empty<BacktestCandidateDecisionAudit>(),
+            ExecutionAudit: Array.Empty<BacktestExecutionAuditEvent>(),
+            EconomicResultsComplete: economicResultsComplete);
 
+        var artifacts = await WriteResultAsync(
+            resultPath,
+            result,
+            run.Artifacts,
+            candidateHypothesisJournal,
+            portfolioExecutionJournal,
+            unifiedCompletedTradesForAudit,
+            candidateAuditJournals,
+            totalWorkItemCount,
+            batches,
+            cancellationToken);
         result = result with
         {
-            ResultPath = await WriteResultAsync(resultPath, result, run.Artifacts, cancellationToken)
+            ResultPath = artifacts.ResultPath,
+            CandidateDecisionAuditPath = artifacts.CandidateDecisionAuditPath,
+            CandidateDecisionAudit = Array.Empty<BacktestCandidateDecisionAudit>(),
+            ExecutionAuditPath = artifacts.PortfolioExecutionAuditPath,
+            ExecutionAudit = Array.Empty<BacktestExecutionAuditEvent>(),
+            CandidateHypothesisAuditPath = artifacts.CandidateHypothesisAuditPath,
+            PortfolioExecutionAuditPath = artifacts.PortfolioExecutionAuditPath,
+            ArtifactManifestPath = artifacts.ArtifactManifestPath,
+            ArtifactReferences = artifacts.ArtifactReferences
         };
-        foreach (var journalPath in candidateAuditJournals)
+        candidateHypothesisJournal.Dispose();
+        portfolioExecutionJournal.Dispose();
+        foreach (var journalPath in candidateAuditJournals
+                     .SelectMany(path => new[] { path, BacktestCandidateJournal.StatePath(path) })
+                     .Append(candidateHypothesisJournal.Path)
+                     .Append(portfolioExecutionJournal.Path))
         {
             try
             {
@@ -491,6 +592,67 @@ public sealed partial class BacktestRunner(
         }
         progress?.Report(BacktestProgress.StageOnly("completed", "Backtest completed."));
         return result;
+    }
+
+    internal static StrategyBacktestResult SuppressStrategyEconomicClaims(
+        StrategyBacktestResult result) =>
+        result with
+        {
+            EndingCapital = result.StartingCapital,
+            NetProfit = 0m,
+            TotalReturnPct = 0m,
+            AverageDailyReturnPct = 0m,
+            MaxDrawdownPct = 0m,
+            WinningTradeCount = 0,
+            LosingTradeCount = 0,
+            CompletedTrades = Array.Empty<BacktestTrade>(),
+            EconomicResultsComplete = false
+        };
+
+    internal static UnifiedPortfolioBacktestResult SuppressUnifiedPortfolioEconomicClaims(
+        UnifiedPortfolioBacktestResult result) =>
+        result with
+        {
+            EndingCapital = result.StartingCapital,
+            NetProfit = 0m,
+            TotalReturnPct = 0m,
+            MaxDrawdownPct = 0m,
+            WinningTradeCount = 0,
+            LosingTradeCount = 0,
+            CompletedTrades = Array.Empty<BacktestTrade>(),
+            EconomicResultsComplete = false
+        };
+
+    internal static PublishedBacktestEconomicSummary BuildPublishedEconomicSummary(
+        decimal startingCapital,
+        StrategyBacktestResult? bestStrategy,
+        WinnerStrategySummary? winner,
+        bool economicResultsComplete)
+    {
+        if (!economicResultsComplete)
+        {
+            return new PublishedBacktestEconomicSummary(
+                startingCapital,
+                0m,
+                0m,
+                0m,
+                0m,
+                null,
+                0,
+                0,
+                Array.Empty<BacktestTrade>());
+        }
+
+        return new PublishedBacktestEconomicSummary(
+            bestStrategy?.EndingCapital ?? startingCapital,
+            bestStrategy?.NetProfit ?? 0m,
+            bestStrategy?.TotalReturnPct ?? 0m,
+            bestStrategy?.AverageDailyReturnPct ?? 0m,
+            bestStrategy?.MaxDrawdownPct ?? 0m,
+            winner,
+            bestStrategy?.WinningTradeCount ?? 0,
+            bestStrategy?.LosingTradeCount ?? 0,
+            bestStrategy?.CompletedTrades ?? Array.Empty<BacktestTrade>());
     }
 
     private static StrategyDefinition[] ApplyRunSessionPolicy(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
@@ -516,9 +678,33 @@ public sealed partial class BacktestRunner(
             throw new InvalidOperationException($"Unsupported pipeline: {run.Engine.Pipeline}.");
         }
 
+        if (run.Engine.MaxRetainedReplayBars <= 0)
+        {
+            throw new InvalidOperationException(
+                "engine.max_retained_replay_bars must be greater than zero for a backtest.");
+        }
+
+        if (run.Engine.MaxStrategyWorkItems <= 0)
+        {
+            throw new InvalidOperationException(
+                "engine.max_strategy_work_items must be greater than zero for a backtest.");
+        }
+
+        if (run.Engine.MaxRetainedCandidates <= 0)
+        {
+            throw new InvalidOperationException(
+                "engine.max_retained_candidates must be greater than zero for a backtest.");
+        }
+
         if (run.Portfolio.MaxConcurrentPositions <= 0)
         {
             throw new InvalidOperationException("portfolio.max_concurrent_positions must be greater than zero.");
+        }
+
+        if (run.Portfolio.MaxExecutionOrderHistory <= 0)
+        {
+            throw new InvalidOperationException(
+                "portfolio.max_execution_order_history must be greater than zero.");
         }
 
         if (run.Mode.Equals("live", StringComparison.OrdinalIgnoreCase) &&
@@ -690,7 +876,7 @@ public sealed partial class BacktestRunner(
         {
             throw;
         }
-        catch (Exception exception) when (!run.Engine.FailFast)
+        catch (Exception exception) when (!run.Engine.FailFast && exception is not AuditPersistenceException)
         {
             return PreparedTickerEvaluationContext.Failed(ticker, exception.Message);
         }
@@ -705,6 +891,9 @@ public sealed partial class BacktestRunner(
         DateTimeOffset windowEnd,
         UniverseMembership? universeMembership,
         RegimeCalendar? regimeCalendar,
+        ExecutionAuditor executionAuditor,
+        string candidateJournalPath,
+        RetainedCandidateBudget retainedCandidateBudget,
         CancellationToken cancellationToken)
     {
         BacktestCandidateJournal? candidateJournal = null;
@@ -760,8 +949,7 @@ public sealed partial class BacktestRunner(
                     $"{run.Engine.IndicatorWarmupBars} required. Increase time_window.warmup_lookback_days.");
             }
 
-            candidateJournal = new BacktestCandidateJournal(
-                CreateCandidateAuditJournalPath(run, strategy, ticker));
+            candidateJournal = new BacktestCandidateJournal(candidateJournalPath);
 
             var evaluation = await CreateStrategyCandidatesAsync(
                 run,
@@ -778,6 +966,8 @@ public sealed partial class BacktestRunner(
                 universeMembership,
                 regimeCalendar,
                 candidateJournal,
+                executionAuditor,
+                retainedCandidateBudget,
                 cancellationToken);
 
             return new StrategyTickerBacktestBatch(
@@ -795,115 +985,20 @@ public sealed partial class BacktestRunner(
         {
             throw;
         }
-        catch (Exception exception) when (!run.Engine.FailFast)
+        catch (Exception exception) when (
+            !run.Engine.FailFast &&
+            exception is not (AuditPersistenceException or BacktestCandidateRetentionLimitExceededException))
         {
             return StrategyTickerBacktestBatch.Failed(
                 ticker,
                 strategy,
                 exception.Message,
-                candidateJournal?.Snapshot() ?? [],
+                candidateJournal?.DurableJournalPath is null ? candidateJournal?.Snapshot() ?? [] : [],
                 candidateJournal?.DurableJournalPath);
         }
         finally
         {
             candidateJournal?.Dispose();
-        }
-    }
-
-    private async Task<TickerBacktestBatch> ProcessPreparedTickerAsync(
-        BacktestRunConfig run,
-        CandlePipelineResult marketState,
-        CatalystStreamer catalystStreamer,
-        IReadOnlyCollection<StrategyDefinition> strategies,
-        string ticker,
-        DateTimeOffset dataStart,
-        DateTimeOffset windowStart,
-        DateTimeOffset windowEnd,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            if (!marketState.TickerStates.TryGetValue(ticker, out var tickerState))
-            {
-                var failure = marketState.Failures.TryGetValue(ticker, out var reason)
-                    ? reason
-                    : $"No prepared market state was produced for ticker {ticker}.";
-                throw new InvalidOperationException(failure);
-            }
-
-            var barsByTimeframe = tickerState.BarsByTimeframe;
-            var snapshotsByTimeframe = tickerState.SnapshotsByTimeframe
-                .ToDictionary(x => x.Key, x => x.Value.ToList(), StringComparer.OrdinalIgnoreCase);
-            var processedBars = tickerState.AllBars
-                .Where(bar => bar.Timestamp >= windowStart && bar.Timestamp <= windowEnd)
-                .ToArray();
-
-            var catalysts = (await catalystStreamer.LoadTickerCatalystsAsync(ticker, dataStart, windowEnd, cancellationToken))
-                .OrderBy(catalyst => catalyst.Timestamp)
-                .ToArray();
-            foreach (var timeframe in snapshotsByTimeframe.Keys)
-            {
-                CatalystSnapshotAttacher.AttachToSnapshots(snapshotsByTimeframe[timeframe], catalysts, cancellationToken);
-            }
-
-            // convert back to IReadOnlyList
-            var readonlySnapshots = snapshotsByTimeframe.ToDictionary(
-                x => x.Key,
-                x => (IReadOnlyList<IndicatorSnapshot>)x.Value,
-                StringComparer.OrdinalIgnoreCase);
-
-            var candidates = new List<BacktestCandidateTrade>();
-            var diagnostics = new List<StrategyCandidateDiagnostics>();
-            foreach (var strategy in strategies)
-            {
-                if (!barsByTimeframe.TryGetValue(strategy.Timeframe, out var strategyBars) ||
-                    !readonlySnapshots.TryGetValue(strategy.Timeframe, out var strategySnapshots))
-                {
-                    diagnostics.Add(StrategyCandidateDiagnostics.MissingTimeframe(strategy, "missing_signal_timeframe"));
-                    continue;
-                }
-
-                if (!barsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionBars) ||
-                    !readonlySnapshots.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots))
-                {
-                    diagnostics.Add(StrategyCandidateDiagnostics.MissingTimeframe(strategy, "missing_execution_timeframe"));
-                    continue;
-                }
-
-                using var candidateJournal = new BacktestCandidateJournal();
-                var strategyEvaluation = await CreateStrategyCandidatesAsync(
-                    run,
-                    strategy,
-                    strategyBars,
-                    strategySnapshots,
-                    executionBars,
-                    executionSnapshots,
-                    barsByTimeframe,
-                    readonlySnapshots,
-                    catalysts,
-                    windowStart,
-                    windowEnd,
-                    null,
-                    null,
-                    candidateJournal,
-                    cancellationToken);
-                candidates.AddRange(strategyEvaluation.Candidates);
-                diagnostics.Add(strategyEvaluation.Diagnostics);
-            }
-
-            return new TickerBacktestBatch(
-                TickerBacktestResult.Completed(ticker, barsByTimeframe.Values.Sum(x => x.Count), candidates.Count),
-                candidates,
-                diagnostics,
-                processedBars);
-        }
-        catch (Exception exception) when (!run.Engine.FailFast)
-        {
-            return new TickerBacktestBatch(
-                TickerBacktestResult.Failed(ticker, exception),
-                Array.Empty<BacktestCandidateTrade>(),
-                Array.Empty<StrategyCandidateDiagnostics>(),
-                Array.Empty<OhlcvBar>());
         }
     }
 
@@ -984,6 +1079,8 @@ public sealed partial class BacktestRunner(
         UniverseMembership? universeMembership,
         RegimeCalendar? regimeCalendar,
         BacktestCandidateJournal candidateJournal,
+        ExecutionAuditor executionAuditor,
+        RetainedCandidateBudget retainedCandidateBudget,
         CancellationToken cancellationToken)
     {
         var candidates = new List<BacktestCandidateTrade>();
@@ -1127,13 +1224,14 @@ public sealed partial class BacktestRunner(
                 }
 
                 var candidate = CreateCandidate(
+                    persistedDecision.Candidate.CandidateId.ToString("D"),
                     run,
                     strategy,
                     signal,
                     canonicalOrderPlan,
                     executionBars,
                     executionSnapshots,
-                    _auditor,
+                    executionAuditor,
                     cancellationToken,
                     plannedEntryIndex);
                 if (candidate is null)
@@ -1142,6 +1240,7 @@ public sealed partial class BacktestRunner(
                     break;
                 }
 
+                retainedCandidateBudget.Reserve();
                 candidates.Add(candidate.Value.Candidate);
                 candidateCreated = true;
                 break;
@@ -1156,7 +1255,7 @@ public sealed partial class BacktestRunner(
         diagnostics.CandidateTradeCount = candidates.Count;
         return new StrategyCandidateEvaluation(
             candidates,
-            candidateJournal.Snapshot(),
+            candidateJournal.DurableJournalPath is null ? candidateJournal.Snapshot() : [],
             diagnostics);
     }
 
@@ -1184,34 +1283,165 @@ public sealed partial class BacktestRunner(
             $"{SanitizePathSegment(strategy.StrategyId)}-{SanitizePathSegment(ticker)}-{Guid.NewGuid():N}.ndjson");
     }
 
-    private async Task<string> WriteResultAsync(
+    private async Task<BacktestArtifactWriteResult> WriteResultAsync(
         string resultPath,
         BacktestResult result,
         ArtifactRetentionConfig artifacts,
+        ExecutionEventJournal candidateHypothesisJournal,
+        ExecutionEventJournal portfolioExecutionJournal,
+        IReadOnlyList<BacktestTrade> unifiedCompletedTrades,
+        IReadOnlyList<string> candidateAuditJournals,
+        int expectedWorkItemCount,
+        IReadOnlyList<StrategyTickerBacktestBatch> batches,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
         var exclusivePath = ReserveResultPath(resultPath);
+        var artifactRoot = Path.GetDirectoryName(exclusivePath)!;
+        var artifactSetId = Guid.NewGuid().ToString("D");
         var persistedResult = BacktestArtifactProjector.Project(
             result with { ResultPath = exclusivePath },
             artifacts);
         var candidateAuditPath = Path.ChangeExtension(exclusivePath, ".candidate-decisions.json");
-        await _artifactWriter.WriteTextExclusiveAsync(
+        long candidateAuditCount = 0;
+        await _artifactWriter.WriteStreamExclusiveAsync(
             candidateAuditPath,
-            JsonSerializer.Serialize(
-                result.CandidateDecisionAudit ?? Array.Empty<BacktestCandidateDecisionAudit>(),
-                new JsonSerializerOptions { WriteIndented = true }),
+            async (stream, token) =>
+            {
+                candidateAuditCount = await CandidateAuditExporter.WriteAsync(
+                    stream, candidateAuditJournals, token);
+            },
             cancellationToken);
+        var candidateHypothesisAuditPath = Path.ChangeExtension(exclusivePath, ".candidate-hypotheses.json");
+        await _artifactWriter.WriteStreamExclusiveAsync(
+            candidateHypothesisAuditPath,
+            (stream, token) => JsonSerializer.SerializeAsync(stream,
+                candidateHypothesisJournal.ReadAsync(token),
+                cancellationToken: token),
+            cancellationToken);
+        var portfolioExecutionAuditPath = Path.ChangeExtension(exclusivePath, ".portfolio-execution.json");
+        await _artifactWriter.WriteStreamExclusiveAsync(
+            portfolioExecutionAuditPath,
+            (stream, token) => JsonSerializer.SerializeAsync(stream,
+                portfolioExecutionJournal.ReadAsync(token),
+                cancellationToken: token),
+            cancellationToken);
+        var unifiedCompletedTradesPath = Path.ChangeExtension(exclusivePath, ".unified-completed-trades.json");
+        await _artifactWriter.WriteStreamExclusiveAsync(
+            unifiedCompletedTradesPath,
+            (stream, token) => JsonSerializer.SerializeAsync(
+                stream,
+                unifiedCompletedTrades,
+                cancellationToken: token),
+            cancellationToken);
+        var manifestPath = Path.ChangeExtension(exclusivePath, ".manifest.json");
+        var evidenceReferences = new List<BacktestArtifactReference>
+        {
+            await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "candidate_decisions", candidateAuditPath, candidateAuditCount, cancellationToken),
+            await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "candidate_hypotheses", candidateHypothesisAuditPath, candidateHypothesisJournal.Count, cancellationToken),
+            await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "unified_portfolio_execution", portfolioExecutionAuditPath, portfolioExecutionJournal.Count, cancellationToken),
+            await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "unified_completed_trades", unifiedCompletedTradesPath, unifiedCompletedTrades.Count, cancellationToken)
+        };
+        var rawJournalDirectory = Path.Combine(
+            artifactRoot,
+            $"{Path.GetFileNameWithoutExtension(exclusivePath)}.artifacts",
+            "candidate-raw");
+        Directory.CreateDirectory(rawJournalDirectory);
+        for (var index = 0; index < candidateAuditJournals.Count; index++)
+        {
+            var journalPath = candidateAuditJournals[index];
+            var archivedJournalPath = Path.Combine(
+                rawJournalDirectory,
+                $"{index:0000}-{Path.GetFileName(journalPath)}");
+            await _artifactWriter.WriteStreamExclusiveAsync(
+                archivedJournalPath,
+                async (stream, token) =>
+                {
+                    await using var input = new FileStream(
+                        journalPath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read,
+                        64 * 1024,
+                        FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    await input.CopyToAsync(stream, token);
+                },
+                cancellationToken);
+            evidenceReferences.Add(await BacktestArtifactIntegrity.CreateReferenceAsync(
+                artifactRoot,
+                "candidate_raw_journal",
+                archivedJournalPath,
+                await CountLinesAsync(archivedJournalPath, cancellationToken),
+                cancellationToken));
+        }
         persistedResult = persistedResult with
         {
             CandidateDecisionAuditPath = candidateAuditPath,
-            CandidateDecisionAudit = Array.Empty<BacktestCandidateDecisionAudit>()
+            CandidateDecisionAudit = Array.Empty<BacktestCandidateDecisionAudit>(),
+            ExecutionAuditPath = portfolioExecutionAuditPath,
+            ExecutionAudit = Array.Empty<BacktestExecutionAuditEvent>(),
+            CandidateHypothesisAuditPath = candidateHypothesisAuditPath,
+            PortfolioExecutionAuditPath = portfolioExecutionAuditPath,
+            ArtifactManifestPath = manifestPath,
+            ArtifactReferences = evidenceReferences
         };
-        await _artifactWriter.WriteTextExclusiveAsync(
+        await _artifactWriter.WriteStreamExclusiveAsync(
             exclusivePath,
-            JsonSerializer.Serialize(persistedResult, new JsonSerializerOptions { WriteIndented = true }),
+            (stream, token) => JsonSerializer.SerializeAsync(stream, persistedResult,
+                cancellationToken: token),
             cancellationToken);
-        return exclusivePath;
+        var manifestArtifacts = evidenceReferences.Append(
+            await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "backtest_result", exclusivePath, 1, cancellationToken)).ToArray();
+        var failedWorkItems = batches
+            .Where(batch => !batch.Succeeded)
+            .Select(batch => $"{batch.StrategyId}:{batch.Ticker}:{batch.ErrorMessage}")
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+        var coverage = new BacktestArtifactCoverage(
+            expectedWorkItemCount,
+            batches.Count(batch => batch.Succeeded),
+            failedWorkItems.Length,
+            failedWorkItems,
+            result.UnifiedPortfolio?.ExecutionFailures?.Count ?? 0,
+            result.UnifiedPortfolio?.ExecutionFailures?
+                .OrderBy(failure => failure.CandidateId, StringComparer.Ordinal)
+                .ToArray());
+        await _artifactWriter.WriteStreamExclusiveAsync(
+            manifestPath,
+            (stream, token) => JsonSerializer.SerializeAsync(stream,
+                new BacktestArtifactManifest(
+                    1,
+                    artifactSetId,
+                    result.RunName,
+                    DateTimeOffset.UtcNow,
+                    true,
+                    coverage,
+                    manifestArtifacts),
+                cancellationToken: token),
+            cancellationToken);
+        return new BacktestArtifactWriteResult(
+            exclusivePath,
+            candidateAuditPath,
+            candidateHypothesisAuditPath,
+            portfolioExecutionAuditPath,
+            manifestPath,
+            evidenceReferences);
+    }
+
+    private sealed record BacktestArtifactWriteResult(
+        string ResultPath,
+        string CandidateDecisionAuditPath,
+        string CandidateHypothesisAuditPath,
+        string PortfolioExecutionAuditPath,
+        string ArtifactManifestPath,
+        IReadOnlyList<BacktestArtifactReference> ArtifactReferences);
+
+    private static async Task<long> CountLinesAsync(string path, CancellationToken cancellationToken)
+    {
+        long count = 0;
+        using var reader = new StreamReader(path);
+        while (await reader.ReadLineAsync(cancellationToken) is not null) count++;
+        return count;
     }
 
     private static string ReserveResultPath(string resultPath)
@@ -1238,7 +1468,11 @@ public sealed partial class BacktestRunner(
 
     private static bool IsResultPathAvailable(string path) =>
         !File.Exists(path) &&
-        !File.Exists(Path.ChangeExtension(path, ".candidate-decisions.json"));
+        !File.Exists(Path.ChangeExtension(path, ".candidate-decisions.json")) &&
+        !File.Exists(Path.ChangeExtension(path, ".candidate-hypotheses.json")) &&
+        !File.Exists(Path.ChangeExtension(path, ".portfolio-execution.json")) &&
+        !File.Exists(Path.ChangeExtension(path, ".unified-completed-trades.json")) &&
+        !File.Exists(Path.ChangeExtension(path, ".manifest.json"));
 
     private static string SanitizePathSegment(string value)
     {
@@ -1255,6 +1489,8 @@ public sealed partial class BacktestRunner(
         IReadOnlyCollection<string> intervals,
         DateTimeOffset start,
         DateTimeOffset end,
+        int retainedBars,
+        int configuredReplayBarLimit,
         CancellationToken cancellationToken)
     {
         var bars = new List<OhlcvBar>();
@@ -1262,8 +1498,16 @@ public sealed partial class BacktestRunner(
         {
             await foreach (var bar in provider.GetBarsAsync([ticker], intervals, start, end, cancellationToken))
             {
+                EnsureReplayRetentionLimit(
+                    retainedBars,
+                    bars.Count + 1,
+                    configuredReplayBarLimit);
                 bars.Add(bar);
             }
+        }
+        catch (BacktestReplayRetentionLimitExceededException)
+        {
+            throw;
         }
         catch (Exception exception)
         {
@@ -1289,6 +1533,8 @@ public sealed partial class BacktestRunner(
         IMarketDataProvider provider,
         DateTimeOffset start,
         DateTimeOffset end,
+        int retainedBars,
+        int configuredReplayBarLimit,
         CancellationToken cancellationToken)
     {
         if (!run.Validation.Benchmark.Enabled || String.IsNullOrWhiteSpace(run.Validation.Benchmark.Ticker))
@@ -1313,13 +1559,16 @@ public sealed partial class BacktestRunner(
                     [interval],
                     start,
                     end,
+                    retainedBars,
+                    configuredReplayBarLimit,
                     cancellationToken);
                 if (bars.Count > 0)
                 {
                     return bars;
                 }
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException exception)
+                when (exception is not BacktestReplayRetentionLimitExceededException)
             {
                 // This timeframe has no data for the benchmark; try the next.
             }
@@ -1327,17 +1576,93 @@ public sealed partial class BacktestRunner(
 
         return Array.Empty<OhlcvBar>();
     }
+
+    internal static IReadOnlyList<OhlcvBar>? ResolvePreparedBenchmarkBars(
+        BacktestRunConfig run,
+        CandlePipelineResult marketState)
+    {
+        if (!run.Validation.Benchmark.Enabled || String.IsNullOrWhiteSpace(run.Validation.Benchmark.Ticker) ||
+            !marketState.TickerStates.TryGetValue(run.Validation.Benchmark.Ticker, out var tickerState))
+        {
+            return null;
+        }
+
+        foreach (var interval in run.Intervals.OrderBy(
+                     interval => TimeframeParser.IsDailyOrHigher(interval) ? 0 : 1))
+        {
+            if (tickerState.BarsByTimeframe.TryGetValue(interval, out var bars) && bars.Count > 0)
+            {
+                return bars;
+            }
+        }
+
+        return null;
+    }
+
+    internal static void EnsureReplayRetentionLimit(
+        int retainedBars,
+        int additionalBars,
+        int maximumBars)
+    {
+        if (retainedBars < 0 || additionalBars < 0 || maximumBars <= 0 ||
+            (long)retainedBars + additionalBars > maximumBars)
+        {
+            throw new BacktestReplayRetentionLimitExceededException(maximumBars);
+        }
+    }
+
+    internal static void EnsureStrategyWorkItemLimit(
+        int tickerCount,
+        int strategyCount,
+        int maximumWorkItems)
+    {
+        if (tickerCount < 0 || strategyCount < 0 || maximumWorkItems <= 0 ||
+            (long)tickerCount * strategyCount > maximumWorkItems)
+        {
+            throw new BacktestWorkItemLimitExceededException(maximumWorkItems);
+        }
+    }
 }
 
 internal sealed record DailyReturnMetrics(
     decimal AverageDailyReturnPct,
     int TradingDayCount);
 
-internal sealed record TickerBacktestBatch(
-    TickerBacktestResult Result,
-    IReadOnlyList<BacktestCandidateTrade> CandidateTrades,
-    IReadOnlyList<StrategyCandidateDiagnostics> Diagnostics,
-    IReadOnlyList<OhlcvBar> ProcessedBars);
+internal sealed record PublishedBacktestEconomicSummary(
+    decimal EndingCapital,
+    decimal NetProfit,
+    decimal TotalReturnPct,
+    decimal AverageDailyReturnPct,
+    decimal MaxDrawdownPct,
+    WinnerStrategySummary? Winner,
+    int WinningTradeCount,
+    int LosingTradeCount,
+    IReadOnlyList<BacktestTrade> CompletedTrades);
+
+internal sealed class BacktestReplayRetentionLimitExceededException(int maximumBars)
+    : InvalidOperationException(
+        $"Backtest replay exceeds engine.max_retained_replay_bars ({maximumBars:N0}) across market and benchmark data.");
+
+internal sealed class BacktestWorkItemLimitExceededException(int maximumWorkItems)
+    : InvalidOperationException(
+        $"Backtest strategy/ticker matrix exceeds engine.max_strategy_work_items ({maximumWorkItems:N0}).");
+
+internal sealed class BacktestCandidateRetentionLimitExceededException(int maximumCandidates)
+    : InvalidOperationException(
+        $"Backtest candidate retention exceeds engine.max_retained_candidates ({maximumCandidates:N0}).");
+
+internal sealed class RetainedCandidateBudget(int maximumCandidates)
+{
+    private int retainedCandidateCount;
+
+    public void Reserve()
+    {
+        if (maximumCandidates <= 0 || Interlocked.Increment(ref retainedCandidateCount) > maximumCandidates)
+        {
+            throw new BacktestCandidateRetentionLimitExceededException(maximumCandidates);
+        }
+    }
+}
 
 internal sealed record PreparedTickerEvaluationContext(
     string Ticker,

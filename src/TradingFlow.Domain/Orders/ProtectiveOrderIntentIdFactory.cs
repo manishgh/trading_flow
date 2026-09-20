@@ -10,11 +10,13 @@ namespace TradingFlow.Domain.Orders;
 public static class ProtectiveOrderIntentIdFactory
 {
     public static Guid Create(
+        string accountId,
         string symbol,
         string side,
         string positionGenerationIdentity,
         int protectionRevision)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
         ArgumentException.ThrowIfNullOrWhiteSpace(side);
         ArgumentException.ThrowIfNullOrWhiteSpace(positionGenerationIdentity);
@@ -24,6 +26,7 @@ public static class ProtectiveOrderIntentIdFactory
         }
         var canonical = String.Join(
             '\n',
+            accountId.Trim(),
             symbol.Trim().ToUpperInvariant(),
             side.Trim().ToUpperInvariant(),
             positionGenerationIdentity.Trim(),

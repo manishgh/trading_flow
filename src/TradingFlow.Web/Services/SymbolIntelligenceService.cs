@@ -20,11 +20,9 @@ public sealed class SymbolIntelligenceService
 
     public async Task<MobileSymbolIntelligenceResponse> BuildAsync(
         WishlistDeskRow row,
-        string mode,
-        string horizon,
         CancellationToken cancellationToken)
     {
-        var evidence = await predictor.GetAsync(row.Ticker, mode, horizon, cancellationToken);
+        var evidence = await predictor.GetAsync(row.Ticker, "auto", cancellationToken);
         return new MobileSymbolIntelligenceResponse(
             row.Ticker,
             timeProvider.GetUtcNow(),
@@ -45,7 +43,6 @@ public sealed class SymbolIntelligenceService
     {
         var readinessReasons = evidence.Errors
             .Concat(evidence.Swing?.Readiness.Reasons ?? [])
-            .Concat(evidence.Intraday?.Readiness.Reasons ?? [])
             .Where(reason => !String.IsNullOrWhiteSpace(reason))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -69,8 +66,7 @@ public sealed class SymbolIntelligenceService
             evidence.Model?.Target,
             evidence.Model?.ArtifactSha256,
             evidence.Model?.TrainingDataEnd,
-            evidence.Swing is null ? null : MapSwing(evidence.Swing),
-            evidence.Intraday is null ? null : MapIntraday(evidence.Intraday));
+            evidence.Swing is null ? null : MapSwing(evidence.Swing));
     }
 
     private static MobileSwingIntelligenceResponse MapSwing(PredictorSwingPrediction swing) => new(
@@ -87,23 +83,6 @@ public sealed class SymbolIntelligenceService
         swing.Readiness.Reasons,
         swing.Readiness.LatestPriceDate,
         swing.Readiness.PriceFeed);
-
-    private static MobileIntradayIntelligenceResponse MapIntraday(PredictorIntradayPrediction intraday) => new(
-        intraday.OpportunityProbability,
-        intraday.DownsideProbability,
-        intraday.DecisionScore,
-        intraday.Signal,
-        intraday.Rank,
-        intraday.RelativeVolume,
-        intraday.Rsi14,
-        intraday.MacdSignalDiff,
-        intraday.EntryStopPct,
-        intraday.EntryTargetPct,
-        MapCatalyst(intraday.Catalyst),
-        intraday.Readiness.Status,
-        intraday.Readiness.Reasons,
-        intraday.Readiness.LatestPriceDate,
-        intraday.Readiness.PriceFeed);
 
     private static MobileCatalystIntelligenceResponse MapCatalyst(PredictorCatalyst catalyst) => new(
         catalyst.Status,

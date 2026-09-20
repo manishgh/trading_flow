@@ -61,11 +61,8 @@ public sealed class TradeDeskModel : PageModel
     [BindProperty(SupportsGet = true)] public decimal? MaxSpreadBps { get; set; }
     [BindProperty(SupportsGet = true)] public string? Sort { get; set; }
     [BindProperty(SupportsGet = true)] public string? Dir { get; set; }
-    [BindProperty(SupportsGet = true)] public string PredictionMode { get; set; } = "unified";
     [BindProperty(SupportsGet = true)] public string PredictionHorizon { get; set; } = "auto";
-
-    /// <summary>Screener scope, <c>swing</c> or <c>intraday</c>. Carried so the band survives a reload.</summary>
-    [BindProperty(SupportsGet = true)] public string ScreenerScopeName { get; set; } = "intraday";
+    public string ScreenerScopeName => "swing";
 
     /// <summary>Finviz URL, saved screener name, or bare query string.</summary>
     [BindProperty(SupportsGet = true)] public string? ScreenerQuery { get; set; }
@@ -186,8 +183,7 @@ public sealed class TradeDeskModel : PageModel
             return Page();
         }
 
-        var scope = ParseScope(ScreenerScopeName);
-        var result = await screener.PreviewAsync(ScreenerQuery ?? String.Empty, scope, wishlistId, cancellationToken);
+        var result = await screener.PreviewAsync(ScreenerQuery ?? String.Empty, ScreenerScope.Swing, wishlistId, cancellationToken);
         if (!result.Succeeded)
         {
             ErrorMessage = result.Error;
@@ -279,7 +275,7 @@ public sealed class TradeDeskModel : PageModel
         public decimal LimitPrice { get; set; }
         public decimal? StopLossPrice { get; set; }
         public decimal? TakeProfitPrice { get; set; }
-        public string Horizon { get; set; } = "intraday";
+        public string Horizon { get; set; } = "swing";
         public string OrderType { get; set; } = "limit";
         public decimal? TriggerPrice { get; set; }
         public string TimeInForce { get; set; } = "day";
@@ -295,7 +291,7 @@ public sealed class TradeDeskModel : PageModel
             // An exit carries no bracket: the protection belonged to the entry.
             IsExit ? null : StopLossPrice,
             IsExit ? null : TakeProfitPrice,
-            Horizon,
+            "swing",
             AllowExtendedHoursTrading,
             "sip",
             IsExit ? OrderType : "limit",
@@ -308,7 +304,7 @@ public sealed class TradeDeskModel : PageModel
         Strategies = await catalog.GetStrategiesAsync(
             environments.Parse(Env) == TradingEnvironment.Live
                 ? StrategySelectionMode.RunLive
-                : StrategySelectionMode.RunPaperShadow,
+                : StrategySelectionMode.RunPaperExperiment,
             cancellationToken);
         SelectedStrategyId = ResolveStrategyId();
         SelectedPaperConfigPath = ResolvePaperConfigPath();
@@ -345,16 +341,10 @@ public sealed class TradeDeskModel : PageModel
             .Take(20)
             .ToArray();
 
-        PredictionMode = MarketPredictorHttpClient.TryNormalizeMode(PredictionMode, out var normalizedMode)
-            ? normalizedMode
-            : "unified";
         PredictionHorizon = String.IsNullOrWhiteSpace(PredictionHorizon) ? "auto" : PredictionHorizon.Trim().ToLowerInvariant();
-        ScreenerScopeName = ParseScope(ScreenerScopeName).ToString().ToLowerInvariant();
+        ScreenerPresets = await screenerPresets.ListAsync(ScreenerScope.Swing, cancellationToken);
 
-        ScreenerPresets = await screenerPresets.ListAsync(ParseScope(ScreenerScopeName), cancellationToken);
-
-        // An intraday screen already read this session is reused rather than
-        // re-fetched; a swing screen or an explicit sync goes to the provider.
+        // The screener result is resolved for the current swing universe.
         ScreenerResult = await ResolveScreenerResultAsync(cancellationToken);
         var screenerSymbols = ScreenerResult?.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase)
             ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -367,7 +357,6 @@ public sealed class TradeDeskModel : PageModel
             snapshot.Rows,
             RankConfig,
             DeskHorizon,
-            PredictionMode,
             PredictionHorizon,
             screenerSymbols,
             earningsSymbols,
@@ -393,8 +382,6 @@ public sealed class TradeDeskModel : PageModel
         {
             var symbolIntelligenceTask = symbolIntelligence.BuildAsync(
                 SelectedRow.Row,
-                PredictionMode,
-                PredictionHorizon,
                 cancellationToken);
             await Task.WhenAll(operationalStatusTask, symbolIntelligenceTask);
             OperationalStatus = await operationalStatusTask;
@@ -404,15 +391,12 @@ public sealed class TradeDeskModel : PageModel
 
     private async Task<ScreenerSyncResult?> ResolveScreenerResultAsync(CancellationToken cancellationToken)
     {
-        var scope = ParseScope(ScreenerScopeName);
         if (String.IsNullOrWhiteSpace(ScreenerQuery))
         {
-            // With no query typed, an intraday screen already taken this session
-            // still applies; nothing is fetched.
-            return scope == ScreenerScope.Intraday ? screener.GetCurrentIntradayResult() : null;
+            return null;
         }
 
-        return await screener.PreviewAsync(ScreenerQuery, scope, Id, cancellationToken);
+        return await screener.PreviewAsync(ScreenerQuery, ScreenerScope.Swing, Id, cancellationToken);
     }
 
     /// <summary>
@@ -420,17 +404,7 @@ public sealed class TradeDeskModel : PageModel
     /// strategy's own timeframe rather than a separate control, so the ordering
     /// always matches the strategy the operator is reading against.
     /// </summary>
-    public string DeskHorizon
-    {
-        get
-        {
-            var strategy = Strategies.FirstOrDefault(candidate =>
-                candidate.Definition.StrategyId.Equals(SelectedStrategyId, StringComparison.OrdinalIgnoreCase));
-            return strategy?.Definition.StrategyId.Contains("swing", StringComparison.OrdinalIgnoreCase) == true
-                ? "swing"
-                : "intraday";
-        }
-    }
+    public string DeskHorizon => "swing";
 
     /// <summary>Row count in the view before search and range bounds.</summary>
     public int UnfilteredCount => AllRows.Count;
@@ -498,11 +472,6 @@ public sealed class TradeDeskModel : PageModel
     public string NextDirectionFor(string key) =>
         String.Equals(Sort, key, StringComparison.OrdinalIgnoreCase) && !SortDescending ? "desc" : "asc";
 
-    internal static ScreenerScope ParseScope(string? value) =>
-        String.Equals(value, "swing", StringComparison.OrdinalIgnoreCase)
-            ? ScreenerScope.Swing
-            : ScreenerScope.Intraday;
-
     private static string NewsIdentity(MobileNewsItem item)
     {
         return !String.IsNullOrWhiteSpace(item.Url)
@@ -565,7 +534,7 @@ public sealed class TradeDeskModel : PageModel
             "price" => Order(rows, row => row.Row.LastPrice ?? Decimal.MinValue, descending),
             "bidask" => Order(rows, row => row.Row.Quote.BidPrice ?? Decimal.MinValue, descending),
             "spread" => Order(rows, row => row.Row.SpreadBps ?? Decimal.MaxValue, descending),
-            "rvol" => Order(rows, row => row.Evidence.Intraday?.RelativeVolume ?? Decimal.MinValue, descending),
+            "rvol" => Order(rows, row => row.Evidence.Swing?.VolumeZ20 ?? Decimal.MinValue, descending),
             "eligibility" => Order(rows, row => row.Row.HasSignal ? 1m : 0m, descending),
             "pl" => Order(rows, row => row.Row.Trade?.UnrealizedPl ?? Decimal.MinValue, descending),
             "news" => Order(rows, row => row.Row.NewsTimestamp ?? DateTimeOffset.MinValue, descending),
@@ -628,8 +597,7 @@ public sealed class TradeDeskModel : PageModel
             return StrategyId;
         }
 
-        return Strategies.FirstOrDefault(strategy => strategy.Definition.StrategyId.Contains("intraday", StringComparison.OrdinalIgnoreCase))?.Definition.StrategyId
-            ?? Strategies.FirstOrDefault()?.Definition.StrategyId
+        return Strategies.FirstOrDefault()?.Definition.StrategyId
             ?? String.Empty;
     }
 

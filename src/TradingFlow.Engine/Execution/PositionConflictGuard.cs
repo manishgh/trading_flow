@@ -32,6 +32,7 @@ public sealed class PositionConflictException(
 public interface IPositionConflictGuard
 {
     Task<T> ExecuteEntryAsync<T>(
+        string accountId,
         string symbol,
         string strategyId,
         Func<CancellationToken, Task<T>> submit,
@@ -52,6 +53,7 @@ public sealed class PositionConflictGuard(
     private static readonly TimeSpan EntryLeaseTtl = TimeSpan.FromMinutes(2);
 
     public async Task<T> ExecuteEntryAsync<T>(
+        string accountId,
         string symbol,
         string strategyId,
         Func<CancellationToken, Task<T>> submit,
@@ -59,9 +61,10 @@ public sealed class PositionConflictGuard(
     {
         ArgumentNullException.ThrowIfNull(submit);
         _ = options.AllowMultiStrategySameSymbol;
+        var normalizedAccountId = Require(accountId, nameof(accountId));
         var normalizedSymbol = Require(symbol, nameof(symbol)).ToUpperInvariant();
         var normalizedStrategy = Require(strategyId, nameof(strategyId));
-        var lockKey = $"exe10:{normalizedSymbol}";
+        var lockKey = $"entry:{normalizedAccountId}:{normalizedSymbol}";
         var owner = $"entry:{Guid.NewGuid():N}";
         var acquired = await locks.TryAcquireLockAsync(
             lockKey,
@@ -78,6 +81,7 @@ public sealed class PositionConflictGuard(
         try
         {
             await EnsureNoCrossStrategyConflictAsync(
+                normalizedAccountId,
                 normalizedSymbol,
                 normalizedStrategy,
                 cancellationToken);
@@ -102,11 +106,12 @@ public sealed class PositionConflictGuard(
     }
 
     private async Task EnsureNoCrossStrategyConflictAsync(
+        string accountId,
         string symbol,
         string strategyId,
         CancellationToken cancellationToken)
     {
-        var position = await positions.GetCurrentAsync(symbol, cancellationToken);
+        var position = await positions.GetCurrentAsync(accountId, symbol, cancellationToken);
         if (position is { Quantity: not 0m } &&
             !position.StrategyId.Equals(strategyId, StringComparison.Ordinal))
         {
@@ -117,7 +122,10 @@ public sealed class PositionConflictGuard(
                 $"open position quantity {position.Quantity}");
         }
 
-        var conflictingIntent = (await intents.ListActiveForSymbolAsync(symbol, cancellationToken))
+        var conflictingIntent = (await intents.ListActiveForSymbolAsync(
+                accountId,
+                symbol,
+                cancellationToken))
             .FirstOrDefault(intent =>
                 !intent.StrategyId.Equals(strategyId, StringComparison.Ordinal));
         if (conflictingIntent is not null)

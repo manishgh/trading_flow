@@ -274,7 +274,7 @@ public sealed class StreamingMarketStateProcessor
         var providerConfirmsSparseNoTradeIntervals =
             provider is IMarketDataCompletenessProvider
             {
-                OmittedIntradayIntervalsMeanNoQualifyingTrades: true
+                OmittedSubDailyIntervalsMeanNoQualifyingTrades: true
             };
         var incomingBySymbol = normalizedSymbols.ToDictionary(
             symbol => symbol,

@@ -1,9 +1,8 @@
 @*
     TradingFlow's decision beside the model's evidence.
 
-    Two equal cells, because both are worth reading. Only the left one can
-    authorise an entry, and both say so on the Authority line rather than
-    relying on position or size to imply it.
+    Two equal cells, because both are worth reading. Neither observation authorises
+    an entry; the normal strategy admission and order-review path owns that decision.
 *@
 @model TradingFlow.Web.Pages.Shared.DeskEvidenceModel
 @{
@@ -34,7 +33,7 @@
             <dt>Severity</dt>
             <dd>@(row.LatestSignal?.Severity ?? "—")</dd>
             <dt>Authority</dt>
-            <dd>Decision support only</dd>
+            <dd class="unknown">Advisory until strategy admission</dd>
         </dl>
     </div>
 
@@ -52,7 +51,7 @@
         else
         {
             <p class="desk-evidence-copy">
-                @evidence.FinalSignal.Replace('_', ' ') — @(Model.IsIntraday ? "intraday" : "swing") leg on the
+                @evidence.FinalSignal.Replace('_', ' ') — swing leg on the
                 @evidence.ResolvedHorizon horizon, from a @(evidence.Model?.Status ?? "unknown") model.
             </p>
         }

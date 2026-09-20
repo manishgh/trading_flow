@@ -2,13 +2,14 @@ using System.Text.Json;
 using TradingFlow.Domain.Audit;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Orders;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Execution;
 
 namespace TradingFlow.Web.Services;
 
-// Guardian exit management for a live automation session: the polling monitor loop that decides
+// Guardian exit management for a swing automation session: the polling monitor loop that decides
 // when to close a position, plus safety-order placement, broker sell-order cancellation, and
 // trailing-stop raises. Split into a partial file for readability; behavior is unchanged.
 public sealed partial class MobileAutomationService
@@ -17,6 +18,7 @@ public sealed partial class MobileAutomationService
         MutableAutomationSession session,
         BacktestRunConfig runConfig,
         StrategyDefinition strategy,
+        ExecutionRunContext executionRunContext,
         IMarketDataProvider provider,
         IBrokerClient brokerClient,
         CancellationToken cancellationToken)
@@ -119,24 +121,31 @@ public sealed partial class MobileAutomationService
                 stopLoss,
                 takeProfit);
 
-            if (guardianDecision.ShouldExit)
+            if (guardianDecision.ShouldExit || sessionSnapshot.ExitSubmittedAt is not null)
             {
-                session.Report("submitting_exit", $"Exit triggered for {session.Ticker}: {guardianDecision.Reason}.");
-                foreach (var order in openOrders.Where(order =>
-                             order.Ticker.Equals(session.Ticker, StringComparison.OrdinalIgnoreCase) &&
-                             order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase)))
+                var durableExitReason = sessionSnapshot.ExitReason ?? guardianDecision.Reason;
+                session.Report("submitting_exit", $"Exit triggered for {session.Ticker}: {durableExitReason}.");
+                if (orderSubmissionService is null)
                 {
-                    try
-                    {
-                        await brokerClient.CancelOrderAsync(order.OrderId, cancellationToken);
-                    }
-                    catch (Exception exception)
-                    {
-                        logger.LogWarning(exception, "Failed to cancel sell order {OrderId} before closing {Ticker}.", order.OrderId, session.Ticker);
-                    }
+                    throw new InvalidOperationException(
+                        "Strategy exits require the durable order command service.");
                 }
 
-                var closeQuantity = sessionSnapshot.ShareQuantity ?? (int)Math.Floor(position.Qty);
+                var refreshedPosition = (await brokerClient.GetOpenPositionsAsync(cancellationToken))
+                    .FirstOrDefault(candidate =>
+                        candidate.Ticker.Equals(session.Ticker, StringComparison.OrdinalIgnoreCase) &&
+                        candidate.Qty > 0m &&
+                        !candidate.Side.Equals("short", StringComparison.OrdinalIgnoreCase));
+                if (refreshedPosition is null)
+                {
+                    session.Report("completed", $"{session.Ticker} is flat; no additional exit was submitted.");
+                    await PersistAsync(cancellationToken);
+                    continue;
+                }
+
+                var closeQuantity = Math.Min(
+                    sessionSnapshot.ShareQuantity ?? (int)Math.Floor(refreshedPosition.Qty),
+                    (int)Math.Floor(refreshedPosition.Qty));
                 if (closeQuantity <= 0)
                 {
                     session.Report("exit_rejected", $"Exit triggered for {session.Ticker}, but close quantity was unavailable.");
@@ -145,45 +154,67 @@ public sealed partial class MobileAutomationService
                     continue;
                 }
 
-                var closed = await brokerClient.ClosePositionAsync(session.Ticker, closeQuantity, cancellationToken);
-                if (closed)
+                var submittedAtUtc = timeProvider.GetUtcNow().ToUniversalTime();
+                OrderSubmissionResult exit;
+                try
                 {
-                    session.Update(current =>
-                    {
-                        current.Status = "completed";
-                        current.FinishedAt = DateTimeOffset.UtcNow;
-                        current.ExitReason = guardianDecision.Reason;
-                        current.ExitSubmittedAt = DateTimeOffset.UtcNow;
-                        current.Report("completed", $"Closed {current.Ticker} on {guardianDecision.Reason} at ~{guardianDecision.ExitPrice?.ToString("F2") ?? "market"}.");
-                    });
-                    await PersistAsync(cancellationToken);
-
-                    if (auditRepo is not null)
-                    {
-                        await auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
-                        {
-                            RunName = session.RunName,
-                            Ticker = session.Ticker,
-                            StrategyName = strategy.StrategyName,
-                            Timestamp = DateTimeOffset.UtcNow,
-                            Decision = "ExitSubmitted",
-                            RejectionReason = guardianDecision.Reason,
-                            SignalJson = JsonSerializer.Serialize(new
-                            {
-                                ticker = session.Ticker,
-                                session.RunName,
-                                exitReason = guardianDecision.Reason,
-                                exitSignalTimestamp = guardianDecision.ExitSignalTimestamp,
-                                estimatedExitPrice = guardianDecision.ExitPrice,
-                                entryPrice,
-                                currentPrice = position.CurrentPrice,
-                                unrealizedPl = position.UnrealizedPl
-                            })
-                        }, cancellationToken);
-                    }
-
-                    return;
+                    exit = await orderSubmissionService.SubmitPositionExitAsync(
+                        new PositionExitSubmission(
+                            executionRunContext,
+                            session.Ticker,
+                            closeQuantity,
+                            durableExitReason,
+                            submittedAtUtc,
+                            runConfig.Execution.AllowExtendedHoursTrading),
+                        brokerClient,
+                        cancellationToken);
                 }
+                catch (PositionExitNoLongerRequiredException)
+                {
+                    session.Report("completed", $"{session.Ticker} became flat while its owned protection was being resolved.");
+                    await PersistAsync(cancellationToken);
+                    continue;
+                }
+                session.Update(current =>
+                {
+                    current.Status = "running";
+                    current.ExitReason = durableExitReason;
+                    current.ExitSubmittedAt = submittedAtUtc;
+                    current.Report(
+                        "exit_submitted",
+                        $"Exit submitted for {current.Ticker} on {durableExitReason}. ClientOrderId={exit.ClientOrderId}.");
+                });
+                await PersistAsync(cancellationToken);
+
+                if (auditRepo is not null)
+                {
+                    await auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
+                    {
+                        RunName = session.RunName,
+                        Ticker = session.Ticker,
+                        StrategyName = strategy.StrategyName,
+                        Timestamp = submittedAtUtc,
+                        Decision = "ExitSubmitted",
+                        RejectionReason = guardianDecision.Reason,
+                        SignalJson = JsonSerializer.Serialize(new
+                        {
+                            ticker = session.Ticker,
+                            session.RunName,
+                            exitReason = durableExitReason,
+                            exit.IntentId,
+                            exit.ClientOrderId,
+                            exit.BrokerOrderId,
+                            exitSignalTimestamp = guardianDecision.ExitSignalTimestamp,
+                            estimatedExitPrice = guardianDecision.ExitPrice,
+                            entryPrice,
+                            currentPrice = position.CurrentPrice,
+                            unrealizedPl = position.UnrealizedPl
+                        })
+                    }, cancellationToken);
+                }
+
+                await Task.Delay(pollingInterval, cancellationToken);
+                continue;
             }
             else
             {
@@ -208,31 +239,6 @@ public sealed partial class MobileAutomationService
         }
     }
 
-    private async Task CancelOpenSellOrdersForTickerAsync(
-        IBrokerClient brokerClient,
-        string ticker,
-        CancellationToken cancellationToken)
-    {
-        var openOrders = await brokerClient.GetOpenOrdersAsync(cancellationToken);
-        foreach (var order in openOrders.Where(order =>
-                     order.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase) &&
-                     order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase)))
-        {
-            try
-            {
-                await brokerClient.CancelOrderAsync(order.OrderId, cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(
-                    exception,
-                    "Failed to cancel sell order {OrderId} before closing automation position for {Ticker}.",
-                    order.OrderId,
-                    ticker);
-            }
-        }
-    }
-
     private async Task EnsureSafetyExitOrdersAsync(
         MutableAutomationSession session,
         BacktestRunConfig runConfig,
@@ -246,18 +252,31 @@ public sealed partial class MobileAutomationService
             return;
         }
 
-        var stopLoss = sessionSnapshot.StopLossPrice;
-        var takeProfit = sessionSnapshot.TakeProfitPrice;
-        if (stopLoss is null || takeProfit is null)
+        if (protectiveOrders is null)
         {
-            return;
+            throw new InvalidOperationException(
+                "Extended-hours fill protection requires the durable protective-order service.");
         }
 
-        await brokerClient.SubmitExitOrdersAsync(session.Ticker, (int)position.Qty, stopLoss.Value, takeProfit.Value, cancellationToken);
+        var account = await brokerClient.GetAccountSnapshotAsync(cancellationToken);
+        var openOrders = await brokerClient.GetOpenOrdersAsync(cancellationToken);
+        var repairs = await protectiveOrders.EnsureAsync(
+            brokerClient,
+            account.AccountId,
+            [position],
+            openOrders,
+            cancellationToken);
+        if (repairs.Any(repair => !repair.Succeeded))
+        {
+            throw new InvalidOperationException(
+                $"Protective-order repair failed for {session.Ticker}: " +
+                String.Join("; ", repairs.Where(repair => !repair.Succeeded).Select(repair => repair.Detail)));
+        }
+
         session.Update(current =>
         {
             current.ExitSafetyOrdersSubmitted = true;
-            current.Report("monitoring", $"Submitted safety OCO exits for {current.Ticker}.");
+            current.Report("monitoring", $"Durable broker protection verified for {current.Ticker}.");
         });
         await PersistAsync(cancellationToken);
     }
@@ -279,36 +298,44 @@ public sealed partial class MobileAutomationService
             return;
         }
 
-        var stopOrder = openOrders
+        var stopOrders = openOrders
             .Where(order =>
                 order.Ticker.Equals(session.Ticker, StringComparison.OrdinalIgnoreCase) &&
                 order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase) &&
-                order.StopPrice is not null)
+                order.OrderType is "stop" or "stop_limit" &&
+                order.StopPrice is not null &&
+                calculatedStopLossPrice > order.StopPrice.Value + 0.01m)
             .OrderByDescending(order => order.CreatedAt)
-            .FirstOrDefault();
-        if (stopOrder is null)
-        {
-            session.Report("monitoring", $"Guardian calculated a raised stop for {session.Ticker} at {calculatedStopLossPrice:F2}, but no broker stop leg is open.");
-            return;
-        }
-
-        if (stopOrder.StopPrice is { } brokerStopPrice &&
-            calculatedStopLossPrice <= brokerStopPrice + 0.01m)
+            .ToArray();
+        if (stopOrders.Length == 0)
         {
             return;
         }
 
-        var modified = await brokerClient.ModifyOrderAsync(stopOrder.OrderId, calculatedStopLossPrice, 0m, cancellationToken);
-        if (!modified)
+        if (orderSubmissionService is null)
         {
-            session.Report("monitoring", $"Broker rejected trailing stop raise for {session.Ticker}.");
-            return;
+            throw new InvalidOperationException(
+                "Trailing-stop replacement requires the common order command service.");
+        }
+
+        foreach (var stopOrder in stopOrders)
+        {
+            await orderSubmissionService.ReplaceProtectiveStopAsync(
+                new ProtectiveStopReplacementSubmission(
+                    stopOrder.ParentClientOrderId ?? stopOrder.ClientOrderId,
+                    stopOrder.OrderId,
+                    session.Ticker,
+                    calculatedStopLossPrice,
+                    "atr_trailing_stop_raise",
+                    timeProvider.GetUtcNow().ToUniversalTime()),
+                brokerClient,
+                cancellationToken);
         }
 
         session.Update(current =>
         {
             current.StopLossPrice = calculatedStopLossPrice;
-            current.Report("monitoring", $"Raised broker trailing stop for {current.Ticker} to {calculatedStopLossPrice:F2}.");
+            current.Report("monitoring", $"Raised {stopOrders.Length} broker trailing stop tranche(s) for {current.Ticker} to {calculatedStopLossPrice:F2}.");
         });
         await PersistAsync(cancellationToken);
     }

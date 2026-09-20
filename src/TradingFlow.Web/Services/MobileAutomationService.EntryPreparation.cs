@@ -100,18 +100,18 @@ public sealed partial class MobileAutomationService
         IReadOnlyCollection<string> requiredTimeframes,
         IReadOnlyCollection<string> candidateDownloadTimeframes)
     {
-        var intradayRequired = requiredTimeframes
+        var subDailyConfirmationTimeframes = requiredTimeframes
             .Where(timeframe => !TimeframeParser.IsDailyOrHigher(timeframe))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(TimeframeParser.Parse)
             .ToArray();
 
-        if (intradayRequired.Length == 0)
+        if (subDailyConfirmationTimeframes.Length == 0)
         {
             return runConfig.DerivedTimeframes.Source;
         }
 
-        var finestRequired = intradayRequired[0];
+        var finestRequired = subDailyConfirmationTimeframes[0];
         var finestRequiredDuration = TimeframeParser.Parse(finestRequired);
         var currentSource = string.IsNullOrWhiteSpace(runConfig.DerivedTimeframes.Source)
             ? finestRequired
@@ -331,7 +331,7 @@ public sealed partial class MobileAutomationService
             new ValidatedEntryCandidate(
                 session.SessionId,
                 "operator_alert",
-                strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) ? "swing" : "intraday",
+                "swing",
                 session.CreatedAt.ToUniversalTime(),
                 decisionAtUtc,
                 JsonSerializer.Serialize(new

@@ -149,7 +149,7 @@ public sealed class BacktestArtifactProjectorTests
             CreateValidation(),
             [trade],
             [diagnostics],
-            [new MissedMoveAudit("AMD", "5m", started, started.AddMinutes(30), 100m, 112m, 12m, 6, ["swing"], ["intraday"])],
+            [new MissedMoveAudit("AMD", "1h", started, started.AddHours(6), 100m, 112m, 12m, 6, ["swing"], ["confirmation_missing"])],
             [new FinalizedOrder("AMD", "Swing", 10, 100m, 95m, 120m, started)]);
     }
 

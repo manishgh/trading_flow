@@ -166,9 +166,9 @@ public sealed class PaperJobModel : PageModel
         });
     }
 
-    public IActionResult OnPostCancelRun(Guid id)
+    public async Task<IActionResult> OnPostCancelRunAsync(Guid id, CancellationToken cancellationToken)
     {
-        jobs.CancelJob(id);
+        await jobs.CancelJobAsync(id, cancellationToken);
         return RedirectToPage(new { id });
     }
 

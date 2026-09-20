@@ -2,6 +2,7 @@
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Market;
@@ -29,7 +30,10 @@ public sealed partial class LiveRunner
         IProgress<string>? progress)
     {
         if (_brokerClient is null ||
-            _orderRepo is null ||
+            _orderIntents is null ||
+            _orderEvents is null ||
+            _positionLedger is null ||
+            _executionRunContext is null ||
             run.Execution.DryRun ||
             !run.Execution.AllowLiveOrders)
         {
@@ -45,23 +49,43 @@ public sealed partial class LiveRunner
             return false;
         }
 
-        var activeOrders = await _orderRepo.GetActiveOrdersByTickerAsync(ticker, cancellationToken);
-        var strategyOrder = activeOrders
-            .Where(x => x.StrategyName.Equals(strategy.StrategyName, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(x => x.CreatedAt)
-            .FirstOrDefault();
-        if (strategyOrder is null)
+        var ownedPositions = (await _positionLedger.ListCurrentForRunAsync(
+                _executionRunContext.RunId,
+                cancellationToken))
+            .Where(item => item.Position.Symbol.Equals(ticker, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (ownedPositions.Length != 1)
         {
-            logger.LogDebug(
-                "Open position for {Ticker} has no active persisted order for strategy {StrategyName}; technical exit evaluation skipped.",
+            logger.LogWarning(
+                "Technical exit for {Ticker} {StrategyName} requires exactly one run-owned position generation; found {Count}.",
                 ticker,
-                strategy.StrategyName);
+                strategy.StrategyName,
+                ownedPositions.Length);
             return false;
         }
 
-        if (strategyOrder.Status.Equals("technical_exit_submitted", StringComparison.OrdinalIgnoreCase))
+        var ownedPosition = ownedPositions[0].Position;
+        var entryIntent = await _orderIntents.GetByClientOrderIdAsync(
+            ownedPosition.PositionGenerationClientOrderId,
+            cancellationToken);
+        if (entryIntent is null ||
+            !entryIntent.StrategyId.Equals(strategy.StrategyId, StringComparison.Ordinal))
         {
-            return true;
+            logger.LogDebug(
+                "Open position for {Ticker} is not owned by strategy {StrategyId}; technical exit evaluation skipped.",
+                ticker,
+                strategy.StrategyId);
+            return false;
+        }
+
+        var entryState = await _orderEvents.GetCurrentAsync(entryIntent.ClientOrderId, cancellationToken);
+        if (entryState is null || entryState.State is not (OrderState.PartiallyFilled or OrderState.Filled))
+        {
+            logger.LogWarning(
+                "Open position for {Ticker} has no authoritative partial/full entry fill for {ClientOrderId}; technical exit evaluation skipped.",
+                ticker,
+                entryIntent.ClientOrderId);
+            return false;
         }
 
         if (!barsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionBars) ||
@@ -77,14 +101,16 @@ public sealed partial class LiveRunner
             return false;
         }
 
-        var entryTimestamp = strategyOrder.CreatedAt;
+        var entryTimestamp = entryState.BrokerTimestampUtc ?? entryIntent.CreatedAtUtc;
         var entryIndex = FindFirstBarIndexAtOrAfter(executionBars, entryTimestamp);
         if (entryIndex >= executionBars.Count)
         {
             return true;
         }
 
-        var entryPrice = position.EntryPrice > 0 ? position.EntryPrice : strategyOrder.EntryPrice;
+        var entryPrice = position.EntryPrice > 0
+            ? position.EntryPrice
+            : entryState.FillPrice ?? entryIntent.LimitPrice ?? 0m;
         if (entryPrice <= 0)
         {
             logger.LogWarning(
@@ -95,8 +121,8 @@ public sealed partial class LiveRunner
         }
 
         var latestSnapshot = executionSnapshots[^1];
-        var initialStopLossPrice = strategyOrder.StopLossPrice > 0
-            ? strategyOrder.StopLossPrice
+        var initialStopLossPrice = entryIntent.StopPrice is > 0m
+            ? entryIntent.StopPrice.Value
             : entryPrice - ((latestSnapshot.Atr ?? 0m) * strategy.ExitRules.StopAtrMultiple);
         var stopDistance = entryPrice - initialStopLossPrice;
         if (stopDistance <= 0)
@@ -110,8 +136,9 @@ public sealed partial class LiveRunner
             return false;
         }
 
-        var takeProfitPrice = strategyOrder.TakeProfitPrice > 0
-            ? strategyOrder.TakeProfitPrice
+        var configuredTakeProfitPrice = ReadDecimalProperty(entryIntent.RequestJson, "takeProfitPrice");
+        var takeProfitPrice = configuredTakeProfitPrice is > 0m
+            ? configuredTakeProfitPrice.Value
             : entryPrice + (stopDistance * strategy.ExitRules.TargetRMultiple);
         var currentStopLossPrice = initialStopLossPrice;
         var highestHighSinceEntry = entryPrice;
@@ -183,7 +210,7 @@ public sealed partial class LiveRunner
             await TryRaiseBrokerTrailingStopAsync(
                 strategy,
                 ticker,
-                strategyOrder,
+                ownedPosition.PositionGenerationEventId,
                 openOrders,
                 initialStopLossPrice,
                 currentStopLossPrice,
@@ -202,67 +229,55 @@ public sealed partial class LiveRunner
             exitPrice);
         progress?.Report($"Technical exit triggered for {ticker}: {exitReason}. Closing broker position...");
 
-        foreach (var order in openOrders.Where(order =>
-            order.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase) &&
-            order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase)))
+        if (_orderSubmissionService is null || _executionRunContext is null)
         {
-            try
-            {
-                await _brokerClient.CancelOrderAsync(order.OrderId, cancellationToken);
-                logger.LogInformation(
-                    "Cancelled open sell order {OrderId} before technical exit close for {Ticker}.",
-                    order.OrderId,
-                    ticker);
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(
-                    exception,
-                    "Failed to cancel sell order {OrderId} before technical exit close for {Ticker}.",
-                    order.OrderId,
-                    ticker);
-            }
+            throw new InvalidOperationException(
+                "Technical exits require the durable order command service and execution run context.");
         }
 
-        var closeQuantity = Math.Max(1, strategyOrder.ShareQuantity);
-        var closed = await _brokerClient.ClosePositionAsync(ticker, closeQuantity, cancellationToken);
-        if (closed)
+        var refreshedPosition = (await _brokerClient.GetOpenPositionsAsync(cancellationToken))
+            .FirstOrDefault(candidate =>
+                candidate.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase) &&
+                candidate.Qty > 0m &&
+                !candidate.Side.Equals("short", StringComparison.OrdinalIgnoreCase));
+        if (refreshedPosition is null)
         {
-            await _orderRepo.UpdateOrderStatusAsync(strategyOrder.OrderId, "technical_exit_submitted", cancellationToken);
-            _auditor.LogEvent(ticker, strategy.StrategyName, DateTimeOffset.UtcNow, ExecutionState.PositionClosed, $"Technical exit submitted: {exitReason}");
-            if (_auditRepo is not null)
-            {
-                await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
-                {
-                    RunName = run.RunName,
-                    Ticker = ticker,
-                    StrategyName = strategy.StrategyName,
-                    Timestamp = DateTimeOffset.UtcNow,
-                    Decision = "ExitSubmitted",
-                    RejectionReason = exitReason,
-                    SignalJson = JsonSerializer.Serialize(new
-                    {
-                        ticker,
-                        strategy = strategy.StrategyName,
-                        exitReason,
-                        exitSignalTimestamp,
-                        estimatedExitPrice = exitPrice,
-                        entryPrice,
-                        currentPrice = position.CurrentPrice,
-                        unrealizedPl = position.UnrealizedPl
-                    })
-                }, cancellationToken);
-            }
-
-            progress?.Report($"Submitted technical exit close for {ticker}: {exitReason}.");
+            logger.LogInformation(
+                "Technical exit for {Ticker} did not submit because the broker position is flat.",
+                ticker);
+            progress?.Report($"{ticker} is flat; no additional exit was submitted.");
             return true;
         }
 
-        logger.LogWarning(
-            "Broker rejected technical exit close for {Ticker} {StrategyName}. Reason={ExitReason}",
+        var closeQuantity = Math.Min(
+            Math.Abs(ownedPosition.Quantity),
+            Math.Abs(refreshedPosition.Qty));
+        var submittedAtUtc = _timeProvider.GetUtcNow().ToUniversalTime();
+        OrderSubmissionResult exitSubmission;
+        try
+        {
+            exitSubmission = await _orderSubmissionService.SubmitPositionExitAsync(
+                new PositionExitSubmission(
+                    _executionRunContext,
+                    ticker,
+                    closeQuantity,
+                    exitReason,
+                    submittedAtUtc,
+                    run.Execution.AllowExtendedHoursTrading),
+                _brokerClient,
+                cancellationToken);
+        }
+        catch (PositionExitNoLongerRequiredException)
+        {
+            progress?.Report($"{ticker} became flat while its owned protection was being resolved.");
+            return true;
+        }
+        _auditor.LogEvent(
             ticker,
             strategy.StrategyName,
-            exitReason);
+            submittedAtUtc,
+            ExecutionState.ExitSubmitted,
+            $"Technical exit submitted: {exitReason}");
         if (_auditRepo is not null)
         {
             await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
@@ -271,13 +286,18 @@ public sealed partial class LiveRunner
                 Ticker = ticker,
                 StrategyName = strategy.StrategyName,
                 Timestamp = DateTimeOffset.UtcNow,
-                Decision = "ExitRejected",
+                Decision = "ExitSubmitted",
                 RejectionReason = exitReason,
                 SignalJson = JsonSerializer.Serialize(new
                 {
                     ticker,
                     strategy = strategy.StrategyName,
                     exitReason,
+                    exitSubmission.IntentId,
+                    exitSubmission.ClientOrderId,
+                    exitSubmission.BrokerOrderId,
+                    exitSignalTimestamp,
+                    estimatedExitPrice = exitPrice,
                     entryPrice,
                     currentPrice = position.CurrentPrice,
                     unrealizedPl = position.UnrealizedPl
@@ -285,13 +305,14 @@ public sealed partial class LiveRunner
             }, cancellationToken);
         }
 
+        progress?.Report($"Submitted technical exit for {ticker}: {exitReason}.");
         return true;
     }
 
     private async Task TryRaiseBrokerTrailingStopAsync(
         StrategyDefinition strategy,
         string ticker,
-        PersistedOrder strategyOrder,
+        long positionGenerationEventId,
         IReadOnlyCollection<ActiveBrokerOrder> openOrders,
         decimal initialStopLossPrice,
         decimal calculatedStopLossPrice,
@@ -299,60 +320,86 @@ public sealed partial class LiveRunner
         IProgress<string>? progress)
     {
         if (_brokerClient is null ||
-            _orderRepo is null ||
+            _orderIntents is null ||
             !strategy.ExitRules.EnableAtrTrailingStop ||
             calculatedStopLossPrice <= initialStopLossPrice ||
-            calculatedStopLossPrice <= strategyOrder.StopLossPrice + 0.01m)
+            positionGenerationEventId <= 0)
         {
             return;
         }
 
-        var stopOrder = openOrders
+        var candidateStopOrders = openOrders
             .Where(order =>
                 order.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase) &&
                 order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase) &&
-                order.StopPrice is not null)
+                order.OrderType is "stop" or "stop_limit" &&
+                order.StopPrice is not null &&
+                calculatedStopLossPrice > order.StopPrice.Value + 0.01m)
             .OrderByDescending(order => order.CreatedAt)
-            .FirstOrDefault();
-        if (stopOrder is null)
-        {
-            logger.LogWarning(
-                "Trailing stop for {Ticker} {StrategyName} calculated at {StopLossPrice}, but no open broker stop leg was found.",
-                ticker,
-                strategy.StrategyName,
-                calculatedStopLossPrice);
-            progress?.Report($"Trailing stop ready for {ticker} at {calculatedStopLossPrice:0.00}, but no broker stop leg is open.");
-            return;
-        }
-
-        if (stopOrder.StopPrice is { } brokerStopPrice &&
-            calculatedStopLossPrice <= brokerStopPrice + 0.01m)
+            .ToArray();
+        if (candidateStopOrders.Length == 0)
         {
             return;
         }
 
-        var modified = await _brokerClient.ModifyOrderAsync(stopOrder.OrderId, calculatedStopLossPrice, 0m, cancellationToken);
-        if (!modified)
+        var stopOrders = new List<ActiveBrokerOrder>();
+        foreach (var candidate in candidateStopOrders)
         {
-            logger.LogWarning(
-                "Broker did not accept trailing stop update for {Ticker} {StrategyName}. OrderId={OrderId} NewStop={StopLossPrice}",
-                ticker,
-                strategy.StrategyName,
-                stopOrder.OrderId,
-                calculatedStopLossPrice);
+            var owner = await _orderIntents.GetByClientOrderIdAsync(
+                candidate.ParentClientOrderId ?? candidate.ClientOrderId,
+                cancellationToken);
+            if (owner is not null &&
+                owner.Kind == OrderIntentKind.ProtectiveStop &&
+                owner.PositionGenerationEventId == positionGenerationEventId)
+            {
+                stopOrders.Add(candidate);
+            }
+        }
+        if (stopOrders.Count == 0)
+        {
             return;
         }
 
-        strategyOrder.StopLossPrice = calculatedStopLossPrice;
-        strategyOrder.UpdatedAt = DateTimeOffset.UtcNow;
-        await _orderRepo.SaveOrderAsync(strategyOrder, cancellationToken);
+        if (_orderSubmissionService is null)
+        {
+            throw new InvalidOperationException(
+                "Trailing-stop replacement requires the common order command service.");
+        }
+
+        foreach (var stopOrder in stopOrders)
+        {
+            await _orderSubmissionService.ReplaceProtectiveStopAsync(
+                new ProtectiveStopReplacementSubmission(
+                    stopOrder.ParentClientOrderId ?? stopOrder.ClientOrderId,
+                    stopOrder.OrderId,
+                    ticker,
+                    calculatedStopLossPrice,
+                    "atr_trailing_stop_raise",
+                    _timeProvider.GetUtcNow().ToUniversalTime()),
+                _brokerClient,
+                cancellationToken);
+        }
 
         logger.LogInformation(
-            "Raised trailing stop for {Ticker} {StrategyName}. OrderId={OrderId} NewStop={StopLossPrice}",
+            "Raised {StopCount} trailing stop tranche(s) for {Ticker} {StrategyName}. NewStop={StopLossPrice}",
+            stopOrders.Count,
             ticker,
             strategy.StrategyName,
-            stopOrder.OrderId,
             calculatedStopLossPrice);
         progress?.Report($"Raised trailing stop for {ticker} to {calculatedStopLossPrice:0.00}.");
+    }
+
+    private static decimal? ReadDecimalProperty(string json, string propertyName)
+    {
+        if (String.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.TryGetProperty(propertyName, out var property) &&
+               property.TryGetDecimal(out var value)
+            ? value
+            : null;
     }
 }

@@ -119,9 +119,9 @@ test.describe("UI2 web trading workstation", () => {
     await expect(pair.getByRole("heading", { name: "TradingFlow decision" })).toBeVisible();
     await expect(pair.getByRole("heading", { name: "Market predictor" })).toBeVisible();
 
-    // The two panels are the same width, and each states which of them can
-    // authorise an entry. Equal size must not read as equal authority.
-    await expect(pair).toContainText("Authoritative for entry");
+    // The two panels are the same width, and each states its authority. The
+    // observational desk signal remains advisory until a strategy is admitted.
+    await expect(pair).toContainText("Advisory until strategy admission");
     await expect(pair).toContainText("Read-only evidence");
 
     // An unreadable predictor degrades to unavailable evidence; it never blocks
@@ -178,10 +178,10 @@ test.describe("UI2 web trading workstation", () => {
     expect(wrapping).toEqual({ symbolLines: 1, actionOverflows: false });
   });
 
-  test("operator URLs use strategy identities and never expose local config paths", async ({ page }) => {
+  test("operator state uses a strategy identity field and never exposes local config paths", async ({ page }) => {
     await openSeededDesk(page);
+    await expect(page.locator('select[name="strategyId"]')).toHaveCount(1);
     const hrefs = await page.locator('a[href*="/TradeDesk"]').evaluateAll(nodes => nodes.map(node => node.getAttribute("href")));
-    expect(hrefs.some(href => href?.includes("strategyId="))).toBeTruthy();
     expect(hrefs.some(href => href?.includes("strategyPath=") || href?.toLowerCase().includes("%5cproject"))).toBeFalsy();
   });
 

@@ -8,5 +8,6 @@ public enum OrderIntentKind
 {
     StrategyEntry = 1,
     OperatorEntry = 2,
-    ProtectiveStop = 3
+    ProtectiveStop = 3,
+    PositionExit = 4
 }

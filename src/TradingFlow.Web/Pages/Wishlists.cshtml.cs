@@ -31,9 +31,6 @@ public sealed class WishlistsModel : PageModel
     [TempData] public string? StatusMessage { get; set; }
     [TempData] public string? ErrorMessage { get; set; }
 
-    /// <summary>Screener scope the import control is set to, carried across the post.</summary>
-    [BindProperty(SupportsGet = true)] public string ScreenerScopeName { get; set; } = "swing";
-
     /// <summary>The last import in this request, used only for the confirmation line.</summary>
     public ScreenerSyncResult? LastImport { get; private set; }
 
@@ -214,7 +211,7 @@ public sealed class WishlistsModel : PageModel
     /// <remarks>
     /// This goes through the same <see cref="ScreenerSyncService"/> the desk's
     /// screener bar uses, so a URL, a saved screener name and a bare query
-    /// normalise identically on both screens and an intraday scope means the same
+    /// normalise identically on both screens and a sub-daily scope means the same
     /// thing in both places. Adding is idempotent and never removes an entry.
     /// </remarks>
     public async Task<IActionResult> OnPostImportFinvizAsync(
@@ -223,10 +220,7 @@ public sealed class WishlistsModel : PageModel
         string? screenerScope,
         CancellationToken cancellationToken)
     {
-        var scope = String.Equals(screenerScope, "swing", StringComparison.OrdinalIgnoreCase)
-            ? ScreenerScope.Swing
-            : ScreenerScope.Intraday;
-        var result = await screener.PreviewAsync(finvizFilter, scope, targetWishlistId, cancellationToken);
+        var result = await screener.PreviewAsync(finvizFilter, ScreenerScope.Swing, targetWishlistId, cancellationToken);
         if (!result.Succeeded)
         {
             ErrorMessage = result.Error;
@@ -271,10 +265,7 @@ public sealed class WishlistsModel : PageModel
             return RedirectToPage("/Wishlists", new { id });
         }
 
-        var scope = String.Equals(presetScope, "swing", StringComparison.OrdinalIgnoreCase)
-            ? ScreenerScope.Swing
-            : ScreenerScope.Intraday;
-        var saved = await presets.SaveAsync(presetName, scope, presetQuery, cancellationToken);
+        var saved = await presets.SaveAsync(presetName, ScreenerScope.Swing, presetQuery, cancellationToken);
         StatusMessage = $"Saved screen '{saved.Name}' for {saved.Category.ToLowerInvariant()}.";
         return RedirectToPage("/Wishlists", new { id });
     }

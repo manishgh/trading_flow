@@ -67,4 +67,8 @@
 		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
 	</ItemGroup>
 
+	<ItemGroup>
+		<ProjectReference Include="..\TradingFlow.Contracts\TradingFlow.Contracts.csproj" />
+	</ItemGroup>
+
 </Project>

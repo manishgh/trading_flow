@@ -23,7 +23,8 @@ public sealed record CandlePipelineRequest(
     int WorkerCount,
     bool IncludeExtendedHours = true,
     string ExchangeTimezone = "America/New_York",
-    CandleStoreContext? StoreContext = null);
+    CandleStoreContext? StoreContext = null,
+    int MaxRetainedBars = 1_000_000);
 
 public sealed record CandleEvent(MarketBarEvent MarketEvent)
 {
@@ -102,12 +103,19 @@ public sealed class CandlePipelineEngine
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
     {
+        if (request.MaxRetainedBars <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                "A positive MaxRetainedBars limit is required for every candle pipeline run.");
+        }
+
         var workerCount = ResolveWorkerCount(request.WorkerCount);
         var capacity = request.BoundedCapacity <= 0 ? 1000 : request.BoundedCapacity;
         var providerConfirmsSparseNoTradeIntervals =
             provider is IMarketDataCompletenessProvider
             {
-                OmittedIntradayIntervalsMeanNoQualifyingTrades: true
+                OmittedSubDailyIntervalsMeanNoQualifyingTrades: true
             };
         var marketEvidenceProfile = await ResolveMarketEvidenceProfileAsync(
             request,
@@ -126,6 +134,7 @@ public sealed class CandlePipelineEngine
         var barsByKey = new ConcurrentDictionary<
             TickerTimeframeKey,
             ConcurrentDictionary<DateTimeOffset, OhlcvBar>>();
+        var retainedBarBudget = new RetainedBarBudget(request.MaxRetainedBars);
         var failures = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var metrics = new MutablePipelineMetrics();
         var normalizedProgress = new ThrottledCounterProgress(
@@ -233,6 +242,10 @@ public sealed class CandlePipelineEngine
         {
             throw;
         }
+        catch (ReplayBarBudgetExceededException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             progress?.Report($"Batch market data read failed: {exception.Message}. Retrying unresolved ticker(s) one at a time.");
@@ -298,7 +311,8 @@ public sealed class CandlePipelineEngine
             failures,
             metrics,
             providerConfirmsSparseNoTradeIntervals,
-            barResampler);
+            barResampler,
+            retainedBarBudget);
         await PersistCandlesAsync(request, derivedBars, "derived", cancellationToken);
 
         foreach (var failedTicker in failures.Keys)
@@ -353,6 +367,11 @@ public sealed class CandlePipelineEngine
                         continue;
                     }
 
+                    if (isStructurallyValid)
+                    {
+                        retainedBarBudget.Reserve(normalizedBar);
+                    }
+
                     var replayEvent = replayAdapter.Create(
                         normalizedBar,
                         request.StoreContext?.ProviderName ?? provider.GetType().Name,
@@ -363,6 +382,10 @@ public sealed class CandlePipelineEngine
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (ReplayBarBudgetExceededException)
             {
                 throw;
             }
@@ -487,7 +510,8 @@ public sealed class CandlePipelineEngine
         IDictionary<string, string> failures,
         MutablePipelineMetrics metrics,
         bool providerConfirmsSparseNoTradeIntervals,
-        BarResampler barResampler)
+        BarResampler barResampler,
+        RetainedBarBudget retainedBarBudget)
     {
         var derivedBars = new List<OhlcvBar>();
         foreach (var (ticker, barsByTimeframe) in grouped)
@@ -521,6 +545,7 @@ public sealed class CandlePipelineEngine
                 var resampled = providerConfirmsSparseNoTradeIntervals
                     ? barResampler.ResampleAuthoritativeSparseHistory(sourceBars, target, request.End)
                     : barResampler.ResampleComplete(sourceBars, target);
+                foreach (var bar in resampled) retainedBarBudget.Reserve(bar);
                 barsByTimeframe[target] = resampled;
                 derivedBars.AddRange(resampled);
                 metrics.IncrementDerivedTimeframe();
@@ -618,6 +643,33 @@ public sealed class CandlePipelineEngine
     }
 
     private readonly record struct TickerTimeframeKey(string Ticker, string Timeframe);
+
+    private readonly record struct RetainedBarIdentity(
+        string Ticker,
+        string Timeframe,
+        DateTimeOffset TimestampUtc);
+
+    private sealed class RetainedBarBudget(int maximumBars)
+    {
+        private readonly ConcurrentDictionary<RetainedBarIdentity, byte> identities = new();
+
+        public void Reserve(OhlcvBar bar)
+        {
+            var identity = new RetainedBarIdentity(
+                bar.Ticker.Trim().ToUpperInvariant(),
+                bar.Timeframe.Trim().ToLowerInvariant(),
+                bar.Timestamp.ToUniversalTime());
+            if (identities.TryAdd(identity, 0) && identities.Count > maximumBars)
+            {
+                throw new ReplayBarBudgetExceededException(maximumBars);
+            }
+        }
+    }
+
+    private sealed class ReplayBarBudgetExceededException(int maximumBars)
+        : InvalidOperationException(
+            $"Candle replay exceeds the configured retained-bar budget of {maximumBars:N0}. " +
+            "Reduce the universe/window or raise engine.max_retained_replay_bars deliberately.");
 
     private sealed class MutablePipelineMetrics
     {

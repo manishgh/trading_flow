@@ -9,7 +9,7 @@ public sealed class MobilePaperRunEndpointResultTests
     [Fact]
     public void ConfigurationPublicationFailure_ReturnsStableBadRequestCode()
     {
-        var result = MobileApiEndpoints.PaperRunConfigurationInvalid();
+        var result = TradingApiV1Endpoints.PaperRunConfigurationInvalid();
 
         AssertResult(result, StatusCodes.Status400BadRequest, "paper_run_configuration_invalid");
     }
@@ -21,7 +21,7 @@ public sealed class MobilePaperRunEndpointResultTests
         StrategySelectionMode selectionMode,
         string expectedCode)
     {
-        var result = MobileApiEndpoints.PaperStrategyUnavailable(selectionMode);
+        var result = TradingApiV1Endpoints.PaperStrategyUnavailable(selectionMode);
 
         AssertResult(result, StatusCodes.Status409Conflict, expectedCode);
     }

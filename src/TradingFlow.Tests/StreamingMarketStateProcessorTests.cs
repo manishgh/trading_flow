@@ -982,7 +982,7 @@ public sealed class StreamingMarketStateProcessorTests
         IMarketDataProvider,
         IMarketDataCompletenessProvider
     {
-        public bool OmittedIntradayIntervalsMeanNoQualifyingTrades => true;
+        public bool OmittedSubDailyIntervalsMeanNoQualifyingTrades => true;
 
         public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
             IReadOnlyCollection<string> tickers,

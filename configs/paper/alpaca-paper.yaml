@@ -1,4 +1,4 @@
-﻿run_name: local-alpaca-paper
+﻿run_name: local-alpaca-paper-swing
 mode: paper
 
 engine:
@@ -10,8 +10,8 @@ engine:
 
 time_window:
   type: rolling
-  lookback_days: 10
-  warmup_lookback_days: 90
+  lookback_days: 260
+  warmup_lookback_days: 400
   start:
   end:
 
@@ -20,12 +20,9 @@ tickers:
 market_data:
   provider: alpaca
   download_timeframes:
-    - 1m
-    - 5m
-    - 15m
     - 1h
     - 1d
-  derive_from: 1m
+  derive_from: 1h
   raw_root: data/paper/raw
   normalized_root: data/paper/normalized
   results_root: data/paper/results
@@ -96,7 +93,7 @@ news:
     worker_count: 2
     channel_buffer: 256
   veto:
-    ttl_minutes: 90
+    ttl_minutes: 1440
     negative_threshold: -0.6
 
 artifacts:
@@ -105,24 +102,12 @@ artifacts:
 strategies:
 
 
-
-# How the desk orders the resolved candidate universe. The desk selects a
-# universe source, not a symbol: everything downstream ranks that whole set, and
-# per-symbol prediction is one input to the rank rather than the rank itself.
-#
-# A model veto subtracts veto_penalty instead of removing the candidate, so a
-# disagreement between the technical verdict and the model stays visible on the
-# desk and in the persisted ranking run.
+# Swing candidates are ordered by durable market structure, catalyst,
+# strategy state, and executable liquidity evidence.
 universe:
   mode: unresolved_wishlist
   rank:
     weights_version: rank.v1
-    intraday:
-      model_edge: 0.38
-      market_structure: 0.22
-      catalyst: 0.18
-      technical_state: 0.14
-      liquidity: 0.08
     swing:
       model_edge: 0.34
       market_structure: 0.28

@@ -6,45 +6,6 @@ namespace TradingFlow.Tests;
 
 public sealed class StrategyInitialStopResolverTests
 {
-    [Fact]
-    public void Resolve_FlushLow_UsesOnlyCompletedRecentFlushContext()
-    {
-        var strategy = CreateStrategy() with
-        {
-            EntryRules = CreateStrategy().EntryRules with
-            {
-                RequirePriorFlushBelowVwapBars = 2,
-                VwapReclaimMaxBarsSinceFlush = 3
-            },
-            ExitRules = CreateStrategy().ExitRules with
-            {
-                InitialStopMode = "flush_low",
-                StopTickBuffer = 0.01m
-            }
-        };
-        var bars = Enumerable.Range(0, 8)
-            .Select(index => new TradingFlow.Domain.Market.OhlcvBar(
-                "TEST",
-                new DateTimeOffset(2026, 8, 27, 14, index, 0, TimeSpan.Zero),
-                "1m",
-                10m,
-                11m,
-                index == 0 ? 5m : 9m - (index * 0.1m),
-                10m,
-                1000m))
-            .ToArray();
-        var result = resolver.Resolve(CreateRequest(
-            strategy,
-            PlannedOrderSide.Long,
-            entryPrice: 10m,
-            atr: 1m,
-            bars: bars,
-            entryIndex: 7));
-
-        Assert.True(result.IsResolved);
-        Assert.Equal(8.29m, result.StopPrice);
-    }
-
     private readonly StrategyInitialStopResolver resolver = new();
 
     [Fact]
@@ -121,41 +82,6 @@ public sealed class StrategyInitialStopResolverTests
     }
 
     [Fact]
-    public void Resolve_OpeningRangeShort_UsesRangeHigh()
-    {
-        var strategy = CreateStrategy() with
-        {
-            EntryRules = CreateStrategy().EntryRules with
-            {
-                OpeningRangeMinutes = 15
-            },
-            ExitRules = CreateStrategy().ExitRules with
-            {
-                InitialStopMode = "opening_range_opposite"
-            }
-        };
-        var bars = new[]
-        {
-            Bar("2026-06-08T13:30:00Z", 100m, 103m, 99m, 102m),
-            Bar("2026-06-08T13:35:00Z", 102m, 104m, 101m, 103m),
-            Bar("2026-06-08T13:45:00Z", 101m, 102m, 98m, 99m)
-        };
-        var request = CreateRequest(
-            strategy,
-            PlannedOrderSide.Short,
-            entryPrice: 99m,
-            atr: 1m,
-            bars: bars,
-            entryIndex: 2);
-
-        var result = resolver.Resolve(request);
-
-        Assert.True(result.IsResolved);
-        Assert.Equal(104m, result.StopPrice);
-        Assert.Equal(5m, result.StopDistance);
-    }
-
-    [Fact]
     public void Resolve_SwingLow_DoesNotReadFutureFillBar()
     {
         var strategy = CreateStrategy() with
@@ -228,8 +154,6 @@ public sealed class StrategyInitialStopResolverTests
             IsVwapReclaim: false,
             IsVwapRejection: false,
             IsEma20Pullback: false,
-            IsOpeningRangeBreakout: false,
-            IsOpeningRangeBreakdown: false,
             IsRecentHighBreakout: false,
             IsRecentLowBreakdown: false,
             IsVolatilityContraction: false,
@@ -275,10 +199,10 @@ public sealed class StrategyInitialStopResolverTests
             "Stop Test",
             "unit-test",
             1,
-            "5m",
+            "1d",
             "long",
             new EntryRules(
-                SetupType: "indicator_stack",
+                SetupType: "momentum",
                 MinVolumeSpike: 1m,
                 MinEntryRsi: 0m,
                 MaxEntryRsi: 100m,
@@ -291,7 +215,6 @@ public sealed class StrategyInitialStopResolverTests
                 RequirePriceAboveEma50: false,
                 RequireEma20AboveEma50: false,
                 MaxVwapExtensionAtr: null,
-                OpeningRangeMinutes: 5,
                 RecentHighLookbackBars: 8,
                 VolatilityContractionLookbackBars: 10),
             new ConfluenceRules(false, "5m", 50, "none"),
@@ -306,6 +229,6 @@ public sealed class StrategyInitialStopResolverTests
                 ExitOnCloseBelowVwap: false,
                 ExitOnMacdHistogramNegative: false,
                 MinHoldBarsBeforeTechnicalExit: 1),
-            new ExecutionRules("5m", 0m),
+            new ExecutionRules("1h", 0m),
             new SessionRules("America/New_York", 0, 0, 0, false, true));
 }

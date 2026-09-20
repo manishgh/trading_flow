@@ -23,7 +23,7 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_OperatorOverrideCannotUseLiveProfile()
+    public async Task SubmitEntryOrderAsync_OperatorOverrideCannotUseLiveProfile()
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
@@ -42,7 +42,7 @@ public sealed class OrderSubmissionServiceTests
         };
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None));
+            service.SubmitEntryOrderAsync(submission, broker.Object, CancellationToken.None));
 
         Assert.Contains("only in the paper profile", error.Message, StringComparison.Ordinal);
         Assert.Equal(0, repository.ReservationAttempts);
@@ -50,7 +50,7 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_OperatorOverridePersistsExplicitExitPolicyIdentity()
+    public async Task SubmitEntryOrderAsync_OperatorOverridePersistsExplicitExitPolicyIdentity()
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
@@ -72,7 +72,7 @@ public sealed class OrderSubmissionServiceTests
             ExitPolicyIdentity = TestStrategyIdentity
         };
 
-        await CreateService(repository).SubmitBracketOrderAsync(
+        await CreateService(repository).SubmitEntryOrderAsync(
             submission,
             broker.Object,
             CancellationToken.None);
@@ -112,7 +112,7 @@ public sealed class OrderSubmissionServiceTests
 
         var result = await service.SubmitProtectiveStopAsync(
             new ProtectiveStopSubmission(
-                Guid.NewGuid(), context, "MSFT", "sell", 10m, 98m,
+                Guid.NewGuid(), context, "paper-account", "MSFT", "sell", 10m, 98m,
                 new DateOnly(2026, 7, 21), DateTimeOffset.UtcNow, "ledger:1:entry-1", 0),
             broker.Object,
             CancellationToken.None);
@@ -124,7 +124,7 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_PersistsIntentBeforeBrokerNetworkCall()
+    public async Task SubmitEntryOrderAsync_PersistsIntentBeforeBrokerNetworkCall()
     {
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
@@ -147,7 +147,7 @@ public sealed class OrderSubmissionServiceTests
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
-        var result = await service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None);
+        var result = await service.SubmitEntryOrderAsync(submission, broker.Object, CancellationToken.None);
 
         Assert.Equal("broker-order-1", result.BrokerOrderId);
         Assert.Equal(repository.Intent!.ClientOrderId, result.ClientOrderId);
@@ -167,7 +167,7 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_PositionConflict_DoesNotReserveOrCallBroker()
+    public async Task SubmitEntryOrderAsync_PositionConflict_DoesNotReserveOrCallBroker()
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
@@ -178,7 +178,7 @@ public sealed class OrderSubmissionServiceTests
             NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
-            service.SubmitBracketOrderAsync(
+            service.SubmitEntryOrderAsync(
                 CreateSubmission(Guid.NewGuid()),
                 broker.Object,
                 CancellationToken.None));
@@ -191,7 +191,7 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_AcknowledgedRetry_SuppressesDuplicateBrokerCall()
+    public async Task SubmitEntryOrderAsync_AcknowledgedRetry_SuppressesDuplicateBrokerCall()
     {
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
@@ -209,10 +209,10 @@ public sealed class OrderSubmissionServiceTests
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid());
 
-        await service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None);
-        await service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None);
+        await service.SubmitEntryOrderAsync(submission, broker.Object, CancellationToken.None);
+        await service.SubmitEntryOrderAsync(submission, broker.Object, CancellationToken.None);
 
-        Assert.Equal(2, repository.ReservationAttempts);
+        Assert.Equal(1, repository.ReservationAttempts);
         Assert.Equal(1, gates.Calls);
         Assert.Single(submittedClientIds);
         broker.Verify(
@@ -239,6 +239,7 @@ public sealed class OrderSubmissionServiceTests
         var submission = new ProtectiveStopSubmission(
             Guid.NewGuid(),
             context,
+            "paper-account",
             "MSFT",
             "sell",
             10m,
@@ -253,14 +254,14 @@ public sealed class OrderSubmissionServiceTests
         var retry = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.SubmitProtectiveStopAsync(submission, broker.Object, CancellationToken.None));
 
-        Assert.Contains("must reconcile", retry.Message, StringComparison.Ordinal);
+        Assert.Contains("must be reconciled", retry.Message, StringComparison.Ordinal);
         broker.Verify(
             client => client.SubmitProtectiveStopAsync(It.IsAny<ProtectiveStopOrder>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_BrokerFailure_LeavesUncertainSubmissionAndBlocksRetry()
+    public async Task SubmitEntryOrderAsync_BrokerFailure_LeavesUncertainSubmissionAndBlocksRetry()
     {
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
@@ -276,9 +277,9 @@ public sealed class OrderSubmissionServiceTests
         var submission = CreateSubmission(Guid.NewGuid());
 
         await Assert.ThrowsAsync<TimeoutException>(
-            () => service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None));
+            () => service.SubmitEntryOrderAsync(submission, broker.Object, CancellationToken.None));
         var retryError = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None));
+            () => service.SubmitEntryOrderAsync(submission, broker.Object, CancellationToken.None));
 
         Assert.Equal(OrderState.Submitted, events.State);
         Assert.Contains("must be reconciled", retryError.Message, StringComparison.Ordinal);
@@ -288,7 +289,7 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_ExistingIntentFromCompletedRun_DoesNotCallBroker()
+    public async Task SubmitEntryOrderAsync_ExistingIntentFromCompletedRun_DoesNotCallBroker()
     {
         var repository = new RecordingIntentRepository { OwningRunStatus = "completed" };
         var events = new RecordingEventRepository(repository);
@@ -300,35 +301,42 @@ public sealed class OrderSubmissionServiceTests
             NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.SubmitBracketOrderAsync(
+            service.SubmitEntryOrderAsync(
                 CreateSubmission(Guid.NewGuid()),
                 broker.Object,
                 CancellationToken.None));
 
         Assert.Contains("run state 'completed'", error.Message, StringComparison.Ordinal);
-        Assert.Equal(OrderState.Intent, events.State);
+        Assert.NotNull(repository.Intent);
+        Assert.Null(events.State);
         broker.Verify(
             client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
     [Fact]
-    public async Task SubmitProtectiveStopAsync_ExistingIntentFromCompletedRun_DoesNotCallBroker()
+    public async Task SubmitProtectiveStopAsync_ExistingIntentFromCompletedRun_RestoresProtection()
     {
         var repository = new RecordingIntentRepository { OwningRunStatus = "completed" };
         var events = new RecordingEventRepository(repository);
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker.Setup(client => client.SubmitProtectiveStopAsync(
+                It.IsAny<ProtectiveStopOrder>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BrokerOrderReceipt(
+                "protective-1",
+                new DateTimeOffset(2026, 7, 21, 14, 35, 1, TimeSpan.Zero)));
         var service = new OrderSubmissionService(
             repository,
             events,
             new PassThroughEntryGateChain(),
             NullLogger<OrderSubmissionService>.Instance);
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.SubmitProtectiveStopAsync(
+        var result = await service.SubmitProtectiveStopAsync(
                 new ProtectiveStopSubmission(
                     Guid.NewGuid(),
                     CreateSubmission(Guid.NewGuid()).RunContext,
+                    "paper-account",
                     "MSFT",
                     "sell",
                     10m,
@@ -338,17 +346,17 @@ public sealed class OrderSubmissionServiceTests
                     "ledger:1:entry-1",
                     0),
                 broker.Object,
-                CancellationToken.None));
+                CancellationToken.None);
 
-        Assert.Contains("run state 'completed'", error.Message, StringComparison.Ordinal);
-        Assert.Equal(OrderState.Intent, events.State);
+        Assert.Equal("protective-1", result.BrokerOrderId);
+        Assert.NotNull(repository.Intent);
         broker.Verify(
             client => client.SubmitProtectiveStopAsync(It.IsAny<ProtectiveStopOrder>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+            Times.Once);
     }
 
     [Fact]
-    public async Task SubmitProtectiveStopAsync_DurableUnsentIntent_RequiresDispatcherRecovery()
+    public async Task SubmitProtectiveStopAsync_DurableUnsentIntent_IsDispatchedByCommonDispatcher()
     {
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
@@ -358,6 +366,7 @@ public sealed class OrderSubmissionServiceTests
         var submission = new ProtectiveStopSubmission(
             intentId,
             context,
+            "paper-account",
             "MSFT",
             "sell",
             10m,
@@ -394,6 +403,7 @@ public sealed class OrderSubmissionServiceTests
                 intentId,
                 OrderIntentKind.ProtectiveStop,
                 null,
+                "paper-account",
                 "BACKSTOP",
                 "MSFT",
                 "sell",
@@ -406,24 +416,30 @@ public sealed class OrderSubmissionServiceTests
                 createdAt,
                 requestJson));
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker.Setup(client => client.SubmitProtectiveStopAsync(
+                It.IsAny<ProtectiveStopOrder>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BrokerOrderReceipt("recovered-backstop", createdAt.AddSeconds(1)));
         var service = new OrderSubmissionService(
             repository,
             events,
             new PassThroughEntryGateChain(),
             NullLogger<OrderSubmissionService>.Instance);
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.SubmitProtectiveStopAsync(submission, broker.Object, CancellationToken.None));
+        var result = await service.SubmitProtectiveStopAsync(
+            submission,
+            broker.Object,
+            CancellationToken.None);
 
-        Assert.Contains("dispatcher recovery", error.Message, StringComparison.Ordinal);
+        Assert.Equal("recovered-backstop", result.BrokerOrderId);
+        Assert.Equal(OrderState.Acked, events.State);
         broker.Verify(
             client => client.SubmitProtectiveStopAsync(
                 It.IsAny<ProtectiveStopOrder>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+            Times.Once);
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_EntryAdmissionBlocked_DoesNotPersistOrCallBroker()
+    public async Task SubmitEntryOrderAsync_EntryAdmissionBlocked_DoesNotPersistOrCallBroker()
     {
         var repository = new RecordingIntentRepository();
         var events = new RecordingEventRepository(repository);
@@ -439,7 +455,7 @@ public sealed class OrderSubmissionServiceTests
             NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
-            service.SubmitBracketOrderAsync(
+            service.SubmitEntryOrderAsync(
                 CreateSubmission(Guid.NewGuid()),
                 broker.Object,
                 CancellationToken.None));
@@ -450,7 +466,7 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_RegularSession_DoesNotMarkOrderAsExtendedWhenPermissionIsEnabled()
+    public async Task SubmitEntryOrderAsync_RegularSession_DoesNotMarkOrderAsExtendedWhenPermissionIsEnabled()
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
@@ -461,7 +477,7 @@ public sealed class OrderSubmissionServiceTests
             .ReturnsAsync(new BrokerOrderReceipt("regular-order", DateTimeOffset.UtcNow));
         var service = CreateService(repository);
 
-        var result = await service.SubmitBracketOrderAsync(
+        var result = await service.SubmitEntryOrderAsync(
             CreateSubmission(Guid.NewGuid()) with { AllowExtendedHoursTrading = true },
             broker.Object,
             CancellationToken.None);
@@ -473,7 +489,7 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_PremarketWithoutPermission_FailsBeforeIntentReservation()
+    public async Task SubmitEntryOrderAsync_PremarketWithoutPermission_FailsBeforeIntentReservation()
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
@@ -485,7 +501,7 @@ public sealed class OrderSubmissionServiceTests
             NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.SubmitBracketOrderAsync(
+            service.SubmitEntryOrderAsync(
                 CreateSubmission(Guid.NewGuid()),
                 broker.Object,
                 CancellationToken.None));
@@ -496,7 +512,7 @@ public sealed class OrderSubmissionServiceTests
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_OvernightEntry_FailsBeforeIntentReservationWhenProtectionIsUnavailable()
+    public async Task SubmitEntryOrderAsync_OvernightEntry_FailsBeforeIntentReservationWhenProtectionIsUnavailable()
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
@@ -504,20 +520,20 @@ public sealed class OrderSubmissionServiceTests
             repository,
             new RecordingEventRepository(repository),
             new RejectingEntryGateChain(new InvalidOperationException(
-                "Extended-hours order contract does not support broker-protected bracket orders.")),
+                    "Extended-hours order contract cannot attach a broker-resting protective stop.")),
             NullLogger<OrderSubmissionService>.Instance);
         var submission = CreateSubmission(Guid.NewGuid()) with { AllowExtendedHoursTrading = true };
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.SubmitBracketOrderAsync(submission, broker.Object, CancellationToken.None));
+            service.SubmitEntryOrderAsync(submission, broker.Object, CancellationToken.None));
 
-        Assert.Contains("does not support broker-protected bracket orders", error.Message, StringComparison.Ordinal);
+        Assert.Contains("cannot attach a broker-resting protective stop", error.Message, StringComparison.Ordinal);
         Assert.Equal(0, repository.ReservationAttempts);
         broker.VerifyAll();
     }
 
     [Fact]
-    public async Task SubmitBracketOrderAsync_AfterHoursEnabled_DoesNotSubmitUnprotectedEntry()
+    public async Task SubmitEntryOrderAsync_AfterHoursEnabled_DoesNotSubmitUnprotectedEntry()
     {
         var repository = new RecordingIntentRepository();
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
@@ -525,16 +541,16 @@ public sealed class OrderSubmissionServiceTests
             repository,
             new RecordingEventRepository(repository),
             new RejectingEntryGateChain(new InvalidOperationException(
-                "Extended-hours order contract does not support broker-protected bracket orders.")),
+                    "Extended-hours order contract cannot attach a broker-resting protective stop.")),
             NullLogger<OrderSubmissionService>.Instance);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.SubmitBracketOrderAsync(
+            service.SubmitEntryOrderAsync(
                 CreateSubmission(Guid.NewGuid()) with { AllowExtendedHoursTrading = true },
                 broker.Object,
                 CancellationToken.None));
 
-        Assert.Contains("does not support broker-protected bracket orders", error.Message, StringComparison.Ordinal);
+        Assert.Contains("cannot attach a broker-resting protective stop", error.Message, StringComparison.Ordinal);
         Assert.Equal(0, repository.ReservationAttempts);
         broker.VerifyAll();
     }
@@ -601,7 +617,7 @@ public sealed class OrderSubmissionServiceTests
                 "America/New_York"));
     }
 
-    private static BracketOrderSubmission CreateSubmission(Guid intentId)
+    private static EntryOrderSubmission CreateSubmission(Guid intentId)
     {
         var runContext = new ExecutionRunContext(
             Guid.NewGuid(),
@@ -609,7 +625,7 @@ public sealed class OrderSubmissionServiceTests
             new string('a', 64),
             new string('b', 40),
             new DateTimeOffset(2026, 7, 21, 14, 0, 0, TimeSpan.Zero));
-        return new BracketOrderSubmission(
+        return new EntryOrderSubmission(
             intentId,
             new ValidatedEntryCandidate(
                 Guid.NewGuid(),
@@ -646,6 +662,17 @@ public sealed class OrderSubmissionServiceTests
 
     private sealed class RecordingIntentRepository : IOrderIntentRepository
     {
+        public Task<ProductionRun?> GetRunAsync(
+            Guid runId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<ProductionRun?>(null);
+
+        public Task<IReadOnlyList<OrderIntentRecord>> ListByRunAsync(
+            Guid runId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<OrderIntentRecord>>(
+                Intent?.RunId == runId ? [Intent] : []);
+
         public OrderIntentRecord? Intent { get; private set; }
 
         public OrderIntentReservation? Reservation { get; private set; }
@@ -667,10 +694,42 @@ public sealed class OrderSubmissionServiceTests
             Task.FromResult(
                 Intent?.ClientOrderId == clientOrderId ? Intent : null);
 
+        public Task<PortfolioRiskReservationRecord?> GetRiskReservationByIntentIdAsync(
+            Guid intentId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<PortfolioRiskReservationRecord?>(null);
+
         public Task<IReadOnlyList<ActiveOrderIntent>> ListActiveForSymbolAsync(
+            string accountId,
             string symbol,
             CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<ActiveOrderIntent>>([]);
+
+        public Task<IReadOnlyList<ActiveOrderIntent>> ListActiveProtectiveForSymbolAsync(
+            string accountId,
+            string symbol,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ActiveOrderIntent>>([]);
+
+        public Task<bool> HasActivePositionExitAsync(
+            string accountId,
+            string symbol,
+            long positionGenerationEventId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
+
+        public Task<IReadOnlyList<OrderIntentRecord>> ListUnpreparedPositionExitsAsync(
+            string accountId,
+            int limit,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<OrderIntentRecord>>([]);
+
+        public Task<bool> TryExpireUnattemptedUnleasedPositionExitAsync(
+            Guid intentId,
+            string reason,
+            DateTimeOffset occurredAtUtc,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
 
         public Task<OrderIntentReservationResult> ReserveAsync(
             ProductionRun run,
@@ -699,6 +758,7 @@ public sealed class OrderSubmissionServiceTests
                     reservation.SessionDate,
                     1,
                     reservation.IntentId),
+                AccountId = reservation.AccountId,
                 StrategyId = reservation.StrategyId,
                 Symbol = reservation.Symbol,
                 Side = reservation.Side,
@@ -722,17 +782,35 @@ public sealed class OrderSubmissionServiceTests
         public int Calls { get; private set; }
 
         public Task<T> ExecuteAsync<T>(
-            BracketOrderSubmission submission,
+            EntryOrderSubmission submission,
             IBrokerClient brokerClient,
             Func<EntryGateApproval, CancellationToken, Task<T>> submit,
             CancellationToken cancellationToken = default)
         {
             Calls++;
+            var notional = submission.Order.ShareQuantity * submission.Order.LimitPrice;
             return submit(
                 new EntryGateApproval(
                     submission.SessionDate,
                     EquityTradingSession.Regular,
-                    SubmitOutsideRegularHours: false),
+                    SubmitOutsideRegularHours: false,
+                    submission.CreatedAtUtc.AddMinutes(5),
+                    new PortfolioRiskReservationRequest(
+                        "paper-account",
+                        submission.Candidate.Horizon,
+                        100_000m,
+                        100_000m,
+                        0m,
+                        0m,
+                        new HashSet<string>(StringComparer.Ordinal),
+                        notional,
+                        submission.Order.ShareQuantity *
+                            Math.Abs(submission.Order.LimitPrice - submission.Order.StopLossPrice),
+                        100_000m,
+                        1_500m,
+                        3,
+                        submission.CreatedAtUtc,
+                        submission.CreatedAtUtc)),
                 cancellationToken);
         }
     }
@@ -740,7 +818,7 @@ public sealed class OrderSubmissionServiceTests
     private sealed class RejectingEntryGateChain(Exception? exception = null) : IEntryGateChain
     {
         public Task<T> ExecuteAsync<T>(
-            BracketOrderSubmission submission,
+            EntryOrderSubmission submission,
             IBrokerClient brokerClient,
             Func<EntryGateApproval, CancellationToken, Task<T>> submit,
             CancellationToken cancellationToken = default) =>
@@ -750,7 +828,9 @@ public sealed class OrderSubmissionServiceTests
                 $"Position for {submission.Order.Ticker} belongs to another strategy.");
     }
 
-    private sealed class RecordingEventRepository(RecordingIntentRepository intents) : IOrderEventRepository
+    private sealed class RecordingEventRepository(RecordingIntentRepository intents) :
+        IOrderEventRepository,
+        IOrderDispatchService
     {
         private long eventId;
         private OrderStateSnapshot? current;
@@ -781,6 +861,7 @@ public sealed class OrderSubmissionServiceTests
         }
 
         public Task<IReadOnlyList<OrderStateSnapshot>> ListReconcilableAsync(
+            string accountId,
             CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<OrderStateSnapshot>>(
                 current is not null && current.State is
@@ -813,5 +894,100 @@ public sealed class OrderSubmissionServiceTests
             AppliedStates.Add(request.NewState);
             return Task.FromResult(new OrderTransitionResult(current, Applied: true));
         }
+
+        public Task<OrderStateSnapshot> RecordBrokerReplacementAsync(
+            BrokerOrderReplacementTransition request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public async Task<OrderSubmissionResult> DispatchAsync(
+            Guid intentId,
+            IBrokerClient broker,
+            CancellationToken cancellationToken = default)
+        {
+            var intent = intents.Intent is { } candidate && candidate.IntentId == intentId
+                ? candidate
+                : throw new InvalidOperationException("Unknown test intent.");
+            var state = await GetCurrentAsync(intent.ClientOrderId, cancellationToken)
+                ?? throw new InvalidOperationException("Missing test lifecycle state.");
+            if (state.State == OrderState.Acked)
+            {
+                return new OrderSubmissionResult(
+                    state.BrokerOrderId!,
+                    intent.ClientOrderId,
+                    intent.IntentId,
+                    state.BrokerTimestampUtc!.Value);
+            }
+
+            if (state.State == OrderState.Submitted)
+            {
+                throw new InvalidOperationException(
+                    $"Order '{intent.ClientOrderId}' must be reconciled before retry.");
+            }
+
+            await TransitionAsync(
+                new OrderTransitionRequest(
+                    intent.ClientOrderId,
+                    OrderState.Intent,
+                    OrderState.Submitted,
+                    "test_dispatcher",
+                    DateTimeOffset.UtcNow,
+                    PayloadJson: intent.RequestJson),
+                cancellationToken);
+            BrokerOrderReceipt receipt;
+            if (intent.Kind == OrderIntentKind.ProtectiveStop)
+            {
+                receipt = await broker.SubmitProtectiveStopAsync(
+                    new ProtectiveStopOrder(
+                        intent.Symbol,
+                        intent.Side,
+                        intent.RequestedQuantity,
+                        intent.StopPrice!.Value,
+                        intent.TimeInForce,
+                        intent.ClientOrderId),
+                    cancellationToken);
+            }
+            else
+            {
+                using var request = JsonDocument.Parse(intent.RequestJson);
+                var takeProfit = request.RootElement.GetProperty("takeProfitPrice").GetDecimal();
+                receipt = await broker.SubmitOrderAsync(
+                    new BrokerEntryOrder(
+                        new FinalizedOrder(
+                            intent.Symbol,
+                            intent.StrategyId,
+                            Decimal.ToInt32(intent.RequestedQuantity),
+                            intent.LimitPrice!.Value,
+                            intent.StopPrice!.Value,
+                            takeProfit,
+                            intent.CreatedAtUtc,
+                            intent.ClientOrderId),
+                        intent.Side,
+                        intent.OrderType,
+                        intent.TimeInForce,
+                        false),
+                    cancellationToken);
+            }
+
+            var acknowledged = await TransitionAsync(
+                new OrderTransitionRequest(
+                    intent.ClientOrderId,
+                    OrderState.Submitted,
+                    OrderState.Acked,
+                    "broker_rest",
+                    DateTimeOffset.UtcNow,
+                    receipt.BrokerAcceptedAtUtc,
+                    receipt.BrokerOrderId),
+                cancellationToken);
+            return new OrderSubmissionResult(
+                receipt.BrokerOrderId,
+                intent.ClientOrderId,
+                intent.IntentId,
+                acknowledged.Snapshot.BrokerTimestampUtc!.Value);
+        }
+
+        public Task<int> RecoverPendingAsync(
+            IBrokerClient broker,
+            CancellationToken cancellationToken = default) => Task.FromResult(0);
     }
 }

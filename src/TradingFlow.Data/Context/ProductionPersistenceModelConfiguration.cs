@@ -12,6 +12,8 @@ internal static class ProductionPersistenceModelConfiguration
         ConfigureRuns(modelBuilder.Entity<ProductionRun>());
         ConfigureOrderIntents(modelBuilder.Entity<OrderIntentRecord>());
         ConfigureOrderEvents(modelBuilder.Entity<OrderEventRecord>());
+        ConfigureProtectiveStopReplacements(modelBuilder.Entity<ProtectiveStopReplacementRecord>());
+        ConfigurePortfolioRiskReservations(modelBuilder.Entity<PortfolioRiskReservationRecord>());
         ConfigureGateEvaluations(modelBuilder.Entity<GateEvaluationRecord>());
         ConfigureRiskEvents(modelBuilder.Entity<RiskEventRecord>());
         ConfigureKillSwitchEvents(modelBuilder.Entity<KillSwitchEventRecord>());
@@ -40,6 +42,7 @@ internal static class ProductionPersistenceModelConfiguration
         entity.Property(record => record.Status).HasMaxLength(30).IsRequired();
         entity.HasIndex(record => record.StartedAtUtc);
         entity.HasIndex(record => record.Status);
+        entity.HasIndex(record => record.UniverseSnapshotId);
     }
 
     private static void ConfigureOrderIntents(EntityTypeBuilder<OrderIntentRecord> entity)
@@ -49,12 +52,14 @@ internal static class ProductionPersistenceModelConfiguration
         ConfigureProvenance(entity);
         entity.Property(record => record.Kind).HasConversion<string>().HasMaxLength(40).IsRequired();
         entity.Property(record => record.ClientOrderId).HasMaxLength(100).IsRequired();
+        entity.Property(record => record.AccountId).HasMaxLength(100).IsRequired();
         entity.Property(record => record.StrategyId).HasMaxLength(120).IsRequired();
         entity.Property(record => record.Symbol).HasMaxLength(20).IsRequired();
         entity.Property(record => record.Side).HasMaxLength(10).IsRequired();
         entity.Property(record => record.OrderType).HasMaxLength(30).IsRequired();
         entity.Property(record => record.TimeInForce).HasMaxLength(10).IsRequired();
         entity.Property(record => record.RequestJson).IsRequired();
+        entity.Property(record => record.DispatchLeaseOwner).HasMaxLength(100);
         entity.HasIndex(record => record.ClientOrderId).IsUnique();
         entity.HasIndex(record => new
         {
@@ -67,13 +72,47 @@ internal static class ProductionPersistenceModelConfiguration
         entity.HasIndex(record => record.CandidateId)
             .HasFilter("candidate_id IS NOT NULL")
             .IsUnique();
-        entity.HasIndex(record => new { record.Symbol, record.CreatedAtUtc });
+        entity.HasIndex(record => new { record.AccountId, record.Symbol, record.CreatedAtUtc });
+        entity.HasIndex(record => new
+        {
+            record.AccountId,
+            record.Symbol,
+            record.PositionGenerationEventId,
+            record.Kind
+        });
+        entity.HasIndex(record => new { record.AccountId, record.DispatchLeaseExpiresAtUtc });
         entity.Property(record => record.CandidateSemanticDecisionSha256).HasMaxLength(64);
         entity.Property(record => record.CandidateTriggeredEvidenceSha256).HasMaxLength(64);
         entity.Property(record => record.CandidateConsumptionEvidenceSha256).HasMaxLength(64);
         entity.HasOne<CandidateRecord>()
             .WithMany()
             .HasForeignKey(record => record.CandidateId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+
+    private static void ConfigurePortfolioRiskReservations(
+        EntityTypeBuilder<PortfolioRiskReservationRecord> entity)
+    {
+        entity.ToTable("portfolio_risk_reservations");
+        entity.HasKey(record => record.ReservationId);
+        ConfigureProvenance(entity);
+        entity.Property(record => record.ClientOrderId).HasMaxLength(100).IsRequired();
+        entity.Property(record => record.AccountId).HasMaxLength(100).IsRequired();
+        entity.Property(record => record.Symbol).HasMaxLength(20).IsRequired();
+        entity.Property(record => record.Horizon).HasMaxLength(20).IsRequired();
+        entity.Property(record => record.State).HasConversion<string>().HasMaxLength(40).IsRequired();
+        entity.Property(record => record.ReleaseReason).HasMaxLength(200);
+        entity.Property(record => record.Version).IsConcurrencyToken();
+        entity.HasIndex(record => record.IntentId).IsUnique();
+        entity.HasIndex(record => record.ClientOrderId).IsUnique();
+        entity.HasIndex(record => new { record.AccountId, record.State });
+        entity.HasIndex(record => new { record.Symbol, record.State });
+        entity.HasIndex(record => new { record.AccountId, record.Symbol })
+            .HasFilter("state <> 'Released'")
+            .IsUnique();
+        entity.HasOne<OrderIntentRecord>()
+            .WithOne()
+            .HasForeignKey<PortfolioRiskReservationRecord>(record => record.IntentId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 
@@ -90,6 +129,63 @@ internal static class ProductionPersistenceModelConfiguration
         entity.Property(record => record.PayloadJson).IsRequired();
         entity.HasIndex(record => new { record.ClientOrderId, record.LocalTimestampUtc });
         entity.HasIndex(record => record.BrokerOrderId);
+    }
+
+    private static void ConfigureProtectiveStopReplacements(
+        EntityTypeBuilder<ProtectiveStopReplacementRecord> entity)
+    {
+        entity.ToTable("protective_stop_replacements");
+        entity.HasKey(record => record.CommandId);
+        ConfigureProvenance(entity);
+        entity.Property(record => record.AccountId).HasMaxLength(100).IsRequired();
+        entity.Property(record => record.OwnerClientOrderId).HasMaxLength(100).IsRequired();
+        entity.Property(record => record.RootBrokerOrderId).HasMaxLength(100).IsRequired();
+        entity.Property(record => record.BrokerOrderId).HasMaxLength(100).IsRequired();
+        entity.Property(record => record.ReplacementClientOrderId).HasMaxLength(100).IsRequired();
+        entity.Property(record => record.Symbol).HasMaxLength(20).IsRequired();
+        entity.Property(record => record.Reason).HasMaxLength(200).IsRequired();
+        entity.Property(record => record.State).HasConversion<string>().HasMaxLength(30).IsRequired();
+        entity.Property(record => record.RequestedAtUtc)
+            .HasConversion(
+                value => value.ToUniversalTime().ToUnixTimeMilliseconds(),
+                value => DateTimeOffset.FromUnixTimeMilliseconds(value));
+        entity.Property(record => record.LeaseExpiresAtUtc)
+            .HasConversion(
+                value => value.HasValue
+                    ? value.Value.ToUniversalTime().ToUnixTimeMilliseconds()
+                    : (long?)null,
+                value => value.HasValue
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(value.Value)
+                    : (DateTimeOffset?)null);
+        entity.Property(record => record.LastAttemptAtUtc)
+            .HasConversion(
+                value => value.HasValue
+                    ? value.Value.ToUniversalTime().ToUnixTimeMilliseconds()
+                    : (long?)null,
+                value => value.HasValue
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(value.Value)
+                    : (DateTimeOffset?)null);
+        entity.Property(record => record.VerifiedAtUtc)
+            .HasConversion(
+                value => value.HasValue
+                    ? value.Value.ToUniversalTime().ToUnixTimeMilliseconds()
+                    : (long?)null,
+                value => value.HasValue
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(value.Value)
+                    : (DateTimeOffset?)null);
+        entity.Property(record => record.LeaseOwner).HasMaxLength(100);
+        entity.Property(record => record.VerifiedBrokerOrderId).HasMaxLength(100);
+        entity.Property(record => record.LastError).HasMaxLength(2_000);
+        entity.Property(record => record.Version).IsConcurrencyToken();
+        entity.HasIndex(record => new { record.AccountId, record.RootBrokerOrderId, record.StopPrice }).IsUnique();
+        entity.HasIndex(record => record.ReplacementClientOrderId).IsUnique();
+        entity.HasIndex(record => new { record.AccountId, record.VerifiedBrokerOrderId }).IsUnique();
+        entity.HasIndex(record => new { record.AccountId, record.State, record.LeaseExpiresAtUtc });
+        entity.HasOne<OrderIntentRecord>()
+            .WithMany()
+            .HasPrincipalKey(record => record.ClientOrderId)
+            .HasForeignKey(record => record.OwnerClientOrderId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 
     private static void ConfigureGateEvaluations(EntityTypeBuilder<GateEvaluationRecord> entity)
@@ -155,18 +251,21 @@ internal static class ProductionPersistenceModelConfiguration
         entity.ToTable("position_events");
         entity.HasKey(record => record.PositionEventId);
         ConfigureProvenance(entity);
+        entity.Property(record => record.AccountId).HasMaxLength(100).IsRequired();
         entity.Property(record => record.Symbol).HasMaxLength(20).IsRequired();
         entity.Property(record => record.StrategyId).HasMaxLength(120).IsRequired();
         entity.Property(record => record.ExecutionStrategyId).HasMaxLength(120).IsRequired();
+        entity.Property(record => record.PositionGenerationClientOrderId).HasMaxLength(100).IsRequired();
         entity.Property(record => record.Side).HasMaxLength(10).IsRequired();
         entity.Property(record => record.BrokerOrderId).HasMaxLength(100).IsRequired();
         entity.Property(record => record.ClientOrderId).HasMaxLength(100).IsRequired();
         entity.Property(record => record.ExecutionId).HasMaxLength(160).IsRequired();
         entity.Property(record => record.Source).HasMaxLength(30).IsRequired();
         entity.Property(record => record.PayloadJson).IsRequired();
-        entity.HasIndex(record => record.ExecutionId).IsUnique();
-        entity.HasIndex(record => new { record.Symbol, record.PositionEventId });
-        entity.HasIndex(record => record.BrokerOrderId);
+        entity.HasIndex(record => new { record.AccountId, record.ExecutionId }).IsUnique();
+        entity.HasIndex(record => new { record.AccountId, record.Symbol, record.PositionEventId });
+        entity.HasIndex(record => new { record.AccountId, record.Symbol, record.PositionGenerationEventId });
+        entity.HasIndex(record => new { record.AccountId, record.BrokerOrderId });
     }
 
     private static void ConfigureCandidates(EntityTypeBuilder<CandidateRecord> entity)
@@ -179,6 +278,7 @@ internal static class ProductionPersistenceModelConfiguration
         entity.Property(record => record.FinvizPreset).HasMaxLength(120).IsRequired();
         entity.Property(record => record.Horizon).HasMaxLength(20).IsRequired();
         entity.Property(record => record.SelectedStrategy).HasMaxLength(120);
+        entity.Property(record => record.StrategySemanticVersion).HasMaxLength(40).IsRequired();
         entity.Property(record => record.StrategyContentSha256).HasMaxLength(64).IsRequired();
         entity.Property(record => record.AdmissionProfileId).HasMaxLength(120).IsRequired();
         entity.Property(record => record.AdmissionProfileVersion).HasMaxLength(40).IsRequired();

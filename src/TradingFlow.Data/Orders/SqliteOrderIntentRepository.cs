@@ -14,7 +14,7 @@ namespace TradingFlow.Data.Orders;
 /// <summary>
 /// Commits an order intent as one append-only SQLite transaction.
 /// </summary>
-public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
+public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrderDispatchRepository
 {
     private readonly IDbContextFactory<TradingFlowDbContext> contextFactory;
     private readonly TimeProvider timeProvider;
@@ -43,6 +43,21 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             .SingleOrDefaultAsync(record => record.IntentId == intentId, cancellationToken);
     }
 
+    public async Task<ProductionRun?> GetRunAsync(
+        Guid runId,
+        CancellationToken cancellationToken = default)
+    {
+        if (runId == Guid.Empty)
+        {
+            throw new ArgumentException("Run ID is required.", nameof(runId));
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.ProductionRuns
+            .AsNoTracking()
+            .SingleOrDefaultAsync(record => record.RunId == runId, cancellationToken);
+    }
+
     public async Task<OrderIntentRecord?> GetByClientOrderIdAsync(
         string clientOrderId,
         CancellationToken cancellationToken = default)
@@ -56,10 +71,377 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             .SingleOrDefaultAsync(record => record.ClientOrderId == normalized, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<OrderIntentRecord>> ListByRunAsync(
+        Guid runId,
+        CancellationToken cancellationToken = default)
+    {
+        if (runId == Guid.Empty)
+        {
+            throw new ArgumentException("Run ID is required.", nameof(runId));
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var intents = await context.OrderIntents
+            .AsNoTracking()
+            .Where(record => record.RunId == runId)
+            .ToArrayAsync(cancellationToken);
+
+        return intents
+            .OrderBy(record => record.CreatedAtUtc)
+            .ThenBy(record => record.IntentId)
+            .ToArray();
+    }
+
+    public async Task<PortfolioRiskReservationRecord?> GetRiskReservationByIntentIdAsync(
+        Guid intentId,
+        CancellationToken cancellationToken = default)
+    {
+        if (intentId == Guid.Empty)
+        {
+            throw new ArgumentException("Intent ID is required.", nameof(intentId));
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.PortfolioRiskReservations
+            .AsNoTracking()
+            .SingleOrDefaultAsync(record => record.IntentId == intentId, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Guid>> ListRecoverableIntentIdsAsync(
+        string accountId,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedAccountId = !String.IsNullOrWhiteSpace(accountId)
+            ? accountId.Trim()
+            : throw new ArgumentException("Dispatch account ID is required.", nameof(accountId));
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var latestEventIds = context.OrderEvents
+            .GroupBy(record => record.ClientOrderId)
+            .Select(group => group.Max(record => record.EventId));
+        var recoverable = await (
+                from intent in context.OrderIntents.AsNoTracking()
+                join orderEvent in context.OrderEvents.AsNoTracking()
+                    on intent.ClientOrderId equals orderEvent.ClientOrderId
+                join run in context.ProductionRuns.AsNoTracking()
+                    on intent.RunId equals run.RunId
+                where intent.AccountId == normalizedAccountId &&
+                      latestEventIds.Contains(orderEvent.EventId) &&
+                      (orderEvent.NewState == "SUBMITTED" ||
+                       orderEvent.NewState == "INTENT" &&
+                       (intent.Kind == OrderIntentKind.ProtectiveStop ||
+                        intent.Kind == OrderIntentKind.PositionExit ||
+                        run.Status == "running"))
+                select new { intent.IntentId, intent.CreatedAtUtc })
+            .ToArrayAsync(cancellationToken);
+        return recoverable
+            .OrderBy(item => item.CreatedAtUtc)
+            .ThenBy(item => item.IntentId)
+            .Select(item => item.IntentId)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<OrderIntentRecord>> ListUnpreparedPositionExitsAsync(
+        string accountId,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedAccountId = !String.IsNullOrWhiteSpace(accountId)
+            ? accountId.Trim()
+            : throw new ArgumentException("Account ID is required.", nameof(accountId));
+        if (limit is < 1 or > 1_000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var latestEventIds = context.OrderEvents
+            .GroupBy(record => record.ClientOrderId)
+            .Select(group => group.Max(record => record.EventId));
+        var recoverable = await (
+                from intent in context.OrderIntents.AsNoTracking()
+                join orderEvent in context.OrderEvents.AsNoTracking()
+                    on intent.ClientOrderId equals orderEvent.ClientOrderId
+                where intent.AccountId == normalizedAccountId &&
+                      intent.Kind == OrderIntentKind.PositionExit &&
+                      latestEventIds.Contains(orderEvent.EventId) &&
+                      orderEvent.NewState == "INTENT"
+                select intent)
+            .ToArrayAsync(cancellationToken);
+        return recoverable
+            .OrderBy(intent => intent.CreatedAtUtc)
+            .ThenBy(intent => intent.IntentId)
+            .Take(limit)
+            .ToArray();
+    }
+
+    public async Task<OrderDispatchLease?> TryAcquireDispatchLeaseAsync(
+        Guid intentId,
+        string accountId,
+        string ownerId,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default)
+    {
+        if (intentId == Guid.Empty || String.IsNullOrWhiteSpace(accountId) ||
+            String.IsNullOrWhiteSpace(ownerId) || leaseDuration <= TimeSpan.Zero)
+        {
+            throw new ArgumentException(
+                "Dispatch requires intent, account, owner, and a positive lease duration.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await context.Database.OpenConnectionAsync(cancellationToken);
+        var connection = (SqliteConnection)context.Database.GetDbConnection();
+        await using var transaction = connection.BeginTransaction(
+            IsolationLevel.Serializable,
+            deferred: false);
+        context.Database.UseTransaction(transaction);
+        var nowUtc = timeProvider.GetUtcNow().ToUniversalTime();
+        var intent = await context.OrderIntents.SingleOrDefaultAsync(
+            record => record.IntentId == intentId,
+            cancellationToken);
+        if (intent is null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return null;
+        }
+
+        if (!intent.AccountId.Equals(accountId.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Intent {intentId:N} belongs to a different broker account.");
+        }
+
+        var stateValue = await context.OrderEvents
+            .Where(record => record.ClientOrderId == intent.ClientOrderId)
+            .OrderByDescending(record => record.EventId)
+            .Select(record => record.NewState)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Intent {intentId:N} has no persisted lifecycle event.");
+        var state = OrderStateMachine.ParseStorageValue(stateValue);
+        var runStatus = await context.ProductionRuns
+            .Where(record => record.RunId == intent.RunId)
+            .Select(record => record.Status)
+            .SingleAsync(cancellationToken);
+        if (state is not (OrderState.Intent or OrderState.Submitted) ||
+            state == OrderState.Intent &&
+            intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry &&
+            !runStatus.Equals("running", StringComparison.Ordinal) ||
+            intent.DispatchLeaseExpiresAtUtc is { } currentExpiry && currentExpiry > nowUtc)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return null;
+        }
+
+        var token = Guid.NewGuid();
+        var leaseExpiresAtUtc = nowUtc.Add(leaseDuration);
+        intent.DispatchLeaseOwner = ownerId.Trim();
+        intent.DispatchLeaseToken = token;
+        intent.DispatchLeaseExpiresAtUtc = leaseExpiresAtUtc;
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new OrderDispatchLease(intent, state, token, leaseExpiresAtUtc);
+    }
+
+    public async Task<OrderIntentRecord> RecordDispatchAttemptAsync(
+        Guid intentId,
+        Guid leaseToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (intentId == Guid.Empty || leaseToken == Guid.Empty)
+        {
+            throw new ArgumentException("Dispatch intent and lease token are required.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await context.Database.OpenConnectionAsync(cancellationToken);
+        var connection = (SqliteConnection)context.Database.GetDbConnection();
+        await using var transaction = connection.BeginTransaction(
+            IsolationLevel.Serializable,
+            deferred: false);
+        context.Database.UseTransaction(transaction);
+        var nowUtc = timeProvider.GetUtcNow().ToUniversalTime();
+        var intent = await context.OrderIntents.SingleOrDefaultAsync(
+            record => record.IntentId == intentId,
+            cancellationToken)
+            ?? throw new InvalidOperationException($"Unknown dispatch intent {intentId:N}.");
+        if (intent.DispatchLeaseToken != leaseToken ||
+            intent.DispatchLeaseExpiresAtUtc is null ||
+            intent.DispatchLeaseExpiresAtUtc <= nowUtc)
+        {
+            throw new OrderDispatchLeaseLostException(intentId);
+        }
+
+        var stateValue = await context.OrderEvents
+            .Where(record => record.ClientOrderId == intent.ClientOrderId)
+            .OrderByDescending(record => record.EventId)
+            .Select(record => record.NewState)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Intent {intentId:N} has no persisted lifecycle event.");
+        var state = OrderStateMachine.ParseStorageValue(stateValue);
+        if (state is not (OrderState.Intent or OrderState.Submitted))
+        {
+            throw new OrderDispatchLeaseLostException(intentId);
+        }
+
+        var runStatus = await context.ProductionRuns
+            .Where(record => record.RunId == intent.RunId)
+            .Select(record => record.Status)
+            .SingleAsync(cancellationToken);
+        if (intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry &&
+            !runStatus.Equals("running", StringComparison.Ordinal))
+        {
+            throw intent.DispatchAttemptCount > 0
+                ? new OrderDispatchAdoptionRequiredException(intentId)
+                : new OrderDispatchRunInactiveException(intentId);
+        }
+
+        if (intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry &&
+            intent.DispatchExpiresAtUtc is { } dispatchExpiry && dispatchExpiry <= nowUtc)
+        {
+            throw intent.DispatchAttemptCount > 0
+                ? new OrderDispatchAdoptionRequiredException(intentId)
+                : new OrderDispatchExpiredException(intentId, dispatchExpiry);
+        }
+
+        if (intent.Kind == OrderIntentKind.ProtectiveStop &&
+            intent.PositionGenerationEventId is { } positionGenerationEventId &&
+            await HasActivePositionExitAsync(
+                context,
+                intent.AccountId,
+                intent.Symbol,
+                positionGenerationEventId,
+                cancellationToken))
+        {
+            throw new PositionExitInProgressException(
+                intent.AccountId,
+                intent.Symbol,
+                positionGenerationEventId);
+        }
+
+        intent.DispatchAttemptCount = checked(intent.DispatchAttemptCount + 1);
+        intent.LastDispatchAttemptAtUtc = nowUtc;
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return intent;
+    }
+
+    public async Task<bool> TryExpireUnattemptedUnleasedPositionExitAsync(
+        Guid intentId,
+        string reason,
+        DateTimeOffset occurredAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        if (intentId == Guid.Empty || String.IsNullOrWhiteSpace(reason) ||
+            occurredAtUtc == default || occurredAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException(
+                "Position-exit expiry requires intent identity, reason, and a UTC timestamp.");
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await context.Database.OpenConnectionAsync(cancellationToken);
+        var connection = (SqliteConnection)context.Database.GetDbConnection();
+        await using var transaction = connection.BeginTransaction(
+            IsolationLevel.Serializable,
+            deferred: false);
+        context.Database.UseTransaction(transaction);
+        var intent = await context.OrderIntents.SingleOrDefaultAsync(
+            record => record.IntentId == intentId,
+            cancellationToken) ?? throw new InvalidOperationException(
+                $"Unknown position-exit intent {intentId:N}.");
+        if (intent.Kind != OrderIntentKind.PositionExit)
+        {
+            throw new InvalidOperationException(
+                $"Intent {intentId:N} is not a position exit.");
+        }
+
+        var current = await context.OrderEvents
+            .Where(record => record.ClientOrderId == intent.ClientOrderId)
+            .OrderByDescending(record => record.EventId)
+            .FirstOrDefaultAsync(cancellationToken) ?? throw new InvalidOperationException(
+                $"Position-exit intent {intentId:N} has no lifecycle event.");
+        var state = OrderStateMachine.ParseStorageValue(current.NewState);
+        if (OrderStateMachine.IsTerminal(state))
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return state is OrderState.Rejected or OrderState.Canceled or OrderState.Expired;
+        }
+
+        var nowUtc = timeProvider.GetUtcNow().ToUniversalTime();
+        var hasActiveLease = intent.DispatchLeaseToken is not null &&
+            intent.DispatchLeaseExpiresAtUtc is { } leaseExpiry &&
+            leaseExpiry > nowUtc;
+        if (intent.DispatchAttemptCount != 0 || hasActiveLease ||
+            state is not (OrderState.Intent or OrderState.Submitted))
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return false;
+        }
+
+        var eventTime = occurredAtUtc < current.LocalTimestampUtc
+            ? current.LocalTimestampUtc
+            : occurredAtUtc;
+        context.OrderEvents.Add(new OrderEventRecord
+        {
+            ClientOrderId = intent.ClientOrderId,
+            BrokerOrderId = current.BrokerOrderId,
+            PreviousState = state.ToStorageValue(),
+            NewState = OrderState.Expired.ToStorageValue(),
+            Source = "engine",
+            BrokerTimestampUtc = current.BrokerTimestampUtc,
+            LocalTimestampUtc = eventTime,
+            FilledQuantity = current.FilledQuantity,
+            FillPrice = current.FillPrice,
+            PayloadJson = JsonSerializer.Serialize(new
+            {
+                action = "position_exit_expired_for_protection_restore",
+                reason = reason.Trim()
+            }),
+            RunId = intent.RunId,
+            SchemaVersion = intent.SchemaVersion,
+            ConfigHash = intent.ConfigHash,
+            CodeVersion = intent.CodeVersion
+        });
+        intent.DispatchLeaseOwner = null;
+        intent.DispatchLeaseToken = null;
+        intent.DispatchLeaseExpiresAtUtc = null;
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
+    public async Task ReleaseDispatchLeaseAsync(
+        Guid intentId,
+        Guid leaseToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (intentId == Guid.Empty || leaseToken == Guid.Empty)
+        {
+            return;
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await context.OrderIntents
+            .Where(record =>
+                record.IntentId == intentId && record.DispatchLeaseToken == leaseToken)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(record => record.DispatchLeaseOwner, (string?)null)
+                    .SetProperty(record => record.DispatchLeaseToken, (Guid?)null)
+                    .SetProperty(record => record.DispatchLeaseExpiresAtUtc, (DateTimeOffset?)null),
+                cancellationToken);
+    }
+
     public async Task<IReadOnlyList<ActiveOrderIntent>> ListActiveForSymbolAsync(
+        string accountId,
         string symbol,
         CancellationToken cancellationToken = default)
     {
+        var normalizedAccountId = !String.IsNullOrWhiteSpace(accountId)
+            ? accountId.Trim()
+            : throw new ArgumentException("Order-intent account ID is required.", nameof(accountId));
         var normalized = !String.IsNullOrWhiteSpace(symbol)
             ? symbol.Trim().ToUpperInvariant()
             : throw new ArgumentException("Order-intent symbol is required.", nameof(symbol));
@@ -71,7 +453,8 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
                 from intent in context.OrderIntents.AsNoTracking()
                 join orderEvent in context.OrderEvents.AsNoTracking()
                     on intent.ClientOrderId equals orderEvent.ClientOrderId
-                where intent.Symbol == normalized &&
+                where intent.AccountId == normalizedAccountId &&
+                      intent.Symbol == normalized &&
                       intent.StrategyId != "BACKSTOP" &&
                       latestEventIds.Contains(orderEvent.EventId)
                 select new
@@ -94,6 +477,77 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             .Where(intent => !OrderStateMachine.IsTerminal(intent.State))
             .OrderBy(intent => intent.ClientOrderId, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    public async Task<IReadOnlyList<ActiveOrderIntent>> ListActiveProtectiveForSymbolAsync(
+        string accountId,
+        string symbol,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedAccountId = !String.IsNullOrWhiteSpace(accountId)
+            ? accountId.Trim()
+            : throw new ArgumentException("Order-intent account ID is required.", nameof(accountId));
+        var normalizedSymbol = !String.IsNullOrWhiteSpace(symbol)
+            ? symbol.Trim().ToUpperInvariant()
+            : throw new ArgumentException("Order-intent symbol is required.", nameof(symbol));
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var latestEventIds = context.OrderEvents
+            .GroupBy(record => record.ClientOrderId)
+            .Select(group => group.Max(record => record.EventId));
+        var rows = await (
+                from intent in context.OrderIntents.AsNoTracking()
+                join orderEvent in context.OrderEvents.AsNoTracking()
+                    on intent.ClientOrderId equals orderEvent.ClientOrderId
+                where intent.AccountId == normalizedAccountId &&
+                      intent.Symbol == normalizedSymbol &&
+                      intent.Kind == OrderIntentKind.ProtectiveStop &&
+                      latestEventIds.Contains(orderEvent.EventId)
+                select new
+                {
+                    intent.ClientOrderId,
+                    intent.StrategyId,
+                    intent.Symbol,
+                    intent.Side,
+                    orderEvent.NewState
+                })
+            .ToArrayAsync(cancellationToken);
+
+        return rows
+            .Select(row => new ActiveOrderIntent(
+                row.ClientOrderId,
+                row.StrategyId,
+                row.Symbol,
+                row.Side,
+                OrderStateMachine.ParseStorageValue(row.NewState)))
+            .Where(intent => !OrderStateMachine.IsTerminal(intent.State))
+            .OrderBy(intent => intent.ClientOrderId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    public async Task<bool> HasActivePositionExitAsync(
+        string accountId,
+        string symbol,
+        long positionGenerationEventId,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedAccountId = !String.IsNullOrWhiteSpace(accountId)
+            ? accountId.Trim()
+            : throw new ArgumentException("Order-intent account ID is required.", nameof(accountId));
+        var normalizedSymbol = !String.IsNullOrWhiteSpace(symbol)
+            ? symbol.Trim().ToUpperInvariant()
+            : throw new ArgumentException("Order-intent symbol is required.", nameof(symbol));
+        if (positionGenerationEventId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(positionGenerationEventId));
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await HasActivePositionExitAsync(
+            context,
+            normalizedAccountId,
+            normalizedSymbol,
+            positionGenerationEventId,
+            cancellationToken);
     }
 
     public async Task<OrderIntentReservationResult> ReserveAsync(
@@ -162,7 +616,35 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             }
             else
             {
-                EnsureRunCanSubmit(existingRun, run);
+                EnsureSameRun(existingRun, run);
+                if (reservation.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry &&
+                    !existingRun.Status.Equals("running", StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot submit an entry intent for run {run.RunId:N} in state '{existingRun.Status}'.");
+                }
+            }
+
+            if (reservation.Kind == OrderIntentKind.PositionExit)
+            {
+                await ReservePositionExitQuantityAsync(
+                    context,
+                    reservation,
+                    cancellationToken);
+            }
+            else if (reservation.Kind == OrderIntentKind.ProtectiveStop &&
+                     reservation.PositionGenerationEventId is { } protectiveGeneration &&
+                     await HasActivePositionExitAsync(
+                         context,
+                         reservation.AccountId.Trim(),
+                         reservation.Symbol.Trim().ToUpperInvariant(),
+                         protectiveGeneration,
+                         cancellationToken))
+            {
+                throw new PositionExitInProgressException(
+                    reservation.AccountId.Trim(),
+                    reservation.Symbol.Trim().ToUpperInvariant(),
+                    protectiveGeneration);
             }
 
             var previousSequence = await context.OrderIntents
@@ -187,6 +669,17 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             string? triggeredEvidenceSha256 = null;
             string? consumptionEvidenceSha256 = null;
             string? consumptionEvidenceJson = null;
+            if (reservation.Kind == OrderIntentKind.OperatorEntry)
+            {
+                await ReservePortfolioRiskAsync(
+                    context,
+                    run,
+                    reservation,
+                    clientOrderId,
+                    serverNowUtc,
+                    cancellationToken);
+            }
+
             if (reservation.Kind == OrderIntentKind.StrategyEntry)
             {
                 var candidateId = reservation.CandidateId!.Value;
@@ -238,6 +731,14 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
                         reservation.IntentId,
                         candidate.ExpiresAtUtc);
                 }
+
+                await ReservePortfolioRiskAsync(
+                    context,
+                    run,
+                    reservation,
+                    clientOrderId,
+                    serverNowUtc,
+                    cancellationToken);
 
                 triggeredVersion = reservation.CandidateExpectedVersion!.Value;
                 consumedVersion = checked(triggeredVersion.Value + 1);
@@ -319,6 +820,7 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
                 CandidateTriggeredEvidenceSha256 = triggeredEvidenceSha256,
                 CandidateConsumptionEvidenceSha256 = consumptionEvidenceSha256,
                 ClientOrderId = clientOrderId,
+                AccountId = reservation.AccountId.Trim(),
                 StrategyId = reservation.StrategyId,
                 Symbol = reservation.Symbol,
                 Side = reservation.Side,
@@ -327,9 +829,11 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
                 RequestedQuantity = reservation.RequestedQuantity,
                 LimitPrice = reservation.LimitPrice,
                 StopPrice = reservation.StopPrice,
+                PositionGenerationEventId = reservation.PositionGenerationEventId,
                 SessionDate = reservation.SessionDate,
                 SequenceNumber = sequenceNumber,
                 CreatedAtUtc = serverNowUtc,
+                DispatchExpiresAtUtc = reservation.DispatchExpiresAtUtc?.ToUniversalTime(),
                 RequestJson = reservation.RequestJson,
                 RunId = run.RunId,
                 SchemaVersion = run.SchemaVersion,
@@ -364,6 +868,15 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
                 reservation.IntentId,
                 innerException: exception);
         }
+        catch (PortfolioRiskReservationRejectedException exception)
+        {
+            await PersistRiskRejectionAsync(
+                run,
+                reservation,
+                exception,
+                cancellationToken);
+            throw;
+        }
         finally
         {
             reservationLock.Release();
@@ -386,6 +899,7 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
         if (!Enum.IsDefined(reservation.Kind) ||
             reservation.RequestedQuantity <= 0m ||
             String.IsNullOrWhiteSpace(reservation.RequestJson) ||
+            String.IsNullOrWhiteSpace(reservation.AccountId) ||
             String.IsNullOrWhiteSpace(reservation.StrategyId) ||
             String.IsNullOrWhiteSpace(reservation.Symbol) ||
             String.IsNullOrWhiteSpace(reservation.Side) ||
@@ -421,7 +935,438 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             throw new InvalidOperationException(
                 "Only strategy-entry intents may carry candidate authorization fields.");
         }
+
+        if (reservation.Kind == OrderIntentKind.PositionExit &&
+            reservation.PositionGenerationEventId is not > 0)
+        {
+            throw new InvalidOperationException(
+                "Position-exit intents require a positive position-generation event ID.");
+        }
+
+        if (reservation.Kind is not (OrderIntentKind.PositionExit or OrderIntentKind.ProtectiveStop) &&
+            reservation.PositionGenerationEventId is not null)
+        {
+            throw new InvalidOperationException(
+                "Only position-exit and protective-stop intents may carry a position-generation event ID.");
+        }
+
+        var entryKind = reservation.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry;
+        if (entryKind != (reservation.PortfolioRisk is not null) ||
+            entryKind != (reservation.DispatchExpiresAtUtc is not null))
+        {
+            throw new InvalidOperationException(
+                "Entry intents require portfolio risk and dispatch expiry; protective and exit intents must carry neither.");
+        }
+
+        if (reservation.DispatchExpiresAtUtc is { } dispatchExpiry &&
+            (dispatchExpiry.Offset != TimeSpan.Zero || dispatchExpiry <= reservation.CreatedAtUtc))
+        {
+            throw new InvalidOperationException("Entry dispatch expiry must be a future UTC timestamp.");
+        }
+
+        if (reservation.PortfolioRisk is { } risk)
+        {
+            if (!reservation.AccountId.Equals(risk.AccountId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Order intent and portfolio-risk reservation must own the same account.");
+            }
+
+            ValidatePortfolioRisk(reservation, risk);
+        }
     }
+
+    private static void ValidatePortfolioRisk(
+        OrderIntentReservation reservation,
+        PortfolioRiskReservationRequest risk)
+    {
+        if (String.IsNullOrWhiteSpace(risk.AccountId) ||
+            risk.Horizon is not ("day" or "swing") ||
+            risk.AccountEquity <= 0m ||
+            risk.AvailableBuyingPower < 0m ||
+            risk.BrokerGrossExposure < 0m ||
+            risk.ProposedNotional <= 0m ||
+            risk.PlannedRisk <= 0m ||
+            risk.MaxGrossExposure <= 0m ||
+            risk.MaxPortfolioRisk <= 0m ||
+            risk.MaxPositions <= 0 ||
+            risk.AccountSnapshotRequestedAtUtc == default ||
+            risk.AccountSnapshotRequestedAtUtc.Offset != TimeSpan.Zero ||
+            risk.AccountSnapshotObservedAtUtc == default ||
+            risk.AccountSnapshotObservedAtUtc.Offset != TimeSpan.Zero ||
+            risk.AccountSnapshotObservedAtUtc < risk.AccountSnapshotRequestedAtUtc ||
+            risk.BrokerPositionSymbols is null ||
+            risk.BrokerPositionSymbols.Any(String.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException("Portfolio risk reservation data is incomplete or invalid.");
+        }
+
+        var expectedNotional = reservation.RequestedQuantity *
+            (reservation.LimitPrice ?? throw new InvalidOperationException(
+                "Entry risk reservation requires a limit price."));
+        if (risk.ProposedNotional != expectedNotional)
+        {
+            throw new InvalidOperationException(
+                "Portfolio risk notional does not match the immutable order intent.");
+        }
+    }
+
+    private static async Task ReservePortfolioRiskAsync(
+        TradingFlowDbContext context,
+        ProductionRun run,
+        OrderIntentReservation reservation,
+        string clientOrderId,
+        DateTimeOffset serverNowUtc,
+        CancellationToken cancellationToken)
+    {
+        var requested = reservation.PortfolioRisk
+            ?? throw new InvalidOperationException("Entry intent is missing portfolio risk data.");
+        var accountId = requested.AccountId.Trim();
+        var symbol = reservation.Symbol.Trim().ToUpperInvariant();
+        var activeReservations = await context.PortfolioRiskReservations
+            .Where(record =>
+                record.AccountId == accountId &&
+                record.State != PortfolioRiskReservationState.Released)
+            .ToArrayAsync(cancellationToken);
+        if (activeReservations.Any(record => record.Symbol == symbol))
+        {
+            throw RiskRejected(
+                reservation.IntentId,
+                "symbol_already_reserved",
+                $"Account {accountId} already has active TradingFlow ownership for {symbol}.");
+        }
+
+        var latestPositionIds = context.PositionEvents
+            .Where(record => record.AccountId == accountId)
+            .GroupBy(record => new { record.AccountId, record.Symbol })
+            .Select(group => group.Max(record => record.PositionEventId));
+        var localOpenPositions = await context.PositionEvents
+            .AsNoTracking()
+            .Where(record => latestPositionIds.Contains(record.PositionEventId) && record.QuantityAfter != 0m)
+            .Select(record => record.Symbol)
+            .ToArrayAsync(cancellationToken);
+        if (localOpenPositions.Contains(symbol, StringComparer.Ordinal))
+        {
+            throw RiskRejected(
+                reservation.IntentId,
+                "symbol_position_already_open",
+                $"The authoritative local position ledger already has an open position for {symbol}.");
+        }
+
+        var brokerSymbols = requested.BrokerPositionSymbols
+            .Select(value => value.Trim().ToUpperInvariant())
+            .ToHashSet(StringComparer.Ordinal);
+        var localBuyingPower = activeReservations
+            .Where(record =>
+                record.BrokerAcceptedAtUtc is null ||
+                record.BrokerAcceptedAtUtc > requested.AccountSnapshotRequestedAtUtc)
+            .Sum(record => record.ReservedBuyingPower);
+        decimal localGrossExposure = 0m;
+        decimal localNetExposure = 0m;
+        foreach (var active in activeReservations)
+        {
+            var pendingNotional = active.PendingQuantity * active.EntryPrice;
+            var unreflectedFillNotional = !brokerSymbols.Contains(active.Symbol)
+                ? active.OpenPositionQuantity * active.EntryPrice
+                : 0m;
+            var unreflectedNotional = pendingNotional + unreflectedFillNotional;
+            localGrossExposure += unreflectedNotional;
+            localNetExposure += Math.Sign(active.ReservedNetExposure) * unreflectedNotional;
+        }
+
+        var availableAfterLocalReservations = requested.AvailableBuyingPower - localBuyingPower;
+        if (availableAfterLocalReservations < requested.ProposedNotional)
+        {
+            throw RiskRejected(
+                reservation.IntentId,
+                "buying_power_reserved",
+                $"Available buying power {requested.AvailableBuyingPower:F2} minus local reservations " +
+                $"{localBuyingPower:F2} cannot fund {requested.ProposedNotional:F2}.");
+        }
+
+        var projectedGrossExposure = requested.BrokerGrossExposure +
+            localGrossExposure + requested.ProposedNotional;
+        if (projectedGrossExposure > requested.MaxGrossExposure)
+        {
+            throw RiskRejected(
+                reservation.IntentId,
+                "gross_exposure_limit",
+                $"Projected gross exposure {projectedGrossExposure:F2} exceeds " +
+                $"{requested.MaxGrossExposure:F2}.");
+        }
+
+        var activeHeat = activeReservations.Sum(record => record.ReservedPortfolioRisk);
+        var projectedHeat = activeHeat + requested.PlannedRisk;
+        if (projectedHeat > requested.MaxPortfolioRisk)
+        {
+            throw RiskRejected(
+                reservation.IntentId,
+                "portfolio_heat_limit",
+                $"Projected portfolio heat {projectedHeat:F2} exceeds {requested.MaxPortfolioRisk:F2}.");
+        }
+
+        var occupiedSymbols = brokerSymbols
+            .Concat(localOpenPositions)
+            .Concat(activeReservations.Select(record => record.Symbol))
+            .ToHashSet(StringComparer.Ordinal);
+        occupiedSymbols.Add(symbol);
+        if (occupiedSymbols.Count > requested.MaxPositions)
+        {
+            throw RiskRejected(
+                reservation.IntentId,
+                "position_slot_limit",
+                $"Projected position count {occupiedSymbols.Count} exceeds {requested.MaxPositions}.");
+        }
+
+        var signedNotional = reservation.Side.Equals("sell", StringComparison.Ordinal)
+            ? -requested.ProposedNotional
+            : requested.ProposedNotional;
+        context.PortfolioRiskReservations.Add(new PortfolioRiskReservationRecord
+        {
+            ReservationId = Guid.NewGuid(),
+            IntentId = reservation.IntentId,
+            ClientOrderId = clientOrderId,
+            AccountId = accountId,
+            Symbol = symbol,
+            Horizon = requested.Horizon,
+            State = PortfolioRiskReservationState.PendingBrokerSubmission,
+            RequestedQuantity = reservation.RequestedQuantity,
+            PendingQuantity = reservation.RequestedQuantity,
+            CumulativeFilledQuantity = 0m,
+            OpenPositionQuantity = 0m,
+            EntryPrice = reservation.LimitPrice!.Value,
+            RiskPerShare = requested.PlannedRisk / reservation.RequestedQuantity,
+            ReservedBuyingPower = requested.ProposedNotional,
+            ReservedGrossExposure = requested.ProposedNotional,
+            ReservedNetExposure = signedNotional,
+            ReservedPortfolioRisk = requested.PlannedRisk,
+            ReservedPositionSlots = 1,
+            AccountEquityAtReservation = requested.AccountEquity,
+            BrokerBuyingPowerAtReservation = requested.AvailableBuyingPower,
+            BrokerGrossExposureAtReservation = requested.BrokerGrossExposure,
+            BrokerNetExposureAtReservation = requested.BrokerNetExposure,
+            BrokerPositionCountAtReservation = brokerSymbols.Count,
+            MaxGrossExposure = requested.MaxGrossExposure,
+            MaxPortfolioRisk = requested.MaxPortfolioRisk,
+            MaxPositions = requested.MaxPositions,
+            AccountSnapshotRequestedAtUtc = requested.AccountSnapshotRequestedAtUtc,
+            AccountSnapshotObservedAtUtc = requested.AccountSnapshotObservedAtUtc,
+            ReservedAtUtc = serverNowUtc,
+            StateChangedAtUtc = serverNowUtc,
+            Version = 1,
+            RunId = run.RunId,
+            SchemaVersion = run.SchemaVersion,
+            ConfigHash = run.ConfigHash,
+            CodeVersion = run.CodeVersion
+        });
+        context.RiskEvents.Add(new RiskEventRecord
+        {
+            EventType = "portfolio_capacity_reserved",
+            Severity = "information",
+            Symbol = symbol,
+            ObservedValue = projectedHeat,
+            LimitValue = requested.MaxPortfolioRisk,
+            OccurredAtUtc = serverNowUtc,
+            DetailsJson = JsonSerializer.Serialize(new
+            {
+                reservation.IntentId,
+                clientOrderId,
+                accountId,
+                requested.Horizon,
+                requested.ProposedNotional,
+                requested.PlannedRisk,
+                localBuyingPower,
+                projectedGrossExposure,
+                projectedNetExposure = requested.BrokerNetExposure + localNetExposure + signedNotional,
+                projectedHeat,
+                projectedPositionCount = occupiedSymbols.Count
+            }),
+            RunId = run.RunId,
+            SchemaVersion = run.SchemaVersion,
+            ConfigHash = run.ConfigHash,
+            CodeVersion = run.CodeVersion
+        });
+    }
+
+    private static async Task ReservePositionExitQuantityAsync(
+        TradingFlowDbContext context,
+        OrderIntentReservation reservation,
+        CancellationToken cancellationToken)
+    {
+        var accountId = reservation.AccountId.Trim();
+        var symbol = reservation.Symbol.Trim().ToUpperInvariant();
+        var generation = reservation.PositionGenerationEventId
+            ?? throw new InvalidOperationException(
+                "Position-exit reservation has no position generation.");
+        var position = await context.PositionEvents
+            .AsNoTracking()
+            .Where(record => record.AccountId == accountId && record.Symbol == symbol)
+            .OrderByDescending(record => record.PositionEventId)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new PositionExitReservationRejectedException(
+                reservation.IntentId, accountId, symbol, generation,
+                reservation.RequestedQuantity, 0m);
+        var openQuantity = Math.Abs(position.QuantityAfter);
+        var expectedExitSide = position.QuantityAfter > 0m ? "sell" : "buy";
+        if (position.PositionGenerationEventId != generation ||
+            openQuantity <= 0m ||
+            !reservation.Side.Equals(expectedExitSide, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new PositionExitReservationRejectedException(
+                reservation.IntentId, accountId, symbol, generation,
+                reservation.RequestedQuantity, 0m);
+        }
+
+        var latestEventIds = context.OrderEvents
+            .GroupBy(record => record.ClientOrderId)
+            .Select(group => group.Max(record => record.EventId));
+        var activeExitReservations = await (
+                from intent in context.OrderIntents.AsNoTracking()
+                join orderEvent in context.OrderEvents.AsNoTracking()
+                    on intent.ClientOrderId equals orderEvent.ClientOrderId
+                where intent.AccountId == accountId &&
+                      intent.Symbol == symbol &&
+                      intent.Kind == OrderIntentKind.PositionExit &&
+                      intent.PositionGenerationEventId == generation &&
+                      latestEventIds.Contains(orderEvent.EventId)
+                select new
+                {
+                    intent.RequestedQuantity,
+                    orderEvent.FilledQuantity,
+                    orderEvent.NewState
+                })
+            .ToArrayAsync(cancellationToken);
+        var reservedQuantity = activeExitReservations
+            .Where(item => !OrderStateMachine.IsTerminal(
+                OrderStateMachine.ParseStorageValue(item.NewState)))
+            .Sum(item => Math.Max(
+                0m,
+                item.RequestedQuantity - (item.FilledQuantity ?? 0m)));
+        var availableQuantity = Math.Max(0m, openQuantity - reservedQuantity);
+        if (reservation.RequestedQuantity > availableQuantity)
+        {
+            throw new PositionExitReservationRejectedException(
+                reservation.IntentId,
+                accountId,
+                symbol,
+                generation,
+                reservation.RequestedQuantity,
+                availableQuantity);
+        }
+    }
+
+    private static async Task<bool> HasActivePositionExitAsync(
+        TradingFlowDbContext context,
+        string accountId,
+        string symbol,
+        long positionGenerationEventId,
+        CancellationToken cancellationToken)
+    {
+        var latestEventIds = context.OrderEvents
+            .GroupBy(record => record.ClientOrderId)
+            .Select(group => group.Max(record => record.EventId));
+        var states = await (
+                from intent in context.OrderIntents.AsNoTracking()
+                join orderEvent in context.OrderEvents.AsNoTracking()
+                    on intent.ClientOrderId equals orderEvent.ClientOrderId
+                where intent.AccountId == accountId &&
+                      intent.Symbol == symbol &&
+                      intent.Kind == OrderIntentKind.PositionExit &&
+                      intent.PositionGenerationEventId == positionGenerationEventId &&
+                      latestEventIds.Contains(orderEvent.EventId)
+                select orderEvent.NewState)
+            .ToArrayAsync(cancellationToken);
+        return states.Any(state => !OrderStateMachine.IsTerminal(
+            OrderStateMachine.ParseStorageValue(state)));
+    }
+
+    private async Task PersistRiskRejectionAsync(
+        ProductionRun run,
+        OrderIntentReservation reservation,
+        PortfolioRiskReservationRejectedException exception,
+        CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await context.Database.OpenConnectionAsync(cancellationToken);
+        var connection = (SqliteConnection)context.Database.GetDbConnection();
+        await using var transaction = connection.BeginTransaction(
+            IsolationLevel.Serializable,
+            deferred: false);
+        context.Database.UseTransaction(transaction);
+        var occurredAtUtc = timeProvider.GetUtcNow().ToUniversalTime();
+        await ProductionRunPersistence.EnsureAsync(context, run, cancellationToken);
+        context.RiskEvents.Add(new RiskEventRecord
+        {
+            EventType = exception.ReasonCode,
+            Severity = "warning",
+            Symbol = reservation.Symbol,
+            OccurredAtUtc = occurredAtUtc,
+            DetailsJson = JsonSerializer.Serialize(new
+            {
+                reservation.IntentId,
+                exception.ReasonCode,
+                exception.Message
+            }),
+            RunId = run.RunId,
+            SchemaVersion = run.SchemaVersion,
+            ConfigHash = run.ConfigHash,
+            CodeVersion = run.CodeVersion
+        });
+
+        if (reservation.Kind == OrderIntentKind.StrategyEntry)
+        {
+            var candidateId = reservation.CandidateId!.Value;
+            var expectedVersion = reservation.CandidateExpectedVersion!.Value;
+            var blockedVersion = checked(expectedVersion + 1);
+            var affected = await context.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                UPDATE candidates
+                SET state = {StrategyCandidateState.RiskBlocked.ToString()},
+                    version = {blockedVersion},
+                    revalidated_at_utc = {occurredAtUtc}
+                WHERE candidate_id = {candidateId}
+                  AND run_id = {run.RunId}
+                  AND state = {StrategyCandidateState.Triggered.ToString()}
+                  AND version = {expectedVersion}
+                  AND semantic_decision_sha256 = {reservation.CandidateSemanticDecisionSha256};
+                """,
+                cancellationToken);
+            if (affected == 1)
+            {
+                context.CandidateTransitions.Add(new CandidateTransitionRecord
+                {
+                    CandidateId = candidateId,
+                    Sequence = blockedVersion,
+                    PreviousState = StrategyCandidateState.Triggered,
+                    NewState = StrategyCandidateState.RiskBlocked,
+                    OccurredAtUtc = occurredAtUtc,
+                    ReasonCode = exception.ReasonCode,
+                    Source = "portfolio_risk_reservation",
+                    SemanticDecisionSha256 = reservation.CandidateSemanticDecisionSha256!,
+                    EvidenceJson = JsonSerializer.Serialize(new
+                    {
+                        schemaVersion = 1,
+                        reservation.IntentId,
+                        exception.ReasonCode,
+                        exception.Message,
+                        occurredAtUtc
+                    }),
+                    RunId = run.RunId,
+                    SchemaVersion = run.SchemaVersion,
+                    ConfigHash = run.ConfigHash,
+                    CodeVersion = run.CodeVersion
+                });
+            }
+        }
+
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static PortfolioRiskReservationRejectedException RiskRejected(
+        Guid intentId,
+        string reasonCode,
+        string message) => new(intentId, reasonCode, message);
 
     private static void ValidateCandidateSnapshot(
         ProductionRun run,
@@ -636,16 +1581,6 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
         }
     }
 
-    private static void EnsureRunCanSubmit(ProductionRun existing, ProductionRun requested)
-    {
-        EnsureSameRun(existing, requested);
-        if (!existing.Status.Equals("running", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Cannot submit an order intent for run {requested.RunId:N} in state '{existing.Status}'.");
-        }
-    }
-
     private static void EnsureSameLogicalIntent(
         OrderIntentRecord existing,
         ProductionRun run,
@@ -657,6 +1592,7 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             !existing.CodeVersion.Equals(run.CodeVersion, StringComparison.Ordinal) ||
             existing.Kind != requested.Kind ||
             existing.CandidateId != requested.CandidateId ||
+            !existing.AccountId.Equals(requested.AccountId, StringComparison.Ordinal) ||
             existing.CandidateTriggeredVersion != requested.CandidateExpectedVersion ||
             !String.Equals(
                 existing.CandidateSemanticDecisionSha256,
@@ -670,6 +1606,7 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             existing.RequestedQuantity != requested.RequestedQuantity ||
             existing.LimitPrice != requested.LimitPrice ||
             existing.StopPrice != requested.StopPrice ||
+            existing.PositionGenerationEventId != requested.PositionGenerationEventId ||
             existing.SessionDate != requested.SessionDate ||
             !existing.RequestJson.Equals(requested.RequestJson, StringComparison.Ordinal))
         {
@@ -685,6 +1622,7 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
         if (requested.Kind != OrderIntentKind.ProtectiveStop ||
             requested.CandidateId is not null ||
             existing.CandidateId is not null ||
+            !existing.AccountId.Equals(requested.AccountId, StringComparison.Ordinal) ||
             !existing.StrategyId.Equals(requested.StrategyId, StringComparison.Ordinal) ||
             !existing.Symbol.Equals(requested.Symbol, StringComparison.Ordinal) ||
             !existing.Side.Equals(requested.Side, StringComparison.Ordinal) ||
@@ -693,6 +1631,7 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository
             existing.RequestedQuantity != requested.RequestedQuantity ||
             existing.LimitPrice != requested.LimitPrice ||
             existing.StopPrice != requested.StopPrice ||
+            existing.PositionGenerationEventId != requested.PositionGenerationEventId ||
             existing.SessionDate != requested.SessionDate ||
             !existing.RequestJson.Equals(requested.RequestJson, StringComparison.Ordinal))
         {

@@ -71,7 +71,7 @@ public sealed record DiscoveryRuntimeConfig(
 /// hand-listed <c>tickers:</c> (legacy behavior). "historical_screener" selects from a
 /// candidate pool using only data available strictly before the evaluation window starts,
 /// which removes hindsight survivorship from the universe. See
-/// docs/edge-recovery-master-plan.md phase 0.1.
+/// See the point-in-time universe boundary in docs/operating-boundaries.md.
 /// </summary>
 public sealed record UniverseConfig(
     string Mode,
@@ -141,7 +141,10 @@ public sealed record EngineConfig(
     int BoundedCapacity,
     int IndicatorWarmupBars,
     int TickerTimeoutSeconds,
-    bool FailFast);
+    bool FailFast,
+    int MaxRetainedReplayBars = 1_000_000,
+    int MaxStrategyWorkItems = 10_000,
+    int MaxRetainedCandidates = 1_000_000);
 
 public sealed record DerivedTimeframeConfig(string Source);
 
@@ -201,11 +204,13 @@ public sealed record PortfolioConfig(
     decimal FixedSellFee,
     int MaxOpenTradesPerTicker,
     bool PreventOverlappingTickerPositions,
-    // Execution realism (all default to 0 = disabled, preserving legacy results):
+    // Execution realism and bounded execution-history controls.
     decimal MaxBarParticipationPct = 0m,
     decimal SecFeeRate = 0m,
     decimal FinraTafPerShare = 0m,
-    decimal FinraTafCap = 0m);
+    decimal FinraTafCap = 0m,
+    decimal ImpactBpsAtMaxParticipation = 0m,
+    int MaxExecutionOrderHistory = 1_000_000);
 
 public sealed record SignalSourceConfig(
     string Type,

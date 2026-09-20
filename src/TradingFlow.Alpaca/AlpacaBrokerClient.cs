@@ -41,6 +41,7 @@ public sealed class AlpacaBrokerClient :
     public async Task<BrokerAccountSnapshot> GetAccountSnapshotAsync(
         CancellationToken cancellationToken)
     {
+        var requestedAtUtc = DateTimeOffset.UtcNow;
         using var request = new HttpRequestMessage(HttpMethod.Get, "/v2/account");
         var response = await _tradingClient.SendAsync(
             request,
@@ -62,9 +63,11 @@ public sealed class AlpacaBrokerClient :
             ReadBoolean(root, "trade_suspended_by_user"),
             ReadBoolean(root, "shorting_enabled"),
             ParseRequiredDecimal(root, "buying_power", "account snapshot"),
+            ParseRequiredDecimal(root, "regt_buying_power", "account snapshot"),
             ParseRequiredDecimal(root, "equity", "account snapshot"),
             ParseRequiredDecimal(root, "long_market_value", "account snapshot"),
             ParseRequiredDecimal(root, "short_market_value", "account snapshot"),
+            requestedAtUtc,
             DateTimeOffset.UtcNow);
     }
 
@@ -162,18 +165,9 @@ public sealed class AlpacaBrokerClient :
                     symbol = order.Ticker.ToUpperInvariant(),
                     qty = order.ShareQuantity.ToString(CultureInfo.InvariantCulture),
                     side = entryOrder.Side,
-                    type = "market",
+                    type = entryType,
                     time_in_force = entryOrder.TimeInForce,
-                    client_order_id = order.ClientOrderId,
-                    order_class = "bracket",
-                    take_profit = new
-                    {
-                        limit_price = order.TakeProfitPrice.ToString("0.00")
-                    },
-                    stop_loss = new
-                    {
-                        stop_price = order.StopLossPrice.ToString("0.00")
-                    }
+                    client_order_id = order.ClientOrderId
                 };
             }
             else
@@ -183,19 +177,10 @@ public sealed class AlpacaBrokerClient :
                     symbol = order.Ticker.ToUpperInvariant(),
                     qty = order.ShareQuantity.ToString(CultureInfo.InvariantCulture),
                     side = entryOrder.Side,
-                    type = "limit",
+                    type = entryType,
                     time_in_force = entryOrder.TimeInForce,
                     limit_price = FormatOrderPrice(order.LimitPrice),
-                    client_order_id = order.ClientOrderId,
-                    order_class = "bracket",
-                    take_profit = new
-                    {
-                        limit_price = order.TakeProfitPrice.ToString("0.00")
-                    },
-                    stop_loss = new
-                    {
-                        stop_price = order.StopLossPrice.ToString("0.00")
-                    }
+                    client_order_id = order.ClientOrderId
                 };
             }
 
@@ -208,10 +193,7 @@ public sealed class AlpacaBrokerClient :
                 correlationId: order.ClientOrderId,
                 cancellationToken: cancellationToken);
 
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("order submission", response));
-            }
+            ThrowOrderSubmissionFailure("order submission", response);
 
             using var doc = JsonDocument.Parse(response.Payload);
             return RequireOrderReceipt(doc.RootElement, response, "order submission");
@@ -439,14 +421,75 @@ public sealed class AlpacaBrokerClient :
                 "broker-submit-protective-stop",
                 correlationId: order.ClientOrderId,
                 cancellationToken: cancellationToken);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new InvalidOperationException(
-                    AlpacaTradingRestClient.DescribeFailure("protective-stop submission", response));
-            }
+            ThrowOrderSubmissionFailure("protective-stop submission", response);
 
             using var document = JsonDocument.Parse(response.Payload);
             return RequireOrderReceipt(document.RootElement, response, "protective-stop submission");
+        });
+    }
+
+    public async Task<BrokerOrderReceipt> SubmitExitOrderAsync(
+        BrokerExitOrder order,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        var side = order.Side.Trim().ToLowerInvariant();
+        var type = order.OrderType.Trim().ToLowerInvariant();
+        var timeInForce = order.TimeInForce.Trim().ToLowerInvariant();
+        if (String.IsNullOrWhiteSpace(order.Ticker) || order.Quantity <= 0m ||
+            side is not ("buy" or "sell") ||
+            type is not ("market" or "limit" or "stop" or "stop_limit") ||
+            timeInForce is not ("day" or "gtc" or "ioc" or "fok") ||
+            String.IsNullOrWhiteSpace(order.ClientOrderId) ||
+            type is "limit" or "stop_limit" && order.LimitPrice is null or <= 0m ||
+            type is "stop" or "stop_limit" && order.StopPrice is null or <= 0m ||
+            type == "market" && (order.LimitPrice is not null || order.StopPrice is not null) ||
+            order.SubmitOutsideRegularHours && (type != "limit" || timeInForce != "day"))
+        {
+            throw new InvalidOperationException(
+                "An exit order requires symbol, side, positive quantity, explicit type/time-in-force, and a client order ID; extended exits require a DAY limit.");
+        }
+
+        return await ApiProfiler.ProfileAsync("Alpaca", "/v2/orders", "POST (Position Exit)", async () =>
+        {
+            var requestBody = new Dictionary<string, object?>
+            {
+                ["symbol"] = order.Ticker.Trim().ToUpperInvariant(),
+                ["qty"] = order.Quantity.ToString("0.#########", CultureInfo.InvariantCulture),
+                ["side"] = side,
+                ["type"] = type,
+                ["time_in_force"] = timeInForce,
+                ["client_order_id"] = order.ClientOrderId
+            };
+            if (type is "limit" or "stop_limit")
+            {
+                requestBody["limit_price"] = FormatOrderPrice(order.LimitPrice!.Value);
+            }
+
+            if (type is "stop" or "stop_limit")
+            {
+                requestBody["stop_price"] = FormatOrderPrice(order.StopPrice!.Value);
+            }
+
+            if (order.SubmitOutsideRegularHours)
+            {
+                requestBody["extended_hours"] = true;
+            }
+
+            using var content = new StringContent(
+                JsonSerializer.Serialize(requestBody),
+                Encoding.UTF8,
+                "application/json");
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/v2/orders") { Content = content };
+            var response = await _tradingClient.SendAsync(
+                request,
+                "broker-submit-position-exit",
+                correlationId: order.ClientOrderId,
+                cancellationToken: cancellationToken);
+            ThrowOrderSubmissionFailure("position-exit submission", response);
+
+            using var document = JsonDocument.Parse(response.Payload);
+            return RequireOrderReceipt(document.RootElement, response, "position-exit submission");
         });
     }
 
@@ -477,29 +520,50 @@ public sealed class AlpacaBrokerClient :
         });
     }
 
-    public async Task<bool> ModifyOrderAsync(string orderId, decimal newStopLoss, decimal newTakeProfit, CancellationToken cancellationToken)
+    public async Task<ActiveBrokerOrder> ReplaceProtectiveOrderAsync(
+        BrokerProtectiveOrderReplacement replacement,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(replacement);
+        if (String.IsNullOrWhiteSpace(replacement.BrokerOrderId) ||
+            String.IsNullOrWhiteSpace(replacement.ReplacementClientOrderId) ||
+            replacement.StopPrice <= 0m)
+        {
+            throw new InvalidOperationException(
+                "Protective replacement requires broker order, successor client order ID, and stop price.");
+        }
+
+        var orderId = replacement.BrokerOrderId.Trim();
+        var orderType = replacement.OrderType.Trim().ToLowerInvariant();
+        if (orderType == "trailing_stop")
+        {
+            throw new InvalidOperationException(
+                "Broker trailing_stop orders cannot be repriced with stop_price. " +
+                "TradingFlow ATR trailing must own an ordinary stop or stop_limit order.");
+        }
+
+        if (orderType is not ("stop" or "stop_limit"))
+        {
+            throw new InvalidOperationException(
+                $"Protective replacement supports stop and stop_limit orders, not '{replacement.OrderType}'.");
+        }
+
+        if (orderType == "stop_limit" && replacement.LimitPrice is not > 0m)
+        {
+            throw new InvalidOperationException(
+                "Replacing a stop_limit order requires its existing limit_price.");
+        }
+
         return await ApiProfiler.ProfileAsync("Alpaca", $"/v2/orders/{orderId}", "PATCH", async () =>
         {
-            if (String.IsNullOrWhiteSpace(orderId))
+            var request = new System.Collections.Generic.Dictionary<string, string>
             {
-                throw new ArgumentException("Order id is required when modifying an Alpaca order.", nameof(orderId));
-            }
-
-            var request = new System.Collections.Generic.Dictionary<string, string>();
-            if (newStopLoss > 0m)
+                ["client_order_id"] = replacement.ReplacementClientOrderId.Trim(),
+                ["stop_price"] = FormatOrderPrice(replacement.StopPrice)
+            };
+            if (orderType == "stop_limit")
             {
-                request["stop_price"] = newStopLoss.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
-            }
-
-            if (newTakeProfit > 0m)
-            {
-                request["limit_price"] = newTakeProfit.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
-            }
-
-            if (request.Count == 0)
-            {
-                return false;
+                request["limit_price"] = FormatOrderPrice(replacement.LimitPrice!.Value);
             }
 
             var json = JsonSerializer.Serialize(request);
@@ -514,56 +578,14 @@ public sealed class AlpacaBrokerClient :
                 "broker-modify-order",
                 providerRecordId: orderId,
                 cancellationToken: cancellationToken);
-            if (response.IsSuccessStatusCode)
-            {
-                return true;
-            }
-
-            throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("order modification", response));
-        });
-    }
-
-    public async Task<string[]> SubmitExitOrdersAsync(string ticker, int quantity, decimal stopLossPrice, decimal takeProfitPrice, CancellationToken cancellationToken)
-    {
-        return await ApiProfiler.ProfileAsync("Alpaca", "/v2/orders", "POST (Exit OCO)", async () =>
-        {
-            var requestBody = new
-            {
-                symbol = ticker.ToUpperInvariant(),
-                qty = quantity.ToString(),
-                side = "sell",
-                type = "limit",
-                time_in_force = "gtc",
-                order_class = "oco",
-                take_profit = new
-                {
-                    limit_price = takeProfitPrice.ToString("0.00")
-                },
-                stop_loss = new
-                {
-                    stop_price = stopLossPrice.ToString("0.00")
-                }
-            };
-
-            var json = JsonSerializer.Serialize(requestBody);
-            using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var request = new HttpRequestMessage(HttpMethod.Post, "/v2/orders") { Content = content };
-            var response = await _tradingClient.SendAsync(
-                request,
-                "broker-submit-exit-order",
-                correlationId: ticker.ToUpperInvariant(),
-                cancellationToken: cancellationToken);
-
             if (!response.IsSuccessStatusCode)
             {
-                throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("exit-order submission", response));
+                throw new InvalidOperationException(
+                    AlpacaTradingRestClient.DescribeFailure("protective-order replacement", response));
             }
 
-            using var doc = JsonDocument.Parse(response.Payload);
-            var id = RequireOrderId(doc.RootElement, response, "exit-order submission");
-
-            // OCO is submitted as one parent order which creates two legs. We just return the parent ID.
-            return new[] { id };
+            using var document = JsonDocument.Parse(response.Payload);
+            return ParseOrder(document.RootElement, "protective-order replacement");
         });
     }
 
@@ -623,7 +645,7 @@ public sealed class AlpacaBrokerClient :
         {
             using var request = new HttpRequestMessage(
                 HttpMethod.Get,
-                $"/v2/orders:by_client_order_id?client_order_id={Uri.EscapeDataString(normalized)}");
+                $"/v2/orders:by_client_order_id?client_order_id={Uri.EscapeDataString(normalized)}&nested=true");
             var response = await _tradingClient.SendAsync(
                 request,
                 "broker-order-by-client-id",
@@ -656,6 +678,7 @@ public sealed class AlpacaBrokerClient :
         var status = RequireString(element, "status", operation);
         var orderType = RequireString(element, "type", operation);
         var clientOrderId = RequireString(element, "client_order_id", operation);
+        var (bracketTakeProfitPrice, bracketStopPrice) = ParseBracketLegPrices(element);
         return new ActiveBrokerOrder(
             id,
             symbol,
@@ -670,7 +693,59 @@ public sealed class AlpacaBrokerClient :
             ParseRequiredDecimal(element, "filled_qty", operation),
             ParseOptionalDecimal(element, "filled_avg_price"),
             RequireTimestamp(element, "updated_at", operation),
-            parentClientOrderId);
+            parentClientOrderId,
+            ParseOptionalString(element, "time_in_force"),
+            ParseOptionalString(element, "order_class"),
+            ParseOptionalBoolean(element, "extended_hours"),
+            bracketTakeProfitPrice,
+            bracketStopPrice,
+            ParseOptionalString(element, "replaces"),
+            ParseOptionalString(element, "replaced_by"));
+    }
+
+    private static (decimal? TakeProfitPrice, decimal? StopPrice) ParseBracketLegPrices(
+        JsonElement element)
+    {
+        if (!element.TryGetProperty("legs", out var legs) || legs.ValueKind != JsonValueKind.Array)
+        {
+            return (null, null);
+        }
+
+        decimal? takeProfitPrice = null;
+        decimal? stopPrice = null;
+        foreach (var leg in legs.EnumerateArray())
+        {
+            var type = ParseOptionalString(leg, "type")?.Trim().ToLowerInvariant();
+            if (type is "limit")
+            {
+                takeProfitPrice = ParseOptionalDecimal(leg, "limit_price");
+            }
+            else if (type is "stop" or "stop_limit")
+            {
+                stopPrice = ParseOptionalDecimal(leg, "stop_price");
+            }
+        }
+
+        return (takeProfitPrice, stopPrice);
+    }
+
+    private static void ThrowOrderSubmissionFailure(
+        string operation,
+        ArchivedAlpacaResponse response)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        var statusCode = (int)response.StatusCode;
+        var message = AlpacaTradingRestClient.DescribeFailure(operation, response);
+        if (statusCode is >= 400 and < 500 && statusCode is not (408 or 409 or 429))
+        {
+            throw new BrokerOrderRejectedException(operation, statusCode, message);
+        }
+
+        throw new HttpRequestException(message, null, response.StatusCode);
     }
 
     private static bool IsOpenStatus(string status) =>
@@ -714,6 +789,18 @@ public sealed class AlpacaBrokerClient :
 
         throw new InvalidOperationException($"Alpaca response has invalid {propertyName}.");
     }
+
+    private static string? ParseOptionalString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) &&
+        property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private static bool? ParseOptionalBoolean(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) &&
+        property.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? property.GetBoolean()
+            : null;
 
     private static decimal ParseRequiredDecimal(
         JsonElement element,
@@ -776,41 +863,6 @@ public sealed class AlpacaBrokerClient :
             }
 
             return (System.Collections.Generic.IReadOnlyList<BrokerPosition>)positions;
-        });
-    }
-
-    public async Task<bool> ClosePositionAsync(string ticker, CancellationToken cancellationToken)
-    {
-        return await ApiProfiler.ProfileAsync("Alpaca", $"/v2/positions/{ticker}", "DELETE", async () =>
-        {
-            var symbol = Uri.EscapeDataString(ticker.ToUpperInvariant());
-            using var request = new HttpRequestMessage(HttpMethod.Delete, $"/v2/positions/{symbol}");
-            var response = await _tradingClient.SendAsync(
-                request,
-                "broker-close-position",
-                correlationId: ticker.ToUpperInvariant(),
-                cancellationToken: cancellationToken);
-            return response.IsSuccessStatusCode;
-        });
-    }
-
-    public async Task<bool> ClosePositionAsync(string ticker, int quantity, CancellationToken cancellationToken)
-    {
-        if (quantity <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(quantity), "Close quantity must be greater than zero.");
-        }
-
-        return await ApiProfiler.ProfileAsync("Alpaca", $"/v2/positions/{ticker}?qty={quantity}", "DELETE", async () =>
-        {
-            var symbol = Uri.EscapeDataString(ticker.ToUpperInvariant());
-            using var request = new HttpRequestMessage(HttpMethod.Delete, $"/v2/positions/{symbol}?qty={quantity}");
-            var response = await _tradingClient.SendAsync(
-                request,
-                "broker-close-position-partial",
-                correlationId: ticker.ToUpperInvariant(),
-                cancellationToken: cancellationToken);
-            return response.IsSuccessStatusCode;
         });
     }
 

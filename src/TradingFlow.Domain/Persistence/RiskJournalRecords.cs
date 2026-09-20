@@ -47,6 +47,9 @@ public sealed class ReconciliationRecord : OperationalRecord
 public sealed class PositionEventRecord : OperationalRecord
 {
     public long PositionEventId { get; set; }
+    public long PositionGenerationEventId { get; set; }
+    public string PositionGenerationClientOrderId { get; set; } = string.Empty;
+    public string AccountId { get; set; } = string.Empty;
     public string Symbol { get; set; } = string.Empty;
     public string StrategyId { get; set; } = string.Empty;
     public string ExecutionStrategyId { get; set; } = string.Empty;

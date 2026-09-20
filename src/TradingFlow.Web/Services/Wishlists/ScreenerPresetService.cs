@@ -12,10 +12,7 @@ namespace TradingFlow.Web.Services.Wishlists;
 /// browser UI, so the list of named screens has to live here. That is what this
 /// is: the local catalogue, not a mirror of anything remote.
 ///
-/// A preset is scoped to a horizon because an intraday screen and a swing screen
-/// answer different questions and must not be substituted for one another. The
-/// horizon also decides the discard rule: an intraday result belongs to one
-/// session.
+/// Every preset is a swing-universe screen.
 /// </summary>
 public sealed class ScreenerPresetService
 {

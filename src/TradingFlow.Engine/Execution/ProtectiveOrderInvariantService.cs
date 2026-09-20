@@ -9,7 +9,9 @@ namespace TradingFlow.Engine.Execution;
 
 public sealed record ProtectiveOrderOptions
 {
-    public ProtectiveOrderOptions(decimal backstopAtrMultiple = 1.5m)
+    public ProtectiveOrderOptions(
+        decimal backstopAtrMultiple = 1.5m,
+        int restProjectionLagToleranceSeconds = 30)
     {
         if (backstopAtrMultiple is < 1m or > 3m)
         {
@@ -17,9 +19,16 @@ public sealed record ProtectiveOrderOptions
         }
 
         BackstopAtrMultiple = backstopAtrMultiple;
+        if (restProjectionLagToleranceSeconds is < 5 or > 120)
+        {
+            throw new ArgumentOutOfRangeException(nameof(restProjectionLagToleranceSeconds));
+        }
+
+        RestProjectionLagTolerance = TimeSpan.FromSeconds(restProjectionLagToleranceSeconds);
     }
 
     public decimal BackstopAtrMultiple { get; }
+    public TimeSpan RestProjectionLagTolerance { get; }
 }
 
 public sealed record ProtectiveOrderRepair(
@@ -32,6 +41,7 @@ public interface IProtectiveOrderInvariantService
 {
     Task<IReadOnlyList<ProtectiveOrderRepair>> EnsureAsync(
         IBrokerClient broker,
+        string accountId,
         IReadOnlyList<BrokerPosition> brokerPositions,
         IReadOnlyList<ActiveBrokerOrder> openOrders,
         CancellationToken cancellationToken = default);
@@ -51,25 +61,98 @@ public sealed class ProtectiveOrderInvariantService(
     ProtectiveOrderOptions options,
     ReconciliationRunContext runContext,
     TimeProvider timeProvider,
-    ILogger<ProtectiveOrderInvariantService> logger) : IProtectiveOrderInvariantService
+    ILogger<ProtectiveOrderInvariantService> logger,
+    IProtectiveStopReplacementRepository? stopReplacements = null) : IProtectiveOrderInvariantService
 {
     private const int AtrWarmupCalendarDays = 120;
     private static readonly string ExchangeTimezone = "America/New_York";
 
     public async Task<IReadOnlyList<ProtectiveOrderRepair>> EnsureAsync(
         IBrokerClient broker,
+        string accountId,
         IReadOnlyList<BrokerPosition> brokerPositions,
         IReadOnlyList<ActiveBrokerOrder> openOrders,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(broker);
+        if (String.IsNullOrWhiteSpace(accountId))
+        {
+            throw new ArgumentException("Broker account ID is required.", nameof(accountId));
+        }
         ArgumentNullException.ThrowIfNull(brokerPositions);
         ArgumentNullException.ThrowIfNull(openOrders);
         var repairs = new List<ProtectiveOrderRepair>();
-        foreach (var position in brokerPositions.Where(item => item.Qty != 0m))
+        var effectivePositions = brokerPositions
+            .Where(item => item.Qty != 0m)
+            .ToDictionary(item => NormalizeSymbol(item.Ticker), StringComparer.Ordinal);
+
+        // The local ledger is advanced atomically with every accepted stream/REST fill.
+        // Alpaca's position REST projection may lag that fill, so protection must use
+        // the locally committed quantity as the minimum exposure, never as a reason to wait.
+        var localPositions = await positions.ListCurrentAsync(accountId, cancellationToken) ?? [];
+        foreach (var local in localPositions.Where(item => item.Quantity != 0m))
+        {
+            var symbol = NormalizeSymbol(local.Symbol);
+            var hasBrokerPosition = effectivePositions.TryGetValue(symbol, out var brokerPosition);
+            if (hasBrokerPosition && Math.Abs(brokerPosition!.Qty) >= Math.Abs(local.Quantity))
+            {
+                continue;
+            }
+
+            var latestFillIncreasedExposure =
+                local.Quantity > 0m && local.LatestFillSide.Equals("buy", StringComparison.OrdinalIgnoreCase) ||
+                local.Quantity < 0m && local.LatestFillSide.Equals("sell", StringComparison.OrdinalIgnoreCase);
+            var fillIsInsideRestLagWindow =
+                timeProvider.GetUtcNow() - local.LocalTimestampUtc.ToUniversalTime() <= options.RestProjectionLagTolerance;
+            if (!latestFillIncreasedExposure || !fillIsInsideRestLagWindow)
+            {
+                // A smaller broker position paired with an old or reducing local
+                // event means the broker quantity is the safe upper bound. Using
+                // stale local size could create a reversing stop order.
+                continue;
+            }
+
+            var side = local.Quantity > 0m ? "long" : "short";
+            effectivePositions[symbol] = new BrokerPosition(
+                symbol,
+                side,
+                Math.Abs(local.Quantity),
+                local.LatestFillPrice,
+                local.LatestFillPrice,
+                0m);
+        }
+
+        foreach (var position in effectivePositions.Values.OrderBy(item => item.Ticker, StringComparer.Ordinal))
         {
             var symbol = NormalizeSymbol(position.Ticker);
-            var effectiveOrders = openOrders.ToList();
+            var localPosition = await positions.GetCurrentAsync(
+                accountId,
+                symbol,
+                cancellationToken);
+            if (localPosition is not null &&
+                await intents.HasActivePositionExitAsync(
+                    accountId,
+                    symbol,
+                    localPosition.PositionGenerationEventId,
+                    cancellationToken))
+            {
+                repairs.Add(new ProtectiveOrderRepair(
+                    symbol,
+                    true,
+                    $"Protection reconciliation deferred while a durable exit owns position generation {localPosition.PositionGenerationEventId}."));
+                continue;
+            }
+
+            var positionGenerationIdentity = localPosition is not null
+                ? $"ledger:{localPosition.PositionGenerationEventId}:{localPosition.PositionGenerationClientOrderId}"
+                : FormattableString.Invariant(
+                    $"broker:{position.Side}:{position.EntryPrice:G29}:{position.Qty:G29}");
+            var effectiveOrders = await ListOwnedProtectiveOrdersAsync(
+                accountId,
+                position,
+                positionGenerationIdentity,
+                openOrders,
+                cancellationToken);
             var coverage = ProtectiveCoverage(position, effectiveOrders);
             if (coverage > Math.Abs(position.Qty))
             {
@@ -83,15 +166,14 @@ public sealed class ProtectiveOrderInvariantService(
                         continue;
                     }
 
-                    var canceled = await broker.CancelOrderAsync(redundant.OrderId, cancellationToken);
-                    if (!canceled)
-                    {
-                        repairs.Add(new ProtectiveOrderRepair(
-                            symbol,
-                            false,
-                            $"Could not cancel redundant backstop {redundant.OrderId}."));
-                        break;
-                    }
+                    await submissions.RequestCancelAsync(
+                        new OrderCancellationSubmission(
+                            redundant.ParentClientOrderId ?? redundant.ClientOrderId,
+                            redundant.OrderId,
+                            "redundant_protective_backstop",
+                            timeProvider.GetUtcNow().ToUniversalTime()),
+                        broker,
+                        cancellationToken);
 
                     coverage = remaining;
                     effectiveOrders.Remove(redundant);
@@ -116,17 +198,13 @@ public sealed class ProtectiveOrderInvariantService(
                         "Alpaca does not support fractional-quantity GTC stop orders.");
                 }
 
-                var localPosition = await positions.GetCurrentAsync(symbol, cancellationToken);
-                var positionGenerationIdentity = localPosition is not null
-                    ? $"ledger:{localPosition.PositionEventId}:{localPosition.LatestClientOrderId}"
-                    : FormattableString.Invariant(
-                        $"broker:{position.Side}:{position.EntryPrice:G29}:{position.Qty:G29}");
                 var now = timeProvider.GetUtcNow();
                 var run = runContext.Run;
                 var protectiveSide = OppositeOrderSide(position);
                 var owner = await ResolveProtectionOwnerAsync(
                     broker,
                     position,
+                    accountId,
                     symbol,
                     protectiveSide,
                     positionGenerationIdentity,
@@ -136,6 +214,7 @@ public sealed class ProtectiveOrderInvariantService(
                 var existingIntent = owner.Intent;
                 if (existingIntent is not null &&
                     (existingIntent.Kind != OrderIntentKind.ProtectiveStop ||
+                     !existingIntent.AccountId.Equals(accountId, StringComparison.Ordinal) ||
                      !existingIntent.Symbol.Equals(symbol, StringComparison.Ordinal) ||
                      !existingIntent.Side.Equals(protectiveSide, StringComparison.Ordinal)))
                 {
@@ -164,6 +243,7 @@ public sealed class ProtectiveOrderInvariantService(
                             run.ConfigHash,
                             run.CodeVersion,
                             run.StartedAtUtc),
+                        accountId,
                         symbol,
                         protectiveSide,
                         quantity,
@@ -196,6 +276,72 @@ public sealed class ProtectiveOrderInvariantService(
         return repairs;
     }
 
+    private async Task<List<ActiveBrokerOrder>> ListOwnedProtectiveOrdersAsync(
+        string accountId,
+        BrokerPosition position,
+        string positionGenerationIdentity,
+        IReadOnlyList<ActiveBrokerOrder> openOrders,
+        CancellationToken cancellationToken)
+    {
+        var owned = new List<ActiveBrokerOrder>();
+        foreach (var order in openOrders.Where(order => IsProtectiveFor(position, order)))
+        {
+            var ownerClientOrderId = order.ParentClientOrderId ?? order.ClientOrderId;
+            var intent = await intents.GetByClientOrderIdAsync(ownerClientOrderId, cancellationToken);
+            if (intent is null && stopReplacements is not null)
+            {
+                var replacement = await stopReplacements.GetVerifiedByReplacementClientOrderIdAsync(
+                    order.ClientOrderId,
+                    cancellationToken);
+                if (replacement is not null)
+                {
+                    ownerClientOrderId = replacement.OwnerClientOrderId;
+                    intent = await intents.GetByClientOrderIdAsync(
+                        ownerClientOrderId,
+                        cancellationToken);
+                }
+            }
+
+            if (intent is null)
+            {
+                continue;
+            }
+
+            if (intent.Kind != OrderIntentKind.ProtectiveStop ||
+                !intent.AccountId.Equals(accountId, StringComparison.Ordinal) ||
+                !intent.Symbol.Equals(NormalizeSymbol(position.Ticker), StringComparison.Ordinal) ||
+                !intent.Side.Equals(OppositeOrderSide(position), StringComparison.OrdinalIgnoreCase) ||
+                intent.RequestedQuantity != order.Qty)
+            {
+                continue;
+            }
+
+            var state = await orderEvents.GetCurrentAsync(intent.ClientOrderId, cancellationToken);
+            if (state is null || OrderStateMachine.IsTerminal(state.State) ||
+                !IntentOwnsPositionGeneration(intent, positionGenerationIdentity))
+            {
+                continue;
+            }
+
+            owned.Add(order);
+        }
+
+        return owned;
+    }
+
+    private static bool IntentOwnsPositionGeneration(
+        OrderIntentRecord intent,
+        string expectedPositionGenerationIdentity)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(intent.RequestJson);
+        return document.RootElement.TryGetProperty("PositionGenerationIdentity", out var identity) &&
+               identity.ValueKind == System.Text.Json.JsonValueKind.String &&
+               String.Equals(
+                   identity.GetString(),
+                   expectedPositionGenerationIdentity,
+                   StringComparison.Ordinal);
+    }
+
     internal static bool HasProtectiveCoverage(
         BrokerPosition position,
         IReadOnlyList<ActiveBrokerOrder> openOrders) =>
@@ -211,6 +357,7 @@ public sealed class ProtectiveOrderInvariantService(
     private async Task<ProtectionOwner> ResolveProtectionOwnerAsync(
         IBrokerClient broker,
         BrokerPosition expectedPosition,
+        string accountId,
         string symbol,
         string side,
         string positionGenerationIdentity,
@@ -220,6 +367,7 @@ public sealed class ProtectiveOrderInvariantService(
         for (var revision = 0; revision < 10_000; revision++)
         {
             var intentId = ProtectiveOrderIntentIdFactory.Create(
+                accountId,
                 symbol,
                 side,
                 positionGenerationIdentity,
@@ -231,6 +379,7 @@ public sealed class ProtectiveOrderInvariantService(
             }
 
             if (intent.Kind != OrderIntentKind.ProtectiveStop ||
+                !intent.AccountId.Equals(accountId, StringComparison.Ordinal) ||
                 !intent.Symbol.Equals(symbol, StringComparison.Ordinal) ||
                 !intent.Side.Equals(side, StringComparison.Ordinal))
             {
@@ -284,10 +433,10 @@ public sealed class ProtectiveOrderInvariantService(
     {
         var symbol = NormalizeSymbol(brokerPosition.Ticker);
         if (localPosition is not null &&
-            !String.IsNullOrWhiteSpace(localPosition.LatestClientOrderId))
+            !String.IsNullOrWhiteSpace(localPosition.PositionGenerationClientOrderId))
         {
             var intent = await intents.GetByClientOrderIdAsync(
-                localPosition.LatestClientOrderId,
+                localPosition.PositionGenerationClientOrderId,
                 cancellationToken);
             if (intent?.StopPrice is > 0m && IsValidStopSide(brokerPosition, intent.StopPrice.Value))
             {

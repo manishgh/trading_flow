@@ -74,9 +74,9 @@ public sealed class OptimizationJobModel : PageModel
         });
     }
 
-    public IActionResult OnPostCancel(Guid id)
+    public async Task<IActionResult> OnPostCancelAsync(Guid id, CancellationToken cancellationToken)
     {
-        jobs.Cancel(id);
+        await jobs.CancelAsync(id, cancellationToken);
         return RedirectToPage(new { id });
     }
 

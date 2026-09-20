@@ -56,22 +56,22 @@ public sealed class StrategyExperimentArtifactStoreTests
                 registry);
             var operationId = Guid.NewGuid();
             var registered = writer.RegisterPaperExperiment(
-                Path.Combine(repositoryRoot, "configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"),
-                "1.0.0",
+                Path.Combine(repositoryRoot, "configs", "strategies", "minervini-trend-template-vcp.v4-trend-rider.yaml"),
+                "4.0.0",
                 "unit-test-operator",
                 operationId,
                 RegistrationTime);
             var replay = writer.RegisterPaperExperiment(
-                Path.Combine(repositoryRoot, "configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"),
-                "1.0.0",
+                Path.Combine(repositoryRoot, "configs", "strategies", "minervini-trend-template-vcp.v4-trend-rider.yaml"),
+                "4.0.0",
                 "unit-test-operator",
                 operationId,
                 RegistrationTime);
             Assert.Equal(registered.Identity, replay.Identity);
             var duplicate = Assert.Throws<InvalidOperationException>(() =>
                 writer.RegisterPaperExperiment(
-                    Path.Combine(repositoryRoot, "configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"),
-                    "1.0.0",
+                    Path.Combine(repositoryRoot, "configs", "strategies", "minervini-trend-template-vcp.v4-trend-rider.yaml"),
+                    "4.0.0",
                     "unit-test-operator",
                     Guid.NewGuid(),
                     RegistrationTime));
@@ -191,7 +191,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 repositoryRoot,
                 "configs",
                 "strategies",
-                "intraday-ema10-ema20-macd-volume.v1.yaml");
+                "minervini-trend-template-vcp.v4-trend-rider.yaml");
 
             var operationId = Guid.NewGuid();
             var registered = await Task.WhenAll(
@@ -254,7 +254,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 repositoryRoot,
                 "configs",
                 "strategies",
-                "intraday-ema10-ema20-macd-volume.v1.yaml");
+                "minervini-trend-template-vcp.v4-trend-rider.yaml");
             var operationId = Guid.NewGuid();
 
             Assert.Throws<IOException>(() => writer.RegisterPaperExperiment(
@@ -323,7 +323,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 repositoryRoot,
                 "configs",
                 "strategies",
-                "intraday-ema10-ema20-macd-volume.v1.yaml");
+                "minervini-trend-template-vcp.v4-trend-rider.yaml");
 
             var operationId = Guid.NewGuid();
             var registered = writer.RegisterPaperExperiment(
@@ -429,7 +429,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 repositoryRoot,
                 "configs",
                 "strategies",
-                "intraday-ema10-ema20-macd-volume.v1.yaml");
+                "minervini-trend-template-vcp.v4-trend-rider.yaml");
             var strategyOverride = new StrategyParameterOverride(
                 sourcePath,
                 2.5m,
@@ -446,13 +446,13 @@ public sealed class StrategyExperimentArtifactStoreTests
                 1m,
                 1m,
                 1,
-                "1m",
+                "1h",
                 25m,
                 Actor: "experiment-author");
 
             Assert.Throws<InvalidOperationException>(() => writer.RegisterPaperExperiment(
                 sourcePath,
-                "1.0.0",
+                "4.0.0",
                 "experiment-author",
                 Guid.NewGuid(),
                 RegistrationTime,
@@ -460,14 +460,14 @@ public sealed class StrategyExperimentArtifactStoreTests
 
             var registered = writer.RegisterPaperExperiment(
                 sourcePath,
-                "1.1.0-experiment",
+                "4.1.0-experiment",
                 "experiment-author",
                 Guid.NewGuid(),
                 RegistrationTime,
                 strategyOverride);
             var manifest = File.ReadAllText(Path.Combine(Path.GetDirectoryName(registered.SourcePath)!, "artifact.json"));
 
-            Assert.Equal("1.1.0-experiment", registered.Identity.SemanticVersion);
+            Assert.Equal("4.1.0-experiment", registered.Identity.SemanticVersion);
             Assert.NotNull(registered.DerivedFromContentSha256);
             Assert.Contains("\"registeredBy\":\"experiment-author\"", manifest, StringComparison.Ordinal);
             Assert.Contains("entry_rules.min_volume_spike", manifest, StringComparison.Ordinal);

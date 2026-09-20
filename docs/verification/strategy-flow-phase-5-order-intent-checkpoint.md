@@ -4,6 +4,11 @@
 
 **Date:** 2026-08-31
 
+This historical checkpoint is superseded by the later
+[Phase 5 Durable Execution Checkpoint](strategy-flow-phase-5-durable-execution-checkpoint.md)
+for current implementation status. Its results below remain the evidence for the
+earlier candidate/order-intent slice.
+
 ## Scope
 
 This checkpoint closes two lifecycle consistency gaps without claiming the full

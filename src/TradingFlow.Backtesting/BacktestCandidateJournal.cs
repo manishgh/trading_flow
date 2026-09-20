@@ -4,11 +4,14 @@ using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Research;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Execution;
+using TradingFlow.Data.Backtesting;
+using Microsoft.Data.Sqlite;
 
 namespace TradingFlow.Backtesting;
 
 /// <summary>
-/// Keeps the candidate state journal for one isolated backtest worker in memory.
+/// Keeps candidate state for one isolated backtest worker, indexed on disk for durable runs.
 /// Backtests need the same persisted transition contract as paper/live, but writing
 /// every simulated bar to the operational database would couple parallel research
 /// runs and add database latency to deterministic replay.
@@ -20,6 +23,8 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
     private readonly Dictionary<Guid, List<CandidateTransitionRecord>> transitions = [];
     private readonly FileStream? durableStream;
     private readonly StreamWriter? durableWriter;
+    private AuditPersistenceException? persistenceFailure;
+    private readonly SqliteBacktestCandidateStateStore? stateStore;
 
     public BacktestCandidateJournal(string? durableJournalPath = null)
     {
@@ -28,19 +33,26 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
             return;
         }
 
-        DurableJournalPath = Path.GetFullPath(durableJournalPath);
-        Directory.CreateDirectory(Path.GetDirectoryName(DurableJournalPath)!);
-        durableStream = new FileStream(
-            DurableJournalPath,
-            FileMode.CreateNew,
-            FileAccess.Write,
-            FileShare.Read,
-            16 * 1024,
-            FileOptions.WriteThrough);
-        durableWriter = new StreamWriter(durableStream, new UTF8Encoding(false), 16 * 1024, leaveOpen: true);
+        try
+        {
+            DurableJournalPath = Path.GetFullPath(durableJournalPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(DurableJournalPath)!);
+            durableStream = new FileStream(DurableJournalPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.Read, 16 * 1024, FileOptions.WriteThrough);
+            durableWriter = new StreamWriter(durableStream, new UTF8Encoding(false), 16 * 1024, leaveOpen: true);
+            stateStore = new SqliteBacktestCandidateStateStore(StatePath(DurableJournalPath));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            try { durableWriter?.Dispose(); }
+            finally { durableStream?.Dispose(); }
+            throw new AuditPersistenceException("Candidate audit initialization failed.", exception);
+        }
     }
 
     public string? DurableJournalPath { get; }
+    internal static string StatePath(string journalPath) => journalPath + ".sqlite";
+    internal int RetainedCandidateCount { get { lock (sync) return candidates.Count; } }
 
     public Task<CandidateRecord> UpsertDiscoveryAsync(
         ProductionRun run,
@@ -50,7 +62,9 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
         {
-            if (candidates.TryGetValue(candidate.CandidateId, out var existing))
+            if (persistenceFailure is not null) throw persistenceFailure;
+            var existing = Find(candidate.CandidateId);
+            if (existing is not null)
             {
                 RequireSameIdentity(existing, candidate, run);
                 return Task.FromResult(Clone(existing));
@@ -64,9 +78,12 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
 
             var persisted = Clone(candidate);
             persisted.Version = 0;
-            candidates.Add(persisted.CandidateId, persisted);
-            transitions.Add(persisted.CandidateId, []);
             AppendDurable("discovered", persisted, []);
+            if (stateStore is null)
+            {
+                candidates.Add(persisted.CandidateId, persisted);
+                transitions.Add(persisted.CandidateId, []);
+            }
             return Task.FromResult(Clone(persisted));
         }
     }
@@ -83,7 +100,11 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
         {
-            if (!candidates.TryGetValue(candidateId, out var candidate))
+            if (persistenceFailure is not null) throw persistenceFailure;
+            if (requestedTransitions.Count == 0)
+                throw new ArgumentException("A decision must include at least one transition.", nameof(requestedTransitions));
+            var candidate = Find(candidateId);
+            if (candidate is null)
             {
                 throw new InvalidOperationException($"Candidate {candidateId} was not journaled before evaluation.");
             }
@@ -124,18 +145,24 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
                     ConfigHash = run.ConfigHash,
                     CodeVersion = run.CodeVersion
                 };
-                transitions[candidateId].Add(persistedTransition);
                 appended.Add(persistedTransition);
                 current = transition.NewState;
             }
 
-            candidate.State = current;
-            candidate.Version = sequence;
-            candidate.ExpiresAtUtc = expiresAtUtc;
-            candidate.SemanticDecisionSha256 = semanticDecisionSha256;
-            candidate.RevalidatedAtUtc = requestedTransitions[^1].OccurredAtUtc;
-            AppendDurable("decision", candidate, appended);
-            return Task.FromResult(Clone(candidate));
+            // Validate the entire batch and persist it before publishing any mutable state.
+            var updated = Clone(candidate);
+            updated.State = current;
+            updated.Version = sequence;
+            updated.ExpiresAtUtc = expiresAtUtc;
+            updated.SemanticDecisionSha256 = semanticDecisionSha256;
+            updated.RevalidatedAtUtc = requestedTransitions[^1].OccurredAtUtc;
+            AppendDurable("decision", updated, appended);
+            if (stateStore is null)
+            {
+                candidates[candidateId] = updated;
+                transitions[candidateId].AddRange(appended);
+            }
+            return Task.FromResult(Clone(updated));
         }
     }
 
@@ -146,9 +173,8 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
         {
-            return Task.FromResult(candidates.TryGetValue(candidateId, out var candidate)
-                ? Clone(candidate)
-                : null);
+            if (persistenceFailure is not null) throw persistenceFailure;
+            return Task.FromResult(Find(candidateId));
         }
     }
 
@@ -159,6 +185,16 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
         {
+            if (persistenceFailure is not null) throw persistenceFailure;
+            if (stateStore is not null)
+            {
+                try { return Task.FromResult(stateStore.GetTransitions(candidateId)); }
+                catch (SqliteException exception)
+                {
+                    persistenceFailure = new AuditPersistenceException("Candidate transition index read failed.", exception);
+                    throw persistenceFailure;
+                }
+            }
             return Task.FromResult<IReadOnlyList<CandidateTransitionRecord>>(
                 transitions.TryGetValue(candidateId, out var items)
                     ? items.Select(Clone).ToArray()
@@ -170,6 +206,8 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
     {
         lock (sync)
         {
+            if (stateStore is not null)
+                throw new InvalidOperationException("Durable audit history must be streamed from its index, not materialized.");
             return candidates.Values
                 .OrderBy(candidate => candidate.DiscoveredAtUtc)
                 .ThenBy(candidate => candidate.Symbol, StringComparer.OrdinalIgnoreCase)
@@ -218,8 +256,12 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
     {
         lock (sync)
         {
-            durableWriter?.Dispose();
-            durableStream?.Dispose();
+            try { durableWriter?.Dispose(); }
+            finally
+            {
+                try { durableStream?.Dispose(); }
+                finally { stateStore?.Dispose(); }
+            }
         }
     }
 
@@ -233,13 +275,36 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
             return;
         }
 
-        durableWriter.WriteLine(JsonSerializer.Serialize(new BacktestCandidateJournalEntry(
-            recordType,
-            DateTimeOffset.UtcNow,
-            Clone(candidate),
-            appendedTransitions.Select(Clone).ToArray())));
-        durableWriter.Flush();
-        durableStream.Flush(flushToDisk: true);
+        try
+        {
+            durableWriter.WriteLine(JsonSerializer.Serialize(new BacktestCandidateJournalEntry(
+                recordType,
+                DateTimeOffset.UtcNow,
+                Clone(candidate),
+                appendedTransitions.Select(Clone).ToArray())));
+            durableWriter.Flush();
+            durableStream.Flush(flushToDisk: true);
+            stateStore?.Save(candidate, appendedTransitions);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            persistenceFailure = new AuditPersistenceException("Candidate audit append failed; the run cannot claim complete evidence.", exception);
+            throw persistenceFailure;
+        }
+    }
+
+    private CandidateRecord? Find(Guid candidateId)
+    {
+        try
+        {
+            return stateStore is not null ? stateStore.Get(candidateId)
+                : candidates.TryGetValue(candidateId, out var value) ? Clone(value) : null;
+        }
+        catch (SqliteException exception)
+        {
+            persistenceFailure = new AuditPersistenceException("Candidate audit index read failed.", exception);
+            throw persistenceFailure;
+        }
     }
 
     private static void RequireSameIdentity(
@@ -290,6 +355,7 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
         MarketConfirmationScore = value.MarketConfirmationScore,
         SetupScoresJson = value.SetupScoresJson,
         SelectedStrategy = value.SelectedStrategy,
+        StrategySemanticVersion = value.StrategySemanticVersion,
         StrategyContentSha256 = value.StrategyContentSha256,
         AdmissionProfileId = value.AdmissionProfileId,
         AdmissionProfileVersion = value.AdmissionProfileVersion,

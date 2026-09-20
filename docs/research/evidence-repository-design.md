@@ -4,7 +4,7 @@ Status: binding design for research-data implementation
 
 Precedence: this design implements and is subordinate to
 `docs/spec/automated_trading_production_spec_v1.md` and
-`docs/spec/automated_us_equities_trading_research_design.md`. Requirement IDs remain
+`docs/operating-boundaries.md`. Requirement IDs remain
 traceability metadata; they are not class, method, variable, or business-rule names.
 
 Current-state warning: the immutable local evidence slice is implemented for
@@ -13,6 +13,32 @@ SQLite catalog lifecycle; identity, universe, exchange-session, sentiment, label
 holdout, promotion, and catalog-only research workflows. The complete acceptance
 matrix still includes unimplemented provider surfaces and production Azure adapters.
 Legacy arbitrary-file research paths and mutable caches remain diagnostic-only.
+
+### Unified Product Raw News Exchange
+
+The 2026-09-17 unification checkpoint adds an import boundary, not another evidence
+catalog or a replacement for the collection lifecycle. `TradingFlow.Contracts/Evidence/
+NewsReceipt.cs` validates the shared `alpaca.news_http_receipt.v1` wire envelope.
+`TradingFlow.Data/Evidence/Collection/NewsReceiptImporter.cs` reads bounded manifest
+and body files with an independently supplied expected manifest SHA256. Import is
+read-only and preserves original response bytes and receipt time, never local import
+time. A receipt downloaded today cannot provide historical first-seen evidence.
+
+The authoritative protocol specification is Market Predictor's
+`docs/catalyst_confirmation_architecture.md`, section **Raw News Receipt Exchange**.
+Both test suites consume byte-identical `news_receipt_exchange.json` fixtures.
+The manifest binds exact request identity and raw body digest/length; the payload is
+strict UTF-8 JSON. No credentials or local paths belong in its metadata. Structural
+parsing is not source authentication; the expected manifest hash must arrive through
+an independently trusted publication channel.
+
+This boundary deliberately does not invent collection-plan/attempt hashes to create
+`EvidenceSourceObservation`. Catalog publication needs genuine collection provenance
+and normalization/identity/coverage checks. Shared collector ownership, candles, SEC,
+full article bodies and cloud storage are not completed by this receipt slice.
+TradingFlow retains its current fenced live market-stream ownership and all order,
+risk and approval responsibilities. Its prediction client now requires exact
+ten-session swing (`10b`) response evidence; there is no day-trading fallback.
 
 ## 1. Purpose
 
@@ -207,7 +233,7 @@ future-adjusted series. A split, spin-off, merger, or unresolved symbol lineage 
 the affected interval inadmissible until reconciled.
 
 Daily bars become available only after the relevant New York trading session is
-complete. Comparing the provider's daily bar start timestamp to an intraday cutoff is
+complete. Comparing the provider's daily bar start timestamp to a sub-daily cutoff is
 prohibited. Session membership uses `America/New_York` exchange date, never UTC date.
 
 ## 5. Point-In-Time Universe
@@ -323,13 +349,13 @@ timeout apply at request, symbol, and whole-job levels.
 - no issuer or month contributes more than 10% of primary observations;
 - SPY, equal-weight universe, and relevant sector benchmark coverage.
 
-### 8.3 Intraday catalyst
+### 8.3 Swing catalyst confirmation
 
 - SIP bars and SIP quotes from the same feed;
-- at least 40 prior same-time sessions for cumulative RVOL, target 63;
+- enough completed sub-daily history to stabilize the selected confirmation indicators;
 - at least 300 independent stories overall and 100 in a proposed catalyst cohort;
 - event-local two-sided quote coverage for the claimed executable horizons;
-- session cohorts separated into premarket, regular, postmarket, and overnight;
+- reaction cohorts separated by provider-published session and first tradable bar;
 - chronological development, validation, and untouched holdout partitions;
 - matched no-catalyst controls and market/sector-adjusted returns;
 - estimated edge at least twice round-trip execution cost;
@@ -457,7 +483,7 @@ references.
 6. Security-master and corporate-action collectors.
 7. Universe snapshot lineage and point-in-time membership integration.
 8. Revision-aware news and historical SIP quote collectors.
-9. Swing and intraday event studies consume verified dataset handles only.
+9. Swing momentum and catalyst event studies consume verified dataset handles only.
 10. Promotion registry becomes the sole runtime strategy source.
 11. Full replay, restart, corruption, and end-to-end tests.
 

@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/TradingFlow.Alpaca/TradingFlow.Alpaca.csproj" />
+    <Project Path="src/TradingFlow.Application/TradingFlow.Application.csproj" />
     <Project Path="src/TradingFlow.Backtesting/TradingFlow.Backtesting.csproj" />
     <Project Path="src/TradingFlow.Cli/TradingFlow.Cli.csproj" />
+    <Project Path="src/TradingFlow.Contracts/TradingFlow.Contracts.csproj" />
     <Project Path="src/TradingFlow.Data/TradingFlow.Data.csproj" />
     <Project Path="src/TradingFlow.Domain/TradingFlow.Domain.csproj" />
     <Project Path="src/TradingFlow.Earnings/TradingFlow.Earnings.csproj" />

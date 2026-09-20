@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Audit;
 using TradingFlow.Domain.Market;
@@ -53,18 +53,6 @@ public sealed partial class LiveRunner
 
         try
         {
-        // 0.5 Recover state from DB if necessary
-        if (_orderRepo != null)
-        {
-            var dbOrders = await _orderRepo.GetActiveOrdersByTickerAsync(ticker, cancellationToken);
-            if (dbOrders.Count > 0)
-            {
-                logger.LogInformation("Recovered {Count} active orders for {Ticker} from database state.", dbOrders.Count, ticker);
-                progress?.Report($"Recovered {dbOrders.Count} active orders for {ticker} from database state.");
-                // Here the pod could theoretically reconstruct technical exits based on the recovered StrategyName and EntryPrice
-            }
-        }
-
         var barsByTimeframe = marketState.BarsByTimeframe
             .ToDictionary(
                 x => x.Key,
@@ -447,15 +435,13 @@ public sealed partial class LiveRunner
                                 "buy",
                                 ticker,
                                 orderSignal.Timestamp);
-                            var submission = await _orderSubmissionService.SubmitBracketOrderAsync(
-                                new BracketOrderSubmission(
+                            var submission = await _orderSubmissionService.SubmitEntryOrderAsync(
+                                new EntryOrderSubmission(
                                     intentId,
                                      new ValidatedEntryCandidate(
                                          persistedDecision.Candidate.CandidateId,
                                          DiscoverySource: persistedDecision.Candidate.DiscoverySource,
-                                         Horizon: strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)
-                                             ? "swing"
-                                             : "intraday",
+                                         Horizon: "swing",
                                          DiscoveredAtUtc: persistedDecision.Candidate.DiscoveredAtUtc,
                                          RevalidatedAtUtc: persistedDecision.Candidate.RevalidatedAtUtc,
                                          SetupEvidenceJson: signalJson,
@@ -487,26 +473,6 @@ public sealed partial class LiveRunner
                             progress?.Report(successMsg);
                             _auditor.LogEvent(ticker, strategy.StrategyName, DateTimeOffset.UtcNow, ExecutionState.BracketOrderSubmitted, successMsg);
 
-                            if (_orderRepo != null)
-                            {
-                                var persistedOrder = new TradingFlow.Domain.Orders.PersistedOrder
-                                {
-                                    OrderId = orderId,
-                                    Ticker = ticker,
-                                    RunName = run.RunName,
-                                    ClientOrderId = submission.ClientOrderId,
-                                    StrategyName = strategy.StrategyName,
-                                    Broker = run.Execution.Broker,
-                                    Status = submission.SubmittedOutsideRegularHours ? "pending_exit_setup" : "new",
-                                    EntryPrice = order.LimitPrice,
-                                    StopLossPrice = order.StopLossPrice,
-                                    TakeProfitPrice = order.TakeProfitPrice,
-                                    ShareQuantity = order.ShareQuantity,
-                                    CreatedAt = DateTimeOffset.UtcNow,
-                                    UpdatedAt = DateTimeOffset.UtcNow
-                                };
-                                await _orderRepo.SaveOrderAsync(persistedOrder, cancellationToken);
-                            }
                         }
                         catch (Exception ex)
                         {

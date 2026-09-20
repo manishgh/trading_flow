@@ -16,11 +16,11 @@ public sealed class PaperRunUniverseSnapshotResolverTests
         screener
             .Setup(source => source.PreviewAsync(
                 "large movers",
-                ScreenerScope.Intraday,
+                ScreenerScope.Swing,
                 null,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ScreenerSyncResult(
-                ScreenerScope.Intraday,
+                ScreenerScope.Swing,
                 "large movers",
                 "f=cap_large,sh_relvol_o2",
                 [" nvda ", "MU", "NVDA"],
@@ -41,7 +41,7 @@ public sealed class PaperRunUniverseSnapshotResolverTests
                 repoRoot,
                 "configs",
                 "strategies",
-                "intraday-ema10-ema20-macd-volume.v1.yaml"),
+                "minervini-trend-template-vcp.v4-trend-rider.yaml"),
             CancellationToken.None);
 
         Assert.Equal(["MU", "NVDA"], snapshot.Tickers);
@@ -105,11 +105,11 @@ public sealed class PaperRunUniverseSnapshotResolverTests
         screener
             .Setup(source => source.PreviewAsync(
                 "bad screen",
-                ScreenerScope.Intraday,
+                ScreenerScope.Swing,
                 null,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(ScreenerSyncResult.Failed(
-                ScreenerScope.Intraday,
+                ScreenerScope.Swing,
                 "bad screen",
                 String.Empty,
                 "Finviz read failed: timeout"));
@@ -126,7 +126,7 @@ public sealed class PaperRunUniverseSnapshotResolverTests
                 repoRoot,
                 "configs",
                 "strategies",
-                "intraday-ema10-ema20-macd-volume.v1.yaml"),
+                "minervini-trend-template-vcp.v4-trend-rider.yaml"),
             CancellationToken.None));
 
         Assert.Equal("Finviz read failed: timeout", exception.Message);

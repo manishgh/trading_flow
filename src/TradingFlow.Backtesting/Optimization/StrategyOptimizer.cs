@@ -16,12 +16,22 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         string optimizationConfigPath,
         CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress = null,
-        IProgress<OptimizationProgress>? optimizationProgress = null)
+        IProgress<OptimizationProgress>? optimizationProgress = null,
+        string? durableAttemptRoot = null,
+        DateTimeOffset? evaluationCutoffUtc = null)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var config = yamlReader.ReadOptimizationConfig(optimizationConfigPath);
         var baseStrategy = yamlReader.ReadStrategy(config.BaseStrategyPath);
         var backtestConfig = yamlReader.ReadBacktestRun(config.BacktestConfigPath);
+        if (evaluationCutoffUtc is not null &&
+            backtestConfig.TimeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase))
+        {
+            backtestConfig = backtestConfig with
+            {
+                TimeWindow = backtestConfig.TimeWindow with { End = evaluationCutoffUtc }
+            };
+        }
 
         var permutations = GeneratePermutations(config.Parameters);
         var runs = new List<OptimizationRun>();
@@ -66,7 +76,9 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
                 RankRuns(runs, config.TopNResults),
                 $"Running {testStrategy.StrategyName} with {parameterText}."));
 
-            var runPath = Path.Combine(backtestConfig.ResultsRoot, "optimization", config.RunName, $"run_{i}.json");
+            var runPath = durableAttemptRoot is null
+                ? Path.Combine(backtestConfig.ResultsRoot, "optimization", config.RunName, $"run_{i}.json")
+                : Path.Combine(durableAttemptRoot, "runs", $"run_{i}.json");
             var permutationProgress = progress is null
                 ? null
                 : new Progress<BacktestProgress>(update =>
@@ -119,7 +131,9 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
             permutations.Count,
             topRuns);
 
-        var resultPath = Path.Combine(backtestConfig.ResultsRoot, "optimization", $"{config.RunName}_summary.json");
+        var resultPath = durableAttemptRoot is null
+            ? Path.Combine(backtestConfig.ResultsRoot, "optimization", $"{config.RunName}_summary.json")
+            : Path.Combine(durableAttemptRoot, "summary.json");
         Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
         await _artifactWriter.WriteTextAsync(
             resultPath,
@@ -224,10 +238,6 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
             "entry_rules.min_entry_rsi" => strategy with { EntryRules = strategy.EntryRules with { MinEntryRsi = Convert.ToDecimal(value) } },
             "entry_rules.max_entry_rsi" => strategy with { EntryRules = strategy.EntryRules with { MaxEntryRsi = Convert.ToDecimal(value) } },
             "entry_rules.max_vwap_extension_atr" => strategy with { EntryRules = strategy.EntryRules with { MaxVwapExtensionAtr = Convert.ToDecimal(value) } },
-            "entry_rules.opening_range_minutes" => strategy with { EntryRules = strategy.EntryRules with { OpeningRangeMinutes = Convert.ToInt32(value) } },
-            "entry_rules.min_session_gain_pct" => strategy with { EntryRules = strategy.EntryRules with { MinSessionGainPct = Convert.ToDecimal(value) } },
-            "entry_rules.max_pre_entry_session_range_pct" => strategy with { EntryRules = strategy.EntryRules with { MaxPreEntrySessionRangePct = Convert.ToDecimal(value) } },
-            "entry_rules.max_entry_pullback_from_session_high_pct" => strategy with { EntryRules = strategy.EntryRules with { MaxEntryPullbackFromSessionHighPct = Convert.ToDecimal(value) } },
             "entry_rules.volume_sma_period" => strategy with { EntryRules = strategy.EntryRules with { VolumeSmaPeriod = Convert.ToInt32(value) } },
             "entry_rules.volume_sma_rising_lookback_bars" => strategy with { EntryRules = strategy.EntryRules with { VolumeSmaRisingLookbackBars = Convert.ToInt32(value) } },
             "entry_rules.min_volume_sma_rise_pct" => strategy with { EntryRules = strategy.EntryRules with { MinVolumeSmaRisePct = Convert.ToDecimal(value) } },

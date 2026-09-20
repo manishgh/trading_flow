@@ -4,7 +4,7 @@ source: doctrine_archetype_c_connors_chan
 version: 1
 timeframe: 1d
 direction: long
-# Archetype C (docs/strategy-design-doctrine.md §6C): buy an oversold stretch in a stock whose long-term
+# Archived mean-reversion archetype: buy an oversold stretch in a stock whose long-term
 # trend is intact and that has no fresh negative catalyst, entering on the first close back above the
 # prior day's high (a one-shot reclaim), targeting a mean-reversion bounce over a few days.
 entry_rules:
@@ -28,7 +28,6 @@ entry_rules:
   # L3 no-news veto (Chan): skip if any catalyst is fresher than 48h. Active only when news data is present
   # (backtests run with news disabled, so this is a no-op offline and the real edge is validated live).
   veto_fresh_news_hours: 48.0
-  max_entries_per_ticker_per_day: 1
   require_positive_news: false
 # L2 regime (SPY > 200dma) belongs here for paper/live via a `regime:` block; omitted in this offline
 # config because no cache holds 200+ days of SPY daily. The ticker-level 200dma gate above carries the

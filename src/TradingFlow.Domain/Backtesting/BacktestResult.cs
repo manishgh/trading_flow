@@ -33,7 +33,75 @@ public sealed record BacktestResult(
     UnifiedPortfolioBacktestResult? UnifiedPortfolio = null,
     UniversePromotionEligibility? UniversePromotion = null,
     string? CandidateDecisionAuditPath = null,
-    IReadOnlyList<BacktestCandidateDecisionAudit>? CandidateDecisionAudit = null);
+    IReadOnlyList<BacktestCandidateDecisionAudit>? CandidateDecisionAudit = null,
+    string? ExecutionAuditPath = null,
+    IReadOnlyList<BacktestExecutionAuditEvent>? ExecutionAudit = null,
+    string? ArtifactManifestPath = null,
+    IReadOnlyList<BacktestArtifactReference>? ArtifactReferences = null,
+    string? CandidateHypothesisAuditPath = null,
+    string? PortfolioExecutionAuditPath = null,
+    string SummaryScope = "winner_strategy",
+    string ExecutionEvidenceScope = "unified_portfolio",
+    bool EconomicResultsComplete = true);
+
+public sealed record BacktestArtifactReference(
+    int SchemaVersion,
+    string Kind,
+    string Path,
+    long RecordCount,
+    long ByteLength,
+    string Sha256,
+    bool Complete);
+
+public sealed record BacktestArtifactManifest(
+    int SchemaVersion,
+    string ArtifactSetId,
+    string RunName,
+    DateTimeOffset PublishedAtUtc,
+    bool PublicationComplete,
+    BacktestArtifactCoverage Coverage,
+    IReadOnlyList<BacktestArtifactReference> Artifacts);
+
+public sealed record BacktestArtifactCoverage(
+    int ExpectedWorkItemCount,
+    int SucceededWorkItemCount,
+    int FailedWorkItemCount,
+    IReadOnlyList<string> FailedWorkItems,
+    int ExecutionFailureCount = 0,
+    IReadOnlyList<BacktestExecutionFailure>? ExecutionFailures = null)
+{
+    public string Status => FailedWorkItemCount == 0 && ExecutionFailureCount == 0
+        ? "complete"
+        : "partial";
+}
+
+public sealed record BacktestExecutionFailure(
+    string CandidateId,
+    string Ticker,
+    string StrategyName,
+    string StrategyId,
+    string Direction,
+    DateTimeOffset EntryTimestamp,
+    string Reason,
+    int RequestedQuantity,
+    int EntryFilledQuantity,
+    int ExitFilledQuantity,
+    int OpenSignedQuantity,
+    decimal EntryFilledNotional,
+    decimal ExitFilledNotional,
+    decimal Fees,
+    decimal? LastMarkedPrice,
+    DateTimeOffset? LastMarketTimestampUtc);
+
+public sealed record BacktestExecutionAuditEvent(
+    string Ticker,
+    string StrategyName,
+    DateTimeOffset Timestamp,
+    string State,
+    string Message,
+    string EvidenceScope,
+    string? ReferenceId = null,
+    string? EvidenceJson = null);
 
 public sealed record BacktestCandidateDecisionAudit(
     CandidateRecord Candidate,
@@ -63,7 +131,9 @@ public sealed record UnifiedPortfolioBacktestResult(
     int LosingTradeCount,
     IReadOnlyList<BacktestTrade> CompletedTrades,
     IReadOnlyDictionary<string, int>? AdmissionRejectionCounts = null,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? AdmissionRejectionExamples = null);
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? AdmissionRejectionExamples = null,
+    IReadOnlyList<BacktestExecutionFailure>? ExecutionFailures = null,
+    bool EconomicResultsComplete = true);
 
 
 public sealed record MissedMoveAudit(
@@ -93,7 +163,9 @@ public sealed record StrategyBacktestResult(
     int RejectedTradeCount,
     int WinningTradeCount,
     int LosingTradeCount,
-    IReadOnlyList<BacktestTrade> CompletedTrades);
+    IReadOnlyList<BacktestTrade> CompletedTrades,
+    IReadOnlyList<BacktestExecutionFailure>? ExecutionFailures = null,
+    bool EconomicResultsComplete = true);
 
 public sealed record TickerBacktestResult(
     string Ticker,
@@ -128,7 +200,9 @@ public sealed record StrategyDiagnosticReport(
     IReadOnlyDictionary<string, int> ExitReasonCounts,
     IReadOnlyDictionary<string, int> RejectionCounts,
     IReadOnlyDictionary<string, IReadOnlyList<string>> RejectionExamples,
-    IReadOnlyList<string> Suggestions);
+    IReadOnlyList<string> Suggestions,
+    int ExecutionFailureCount = 0,
+    bool EconomicResultsComplete = true);
 
 public sealed record DailyPnlSummary(
     int TradingDayCount,

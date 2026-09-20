@@ -20,7 +20,6 @@ entry_rules:
   require_ema10_above_ema20: true
   require_ema20_above_ema50: true
   max_vwap_extension_atr:
-  opening_range_minutes: 15
   recent_high_lookback_bars: 20
   volatility_contraction_lookback_bars: 25
   require_log_price_rising: false
@@ -34,16 +33,10 @@ entry_rules:
   reject_falling_price_rising_volume: false
   red_volume_max_price_slope: -0.0001
   red_volume_min_volume_slope: 0.003
-  vwap_hold_bars: 2
-  max_entries_per_ticker_per_day: 1
   min_close_location_value: 0.55
   reject_weak_close_on_high_relative_volume: false
   weak_close_max_location_value: 0.40
   weak_close_min_relative_volume: 1.0
-  min_day_gain_pct:
-  min_session_gain_pct:
-  max_pre_entry_session_range_pct:
-  max_entry_pullback_from_session_high_pct:
   require_positive_news: false
   min_news_sentiment:
   veto_news_sentiment_below:

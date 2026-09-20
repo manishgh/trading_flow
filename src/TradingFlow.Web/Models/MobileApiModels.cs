@@ -152,7 +152,7 @@ public sealed record MobileAutomationStartRequest(
     string? SourceMessage,
     string EntryMode = "validate_strategy",
     bool AllowExtendedHoursTrading = false,
-    string EntryOrderType = "market");
+    string EntryOrderType = "limit");
 
 public sealed record MobileAutomationSessionSnapshot(
     Guid SessionId,
@@ -181,7 +181,9 @@ public sealed record MobileAutomationSessionSnapshot(
     IReadOnlyList<string> Events,
     string? SourceTitle,
     string? SourceMessage,
-    bool ExitSafetyOrdersSubmitted = false);
+    bool ExitSafetyOrdersSubmitted = false,
+    string? ExecutionConfigHash = null,
+    string? ExecutionCodeVersion = null);
 
 public sealed record MobileWishlistResponse(
     Guid Id,
@@ -286,8 +288,7 @@ public sealed record MobileModelIntelligenceResponse(
     string? ModelTarget,
     string? ModelArtifactSha256,
     string? ModelTrainingDataEnd,
-    MobileSwingIntelligenceResponse? Swing,
-    MobileIntradayIntelligenceResponse? Intraday);
+    MobileSwingIntelligenceResponse? Swing);
 
 public sealed record MobileSwingIntelligenceResponse(
     decimal? Probability,
@@ -299,23 +300,6 @@ public sealed record MobileSwingIntelligenceResponse(
     MobileCatalystIntelligenceResponse Catalyst,
     decimal GlobalContextImpact,
     IReadOnlyList<string> ActiveFlashpoints,
-    string ReadinessStatus,
-    IReadOnlyList<string> ReadinessReasons,
-    string? LatestPriceDate,
-    string PriceFeed);
-
-public sealed record MobileIntradayIntelligenceResponse(
-    decimal? OpportunityProbability,
-    decimal? DownsideProbability,
-    decimal? DecisionScore,
-    string Signal,
-    int? Rank,
-    decimal? RelativeVolume,
-    decimal? Rsi14,
-    decimal? MacdSignalDiff,
-    decimal? EntryStopPct,
-    decimal? EntryTargetPct,
-    MobileCatalystIntelligenceResponse Catalyst,
     string ReadinessStatus,
     IReadOnlyList<string> ReadinessReasons,
     string? LatestPriceDate,
@@ -363,16 +347,14 @@ public sealed record MobileWishlistMonitorSnapshotRequest(
     string? Timeframe,
     decimal CurrentPrice,
     decimal CurrentVolume,
-    decimal? Vwap,
     decimal? Atr,
     decimal? Ema10,
     decimal? Ema20,
     decimal? MacdHistogram,
     decimal? PreviousMacdHistogram,
     decimal? PreviousVolume,
-    decimal? CumulativeSameTimeRelativeVolume,
+    decimal? DailyRelativeVolume,
     decimal? RecentHigh,
-    decimal? SessionOpen,
     string? NewsHeadline,
     string? NewsUrl,
     string? NewsProvider,
@@ -393,9 +375,9 @@ public sealed record MobileWishlistMonitorEvaluationResponse(
     decimal Price,
     string Reason,
     decimal Score,
-    decimal? SessionGainPct,
-    decimal? CumulativeSameTimeRelativeVolume,
-    decimal? VwapExtensionAtr,
+    decimal? DailyRelativeVolume,
+    decimal? DistanceFromRecentHighPct,
+    decimal? Ema20ExtensionAtr,
     string? NewsHeadline,
     string? NewsUrl,
     string? NewsProvider);

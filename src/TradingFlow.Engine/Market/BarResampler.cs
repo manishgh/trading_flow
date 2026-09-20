@@ -114,7 +114,7 @@ public sealed class BarResampler
     }
 
     /// <summary>
-    /// Resamples an authoritative historical response where omitted intraday
+    /// Resamples an authoritative historical response where omitted sub-daily
     /// intervals explicitly mean that no qualifying trade occurred. It never
     /// invents a flat source bar: OHLCV is aggregated from real trades only,
     /// and the containing bucket must be complete by wall-clock time.
@@ -192,7 +192,7 @@ public sealed class BarResampler
         if (!schedule.IsTradingDay)
         {
             throw new InvalidOperationException(
-                $"Cannot resample an intraday bar into closed exchange session {tradeDate:yyyy-MM-dd}.");
+                $"Cannot resample a sub-daily bar into closed exchange session {tradeDate:yyyy-MM-dd}.");
         }
 
         var regularOpen = schedule.RegularOpen.ToTimeSpan();

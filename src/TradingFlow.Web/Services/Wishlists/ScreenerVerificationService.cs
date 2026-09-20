@@ -56,11 +56,8 @@ public sealed class ScreenerVerificationService
         {
             try
             {
-                var result = await predictorClient.GetAsync(ticker, preset.Category.ToLowerInvariant(), "auto", cancellationToken);
-                
-                var probability = preset.Category.Equals("swing", StringComparison.OrdinalIgnoreCase) 
-                    ? result.Swing?.Probability 
-                    : result.Intraday?.OpportunityProbability;
+                var result = await predictorClient.GetAsync(ticker, "auto", cancellationToken);
+                var probability = result.Swing?.Probability;
 
                 if (probability.HasValue)
                 {

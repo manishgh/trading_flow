@@ -31,15 +31,20 @@ TradingFlow currently operates within these hard boundaries:
 - **Universes:** promotable research requires point-in-time membership and delisting
   evidence. Current wishlists or Finviz exports may drive today's operation but may
   not be projected backward.
-- **Research:** only cross-sectional swing momentum and catalyst/participation
-  intraday research are active alpha tracks. ML belongs to the separate Market
-  Predictor project.
+- **Research:** cross-sectional swing momentum and point-in-time swing catalyst
+  research are the only active alpha tracks. ML belongs to the separate Market
+  Predictor project. Intraday strategy research and execution are out of scope.
 - **Timing:** completed-bar features, later-bar confirmation, next-bar execution,
   pre-fill stops, point-in-time news, and one-use chronological holdouts are
   mandatory.
 - **Execution:** costs, quote side, spread, slippage, participation, partial/non-fill,
   and impact assumptions must be explicit. Extended-hours observation does not
   authorize extended-hours execution.
+- **Durable broker commands:** entries, exits, protective orders, cancels, and stop
+  replacements pass through one account-bound command service. Intent and risk are
+  persisted before broker I/O; ambiguous submissions are adopted by exact client
+  order ID instead of blindly retried. Extended-hours entries remain disabled because
+  Alpaca bracket protection is unavailable outside regular hours.
 - **Promotion:** missing universe, timing, execution, statistical, or paper evidence
   fails closed. The current integrated research decision is `RETAIN_RESEARCH`.
 
@@ -275,7 +280,7 @@ folder is not promotion evidence. Experimental variants live under
 paper-shadow run.
 
 The exact bootstrap classification is in
-`configs/strategy-catalog.json`: six research artifacts, fifteen archived
+`configs/strategy-catalog.json`: two research artifacts, thirteen archived
 artifacts, and no paper-experiment, paper-shadow, or validated authorization.
 Folder location is not authority.
 
@@ -287,8 +292,8 @@ are separate choices in Web and Android and both fail closed when their catalog 
 empty.
 
 Each completed comparison may report a run-local winner in its result JSON. That
-label is not a lifecycle promotion. Latest run evidence is tracked in
-[strategy-last-runs.md](docs/strategy-last-runs.md).
+label is not a lifecycle promotion. Immutable run evidence and promotion decisions
+are tracked through the research evidence catalog.
 
 Current limitation: partial exits are not yet modeled. Backtests currently support one entry and one full-position exit. Strategy YAML may express structural stops, VWAP targets, failed-breakout guards, trailing stops, and max-hold exits, but partial scale-out requires a future trade-lot model.
 
@@ -302,6 +307,8 @@ No live broker routing should be enabled until:
 - paper trading behaves correctly
 - position sizing and risk limits are verified
 - broker writes are idempotent and audited
+- partial-fill protection has passed the dedicated broker drill
+- replacement outcomes and graceful shutdown are durably evidenced
 
 Research success is not inferred from a profitable run. A strategy remains
 research-only until its preregistered development, validation, untouched holdout,

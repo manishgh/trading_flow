@@ -34,7 +34,7 @@ Anonymous access is limited to:
 
 - `/Earnings`
 - earnings calendar/status GET APIs under `/api/earnings` and
-  `/api/mobile/earnings`
+  `/api/v1/earnings`
 - `/Login` and `/AccessDenied`, which are required to authenticate
 - static UI assets
 

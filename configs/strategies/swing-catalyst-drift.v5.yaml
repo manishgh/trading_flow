@@ -24,7 +24,6 @@ entry_rules:
   max_catalyst_confirmation_bars: 3
   min_catalyst_price_move_pct: 0.25
   max_catalyst_price_move_pct: 12.0
-  max_entries_per_ticker_per_day: 1
 confluence:
   enabled: false
   timeframe: 1d

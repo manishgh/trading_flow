@@ -27,13 +27,14 @@ public sealed record EntryGateOptions(
     decimal MaxSpreadBps,
     decimal MaxExpectedSlippageBps,
     decimal MaxNotionalPerTradePct,
-    decimal MaxGrossExposureIntradayPct,
-    decimal MaxGrossExposureOvernightPct,
-    int MaxPositionsDay,
-    int MaxPositionsSwing)
+    decimal MaxGrossExposurePct,
+    int MaxPositions,
+    decimal PerTradeRiskPct = 0.5m,
+    int AccountSnapshotMaxAgeSeconds = 60)
 {
     public TimeSpan SetupMaxAge => TimeSpan.FromSeconds(SetupMaxAgeSeconds);
     public TimeSpan QuoteMaxAge => TimeSpan.FromMilliseconds(QuoteMaxAgeMilliseconds);
+    public TimeSpan AccountSnapshotMaxAge => TimeSpan.FromSeconds(AccountSnapshotMaxAgeSeconds);
 }
 
 public sealed class EntryGateRejectedException(
@@ -49,7 +50,7 @@ public sealed class EntryGateRejectedException(
 public interface IEntryGateChain
 {
     Task<T> ExecuteAsync<T>(
-        BracketOrderSubmission submission,
+        EntryOrderSubmission submission,
         IBrokerClient brokerClient,
         Func<EntryGateApproval, CancellationToken, Task<T>> submit,
         CancellationToken cancellationToken = default);
@@ -58,7 +59,9 @@ public interface IEntryGateChain
 public sealed record EntryGateApproval(
     DateOnly TradeDate,
     EquityTradingSession Session,
-    bool SubmitOutsideRegularHours);
+    bool SubmitOutsideRegularHours,
+    DateTimeOffset DispatchExpiresAtUtc,
+    PortfolioRiskReservationRequest PortfolioRisk);
 
 /// <summary>
 /// Collects authoritative evidence lazily in binding order, persists every evaluated
@@ -75,7 +78,7 @@ public sealed class EntryGateChain(
     TimeProvider timeProvider) : IEntryGateChain
 {
     public async Task<T> ExecuteAsync<T>(
-        BracketOrderSubmission submission,
+        EntryOrderSubmission submission,
         IBrokerClient brokerClient,
         Func<EntryGateApproval, CancellationToken, Task<T>> submit,
         CancellationToken cancellationToken = default)
@@ -156,7 +159,9 @@ public sealed class EntryGateChain(
             }
         }
 
-        var candidateValid = submission.OperatorOverride is not null ||
+        var swingHorizon = submission.Candidate.Horizon.Equals("swing", StringComparison.OrdinalIgnoreCase);
+        var candidateValid = swingHorizon &&
+            (submission.OperatorOverride is not null ||
             candidate is not null &&
             strategyAuthorizationError is null &&
             candidate.State == TradingFlow.Domain.Strategies.StrategyCandidateState.Triggered &&
@@ -171,7 +176,7 @@ public sealed class EntryGateChain(
                 submission.StrategyIdentity.ContentSha256,
                 StringComparison.Ordinal)) &&
             candidate.ExpiresAtUtc > now &&
-            candidateAge is { } age && age >= TimeSpan.Zero && age <= options.SetupMaxAge;
+            candidateAge is { } age && age >= TimeSpan.Zero && age <= options.SetupMaxAge);
         await RequireAsync(
             submission, results, EntryGateSlot.CandidateState,
             candidateValid, RejectCode.REJECT_SETUP_INVALID,
@@ -181,6 +186,8 @@ public sealed class EntryGateChain(
                 operatorOverride = submission.OperatorOverride is not null,
                 operatorOverrideActor = submission.OperatorOverride?.Actor,
                 operatorOverrideReason = submission.OperatorOverride?.Reason,
+                submittedHorizon = submission.Candidate.Horizon,
+                swingHorizon,
                 strategySelectionMode = strategyAdmission?.SelectionMode.ToString(),
                 strategyGrantDecisionId = strategyAdmission?.GrantDecisionId,
                 strategyAuthorizationError,
@@ -299,7 +306,21 @@ public sealed class EntryGateChain(
             accountError = exception.Message;
         }
 
+        var accountEvaluationAtUtc = timeProvider.GetUtcNow();
         var notional = submission.Order.ShareQuantity * submission.Order.LimitPrice;
+        var accountAge = account is null
+            ? (TimeSpan?)null
+            : accountEvaluationAtUtc - account.ObservedAtUtc.ToUniversalTime();
+        var accountTimelineValid = account is not null &&
+            account.RequestedAtUtc.ToUniversalTime() <= account.ObservedAtUtc.ToUniversalTime() &&
+            account.ObservedAtUtc.ToUniversalTime() <= accountEvaluationAtUtc;
+        var accountSnapshotFresh = accountTimelineValid &&
+            accountAge is { } observedAccountAge &&
+            observedAccountAge >= TimeSpan.Zero &&
+            observedAccountAge <= options.AccountSnapshotMaxAge;
+        var availableBuyingPower = account is null
+            ? (decimal?)null
+            : Math.Min(account.BuyingPower, account.RegulationTBuyingPower);
         var accountOperational = account is not null &&
             account.Status.Equals("ACTIVE", StringComparison.OrdinalIgnoreCase) &&
             !account.AccountBlocked && !account.TradingBlocked && !account.TradeSuspendedByUser;
@@ -310,13 +331,16 @@ public sealed class EntryGateChain(
                  eligibility.BorrowStatus,
                  "unavailable",
                  StringComparison.OrdinalIgnoreCase));
-        var buyingPowerSufficient = account?.BuyingPower >= notional;
-        var accountAllowed = accountError is null && accountOperational && assetAllowed && buyingPowerSufficient;
+        var buyingPowerSufficient = availableBuyingPower >= notional;
+        var accountAllowed = accountError is null && accountSnapshotFresh &&
+            accountOperational && assetAllowed && buyingPowerSufficient;
         var accountReject = !assetAllowed && submission.Side.Equals("sell", StringComparison.OrdinalIgnoreCase)
             ? RejectCode.REJECT_NO_SHORT_AVAILABILITY
             : buyingPowerSufficient != true
                 ? RejectCode.REJECT_BUDGET_EXHAUSTED
-                : RejectCode.REJECT_SETUP_INVALID;
+                : accountSnapshotFresh
+                    ? RejectCode.REJECT_SETUP_INVALID
+                    : RejectCode.REJECT_DEGRADED_DATA;
         await RequireAsync(
             submission, results, EntryGateSlot.Account,
             accountAllowed, accountError is null ? accountReject : RejectCode.REJECT_DEGRADED_DATA,
@@ -329,9 +353,16 @@ public sealed class EntryGateChain(
                 account?.TradeSuspendedByUser,
                 account?.ShortingEnabled,
                 account?.BuyingPower,
+                account?.RegulationTBuyingPower,
+                availableBuyingPower,
                 account?.Equity,
+                account?.RequestedAtUtc,
+                account?.ObservedAtUtc,
+                accountAgeMs = accountAge?.TotalMilliseconds,
+                maxAccountAgeMs = options.AccountSnapshotMaxAge.TotalMilliseconds,
                 eligibility,
                 requiredBuyingPower = notional,
+                horizon = submission.Candidate.Horizon,
                 pdtProviderApplicable = false,
                 error = accountError
             },
@@ -340,6 +371,7 @@ public sealed class EntryGateChain(
         try
         {
             return await positionConflict.ExecuteEntryAsync(
+                account!.AccountId,
                 submission.Order.Ticker,
                 submission.StrategyId,
                 async token =>
@@ -348,7 +380,83 @@ public sealed class EntryGateChain(
                         submission, EntryGateSlot.PositionConflict, true, null,
                         new { symbol = submission.Order.Ticker, strategy = submission.StrategyId }, now));
 
-                    var sizingValid = IsSizingValid(submission, account!, out var riskDollars);
+                    var reservationAccount = await brokerClient.GetAccountSnapshotAsync(token);
+                    var reservationObservedAtUtc = timeProvider.GetUtcNow();
+                    var reservationAccountAge = reservationObservedAtUtc -
+                        reservationAccount.ObservedAtUtc.ToUniversalTime();
+                    var reservationAccountValid =
+                        reservationAccount.AccountId.Equals(account!.AccountId, StringComparison.Ordinal) &&
+                        reservationAccount.Status.Equals("ACTIVE", StringComparison.OrdinalIgnoreCase) &&
+                        !reservationAccount.AccountBlocked &&
+                        !reservationAccount.TradingBlocked &&
+                        !reservationAccount.TradeSuspendedByUser &&
+                        reservationAccount.RequestedAtUtc.ToUniversalTime() <=
+                            reservationAccount.ObservedAtUtc.ToUniversalTime() &&
+                        reservationAccount.ObservedAtUtc.ToUniversalTime() <= reservationObservedAtUtc &&
+                        reservationAccountAge >= TimeSpan.Zero &&
+                        reservationAccountAge <= options.AccountSnapshotMaxAge;
+                    var reservationBuyingPower = Math.Min(
+                        reservationAccount.BuyingPower,
+                        reservationAccount.RegulationTBuyingPower);
+                    var reservationAccountAllowed = reservationAccountValid &&
+                        reservationBuyingPower >= notional;
+                    var reservationAccountReject = reservationAccountValid
+                        ? RejectCode.REJECT_BUDGET_EXHAUSTED
+                        : RejectCode.REJECT_DEGRADED_DATA;
+                    var accountGateIndex = results.FindIndex(result =>
+                        result.GateOrder == (int)EntryGateSlot.Account);
+                    if (accountGateIndex < 0)
+                    {
+                        throw new InvalidOperationException("The initial account gate result is missing.");
+                    }
+
+                    results[accountGateIndex] = Result(
+                        submission,
+                        EntryGateSlot.Account,
+                        reservationAccountAllowed,
+                        reservationAccountAllowed ? null : reservationAccountReject,
+                        new
+                        {
+                            phase = "reservation_refresh",
+                            initialAccountId = account.AccountId,
+                            refreshedAccountId = reservationAccount.AccountId,
+                            reservationAccount.Status,
+                            reservationAccount.AccountBlocked,
+                            reservationAccount.TradingBlocked,
+                            reservationAccount.TradeSuspendedByUser,
+                            reservationAccount.Equity,
+                            reservationBuyingPower,
+                            requiredBuyingPower = notional,
+                            requestedAtUtc = reservationAccount.RequestedAtUtc,
+                            accountObservedAtUtc = reservationAccount.ObservedAtUtc,
+                            gateObservedAtUtc = reservationObservedAtUtc,
+                            accountAgeMs = reservationAccountAge.TotalMilliseconds,
+                            maxAccountAgeMs = options.AccountSnapshotMaxAge.TotalMilliseconds
+                        },
+                        reservationObservedAtUtc);
+                    if (!reservationAccountAllowed)
+                    {
+                        await PersistAsync(
+                            submission,
+                            results,
+                            CreateCandidateRejection(
+                                submission,
+                                EntryGateSlot.Account,
+                                reservationAccountReject),
+                            token);
+                        throw new EntryGateRejectedException(
+                            EntryGateSlot.Account,
+                            reservationAccountReject,
+                            $"Entry rejected at account for {submission.Order.Ticker}: {reservationAccountReject}.");
+                    }
+
+                    var perTradeRiskPct = options.PerTradeRiskPct;
+                    var perTradeRiskLimit = reservationAccount.Equity * perTradeRiskPct / 100m;
+                    var sizingValid = IsSizingValid(
+                        submission,
+                        reservationAccount,
+                        perTradeRiskLimit,
+                        out var riskDollars);
                     await RequireAsync(
                         submission, results, EntryGateSlot.Sizing,
                         sizingValid, RejectCode.REJECT_SETUP_INVALID,
@@ -359,20 +467,20 @@ public sealed class EntryGateChain(
                             submission.Order.StopLossPrice,
                             submission.Order.TakeProfitPrice,
                             riskDollars,
+                            perTradeRiskLimit,
+                            perTradeRiskPct,
                             notional,
-                            account!.Equity,
-                            maxNotional = account.Equity * options.MaxNotionalPerTradePct / 100m
+                            reservationAccount.Equity,
+                            maxNotional = reservationAccount.Equity * options.MaxNotionalPerTradePct / 100m
                         },
                         now, token);
 
                     var positions = await brokerClient.GetOpenPositionsAsync(token);
-                    var grossExposure = positions.Sum(position => Math.Abs(position.Qty * position.CurrentPrice));
-                    var isSwing = submission.Candidate.Horizon.Equals("swing", StringComparison.OrdinalIgnoreCase);
-                    var maxGrossPct = isSwing
-                        ? options.MaxGrossExposureOvernightPct
-                        : options.MaxGrossExposureIntradayPct;
-                    var maxPositions = isSwing ? options.MaxPositionsSwing : options.MaxPositionsDay;
-                    var exposureAllowed = grossExposure + notional <= account.Equity * maxGrossPct / 100m &&
+                    var grossExposure = Math.Abs(reservationAccount.LongMarketValue) +
+                        Math.Abs(reservationAccount.ShortMarketValue);
+                    var maxGrossPct = options.MaxGrossExposurePct;
+                    var maxPositions = options.MaxPositions;
+                    var exposureAllowed = grossExposure + notional <= reservationAccount.Equity * maxGrossPct / 100m &&
                         positions.Count < maxPositions;
                     await RequireAsync(
                         submission, results, EntryGateSlot.Exposure,
@@ -382,7 +490,7 @@ public sealed class EntryGateChain(
                             horizon = submission.Candidate.Horizon,
                             currentGrossExposure = grossExposure,
                             proposedNotional = notional,
-                            maxGrossExposure = account.Equity * maxGrossPct / 100m,
+                            maxGrossExposure = reservationAccount.Equity * maxGrossPct / 100m,
                             currentPositions = positions.Count,
                             maxPositions
                         },
@@ -408,11 +516,31 @@ public sealed class EntryGateChain(
                         new { duplicateOrders }, now, token);
 
                     await PersistAsync(submission, results, candidateRejection: null, token);
+                    var maxGrossExposure = reservationAccount.Equity * maxGrossPct / 100m;
+                    var maxPortfolioRisk = perTradeRiskLimit * maxPositions;
                     return await submit(
                         new EntryGateApproval(
                             session!.TradeDate,
                             session.Session,
-                            session.Session != EquityTradingSession.Regular),
+                            session.Session != EquityTradingSession.Regular,
+                            candidate?.ExpiresAtUtc ?? now.Add(options.SetupMaxAge),
+                            new PortfolioRiskReservationRequest(
+                                reservationAccount.AccountId,
+                                "swing",
+                                reservationAccount.Equity,
+                                reservationBuyingPower,
+                                grossExposure,
+                                reservationAccount.LongMarketValue + reservationAccount.ShortMarketValue,
+                                positions
+                                    .Select(position => position.Ticker.Trim().ToUpperInvariant())
+                                    .ToHashSet(StringComparer.Ordinal),
+                                notional,
+                                riskDollars,
+                                maxGrossExposure,
+                                maxPortfolioRisk,
+                                maxPositions,
+                                reservationAccount.RequestedAtUtc.ToUniversalTime(),
+                                reservationAccount.ObservedAtUtc.ToUniversalTime())),
                         token);
                 },
                 cancellationToken);
@@ -436,8 +564,9 @@ public sealed class EntryGateChain(
     }
 
     private bool IsSizingValid(
-        BracketOrderSubmission submission,
+        EntryOrderSubmission submission,
         BrokerAccountSnapshot account,
+        decimal perTradeRiskLimit,
         out decimal riskDollars)
     {
         var order = submission.Order;
@@ -450,13 +579,14 @@ public sealed class EntryGateChain(
             : order.LimitPrice - order.TakeProfitPrice;
         riskDollars = order.ShareQuantity * stopDistance;
         return order.ShareQuantity > 0 && order.LimitPrice > 0m && stopDistance > 0m &&
-            targetDistance > 0m && riskDollars > 0m && account.Equity > 0m &&
+            targetDistance > 0m && riskDollars > 0m && riskDollars <= perTradeRiskLimit &&
+            account.Equity > 0m &&
             order.ShareQuantity * order.LimitPrice <=
                 account.Equity * options.MaxNotionalPerTradePct / 100m;
     }
 
     private static decimal? CalculateExpectedSlippageBps(
-        BracketOrderSubmission submission,
+        EntryOrderSubmission submission,
         BrokerMarketObservation market)
     {
         if (market.MidPrice is not > 0m)
@@ -477,7 +607,7 @@ public sealed class EntryGateChain(
     }
 
     private async Task RequireAsync(
-        BracketOrderSubmission submission,
+        EntryOrderSubmission submission,
         List<GateEvaluationAppendRequest> results,
         EntryGateSlot slot,
         bool passed,
@@ -505,7 +635,7 @@ public sealed class EntryGateChain(
     }
 
     private Task PersistAsync(
-        BracketOrderSubmission submission,
+        EntryOrderSubmission submission,
         IReadOnlyList<GateEvaluationAppendRequest> results,
         CandidateGateRejection? candidateRejection,
         CancellationToken cancellationToken) =>
@@ -516,7 +646,7 @@ public sealed class EntryGateChain(
             cancellationToken);
 
     private static CandidateGateRejection? CreateCandidateRejection(
-        BracketOrderSubmission submission,
+        EntryOrderSubmission submission,
         EntryGateSlot slot,
         RejectCode rejectCode) =>
         submission.OperatorOverride is not null
@@ -531,7 +661,7 @@ public sealed class EntryGateChain(
                 rejectCode);
 
     private static GateEvaluationAppendRequest Result(
-        BracketOrderSubmission submission,
+        EntryOrderSubmission submission,
         EntryGateSlot slot,
         bool passed,
         RejectCode? rejectCode,

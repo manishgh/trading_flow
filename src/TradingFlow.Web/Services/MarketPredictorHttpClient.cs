@@ -44,12 +44,11 @@ public sealed class MarketPredictorHttpClient
 
     public async Task<MarketPredictorResult> GetAsync(
         string ticker,
-        string mode,
         string horizon,
         CancellationToken cancellationToken)
     {
         var normalizedTicker = NormalizeTicker(ticker);
-        var normalizedMode = NormalizeMode(mode);
+        const string normalizedMode = "swing";
         var normalizedHorizon = String.IsNullOrWhiteSpace(horizon) ? "auto" : horizon.Trim().ToLowerInvariant();
         if (!options.IsConfigured)
         {
@@ -134,15 +133,13 @@ public sealed class MarketPredictorHttpClient
     /// missing answer for a negative one.
     /// </summary>
     /// <param name="tickers">Candidate symbols. Order is not significant.</param>
-    /// <param name="mode">swing, intraday or unified.</param>
     /// <param name="horizon">Requested horizon, or auto.</param>
     public async Task<IReadOnlyDictionary<string, MarketPredictorResult>> GetBatchAsync(
         IReadOnlyCollection<string> tickers,
-        string mode,
         string horizon,
         CancellationToken cancellationToken)
     {
-        var normalizedMode = NormalizeMode(mode);
+        const string normalizedMode = "swing";
         var normalizedHorizon = String.IsNullOrWhiteSpace(horizon) ? "auto" : horizon.Trim().ToLowerInvariant();
         var results = new Dictionary<string, MarketPredictorResult>(StringComparer.OrdinalIgnoreCase);
 
@@ -317,23 +314,24 @@ public sealed class MarketPredictorHttpClient
         {
             return MarketPredictorResult.Unavailable(ticker, mode, horizon, "invalid", "No prediction was returned for the selected symbol.");
         }
-        if (mode == "unified" && (prediction.Swing is null || prediction.Intraday is null))
+        if (prediction.Swing is null)
         {
-            return MarketPredictorResult.Unavailable(ticker, mode, horizon, "invalid", "Unified prediction evidence is partial.");
-        }
-        if ((mode == "swing" && prediction.Swing is null) || (mode == "intraday" && prediction.Intraday is null))
-        {
-            return MarketPredictorResult.Unavailable(ticker, mode, horizon, "invalid", $"{mode} prediction evidence is missing.");
+            return MarketPredictorResult.Unavailable(ticker, mode, horizon, "invalid", "Swing prediction evidence is missing.");
         }
         if (prediction.Errors is null ||
-            (prediction.Swing is not null && (prediction.Swing.Readiness is null || prediction.Swing.Catalyst is null || prediction.Swing.GlobalContext is null)) ||
-            (prediction.Intraday is not null && (prediction.Intraday.Readiness is null || prediction.Intraday.Catalyst is null)))
+            prediction.Swing.Readiness is null ||
+            prediction.Swing.Catalyst is null ||
+            prediction.Swing.GlobalContext is null)
         {
             return MarketPredictorResult.Unavailable(ticker, mode, horizon, "incompatible", "Prediction evidence is incomplete.");
         }
 
-        var model = ResolveModel(response.Models, mode);
-        var resolvedHorizon = ResolveHorizon(response, mode, horizon);
+        if (!response.ResolvedHorizons.TryGetValue("swing", out var resolvedHorizon) ||
+            !String.Equals(resolvedHorizon, "10b", StringComparison.Ordinal) ||
+            !response.Models.TryGetValue("swing", out var model) || model is null)
+        {
+            return MarketPredictorResult.Unavailable(ticker, mode, horizon, "incompatible", "Ten-session swing model evidence is required.");
+        }
         return new MarketPredictorResult(
             "market_predictor.prediction.v1",
             ticker,
@@ -348,43 +346,8 @@ public sealed class MarketPredictorHttpClient
             prediction.Errors.Concat(response.Errors).ToArray(),
             model,
             prediction.Swing,
-            prediction.Intraday,
             "available",
             null);
-    }
-
-    private static PredictorModelInfo? ResolveModel(
-        IReadOnlyDictionary<string, PredictorModelInfo> models,
-        string mode)
-    {
-        if (mode != "unified" && models.TryGetValue(mode, out var exact))
-        {
-            return exact;
-        }
-        return models.Values.FirstOrDefault();
-    }
-
-    private static string ResolveHorizon(PredictorResponse response, string mode, string requested)
-    {
-        if (mode != "unified" && response.ResolvedHorizons.TryGetValue(mode, out var exact))
-        {
-            return exact;
-        }
-        return response.ResolvedHorizons.Values.FirstOrDefault() ?? response.Horizon ?? requested;
-    }
-
-    internal static string NormalizeMode(string mode)
-    {
-        var normalized = (mode ?? String.Empty).Trim().ToLowerInvariant();
-        return normalized is "swing" or "intraday" or "unified"
-            ? normalized
-            : throw new ArgumentOutOfRangeException(nameof(mode), "Prediction mode must be swing, intraday, or unified.");
-    }
-
-    internal static bool TryNormalizeMode(string? mode, out string normalized)
-    {
-        normalized = (mode ?? String.Empty).Trim().ToLowerInvariant();
-        return normalized is "swing" or "intraday" or "unified";
     }
 
     private static string NormalizeTicker(string ticker)
@@ -414,7 +377,6 @@ public sealed record MarketPredictorResult(
     IReadOnlyList<string> Errors,
     PredictorModelInfo? Model,
     PredictorSwingPrediction? Swing,
-    PredictorIntradayPrediction? Intraday,
     string AvailabilityStatus,
     string? AvailabilityReason)
 {
@@ -446,7 +408,6 @@ public sealed record MarketPredictorResult(
             "not_ready",
             "invalid",
             [reason],
-            null,
             null,
             null,
             status,
@@ -487,7 +448,6 @@ internal sealed record PredictorTickerPrediction(
     [property: JsonPropertyName("final_signal")] string FinalSignal,
     [property: JsonPropertyName("readiness_status")] string ReadinessStatus,
     [property: JsonPropertyName("swing")] PredictorSwingPrediction? Swing,
-    [property: JsonPropertyName("intraday")] PredictorIntradayPrediction? Intraday,
     [property: JsonPropertyName("errors")] IReadOnlyList<string> Errors);
 
 public sealed record PredictorSwingPrediction(
@@ -498,20 +458,6 @@ public sealed record PredictorSwingPrediction(
     [property: JsonPropertyName("return_1d")] decimal? Return1D,
     [property: JsonPropertyName("volume_z20")] decimal? VolumeZ20,
     [property: JsonPropertyName("global_context")] PredictorGlobalContext GlobalContext,
-    [property: JsonPropertyName("catalyst")] PredictorCatalyst Catalyst,
-    [property: JsonPropertyName("readiness")] PredictorReadiness Readiness);
-
-public sealed record PredictorIntradayPrediction(
-    [property: JsonPropertyName("opportunity_probability")] decimal? OpportunityProbability,
-    [property: JsonPropertyName("downside_probability")] decimal? DownsideProbability,
-    [property: JsonPropertyName("decision_score")] decimal? DecisionScore,
-    [property: JsonPropertyName("signal")] string Signal,
-    [property: JsonPropertyName("rank")] int? Rank,
-    [property: JsonPropertyName("relative_volume")] decimal? RelativeVolume,
-    [property: JsonPropertyName("rsi_14")] decimal? Rsi14,
-    [property: JsonPropertyName("macd_signal_diff")] decimal? MacdSignalDiff,
-    [property: JsonPropertyName("entry_stop_pct")] decimal? EntryStopPct,
-    [property: JsonPropertyName("entry_target_pct")] decimal? EntryTargetPct,
     [property: JsonPropertyName("catalyst")] PredictorCatalyst Catalyst,
     [property: JsonPropertyName("readiness")] PredictorReadiness Readiness);
 

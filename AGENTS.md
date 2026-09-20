@@ -42,11 +42,22 @@ These rules apply to every Codex/agent session in this repository.
 8. Stay context-aware. Example: a wishlist named `volatile` is not automatically a swing universe. Match strategy horizon, data timeframe, warm-up depth, and candidate universe intentionally.
 9. Keep code testable, concise, and clean. Prefer small generic engine primitives over strategy-specific branches. Add focused unit/integration tests for every non-trivial engine, risk, runner, API, or persistence change.
 10. Maintain deterministic sample candle fixtures for tests:
-    - Intraday: fixed 1m and 5m candle samples covering 30 days.
-    - Swing: fixed 1d and 4h candle samples covering 6 months.
+    - Swing setup: fixed 1d candle samples covering at least 6 months.
+    - Swing execution confirmation: fixed 1h, 15m, and 5m samples aligned to the daily fixture.
     These fixtures are for unit/integration determinism; live/backtest research can use larger cached datasets.
 
 ## Agentic Programming Best Practices
+
+- Every implementation checkpoint needs a plan/requirements review and an independent
+  code/design review. Use focused, non-forked agent prompts; at most two reviewers
+  active, and close each agent immediately after recording its findings.
+- Run heavyweight verification one job at a time. Track owned process IDs and stop
+  completed test/build/browser processes. At completion stop task-owned Web/ngrok
+  verification services unless the user asks to keep them running; use graceful
+  trading shutdown and verify protection where broker exposure exists.
+- Closing an agent does not delete its disk transcript. Delete only explicitly
+  approved transcript files; preserve main task history and trading/research data.
+- Follow `docs/remaining-work-checkpoints.md` for the remaining phases 6-8 gates.
 
 - Start from repository context. Read current code/config/data flow before editing; do not rely on stale memory.
 - Plan experiments as reversible deltas. Prefer new config files, new test fixtures, or new strategy variants over modifying proven files in place.
@@ -144,12 +155,11 @@ must acquire the manifest's sibling `.lock` file before reading and acknowledgin
 Paper configs:
 
 - `configs/paper/alpaca-paper.yaml`
-- `configs/paper/alpaca-paper-swing.yaml`
 
 Strategy classification:
 
 - `configs/strategy-catalog.json` is the authority.
-- Bootstrap is six research artifacts, fifteen archived artifacts, and no paper
+- Bootstrap is two research artifacts, thirteen archived artifacts, and no paper
   execution or live authorization.
 - Research/archive is artifact disposition. Paper experiment, paper shadow, and
   validated are exact-identity authorization grants.
@@ -157,7 +167,6 @@ Strategy classification:
 
 Backtest profiles currently worth keeping:
 
-- `configs/backtest/intraday-backtest-profile.yaml`
 - `configs/backtest/swing-backtest-profile.yaml`
 
 Paper profiles may combine persisted wishlist and screener discovery sources:
@@ -169,7 +178,7 @@ universe:
       enabled: true
     - type: screener      # Finviz saved view or query string
       enabled: true
-      scope: intraday     # intraday | swing, must match the profile horizon
+      scope: swing       # TradingFlow supports swing strategy admission only
   merge: union           # preserve source provenance; admission happens later
 ```
 
@@ -278,14 +287,14 @@ Recent verification before this handoff:
 
 Near-term work is paper trading and backtesting quality:
 
-- make intraday strategies simple, explainable, and config-driven
-- improve premarket/opening-range and long/short day-bias logic
+- make swing strategies simple, explainable, and config-driven
+- use daily setup bars with completed sub-daily confirmation only where the strategy requires it
 - treat Finviz as operational discovery alongside persisted wishlists while
   preserving provenance and requiring normal strategy admission
-- use only Alpaca candle-derived, same-time RVOL in strategy decisions; retain
-  Finviz RVOL as discovery metadata
+- use Alpaca candle-derived participation measures in strategy decisions; retain
+  Finviz RVOL as discovery metadata only
 - keep StockIndicators for standard technical indicators
-- use news catalysts mainly for swing and catalyst-driven intraday selection
+- use point-in-time news catalysts only where the swing strategy declares them
 - improve audit pages so accepted/rejected decisions show exact matched values and reasons
 
 The user wants the system to be architecturally clean more than merely patched to pass one strategy.

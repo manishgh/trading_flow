@@ -20,8 +20,8 @@ public sealed class ReconciliationPersistenceTests
 
         Assert.Equal(first.PositionEventId, replay.PositionEventId);
         Assert.Equal("SWGA", first.StrategyId);
-        Assert.Equal(10m, (await repository.GetCurrentAsync("msft"))?.Quantity);
-        Assert.Equal(10m, await repository.GetAccountedFillQuantityAsync("broker-1"));
+        Assert.Equal(10m, (await repository.GetCurrentAsync("paper-account", "msft"))?.Quantity);
+        Assert.Equal(10m, await repository.GetAccountedFillQuantityAsync("paper-account", "broker-1"));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             repository.AppendFillAsync(request with { QuantityAfter = 11m }));
     }
@@ -48,7 +48,7 @@ public sealed class ReconciliationPersistenceTests
             BrokerTimestampUtc = opening.BrokerTimestampUtc.AddMinutes(1)
         };
         await repository.AppendFillAsync(partialExit);
-        var partiallyExited = await repository.GetCurrentAsync("MSFT");
+        var partiallyExited = await repository.GetCurrentAsync("paper-account", "MSFT");
 
         Assert.Equal(5m, partiallyExited?.Quantity);
         Assert.Equal("SWGA", partiallyExited?.StrategyId);
@@ -62,7 +62,7 @@ public sealed class ReconciliationPersistenceTests
             LocalTimestampUtc = opening.LocalTimestampUtc.AddMinutes(2),
             BrokerTimestampUtc = opening.BrokerTimestampUtc.AddMinutes(2)
         });
-        var flat = await repository.GetCurrentAsync("MSFT");
+        var flat = await repository.GetCurrentAsync("paper-account", "MSFT");
         Assert.Equal(0m, flat?.Quantity);
         Assert.Equal("SWGA", flat?.StrategyId);
 
@@ -100,8 +100,8 @@ public sealed class ReconciliationPersistenceTests
             LocalTimestampUtc = run.StartedAtUtc.AddSeconds(2)
         });
 
-        Assert.Equal(15m, (await repository.GetCurrentAsync("MSFT"))?.Quantity);
-        Assert.Equal(15m, await repository.GetAccountedFillQuantityAsync("broker-1"));
+        Assert.Equal(15m, (await repository.GetCurrentAsync("paper-account", "MSFT"))?.Quantity);
+        Assert.Equal(15m, await repository.GetAccountedFillQuantityAsync("paper-account", "broker-1"));
     }
 
     [Fact]
@@ -171,6 +171,7 @@ public sealed class ReconciliationPersistenceTests
         string executionId,
         decimal quantityAfter) => new(
         run,
+        "paper-account",
         "MSFT",
         "SWGA",
         quantityAfter,

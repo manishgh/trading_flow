@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -7,36 +8,67 @@ using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Engine.Execution;
+using TradingFlow.Engine.Market;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Orders;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services.Discovery;
+using TradingFlow.Application.Jobs;
+using TradingFlow.Domain.Jobs;
 
 namespace TradingFlow.Web.Services;
 
-public sealed class PaperJobService
+public sealed record PaperJobServiceOptions(
+    int MaximumConcurrentJobs,
+    int MaximumPendingJobs,
+    TimeSpan SnapshotInterval,
+    TimeSpan RecoveryReadinessTimeout)
 {
+    public static PaperJobServiceOptions Default { get; } = new(
+        4,
+        16,
+        TimeSpan.FromSeconds(1),
+        TimeSpan.FromSeconds(30));
+
+    public PaperJobServiceOptions Validate()
+    {
+        if (MaximumConcurrentJobs <= 0 || MaximumPendingJobs <= 0 ||
+            SnapshotInterval <= TimeSpan.Zero || RecoveryReadinessTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaximumConcurrentJobs));
+        }
+
+        return this;
+    }
+}
+
+public sealed class PaperJobService : IDurableJobHandler
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ConcurrentDictionary<Guid, MutablePaperJob> jobs = new();
-    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _cancellationTokens = new();
     private readonly SimpleYamlReader yamlReader;
     private readonly TradingFlow.Domain.Locking.ITickerLockService? _lockService;
-    private readonly TradingFlow.Domain.Orders.IOrderStateRepository? _orderRepo;
     private readonly TradingFlow.Domain.Audit.IDecisionAuditRepository? _auditRepo;
     private readonly PaperRuntimeFactory runtimeFactory;
     private readonly ILogger<PaperJobService> logger;
     private readonly ILogger<LiveRunner> liveRunnerLogger;
     private readonly IArtifactWriter artifactWriter;
     private readonly ICandleStore candleStore;
-    private readonly bool autoResumeJobs;
     private readonly IOrderSubmissionService? orderSubmissionService;
     private readonly IOrderLifecycleService? orderLifecycleService;
+    private readonly TradingFlow.Domain.Persistence.IOrderIntentRepository? orderIntents;
+    private readonly TradingFlow.Domain.Persistence.IOrderEventRepository? orderEvents;
+    private readonly TradingFlow.Domain.Persistence.IPositionLedgerRepository? positionLedger;
     private readonly ConfigCatalogService configCatalog;
     private readonly IPaperDiscoverySessionFactory? discoverySessionFactory;
     private readonly TradingFlow.Engine.Pipeline.IMarketStateSnapshotProvider? marketStateSnapshots;
     private readonly TradingFlow.Domain.Persistence.ICandidateRepository? candidateRepository;
-
-    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IDurableJobRepository durableJobs;
+    private readonly IPaperJobRecoveryService? recoveryService;
+    private readonly PaperJobServiceOptions jobOptions;
+    private int retentionPruned;
 
     public PaperJobService(
         SimpleYamlReader yamlReader,
@@ -50,18 +82,22 @@ public sealed class PaperJobService
         ICandleStore? candleStore = null,
         IConfiguration? configuration = null,
         TradingFlow.Domain.Locking.ITickerLockService? lockService = null,
-        TradingFlow.Domain.Orders.IOrderStateRepository? orderRepo = null,
         TradingFlow.Domain.Audit.IDecisionAuditRepository? auditRepo = null,
         PaperRuntimeFactory? runtimeFactory = null,
         IOrderSubmissionService? orderSubmissionService = null,
         IOrderLifecycleService? orderLifecycleService = null,
+        TradingFlow.Domain.Persistence.IOrderIntentRepository? orderIntents = null,
+        TradingFlow.Domain.Persistence.IOrderEventRepository? orderEvents = null,
+        TradingFlow.Domain.Persistence.IPositionLedgerRepository? positionLedger = null,
         ConfigCatalogService? configCatalog = null,
         IPaperDiscoverySessionFactory? discoverySessionFactory = null,
         TradingFlow.Engine.Pipeline.IMarketStateSnapshotProvider? marketStateSnapshots = null,
-        TradingFlow.Domain.Persistence.ICandidateRepository? candidateRepository = null)
+        TradingFlow.Domain.Persistence.ICandidateRepository? candidateRepository = null,
+        IDurableJobRepository? durableJobs = null,
+        IPaperJobRecoveryService? recoveryService = null,
+        PaperJobServiceOptions? jobOptions = null)
     {
         this.yamlReader = yamlReader;
-        _scopeFactory = scopeFactory;
         _ = alpacaCredentials;
         _ = paths;
         this.runtimeFactory = runtimeFactory ?? new PaperRuntimeFactory(alpacaCredentials, paths, alpacaNewsLogger);
@@ -70,35 +106,40 @@ public sealed class PaperJobService
         _ = alpacaNewsLogger ?? NullLogger<TradingFlow.Alpaca.AlpacaNewsProvider>.Instance;
         this.artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
         this.candleStore = candleStore ?? NullCandleStore.Instance;
-        autoResumeJobs = configuration?.GetValue<bool>("TradingFlow:Paper:AutoResumeJobs") ?? false;
+        _ = configuration;
         _lockService = lockService;
-        _orderRepo = orderRepo;
         _auditRepo = auditRepo;
         this.orderSubmissionService = orderSubmissionService;
         this.orderLifecycleService = orderLifecycleService;
+        this.orderIntents = orderIntents;
+        this.orderEvents = orderEvents;
+        this.positionLedger = positionLedger;
         this.configCatalog = configCatalog
             ?? throw new ArgumentNullException(nameof(configCatalog));
         this.discoverySessionFactory = discoverySessionFactory;
         this.marketStateSnapshots = marketStateSnapshots;
         this.candidateRepository = candidateRepository;
+        this.durableJobs = durableJobs ?? ResolveDurableRepository(scopeFactory);
+        this.recoveryService = recoveryService;
+        this.jobOptions = (jobOptions ?? PaperJobServiceOptions.Default).Validate();
     }
 
-    public async Task InitializeAsync()
+    public string JobType => "paper";
+    public DurableJobRecoveryMode RecoveryMode => DurableJobRecoveryMode.ReconcileBrokerExposure;
+
+    public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var jobRepo = scope.ServiceProvider.GetRequiredService<TradingFlow.Domain.Jobs.IJobRepository>();
-        await jobRepo.PruneTerminalJobsOlderThanAsync(
-            DateTimeOffset.UtcNow.Subtract(MobileAutomationSessionStore.RetentionWindow),
-            default);
-        var allJobs = await jobRepo.GetAllJobsAsync(default);
+        if (Interlocked.Exchange(ref retentionPruned, 1) == 0)
+        {
+            await durableJobs.PruneTerminalJobsOlderThanAsync(
+                DateTimeOffset.UtcNow.Subtract(MobileAutomationSessionStore.RetentionWindow),
+                cancellationToken);
+        }
+        var allJobs = await durableJobs.GetJobsAsync(JobType, cancellationToken);
 
         foreach (var pJob in allJobs)
         {
-            if (!File.Exists(pJob.ConfigPath))
-            {
-                continue;
-            }
-
+            await PublishResultMarkerAsync(pJob, cancellationToken);
             var job = new MutablePaperJob(pJob.Id, pJob.RunName, pJob.ConfigPath, pJob.CreatedAt)
             {
                 Status = pJob.Status,
@@ -106,90 +147,106 @@ public sealed class PaperJobService
                 FinishedAt = pJob.FinishedAt,
                 ErrorMessage = pJob.ErrorMessage
             };
-            jobs[job.JobId] = job;
-
-            if (pJob.Status is "running" or "queued")
+            if (!String.IsNullOrWhiteSpace(pJob.SnapshotJson))
             {
-                if (autoResumeJobs)
+                var snapshot = JsonSerializer.Deserialize<BacktestJobSnapshot>(pJob.SnapshotJson, JsonOptions);
+                if (snapshot is not null)
                 {
-                    _ = Task.Run(() => RunAsync(job));
-                }
-                else
-                {
-                    job.Status = "interrupted";
-                    job.FinishedAt = DateTimeOffset.UtcNow;
-                    job.ErrorMessage = "Previous process ended before the job completed. Auto-resume is disabled.";
-                    await jobRepo.UpdateJobStatusAsync(job.JobId, "interrupted", job.ErrorMessage, default);
+                    job.ApplySnapshot(snapshot);
                 }
             }
+            jobs[job.JobId] = job;
         }
     }
 
-    public Guid StartJob(string configPath, string runName)
-    {
-        var job = new MutablePaperJob(Guid.NewGuid(), runName, configPath, DateTimeOffset.UtcNow);
-        jobs[job.JobId] = job;
+    public Task RefreshProjectionAsync(CancellationToken cancellationToken) =>
+        InitializeAsync(cancellationToken);
 
-        Task.Run(async () =>
+    public async Task<Guid> StartJobAsync(
+        string configPath,
+        string runName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var fullConfigPath = Path.GetFullPath(configPath);
+        var job = new MutablePaperJob(Guid.NewGuid(), runName, fullConfigPath, DateTimeOffset.UtcNow);
+        try
         {
-            try
+            var runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
+            var fileRequest = DurableFileJobRequest.Capture([fullConfigPath, .. runConfig.Strategies]);
+            using (fileRequest.AcquireVerifiedReadLease())
             {
-                using var scope = _scopeFactory.CreateScope();
-                var jobRepo = scope.ServiceProvider.GetRequiredService<TradingFlow.Domain.Jobs.IJobRepository>();
-                await jobRepo.SaveJobAsync(new TradingFlow.Domain.Jobs.PersistedJob
-                {
-                    Id = job.JobId,
-                    RunName = job.RunName,
-                    ConfigPath = job.ConfigPath,
-                    Status = job.Status,
-                    CreatedAt = job.CreatedAt
-                }, default);
+                runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
+                fileRequest.EnsureContains([fullConfigPath, .. runConfig.Strategies]);
             }
-            catch (Exception exception)
+            var persisted = new PersistedJob
             {
-                logger.LogWarning(
-                    exception,
-                    "Failed to persist paper job {JobId} for run {RunName} before execution.",
-                    job.JobId,
-                    job.RunName);
+                Id = job.JobId,
+                JobType = "paper",
+                RunName = job.RunName,
+                ConfigPath = job.ConfigPath,
+                RequestJson = fileRequest.Serialize(),
+                SnapshotJson = JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
+                Status = job.Status,
+                CreatedAt = job.CreatedAt
+            };
+            if (!await durableJobs.TryEnqueueAsync(persisted, jobOptions.MaximumPendingJobs, cancellationToken))
+            {
+                throw new InvalidOperationException(
+                    $"The paper queue already contains its maximum of {jobOptions.MaximumPendingJobs} non-terminal jobs.");
             }
-            await RunAsync(job);
-        });
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                "Paper job {JobId} for run {RunName} was not scheduled because queued-state persistence failed.",
+                job.JobId,
+                job.RunName);
+            throw;
+        }
+
+        jobs.GetOrAdd(job.JobId, job);
 
         return job.JobId;
     }
 
-    public BacktestJobSnapshot Start(string runName, string configPath)
+    public async Task<BacktestJobSnapshot> StartAsync(
+        string runName,
+        string configPath,
+        CancellationToken cancellationToken = default)
     {
-        var jobId = StartJob(configPath, runName);
+        var jobId = await StartJobAsync(configPath, runName, cancellationToken);
         return jobs[jobId].ToSnapshot();
     }
 
-    public void CancelJob(Guid jobId)
+    public async Task<bool> CancelJobAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
-        if (jobs.TryGetValue(jobId, out var job) && _cancellationTokens.TryGetValue(jobId, out var cts))
+        var stored = await durableJobs.GetJobAsync(jobId, cancellationToken);
+        if (stored is null || !stored.JobType.Equals(JobType, StringComparison.OrdinalIgnoreCase))
         {
-            cts.Cancel();
-            job.Status = "cancelled";
-            job.Report("cancelled", "User cancelled the run.", null, 0, 0);
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    using var scope = _scopeFactory.CreateScope();
-                    var jobRepo = scope.ServiceProvider.GetRequiredService<TradingFlow.Domain.Jobs.IJobRepository>();
-                    await jobRepo.UpdateJobStatusAsync(job.JobId, "cancelled", null, default);
-                }
-                catch (Exception exception)
-                {
-                    logger.LogWarning(
-                        exception,
-                        "Failed to persist cancelled status for paper job {JobId}.",
-                        job.JobId);
-                }
-            });
+            return false;
         }
+
+        if (IsTerminalStatus(stored.Status))
+        {
+            return false;
+        }
+
+        var accepted = await durableJobs.RequestCancellationAsync(jobId, DateTimeOffset.UtcNow, cancellationToken);
+        var refreshed = await durableJobs.GetJobAsync(jobId, cancellationToken);
+        if (refreshed is not null)
+        {
+            var job = jobs.GetOrAdd(jobId, _ => new MutablePaperJob(
+                refreshed.Id, refreshed.RunName, refreshed.ConfigPath, refreshed.CreatedAt));
+            job.ApplyPersistedState(refreshed);
+            job.Report("cancelling", "Cancellation requested. Waiting for the paper runner to drain.", null, 0, 0);
+        }
+
+        return accepted;
     }
 
     public async Task<bool> CancelAllBrokerOrdersAsync(Guid jobId)
@@ -203,12 +260,15 @@ public sealed class PaperJobService
 
         try
         {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
             using var profilerScope = TradingFlow.Domain.Logging.ApiProfiler.BeginScope(job.RunName);
             var openOrders = await brokerClient.GetOpenOrdersAsync(cts.Token);
             var ownedClientOrderIds = await GetRunScopedClientOrderIdsAsync(job, cts.Token);
             var runOrders = openOrders
-                .Where(order => ownedClientOrderIds.Contains(order.ClientOrderId))
+                .Where(order =>
+                    ownedClientOrderIds.Contains(order.ClientOrderId) ||
+                    order.ParentClientOrderId is not null &&
+                    ownedClientOrderIds.Contains(order.ParentClientOrderId))
                 .ToArray();
 
             if (runOrders.Length == 0)
@@ -220,19 +280,21 @@ public sealed class PaperJobService
             var cancelled = 0;
             foreach (var order in runOrders)
             {
-                if (orderLifecycleService is not null &&
-                    ClientOrderIdFactory.IsBindingFormat(order.ClientOrderId))
+                if (orderSubmissionService is null)
                 {
-                    await orderLifecycleService.ApplyBrokerUpdateAsync(
-                        BrokerOrderUpdateFactory.Create(order),
-                        cts.Token);
-                    await orderLifecycleService.RequestCancelAsync(
-                        order.ClientOrderId,
-                        order.OrderId,
-                        cts.Token);
+                    throw new InvalidOperationException(
+                        "Paper order cancellation requires the common order command service.");
                 }
 
-                if (await brokerClient.CancelOrderAsync(order.OrderId, cts.Token))
+                var state = await orderSubmissionService.RequestCancelAsync(
+                    new OrderCancellationSubmission(
+                        order.ParentClientOrderId ?? order.ClientOrderId,
+                        order.OrderId,
+                        "operator_cancel_paper_run_orders",
+                        DateTimeOffset.UtcNow),
+                    brokerClient,
+                    cts.Token);
+                if (OrderStateMachine.IsTerminal(state.State))
                 {
                     cancelled++;
                 }
@@ -276,7 +338,10 @@ public sealed class PaperJobService
             var orders = await brokerClient.GetOpenOrdersAsync(cts.Token);
             var ownedClientOrderIds = await GetRunScopedClientOrderIdsAsync(job, cts.Token);
             return orders
-                .Where(order => ownedClientOrderIds.Contains(order.ClientOrderId))
+                .Where(order =>
+                    ownedClientOrderIds.Contains(order.ClientOrderId) ||
+                    order.ParentClientOrderId is not null &&
+                    ownedClientOrderIds.Contains(order.ParentClientOrderId))
                 .ToArray();
         }
         catch (Exception exception)
@@ -348,8 +413,8 @@ public sealed class PaperJobService
                 return false;
             }
 
-            var activeOwners = await GetActiveOwnerRunNamesAsync(ticker, cts.Token);
-            if (activeOwners.Any(owner => !owner.Equals(job.RunName, StringComparison.OrdinalIgnoreCase)))
+            var activeOwners = await GetActiveOwnerRunIdsAsync(ticker, cts.Token);
+            if (activeOwners.Any(owner => owner != job.JobId))
             {
                 job.Report(job.CurrentStage, $"Refused to close {ticker}: another active run also owns this ticker.", null, job.CompletedTickerCount, job.TotalTickerCount);
                 return false;
@@ -363,15 +428,45 @@ public sealed class PaperJobService
                 return false;
             }
 
-            await CancelSellOrdersForTickerAsync(job, brokerClient, ticker, cts.Token);
+            if (orderSubmissionService is null || orderIntents is null)
+            {
+                throw new InvalidOperationException(
+                    "Paper exits require the durable order command service and run journal.");
+            }
+
+            var productionRun = await orderIntents.GetRunAsync(job.JobId, cts.Token)
+                ?? throw new InvalidOperationException(
+                    $"Paper run {job.JobId:N} has no durable execution provenance.");
+            var executionRunContext = new ExecutionRunContext(
+                productionRun.RunId,
+                productionRun.Profile,
+                productionRun.ConfigHash,
+                productionRun.CodeVersion,
+                productionRun.StartedAtUtc);
 
             var closeQuantity = Math.Min(scopedQuantity, (int)Math.Floor(brokerPosition.Qty));
-            var success = await brokerClient.ClosePositionAsync(ticker, closeQuantity, cts.Token);
-            if (success)
-            {
-                job.Report(job.CurrentStage, $"Successfully submitted close for {closeQuantity} share(s) of {ticker}.", null, job.CompletedTickerCount, job.TotalTickerCount);
-            }
-            return success;
+            var submitted = await orderSubmissionService.SubmitPositionExitAsync(
+                new PositionExitSubmission(
+                    executionRunContext,
+                    ticker,
+                    closeQuantity,
+                    "operator_requested_paper_exit",
+                    DateTimeOffset.UtcNow,
+                    runConfig.Execution.AllowExtendedHoursTrading),
+                brokerClient,
+                cts.Token);
+            job.Report(
+                job.CurrentStage,
+                $"Broker accepted an exit for {closeQuantity} share(s) of {ticker}. ClientOrderId={submitted.ClientOrderId}.",
+                null,
+                job.CompletedTickerCount,
+                job.TotalTickerCount);
+            return true;
+        }
+        catch (PositionExitNoLongerRequiredException)
+        {
+            job.Report(job.CurrentStage, $"{ticker} is already flat; no additional exit was submitted.", null, job.CompletedTickerCount, job.TotalTickerCount);
+            return true;
         }
         catch (Exception ex)
         {
@@ -397,43 +492,49 @@ public sealed class PaperJobService
         return jobs.TryGetValue(jobId, out var job) ? job.ToSnapshot() : null;
     }
 
-    private async Task RunAsync(MutablePaperJob job)
+    public async Task RecoverAsync(PersistedJob persisted, CancellationToken cancellationToken)
     {
-        async Task UpdateStatusAsync(string status, string? error = null)
+        var request = DurableFileJobRequest.Deserialize(persisted.RequestJson);
+        using var inputLease = request.AcquireVerifiedReadLease();
+        var run = yamlReader.ReadBacktestRun(persisted.ConfigPath);
+        request.EnsureContains([persisted.ConfigPath, .. run.Strategies]);
+        if (recoveryService is null)
         {
-            try
-            {
-                using var scope = _scopeFactory.CreateScope();
-                var jobRepo = scope.ServiceProvider.GetRequiredService<TradingFlow.Domain.Jobs.IJobRepository>();
-                await jobRepo.UpdateJobStatusAsync(job.JobId, status, error, default);
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(
-                    exception,
-                    "Failed to update persisted status {Status} for paper job {JobId}.",
-                    status,
-                    job.JobId);
-            }
+            throw new InvalidOperationException(
+                "Paper recovery requires the broker reconciliation service.");
         }
+        await recoveryService.RecoverAsync(persisted, cancellationToken);
+    }
 
-        job.Status = "running";
-        job.StartedAt = DateTimeOffset.UtcNow;
-        job.Report("starting", "Paper LiveRunner started.", null, 0, 0);
-        await UpdateStatusAsync("running");
+    public async Task<DurableJobCompletion> ExecuteAsync(
+        DurableJobExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+            var request = DurableFileJobRequest.Deserialize(context.Job.RequestJson);
+            using var inputLease = request.AcquireVerifiedReadLease();
+            var job = jobs.GetOrAdd(
+                context.Job.Id,
+                _ => new MutablePaperJob(
+                    context.Job.Id,
+                    context.Job.RunName,
+                    context.Job.ConfigPath,
+                    context.Job.CreatedAt));
+            job.Status = "running";
+            job.StartedAt ??= context.Job.StartedAt ?? DateTimeOffset.UtcNow;
+            job.Report("starting", "Paper durable worker started.", null, 0, 0);
+            await context.SaveSnapshotAsync(
+                JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
+                cancellationToken);
 
-        var cts = new CancellationTokenSource();
-        _cancellationTokens[job.JobId] = cts;
-        try
-        {
-            var runConfig = runtimeFactory.ResolveRunPaths(yamlReader.ReadBacktestRun(job.ConfigPath));
-            foreach (var strategyPath in runConfig.Strategies)
+            var logicalRunConfig = runtimeFactory.ResolveRunPaths(yamlReader.ReadBacktestRun(job.ConfigPath));
+            request.EnsureContains([job.ConfigPath, .. logicalRunConfig.Strategies]);
+            foreach (var strategyPath in logicalRunConfig.Strategies)
             {
                 await configCatalog.RequireAuthorizedPaperRunSnapshotAsync(
                     strategyPath,
-                    cts.Token);
+                    cancellationToken);
             }
-            var validatedStrategies = runConfig.Strategies
+            var validatedStrategies = logicalRunConfig.Strategies
                 .Select(configCatalog.ReadAndValidatePaperSnapshot)
                 .ToArray();
             var strategies = validatedStrategies
@@ -448,10 +549,15 @@ public sealed class PaperJobService
                 .ToArray();
             var executionRunContext = ExecutionRunContextFactory.Create(
                 job.JobId,
-                runConfig.Mode,
-                new { Run = runConfig, Strategies = strategies },
+                logicalRunConfig.Mode,
+                new { Run = logicalRunConfig, Strategies = strategies },
                 job.StartedAt ?? DateTimeOffset.UtcNow);
+            var runConfig = ScopeAttemptArtifacts(
+                logicalRunConfig,
+                job.JobId,
+                context.LeaseToken);
             ClearLiveChartSnapshots(runConfig);
+            Directory.CreateDirectory(Path.Combine(runConfig.ResultsRoot, "live", runConfig.RunName));
 
             var provider = runtimeFactory.CreateProvider(runConfig);
             var newsProvider = runtimeFactory.CreateNewsProvider(runConfig);
@@ -461,17 +567,22 @@ public sealed class PaperJobService
                 throw new InvalidOperationException("Durable discovery is enabled but no discovery session factory is registered.");
             }
 
-            var horizon = strategies.All(strategy => strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
-                ? "swing"
-                : "intraday";
-            await using var discoverySession = discoverySessionFactory?.Create(job.JobId, runConfig, horizon);
+            if (strategies.Any(strategy => !TimeframeParser.IsDailyOrHigher(strategy.Timeframe)))
+            {
+                throw new InvalidOperationException(
+                    "Paper trading supports swing strategies only. Every strategy must use a daily setup timeframe.");
+            }
+
+            await using var discoverySession = discoverySessionFactory?.Create(job.JobId, runConfig, "swing");
 
             var runner = new LiveRunner(
                 provider,
                 newsProvider,
                 brokerClient,
                 _lockService,
-                _orderRepo,
+                orderIntents,
+                orderEvents,
+                positionLedger,
                 _auditRepo,
                 liveRunnerLogger,
                 artifactWriter,
@@ -489,34 +600,95 @@ public sealed class PaperJobService
             });
 
             using var profilerScope = TradingFlow.Domain.Logging.ApiProfiler.BeginScope(runConfig.RunName);
-            await runner.RunAsync(runConfig, runtimeStrategies, cts.Token, progress);
-            if (job.Status != "cancelled")
+            var runTask = runner.RunAsync(runConfig, runtimeStrategies, cancellationToken, progress);
+            while (!runTask.IsCompleted)
             {
-                job.Status = "completed";
-                await UpdateStatusAsync("completed");
+                var delay = Task.Delay(jobOptions.SnapshotInterval, cancellationToken);
+                if (await Task.WhenAny(runTask, delay) == runTask)
+                {
+                    break;
+                }
+
+                await context.SaveSnapshotAsync(
+                    JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
+                    cancellationToken);
+            }
+            await runTask;
+            cancellationToken.ThrowIfCancellationRequested();
+            var snapshot = job.ToTerminalSnapshot("completed", DateTimeOffset.UtcNow, null);
+            return DurableJobCompletion.Completed(
+                JsonSerializer.Serialize(snapshot, JsonOptions),
+                Path.Combine(runConfig.ResultsRoot, "live", runConfig.RunName));
+    }
+
+    public async Task OnTerminalPublishedAsync(PersistedJob persisted, CancellationToken cancellationToken)
+    {
+        await PublishResultMarkerAsync(persisted, cancellationToken);
+        var job = jobs.GetOrAdd(
+            persisted.Id,
+            _ => new MutablePaperJob(persisted.Id, persisted.RunName, persisted.ConfigPath, persisted.CreatedAt));
+        if (!String.IsNullOrWhiteSpace(persisted.SnapshotJson))
+        {
+            var snapshot = JsonSerializer.Deserialize<BacktestJobSnapshot>(persisted.SnapshotJson, JsonOptions);
+            if (snapshot is not null)
+            {
+                job.ApplySnapshot(snapshot);
             }
         }
-        catch (OperationCanceledException)
+
+        job.ApplyPersistedState(persisted);
+        if (persisted.Status.Equals("cancelled", StringComparison.OrdinalIgnoreCase))
         {
-            job.Status = "cancelled";
-            await UpdateStatusAsync("cancelled");
+            job.Report("cancelled", "Paper runner drained and cancellation is complete.", null, 0, 0);
+        }
+
+    }
+
+    private async Task PublishResultMarkerAsync(PersistedJob persisted, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await DurableJobResultPublication.PublishIfCompletedAsync(persisted, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception)
         {
-            logger.LogError(
+            logger.LogWarning(
                 exception,
-                "Paper job {JobId} for run {RunName} failed.",
-                job.JobId,
-                job.RunName);
-            job.ErrorMessage = exception.Message;
-            job.Status = "failed";
-            await UpdateStatusAsync("failed", exception.Message);
+                "Durable paper run {JobId} result marker is not available yet; projection remains visible and the next refresh will retry.",
+                persisted.Id);
         }
-        finally
+    }
+
+    private static bool IsTerminalStatus(string status)
+    {
+        return status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("cancelled", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("interrupted", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static BacktestRunConfig ScopeAttemptArtifacts(
+        BacktestRunConfig logicalRunConfig,
+        Guid jobId,
+        Guid leaseToken) =>
+        logicalRunConfig with
         {
-            job.FinishedAt = DateTimeOffset.UtcNow;
-            _cancellationTokens.TryRemove(job.JobId, out _);
-        }
+            ResultsRoot = Path.Combine(
+                logicalRunConfig.ResultsRoot,
+                ".durable-attempts",
+                "paper",
+                jobId.ToString("N"),
+                leaseToken.ToString("N"))
+        };
+
+    private static IDurableJobRepository ResolveDurableRepository(IServiceScopeFactory scopeFactory)
+    {
+        using var scope = scopeFactory.CreateScope();
+        return scope.ServiceProvider.GetRequiredService<IDurableJobRepository>();
     }
 
     private void ClearLiveChartSnapshots(BacktestRunConfig run)
@@ -545,61 +717,42 @@ public sealed class PaperJobService
 
     private async Task<HashSet<string>> GetRunScopedActiveTickersAsync(MutablePaperJob job, CancellationToken cancellationToken)
     {
-        var tickers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (_orderRepo is null)
+        if (positionLedger is null)
         {
-            return tickers;
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
 
-        BacktestRunConfig runConfig;
-        try
-        {
-            runConfig = yamlReader.ReadBacktestRun(job.ConfigPath);
-        }
-        catch
-        {
-            return tickers;
-        }
-
-        foreach (var ticker in runConfig.Tickers)
-        {
-            var orders = await _orderRepo.GetActiveOrdersByTickerAsync(ticker, cancellationToken);
-            if (orders.Any(order => order.RunName.Equals(job.RunName, StringComparison.OrdinalIgnoreCase)))
-            {
-                tickers.Add(ticker);
-            }
-        }
-
-        return tickers;
+        var positions = await positionLedger.ListCurrentForRunAsync(job.JobId, cancellationToken);
+        return positions
+            .Where(item => item.Position.Quantity != 0m)
+            .Select(item => item.Position.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
-    private async Task<int> GetRunScopedActiveQuantityAsync(MutablePaperJob job, string ticker, CancellationToken cancellationToken)
+    private async Task<decimal> GetRunScopedActiveQuantityAsync(MutablePaperJob job, string ticker, CancellationToken cancellationToken)
     {
-        if (_orderRepo is null)
+        if (positionLedger is null)
         {
-            return 0;
+            return 0m;
         }
 
-        var activeOrders = await _orderRepo.GetActiveOrdersByTickerAsync(ticker, cancellationToken);
-        return activeOrders
-            .Where(order => order.RunName.Equals(job.RunName, StringComparison.OrdinalIgnoreCase))
-            .Where(order => !order.Status.Equals("technical_exit_submitted", StringComparison.OrdinalIgnoreCase))
-            .Sum(order => Math.Max(0, order.ShareQuantity));
+        var positions = await positionLedger.ListCurrentForRunAsync(job.JobId, cancellationToken);
+        return positions
+            .Where(item => item.Position.Symbol.Equals(ticker, StringComparison.OrdinalIgnoreCase))
+            .Sum(item => Math.Abs(item.Position.Quantity));
     }
 
-    private async Task<IReadOnlyList<string>> GetActiveOwnerRunNamesAsync(string ticker, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<Guid>> GetActiveOwnerRunIdsAsync(string ticker, CancellationToken cancellationToken)
     {
-        if (_orderRepo is null)
+        if (positionLedger is null)
         {
-            return Array.Empty<string>();
+            return Array.Empty<Guid>();
         }
 
-        var activeOrders = await _orderRepo.GetActiveOrdersByTickerAsync(ticker, cancellationToken);
-        return activeOrders
-            .Where(order => !String.IsNullOrWhiteSpace(order.RunName))
-            .Where(order => !order.Status.Equals("technical_exit_submitted", StringComparison.OrdinalIgnoreCase))
-            .Select(order => order.RunName)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        var positions = await positionLedger.ListCurrentOwnersForSymbolAsync(ticker, cancellationToken);
+        return positions
+            .Select(item => item.OwningRunId)
+            .Distinct()
             .ToArray();
     }
 
@@ -608,55 +761,27 @@ public sealed class PaperJobService
         CancellationToken cancellationToken)
     {
         var clientOrderIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (_orderRepo is null)
+        if (orderIntents is null)
         {
             return clientOrderIds;
         }
 
-        var runConfig = yamlReader.ReadBacktestRun(job.ConfigPath);
-        foreach (var ticker in runConfig.Tickers.Distinct(StringComparer.OrdinalIgnoreCase))
+        var intents = await orderIntents.ListByRunAsync(job.JobId, cancellationToken);
+        foreach (var intent in intents)
         {
-            var orders = await _orderRepo.GetActiveOrdersByTickerAsync(ticker, cancellationToken);
-            foreach (var order in orders.Where(order =>
-                         order.RunName.Equals(job.RunName, StringComparison.OrdinalIgnoreCase) &&
-                         !String.IsNullOrWhiteSpace(order.ClientOrderId)))
+            if (!String.IsNullOrWhiteSpace(intent.ClientOrderId))
             {
-                clientOrderIds.Add(order.ClientOrderId);
+                clientOrderIds.Add(intent.ClientOrderId);
             }
         }
 
         return clientOrderIds;
     }
 
-    private async Task CancelSellOrdersForTickerAsync(
-        MutablePaperJob job,
-        TradingFlow.Engine.Execution.IBrokerClient brokerClient,
-        string ticker,
-        CancellationToken cancellationToken)
-    {
-        var openOrders = await brokerClient.GetOpenOrdersAsync(cancellationToken);
-        foreach (var order in openOrders.Where(order =>
-                     order.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase) &&
-                     order.Side.Equals("sell", StringComparison.OrdinalIgnoreCase)))
-        {
-            try
-            {
-                await brokerClient.CancelOrderAsync(order.OrderId, cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(
-                    exception,
-                    "Failed to cancel sell order {OrderId} before closing {Ticker} for paper job {JobId}.",
-                    order.OrderId,
-                    ticker,
-                    job.JobId);
-            }
-        }
-    }
-
     private sealed class MutablePaperJob
     {
+        private readonly object stateLock = new();
+
         public MutablePaperJob(Guid jobId, string runName, string configPath, DateTimeOffset createdAt)
         {
             JobId = jobId; RunName = runName; ConfigPath = configPath; CreatedAt = createdAt; Status = "queued";
@@ -673,15 +798,57 @@ public sealed class PaperJobService
         public int CompletedTickerCount { get; private set; }
         public int TotalTickerCount { get; private set; }
         public ConcurrentQueue<string> Events { get; } = new();
-
         public void Report(string stage, string message, string? ticker, int completedTickerCount, int totalTickerCount)
         {
-            CurrentStage = stage; CompletedTickerCount = completedTickerCount; TotalTickerCount = totalTickerCount;
-            var tickerText = String.IsNullOrWhiteSpace(ticker) ? String.Empty : $" [{ticker}]";
-            Events.Enqueue($"{UiDisplayFormatter.FormatLocalTime(DateTimeOffset.UtcNow)} {stage}{tickerText}: {message}");
-            while (Events.Count > 80 && Events.TryDequeue(out _)) { }
+            lock (stateLock)
+            {
+                CurrentStage = stage; CompletedTickerCount = completedTickerCount; TotalTickerCount = totalTickerCount;
+                var tickerText = String.IsNullOrWhiteSpace(ticker) ? String.Empty : $" [{ticker}]";
+                Events.Enqueue($"{UiDisplayFormatter.FormatLocalTime(DateTimeOffset.UtcNow)} {stage}{tickerText}: {message}");
+                while (Events.Count > 80 && Events.TryDequeue(out _)) { }
+            }
         }
 
-        public BacktestJobSnapshot ToSnapshot() => new(JobId, RunName, ConfigPath, Status, CreatedAt, StartedAt, FinishedAt, ErrorMessage, CurrentStage, CompletedTickerCount, TotalTickerCount, Events.ToArray(), null);
+        public void ApplyPersistedState(PersistedJob persisted)
+        {
+            lock (stateLock)
+            {
+                Status = persisted.Status;
+                StartedAt = persisted.StartedAt;
+                FinishedAt = persisted.FinishedAt;
+                ErrorMessage = persisted.ErrorMessage;
+            }
+        }
+
+        public void ApplySnapshot(BacktestJobSnapshot snapshot)
+        {
+            lock (stateLock)
+            {
+                CurrentStage = snapshot.CurrentStage;
+                CompletedTickerCount = snapshot.CompletedTickerCount;
+                TotalTickerCount = snapshot.TotalTickerCount;
+                while (Events.TryDequeue(out _)) { }
+                foreach (var entry in snapshot.Events.TakeLast(80))
+                {
+                    Events.Enqueue(entry);
+                }
+            }
+        }
+
+        public BacktestJobSnapshot ToSnapshot() =>
+            ToTerminalSnapshot(Status, FinishedAt, ErrorMessage);
+
+        public BacktestJobSnapshot ToTerminalSnapshot(
+            string status,
+            DateTimeOffset? finishedAt,
+            string? error)
+        {
+            lock (stateLock)
+            {
+                return new BacktestJobSnapshot(
+                    JobId, RunName, ConfigPath, status, CreatedAt, StartedAt, finishedAt, error,
+                    CurrentStage, CompletedTickerCount, TotalTickerCount, Events.ToArray(), null);
+            }
+        }
     }
 }

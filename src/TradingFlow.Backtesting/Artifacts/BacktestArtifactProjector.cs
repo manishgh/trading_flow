@@ -27,8 +27,15 @@ public static class BacktestArtifactProjector
             CompletedTrades = Array.Empty<BacktestTrade>(),
             AcceptedOrders = Array.Empty<FinalizedOrder>(),
             StrategyResults = result.StrategyResults
-                .Select(strategy => strategy with { CompletedTrades = Array.Empty<BacktestTrade>() })
-                .ToArray()
+                .Select(strategy => strategy with
+                {
+                    CompletedTrades = Array.Empty<BacktestTrade>(),
+                    ExecutionFailures = Array.Empty<BacktestExecutionFailure>()
+                })
+                .ToArray(),
+            UnifiedPortfolio = result.UnifiedPortfolio is null
+                ? null
+                : result.UnifiedPortfolio with { CompletedTrades = Array.Empty<BacktestTrade>() }
         };
     }
 

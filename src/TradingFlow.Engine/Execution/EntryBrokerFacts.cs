@@ -12,9 +12,11 @@ public sealed record BrokerAccountSnapshot(
     bool TradeSuspendedByUser,
     bool ShortingEnabled,
     decimal BuyingPower,
+    decimal RegulationTBuyingPower,
     decimal Equity,
     decimal LongMarketValue,
     decimal ShortMarketValue,
+    DateTimeOffset RequestedAtUtc,
     DateTimeOffset ObservedAtUtc);
 
 public interface IBrokerAccountProvider

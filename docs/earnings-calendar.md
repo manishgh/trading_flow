@@ -126,7 +126,7 @@ The hosted monitor runs independently of the web and mobile pages. It re-evaluat
 calendar ticker once per minute as completed Alpaca bars and provider news become available;
 closing the Earnings page does not stop analysis.
 
-Endpoints are available under both `/api/earnings` and `/api/mobile/earnings`:
+Endpoints are available under both `/api/earnings` and `/api/v1/earnings`:
 
 - `GET /today-next-business-day`
 - `GET /calendar?from=yyyy-MM-dd&to=yyyy-MM-dd`

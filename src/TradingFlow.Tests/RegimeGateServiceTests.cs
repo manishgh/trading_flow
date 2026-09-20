@@ -30,12 +30,12 @@ public sealed class RegimeGateServiceTests
     }
 
     [Fact]
-    public async Task IsRegimeOnAsync_WhenBenchmarkHasOnlyIntraday_ResamplesToDaily()
+    public async Task IsRegimeOnAsync_WhenBenchmarkHasOnlySubDailyBars_ResamplesToDaily()
     {
         // No native 1d bars; only 5m. The service must resample to daily and still decide the regime.
         var provider = new FakeProvider(new Dictionary<string, IReadOnlyList<OhlcvBar>>
         {
-            ["5m"] = RisingIntraday("2026-06-01", 9),
+            ["5m"] = RisingSubDaily("2026-06-01", 9),
         });
         var service = new RegimeGateService();
 
@@ -102,7 +102,7 @@ public sealed class RegimeGateServiceTests
         return bars;
     }
 
-    private static IReadOnlyList<OhlcvBar> RisingIntraday(string startDate, int days)
+    private static IReadOnlyList<OhlcvBar> RisingSubDaily(string startDate, int days)
     {
         var day = DateOnly.Parse(startDate, System.Globalization.CultureInfo.InvariantCulture);
         var bars = new List<OhlcvBar>();

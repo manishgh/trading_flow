@@ -65,6 +65,7 @@ public static class AlpacaTradeUpdateParser
         var filledPrice = ParseDecimal(order, "filled_avg_price", required: false);
         var isFill = status is OrderStatus.PartiallyFilled or OrderStatus.Filled;
         var lastFillQuantity = isFill ? ParseDecimal(data, "qty", required: true) : 0m;
+        var lastFillPrice = isFill ? ParseDecimal(data, "price", required: true) : (decimal?)null;
         var positionQuantity = isFill ? ParseDecimal(data, "position_qty", required: true) : (decimal?)null;
         var executionId = isFill ? RequireString(data, "execution_id") : null;
         if (status is (OrderStatus.PartiallyFilled or OrderStatus.Filled) && filledPrice <= 0m)
@@ -94,7 +95,8 @@ public static class AlpacaTradeUpdateParser
             positionQuantity,
             executionId,
             timestamp.ToUniversalTime(),
-            BrokerUpdateSource.TradeStream);
+            BrokerUpdateSource.TradeStream,
+            lastFillPrice);
     }
 
     private static string RequireString(System.Text.Json.JsonElement element, string propertyName)

@@ -80,7 +80,7 @@ public sealed class PaperModelTests
         var repoRoot = FindRepositoryRoot();
         var catalog = CreateCatalog(repoRoot);
         var model = CreateModel(repoRoot, catalog);
-        var strategyPath = Path.Combine(repoRoot, "configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml");
+        var strategyPath = Path.Combine(repoRoot, "configs", "strategies", "minervini-trend-template-vcp.v4-trend-rider.yaml");
 
         var result = await model.OnGetStrategyDetailsAsync(strategyPath, "shadow", CancellationToken.None);
         var json = JsonSerializer.Serialize(((JsonResult)result).Value);
@@ -98,7 +98,7 @@ public sealed class PaperModelTests
             repoRoot,
             "configs",
             "strategies",
-            "intraday-ema10-ema20-macd-volume.v1.yaml");
+            "minervini-trend-template-vcp.v4-trend-rider.yaml");
 
         var result = await model.OnGetStrategyDetailsAsync(
             strategyPath,
@@ -156,7 +156,7 @@ public sealed class PaperModelTests
         {
             ["RunName"] = $"paper-invalid-extended-{Guid.NewGuid():N}",
             ["BaseConfigPath"] = Path.Combine(repoRoot, "configs", "paper", "alpaca-paper.yaml"),
-            ["SelectedStrategyPath"] = Path.Combine(repoRoot, "configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"),
+            ["SelectedStrategyPath"] = Path.Combine(repoRoot, "configs", "strategies", "minervini-trend-template-vcp.v4-trend-rider.yaml"),
             ["PaperExecutionMode"] = "shadow",
             ["WishlistId"] = wishlist.Id.ToString(),
             ["OrderExpiration"] = "gtc",
@@ -189,7 +189,7 @@ public sealed class PaperModelTests
             repoRoot,
             "configs",
             "strategies",
-            "intraday-ema10-ema20-macd-volume.v1.yaml");
+            "minervini-trend-template-vcp.v4-trend-rider.yaml");
         var artifactCatalog = CreateStrategyArtifactCatalog(repoRoot);
         var artifactStoreRoot = Path.Combine(
             Path.GetTempPath(),
@@ -263,7 +263,8 @@ public sealed class PaperModelTests
             scopeFactory.Object,
             credentialProvider,
             paths,
-            configCatalog: catalog);
+            configCatalog: catalog,
+            durableJobs: new Mock<TradingFlow.Domain.Jobs.IDurableJobRepository>().Object);
         var wishlistRepository = new Mock<IWishlistRepository>();
         wishlistRepository
             .Setup(repository => repository.ListAsync(It.IsAny<CancellationToken>()))

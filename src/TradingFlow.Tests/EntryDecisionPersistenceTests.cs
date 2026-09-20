@@ -129,7 +129,7 @@ public sealed class EntryDecisionPersistenceTests
             3,
             semanticHash,
             "MSFT",
-            "intraday.test.v1",
+            "swing.test.v1",
             "calendar_window",
             RejectCode.REJECT_SETUP_INVALID);
 
@@ -176,7 +176,7 @@ public sealed class EntryDecisionPersistenceTests
                 3,
                 semanticHash,
                 "MSFT",
-                "intraday.test.v1",
+                "swing.test.v1",
                 "calendar_window",
                 RejectCode.REJECT_SETUP_INVALID));
 
@@ -217,7 +217,7 @@ public sealed class EntryDecisionPersistenceTests
                 3,
                 semanticHash,
                 "MSFT",
-                "intraday.test.v1",
+                "swing.test.v1",
                 "calendar_window",
                 RejectCode.REJECT_SETUP_INVALID)));
 
@@ -248,7 +248,7 @@ public sealed class EntryDecisionPersistenceTests
                 3,
                 semanticHash,
                 "AAPL",
-                "intraday.test.v1",
+                "swing.test.v1",
                 "calendar_window",
                 RejectCode.REJECT_SETUP_INVALID));
 
@@ -344,15 +344,15 @@ public sealed class EntryDecisionPersistenceTests
             RevalidatedAtUtc = revalidatedAt,
             DiscoverySource = "strategy",
             FinvizPreset = String.Empty,
-            Horizon = "intraday",
+            Horizon = "swing",
             LastPrice = lastPrice,
             SpreadBps = spreadBps,
             SetupScoresJson = "{}",
-            SelectedStrategy = "intraday.test.v1",
+            SelectedStrategy = "swing.test.v1",
             StrategyContentSha256 = new string('b', 64),
             AdmissionProfileId = "default-deterministic-v1",
             AdmissionProfileVersion = "1.0.0",
-            SetupKey = "intraday.test.v1:2026-07-22T14:00:00.0000000+00:00",
+            SetupKey = "swing.test.v1:2026-07-22T14:00:00.0000000+00:00",
             DiscoveryWindowStartUtc = discoveredAt,
             DiscoveryWindowEndUtc = discoveredAt.AddMinutes(30),
             State = StrategyCandidateState.Discovered,

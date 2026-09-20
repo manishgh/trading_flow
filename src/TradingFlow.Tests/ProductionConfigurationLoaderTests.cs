@@ -102,7 +102,6 @@ public sealed class ProductionConfigurationLoaderTests
 
     [Theory]
     [InlineData("allow_multi_strategy_same_symbol")]
-    [InlineData("allow_day_to_swing_conversion")]
     public void Load_LiveProfileRejectsLockedV1Overrides(string parameterName)
     {
         var loader = new ProductionConfigurationLoader();

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Web;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Data.Context;
@@ -9,27 +8,23 @@ using TradingFlow.Finviz;
 namespace TradingFlow.Web.Services.Wishlists;
 
 /// <summary>
-/// Horizon a screener result belongs to. This is not a label: a swing screen is
-/// a persistent universe, and an intraday screen is scoped to one session and
-/// must be discarded at the session boundary so it cannot leak into the next
-/// day's universe.
+/// Horizon a screener result belongs to. TradingFlow supports swing discovery.
 /// </summary>
 public enum ScreenerScope
 {
-    Swing,
-    Intraday
+    Swing
 }
 
 /// <summary>
 /// What a screener query would return, without changing anything.
 /// </summary>
-/// <param name="Scope">Swing or intraday.</param>
+/// <param name="Scope">Swing.</param>
 /// <param name="Name">Operator-facing name: the saved screener, or the query itself.</param>
 /// <param name="NormalizedQuery">The query actually sent to Finviz.</param>
 /// <param name="Symbols">Every symbol the screen returned.</param>
 /// <param name="NotInWishlist">Symbols not already active in the compared wishlist.</param>
 /// <param name="SyncedAtUtc">When the read was taken.</param>
-/// <param name="SessionKey">Session this result belongs to; null for swing.</param>
+/// <param name="SessionKey">Reserved for provider diagnostics; null for swing.</param>
 /// <param name="Error">Why the read failed, or null when it succeeded.</param>
 public sealed record ScreenerSyncResult(
     ScreenerScope Scope,
@@ -82,10 +77,8 @@ public interface IScreenerSnapshotSource
 /// are the three things an operator actually has to hand, and making the caller
 /// pick between them would only move the guesswork.
 ///
-/// Intraday results are cached against a session key and dropped when the
-/// session rolls. That discard is the point: an intraday screen describes one
-/// session's conditions, and carrying it into the next day would silently widen
-/// tomorrow's universe with yesterday's reasoning.
+/// Every result is point-in-time evidence and is persisted by the downstream
+/// universe workflow before it can authorize a candidate.
 /// </summary>
 public sealed class ScreenerSyncService : IScreenerSnapshotSource
 {
@@ -95,12 +88,6 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
     private readonly IConfiguration configuration;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<ScreenerSyncService> logger;
-
-    /// <summary>
-    /// Intraday results, keyed by session. Only the current session is retained;
-    /// a read in a new session clears everything older.
-    /// </summary>
-    private readonly ConcurrentDictionary<string, ScreenerSyncResult> intradayBySession = new(StringComparer.Ordinal);
 
     public ScreenerSyncService(
         IDbContextFactory<TradingFlowDbContext> dbFactory,
@@ -183,7 +170,6 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             }
         }
 
-        var sessionKey = scope == ScreenerScope.Intraday ? CurrentSessionKey() : null;
         var result = new ScreenerSyncResult(
             scope,
             name,
@@ -191,7 +177,7 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             symbols,
             symbols.Where(symbol => !existing.Contains(symbol)).ToArray(),
             timeProvider.GetUtcNow(),
-            sessionKey,
+            null,
             null)
         {
             SymbolDetails = symbolDetails,
@@ -199,34 +185,7 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             RawReference = $"finviz:{snapshot.NormalizedQuery}|{snapshot.RawReference}"
         };
 
-        if (sessionKey is not null)
-        {
-            // Replace rather than accumulate: only the current session may be held.
-            intradayBySession.Clear();
-            intradayBySession[sessionKey] = result;
-        }
-
         return result;
-    }
-
-    /// <summary>
-    /// The intraday result for the current session, or null once the session has
-    /// rolled. A caller that reads this after the boundary gets nothing rather
-    /// than yesterday's universe.
-    /// </summary>
-    public ScreenerSyncResult? GetCurrentIntradayResult()
-    {
-        var key = CurrentSessionKey();
-        if (intradayBySession.TryGetValue(key, out var result))
-        {
-            return result;
-        }
-
-        if (!intradayBySession.IsEmpty)
-        {
-            intradayBySession.Clear();
-        }
-        return null;
     }
 
     /// <summary>
@@ -249,8 +208,7 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             return (String.IsNullOrWhiteSpace(filter) ? trimmed : $"Finviz screen {filter}", filter ?? String.Empty);
         }
 
-        // 2. A saved screener preset, matched by name within the scope's category
-        //    so an intraday and a swing preset may share a name.
+        // 2. A saved swing screener preset, matched by name.
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var category = scope.ToString();
         var preset = await db.ScreenerPresets
@@ -268,17 +226,6 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
         return ($"Query {query}", query);
     }
 
-    /// <summary>
-    /// Identifies one trading session by its New York date. A screen taken at
-    /// 09:35 and one taken at 15:50 belong to the same session; one taken the
-    /// next morning does not.
-    /// </summary>
-    private string CurrentSessionKey()
-    {
-        var newYork = TimeZoneInfo.ConvertTime(timeProvider.GetUtcNow(), ResolveNewYorkTimeZone());
-        return newYork.ToString("yyyy-MM-dd");
-    }
-
     private string? ResolveFinvizToken() =>
         Environment.GetEnvironmentVariable("FINVIZ_API_KEY")
         ?? (OperatingSystem.IsWindows()
@@ -286,15 +233,4 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             : null)
         ?? configuration["Finviz:ApiKey"];
 
-    private static TimeZoneInfo ResolveNewYorkTimeZone()
-    {
-        try
-        {
-            return TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
-        }
-        catch (TimeZoneNotFoundException)
-        {
-            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
-        }
-    }
 }

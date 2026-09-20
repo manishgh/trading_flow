@@ -34,4 +34,9 @@ public interface IGateEvaluationRepository
         IReadOnlyList<GateEvaluationAppendRequest> evaluations,
         CandidateGateRejection? candidateRejection = null,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<GateEvaluationRecord>> ListByCandidateAsync(
+        Guid candidateId,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<GateEvaluationRecord>>([]);
 }

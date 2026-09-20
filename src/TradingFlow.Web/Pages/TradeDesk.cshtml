@@ -145,20 +145,16 @@
         <select class="input" id="StrategyId" name="strategyId" data-auto-submit>
             @foreach (var strategy in Model.Strategies)
             {
-                <option value="@strategy.Definition.StrategyId" selected="@(Model.SelectedStrategyId == strategy.Definition.StrategyId)">@strategy.Definition.StrategyName</option>
+                var lifecycle = strategy.Lifecycle == TradingFlow.Domain.Strategies.StrategyLifecycleState.Research
+                    ? "RESEARCH ONLY"
+                    : strategy.Lifecycle.ToString().ToUpperInvariant();
+                <option value="@strategy.Definition.StrategyId" selected="@(Model.SelectedStrategyId == strategy.Definition.StrategyId)">@strategy.Definition.StrategyName · @lifecycle</option>
             }
         </select>
     </div>
     <div class="field">
         <label for="ScreenerQuery">Finviz screener</label>
-        @* Scope and query are butted together so they read as one control. An
-           intraday screen is scoped to this session and is discarded at the
-           session boundary; a swing screen persists. *@
         <div class="input-group">
-            <select class="input desk-screener-scope" id="ScreenerScope" name="screenerScopeName" aria-label="Screener scope">
-                <option value="swing" selected="@(Model.ScreenerScopeName == "swing")">Swing</option>
-                <option value="intraday" selected="@(Model.ScreenerScopeName == "intraday")">Intraday (today)</option>
-            </select>
             @* Saved screens are offered by name because Finviz has no endpoint
                that lists the ones saved in its own UI. The box still accepts a
                raw URL or query for a one-off. *@
@@ -199,12 +195,12 @@
 @if (screener is not null)
 {
     <section class="desk-screener-band @(screener.Succeeded ? null : "is-error")" aria-label="Screener result">
-        <span class="desk-screener-scope-label">@(screener.Scope == ScreenerScope.Intraday ? "Intraday screener" : "Swing screener")</span>
+        <span class="desk-screener-scope-label">Swing screener</span>
         @if (screener.Succeeded)
         {
             <span class="desk-screener-summary">
                 @screener.Name — @screener.Symbols.Count hit@(screener.Symbols.Count == 1 ? "" : "s"),
-                @screener.NotInWishlist.Count not yet in the wishlist@(screener.Scope == ScreenerScope.Intraday ? " · discarded at the session boundary" : "")
+                @screener.NotInWishlist.Count not yet in the wishlist
             </span>
             <span class="desk-screener-chips">
                 @foreach (var symbol in screener.NotInWishlist.Take(8))
@@ -504,7 +500,6 @@
                         {
                             var row = ranked.Row;
                             var isSelected = selected?.Ticker.Equals(row.Ticker, StringComparison.OrdinalIgnoreCase) == true;
-                            var intraday = ranked.Evidence.Intraday;
                             <tr data-symbol-row data-symbol="@row.Ticker.ToUpperInvariant()"
                                 data-quote-row="@row.Ticker.ToUpperInvariant()"
                                 aria-selected="@(isSelected ? "true" : null)">
@@ -529,7 +524,7 @@
                                     @(row.SpreadBps is null ? "—" : row.SpreadBps.Value.ToString("0.0") + " bps")
                                 </td>
                                 <td class="num" data-column="rvol" hidden="@startsHidden.Contains("rvol")">
-                                    @(intraday?.RelativeVolume is { } rvol ? rvol.ToString("0.00") + "x" : "—")
+                                    @(ranked.Evidence.Swing?.VolumeZ20 is { } volumeZ ? volumeZ.ToString("0.00") + " z" : "—")
                                 </td>
                                 <td class="eligibility-cell" data-column="eligibility">
                                     <span class="tag @(row.HasSignal ? "tag-accent" : "tag-neutral")" data-signal-badge>@Verdict(row.HasSignal, row.HasQuote)</span>
@@ -539,9 +534,7 @@
                                     <strong>@ranked.Evidence.FinalSignal</strong>
                                     <span class="cell-sub">
                                         @{
-                                            var probability = Model.DeskHorizon == "intraday"
-                                                ? ranked.Evidence.Intraday?.OpportunityProbability
-                                                : ranked.Evidence.Swing?.Probability;
+                                            var probability = ranked.Evidence.Swing?.Probability;
                                         }
                                         @Percent(probability) · @ranked.Evidence.ResolvedHorizon
                                     </span>
@@ -614,10 +607,10 @@
                     <div><span class="cell-label">Bid</span><span class="cell-value" data-selected-quote="bid">@row.Quote.DisplayBid</span></div>
                     <div><span class="cell-label">Ask</span><span class="cell-value" data-selected-quote="ask">@row.Quote.DisplayAsk</span></div>
                     <div><span class="cell-label">Spread</span><span class="cell-value">@(row.SpreadBps is null ? "—" : row.SpreadBps.Value.ToString("0.0") + " bps")</span></div>
-                    <div><span class="cell-label">RVOL</span><span class="cell-value">@(selected.Evidence.Intraday?.RelativeVolume is { } rv ? rv.ToString("0.00") + "x" : "—")</span></div>
+                    <div><span class="cell-label">Volume Z20</span><span class="cell-value">@(selected.Evidence.Swing?.VolumeZ20 is { } volumeZ ? volumeZ.ToString("0.00") : "—")</span></div>
                 </div>
             </header>
-            <partial name="_DeskEvidencePair" model="new DeskEvidenceModel(selected, Model.DeskHorizon, false)" />
+            <partial name="_DeskEvidencePair" model="new DeskEvidenceModel(selected, false)" />
             <partial name="_DeskAgreementBand" model="selected" />
             <section class="desk-open-book" aria-labelledby="OpenBookHeading">
                 <h2 id="OpenBookHeading" class="section-heading">Open book</h2>
@@ -690,11 +683,11 @@
                     <div><span class="cell-label">Bid</span><span class="cell-value" data-selected-quote="bid">@row.Quote.DisplayBid</span></div>
                     <div><span class="cell-label">Ask</span><span class="cell-value" data-selected-quote="ask">@row.Quote.DisplayAsk</span></div>
                     <div><span class="cell-label">Spread</span><span class="cell-value">@(row.SpreadBps is null ? "—" : row.SpreadBps.Value.ToString("0.0") + " bps")</span></div>
-                    <div><span class="cell-label">RVOL</span><span class="cell-value">@(selected.Evidence.Intraday?.RelativeVolume is { } railRvol ? railRvol.ToString("0.00") + "x" : "—")</span></div>
+                    <div><span class="cell-label">Volume Z20</span><span class="cell-value">@(selected.Evidence.Swing?.VolumeZ20 is { } railVolumeZ ? railVolumeZ.ToString("0.00") : "—")</span></div>
                 </div>
             </section>
 
-            <partial name="_DeskEvidencePair" model="new DeskEvidenceModel(selected, Model.DeskHorizon, true)" />
+            <partial name="_DeskEvidencePair" model="new DeskEvidenceModel(selected, true)" />
             <partial name="_DeskAgreementBand" model="selected" />
 
             // Placeholders only. The real protection distances come from the

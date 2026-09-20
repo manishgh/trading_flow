@@ -12,8 +12,8 @@ public sealed class StrategyArtifactCatalogTests
 
         var snapshot = catalog.GetSnapshot();
 
-        Assert.Equal(6, snapshot.ExecutableArtifacts.Count);
-        Assert.Equal(15, snapshot.ArchivedArtifacts.Count);
+        Assert.Equal(2, snapshot.ExecutableArtifacts.Count);
+        Assert.Equal(13, snapshot.ArchivedArtifacts.Count);
         Assert.All(
             snapshot.ExecutableArtifacts,
             artifact =>
@@ -63,16 +63,15 @@ public sealed class StrategyArtifactCatalogTests
     }
 
     [Fact]
-    public void ArchivedUnsupportedRule_IsNeverParsedAsExecutable()
+    public void ArchivedArtifacts_RemainStrictlyParseableDailySwingEvidence()
     {
         var root = TestRepository.FindRoot();
         var archived = CreateCatalog().GetSnapshot().ArchivedArtifacts;
-        var shannon = Assert.Single(archived, item => item.Identity.StrategyId == "swing.avwap-bounce");
+        var reader = new SimpleYamlReader();
 
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            new SimpleYamlReader().ReadStrategy(Path.Combine(root, shannon.SourcePath)));
-
-        Assert.Contains("exit_rules.stop_below_avwap_pct", exception.Message, StringComparison.Ordinal);
+        Assert.NotEmpty(archived);
+        Assert.All(archived, artifact =>
+            Assert.Equal("1d", reader.ReadStrategy(Path.Combine(root, artifact.SourcePath)).Timeframe));
     }
 
     [Fact]

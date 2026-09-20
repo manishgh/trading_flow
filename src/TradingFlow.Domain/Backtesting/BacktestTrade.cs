@@ -12,9 +12,11 @@ public sealed record BacktestCandidateTrade(
     decimal ExitPrice,
     string ExitReason,
     decimal StopDistance,
-    decimal EntryBarVolume = 0m,
+    decimal EntryLiquidityEvidenceVolume = 0m,
     decimal SelectionScore = 0m,
-    string InitialStopKind = "structural");
+    string InitialStopKind = "structural",
+    string StrategyId = "",
+    string CandidateId = "");
 
 public sealed record BacktestTrade(
     string Ticker,
@@ -30,4 +32,9 @@ public sealed record BacktestTrade(
     string ExitReason,
     decimal GrossProfit,
     decimal Fees,
-    decimal NetProfit);
+    decimal NetProfit,
+    int RequestedShareQuantity = 0,
+    string EntryFillStatus = "filled",
+    decimal EntryEstimatedParticipationPct = 0m,
+    string StrategyId = "",
+    string CandidateId = "");

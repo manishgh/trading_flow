@@ -11,7 +11,7 @@ public static class EarningsApiEndpoints
     public static IEndpointRouteBuilder MapTradingFlowEarningsApi(this IEndpointRouteBuilder endpoints)
     {
         MapGroup(endpoints.MapGroup("/api/earnings"));
-        MapGroup(endpoints.MapGroup("/api/mobile/earnings"));
+        MapGroup(endpoints.MapGroup("/api/v1/earnings"));
         return endpoints;
     }
 

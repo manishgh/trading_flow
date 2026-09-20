@@ -34,7 +34,7 @@ public sealed record LabResultsModel(
     /// </summary>
     /// <remarks>
     /// Replayed from completed trades, so it is a step function at exit
-    /// timestamps and understates intraday drawdown. The chart says so on its
+    /// timestamps and understates within-bar drawdown. The chart says so on its
     /// axis rather than presenting it as a true equity curve.
     /// </remarks>
     public IReadOnlyList<EquitySeries> Series => Result.StrategyResults

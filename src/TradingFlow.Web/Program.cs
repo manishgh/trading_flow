@@ -30,6 +30,7 @@ using TradingFlow.Web;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Wishlists;
 using TradingFlow.Web.Services.Discovery;
+using TradingFlow.Application.Candidates;
 
 var cultureInfo = new CultureInfo("en-US");
 CultureInfo.DefaultThreadCurrentCulture = cultureInfo;
@@ -163,19 +164,74 @@ builder.Services.AddSingleton(new BacktestJobServiceOptions(
         builder.Configuration["Backtests:MaxConcurrentJobs"]
             ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MAX_CONCURRENT_BACKTESTS"),
         BacktestJobServiceOptions.Default.MaxConcurrentJobs),
+    MaximumPendingJobs: ParsePositiveInteger(
+        builder.Configuration["Backtests:MaximumPendingJobs"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MAX_PENDING_BACKTESTS"),
+        BacktestJobServiceOptions.Default.MaximumPendingJobs),
     RetainedTerminalJobs: ParseNonNegativeInteger(
         builder.Configuration["Backtests:RetainedTerminalJobs"]
             ?? Environment.GetEnvironmentVariable("TRADINGFLOW_RETAINED_BACKTEST_JOBS"),
         BacktestJobServiceOptions.Default.RetainedTerminalJobs),
-    RetainedRecentTrades: BacktestJobServiceOptions.Default.RetainedRecentTrades,
-    RetainedMissedMoves: BacktestJobServiceOptions.Default.RetainedMissedMoves));
+    RetainedRecentTrades: ParseNonNegativeInteger(
+        builder.Configuration["Backtests:RetainedRecentTrades"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_RETAINED_BACKTEST_TRADES"),
+        BacktestJobServiceOptions.Default.RetainedRecentTrades),
+    RetainedMissedMoves: ParseNonNegativeInteger(
+        builder.Configuration["Backtests:RetainedMissedMoves"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_RETAINED_BACKTEST_MISSED_MOVES"),
+        BacktestJobServiceOptions.Default.RetainedMissedMoves),
+    SnapshotInterval: TimeSpan.FromMilliseconds(ParsePositiveInteger(
+        builder.Configuration["Backtests:SnapshotIntervalMilliseconds"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_BACKTEST_SNAPSHOT_INTERVAL_MS"),
+        (int)BacktestJobServiceOptions.Default.SnapshotInterval.TotalMilliseconds))));
 builder.Services.AddSingleton<BacktestJobService>();
+builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(serviceProvider =>
+    serviceProvider.GetRequiredService<BacktestJobService>());
+builder.Services.AddSingleton(new OptimizationJobServiceOptions(
+    MaximumConcurrentJobs: ParsePositiveInteger(
+        builder.Configuration["Optimizations:MaxConcurrentJobs"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MAX_CONCURRENT_OPTIMIZATIONS"),
+        OptimizationJobServiceOptions.Default.MaximumConcurrentJobs),
+    MaximumPendingJobs: ParsePositiveInteger(
+        builder.Configuration["Optimizations:MaximumPendingJobs"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MAX_PENDING_OPTIMIZATIONS"),
+        OptimizationJobServiceOptions.Default.MaximumPendingJobs),
+    RetainedTerminalJobs: ParseNonNegativeInteger(
+        builder.Configuration["Optimizations:RetainedTerminalJobs"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_RETAINED_OPTIMIZATION_JOBS"),
+        OptimizationJobServiceOptions.Default.RetainedTerminalJobs),
+    SnapshotInterval: TimeSpan.FromMilliseconds(ParsePositiveInteger(
+        builder.Configuration["Optimizations:SnapshotIntervalMilliseconds"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_OPTIMIZATION_SNAPSHOT_INTERVAL_MS"),
+        (int)OptimizationJobServiceOptions.Default.SnapshotInterval.TotalMilliseconds))));
 builder.Services.AddSingleton<OptimizationJobService>();
+builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(serviceProvider =>
+    serviceProvider.GetRequiredService<OptimizationJobService>());
 builder.Services.AddSingleton<AlpacaCredentialProvider>();
 builder.Services.AddSingleton<PaperRuntimeFactory>();
 builder.Services.AddSingleton<MobileAutomationSessionStore>();
 builder.Services.AddSingleton<PaperEnvironmentService>();
+builder.Services.AddSingleton(new PaperJobServiceOptions(
+    MaximumConcurrentJobs: ParsePositiveInteger(
+        builder.Configuration["PaperRuns:MaxConcurrentJobs"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MAX_CONCURRENT_PAPER_RUNS"),
+        PaperJobServiceOptions.Default.MaximumConcurrentJobs),
+    MaximumPendingJobs: ParsePositiveInteger(
+        builder.Configuration["PaperRuns:MaximumPendingJobs"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MAX_PENDING_PAPER_RUNS"),
+        PaperJobServiceOptions.Default.MaximumPendingJobs),
+    SnapshotInterval: TimeSpan.FromMilliseconds(ParsePositiveInteger(
+        builder.Configuration["PaperRuns:SnapshotIntervalMilliseconds"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_PAPER_SNAPSHOT_INTERVAL_MS"),
+        (int)PaperJobServiceOptions.Default.SnapshotInterval.TotalMilliseconds)),
+    RecoveryReadinessTimeout: TimeSpan.FromSeconds(ParsePositiveInteger(
+        builder.Configuration["PaperRuns:RecoveryReadinessTimeoutSeconds"]
+            ?? Environment.GetEnvironmentVariable("TRADINGFLOW_PAPER_RECOVERY_READY_TIMEOUT_S"),
+        (int)PaperJobServiceOptions.Default.RecoveryReadinessTimeout.TotalSeconds))));
+builder.Services.AddSingleton<IPaperJobRecoveryService, PaperJobRecoveryService>();
 builder.Services.AddSingleton<PaperJobService>();
+builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(serviceProvider =>
+    serviceProvider.GetRequiredService<PaperJobService>());
 builder.Services.AddSingleton<MobileAutomationService>();
 builder.Services.AddSingleton<SqliteNewsFeedRepository>();
 builder.Services.AddSingleton<INewsFeedRepository>(serviceProvider =>
@@ -190,7 +246,7 @@ builder.Services.AddHttpClient<OfficialMarketNewsProvider>(client =>
 builder.Services.AddSingleton<NewsFeedService>();
 builder.Services.AddSingleton<WarmupServiceClient>();
 builder.Services.AddSingleton<WishlistUniverseResolver>();
-builder.Services.AddSingleton<WishlistBreakoutEvaluator>();
+builder.Services.AddSingleton<WishlistSwingWatchEvaluator>();
 builder.Services.AddSingleton<WishlistMarketMonitor>();
 builder.Services.AddSingleton<WishlistDeskService>();
 builder.Services.AddSingleton<TradingEnvironmentService>();
@@ -266,7 +322,6 @@ builder.Services.AddSingleton<AlpacaQuoteService>();
 builder.Services.AddSingleton<AlpacaManualOrderService>();
 builder.Services.AddSingleton<IManualOrderMarketGateway, AlpacaManualOrderMarketGateway>();
 builder.Services.AddSingleton<ManualOrderTicketService>();
-builder.Services.AddSingleton<StrategyEvaluationService>();
 
 var dbPath = Path.Combine(dataRoot, "tradingflow.db");
 Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
@@ -333,7 +388,7 @@ builder.Services.ConfigureApplicationCookie(cookie =>
 });
 // Fail closed. Without a fallback policy, only endpoints that opt in are
 // protected, so forgetting one leaves it open - which is exactly what happened
-// to /api/mobile, a group carrying order preview, order confirm and paper-run
+// to /api/v1, a group carrying order preview, order confirm and paper-run
 // start. With it, every endpoint requires a signed-in operator unless it
 // explicitly says otherwise, and the failure mode of forgetting is a locked
 // endpoint rather than an exposed one.
@@ -390,14 +445,24 @@ builder.Services.AddSingleton<AlpacaMarketStateStreamService>();
 builder.Services.AddSingleton<IDiscoverySubscriptionSink>(serviceProvider =>
     serviceProvider.GetRequiredService<AlpacaMarketStateStreamService>());
 builder.Services.AddSingleton<IPaperDiscoverySessionFactory, PaperDiscoverySessionFactory>();
-builder.Services.AddSingleton<TradingFlow.Domain.Orders.IOrderStateRepository, TradingFlow.Data.Orders.SqliteOrderStateRepository>();
-builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderIntentRepository, TradingFlow.Data.Orders.SqliteOrderIntentRepository>();
+builder.Services.AddSingleton<TradingFlow.Data.Orders.SqliteOrderIntentRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderIntentRepository>(serviceProvider =>
+    serviceProvider.GetRequiredService<TradingFlow.Data.Orders.SqliteOrderIntentRepository>());
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderDispatchRepository>(serviceProvider =>
+    serviceProvider.GetRequiredService<TradingFlow.Data.Orders.SqliteOrderIntentRepository>());
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderEventRepository, TradingFlow.Data.Orders.SqliteOrderEventRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IProtectiveStopReplacementRepository, TradingFlow.Data.Orders.SqliteProtectiveStopReplacementRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderActivityQuery, TradingFlow.Data.Orders.SqliteOrderActivityQuery>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IPositionLedgerRepository, TradingFlow.Data.Orders.SqlitePositionLedgerRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IReconciliationRepository, TradingFlow.Data.Orders.SqliteReconciliationRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.ICandidateRepository, TradingFlow.Data.Orders.SqliteCandidateRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IGateEvaluationRepository, TradingFlow.Data.Orders.SqliteGateEvaluationRepository>();
+builder.Services.AddSingleton<CandidateApplicationService>();
+builder.Services.AddSingleton<ICandidateQueryService>(serviceProvider =>
+    serviceProvider.GetRequiredService<CandidateApplicationService>());
+builder.Services.AddSingleton<IDecisionAuditQuery>(serviceProvider =>
+    serviceProvider.GetRequiredService<CandidateApplicationService>());
+builder.Services.AddSingleton<ICandidateEventStreamService, CandidateEventStreamService>();
 builder.Services.AddSingleton<TradingFlow.Engine.Execution.IOrderLifecycleService, TradingFlow.Engine.Execution.OrderLifecycleService>();
 builder.Services.AddSingleton<IEntryAdmissionControl, EntryAdmissionControl>();
 var productionConfiguration = new ProductionConfigurationLoader();
@@ -407,16 +472,29 @@ T ResolveProductionParameter<T>(string name, string environmentVariable) =>
         name,
         builder.Configuration[$"TradingFlow:Production:{name}"]
             ?? Environment.GetEnvironmentVariable(environmentVariable));
+var expectedBrokerAccountId = builder.Configuration["Alpaca:ExpectedAccountId"]
+    ?? builder.Configuration["TradingFlow:Production:expected_account_id"]
+    ?? Environment.GetEnvironmentVariable("TRADINGFLOW_EXPECTED_ACCOUNT_ID")
+    ?? String.Empty;
+if (!uiTestMode && String.IsNullOrWhiteSpace(expectedBrokerAccountId))
+{
+    throw new InvalidOperationException(
+        "Alpaca:ExpectedAccountId or TRADINGFLOW_EXPECTED_ACCOUNT_ID is required before broker runtime can start.");
+}
+builder.Services.AddSingleton(new BrokerAccountBindingOptions(
+    expectedBrokerAccountId,
+    enforcementEnabled: !uiTestMode));
+builder.Services.AddSingleton<IBrokerAccountBindingService, BrokerAccountBindingService>();
 builder.Services.AddSingleton(new EntryGateOptions(
     ResolveProductionParameter<int>("setup_max_age_s", "TRADINGFLOW_SETUP_MAX_AGE_S"),
     ResolveProductionParameter<int>("quote_max_age_ms", "TRADINGFLOW_QUOTE_MAX_AGE_MS"),
     ResolveProductionParameter<decimal>("max_spread_bps", "TRADINGFLOW_MAX_SPREAD_BPS"),
     ResolveProductionParameter<decimal>("max_expected_slippage_bps", "TRADINGFLOW_MAX_EXPECTED_SLIPPAGE_BPS"),
     ResolveProductionParameter<decimal>("max_notional_per_trade_pct", "TRADINGFLOW_MAX_NOTIONAL_PER_TRADE_PCT"),
-    ResolveProductionParameter<decimal>("max_gross_exposure_intraday_pct", "TRADINGFLOW_MAX_GROSS_EXPOSURE_INTRADAY_PCT"),
     ResolveProductionParameter<decimal>("max_gross_exposure_overnight_pct", "TRADINGFLOW_MAX_GROSS_EXPOSURE_OVERNIGHT_PCT"),
-    ResolveProductionParameter<int>("max_positions_day", "TRADINGFLOW_MAX_POSITIONS_DAY"),
-    ResolveProductionParameter<int>("max_positions_swing", "TRADINGFLOW_MAX_POSITIONS_SWING")));
+    ResolveProductionParameter<int>("max_positions_swing", "TRADINGFLOW_MAX_POSITIONS_SWING"),
+    ResolveProductionParameter<decimal>("per_trade_risk_pct_swing", "TRADINGFLOW_PER_TRADE_RISK_PCT_SWING"),
+    ResolveProductionParameter<int>("account_snapshot_max_age_s", "TRADINGFLOW_ACCOUNT_SNAPSHOT_MAX_AGE_S")));
 builder.Services.AddSingleton(ManualEntryOptions.Parse(
     ResolveProductionParameter<string>("manual_entry_policy", "TRADINGFLOW_MANUAL_ENTRY_POLICY")));
 builder.Services.AddSingleton<ISecurityTradingStatusProvider>(serviceProvider =>
@@ -438,16 +516,63 @@ var orphanTimeoutSeconds = productionConfiguration.ResolveParameter<int>(
     "order_orphan_timeout_s",
     builder.Configuration["TradingFlow:Production:order_orphan_timeout_s"]
         ?? Environment.GetEnvironmentVariable("TRADINGFLOW_ORDER_ORPHAN_TIMEOUT_S"));
+var dispatchLeaseSeconds = ResolveProductionParameter<int>(
+    "order_dispatch_lease_s",
+    "TRADINGFLOW_ORDER_DISPATCH_LEASE_S");
+var dispatchRecoveryIntervalSeconds = ResolveProductionParameter<int>(
+    "order_dispatch_recovery_interval_s",
+    "TRADINGFLOW_ORDER_DISPATCH_RECOVERY_INTERVAL_S");
+var dispatchRecoveryParallelism = ResolveProductionParameter<int>(
+    "order_dispatch_recovery_parallelism",
+    "TRADINGFLOW_ORDER_DISPATCH_RECOVERY_PARALLELISM");
+var exitQuoteMaxAgeMilliseconds = ResolveProductionParameter<int>(
+    "quote_max_age_ms",
+    "TRADINGFLOW_QUOTE_MAX_AGE_MS");
 var reconciliationOptions = new AccountReconciliationOptions(
     reconcileIntervalSeconds,
     orphanTimeoutSeconds);
 builder.Services.AddSingleton(reconciliationOptions);
+builder.Services.AddSingleton(new OrderDispatchOptions(
+    dispatchLeaseSeconds,
+    orphanTimeoutSeconds,
+    dispatchRecoveryIntervalSeconds,
+    dispatchRecoveryParallelism));
+builder.Services.AddSingleton(new PositionExitExecutionOptions(exitQuoteMaxAgeMilliseconds));
+builder.Services.AddSingleton(new PartialFillExecutionOptions(
+    ResolveProductionParameter<decimal>("min_fill_ratio", "TRADINGFLOW_MIN_FILL_RATIO"),
+    allowExtendedHoursTrading: ResolveProductionParameter<bool>(
+        "allow_extended_hours_trading",
+        "TRADINGFLOW_ALLOW_EXTENDED_HOURS_TRADING"),
+    swingEntryWindowEnd: ResolveProductionParameter<ProductionTimeWindow>(
+        "swga_entry_window",
+        "TRADINGFLOW_SWGA_ENTRY_WINDOW").End));
 var backstopAtrMultiple = productionConfiguration.ResolveParameter<decimal>(
     ProductionProfile.Paper,
     "backstop_atr_mult",
     builder.Configuration["TradingFlow:Production:backstop_atr_mult"]
         ?? Environment.GetEnvironmentVariable("TRADINGFLOW_BACKSTOP_ATR_MULT"));
-builder.Services.AddSingleton(new ProtectiveOrderOptions(backstopAtrMultiple));
+builder.Services.AddSingleton(new ProtectiveOrderOptions(
+    backstopAtrMultiple,
+    orphanTimeoutSeconds));
+var shutdownFlattenSwing = ResolveProductionParameter<bool>(
+    "shutdown_flatten_swing",
+    "TRADINGFLOW_SHUTDOWN_FLATTEN_SWING");
+var allowExtendedHoursTrading = ResolveProductionParameter<bool>(
+    "allow_extended_hours_trading",
+    "TRADINGFLOW_ALLOW_EXTENDED_HOURS_TRADING");
+builder.Services.AddSingleton(new ExecutionShutdownOptions(
+    shutdownFlattenSwing,
+    allowExtendedHoursTrading,
+    ResolveProductionParameter<int>("shutdown_timeout_s", "TRADINGFLOW_SHUTDOWN_TIMEOUT_S"),
+    ResolveProductionParameter<int>("shutdown_exit_fill_confirmation_s", "TRADINGFLOW_SHUTDOWN_EXIT_FILL_CONFIRMATION_S"),
+    ResolveProductionParameter<int>("shutdown_exit_fill_poll_ms", "TRADINGFLOW_SHUTDOWN_EXIT_FILL_POLL_MS"),
+    ResolveProductionParameter<int>("shutdown_flat_confirmation_observations", "TRADINGFLOW_SHUTDOWN_FLAT_CONFIRMATION_OBSERVATIONS"),
+    ResolveProductionParameter<int>("shutdown_protection_restoration_timeout_s", "TRADINGFLOW_SHUTDOWN_PROTECTION_RESTORATION_TIMEOUT_S"),
+    ResolveProductionParameter<int>("shutdown_journal_flush_timeout_s", "TRADINGFLOW_SHUTDOWN_JOURNAL_FLUSH_TIMEOUT_S"),
+    ResolveProductionParameter<int>("shutdown_journal_flush_retry_ms", "TRADINGFLOW_SHUTDOWN_JOURNAL_FLUSH_RETRY_MS")));
+builder.Services.AddSingleton<IBrokerMutationCoordinator, BrokerMutationCoordinator>();
+builder.Services.AddSingleton<IExecutionJournalFlushService, TradingFlow.Data.Orders.SqliteExecutionJournalFlushService>();
+builder.Services.AddSingleton<IExecutionShutdownCoordinator, ExecutionShutdownCoordinator>();
 var allowMultiStrategySameSymbol = productionConfiguration.ResolveParameter<bool>(
     ProductionProfile.Paper,
     "allow_multi_strategy_same_symbol",
@@ -492,12 +617,61 @@ builder.Services.AddSingleton(new ReconciliationRunContext(new TradingFlow.Domai
 builder.Services.AddSingleton<IProtectiveOrderInvariantService, ProtectiveOrderInvariantService>();
 builder.Services.AddSingleton<IAccountReconciliationService, AccountReconciliationService>();
 builder.Services.AddSingleton<IOrderSynchronizationCoordinator, OrderSynchronizationCoordinator>();
+builder.Services.AddSingleton<IOrderDispatchService, OrderDispatchService>();
 builder.Services.AddSingleton<IOrderSubmissionService, OrderSubmissionService>();
+builder.Services.AddSingleton<IOrderCommandService>(serviceProvider =>
+    serviceProvider.GetRequiredService<IOrderSubmissionService>());
 builder.Services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOptions(
     Enabled: !uiTestMode,
     EnableEarningsMonitor: !String.IsNullOrWhiteSpace(finvizApiKey)));
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
-builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository, TradingFlow.Data.Jobs.SqliteJobRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.ICandidateAuditEvidenceRepository, TradingFlow.Data.Orders.SqliteCandidateAuditEvidenceRepository>();
+builder.Services.AddSingleton<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IUniversePreviewRepository>(services =>
+    services.GetRequiredService<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>());
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IApplicationEventRepository>(services =>
+    services.GetRequiredService<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>());
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderPreviewRepository>(services =>
+    services.GetRequiredService<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>());
+builder.Services.AddSingleton<TradingFlow.Application.Candidates.IUniverseSourceResolver, UniverseSourceResolver>();
+builder.Services.AddSingleton<TradingFlow.Application.Candidates.IStrategyIdentityResolver, StrategyIdentityResolver>();
+builder.Services.AddSingleton<TradingFlow.Application.Candidates.IUniverseDiscoveryService, TradingFlow.Application.Candidates.UniverseDiscoveryService>();
+builder.Services.AddSingleton<TradingFlow.Application.Candidates.ICandidateWorkflow, TradingFlow.Application.Candidates.CandidateWorkflowService>();
+builder.Services.AddSingleton<IOrderWorkflowService, OrderWorkflowService>();
+builder.Services.AddSingleton<TradingFlow.Data.Jobs.SqliteJobRepository>();
+builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository>(services =>
+    services.GetRequiredService<TradingFlow.Data.Jobs.SqliteJobRepository>());
+builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IDurableJobRepository>(services =>
+    services.GetRequiredService<TradingFlow.Data.Jobs.SqliteJobRepository>());
+builder.Services.AddSingleton<IReadOnlyDictionary<string, TradingFlow.Application.Jobs.DurableJobWorkerOptions>>(services =>
+{
+    var backtests = services.GetRequiredService<BacktestJobServiceOptions>();
+    return new Dictionary<string, TradingFlow.Application.Jobs.DurableJobWorkerOptions>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["backtest"] = TradingFlow.Application.Jobs.DurableJobWorkerOptions.Default with
+        {
+            MaximumPendingJobs = backtests.MaximumPendingJobs,
+            MaximumConcurrentWorkers = backtests.MaxConcurrentJobs,
+            ProjectionRefreshInterval = backtests.SnapshotInterval
+        },
+        ["optimization"] = TradingFlow.Application.Jobs.DurableJobWorkerOptions.Default with
+        {
+            MaximumPendingJobs = services.GetRequiredService<OptimizationJobServiceOptions>().MaximumPendingJobs,
+            MaximumConcurrentWorkers = services.GetRequiredService<OptimizationJobServiceOptions>().MaximumConcurrentJobs,
+            ProjectionRefreshInterval = services.GetRequiredService<OptimizationJobServiceOptions>().SnapshotInterval
+        },
+        ["paper"] = TradingFlow.Application.Jobs.DurableJobWorkerOptions.Default with
+        {
+            MaximumPendingJobs = services.GetRequiredService<PaperJobServiceOptions>().MaximumPendingJobs,
+            MaximumConcurrentWorkers = services.GetRequiredService<PaperJobServiceOptions>().MaximumConcurrentJobs,
+            ProjectionRefreshInterval = services.GetRequiredService<PaperJobServiceOptions>().SnapshotInterval
+        }
+    };
+});
+builder.Services.AddSingleton(new DurableJobHostOptions(TimeSpan.FromSeconds(ParsePositiveInteger(
+    builder.Configuration["DurableJobs:ShutdownDrainSeconds"]
+        ?? Environment.GetEnvironmentVariable("TRADINGFLOW_DURABLE_JOB_SHUTDOWN_DRAIN_S"),
+    (int)DurableJobHostOptions.Default.ShutdownDrainTimeout.TotalSeconds))));
 
 var app = builder.Build();
 
@@ -572,7 +746,6 @@ if (!uiTestMode)
     _ = app.Services.GetRequiredService<IOrderSynchronizationCoordinator>();
     _ = app.Services.GetRequiredService<IAccountReconciliationService>();
 
-    app.Services.GetRequiredService<PaperJobService>().InitializeAsync().GetAwaiter().GetResult();
     app.Services.GetRequiredService<MobileAutomationService>().InitializeAsync().GetAwaiter().GetResult();
 }
 
@@ -590,7 +763,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapRazorPages();
 app.MapTradingFlowAuthApi();
-app.MapTradingFlowMobileApi();
+app.MapTradingFlowApiV1();
 app.MapTradingFlowEarningsApi();
 // Health probes stay open: a readiness check that needs a session cannot tell a
 // load balancer or a container runtime whether the process is alive. Neither
@@ -600,19 +773,25 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "TradingFl
 app.MapGet("/health/trading-readiness", (
     IOrderSynchronizationCoordinator synchronization,
     IAccountReconciliationService reconciliation,
+    IOrderDispatchRecoveryHealth dispatchRecovery,
     IEntryAdmissionControl admission) =>
 {
     var synchronizationHealth = synchronization.GetHealth();
+    var dispatchRecoveryHealth = dispatchRecovery.GetHealth();
     var admissionSnapshot = admission.GetSnapshot();
+    var ready = admissionSnapshot.EntriesAllowed &&
+        dispatchRecoveryHealth.InitialCycleCompleted &&
+        dispatchRecoveryHealth.Healthy;
     var response = new
     {
-        status = admissionSnapshot.EntriesAllowed ? "ready" : "blocked",
+        status = ready ? "ready" : "blocked",
         entriesAllowed = admissionSnapshot.EntriesAllowed,
         orderSynchronization = synchronizationHealth,
+        orderDispatchRecovery = dispatchRecoveryHealth,
         accountReconciliation = reconciliation.GetHealth(),
         blocks = admissionSnapshot.Blocks
     };
-    return admissionSnapshot.EntriesAllowed
+    return ready
         ? Results.Ok(response)
         : Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable);
 }).AllowAnonymous();
@@ -630,7 +809,7 @@ app.MapPost("/api/operations/reconciliations/{reconciliationId:guid}/ack", async
         cancellationToken);
     return Results.Ok(reconciliation.GetHealth());
 });
-app.MapGet("/api/wishlists/{wishlistId:guid}/quotes/stream", async (
+app.MapGet("/api/v1/wishlists/{wishlistId:guid}/quotes/stream", async (
     Guid wishlistId,
     IWishlistRepository wishlists,
     AlpacaQuoteService quoteService,
@@ -681,8 +860,8 @@ app.MapGet("/api/wishlists/{wishlistId:guid}/quotes/stream", async (
         await httpContext.Response.Body.FlushAsync(cancellationToken);
         await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
     }
-});
-app.MapGet("/api/wishlists/{wishlistId:guid}/activity/stream", async (
+}).RequireAuthorization();
+app.MapGet("/api/v1/wishlists/{wishlistId:guid}/activity/stream", async (
     Guid wishlistId,
     IWishlistRepository wishlists,
     NewsFeedService newsFeed,
@@ -744,30 +923,7 @@ app.MapGet("/api/wishlists/{wishlistId:guid}/activity/stream", async (
         await httpContext.Response.Body.FlushAsync(cancellationToken);
         await Task.Delay(TimeSpan.FromSeconds(20), cancellationToken);
     }
-});
-app.MapPost("/api/strategies/evaluate", async (
-    StrategyEvaluationRequest request,
-    StrategyEvaluationService evaluator,
-    CancellationToken cancellationToken) =>
-{
-    var result = await evaluator.EvaluateWithAlpacaAsync(request, cancellationToken);
-    return Results.Ok(result);
-});
-app.MapPost("/api/strategies/intraday-top/evaluate", async (
-    StrategyEvaluationService evaluator,
-    CancellationToken cancellationToken) =>
-{
-    var result = await evaluator.EvaluateWithAlpacaAsync(
-        new StrategyEvaluationRequest(
-            ConfigPath: Path.Combine("configs", "paper", "alpaca-paper.yaml"),
-            StrategyPath: Path.Combine("configs", "strategies", "intraday-ema10-ema20-macd-volume.v1.yaml"),
-            Tickers: new[] { "RGTI", "POET", "NVTS" },
-            LookbackDays: 30,
-            Start: null,
-            End: null),
-        cancellationToken);
-    return Results.Ok(result);
-});
+}).RequireAuthorization();
 app.Run();
 
 static string ResolveRepositoryRoot(string contentRoot)

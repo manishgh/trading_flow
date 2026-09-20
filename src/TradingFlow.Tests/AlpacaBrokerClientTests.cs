@@ -27,7 +27,8 @@ public class AlpacaBrokerClientTests : IDisposable
             {
               "id":"account-1","status":"ACTIVE","account_blocked":false,
               "trading_blocked":false,"trade_suspended_by_user":false,
-              "shorting_enabled":true,"buying_power":"125000.50","equity":"100000.25",
+              "shorting_enabled":true,"buying_power":"125000.50",
+              "regt_buying_power":"95000.25","equity":"100000.25",
               "long_market_value":"25000.00","short_market_value":"-5000.00"
             }
             """);
@@ -43,6 +44,7 @@ public class AlpacaBrokerClientTests : IDisposable
         Assert.False(account.TradeSuspendedByUser);
         Assert.True(account.ShortingEnabled);
         Assert.Equal(125000.50m, account.BuyingPower);
+        Assert.Equal(95000.25m, account.RegulationTBuyingPower);
         Assert.Equal(100000.25m, account.Equity);
         Assert.Equal(25000m, account.LongMarketValue);
         Assert.Equal(-5000m, account.ShortMarketValue);
@@ -161,9 +163,10 @@ public class AlpacaBrokerClientTests : IDisposable
 
 
     [Fact]
-    public async Task SubmitExitOrdersAsync_SendsTakeProfitLimitPrice_ForOcoOrder()
+    public async Task SubmitExitOrderAsync_ExtendedLimit_PreservesExactContract()
     {
-        using var handler = new CapturingHandler();
+        using var handler = new CapturingHandler(
+            responseBody: """{"id":"exit-order-id","created_at":"2026-07-21T14:30:00Z"}""");
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
@@ -175,14 +178,26 @@ public class AlpacaBrokerClientTests : IDisposable
             },
             CreateArchiveWriter());
 
-        await client.SubmitExitOrdersAsync("OUST", 10, 40.12m, 45.67m, CancellationToken.None);
+        await client.SubmitExitOrderAsync(
+            new BrokerExitOrder(
+                "OUST",
+                "sell",
+                10m,
+                "limit",
+                "day",
+                45.67m,
+                null,
+                true,
+                "TEST-S-OUST-20260721-001-12345678"),
+            CancellationToken.None);
 
         using var document = JsonDocument.Parse(handler.RequestJson);
         var root = document.RootElement;
-        Assert.Equal("oco", root.GetProperty("order_class").GetString());
-        Assert.False(root.TryGetProperty("limit_price", out _));
-        Assert.Equal("45.67", root.GetProperty("take_profit").GetProperty("limit_price").GetString());
-        Assert.Equal("40.12", root.GetProperty("stop_loss").GetProperty("stop_price").GetString());
+        Assert.False(root.TryGetProperty("order_class", out _));
+        Assert.Equal("45.67", root.GetProperty("limit_price").GetString());
+        Assert.Equal("day", root.GetProperty("time_in_force").GetString());
+        Assert.True(root.GetProperty("extended_hours").GetBoolean());
+        Assert.Equal("TEST-S-OUST-20260721-001-12345678", root.GetProperty("client_order_id").GetString());
 
         var payloadPath = Assert.Single(
             Directory.EnumerateFiles(archiveRoot, "*.json", SearchOption.AllDirectories),
@@ -192,7 +207,7 @@ public class AlpacaBrokerClientTests : IDisposable
             await File.ReadAllTextAsync(payloadPath + ".manifest.json"),
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
         Assert.NotNull(manifest);
-        Assert.Equal("broker-submit-exit-order", manifest.ArtifactType);
+        Assert.Equal("broker-submit-position-exit", manifest.ArtifactType);
         Assert.Equal(200, manifest.Http!.StatusCode);
         var manifestText = await File.ReadAllTextAsync(payloadPath + ".manifest.json");
         Assert.DoesNotContain("test-key", manifestText, StringComparison.Ordinal);
@@ -200,9 +215,20 @@ public class AlpacaBrokerClientTests : IDisposable
     }
 
     [Fact]
-    public async Task ModifyOrderAsync_PatchesStopLeg_WithNewStopPrice()
+    public async Task ReplaceProtectiveOrderAsync_ParsesSuccessorAndSendsDeterministicClientId()
     {
-        using var handler = new CapturingHandler();
+        using var handler = new CapturingHandler(
+            responseBody: """
+            {
+              "id":"stop-leg-2","client_order_id":"TFR-0123456789abcdef0123456789abcdef",
+              "symbol":"MSFT","side":"sell","status":"new","type":"stop",
+              "limit_price":null,"stop_price":"4.25","qty":"10","filled_qty":"0",
+              "filled_avg_price":null,"created_at":"2026-07-21T15:00:00Z",
+              "updated_at":"2026-07-21T15:00:01Z","time_in_force":"gtc",
+              "order_class":"simple","extended_hours":false,"replaces":"stop-leg-1",
+              "replaced_by":null
+            }
+            """);
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
@@ -214,21 +240,115 @@ public class AlpacaBrokerClientTests : IDisposable
             },
             CreateArchiveWriter());
 
-        var modified = await client.ModifyOrderAsync("stop-leg-1", 4.25m, 0m, CancellationToken.None);
+        var successor = await client.ReplaceProtectiveOrderAsync(
+            new BrokerProtectiveOrderReplacement(
+                "stop-leg-1",
+                "TFR-0123456789abcdef0123456789abcdef",
+                "stop",
+                4.25m,
+                null),
+            CancellationToken.None);
 
-        Assert.True(modified);
+        Assert.Equal("stop-leg-2", successor.OrderId);
+        Assert.Equal("stop-leg-1", successor.ReplacesOrderId);
+        Assert.Null(successor.ReplacedByOrderId);
         Assert.Equal(HttpMethod.Patch, handler.Method);
         Assert.Equal("/v2/orders/stop-leg-1", handler.Path);
         using var document = JsonDocument.Parse(handler.RequestJson);
         var root = document.RootElement;
+        Assert.Equal(
+            "TFR-0123456789abcdef0123456789abcdef",
+            root.GetProperty("client_order_id").GetString());
         Assert.Equal("4.25", root.GetProperty("stop_price").GetString());
         Assert.False(root.TryGetProperty("limit_price", out _));
     }
 
     [Fact]
-    public async Task ClosePositionAsync_WithQuantity_UsesScopedPositionClose()
+    public async Task ReplaceProtectiveOrderAsync_StopLimitPreservesLimitPrice()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """
+            {
+              "id":"stop-limit-2","client_order_id":"TFR-1123456789abcdef0123456789abcdef",
+              "symbol":"MSFT","side":"sell","status":"new","type":"stop_limit",
+              "limit_price":"4.10","stop_price":"4.25","qty":"10","filled_qty":"0",
+              "filled_avg_price":null,"created_at":"2026-07-21T15:00:00Z",
+              "updated_at":"2026-07-21T15:00:01Z","time_in_force":"gtc",
+              "order_class":"simple","extended_hours":false,"replaces":"stop-limit-1"
+            }
+            """);
+        using var client = CreateClient(handler);
+
+        var successor = await client.ReplaceProtectiveOrderAsync(
+            new BrokerProtectiveOrderReplacement(
+                "stop-limit-1",
+                "TFR-1123456789abcdef0123456789abcdef",
+                "stop_limit",
+                4.25m,
+                4.10m),
+            CancellationToken.None);
+
+        Assert.Equal(4.10m, successor.LimitPrice);
+        using var document = JsonDocument.Parse(handler.RequestJson);
+        Assert.Equal("4.25", document.RootElement.GetProperty("stop_price").GetString());
+        Assert.Equal("4.10", document.RootElement.GetProperty("limit_price").GetString());
+    }
+
+    [Fact]
+    public async Task ReplaceProtectiveOrderAsync_SubDollarPricesPreserveFourDecimalPrecision()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """
+            {
+              "id":"stop-limit-2","client_order_id":"TFR-2123456789abcdef0123456789abcdef",
+              "symbol":"PENNY","side":"sell","status":"new","type":"stop_limit",
+              "limit_price":"0.1233","stop_price":"0.1234","qty":"10","filled_qty":"0",
+              "filled_avg_price":null,"created_at":"2026-07-21T15:00:00Z",
+              "updated_at":"2026-07-21T15:00:01Z","time_in_force":"gtc",
+              "order_class":"simple","extended_hours":false,"replaces":"stop-limit-1"
+            }
+            """);
+        using var client = CreateClient(handler);
+
+        await client.ReplaceProtectiveOrderAsync(
+            new BrokerProtectiveOrderReplacement(
+                "stop-limit-1",
+                "TFR-2123456789abcdef0123456789abcdef",
+                "stop_limit",
+                0.12349m,
+                0.12339m),
+            CancellationToken.None);
+
+        using var document = JsonDocument.Parse(handler.RequestJson);
+        Assert.Equal("0.1234", document.RootElement.GetProperty("stop_price").GetString());
+        Assert.Equal("0.1233", document.RootElement.GetProperty("limit_price").GetString());
+    }
+
+    [Fact]
+    public async Task ReplaceProtectiveOrderAsync_BrokerTrailingStopFailsBeforeHttpRequest()
     {
         using var handler = new CapturingHandler();
+        using var client = CreateClient(handler);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.ReplaceProtectiveOrderAsync(
+                new BrokerProtectiveOrderReplacement(
+                    "trailing-1",
+                    "TFR-2123456789abcdef0123456789abcdef",
+                    "trailing_stop",
+                    4.25m,
+                    null),
+                CancellationToken.None));
+
+        Assert.Contains("cannot be repriced", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task SubmitExitOrderAsync_RegularMarket_OmitsExtendedAndLimitFields()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """{"id":"exit-market-id","created_at":"2026-07-21T14:30:00Z"}""");
         using var httpClient = new HttpClient(handler);
         using var client = new AlpacaBrokerClient(
             httpClient,
@@ -240,11 +360,64 @@ public class AlpacaBrokerClientTests : IDisposable
             },
             CreateArchiveWriter());
 
-        var closed = await client.ClosePositionAsync("rgti", 25, CancellationToken.None);
+        await client.SubmitExitOrderAsync(
+            new BrokerExitOrder(
+                "RGTI",
+                "sell",
+                25m,
+                "market",
+                "day",
+                null,
+                null,
+                false,
+                "TEST-S-RGTI-20260721-001-12345678"),
+            CancellationToken.None);
 
-        Assert.True(closed);
-        Assert.Equal(HttpMethod.Delete, handler.Method);
-        Assert.Equal("/v2/positions/RGTI?qty=25", handler.Path);
+        Assert.Equal(HttpMethod.Post, handler.Method);
+        Assert.Equal("/v2/orders", handler.Path);
+        using var document = JsonDocument.Parse(handler.RequestJson);
+        var root = document.RootElement;
+        Assert.Equal("market", root.GetProperty("type").GetString());
+        Assert.False(root.TryGetProperty("limit_price", out _));
+        Assert.False(root.TryGetProperty("extended_hours", out _));
+    }
+
+    [Fact]
+    public async Task SubmitExitOrderAsync_StopOrder_MapsStopPriceWithoutLimitPrice()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """{"id":"exit-stop-id","created_at":"2026-07-21T14:30:00Z"}""");
+        using var httpClient = new HttpClient(handler);
+        using var client = new AlpacaBrokerClient(
+            httpClient,
+            CreateUnusedMarketDataClient(),
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
+            {
+                KeyId = "test-key",
+                SecretKey = "test-secret"
+            },
+            CreateArchiveWriter());
+
+        await client.SubmitExitOrderAsync(
+            new BrokerExitOrder(
+                "RGTI",
+                "sell",
+                25m,
+                "stop",
+                "gtc",
+                null,
+                18.25m,
+                false,
+                "TEST-S-RGTI-20260721-001-12345678"),
+            CancellationToken.None);
+
+        using var document = JsonDocument.Parse(handler.RequestJson);
+        var root = document.RootElement;
+        Assert.Equal("stop", root.GetProperty("type").GetString());
+        Assert.Equal("18.25", root.GetProperty("stop_price").GetString());
+        Assert.False(root.TryGetProperty("limit_price", out _));
+        Assert.Equal("gtc", root.GetProperty("time_in_force").GetString());
+        Assert.False(root.TryGetProperty("extended_hours", out _));
     }
 
     [Fact]
@@ -312,7 +485,8 @@ public class AlpacaBrokerClientTests : IDisposable
               "id":"broker-1","client_order_id":"{{clientOrderId}}","symbol":"MSFT",
               "side":"buy","status":"filled","type":"limit","limit_price":"100.00",
               "stop_price":null,"qty":"10","filled_qty":"10","filled_avg_price":"100.50",
-              "created_at":"2026-07-21T14:59:00Z","updated_at":"2026-07-21T15:00:00Z"
+              "created_at":"2026-07-21T14:59:00Z","updated_at":"2026-07-21T15:00:00Z",
+              "time_in_force":"day","order_class":"bracket","extended_hours":false
             }
             """);
         using var httpClient = new HttpClient(handler);
@@ -333,7 +507,7 @@ public class AlpacaBrokerClientTests : IDisposable
         Assert.Equal(10m, order.FilledQuantity);
         Assert.Equal(100.50m, order.FilledAveragePrice);
         Assert.Equal(
-            $"/v2/orders:by_client_order_id?client_order_id={clientOrderId}",
+            $"/v2/orders:by_client_order_id?client_order_id={clientOrderId}&nested=true",
             handler.Path);
         var manifestPath = Assert.Single(
             Directory.EnumerateFiles(archiveRoot, "*.manifest.json", SearchOption.AllDirectories));
@@ -372,7 +546,7 @@ public class AlpacaBrokerClientTests : IDisposable
     }
 
     [Fact]
-    public async Task SubmitExitOrdersAsync_DoesNotInventOrderIdWhenProviderOmitsIt()
+    public async Task SubmitExitOrderAsync_DoesNotInventOrderIdWhenProviderOmitsIt()
     {
         using var handler = new CapturingHandler(HttpStatusCode.OK, "{}");
         using var httpClient = new HttpClient(handler);
@@ -387,14 +561,18 @@ public class AlpacaBrokerClientTests : IDisposable
             CreateArchiveWriter());
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => client.SubmitExitOrdersAsync("OUST", 10, 40.12m, 45.67m, CancellationToken.None));
+            () => client.SubmitExitOrderAsync(
+                new BrokerExitOrder(
+                    "OUST", "sell", 10m, "market", "day", null, null, false,
+                    "TEST-S-OUST-20260721-001-12345678"),
+                CancellationToken.None));
 
         Assert.Contains("returned no order id", exception.Message, StringComparison.Ordinal);
         Assert.Contains("RawArchiveId=", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task SubmitOrderAsync_RegularLimitOrder_PreservesBracketAndOmitsExtendedFlag()
+    public async Task SubmitOrderAsync_RegularLimitOrder_SendsStandaloneOwnedEntry()
     {
         using var handler = new CapturingHandler(
             responseBody: """{"id":"regular-order","created_at":"2026-07-21T15:00:00Z"}""");
@@ -406,10 +584,31 @@ public class AlpacaBrokerClientTests : IDisposable
 
         using var document = JsonDocument.Parse(handler.RequestJson);
         var root = document.RootElement;
-        Assert.Equal("bracket", root.GetProperty("order_class").GetString());
+        Assert.False(root.TryGetProperty("order_class", out _));
+        Assert.False(root.TryGetProperty("take_profit", out _));
+        Assert.False(root.TryGetProperty("stop_loss", out _));
         Assert.False(root.TryGetProperty("extended_hours", out _));
         Assert.Equal("limit", root.GetProperty("type").GetString());
         Assert.Equal("day", root.GetProperty("time_in_force").GetString());
+    }
+
+    [Fact]
+    public async Task SubmitOrderAsync_RegularMarketOrder_PreservesTypeAndOmitsLimitPrice()
+    {
+        using var handler = new CapturingHandler(
+            responseBody: """{"id":"regular-market-order","created_at":"2026-07-21T15:00:00Z"}""");
+        using var client = CreateClient(handler);
+
+        await client.SubmitOrderAsync(
+            CreateEntryOrder(submitOutsideRegularHours: false, orderType: "market"),
+            CancellationToken.None);
+
+        using var document = JsonDocument.Parse(handler.RequestJson);
+        var root = document.RootElement;
+        Assert.Equal("market", root.GetProperty("type").GetString());
+        Assert.Equal("day", root.GetProperty("time_in_force").GetString());
+        Assert.False(root.TryGetProperty("limit_price", out _));
+        Assert.False(root.TryGetProperty("extended_hours", out _));
     }
 
     [Fact]
@@ -536,7 +735,9 @@ public class AlpacaBrokerClientTests : IDisposable
 
     private static HttpClient CreateUnexpectedRequestClient() => new(new UnexpectedRequestHandler());
 
-    private static BrokerEntryOrder CreateEntryOrder(bool submitOutsideRegularHours) =>
+    private static BrokerEntryOrder CreateEntryOrder(
+        bool submitOutsideRegularHours,
+        string orderType = "limit") =>
         new(
             new FinalizedOrder(
                 "MSFT",
@@ -548,7 +749,7 @@ public class AlpacaBrokerClientTests : IDisposable
                 new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero),
                 "TEST-B-MSFT-20260721-001-12345678"),
             "buy",
-            "limit",
+            orderType,
             "day",
             submitOutsideRegularHours);
 

@@ -7,6 +7,27 @@ namespace TradingFlow.Tests;
 public class CandlePipelineEngineTests
 {
     [Fact]
+    public async Task RunAsync_RejectsUnlimitedRetainedBarConfiguration()
+    {
+        var engine = new CandlePipelineEngine();
+        var request = new CandlePipelineRequest(
+            ["AAPL"],
+            ["5m"],
+            ["5m"],
+            "5m",
+            DateTimeOffset.UtcNow.AddDays(-1),
+            DateTimeOffset.UtcNow,
+            BoundedCapacity: 10,
+            WorkerCount: 1,
+            MaxRetainedBars: 0);
+
+        var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            engine.RunAsync(request, new CapturingMarketDataProvider(), CancellationToken.None));
+
+        Assert.Contains("positive MaxRetainedBars", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RunAsync_BatchesProviderRead_DerivesRequiredTimeframes_AndComputesIndicators()
     {
         var provider = new CapturingMarketDataProvider();
@@ -256,7 +277,8 @@ public class CandlePipelineEngineTests
                 DateTimeOffset.UtcNow.AddDays(-1),
                 DateTimeOffset.UtcNow,
                 BoundedCapacity: 4,
-                WorkerCount: 1),
+                WorkerCount: 1,
+                MaxRetainedBars: 1),
             new DuplicateMarketDataProvider(),
             default);
 
@@ -264,6 +286,27 @@ public class CandlePipelineEngineTests
         Assert.Equal(2, result.Metrics.ReadCount);
         Assert.Equal(1, result.Metrics.GroupedCount);
         Assert.Single(result.TickerStates["AAPL"].BarsByTimeframe["1m"]);
+    }
+
+    [Fact]
+    public async Task RunAsync_UniqueBarsExceedRetainedBudget_FailsBeforeIndicatorPublication()
+    {
+        var exception = await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+            new CandlePipelineEngine().RunAsync(
+                new CandlePipelineRequest(
+                    ["AAPL"],
+                    ["1m"],
+                    ["1m"],
+                    "1m",
+                    DateTimeOffset.UtcNow.AddDays(-1),
+                    DateTimeOffset.UtcNow,
+                    BoundedCapacity: 4,
+                    WorkerCount: 1,
+                    MaxRetainedBars: 1),
+                new CapturingMarketDataProvider(),
+                default));
+
+        Assert.Contains("retained-bar budget of 1", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -402,7 +445,7 @@ public class CandlePipelineEngineTests
         IMarketDataProvider,
         IMarketDataCompletenessProvider
     {
-        public bool OmittedIntradayIntervalsMeanNoQualifyingTrades => true;
+        public bool OmittedSubDailyIntervalsMeanNoQualifyingTrades => true;
 
         public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
             IReadOnlyCollection<string> tickers,

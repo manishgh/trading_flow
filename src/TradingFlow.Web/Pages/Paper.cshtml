@@ -263,7 +263,7 @@
                 <option value="active_cancel" selected="@(Model.OrderExpiration == "active_cancel")">Active Cancellation (GTC + 30-min Auto-Cancel)</option>
             </select>
 
-            <label for="EntryOrderTypeDropdown">Entry Order Type <span class="tf-help" title="Limit waits for a controlled fill price; market enters immediately but may slip. Low-float/intraday strategies usually prefer limit.">?</span></label>
+            <label for="EntryOrderTypeDropdown">Entry Order Type <span class="tf-help" title="Limit waits for a controlled fill price; market enters immediately but may slip. Swing entries normally use a validated limit price.">?</span></label>
             <select class="mb-md" id="EntryOrderTypeDropdown" name="EntryOrderType">
                 <option value="limit" selected="@(Model.EntryOrderType == "limit")">Limit Order (Waits for pullback/discount)</option>
                 <option value="market" selected="@(Model.EntryOrderType == "market")">Market Order (Enters immediately at current price)</option>

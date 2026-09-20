@@ -39,6 +39,7 @@ public sealed class StrategyCandidateDecisionOrchestrator(
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(request);
+        RequireSwingStrategy(request.Strategy);
         RequireRunProvenance(run, request);
 
         var existing = await candidates.GetAsync(request.Candidate.CandidateId, cancellationToken);
@@ -102,9 +103,7 @@ public sealed class StrategyCandidateDecisionOrchestrator(
         DiscoveredAtUtc = request.Candidate.Discovery.ObservedAtUtc,
         RevalidatedAtUtc = request.AsOfUtc,
         DiscoverySource = String.Join(",", request.Candidate.Discovery.Sources),
-        Horizon = request.Strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)
-            ? "swing"
-            : "intraday",
+        Horizon = "swing",
         LastPrice = ResolveLastPrice(request),
         SetupScoresJson = JsonSerializer.Serialize(new
         {
@@ -115,6 +114,7 @@ public sealed class StrategyCandidateDecisionOrchestrator(
             request.Candidate.Discovery.EvidenceSha256
         }),
         SelectedStrategy = request.StrategyIdentity.StrategyId,
+        StrategySemanticVersion = request.StrategyIdentity.SemanticVersion,
         StrategyContentSha256 = request.StrategyIdentity.ContentSha256,
         AdmissionProfileId = request.AdmissionProfile.ProfileId,
         AdmissionProfileVersion = request.AdmissionProfile.ProfileVersion,
@@ -129,6 +129,16 @@ public sealed class StrategyCandidateDecisionOrchestrator(
         ConfigHash = run.ConfigHash,
         CodeVersion = run.CodeVersion
     };
+
+    private static void RequireSwingStrategy(StrategyDefinition strategy)
+    {
+        if (!strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Strategy '{strategy.StrategyId}' uses primary timeframe '{strategy.Timeframe}'. " +
+                "TradingFlow supports daily-primary swing strategies only.");
+        }
+    }
 
     private static decimal? ResolveLastPrice(StrategyDecisionRequest request) =>
         request.SnapshotsByTimeframe.TryGetValue(request.Strategy.Execution.Timeframe, out var execution) &&
@@ -160,6 +170,7 @@ public sealed class StrategyCandidateDecisionOrchestrator(
 
         if (!candidate.Symbol.Equals(request.Candidate.Identity.Symbol, StringComparison.OrdinalIgnoreCase) ||
             !String.Equals(candidate.SelectedStrategy, request.StrategyIdentity.StrategyId, StringComparison.Ordinal) ||
+            !candidate.StrategySemanticVersion.Equals(request.StrategyIdentity.SemanticVersion, StringComparison.Ordinal) ||
             !candidate.StrategyContentSha256.Equals(request.StrategyIdentity.ContentSha256, StringComparison.Ordinal) ||
             !candidate.AdmissionProfileId.Equals(request.AdmissionProfile.ProfileId, StringComparison.Ordinal) ||
             !candidate.AdmissionProfileVersion.Equals(request.AdmissionProfile.ProfileVersion, StringComparison.Ordinal) ||

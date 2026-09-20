@@ -20,7 +20,6 @@ entry_rules:
   require_ema20_above_ema50: false
   require_price_above_sma200: true
   max_vwap_extension_atr:
-  opening_range_minutes: 0
   recent_high_lookback_bars: 20
   volatility_contraction_lookback_bars: 25
   reversion_stretch_lookback_bars: 5
@@ -28,7 +27,6 @@ entry_rules:
   max_reversion_rsi2: 5.0
   enable_lower_bollinger_stretch: false
   veto_fresh_news_hours: 48.0
-  max_entries_per_ticker_per_day: 1
   require_positive_news: false
 regime:
   benchmark: SPY

@@ -391,15 +391,10 @@ namespace TradingFlow.Web.Pages
                 AddBoolChip(chips, root, "IsPriceAboveSma20", "Above SMA20");
                 AddBoolChip(chips, root, "IsMacdNotBearish", "MACD not bearish");
                 AddBoolChip(chips, root, "IsMacdHistogramPositive", "MACD histogram positive");
-                AddTrueBoolChip(chips, root, "IsBullFlagBreakout", "Bull flag breakout");
                 AddTrueBoolChip(chips, root, "IsSwingReclaim", "Swing reclaim");
                 AddTrueBoolChip(chips, root, "IsSwingRollover", "Swing rollover");
                 AddDecimalChip(chips, root, "CloseLocationValue", "Close location", "F2");
-                AddDecimalChip(chips, root, "DayGainPct", "Day gain %", "F2");
-                AddDecimalChip(chips, root, "SessionGainPct", "Session gain %", "F2");
                 AddDecimalChip(chips, root, "VwapExtensionAtr", "VWAP ext ATR", "F2");
-                AddDecimalChip(chips, root, "BullFlagPoleMovePct", "Flag pole %", "F2");
-                AddDecimalChip(chips, root, "BullFlagBreakoutVolumeRatio", "Breakout volume ratio", "F2");
                 AddDecimalChip(chips, root, "ReclaimPullbackDepthPct", "Reclaim pullback %", "F2");
                 AddDecimalChip(chips, root, "RolloverAdvancePct", "Rollover advance %", "F2");
             }

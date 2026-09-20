@@ -21,6 +21,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="Fixtures\news_receipt_exchange.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TradingFlow.Application\TradingFlow.Application.csproj" />
+    <ProjectReference Include="..\TradingFlow.Contracts\TradingFlow.Contracts.csproj" />
     <ProjectReference Include="..\TradingFlow.Domain\TradingFlow.Domain.csproj" />
     <ProjectReference Include="..\TradingFlow.Engine\TradingFlow.Engine.csproj" />
     <ProjectReference Include="..\TradingFlow.Earnings\TradingFlow.Earnings.csproj" />

@@ -2,7 +2,7 @@
 
 How to build a broad, non-hand-picked candidate pool from a Finviz Elite screener
 and run it through the no-lookahead point-in-time universe screen. Companion to
-`docs/edge-recovery-master-plan.md` phase 0.1.
+`docs/operating-boundaries.md` and the research promotion protocol.
 
 ## How it fits together
 
@@ -69,15 +69,8 @@ optionable, US common stock, not ETF
 ```
 Example filter fragment: `f=cap_smallover,sh_avgvol_o1000,sh_price_o5,sh_opt_option,geo_usa`
 
-**Intraday candidate pool** (liquid, volatile enough to move within a session):
-
-```
-price >= $3, avg volume >= 2M shares, relative volume elevated (structural, not
-today's gainer), ATR / range sufficient
-```
-Example filter fragment: `f=sh_avgvol_o2000,sh_price_o3,ta_volatility_mo2,geo_usa`
-
-Keep both screens **structural** (capacity to move), never **outcome** (already moved).
+Keep the screen **structural** (capacity and eligibility), never **outcome** (already
+moved).
 
 ## Known remaining limitations
 

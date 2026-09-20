@@ -28,7 +28,6 @@ entry_rules:
   require_price_below_anchored_vwap_for_short: false
   max_anchored_vwap_extension_atr: 4.0
   max_vwap_extension_atr: 999.0
-  opening_range_minutes: 60
   recent_high_lookback_bars: 20
   volatility_contraction_lookback_bars: 10
   reclaim_lookback_bars: 20
@@ -46,8 +45,6 @@ entry_rules:
   reject_falling_price_rising_volume: false
   red_volume_max_price_slope: -0.0001
   red_volume_min_volume_slope: 0.003
-  vwap_hold_bars: 2
-  max_entries_per_ticker_per_day: 1
   min_close_location_value: 0.55
   reject_weak_close_on_high_relative_volume: false
   weak_close_max_location_value: 0.35

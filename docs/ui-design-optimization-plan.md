@@ -29,7 +29,7 @@ TradingFlow is the user-facing trading workstation. It owns:
 
 Market Predictor remains prediction-only. It owns:
 
-- swing and intraday model inference
+- swing model inference
 - model and data readiness
 - opportunity and downside probabilities
 - catalyst confirmation or conflict
@@ -261,17 +261,7 @@ The UI consumes the existing unified prediction response. It must not derive new
 - SPY/QQQ and sector context where available
 - readiness reasons and source status
 
-### 8.3 Intraday block
-
-- opportunity probability
-- downside probability
-- decision score and rank
-- relative volume, RSI, and MACD state
-- modeled stop and target percentages
-- catalyst confirmation as a separate overlay
-- readiness reasons, feed, benchmark state, and latest price date
-
-### 8.4 Display rules
+### 8.3 Display rules
 
 1. `invalid` readiness disables all model-derived actionable styling.
 2. `warn` is presented as incomplete intelligence, never as a Buy recommendation.
@@ -495,14 +485,14 @@ Scope:
 - call Market Predictor through a typed server-side client
 - cache only according to model/data freshness metadata
 - render separate Model Intelligence and TradingFlow Decision blocks
-- include swing/intraday segmented view, catalyst, global context, SPY/QQQ context, and readiness
+- include swing horizon, catalyst, global context, SPY/QQQ context, and readiness
 - fail closed when the predictor is unavailable, stale, invalid, or schema-incompatible
 
 Primary files:
 
 - new typed predictor client in `src/TradingFlow.Web/Services`
 - shared mobile API records in `src/TradingFlow.Web/Models/MobileApiModels.cs`
-- `src/TradingFlow.Web/MobileApiEndpoints.cs`
+- `src/TradingFlow.Web/TradingApiV1Endpoints.cs`
 - symbol-detail partials and MAUI pages/controls
 
 Acceptance:

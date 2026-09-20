@@ -61,7 +61,7 @@ public sealed class TechnicalExecutionEngine
             return (bar.Close, "max_hold_bars");
         }
 
-        // Calendar-hour timeout remains available for intraday strategies and as a fallback.
+        // Calendar-hour timeout remains available for sub-daily swing execution and as a fallback.
         var maxExitTimestamp = entryTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours);
         if (bar.Timestamp >= maxExitTimestamp)
         {

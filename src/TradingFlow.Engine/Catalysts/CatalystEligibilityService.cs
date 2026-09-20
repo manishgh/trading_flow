@@ -3,7 +3,7 @@ using TradingFlow.Domain.Market;
 namespace TradingFlow.Engine.Catalysts;
 
 /// <summary>
-/// Shared catalyst one-shot lifecycle (docs/edge-recovery-master-plan.md Phase 1, doctrine §6B).
+/// Shared point-in-time catalyst one-shot lifecycle.
 /// Turns a catalyst from a state that is re-tradable every bar (the V3 churn anti-pattern) into an
 /// EVENT that gets exactly one bounded attempt:
 ///  - eligibility starts at the RECEIVED time (when the system could actually act), not the published

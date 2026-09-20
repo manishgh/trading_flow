@@ -87,7 +87,7 @@ public sealed class EarningsMarketStateLoader
         try
         {
             var end = nowUtc.ToUniversalTime();
-            var windowStart = end.AddDays(-options.IntradayLookbackDays);
+            var windowStart = end.AddDays(-options.SubDailyLookbackDays);
             await HydrateMissingSymbolsAsync(normalized, windowStart, end, cancellationToken);
 
             var cold = normalized.Where(ticker => state[ticker].Count == 0).ToArray();

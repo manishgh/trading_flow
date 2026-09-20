@@ -38,8 +38,8 @@ The following existing tests freeze behavior before the later refactor phases:
 - positive news cannot bypass the technical trigger or reach an order write:
   `LiveRunnerIntegrationTests.RunAsync_PositiveNewsWithoutTechnicalTrigger_CreatesNoOrderIntentOrBrokerRequest`
 - intent persistence/idempotency:
-  `OrderSubmissionServiceTests.SubmitBracketOrderAsync_PersistsIntentBeforeBrokerNetworkCall`
-  and `SubmitBracketOrderAsync_AcknowledgedRetry_SuppressesDuplicateBrokerCall`
+  `OrderSubmissionServiceTests.SubmitEntryOrderAsync_PersistsIntentBeforeBrokerNetworkCall`
+  and `SubmitEntryOrderAsync_AcknowledgedRetry_SuppressesDuplicateBrokerCall`
 
 ## Commands
 

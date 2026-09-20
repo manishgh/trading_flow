@@ -30,7 +30,7 @@ Example run config:
 ```yaml
 universe:
   source: wishlist
-  wishlist_name: Intraday Movers
+  wishlist_name: Swing Candidates
   include_extended_hours: true
 ```
 

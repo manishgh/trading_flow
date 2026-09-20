@@ -19,7 +19,6 @@ entry_rules:
   min_consecutive_down_closes_for_stretch: 3
   max_reversion_rsi2: 10.0
   enable_lower_bollinger_stretch: true
-  max_entries_per_ticker_per_day: 1
   require_positive_news: false
 confluence:
   enabled: false

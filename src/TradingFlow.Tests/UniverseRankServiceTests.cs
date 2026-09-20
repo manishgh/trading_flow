@@ -29,8 +29,7 @@ public sealed class UniverseRankServiceTests : IDisposable
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 1m), WatchingRow("NVDA", spreadBps: 6m)],
             UniverseRankConfig.Default,
-            "intraday",
-            "unified",
+            "swing",
             "auto",
             EmptySet,
             EmptySet,
@@ -50,8 +49,7 @@ public sealed class UniverseRankServiceTests : IDisposable
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 1m)],
             UniverseRankConfig.Default,
-            "intraday",
-            "unified",
+            "swing",
             "auto",
             EmptySet,
             EmptySet,
@@ -77,8 +75,7 @@ public sealed class UniverseRankServiceTests : IDisposable
         var run = await service.RankAsync(
             [WatchingRow("MU", spreadBps: 1m)],
             UniverseRankConfig.Default,
-            "intraday",
-            "unified",
+            "swing",
             "auto",
             EmptySet,
             EmptySet,
@@ -98,8 +95,7 @@ public sealed class UniverseRankServiceTests : IDisposable
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 1m)],
             UniverseRankConfig.Default,
-            "intraday",
-            "unified",
+            "swing",
             "auto",
             EmptySet,
             EmptySet,
@@ -122,8 +118,7 @@ public sealed class UniverseRankServiceTests : IDisposable
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 2m)],
             UniverseRankConfig.Default,
-            "intraday",
-            "unified",
+            "swing",
             "auto",
             EmptySet,
             EmptySet,
@@ -138,16 +133,13 @@ public sealed class UniverseRankServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task RankAsync_AdvisoryFactorsHaveZeroWeightForEveryHorizon()
+    public async Task RankAsync_AdvisoryFactorsHaveZeroWeightForSwing()
     {
         var service = CreateService(SignalFor("MU", "watch_for_entry"));
         var config = UniverseRankConfig.Default;
 
-        var intraday = await RankSingleAsync(service, config, "intraday");
         var swing = await RankSingleAsync(service, config, "swing");
 
-        Assert.Equal(0m, intraday.Factors.Single(factor => factor.Key == "model_edge").Weight);
-        Assert.Equal(0m, intraday.Factors.Single(factor => factor.Key == "market_structure").Weight);
         Assert.Equal(0m, swing.Factors.Single(factor => factor.Key == "model_edge").Weight);
         Assert.Equal(0m, swing.Factors.Single(factor => factor.Key == "market_structure").Weight);
     }
@@ -167,10 +159,10 @@ public sealed class UniverseRankServiceTests : IDisposable
             handler: new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
 
         var withPredictions = await conflicting.RankAsync(
-            rows, UniverseRankConfig.Default, "intraday", "unified", "auto",
+            rows, UniverseRankConfig.Default, "swing", "auto",
             EmptySet, EmptySet, "wishlist:test", CancellationToken.None);
         var withoutPredictions = await unavailable.RankAsync(
-            rows, UniverseRankConfig.Default, "intraday", "unified", "auto",
+            rows, UniverseRankConfig.Default, "swing", "auto",
             EmptySet, EmptySet, "wishlist:test", CancellationToken.None);
 
         Assert.Equal(["AAA", "BBB"], withPredictions.Rows.Select(row => row.Ticker));
@@ -189,8 +181,7 @@ public sealed class UniverseRankServiceTests : IDisposable
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 2m), EligibleRow("NVDA", spreadBps: 2m)],
             UniverseRankConfig.Default,
-            "intraday",
-            "unified",
+            "swing",
             "auto",
             new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "NVDA" },
             new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "MU" },
@@ -209,8 +200,7 @@ public sealed class UniverseRankServiceTests : IDisposable
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 2m)],
             UniverseRankConfig.Default,
-            "intraday",
-            "unified",
+            "swing",
             "auto",
             EmptySet,
             EmptySet,
@@ -257,7 +247,6 @@ public sealed class UniverseRankServiceTests : IDisposable
             [EligibleRow("MU", spreadBps: 2m)],
             config,
             horizon,
-            "unified",
             "auto",
             EmptySet,
             EmptySet,
@@ -326,13 +315,6 @@ public sealed class UniverseRankServiceTests : IDisposable
           "global_context": {"net_impact":0.1,"active_flashpoints":[]},
           "catalyst": {"status":"none","direction":"neutral","score":0.0,"event_count":0,"relevance":0.0,"minutes_since_latest":null,"reasons":[]},
           "readiness": {"status":"valid","reasons":[],"latest_price_date":"2026-08-06","price_feed":"sip","benchmark_status":"valid","market_context_status":"valid","model_status":"promoted","source_status":"valid"}
-        },
-        "intraday": {
-          "opportunity_probability": 0.58, "downside_probability": 0.21, "decision_score": 0.19,
-          "signal": "watch_for_confirmation", "rank": 8, "relative_volume": 1.8, "rsi_14": 58.0,
-          "macd_signal_diff": 0.04, "entry_stop_pct": 0.01, "entry_target_pct": 0.03,
-          "catalyst": {"status":"none","direction":"neutral","score":0.0,"event_count":0,"relevance":0.0,"minutes_since_latest":null,"reasons":[]},
-          "readiness": {"status":"valid","reasons":[],"latest_price_date":"2026-08-06","price_feed":"sip","benchmark_status":"valid","market_context_status":"valid","model_status":"promoted","source_status":"valid"}
         }
       }
       """;
@@ -341,10 +323,10 @@ public sealed class UniverseRankServiceTests : IDisposable
     {
       "request_id": "req-rank",
       "generated_at_utc": "{{{Now.AddSeconds(-5):O}}}",
-      "mode": "unified",
+      "mode": "swing",
       "horizon": "auto",
-      "resolved_horizons": {"swing":"5d","intraday":"30m"},
-      "models": {"swing":{"status":"promoted","model_type":"lightgbm","schema_version":"1","target":"return_5d"}},
+      "resolved_horizons": {"swing":"10b"},
+      "models": {"swing":{"status":"promoted","model_type":"classifier","schema_version":"1","target":"return_10_sessions"}},
       "predictions": [{{{String.Join(",", predictions)}}}],
       "errors": [],
       "snapshot_id": "snapshot-rank"

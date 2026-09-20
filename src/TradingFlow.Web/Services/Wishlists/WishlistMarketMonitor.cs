@@ -10,17 +10,17 @@ namespace TradingFlow.Web.Services.Wishlists;
 public sealed class WishlistMarketMonitor
 {
     private readonly IWishlistRepository wishlists;
-    private readonly WishlistBreakoutEvaluator evaluator;
+    private readonly WishlistSwingWatchEvaluator evaluator;
     private readonly TimeProvider timeProvider;
 
-    public WishlistMarketMonitor(IWishlistRepository wishlists, WishlistBreakoutEvaluator evaluator)
+    public WishlistMarketMonitor(IWishlistRepository wishlists, WishlistSwingWatchEvaluator evaluator)
         : this(wishlists, evaluator, TimeProvider.System)
     {
     }
 
     public WishlistMarketMonitor(
         IWishlistRepository wishlists,
-        WishlistBreakoutEvaluator evaluator,
+        WishlistSwingWatchEvaluator evaluator,
         TimeProvider timeProvider)
     {
         this.wishlists = wishlists;
@@ -28,7 +28,7 @@ public sealed class WishlistMarketMonitor
         this.timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<WishlistBreakoutEvaluation>> EvaluateAsync(
+    public async Task<IReadOnlyList<WishlistSwingWatchEvaluation>> EvaluateAsync(
         Guid wishlistId,
         IReadOnlyDictionary<string, WishlistMarketSnapshot> snapshotsByTicker,
         CancellationToken cancellationToken)
@@ -36,7 +36,7 @@ public sealed class WishlistMarketMonitor
         var wishlist = await wishlists.GetByIdAsync(wishlistId, cancellationToken) ??
             throw new InvalidOperationException($"Wishlist {wishlistId} does not exist.");
 
-        var results = new List<WishlistBreakoutEvaluation>();
+        var results = new List<WishlistSwingWatchEvaluation>();
         foreach (var item in wishlist.Items.Where(item => item.Active).OrderBy(item => item.Ticker))
         {
             if (snapshotsByTicker.TryGetValue(item.Ticker, out var snapshot))
@@ -98,7 +98,7 @@ public sealed class WishlistMarketMonitor
 }
 
 public sealed record WishlistMonitorPersistenceResult(
-    IReadOnlyList<WishlistBreakoutEvaluation> Evaluations,
+    IReadOnlyList<WishlistSwingWatchEvaluation> Evaluations,
     IReadOnlyList<WishlistSignal> PersistedSignals);
 
 

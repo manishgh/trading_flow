@@ -7,27 +7,27 @@ namespace TradingFlow.Tests;
 public sealed class RegimeCalendarTests
 {
     [Fact]
-    public void Resample_IntradayToDaily_ThenBuild_MatchesNativeDailyRegime()
+    public void Resample_SubDailyToDaily_ThenBuild_MatchesNativeDailyRegime()
     {
-        // A benchmark cache may hold only intraday bars (e.g. SPY 5m). Resampling them to daily must
+        // A benchmark cache may hold only sub-daily bars (e.g. SPY 5m). Resampling them to daily must
         // reproduce the same regime calendar as native daily bars, so the regime gate works offline
-        // from intraday — this is the fallback path in BacktestRunner.Regime.LoadBenchmarkDailyBarsAsync.
+        // from sub-daily bars; this is the fallback path in BacktestRunner.Regime.LoadBenchmarkDailyBarsAsync.
         var closes = new (string Date, decimal Close)[]
         {
             ("2026-06-01", 10m), ("2026-06-02", 10m), ("2026-06-03", 10m), ("2026-06-04", 20m),
             ("2026-06-05", 20m), ("2026-06-06", 5m), ("2026-06-07", 5m), ("2026-06-08", 5m),
         };
 
-        var intraday = new List<OhlcvBar>();
+        var subDailyBars = new List<OhlcvBar>();
         foreach (var (date, close) in closes)
         {
-            // Three intraday bars within the same UTC date; the last bar's close is the session close.
-            intraday.Add(Intraday(date, 14, close - 1m));
-            intraday.Add(Intraday(date, 15, close + 2m));
-            intraday.Add(Intraday(date, 16, close));
+            // Three sub-daily bars within the same UTC date; the last bar's close is the session close.
+            subDailyBars.Add(SubDaily(date, 14, close - 1m));
+            subDailyBars.Add(SubDaily(date, 15, close + 2m));
+            subDailyBars.Add(SubDaily(date, 16, close));
         }
 
-        var daily = new BarResampler().Resample(intraday, "1d");
+        var daily = new BarResampler().Resample(subDailyBars, "1d");
         var calendar = RegimeCalendarBuilder.Build(daily, smaPeriod: 3);
 
         // Same on/off days as Build_RegimeOn_UsesOnlyPriorCloses_NoLookahead, which uses native daily bars.
@@ -129,7 +129,7 @@ public sealed class RegimeCalendarTests
         return new OhlcvBar("SPY", ts, "1d", close, close, close, close, 1_000_000m);
     }
 
-    private static OhlcvBar Intraday(string date, int hourUtc, decimal close)
+    private static OhlcvBar SubDaily(string date, int hourUtc, decimal close)
     {
         var day = DateOnly.Parse(date, System.Globalization.CultureInfo.InvariantCulture);
         var ts = new DateTimeOffset(day, new TimeOnly(hourUtc, 0), TimeSpan.Zero);

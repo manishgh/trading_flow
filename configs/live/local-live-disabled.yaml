@@ -15,19 +15,13 @@ time_window:
   end:
 
 tickers:
-  - MU
-  - NVDA
-  - AMD
 
 market_data:
   provider: alpaca
   download_timeframes:
-    - 1m
-    - 5m
-    - 15m
     - 1h
     - 1d
-  derive_from: 1m
+  derive_from: 1h
   raw_root: data/live/raw
   normalized_root: data/live/normalized
   results_root: data/live/results
@@ -101,6 +95,6 @@ artifacts:
   retention_mode: full
 
 strategies:
-  - ../strategies/intraday-ema10-ema20-macd-volume.v1.yaml
+  - ../strategies/minervini-trend-template-vcp.v4-trend-rider.yaml
 
 

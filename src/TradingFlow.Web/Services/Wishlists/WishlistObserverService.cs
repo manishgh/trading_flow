@@ -12,7 +12,7 @@ namespace TradingFlow.Web.Services.Wishlists;
 /// <summary>
 /// Durable server-side observer for named wishlist groups. The mobile app only
 /// toggles intent; this service owns the 24x7 polling loop so monitoring
-/// survives app close and naturally includes pre/post-market Alpaca bars.
+/// survives app close and evaluates completed daily swing evidence.
 /// </summary>
 public sealed class WishlistObserverService : BackgroundService
 {
@@ -20,8 +20,6 @@ public sealed class WishlistObserverService : BackgroundService
         Guid.Parse("d1a12e6e-20f8-42f8-8c1d-5166d80b3fc8");
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan NewsWindow = TimeSpan.FromHours(4);
-    private static readonly TimeZoneInfo ExchangeTimeZone = ResolveExchangeTimeZone();
-
     private readonly IWishlistRepository wishlists;
     private readonly WishlistMarketMonitor monitor;
     private readonly INewsFeedRepository newsRepository;
@@ -112,8 +110,8 @@ public sealed class WishlistObserverService : BackgroundService
             {
                 var state = await marketState.GetTickerStateAsync(
                     ticker,
-                    ["1m"],
-                    minimumBarsPerTimeframe: 35,
+                    ["1d"],
+                    minimumBarsPerTimeframe: 260,
                     asOfUtc: end,
                     cancellationToken: cancellationToken);
                 if (state is null)
@@ -208,8 +206,8 @@ public sealed class WishlistObserverService : BackgroundService
         TickerMarketState marketState,
         CancellationToken cancellationToken)
     {
-        var bars = marketState.BarsByTimeframe.GetValueOrDefault("1m") ?? [];
-        var snapshots = marketState.SnapshotsByTimeframe.GetValueOrDefault("1m") ?? [];
+        var bars = marketState.BarsByTimeframe.GetValueOrDefault("1d") ?? [];
+        var snapshots = marketState.SnapshotsByTimeframe.GetValueOrDefault("1d") ?? [];
         if (bars.Count == 0 || snapshots.Count < 2)
         {
             return null;
@@ -223,15 +221,13 @@ public sealed class WishlistObserverService : BackgroundService
             current = current with { Catalyst = catalyst };
         }
 
-        var recentHigh = bars.Take(Math.Max(0, bars.Count - 1)).TakeLast(30).Select(bar => (decimal?)bar.High).Max();
-        var currentSession = ToExchangeDate(current.Timestamp);
-        var sessionOpen = bars
-            .Where(bar => ToExchangeDate(bar.Timestamp) == currentSession)
-            .OrderBy(bar => bar.Timestamp)
-            .Select(bar => (decimal?)bar.Open)
-            .FirstOrDefault();
+        var recentHigh = bars
+            .Take(Math.Max(0, bars.Count - 1))
+            .TakeLast(20)
+            .Select(bar => (decimal?)bar.High)
+            .Max();
 
-        var snapshot = new WishlistMarketSnapshot(ticker, current, previous, recentHigh, sessionOpen);
+        var snapshot = new WishlistMarketSnapshot(ticker, current, previous, recentHigh);
         return new PreparedWishlistSnapshot(snapshot, BuildEvidenceFingerprint(snapshot));
     }
 
@@ -262,18 +258,12 @@ public sealed class WishlistObserverService : BackgroundService
             ReceivedAt: item.IngestedAt);
     }
 
-    private static DateOnly ToExchangeDate(DateTimeOffset timestamp)
-    {
-        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, ExchangeTimeZone).DateTime);
-    }
-
     private static string BuildEvidenceFingerprint(WishlistMarketSnapshot input) =>
         JsonSerializer.Serialize(new
         {
             current = DecisionFields(input.Current),
             previousMacdHistogram = input.Previous?.MacdHistogram,
-            input.RecentHigh,
-            input.SessionOpen
+            input.RecentHigh
         });
 
     private static object DecisionFields(IndicatorSnapshot snapshot) => new
@@ -298,18 +288,6 @@ public sealed class WishlistObserverService : BackgroundService
             receivedAtUtc = snapshot.Catalyst.ReceivedAt?.ToUniversalTime()
         }
     };
-
-    private static TimeZoneInfo ResolveExchangeTimeZone()
-    {
-        try
-        {
-            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
-        }
-        catch (TimeZoneNotFoundException)
-        {
-            return TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
-        }
-    }
 
     private sealed record PreparedWishlistSnapshot(
         WishlistMarketSnapshot Snapshot,

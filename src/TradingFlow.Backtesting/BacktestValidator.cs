@@ -186,7 +186,7 @@ public sealed class BacktestValidator
             "finviz",
             StringComparison.OrdinalIgnoreCase);
         var missingAsOfDate = config.Validation.BiasRisk.UniverseAsOfDate is null;
-        var rawIntradayPolicy = config.Validation.BiasRisk.PriceAdjustmentPolicy.Contains("raw", StringComparison.OrdinalIgnoreCase);
+        var rawSubDailyPolicy = config.Validation.BiasRisk.PriceAdjustmentPolicy.Contains("raw", StringComparison.OrdinalIgnoreCase);
 
         if (staticUniverse)
         {
@@ -203,9 +203,9 @@ public sealed class BacktestValidator
             warnings.Add("Universe as-of date is not configured.");
         }
 
-        if (rawIntradayPolicy)
+        if (rawSubDailyPolicy)
         {
-            warnings.Add("Price adjustment policy uses raw intraday bars; validate split/dividend handling before comparing long historical windows.");
+            warnings.Add("Price adjustment policy uses raw sub-daily bars; validate split/dividend handling before comparing long historical windows.");
         }
 
         return new BiasRiskValidation(
@@ -213,7 +213,7 @@ public sealed class BacktestValidator
             config.Validation.BiasRisk.UniverseAsOfDate,
             config.Validation.BiasRisk.PriceAdjustmentPolicy,
             staticUniverse || currentScreenerUniverse || missingAsOfDate,
-            rawIntradayPolicy,
+            rawSubDailyPolicy,
             warnings);
     }
 

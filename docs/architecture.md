@@ -87,10 +87,26 @@ deterministic supplemental revision for only the remaining deficit. Canceled or
 rejected owners may advance. A filled owner advances only after fresh broker queries
 confirm both the fill and the exact remaining position. Broker/local quantity
 mismatches continue through protective handling under EXE-08/09 while globally
-blocking new entries. Durable dispatch recovery,
-portfolio-risk reservation, and
-complete partial-fill protection remain open Phase 5 boundaries and are not implied
-by this checkpoint.
+blocking new entries. Account-scoped risk reservation now commits with candidate
+consumption and the intent. A leased dispatcher adopts exact broker contracts by
+client order ID, recovers unsent intents, and leaves ambiguous submissions pending
+instead of posting duplicates. Exact cumulative fills are projected idempotently
+into account-scoped position and risk journals. Protective-stop replacement commands
+and verified successor IDs are durable and recoverable. Replacement verification and
+the successor lifecycle event commit atomically, and chained commands resolve the
+latest verified successor. Recovery expires protection work from stale position
+generations, resumes exits that crashed before preparation using their original
+intent, and publishes its initial-cycle result into trading readiness. A deterministic
+execution kernel now models time-valid quote-side or explicitly synthetic fills,
+shared bar liquidity, partial/no-fill outcomes, spread, slippage, impact, fees,
+partial exits, stop-limit activation, and stable replay. Its stateful execution book
+cannot reverse a position through competing exits, rejects conflicting idempotency
+contracts, applies regulatory fees only to sell fills, and resolves ambiguous
+stop/target bars conservatively. A conditional fill overlapping a mid-slice cancel
+or replacement fails closed and requires a smaller input slice. The central
+chronological coordinator now uses that stateful book for the portfolio replay,
+including shared liquidity, persistent remainders, and causally resting stop/target
+orders. Live fills are protected before remainder or abort decisions.
 
 Provider publication, receipt, update, and sentiment-completion timestamps remain
 separate. A catalyst can influence a decision only at its recorded decision-known
@@ -133,7 +149,7 @@ flowchart LR
   evidence and exact observed coverage.
 - `TradingFlow.Engine/Universe` ranks and deduplicates point-in-time candidates and
   fails promotion closed when membership provenance is incomplete.
-- `TradingFlow.Research` computes the frozen swing and intraday studies without
+- `TradingFlow.Research` computes frozen swing studies without
   depending on UI or broker adapters.
 - `TradingFlow.Research.Orchestration` and `TradingFlow.Research.Workflows` own trial
   registration, partition access, immutable output publication, and promotion
@@ -158,7 +174,7 @@ configs/backtest/strategies/
 
 Do not mutate a canonical strategy for experiments. Copy it into the
 research/backtest strategy area, change the copy, run it, and capture the result in
-`docs/strategy-last-runs.md`. Folder location is never lifecycle authority.
+the immutable research evidence catalog. Folder location is never lifecycle authority.
 
 The immutable artifact identity is `(strategy_id, semantic_version,
 content_sha256)`. Research/archive is catalog disposition; paper experiment, paper
@@ -189,20 +205,13 @@ Promotion requires an immutable authorization decision bound to the exact strate
 content hash. The current integrated decision is
 `RETAIN_RESEARCH`; no strategy is paper-shadow or validated.
 
-The July 2026 intraday execution spec is implemented as research-only. The shared engine now supports generic execution primitives for those configs:
-
-- opening-range breakout/breakdown buffers
-- prior inside-day / NR7 compression gates
-- VWAP-minus-ATR and opening-range-opposite stop modes
-- extreme-shadow stop mode for divergence fades
-- VWAP profit target mode
-- failed-breakout circuit breaker
-
-Partial exits are not supported yet because `BacktestTrade` currently represents one entry and one full-position exit. Supporting partial exits requires trade execution legs and per-leg realized P/L.
+The deterministic execution book supports partial entry and exit fills and carries
+their remainders across later bars. `BacktestTrade` remains the final aggregated
+trade projection; execution-leg detail remains in the stateful replay events.
 
 ## Research Control Plane
 
-Promotable research is restricted to two non-ML families:
+Promotable research is restricted to one swing baseline and isolated additions:
 
 ```text
 Swing:
@@ -210,15 +219,8 @@ Swing:
   -> frozen 12-1 momentum rank
   -> fixed portfolio slots
   -> isolated trend, VCP, or classified-catalyst additions
+  -> optional completed sub-daily entry confirmation
   -> shared portfolio simulation
-
-Intraday:
-  point-in-time classified catalyst
-  -> executable post-event response study
-  -> cumulative same-minute participation cohorts
-  -> opening/pullback/reclaim morphology
-  -> one preregistered entry rule
-  -> shared execution and paper shadow
 ```
 
 Every run is registered before outcomes are read. Exact observed coverage,
@@ -338,19 +340,61 @@ used to infer terminal broker state. In particular, absence from an open-order
 snapshot is not evidence of fill, cancellation, rejection, or expiry.
 
 The current Phase 5 checkpoint consumes an exact, unexpired `Triggered` candidate and
-creates its order intent in one immediate SQLite transaction. The compare-and-swap
-binds run, candidate version, symbol, strategy, semantic decision hash, and persisted
-trigger evidence. Exact intent replays verify the stored consumption evidence; a
-different intent cannot reuse the candidate. Rejected entry-gate prefixes commit with
-an idempotent `RiskBlocked` or `Expired` transition in the same transaction. Operator
-overrides are audited but do not mutate strategy candidates.
+creates its order intent, symbol ownership, and account-scoped buying-power,
+gross-exposure, heat, and position-slot reservation in one immediate SQLite
+transaction. The compare-and-swap binds run, candidate version, symbol, strategy,
+semantic decision hash, persisted trigger evidence, and broker account. Exact intent
+replays verify the stored evidence; a different intent cannot reuse the candidate.
+Terminal non-fill outcomes release reserved capacity idempotently, while filled
+position risk remains until the account/symbol ledger becomes flat.
 
-This is not yet the final production order boundary. Portfolio buying-power/heat/slot
-reservation is not atomic with the intent; a durable dispatcher and complete recovery
-policy for stranded `INTENT`/`SUBMITTED` work remain; protective intents do not yet
-carry full parent position/fill ownership; and the deterministic shared execution
-simulator is still outstanding. Paper/live short entry remains fail-closed. Extended
-hours remains an explicit provider-validated limit/DAY option and defaults off.
+The dispatcher writes `SUBMITTED` before broker I/O, leases each intent across
+processes, and first queries Alpaca by deterministic client order ID. Adoption
+requires an exact symbol, side, quantity, type, time-in-force, order class,
+extended-hours flag, and price/protection match. Ambiguous HTTP failures stay
+`SUBMITTED`; recovery retries broker lookup and only resubmits after the configured
+orphan window. Inactive runs cannot start a fresh broker post. Cancellations write
+`CANCEL_PENDING` before DELETE and are retried by the recovery host. Trailing-stop
+replacement proves account, local owner, broker order, symbol, side, and protective
+type before PATCH, then re-queries the broker and updates caller state only after the
+requested stop is visible. The replacement journal records the successor broker and
+client IDs, so cancellation and restart recovery target the successor rather than the
+superseded order. Verification of that successor and projection into the order
+lifecycle are one SQLite transaction; a later chained replacement resolves the newest
+verified broker order before PATCH.
+
+Position exits and protective stops are serialized by account, symbol, side, and a
+stable position-generation ID. Partial entry fills retain one generation until the
+position becomes flat. An exit is first reserved but cannot be dispatched until all
+owned protection for that generation is terminal and broker/local quantity agrees.
+While an exit owns that generation, new protective dispatch is rejected. A mismatch
+expires the unsubmitted exit reservation. If protection was already canceled and the
+exit then fails, the handoff independently checks broker position and closing-order
+state. A successor GTC stop is written and dispatched immediately only when the exit
+is proven not to own a broker order; an active or filled exit suppresses restoration,
+and ambiguous broker ownership blocks all new entries rather than risking a reversing
+order. Active protective intents use a dedicated repository query and are never
+hidden by the ordinary-entry duplicate filter. Exit expiry is an atomic
+"unattempted and unleased" journal operation, and dispatch attempt recording
+rechecks lifecycle state in its own immediate transaction; concurrent recovery
+cannot expire and dispatch the same exit.
+If the process stops after protection cancellation but before exit preparation, the
+recovery host prepares and dispatches that same reserved intent rather than creating
+a second exit. Recovered protection for a closed or superseded generation expires
+before any broker POST. The recovery host's first completed cycle is a required
+trading-readiness signal.
+
+The Phase 5 order boundary is complete. Intent/event/position journals are the
+operational authority; the legacy order table is removed. Every committed partial
+fill enters a visible protection-pending state and is reconciled to broker-resting
+coverage before a remainder or abort decision. Graceful shutdown closes a shared
+broker-mutation fence, drains producers, and restores protection if flattening does
+not complete.
+Paper/live short entry remains fail-closed. Extended-hours entries remain rejected
+because Alpaca cannot attach equivalent broker-resting protection there; eligible risk-reducing exits
+may use an explicit limit/DAY contract when the toggle is enabled and a fresh quote is
+available. Regular-session entries are also standalone orders, followed by an
+independently owned GTC stop; the system does not claim broker-native OCO parity.
 
 Every broker position is also subject to the EXE-09 protective-order invariant.
 Startup and periodic account reconciliation, plus an immediate REST cross-check after

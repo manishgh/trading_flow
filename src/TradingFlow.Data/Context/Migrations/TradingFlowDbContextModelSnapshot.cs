@@ -644,6 +644,12 @@ namespace TradingFlow.Data.Context.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("CancellationRequestedAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ConfigPath")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -652,15 +658,50 @@ namespace TradingFlow.Data.Context.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<long>("CreatedAtUtcTicks")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("ErrorMessage")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTimeOffset?>("FinishedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset?>("HeartbeatAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("JobType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("LeaseExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("LeaseExpiresAtUtcTicks")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResultReference")
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("RunName")
                         .IsRequired()
                         .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SnapshotJson")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTimeOffset?>("StartedAt")
@@ -673,10 +714,10 @@ namespace TradingFlow.Data.Context.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("RunName")
+                    b.HasIndex("JobType", "RunName")
                         .IsUnique();
 
-                    b.HasIndex("Status");
+                    b.HasIndex("JobType", "Status", "LeaseExpiresAtUtcTicks", "CreatedAtUtcTicks");
 
                     b.ToTable("Jobs");
                 });
@@ -794,70 +835,34 @@ namespace TradingFlow.Data.Context.Migrations
                     b.ToTable("NewsItems");
                 });
 
-            modelBuilder.Entity("TradingFlow.Domain.Orders.PersistedOrder", b =>
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.ApplicationEventRecord", b =>
                 {
-                    b.Property<string>("OrderId")
-                        .HasMaxLength(100)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Broker")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ClientOrderId")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<decimal>("EntryPrice")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("RunName")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("ShareQuantity")
+                    b.Property<long>("EventSequence")
+                        .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.Property<string>("Status")
+                    b.Property<string>("EventType")
                         .IsRequired()
-                        .HasMaxLength(50)
+                        .HasMaxLength(80)
                         .HasColumnType("TEXT");
 
-                    b.Property<decimal>("StopLossPrice")
+                    b.Property<DateTimeOffset>("OccurredAtUtc")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("StrategyName")
+                    b.Property<string>("PayloadJson")
                         .IsRequired()
-                        .HasMaxLength(100)
                         .HasColumnType("TEXT");
 
-                    b.Property<decimal>("TakeProfitPrice")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Ticker")
+                    b.Property<string>("StreamName")
                         .IsRequired()
-                        .HasMaxLength(50)
+                        .HasMaxLength(200)
                         .HasColumnType("TEXT");
 
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                    b.HasKey("EventSequence");
 
-                    b.HasKey("OrderId");
+                    b.HasIndex("StreamName", "EventSequence");
 
-                    b.HasIndex("ClientOrderId");
-
-                    b.HasIndex("RunName");
-
-                    b.HasIndex("Status");
-
-                    b.HasIndex("Ticker");
-
-                    b.ToTable("Orders");
+                    b.ToTable("application_events", (string)null);
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Persistence.CandidateRecord", b =>
@@ -1036,6 +1041,12 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("strategy_content_sha256");
 
+                    b.Property<string>("StrategySemanticVersion")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("strategy_semantic_version");
+
                     b.Property<string>("Symbol")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -1058,6 +1069,45 @@ namespace TradingFlow.Data.Context.Migrations
                     b.HasIndex("Symbol", "DiscoveredAtUtc");
 
                     b.ToTable("candidates", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.CandidateRunRequestRecord", b =>
+                {
+                    b.Property<string>("IdempotencyKey")
+                        .HasMaxLength(160)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("CandidateRunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StrategyIdentitiesJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UniverseSnapshotId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("IdempotencyKey");
+
+                    b.HasIndex("CandidateRunId")
+                        .IsUnique();
+
+                    b.HasIndex("UniverseSnapshotId");
+
+                    b.ToTable("candidate_run_requests", (string)null);
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Persistence.CandidateTransitionRecord", b =>
@@ -1497,6 +1547,12 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("intent_id");
 
+                    b.Property<string>("AccountId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("account_id");
+
                     b.Property<int?>("CandidateConsumedVersion")
                         .HasColumnType("INTEGER")
                         .HasColumnName("candidate_consumed_version");
@@ -1546,11 +1602,36 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("created_at_utc");
 
+                    b.Property<int>("DispatchAttemptCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("dispatch_attempt_count");
+
+                    b.Property<DateTimeOffset?>("DispatchExpiresAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("dispatch_expires_at_utc");
+
+                    b.Property<DateTimeOffset?>("DispatchLeaseExpiresAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("dispatch_lease_expires_at_utc");
+
+                    b.Property<string>("DispatchLeaseOwner")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("dispatch_lease_owner");
+
+                    b.Property<Guid?>("DispatchLeaseToken")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("dispatch_lease_token");
+
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasMaxLength(40)
                         .HasColumnType("TEXT")
                         .HasColumnName("kind");
+
+                    b.Property<DateTimeOffset?>("LastDispatchAttemptAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_dispatch_attempt_at_utc");
 
                     b.Property<decimal?>("LimitPrice")
                         .HasColumnType("TEXT")
@@ -1561,6 +1642,10 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("TEXT")
                         .HasColumnName("order_type");
+
+                    b.Property<long?>("PositionGenerationEventId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("position_generation_event_id");
 
                     b.Property<string>("RequestJson")
                         .IsRequired()
@@ -1626,12 +1711,278 @@ namespace TradingFlow.Data.Context.Migrations
 
                     b.HasIndex("RunId");
 
-                    b.HasIndex("Symbol", "CreatedAtUtc");
+                    b.HasIndex("AccountId", "DispatchLeaseExpiresAtUtc");
+
+                    b.HasIndex("AccountId", "Symbol", "CreatedAtUtc");
+
+                    b.HasIndex("AccountId", "Symbol", "PositionGenerationEventId", "Kind");
 
                     b.HasIndex("StrategyId", "Side", "Symbol", "SessionDate", "SequenceNumber")
                         .IsUnique();
 
                     b.ToTable("order_intents", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.OrderPreviewRecord", b =>
+                {
+                    b.Property<Guid>("PreviewId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ConfirmationLeaseExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ConfirmationLeaseToken")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OutcomeJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PreviewJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TokenSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("PreviewId");
+
+                    b.HasIndex("ExpiresAtUtc");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("TokenSha256")
+                        .IsUnique();
+
+                    b.ToTable("order_previews", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.PortfolioRiskReservationRecord", b =>
+                {
+                    b.Property<Guid>("ReservationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("reservation_id");
+
+                    b.Property<decimal>("AccountEquityAtReservation")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("account_equity_at_reservation");
+
+                    b.Property<string>("AccountId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("account_id");
+
+                    b.Property<DateTimeOffset>("AccountSnapshotObservedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("account_snapshot_observed_at_utc");
+
+                    b.Property<DateTimeOffset>("AccountSnapshotRequestedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("account_snapshot_requested_at_utc");
+
+                    b.Property<DateTimeOffset?>("BrokerAcceptedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("broker_accepted_at_utc");
+
+                    b.Property<decimal>("BrokerBuyingPowerAtReservation")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("broker_buying_power_at_reservation");
+
+                    b.Property<decimal>("BrokerGrossExposureAtReservation")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("broker_gross_exposure_at_reservation");
+
+                    b.Property<decimal>("BrokerNetExposureAtReservation")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("broker_net_exposure_at_reservation");
+
+                    b.Property<int>("BrokerPositionCountAtReservation")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("broker_position_count_at_reservation");
+
+                    b.Property<string>("ClientOrderId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("client_order_id");
+
+                    b.Property<string>("CodeVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("code_version");
+
+                    b.Property<string>("ConfigHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("config_hash");
+
+                    b.Property<decimal>("CumulativeFilledQuantity")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("cumulative_filled_quantity");
+
+                    b.Property<decimal>("EntryPrice")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("entry_price");
+
+                    b.Property<string>("Horizon")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("horizon");
+
+                    b.Property<Guid>("IntentId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("intent_id");
+
+                    b.Property<DateTimeOffset?>("LatestFillAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("latest_fill_at_utc");
+
+                    b.Property<decimal>("MaxGrossExposure")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("max_gross_exposure");
+
+                    b.Property<decimal>("MaxPortfolioRisk")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("max_portfolio_risk");
+
+                    b.Property<int>("MaxPositions")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("max_positions");
+
+                    b.Property<decimal>("OpenPositionQuantity")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("open_position_quantity");
+
+                    b.Property<decimal>("PendingQuantity")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("pending_quantity");
+
+                    b.Property<string>("ReleaseReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("release_reason");
+
+                    b.Property<DateTimeOffset?>("ReleasedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("released_at_utc");
+
+                    b.Property<decimal>("RequestedQuantity")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("requested_quantity");
+
+                    b.Property<DateTimeOffset>("ReservedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("reserved_at_utc");
+
+                    b.Property<decimal>("ReservedBuyingPower")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("reserved_buying_power");
+
+                    b.Property<decimal>("ReservedGrossExposure")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("reserved_gross_exposure");
+
+                    b.Property<decimal>("ReservedNetExposure")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("reserved_net_exposure");
+
+                    b.Property<decimal>("ReservedPortfolioRisk")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("reserved_portfolio_risk");
+
+                    b.Property<int>("ReservedPositionSlots")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("reserved_position_slots");
+
+                    b.Property<decimal>("RiskPerShare")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("risk_per_share");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<int>("SchemaVersion")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("schema_version");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("state");
+
+                    b.Property<DateTimeOffset>("StateChangedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("state_changed_at_utc");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("symbol");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("version");
+
+                    b.HasKey("ReservationId");
+
+                    b.HasIndex("ClientOrderId")
+                        .IsUnique();
+
+                    b.HasIndex("IntentId")
+                        .IsUnique();
+
+                    b.HasIndex("RunId");
+
+                    b.HasIndex("AccountId", "State");
+
+                    b.HasIndex("AccountId", "Symbol")
+                        .IsUnique()
+                        .HasFilter("state <> 'Released'");
+
+                    b.HasIndex("Symbol", "State");
+
+                    b.ToTable("portfolio_risk_reservations", (string)null);
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Persistence.PositionEventRecord", b =>
@@ -1640,6 +1991,12 @@ namespace TradingFlow.Data.Context.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
                         .HasColumnName("position_event_id");
+
+                    b.Property<string>("AccountId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("account_id");
 
                     b.Property<string>("BrokerOrderId")
                         .IsRequired()
@@ -1698,6 +2055,16 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("payload_json");
 
+                    b.Property<string>("PositionGenerationClientOrderId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("position_generation_client_order_id");
+
+                    b.Property<long>("PositionGenerationEventId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("position_generation_event_id");
+
                     b.Property<decimal>("QuantityAfter")
                         .HasColumnType("TEXT")
                         .HasColumnName("quantity_after");
@@ -1736,14 +2103,16 @@ namespace TradingFlow.Data.Context.Migrations
 
                     b.HasKey("PositionEventId");
 
-                    b.HasIndex("BrokerOrderId");
-
-                    b.HasIndex("ExecutionId")
-                        .IsUnique();
-
                     b.HasIndex("RunId");
 
-                    b.HasIndex("Symbol", "PositionEventId");
+                    b.HasIndex("AccountId", "BrokerOrderId");
+
+                    b.HasIndex("AccountId", "ExecutionId")
+                        .IsUnique();
+
+                    b.HasIndex("AccountId", "Symbol", "PositionEventId");
+
+                    b.HasIndex("AccountId", "Symbol", "PositionGenerationEventId");
 
                     b.ToTable("position_events", (string)null);
                 });
@@ -1766,6 +2135,10 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT")
                         .HasColumnName("config_hash");
+
+                    b.Property<Guid?>("DecisionRunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("decision_run_id");
 
                     b.Property<DateTimeOffset?>("FinishedAtUtc")
                         .HasColumnType("TEXT")
@@ -1791,13 +2164,162 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("status");
 
+                    b.Property<Guid>("UniverseSnapshotId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("universe_snapshot_id");
+
                     b.HasKey("RunId");
 
                     b.HasIndex("StartedAtUtc");
 
                     b.HasIndex("Status");
 
+                    b.HasIndex("UniverseSnapshotId");
+
                     b.ToTable("runs", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.ProtectiveStopReplacementRecord", b =>
+                {
+                    b.Property<Guid>("CommandId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("command_id");
+
+                    b.Property<string>("AccountId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("account_id");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("attempt_count");
+
+                    b.Property<string>("BrokerOrderId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("broker_order_id");
+
+                    b.Property<string>("CodeVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("code_version");
+
+                    b.Property<string>("ConfigHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("config_hash");
+
+                    b.Property<long?>("LastAttemptAtUtc")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("last_attempt_at_utc");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_error");
+
+                    b.Property<long?>("LeaseExpiresAtUtc")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("lease_expires_at_utc");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("lease_owner");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("lease_token");
+
+                    b.Property<string>("OwnerClientOrderId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("owner_client_order_id");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("ReplacementClientOrderId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("replacement_client_order_id");
+
+                    b.Property<long>("RequestedAtUtc")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("requested_at_utc");
+
+                    b.Property<string>("RootBrokerOrderId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("root_broker_order_id");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<int>("SchemaVersion")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("schema_version");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("state");
+
+                    b.Property<decimal>("StopPrice")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("stop_price");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("symbol");
+
+                    b.Property<long?>("VerifiedAtUtc")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("verified_at_utc");
+
+                    b.Property<string>("VerifiedBrokerOrderId")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("verified_broker_order_id");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("version");
+
+                    b.HasKey("CommandId");
+
+                    b.HasIndex("OwnerClientOrderId");
+
+                    b.HasIndex("ReplacementClientOrderId")
+                        .IsUnique();
+
+                    b.HasIndex("RunId");
+
+                    b.HasIndex("AccountId", "VerifiedBrokerOrderId")
+                        .IsUnique();
+
+                    b.HasIndex("AccountId", "RootBrokerOrderId", "StopPrice")
+                        .IsUnique();
+
+                    b.HasIndex("AccountId", "State", "LeaseExpiresAtUtc");
+
+                    b.ToTable("protective_stop_replacements", (string)null);
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Persistence.ReconciliationRecord", b =>
@@ -1965,6 +2487,44 @@ namespace TradingFlow.Data.Context.Migrations
                     b.HasIndex("EventType", "Severity");
 
                     b.ToTable("risk_events", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.UniversePreviewRecord", b =>
+                {
+                    b.Property<Guid>("UniverseSnapshotId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContentSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Horizon")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PreviewJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ResolvedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("UniverseSnapshotId");
+
+                    b.HasIndex("ExpiresAtUtc");
+
+                    b.ToTable("universe_previews", (string)null);
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Portfolio.AdvisoryPortfolio", b =>
@@ -2367,8 +2927,39 @@ namespace TradingFlow.Data.Context.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.PortfolioRiskReservationRecord", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.Persistence.OrderIntentRecord", null)
+                        .WithOne()
+                        .HasForeignKey("TradingFlow.Domain.Persistence.PortfolioRiskReservationRecord", "IntentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TradingFlow.Domain.Persistence.ProductionRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Persistence.PositionEventRecord", b =>
                 {
+                    b.HasOne("TradingFlow.Domain.Persistence.ProductionRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.ProtectiveStopReplacementRecord", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.Persistence.OrderIntentRecord", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerClientOrderId")
+                        .HasPrincipalKey("ClientOrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.HasOne("TradingFlow.Domain.Persistence.ProductionRun", null)
                         .WithMany()
                         .HasForeignKey("RunId")

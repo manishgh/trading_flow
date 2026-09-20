@@ -22,8 +22,8 @@ public static class OrderStateMachine
     private static readonly IReadOnlyDictionary<OrderState, IReadOnlySet<OrderState>> AllowedTransitions =
         new Dictionary<OrderState, IReadOnlySet<OrderState>>
         {
-            [OrderState.Intent] = Set(OrderState.Submitted),
-            [OrderState.Submitted] = Set(OrderState.Acked, OrderState.Rejected),
+            [OrderState.Intent] = Set(OrderState.Submitted, OrderState.Expired),
+            [OrderState.Submitted] = Set(OrderState.Acked, OrderState.Rejected, OrderState.Expired),
             [OrderState.Acked] = Set(
                 OrderState.PartiallyFilled,
                 OrderState.Filled,

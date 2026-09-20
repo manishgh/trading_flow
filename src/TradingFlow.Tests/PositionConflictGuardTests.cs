@@ -15,7 +15,7 @@ public sealed class PositionConflictGuardTests
     {
         var locks = CreateAvailableLock();
         var positions = new Mock<IPositionLedgerRepository>(MockBehavior.Strict);
-        positions.Setup(repository => repository.GetCurrentAsync("MSFT", It.IsAny<CancellationToken>()))
+        positions.Setup(repository => repository.GetCurrentAsync("paper-account", "MSFT", It.IsAny<CancellationToken>()))
             .ReturnsAsync(CreatePosition("MSFT", 10m, "SWGA"));
         var intents = CreateEmptyIntentRepository();
         var submitted = false;
@@ -23,6 +23,7 @@ public sealed class PositionConflictGuardTests
 
         var error = await Assert.ThrowsAsync<PositionConflictException>(() =>
             guard.ExecuteEntryAsync(
+                "paper-account",
                 "msft",
                 "OTHER",
                 _ =>
@@ -34,7 +35,7 @@ public sealed class PositionConflictGuardTests
         Assert.Equal(RejectCode.REJECT_SETUP_INVALID, error.RejectCode);
         Assert.False(submitted);
         locks.Verify(service => service.ReleaseLockAsync(
-            "exe10:MSFT",
+            "entry:paper-account:MSFT",
             It.Is<string>(owner => owner.StartsWith("entry:", StringComparison.Ordinal)),
             CancellationToken.None), Times.Once);
     }
@@ -44,12 +45,13 @@ public sealed class PositionConflictGuardTests
     {
         var locks = CreateAvailableLock();
         var positions = new Mock<IPositionLedgerRepository>(MockBehavior.Strict);
-        positions.Setup(repository => repository.GetCurrentAsync("MSFT", It.IsAny<CancellationToken>()))
+        positions.Setup(repository => repository.GetCurrentAsync("paper-account", "MSFT", It.IsAny<CancellationToken>()))
             .ReturnsAsync(CreatePosition("MSFT", 10m, "SWGA"));
         var intents = CreateEmptyIntentRepository();
         var guard = CreateGuard(locks.Object, positions.Object, intents.Object);
 
-        var result = await guard.ExecuteEntryAsync("MSFT", "SWGA", _ => Task.FromResult("submitted"));
+        var result = await guard.ExecuteEntryAsync(
+            "paper-account", "MSFT", "SWGA", _ => Task.FromResult("submitted"));
 
         Assert.Equal("submitted", result);
     }
@@ -59,10 +61,11 @@ public sealed class PositionConflictGuardTests
     {
         var locks = CreateAvailableLock();
         var positions = new Mock<IPositionLedgerRepository>(MockBehavior.Strict);
-        positions.Setup(repository => repository.GetCurrentAsync("RGTI", It.IsAny<CancellationToken>()))
+        positions.Setup(repository => repository.GetCurrentAsync("paper-account", "RGTI", It.IsAny<CancellationToken>()))
             .ReturnsAsync((PositionLedgerSnapshot?)null);
         var intents = new Mock<IOrderIntentRepository>(MockBehavior.Strict);
-        intents.Setup(repository => repository.ListActiveForSymbolAsync("RGTI", It.IsAny<CancellationToken>()))
+        intents.Setup(repository => repository.ListActiveForSymbolAsync(
+                "paper-account", "RGTI", It.IsAny<CancellationToken>()))
             .ReturnsAsync([
                 new ActiveOrderIntent("owner-order", "SWGA", "RGTI", "buy", OrderState.Acked)
             ]);
@@ -71,6 +74,7 @@ public sealed class PositionConflictGuardTests
 
         var error = await Assert.ThrowsAsync<PositionConflictException>(() =>
             guard.ExecuteEntryAsync(
+                "paper-account",
                 "RGTI",
                 "OTHER",
                 _ =>
@@ -88,7 +92,7 @@ public sealed class PositionConflictGuardTests
     {
         var locks = new Mock<ITickerLockService>(MockBehavior.Strict);
         locks.Setup(service => service.TryAcquireLockAsync(
-                "exe10:NVDA",
+                "entry:paper-account:NVDA",
                 It.IsAny<string>(),
                 TimeSpan.FromMinutes(2),
                 It.IsAny<CancellationToken>()))
@@ -99,7 +103,8 @@ public sealed class PositionConflictGuardTests
             Mock.Of<IOrderIntentRepository>());
 
         var error = await Assert.ThrowsAsync<PositionConflictException>(() =>
-            guard.ExecuteEntryAsync("NVDA", "SWGA", _ => Task.FromResult("submitted")));
+            guard.ExecuteEntryAsync(
+                "paper-account", "NVDA", "SWGA", _ => Task.FromResult("submitted")));
 
         Assert.Equal(RejectCode.REJECT_RECONCILE_LOCK, error.RejectCode);
         locks.Verify(service => service.ReleaseLockAsync(
@@ -111,19 +116,20 @@ public sealed class PositionConflictGuardTests
     {
         var locks = CreateAvailableLock();
         var positions = new Mock<IPositionLedgerRepository>(MockBehavior.Strict);
-        positions.Setup(repository => repository.GetCurrentAsync("MSFT", It.IsAny<CancellationToken>()))
+        positions.Setup(repository => repository.GetCurrentAsync("paper-account", "MSFT", It.IsAny<CancellationToken>()))
             .ReturnsAsync((PositionLedgerSnapshot?)null);
         var intents = CreateEmptyIntentRepository();
         var guard = CreateGuard(locks.Object, positions.Object, intents.Object);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             guard.ExecuteEntryAsync<string>(
+                "paper-account",
                 "MSFT",
                 "SWGA",
                 _ => throw new InvalidOperationException("broker failure")));
 
         locks.Verify(service => service.ReleaseLockAsync(
-            "exe10:MSFT",
+            "entry:paper-account:MSFT",
             It.Is<string>(owner => owner.StartsWith("entry:", StringComparison.Ordinal)),
             CancellationToken.None), Times.Once);
     }
@@ -160,7 +166,7 @@ public sealed class PositionConflictGuardTests
     {
         var intents = new Mock<IOrderIntentRepository>(MockBehavior.Strict);
         intents.Setup(repository => repository.ListActiveForSymbolAsync(
-                It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         return intents;
     }
@@ -170,12 +176,15 @@ public sealed class PositionConflictGuardTests
         decimal quantity,
         string strategyId) =>
         new(
+            "paper-account",
             symbol,
             quantity,
             strategyId,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
             1,
+            1,
+            "owner-order",
             "owner-order",
             100m,
             "buy");

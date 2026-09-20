@@ -31,10 +31,8 @@ entry_rules:
   require_volume_dry_up_pre_breakout: true
   min_breakout_volume_ratio: 1.0
   max_vwap_extension_atr:
-  opening_range_minutes: 0
   recent_high_lookback_bars: 20
   volatility_contraction_lookback_bars: 25
-  max_entries_per_ticker_per_day: 1
   min_close_location_value: 0.55
   require_positive_news: false
 regime:

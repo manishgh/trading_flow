@@ -4,14 +4,12 @@ namespace TradingFlow.Tests;
 
 public sealed class RunUniverseValidatorTests
 {
-    [Theory]
-    [InlineData("intraday-backtest-profile.yaml")]
-    [InlineData("swing-backtest-profile.yaml")]
-    public void BaseWishlistProfileCannotExecuteBeforeResolution(string fileName)
+    [Fact]
+    public void BaseWishlistProfileCannotExecuteBeforeResolution()
     {
         var root = TestRepository.FindRoot();
         var run = new SimpleYamlReader().ReadBacktestRun(
-            Path.Combine(root, "configs", "backtest", fileName));
+            Path.Combine(root, "configs", "backtest", "swing-backtest-profile.yaml"));
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
             RunUniverseValidator.RequireResolved(run));
@@ -24,7 +22,7 @@ public sealed class RunUniverseValidatorTests
     {
         var root = TestRepository.FindRoot();
         var template = new SimpleYamlReader().ReadBacktestRun(
-            Path.Combine(root, "configs", "backtest", "intraday-backtest-profile.yaml"));
+            Path.Combine(root, "configs", "backtest", "swing-backtest-profile.yaml"));
         var missingProvenance = template with
         {
             Tickers = ["AAPL"],
@@ -42,7 +40,7 @@ public sealed class RunUniverseValidatorTests
     {
         var root = TestRepository.FindRoot();
         var template = new SimpleYamlReader().ReadBacktestRun(
-            Path.Combine(root, "configs", "backtest", "intraday-backtest-profile.yaml"));
+            Path.Combine(root, "configs", "backtest", "swing-backtest-profile.yaml"));
         var resolved = template with
         {
             Tickers = ["AAPL"],

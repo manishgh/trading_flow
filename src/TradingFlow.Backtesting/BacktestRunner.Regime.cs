@@ -6,7 +6,7 @@ using TradingFlow.Engine.Regime;
 
 namespace TradingFlow.Backtesting;
 
-// Layer-2 regime wiring (docs/strategy-design-doctrine.md §2): builds a no-lookahead regime
+// Layer-2 regime wiring: builds a no-lookahead regime
 // calendar per strategy that declares an active regime rule. The calendar is consumed as an
 // entry gate at trade acceptance, so a strategy takes new entries only on regime-on days. The
 // benchmark-daily loading (with resample fallback) is shared with the live path via RegimeGateService.

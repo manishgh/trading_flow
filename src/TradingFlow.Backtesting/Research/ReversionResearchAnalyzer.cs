@@ -4,7 +4,7 @@ using TradingFlow.Engine.Execution;
 namespace TradingFlow.Backtesting.Research;
 
 /// <summary>
-/// Inverted event study for the mean-reversion archetype (docs/strategy-design-doctrine.md §4/§6C,
+/// Inverted event study for the archived mean-reversion archetype (
 /// "down today -> up tomorrow"). For each cached daily series it finds "stretch" events (>=N consecutive
 /// down closes, RSI(2) oversold, or a close below the lower Bollinger band) and measures 1-5 day forward
 /// returns, split by whether the stock is above or below its 200-day SMA. It answers the evidence-gate

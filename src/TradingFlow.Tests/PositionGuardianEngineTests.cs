@@ -67,7 +67,7 @@ public sealed class PositionGuardianEngineTests
                 atr: 1m,
                 vwap: i < 6 ? 99m : 100m,
                 ema10: 99m,
-                ema20: 98.50m,
+                ema20: 90m,
                 macdHistogram: 0.05m))
             .ToArray();
 
@@ -154,7 +154,7 @@ public sealed class PositionGuardianEngineTests
             root,
             "configs",
             "strategies",
-            "intraday-ema10-ema20-macd-volume.v1.yaml"));
+            "minervini-trend-template-vcp.v4-trend-rider.yaml"));
     }
 
     private static string FindRepositoryRoot()
@@ -173,4 +173,3 @@ public sealed class PositionGuardianEngineTests
         throw new DirectoryNotFoundException("Could not locate TradingFlow repository root.");
     }
 }
-

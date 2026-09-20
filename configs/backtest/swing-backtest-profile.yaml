@@ -7,6 +7,9 @@ engine:
   bounded_capacity: 2000
   indicator_warmup_bars: 260
   ticker_timeout_seconds: 1800
+  max_retained_replay_bars: 1000000
+  max_strategy_work_items: 10000
+  max_retained_candidates: 1000000
   fail_fast: false
 
 time_window:
@@ -42,6 +45,7 @@ portfolio:
   max_concurrent_positions: 4
   fixed_buy_fee: 1.0
   fixed_sell_fee: 1.0
+  max_execution_order_history: 1000000
   prevent_overlapping_ticker_positions: true
   max_bar_participation_pct: 5.0
   sec_fee_rate: 0.0000278

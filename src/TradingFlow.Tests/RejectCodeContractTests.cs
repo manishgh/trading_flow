@@ -82,7 +82,6 @@ public sealed partial class RejectCodeContractTests
         var root = TestRepository.FindRoot();
         var paths = new[]
         {
-            Path.Combine(root, "docs", "spec", "automated_us_equities_trading_research_design.md"),
             Path.Combine(root, "docs", "spec", "automated_trading_production_spec_v1.md")
         };
         return paths

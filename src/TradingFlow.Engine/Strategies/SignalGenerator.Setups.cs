@@ -8,7 +8,7 @@ using TradingFlow.Engine.Market;
 
 namespace TradingFlow.Engine.Strategies;
 
-// Setup/trigger detectors (breakout, reclaim, reversion, catalyst-drift, VCP, step, bull-flag, avwap) for SignalGenerator (partial split).
+// Swing setup and trigger detectors for SignalGenerator.
 public sealed partial class SignalGenerator
 {
     private static (
@@ -76,81 +76,6 @@ public sealed partial class SignalGenerator
         return (
             low <= 0m ? null : ((price / low) - 1m) * 100m,
             high <= 0m ? null : ((price / high) - 1m) * 100m);
-    }
-
-    private static (
-        decimal? High,
-        decimal? Low,
-        decimal? Vwap,
-        decimal? Volume,
-        decimal? RunPct,
-        decimal? VwapExtensionPct,
-        bool IsHighBreak) GetPremarketContext(
-            StrategyDefinition strategy,
-            IReadOnlyList<OhlcvBar> bars,
-            IReadOnlyList<IndicatorSnapshot> snapshots,
-            int index)
-    {
-        var currentExchangeTime = ConvertToExchangeTime(snapshots[index].Timestamp, strategy.Session.ExchangeTimezone);
-        var premarketStart = currentExchangeTime.Date.Add(new TimeSpan(4, 0, 0));
-        var regularOpen = currentExchangeTime.Date.Add(new TimeSpan(9, 30, 0));
-        var premarketBars = bars
-            .Take(index + 1)
-            .Where(bar =>
-            {
-                var exchangeTime = ConvertToExchangeTime(bar.Timestamp, strategy.Session.ExchangeTimezone);
-                return exchangeTime.Date == currentExchangeTime.Date &&
-                    exchangeTime >= premarketStart &&
-                    exchangeTime < regularOpen;
-            })
-            .ToArray();
-
-        if (premarketBars.Length == 0)
-        {
-            return (null, null, null, null, null, null, false);
-        }
-
-        var high = premarketBars.Max(x => x.High);
-        var low = premarketBars.Min(x => x.Low);
-        var volume = premarketBars.Sum(x => x.Volume);
-        var priceVolume = premarketBars.Sum(x => ((x.High + x.Low + x.Close) / 3m) * x.Volume);
-        var vwap = volume <= 0m ? (decimal?)null : priceVolume / volume;
-        var previousRegularClose = GetPreviousRegularClose(strategy, bars, snapshots, index);
-        var runPct = previousRegularClose is null || previousRegularClose.Value <= 0m
-            ? (decimal?)null
-            : ((high / previousRegularClose.Value) - 1m) * 100m;
-        var vwapExtensionPct = vwap is null || vwap.Value <= 0m
-            ? (decimal?)null
-            : ((snapshots[index].CurrentPrice / vwap.Value) - 1m) * 100m;
-        var breakoutLevel = high * (1m + (strategy.EntryRules.PremarketHighBreakBufferPct / 100m));
-        var isHighBreak = snapshots[index].CurrentPrice >= breakoutLevel;
-
-        return (high, low, vwap, volume, runPct, vwapExtensionPct, isHighBreak);
-    }
-
-    private static int? GetMinutesAfterRegularOpen(StrategyDefinition strategy, DateTimeOffset timestamp)
-    {
-        var currentExchangeTime = ConvertToExchangeTime(timestamp, strategy.Session.ExchangeTimezone);
-        var regularOpen = currentExchangeTime.Date.Add(new TimeSpan(9, 30, 0));
-        return currentExchangeTime < regularOpen
-            ? null
-            : (int)Math.Floor((currentExchangeTime - regularOpen).TotalMinutes);
-    }
-
-    private static int CountConsecutiveClosesAboveVwap(IReadOnlyList<IndicatorSnapshot> snapshots, int index)
-    {
-        var count = 0;
-        for (var i = index; i >= 0; i--)
-        {
-            if (snapshots[i].Vwap is null || snapshots[i].CurrentPrice <= snapshots[i].Vwap!.Value)
-            {
-                break;
-            }
-
-            count++;
-        }
-
-        return count;
     }
 
     private static (
@@ -532,115 +457,6 @@ public sealed partial class SignalGenerator
         var secondHalfHigh = bars.Skip(midpoint).Max(x => x.High);
         return secondHalfHigh <= firstHalfHigh;
     }
-    private static (
-        bool IsBreakout,
-        decimal? PoleMovePct,
-        decimal? PullbackDepthPct,
-        decimal? PullbackVolumeRatio,
-        decimal? BreakoutVolumeRatio) GetBullFlagContext(
-            StrategyDefinition strategy,
-            IReadOnlyList<OhlcvBar> bars,
-            int index)
-    {
-        var rules = strategy.EntryRules;
-        var pullbackMinBars = Math.Max(1, rules.BullFlagPullbackMinBars);
-        var pullbackMaxBars = Math.Max(pullbackMinBars, rules.BullFlagPullbackMaxBars);
-        var poleMaxBars = Math.Max(1, rules.BullFlagPoleMaxBars);
-
-        for (var pullbackBars = pullbackMinBars; pullbackBars <= pullbackMaxBars; pullbackBars++)
-        {
-            var pullbackStart = index - pullbackBars;
-            var poleEndExclusive = pullbackStart;
-            var poleStart = Math.Max(0, poleEndExclusive - poleMaxBars);
-            if (pullbackStart < 1 || poleEndExclusive <= poleStart)
-            {
-                continue;
-            }
-
-            var poleBars = bars.Skip(poleStart).Take(poleEndExclusive - poleStart).ToArray();
-            var flagBars = bars.Skip(pullbackStart).Take(pullbackBars).ToArray();
-            if (poleBars.Length == 0 || flagBars.Length == 0)
-            {
-                continue;
-            }
-
-            var poleLow = poleBars.Min(x => x.Low);
-            var poleHigh = poleBars.Max(x => x.High);
-            if (poleLow <= 0 || poleHigh <= poleLow)
-            {
-                continue;
-            }
-
-            var poleMovePct = ((poleHigh - poleLow) / poleLow) * 100m;
-            if (rules.MinBullFlagPoleMovePct is { } minPoleMove &&
-                poleMovePct < minPoleMove)
-            {
-                continue;
-            }
-
-            var pullbackLow = flagBars.Min(x => x.Low);
-            var pullbackDepthPct = ((poleHigh - pullbackLow) / (poleHigh - poleLow)) * 100m;
-            if (pullbackDepthPct < 0 || pullbackDepthPct > rules.BullFlagMaxDepthPctOfPole)
-            {
-                continue;
-            }
-
-            var averagePoleVolume = poleBars.Average(x => x.Volume);
-            var averagePullbackVolume = flagBars.Average(x => x.Volume);
-            if (averagePoleVolume <= 0 || averagePullbackVolume <= 0)
-            {
-                continue;
-            }
-
-            var pullbackVolumeRatio = averagePullbackVolume / averagePoleVolume;
-            if (rules.BullFlagPullbackVolumeRatioMax is { } maxPullbackVolumeRatio &&
-                pullbackVolumeRatio > maxPullbackVolumeRatio)
-            {
-                continue;
-            }
-
-            var breakoutLevel = Math.Max(poleHigh, flagBars.Max(x => x.High));
-            if (bars[index].Close <= breakoutLevel)
-            {
-                continue;
-            }
-
-            var breakoutVolumeRatio = bars[index].Volume / averagePullbackVolume;
-            if (rules.BullFlagBreakoutVolumeRatioMin is { } minBreakoutVolumeRatio &&
-                breakoutVolumeRatio < minBreakoutVolumeRatio)
-            {
-                continue;
-            }
-
-            return (true, poleMovePct, pullbackDepthPct, pullbackVolumeRatio, breakoutVolumeRatio);
-        }
-
-        return (false, null, null, null, null);
-    }
-
-    private static bool IsFlatTopBreakout(
-        StrategyDefinition strategy,
-        IReadOnlyList<OhlcvBar> bars,
-        int index)
-    {
-        var lookback = Math.Max(3, Math.Min(strategy.EntryRules.RecentHighLookbackBars, 8));
-        if (index <= lookback)
-        {
-            return false;
-        }
-
-        var consolidationBars = bars.Skip(index - lookback).Take(lookback).ToArray();
-        var high = consolidationBars.Max(x => x.High);
-        var low = consolidationBars.Min(x => x.Low);
-        if (high <= 0)
-        {
-            return false;
-        }
-
-        var rangePct = ((high - low) / high) * 100m;
-        return rangePct <= 3.0m && bars[index].Close > high;
-    }
-
     private static (decimal? AgeHours, decimal? PriceMovePct, int? AgeBars) GetCatalystContext(
         CatalystEvent? catalyst,
         IReadOnlyList<OhlcvBar> bars,
@@ -666,40 +482,6 @@ public sealed partial class SignalGenerator
 
         var priceMovePct = ((snapshots[index].CurrentPrice / catalystBar.Close) - 1m) * 100m;
         return (ageHours, priceMovePct, ageBars);
-    }
-
-    private static (decimal? RangePct, decimal? PullbackFromHighPct) GetSessionContext(
-        StrategyDefinition strategy,
-        IReadOnlyList<OhlcvBar> bars,
-        IReadOnlyList<IndicatorSnapshot> snapshots,
-        int index)
-    {
-        var currentExchangeTime = ConvertToExchangeTime(snapshots[index].Timestamp, strategy.Session.ExchangeTimezone);
-        var sessionOpen = currentExchangeTime.Date.Add(new TimeSpan(9, 30, 0));
-        var sessionBars = bars
-            .Take(index + 1)
-            .Where(bar =>
-            {
-                var exchangeTime = ConvertToExchangeTime(bar.Timestamp, strategy.Session.ExchangeTimezone);
-                return exchangeTime.Date == currentExchangeTime.Date && exchangeTime >= sessionOpen;
-            })
-            .ToArray();
-
-        if (sessionBars.Length == 0)
-        {
-            return (null, null);
-        }
-
-        var sessionHigh = sessionBars.Max(x => x.High);
-        var sessionLow = sessionBars.Min(x => x.Low);
-        if (sessionHigh <= 0)
-        {
-            return (null, null);
-        }
-
-        var rangePct = ((sessionHigh - sessionLow) / sessionHigh) * 100m;
-        var pullbackFromHighPct = ((sessionHigh - snapshots[index].CurrentPrice) / sessionHigh) * 100m;
-        return (rangePct, pullbackFromHighPct);
     }
 
 }

@@ -26,11 +26,12 @@ const protectedPages = [
 ];
 
 const protectedApis = [
-  "/api/mobile/catalog",
-  "/api/mobile/wishlists",
-  "/api/mobile/paper/jobs",
+  "/api/v1/catalog",
+  "/api/v1/wishlists",
+  "/api/v1/paper/jobs",
+  "/api/v1/wishlists/00000000-0000-0000-0000-000000000000/quotes/stream",
+  "/api/v1/wishlists/00000000-0000-0000-0000-000000000000/activity/stream",
   "/api/profiler/alpaca",
-  "/api/strategies/evaluate"
 ];
 
 // The deliberate exceptions, and the reason each one is open.
@@ -54,20 +55,20 @@ test.describe("authorisation", () => {
   test("the mobile and operations APIs require a session", async ({ request }) => {
     for (const route of protectedApis) {
       const response = await request.get(route, { maxRedirects: 0 });
-      // 401, or a 302 to the login form for a cookie scheme. Never 200.
-      expect(response.status(), `${route} answered without a session`).not.toBe(200);
+      // A missing route must fail this test; only an authentication challenge is valid.
+      expect([302, 401], `${route} did not issue an authentication challenge`).toContain(response.status());
     }
   });
 
   test("order submission cannot be reached without a session", async ({ request }) => {
     // The endpoint that actually places a paper order. It was reachable
     // anonymously before the fallback policy went in.
-    const response = await request.post("/api/mobile/orders/confirm", {
+    const response = await request.post("/api/v1/orders/confirm", {
       data: { ticketToken: "does-not-matter" },
       maxRedirects: 0,
       failOnStatusCode: false
     });
-    expect(response.status()).not.toBe(200);
+    expect([302, 401], "order confirm did not issue an authentication challenge").toContain(response.status());
   });
 
   test("only the documented routes are public", async ({ request }) => {
@@ -78,6 +79,7 @@ test.describe("authorisation", () => {
       // and says nothing about authorisation. What must not happen is a 401 or a
       // redirect to the sign-in form.
       expect(response.status(), `${route} should be public because ${reason}`).not.toBe(401);
+      expect(response.status(), `${route} should exist because ${reason}`).not.toBe(404);
       expect(
         response.headers()["location"] ?? "",
         `${route} should be public because ${reason}`

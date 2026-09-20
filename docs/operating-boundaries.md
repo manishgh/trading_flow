@@ -69,8 +69,8 @@ eligible_at =
 ```
 
 The current swing momentum benchmark requires at least 252 genuine completed daily
-sessions for each admitted security. Intraday studies use their independently frozen
-bar/session requirements; they do not inherit the swing warm-up.
+sessions for each admitted security. Declared sub-daily swing confirmation uses its
+own indicator stabilization depth and never substitutes for daily warm-up.
 
 ## Universe Boundary
 
@@ -91,10 +91,9 @@ Research and operation use different universe contracts:
 
 Non-ML alpha research is intentionally limited to two tracks:
 
-1. Swing cross-sectional momentum, followed only by isolated paired tests of stock
-   trend, VCP, or validated classified catalysts.
-2. Intraday point-in-time catalyst response and abnormal participation, followed by
-   opening-response and pullback/reclaim studies before defining one entry rule.
+1. Swing cross-sectional momentum.
+2. Isolated paired tests of stock trend, VCP, validated classified catalysts, or
+   completed sub-daily entry confirmation against that frozen baseline.
 
 No additional broad strategy family is admitted until these baselines are measured.
 Generic sentiment, present-day universes projected backward, and parameter searches
@@ -153,9 +152,9 @@ Promotion requires the binding track-specific statistical, concentration, cost,
 drawdown, sample-size, execution, and human-approval criteria. Missing evidence is a
 blocker, never an implied pass.
 
-The current integrated decision is `RETAIN_RESEARCH`. No current swing or intraday
-research configuration is eligible for a new paper-shadow promotion from the
-available evidence.
+The current integrated decision is `RETAIN_RESEARCH`. No current swing research
+configuration is eligible for a new paper-shadow promotion from the available
+evidence.
 
 ## Persistence And Deployment Boundary
 

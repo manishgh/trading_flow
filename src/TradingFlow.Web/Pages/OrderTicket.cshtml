@@ -139,7 +139,8 @@ else
                     position; the server checks the exit quantity against the open position.
                 </p>
             }
-            <label asp-for="Horizon">Horizon<select asp-for="Horizon"><option value="intraday">Intraday</option><option value="swing">Swing</option></select></label>
+            <input asp-for="Horizon" type="hidden" value="swing" />
+            <div class="field-readonly"><span>Horizon</span><strong>Swing</strong></div>
             <label class="checkbox-field"><input asp-for="AllowExtendedHoursTrading" />Allow extended-hours trading</label>
             <p class="field-help">Extended-hours requests fail closed unless the session, asset, order type, and broker protection are eligible.</p>
             <button class="button" type="submit">Review @(Model.IsExit ? "exit" : "order")</button>

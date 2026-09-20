@@ -72,48 +72,6 @@ public sealed class StrategyInitialStopResolver
                 stop = PlannedStopRequest.FromStructuralPrice(stopPrice);
                 break;
 
-            case "opening_range_opposite":
-                var openingRange = GetOpeningRange(request);
-                if (openingRange is null)
-                {
-                    return StrategyInitialStopResult.Rejected("opening_range_unavailable_for_initial_stop");
-                }
-
-                stopPrice = isShort ? openingRange.Value.High : openingRange.Value.Low;
-                stop = PlannedStopRequest.FromStructuralPrice(stopPrice);
-                break;
-
-            case "extreme_shadow":
-                var sessionExtreme = GetSessionExtremeThroughEntry(request);
-                if (sessionExtreme is null)
-                {
-                    return StrategyInitialStopResult.Rejected("session_extreme_unavailable_for_initial_stop");
-                }
-
-                stopPrice = isShort
-                    ? sessionExtreme.Value.High + request.Strategy.ExitRules.StopTickBuffer
-                    : sessionExtreme.Value.Low - request.Strategy.ExitRules.StopTickBuffer;
-                stop = PlannedStopRequest.FromStructuralPrice(stopPrice);
-                break;
-
-            case "flush_low" when !isShort:
-                var flushLookback = Math.Max(
-                    1,
-                    (request.Strategy.EntryRules.VwapReclaimMaxBarsSinceFlush ?? 0) +
-                    (request.Strategy.EntryRules.RequirePriorFlushBelowVwapBars ?? 0));
-                var flushLow = LowestLowThroughStopContext(
-                    request.ExecutionBars,
-                    request.StopContextIndex,
-                    flushLookback);
-                if (flushLow is not > 0m)
-                {
-                    return StrategyInitialStopResult.Rejected("flush_low_unavailable_for_initial_stop");
-                }
-
-                stopPrice = flushLow.Value - request.Strategy.ExitRules.StopTickBuffer;
-                stop = PlannedStopRequest.FromStructuralPrice(stopPrice);
-                break;
-
             case "swing_low" when !isShort:
                 var swingLow = request.Signal.SetupStructuralStopPrice ??
                     request.Signal.ReversionStretchLow ??
@@ -173,59 +131,6 @@ public sealed class StrategyInitialStopResolver
         return vwap > 0m && atr > 0m;
     }
 
-    private static (decimal High, decimal Low)? GetOpeningRange(
-        StrategyInitialStopRequest request)
-    {
-        if (request.Strategy.EntryRules.OpeningRangeMinutes <= 0)
-        {
-            return null;
-        }
-
-        var contextTimestamp = request.ExecutionBars[request.StopContextIndex].Timestamp;
-        var exchangeTime = ToExchangeTime(
-            contextTimestamp,
-            request.Strategy.Session.ExchangeTimezone);
-        var sessionOpen = exchangeTime.Date.Add(new TimeSpan(9, 30, 0));
-        var openingRangeEnd = sessionOpen.AddMinutes(
-            request.Strategy.EntryRules.OpeningRangeMinutes);
-        var rangeBars = request.ExecutionBars
-            .Take(request.StopContextIndex + 1)
-            .Where(bar =>
-            {
-                var barExchangeTime = ToExchangeTime(
-                    bar.Timestamp,
-                    request.Strategy.Session.ExchangeTimezone);
-                return barExchangeTime.Date == exchangeTime.Date &&
-                    barExchangeTime >= sessionOpen &&
-                    barExchangeTime < openingRangeEnd;
-            })
-            .ToArray();
-
-        return rangeBars.Length == 0
-            ? null
-            : (rangeBars.Max(bar => bar.High), rangeBars.Min(bar => bar.Low));
-    }
-
-    private static (decimal High, decimal Low)? GetSessionExtremeThroughEntry(
-        StrategyInitialStopRequest request)
-    {
-        var contextTimestamp = request.ExecutionBars[request.StopContextIndex].Timestamp;
-        var exchangeDate = ToExchangeTime(
-            contextTimestamp,
-            request.Strategy.Session.ExchangeTimezone).Date;
-        var sessionBars = request.ExecutionBars
-            .Take(request.StopContextIndex + 1)
-            .Where(bar =>
-                ToExchangeTime(
-                    bar.Timestamp,
-                    request.Strategy.Session.ExchangeTimezone).Date == exchangeDate)
-            .ToArray();
-
-        return sessionBars.Length == 0
-            ? null
-            : (sessionBars.Max(bar => bar.High), sessionBars.Min(bar => bar.Low));
-    }
-
     private static decimal? LowestLowThroughStopContext(
         IReadOnlyList<OhlcvBar> bars,
         int stopContextIndex,
@@ -241,30 +146,6 @@ public sealed class StrategyInitialStopResolver
         return low;
     }
 
-    private static DateTime ToExchangeTime(DateTimeOffset timestamp, string timezoneId)
-    {
-        var timezone = ResolveTimeZone(timezoneId);
-        return TimeZoneInfo.ConvertTime(timestamp, timezone).DateTime;
-    }
-
-    private static TimeZoneInfo ResolveTimeZone(string timezoneId)
-    {
-        foreach (var candidate in new[] { timezoneId, "America/New_York", "Eastern Standard Time" })
-        {
-            try
-            {
-                return TimeZoneInfo.FindSystemTimeZoneById(candidate);
-            }
-            catch (TimeZoneNotFoundException)
-            {
-            }
-            catch (InvalidTimeZoneException)
-            {
-            }
-        }
-
-        return TimeZoneInfo.Utc;
-    }
 
     private static string NormalizeRuleName(string? value) =>
         String.IsNullOrWhiteSpace(value)

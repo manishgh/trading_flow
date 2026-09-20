@@ -13,7 +13,7 @@ public sealed class TimeframeParserTests
     [InlineData("1h", 60)]
     [InlineData("65m", 65)]
     [InlineData("1d", 1440)]
-    public void Parse_SupportsIntradayAndDailyTimeframes(string timeframe, int expectedMinutes)
+    public void Parse_SupportsSubDailyAndDailyTimeframes(string timeframe, int expectedMinutes)
     {
         var duration = TimeframeParser.Parse(timeframe);
 
@@ -21,7 +21,7 @@ public sealed class TimeframeParserTests
     }
 
     [Fact]
-    public void BarResampler_CanDeriveDailyBarsFromIntradayBars()
+    public void BarResampler_CanDeriveDailyBarsFromSubDailyBars()
     {
         var sourceBars = new[]
         {

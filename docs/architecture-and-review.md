@@ -40,7 +40,7 @@ OHLCV candles
 | `TradingFlow.Data` | Persistence: CSV candles, SQLite (jobs, orders, wishlists, news), catalyst streamer, rolling warm-up cache. |
 | `TradingFlow.Alpaca` / `TradingFlow.Finviz` | Broker + market-data + news + screener providers behind Engine interfaces. |
 | `TradingFlow.Earnings` | Full earnings schedule/result monitoring and completed-bar reaction analysis; advisory only. |
-| `TradingFlow.Web` | ASP.NET Razor pages + `/api/mobile` for the app + SSE streams. Resolves config/credentials and calls Engine APIs; does **not** compute indicators. |
+| `TradingFlow.Web` | ASP.NET Razor pages + `/api/v1` for the app + SSE streams. Resolves config/credentials and calls Engine APIs; does **not** compute indicators. |
 | `TradingFlow.WarmupService` | Standalone service that maintains the rolling warm-up candle cache. Binds `:53120`. |
 | `TradingFlow.Mobile` | .NET MAUI Android client. |
 | `TradingFlow.Cli` | Command-line entry for runs/research. |
@@ -202,7 +202,7 @@ The planner never narrows either stop to force admission. It preserves the
 resolved invalidation price and sizes quantity from the account-equity risk
 budget, subject to the separate maximum position-notional cap.
 
-### Daily swing setup versus intraday execution
+### Daily swing setup versus sub-daily execution
 
 A daily structural or multi-ATR stop is commonly wider than 1% of entry price.
 That is valid when quantity is reduced so the planned dollar loss remains within

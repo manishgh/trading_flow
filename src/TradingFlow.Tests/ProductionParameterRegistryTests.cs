@@ -92,9 +92,6 @@ public sealed class ProductionParameterRegistryTests
     {
         "rest_budget_per_min (md/trading)" => ["rest_budget_market_data_per_min", "rest_budget_trading_per_min"],
         "finviz_min_rows / finviz_max_rows" => ["finviz_min_rows", "finviz_max_rows"],
-        "shutdown_flatten (day/swing)" => ["shutdown_flatten_day", "shutdown_flatten_swing"],
-        "per_trade_risk_pct / _swing" => ["per_trade_risk_pct_day", "per_trade_risk_pct_swing"],
-        "max_positions_day / _swing" => ["max_positions_day", "max_positions_swing"],
         _ => [appendixName]
     };
 

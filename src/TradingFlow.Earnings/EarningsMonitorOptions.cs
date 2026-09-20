@@ -12,7 +12,7 @@ public sealed record EarningsMonitorOptions(
     int RecentResultLookbackDays,
     int PriorResultMinimumDaysAgo,
     int PriorResultMaximumDaysAgo,
-    int IntradayLookbackDays,
+    int SubDailyLookbackDays,
     int ReferenceBarCount,
     decimal MinimumSlotRelativeVolume,
     int MinimumSlotRelativeVolumeSamples,
@@ -32,7 +32,7 @@ public sealed record EarningsMonitorOptions(
         PriorResultMinimumDaysAgo: 70,
         PriorResultMaximumDaysAgo: 112,
         // 100 calendar days reliably covers the 63 prior US trading sessions used by RVOL.
-        IntradayLookbackDays: 100,
+        SubDailyLookbackDays: 100,
         ReferenceBarCount: 78,
         MinimumSlotRelativeVolume: 1.5m,
         MinimumSlotRelativeVolumeSamples: IndicatorEngine.RelativeVolumeLookbackSessions,

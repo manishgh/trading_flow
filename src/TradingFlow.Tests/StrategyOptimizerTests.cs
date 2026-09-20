@@ -8,7 +8,7 @@ namespace TradingFlow.Tests;
 public class StrategyOptimizerTests
 {
     [Fact]
-    public void ApplyParameter_MapsIntradaySelectionFields()
+    public void ApplyParameter_MapsSwingResearchFields()
     {
         var optimizer = new StrategyOptimizer(new SimpleYamlReader(), CreateRunner());
         var method = typeof(StrategyOptimizer).GetMethod(
@@ -20,20 +20,11 @@ public class StrategyOptimizerTests
             FindRepositoryRoot(),
             "configs",
             "strategies",
-            "intraday-ema10-ema20-macd-volume.v1.yaml"));
+            "minervini-trend-template-vcp.v4-trend-rider.yaml"));
 
         strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
             optimizer,
             [strategy, "entry_rules.min_volume_spike", 0.25m])!;
-        strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
-            optimizer,
-            [strategy, "entry_rules.min_session_gain_pct", 1.5m])!;
-        strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
-            optimizer,
-            [strategy, "entry_rules.max_pre_entry_session_range_pct", 8.0m])!;
-        strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
-            optimizer,
-            [strategy, "entry_rules.max_entry_pullback_from_session_high_pct", 3.0m])!;
         strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
             optimizer,
             [strategy, "entry_rules.volume_sma_period", 4])!;
@@ -45,9 +36,6 @@ public class StrategyOptimizerTests
             [strategy, "entry_rules.min_volume_sma_rise_pct", 15.0m])!;
 
         Assert.Equal(0.25m, strategy.EntryRules.MinVolumeSpike);
-        Assert.Equal(1.5m, strategy.EntryRules.MinSessionGainPct);
-        Assert.Equal(8.0m, strategy.EntryRules.MaxPreEntrySessionRangePct);
-        Assert.Equal(3.0m, strategy.EntryRules.MaxEntryPullbackFromSessionHighPct);
         Assert.Equal(4, strategy.EntryRules.VolumeSmaPeriod);
         Assert.Equal(2, strategy.EntryRules.VolumeSmaRisingLookbackBars);
         Assert.Equal(15.0m, strategy.EntryRules.MinVolumeSmaRisePct);
@@ -69,7 +57,7 @@ strategy_id: test.progress
 strategy_name: Progress Strategy
 source: test
 version: 1
-timeframe: 15m
+timeframe: 1d
 direction: long
 entry_rules:
   min_volume_spike: 0.0
@@ -81,7 +69,7 @@ entry_rules:
   require_macd_histogram_positive: false
 confluence:
   enabled: false
-  timeframe: 15m
+  timeframe: 1h
   ema_period: 10
   macd_filter: none
 exit_rules:
@@ -96,7 +84,7 @@ exit_rules:
   exit_on_macd_histogram_negative: false
   min_hold_bars_before_technical_exit: 1
 execution:
-  timeframe: 15m
+  timeframe: 1h
   slippage_bps: 0.0
 session:
   exchange_timezone: America/New_York

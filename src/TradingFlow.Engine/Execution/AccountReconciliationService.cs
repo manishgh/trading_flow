@@ -46,7 +46,11 @@ public sealed record AccountReconciliationResult(
     Guid ReconciliationId,
     string Status,
     IReadOnlyList<ReconciliationDifference> Differences,
-    bool RequiresAcknowledgement);
+    bool RequiresAcknowledgement,
+    int ProtectionRepairFailureCount = 0)
+{
+    public bool BrokerProtectionReady => ProtectionRepairFailureCount == 0;
+}
 
 public interface IAccountReconciliationService
 {
@@ -73,6 +77,8 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
 {
     internal const string StartupBlockSource = "account_reconciliation_startup";
     internal const string MismatchBlockSource = "account_reconciliation";
+    internal const string ProtectionBlockSource = "broker_side_protection";
+    internal const string PositionExitHandoffBlockSource = "position_exit_handoff";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -88,6 +94,8 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
     private readonly AccountReconciliationOptions options;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<AccountReconciliationService> logger;
+    private readonly IProtectiveStopReplacementRepository? stopReplacements;
+    private readonly IOrderIntentRepository? orderIntents;
     private readonly SemaphoreSlim reconcileLock = new(1, 1);
     private volatile bool initialCompleted;
     private long lastCompletedUnixMilliseconds = -1;
@@ -104,7 +112,9 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
         ReconciliationRunContext runContext,
         AccountReconciliationOptions options,
         TimeProvider timeProvider,
-        ILogger<AccountReconciliationService> logger)
+        ILogger<AccountReconciliationService> logger,
+        IProtectiveStopReplacementRepository? stopReplacements = null,
+        IOrderIntentRepository? orderIntents = null)
     {
         this.orderEvents = orderEvents;
         this.positions = positions;
@@ -115,6 +125,8 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
         this.options = options;
         this.timeProvider = timeProvider;
         this.logger = logger;
+        this.stopReplacements = stopReplacements;
+        this.orderIntents = orderIntents;
         admission.Block(
             StartupBlockSource,
             "RECONCILIATION_NOT_READY",
@@ -140,10 +152,23 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
         try
         {
             var startedAt = timeProvider.GetUtcNow();
+            admission.Block(
+                ProtectionBlockSource,
+                "BROKER_SIDE_PROTECTION_NOT_READY",
+                "Broker-side position protection is being verified.",
+                startedAt);
+            var account = await broker.GetAccountSnapshotAsync(cancellationToken);
             var brokerPositions = await broker.GetOpenPositionsAsync(cancellationToken);
-            var localPositions = await positions.ListCurrentAsync(cancellationToken);
-            var localOrders = (await orderEvents.ListReconcilableAsync(cancellationToken)).ToList();
-            foreach (var parentClientOrderId in openOrders
+            var localPositions = await positions.ListCurrentAsync(
+                account.AccountId,
+                cancellationToken);
+            var localOrders = (await orderEvents.ListReconcilableAsync(
+                account.AccountId,
+                cancellationToken)).ToList();
+            var ownedOpenOrders = await ResolveReplacementOwnersAsync(
+                openOrders,
+                cancellationToken);
+            foreach (var parentClientOrderId in ownedOpenOrders
                          .Select(order => order.ParentClientOrderId)
                          .Where(ClientOrderIdFactory.IsBindingFormat)
                          .Distinct(StringComparer.Ordinal))
@@ -161,7 +186,7 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
             }
             var differences = BuildDifferences(
                 brokerPositions,
-                openOrders,
+                ownedOpenOrders,
                 localPositions,
                 localOrders,
                 startedAt,
@@ -195,10 +220,6 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
                 cancellationToken);
             var requiresAcknowledgement = recorded.RequiresAcknowledgement;
 
-            initialCompleted = true;
-            Interlocked.Exchange(ref lastCompletedUnixMilliseconds, completedAt.ToUnixTimeMilliseconds());
-            admission.Clear(StartupBlockSource);
-            Volatile.Write(ref differenceCount, differences.Count);
             if (requiresAcknowledgement)
             {
                 status = "reconcile_mismatch";
@@ -244,35 +265,136 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
                 }
             }
 
-            if (differences.Any(item => item.Kind is "missing_protective_order" or "protective_order_overcoverage"))
+            // Run the invariant on every reconciliation. It deliberately merges the
+            // committed local position ledger with REST positions, so a just-received
+            // fill is protected even while Alpaca's position endpoint is catching up.
+            IReadOnlyList<ProtectiveOrderRepair> repairs;
+            try
             {
-                var repairs = await protectiveOrders.EnsureAsync(
+                repairs = await protectiveOrders.EnsureAsync(
                     broker,
+                    account.AccountId,
                     brokerPositions,
                     openOrders,
                     cancellationToken);
-                foreach (var repair in repairs)
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                status = "protection_verification_failed";
+                admission.Block(
+                    ProtectionBlockSource,
+                    "BROKER_SIDE_PROTECTION_FAILED",
+                    exception.Message,
+                    timeProvider.GetUtcNow());
+                logger.LogCritical(
+                    exception,
+                    "Broker-side protective-order verification failed during account reconciliation.");
+                throw;
+            }
+            foreach (var repair in repairs)
+            {
+                logger.Log(
+                    repair.Succeeded ? LogLevel.Warning : LogLevel.Critical,
+                    "Protective-order invariant result for {Symbol}. Succeeded={Succeeded} Detail={Detail} BrokerOrderId={BrokerOrderId}",
+                    repair.Symbol,
+                    repair.Succeeded,
+                    repair.Detail,
+                    repair.BrokerOrderId);
+            }
+
+            var failedRepairs = repairs.Where(repair => !repair.Succeeded).ToArray();
+            if (failedRepairs.Length > 0)
+            {
+                admission.Block(
+                    ProtectionBlockSource,
+                    "BROKER_SIDE_PROTECTION_FAILED",
+                    String.Join("; ", failedRepairs.Select(repair => $"{repair.Symbol}: {repair.Detail}")),
+                    completedAt);
+            }
+            else
+            {
+                admission.Clear(ProtectionBlockSource);
+            }
+
+            var hasActiveExitHandoff = false;
+            foreach (var localPosition in localPositions.Where(item => item.Quantity != 0m))
+            {
+                if (await HasActiveExitAsync(localPosition, cancellationToken))
                 {
-                    logger.Log(
-                        repair.Succeeded ? LogLevel.Critical : LogLevel.Error,
-                        "Protective-order repair result for {Symbol}. Succeeded={Succeeded} Detail={Detail} BrokerOrderId={BrokerOrderId}",
-                        repair.Symbol,
-                        repair.Succeeded,
-                        repair.Detail,
-                        repair.BrokerOrderId);
+                    hasActiveExitHandoff = true;
+                    break;
                 }
             }
+
+            if (hasActiveExitHandoff)
+            {
+                admission.Block(
+                    PositionExitHandoffBlockSource,
+                    "POSITION_EXIT_HANDOFF_ACTIVE",
+                    "A durable position exit owns an open position while broker protection is exchanged for the closing order.",
+                    completedAt);
+            }
+            else if (failedRepairs.Length == 0)
+            {
+                admission.Clear(PositionExitHandoffBlockSource);
+            }
+
+            initialCompleted = true;
+            Interlocked.Exchange(ref lastCompletedUnixMilliseconds, completedAt.ToUnixTimeMilliseconds());
+            admission.Clear(StartupBlockSource);
+            Volatile.Write(ref differenceCount, differences.Count);
 
             return new AccountReconciliationResult(
                 recorded.ReconciliationId,
                 status,
                 differences,
-                requiresAcknowledgement);
+                requiresAcknowledgement,
+                failedRepairs.Length);
         }
         finally
         {
             reconcileLock.Release();
         }
+    }
+
+    private Task<bool> HasActiveExitAsync(
+        PositionLedgerSnapshot position,
+        CancellationToken cancellationToken)
+    {
+        return orderIntents is null
+            ? Task.FromResult(false)
+            : orderIntents.HasActivePositionExitAsync(
+                position.AccountId,
+                position.Symbol,
+                position.PositionGenerationEventId,
+                cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<ActiveBrokerOrder>> ResolveReplacementOwnersAsync(
+        IReadOnlyList<ActiveBrokerOrder> brokerOrders,
+        CancellationToken cancellationToken)
+    {
+        if (stopReplacements is null)
+        {
+            return brokerOrders;
+        }
+
+        var resolved = new List<ActiveBrokerOrder>(brokerOrders.Count);
+        foreach (var order in brokerOrders)
+        {
+            var replacement = await stopReplacements.GetVerifiedByReplacementClientOrderIdAsync(
+                order.ClientOrderId,
+                cancellationToken);
+            resolved.Add(replacement is null
+                ? order
+                : order with
+                {
+                    ClientOrderId = replacement.OwnerClientOrderId,
+                    ParentClientOrderId = replacement.OwnerClientOrderId
+                });
+        }
+
+        return resolved;
     }
 
     public async Task AcknowledgeAsync(
@@ -347,7 +469,14 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
 
         foreach (var brokerPosition in brokerPositions.Where(position => position.Qty != 0m))
         {
-            var coverage = ProtectiveOrderInvariantService.ProtectiveCoverage(brokerPosition, brokerOrders);
+            var ownedProtectiveOrders = brokerOrders.Where(order =>
+                localOrders.Any(localOrder =>
+                    localOrder.ClientOrderId.Equals(order.ClientOrderId, StringComparison.Ordinal) ||
+                    String.Equals(localOrder.ClientOrderId, order.ParentClientOrderId, StringComparison.Ordinal)))
+                .ToArray();
+            var coverage = ProtectiveOrderInvariantService.ProtectiveCoverage(
+                brokerPosition,
+                ownedProtectiveOrders);
             var required = Math.Abs(brokerPosition.Qty);
             if (coverage < required)
             {

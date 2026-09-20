@@ -23,7 +23,7 @@ public sealed class DiscoveryRepositoryTests
             Guid.NewGuid(),
             DiscoverySourceKinds.Finviz,
             "v=111&f=sh_relvol_o2",
-            "intraday",
+            "swing",
             observedAt,
             observedAt.AddMinutes(3),
             0,
@@ -55,7 +55,7 @@ public sealed class DiscoveryRepositoryTests
             observationId,
             DiscoverySourceKinds.Wishlist,
             "momentum",
-            "intraday",
+            "swing",
             observedAt,
             observedAt.AddMinutes(3),
             0,
@@ -222,7 +222,7 @@ public sealed class DiscoveryRepositoryTests
             Guid.NewGuid(),
             DiscoverySourceKinds.Finviz,
             "screen",
-            "intraday",
+            "swing",
             firstSeen,
             firstSeen.AddMinutes(1),
             0,
@@ -234,7 +234,7 @@ public sealed class DiscoveryRepositoryTests
             Guid.NewGuid(),
             DiscoverySourceKinds.Finviz,
             "screen",
-            "intraday",
+            "swing",
             refreshedAt,
             refreshedAt.AddMinutes(3),
             1,
@@ -261,7 +261,7 @@ public sealed class DiscoveryRepositoryTests
             Guid.NewGuid(),
             sourceKind,
             sourceKey,
-            "intraday",
+            "swing",
             observedAt,
             observedAt.AddMinutes(3),
             expectedVersion,
@@ -298,7 +298,7 @@ public sealed class DiscoveryRepositoryTests
         public bool Fail { get; set; }
         public string SourceKind => DiscoverySourceKinds.Finviz;
         public string SourceKey => "test-screen";
-        public string Horizon => "intraday";
+        public string Horizon => "swing";
         public TimeSpan RefreshInterval => TimeSpan.FromMinutes(1);
         public TimeSpan TimeToLive => TimeSpan.FromMinutes(3);
         public bool IsDiagnostic => false;

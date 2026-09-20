@@ -30,6 +30,28 @@ public sealed record OrderSynchronizationHealth(
     DateTimeOffset? LastRestPollUtc,
     IReadOnlyDictionary<string, int> DivergenceCycles);
 
+public sealed record PartialFillExecutionOptions
+{
+    public PartialFillExecutionOptions(
+        decimal swingMinimumFillRatioPct,
+        bool allowExtendedHoursTrading = false,
+        TimeOnly? swingEntryWindowEnd = null)
+    {
+        if (swingMinimumFillRatioPct is < 10m or > 100m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(swingMinimumFillRatioPct));
+        }
+
+        SwingMinimumFillRatioPct = swingMinimumFillRatioPct;
+        AllowExtendedHoursTrading = allowExtendedHoursTrading;
+        SwingEntryWindowEnd = swingEntryWindowEnd ?? new TimeOnly(10, 30);
+    }
+
+    public decimal SwingMinimumFillRatioPct { get; }
+    public bool AllowExtendedHoursTrading { get; }
+    public TimeOnly SwingEntryWindowEnd { get; }
+}
+
 public interface ITradeUpdateStreamerFactory
 {
     ITradeUpdateStreamer Create();
@@ -46,7 +68,7 @@ public interface IOrderSynchronizationCoordinator
     Task ProcessStreamUpdateAsync(OrderUpdate update, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<ActiveBrokerOrder>> CrossCheckAsync(
-        IBrokerOrderReader broker,
+        IAccountScopedBrokerOrderReader broker,
         CancellationToken cancellationToken);
 }
 
@@ -64,11 +86,10 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
     private readonly IOrderIntentRepository intents;
     private readonly IOrderLifecycleService lifecycle;
     private readonly IEntryAdmissionControl admission;
-    private readonly IPositionLedgerRepository positions;
-    private readonly ReconciliationRunContext runContext;
     private readonly AccountReconciliationOptions reconciliationOptions;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<OrderSynchronizationCoordinator> logger;
+    private readonly IProtectiveStopReplacementRepository? stopReplacements;
     private readonly ConcurrentDictionary<string, byte> terminalAwaitingRest =
         new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, int> divergenceCycles =
@@ -82,21 +103,19 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         IOrderIntentRepository intents,
         IOrderLifecycleService lifecycle,
         IEntryAdmissionControl admission,
-        IPositionLedgerRepository positions,
-        ReconciliationRunContext runContext,
         AccountReconciliationOptions reconciliationOptions,
         TimeProvider timeProvider,
-        ILogger<OrderSynchronizationCoordinator> logger)
+        ILogger<OrderSynchronizationCoordinator> logger,
+        IProtectiveStopReplacementRepository? stopReplacements = null)
     {
         this.events = events;
         this.intents = intents;
         this.lifecycle = lifecycle;
         this.admission = admission;
-        this.positions = positions;
-        this.runContext = runContext;
         this.reconciliationOptions = reconciliationOptions;
         this.timeProvider = timeProvider;
         this.logger = logger;
+        this.stopReplacements = stopReplacements;
         var now = timeProvider.GetUtcNow();
         admission.Block(StreamBlockSource, "ORDER_STREAM_NOT_CONNECTED", "The Alpaca account order stream is not connected.", now);
         admission.Block(RestReadyBlockSource, "ORDER_REST_NOT_READY", "The initial broker order cross-check has not completed.", now);
@@ -136,33 +155,11 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
             throw new InvalidOperationException("The primary stream path accepts only trade-stream updates.");
         }
 
-        if (update.Status is OrderStatus.PartiallyFilled or OrderStatus.Filled)
-        {
-            var executionStrategyId = await ResolveExecutionStrategyIdAsync(
-                update.ClientOrderId,
-                cancellationToken);
-            await positions.AppendFillAsync(
-                new PositionFillAppendRequest(
-                    runContext.Run,
-                    update.Ticker,
-                    executionStrategyId,
-                    update.PositionQuantity ?? throw new InvalidOperationException(
-                        "A stream fill requires authoritative position_qty."),
-                    update.LastFillQuantity,
-                    update.FilledPrice,
-                    update.Side,
-                    update.OrderId,
-                    update.ClientOrderId,
-                    update.ExecutionId ?? throw new InvalidOperationException(
-                        "A stream fill requires execution_id."),
-                    "broker_stream",
-                    update.Timestamp,
-                    timeProvider.GetUtcNow(),
-                    JsonSerializer.Serialize(update)),
-                cancellationToken);
-        }
-
-        if (!ClientOrderIdFactory.IsBindingFormat(update.ClientOrderId))
+        var isBindingClientOrderId = ClientOrderIdFactory.IsBindingFormat(update.ClientOrderId);
+        var isReplacementClientOrderId = update.ClientOrderId.StartsWith(
+            "TFR-",
+            StringComparison.Ordinal);
+        if (!isBindingClientOrderId && !isReplacementClientOrderId)
         {
             logger.LogDebug(
                 "Ignoring external broker order update {BrokerOrderId} with non-TradingFlow client ID {ClientOrderId}.",
@@ -171,15 +168,83 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
             return;
         }
 
+        var ownedIntent = await intents.GetByClientOrderIdAsync(
+            update.ClientOrderId,
+            cancellationToken);
+        if (ownedIntent is null && stopReplacements is not null)
+        {
+            var replacement = await stopReplacements.GetVerifiedByReplacementClientOrderIdAsync(
+                update.ClientOrderId,
+                cancellationToken);
+            if (replacement is not null)
+            {
+                ownedIntent = await intents.GetByClientOrderIdAsync(
+                    replacement.OwnerClientOrderId,
+                    cancellationToken);
+            }
+        }
+
+        if (ownedIntent is null)
+        {
+            if (!isBindingClientOrderId)
+            {
+                logger.LogDebug(
+                    "Ignoring external broker order update {BrokerOrderId} with non-TradingFlow client ID {ClientOrderId}.",
+                    update.OrderId,
+                    update.ClientOrderId);
+                return;
+            }
+
+            RegisterImmediateDivergence(
+                update.ClientOrderId,
+                "Broker update has a TradingFlow-shaped client ID but no local order intent.");
+            return;
+        }
+
+        var ownedUpdate = update.ClientOrderId.Equals(
+            ownedIntent.ClientOrderId,
+            StringComparison.Ordinal)
+                ? update
+                : update with { ClientOrderId = ownedIntent.ClientOrderId };
+
         try
         {
-            var snapshot = await lifecycle.ApplyBrokerUpdateAsync(update, cancellationToken);
+            ValidateOwnedUpdate(ownedIntent, ownedUpdate);
+        }
+        catch (InvalidOperationException exception)
+        {
+            RegisterImmediateDivergence(ownedIntent.ClientOrderId, exception.Message);
+            throw;
+        }
+
+        try
+        {
+            var positionFill = ownedUpdate.Status is OrderStatus.PartiallyFilled or OrderStatus.Filled
+                ? new OrderFillProjection(
+                    ownedUpdate.Ticker,
+                    ownedUpdate.Side,
+                    ownedUpdate.FilledQuantity,
+                    ownedUpdate.FilledPrice,
+                    ownedUpdate.ExecutionId ?? throw new InvalidOperationException(
+                        "A stream fill requires execution_id."),
+                    ownedUpdate.PositionQuantity ?? throw new InvalidOperationException(
+                        "A stream fill requires authoritative position_qty."),
+                    ownedUpdate.LastFillQuantity,
+                    ownedUpdate.LastFillPrice ?? throw new InvalidOperationException(
+                        "A stream fill requires the execution price."))
+                : null;
+            var snapshot = positionFill is null
+                ? await lifecycle.ApplyBrokerUpdateAsync(ownedUpdate, cancellationToken)
+                : await lifecycle.ApplyBrokerUpdateWithFillAsync(
+                    ownedUpdate,
+                    positionFill,
+                    cancellationToken);
             Interlocked.Exchange(
                 ref lastStreamUpdateUnixMilliseconds,
                 timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
             if (OrderStateMachine.IsTerminal(snapshot.State))
             {
-                terminalAwaitingRest[update.ClientOrderId] = 0;
+                terminalAwaitingRest[ownedIntent.ClientOrderId] = 0;
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -191,12 +256,57 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         }
     }
 
+    private static void ValidateOwnedUpdate(OrderIntentRecord intent, OrderUpdate update)
+    {
+        if (!intent.Symbol.Equals(update.Ticker, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Broker symbol {update.Ticker} does not match owned intent symbol {intent.Symbol}.");
+        }
+
+        if (!intent.Side.Equals(update.Side, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Broker side {update.Side} does not match owned intent side {intent.Side}.");
+        }
+
+        if (update.FilledQuantity < 0m || update.FilledQuantity > intent.RequestedQuantity)
+        {
+            throw new InvalidOperationException(
+                $"Broker cumulative fill {update.FilledQuantity} is outside owned quantity " +
+                $"0..{intent.RequestedQuantity}.");
+        }
+
+        if (update.FilledQuantity > 0m && update.FilledPrice <= 0m)
+        {
+            throw new InvalidOperationException(
+                "Broker cumulative fill has no positive average fill price.");
+        }
+
+        if (update.Status is not (OrderStatus.PartiallyFilled or OrderStatus.Filled))
+        {
+            return;
+        }
+
+        if (update.LastFillQuantity <= 0m ||
+            update.LastFillQuantity > update.FilledQuantity ||
+            update.FilledPrice <= 0m ||
+            update.PositionQuantity is null ||
+            String.IsNullOrWhiteSpace(update.ExecutionId))
+        {
+            throw new InvalidOperationException(
+                "Broker fill is missing valid cumulative quantity, last-fill quantity, price, " +
+                "position quantity, or execution identity.");
+        }
+    }
+
     public async Task<IReadOnlyList<ActiveBrokerOrder>> CrossCheckAsync(
-        IBrokerOrderReader broker,
+        IAccountScopedBrokerOrderReader broker,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(broker);
-        var local = (await events.ListReconcilableAsync(cancellationToken))
+        var account = await broker.GetAccountSnapshotAsync(cancellationToken);
+        var local = (await events.ListReconcilableAsync(account.AccountId, cancellationToken))
             .ToDictionary(snapshot => snapshot.ClientOrderId, StringComparer.Ordinal);
         foreach (var clientOrderId in terminalAwaitingRest.Keys)
         {
@@ -208,8 +318,25 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         }
 
         var openOrders = await broker.GetOpenOrdersAsync(cancellationToken);
-        var brokerOrders = openOrders
-            .Where(order => ClientOrderIdFactory.IsBindingFormat(order.ClientOrderId))
+        var ownedBrokerOrders = new List<ActiveBrokerOrder>();
+        foreach (var order in openOrders)
+        {
+            var ownerClientOrderId = order.ParentClientOrderId ?? order.ClientOrderId;
+            if (!local.ContainsKey(ownerClientOrderId) && stopReplacements is not null)
+            {
+                var replacement = await stopReplacements.GetVerifiedByReplacementClientOrderIdAsync(
+                    order.ClientOrderId,
+                    cancellationToken);
+                ownerClientOrderId = replacement?.OwnerClientOrderId ?? ownerClientOrderId;
+            }
+
+            if (local.ContainsKey(ownerClientOrderId))
+            {
+                ownedBrokerOrders.Add(order with { ClientOrderId = ownerClientOrderId });
+            }
+        }
+
+        var brokerOrders = ownedBrokerOrders
             .GroupBy(order => order.ClientOrderId, StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
@@ -330,68 +457,26 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         CancellationToken cancellationToken)
     {
         var update = BrokerOrderUpdateFactory.Create(brokerOrder);
-        var brokerState = BrokerOrderStateProjection.Project(OrderStatusCodec.ParseBrokerValue(brokerOrder.Status));
-        var accountedFillQuantity = await positions.GetAccountedFillQuantityAsync(
-            brokerOrder.OrderId,
-            cancellationToken);
-        var fillDelta = brokerOrder.FilledQuantity - accountedFillQuantity;
-        if (fillDelta < 0m)
+        var positionFill = brokerOrder.FilledQuantity > 0m
+            ? new OrderFillProjection(
+                brokerOrder.Ticker,
+                brokerOrder.Side,
+                brokerOrder.FilledQuantity,
+                brokerOrder.FilledAveragePrice ?? throw new InvalidOperationException(
+                    $"Broker fill {brokerOrder.OrderId} is missing filled_avg_price."),
+                $"rest:{brokerOrder.OrderId}:{brokerOrder.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture)}")
+            : null;
+        if (positionFill is null)
         {
-            throw new InvalidOperationException(
-                $"Position journal fill quantity {accountedFillQuantity} exceeds broker cumulative fill " +
-                $"{brokerOrder.FilledQuantity} for order {brokerOrder.OrderId}.");
+            await lifecycle.ApplyBrokerUpdateAsync(update, cancellationToken);
         }
-
-        if (brokerState is OrderState.PartiallyFilled or OrderState.Filled && fillDelta > 0m)
+        else
         {
-            var currentPosition = await positions.GetCurrentAsync(brokerOrder.Ticker, cancellationToken);
-            var signedDelta = brokerOrder.Side.Trim().ToLowerInvariant() switch
-            {
-                "buy" => fillDelta,
-                "sell" => -fillDelta,
-                _ => throw new InvalidOperationException(
-                    $"Broker order {brokerOrder.OrderId} has unsupported side '{brokerOrder.Side}'.")
-            };
-            var quantityAfter = (currentPosition?.Quantity ?? 0m) + signedDelta;
-            var executionId = $"rest:{brokerOrder.OrderId}:{brokerOrder.FilledQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-            await positions.AppendFillAsync(
-                new PositionFillAppendRequest(
-                    runContext.Run,
-                    brokerOrder.Ticker,
-                    await ResolveExecutionStrategyIdAsync(
-                        brokerOrder.ClientOrderId,
-                        cancellationToken),
-                    quantityAfter,
-                    fillDelta,
-                    brokerOrder.FilledAveragePrice ?? throw new InvalidOperationException(
-                        $"Broker fill {brokerOrder.OrderId} is missing filled_avg_price."),
-                    brokerOrder.Side,
-                    brokerOrder.OrderId,
-                    brokerOrder.ClientOrderId,
-                    executionId,
-                    "broker_rest",
-                    brokerOrder.UpdatedAt,
-                    timeProvider.GetUtcNow(),
-                    JsonSerializer.Serialize(brokerOrder)),
+            await lifecycle.ApplyBrokerUpdateWithFillAsync(
+                update,
+                positionFill,
                 cancellationToken);
         }
-
-        await lifecycle.ApplyBrokerUpdateAsync(update, cancellationToken);
-    }
-
-    private async Task<string> ResolveExecutionStrategyIdAsync(
-        string clientOrderId,
-        CancellationToken cancellationToken)
-    {
-        var intent = await intents.GetByClientOrderIdAsync(clientOrderId, cancellationToken);
-        if (intent is not null)
-        {
-            return intent.StrategyId;
-        }
-
-        return clientOrderId.StartsWith("tf-manual-", StringComparison.OrdinalIgnoreCase)
-            ? "MANUAL"
-            : "EXTERNAL";
     }
 
     private void RegisterImmediateDivergence(string clientOrderId, string detail)
@@ -438,10 +523,15 @@ public sealed class OrderSynchronizationRunner(
     IOrderSynchronizationCoordinator coordinator,
     IAccountReconciliationService reconciliation,
     OrderSynchronizationOptions options,
-    AccountReconciliationOptions reconciliationOptions,
     TimeProvider timeProvider,
-    ILogger<OrderSynchronizationRunner> logger) : IOrderSynchronizationRunner
+    ILogger<OrderSynchronizationRunner> logger,
+    IOrderIntentRepository? intents = null,
+    IOrderCommandService? orderCommands = null,
+    IEntryAdmissionControl? admission = null,
+    PartialFillExecutionOptions? partialFillOptions = null) : IOrderSynchronizationRunner
 {
+    private const string RestProtectionPendingBlockSource = "rest_fill_protection_pending";
+
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -470,8 +560,17 @@ public sealed class OrderSynchronizationRunner(
     {
         await streamer.ConnectAsync(cancellationToken);
         coordinator.MarkStreamConnected();
-        var initialOrders = await coordinator.CrossCheckAsync(broker, cancellationToken);
-        await reconciliation.ReconcileAsync(broker, initialOrders, cancellationToken);
+        var initialOrders = await CrossCheckAndProtectAsync(
+            RestProtectionPendingBlockSource,
+            "Initial broker state is being reconciled and protected.",
+            cancellationToken);
+        if (await HandleRestPartialEntriesAsync(initialOrders, cancellationToken))
+        {
+            await CrossCheckAndProtectAsync(
+                RestProtectionPendingBlockSource,
+                "A startup partial-fill decision is being reconciled and protected.",
+                cancellationToken);
+        }
 
         using var sessionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var streamTask = ConsumeStreamAsync(streamer, sessionCancellation.Token);
@@ -512,26 +611,219 @@ public sealed class OrderSynchronizationRunner(
             await coordinator.ProcessStreamUpdateAsync(update, cancellationToken);
             if (update.Status is OrderStatus.PartiallyFilled or OrderStatus.Filled)
             {
-                // A fill changes broker exposure. Reconcile immediately so protection does not
-                // wait for the periodic REST timer before verifying broker-resting protection.
-                var openOrders = await coordinator.CrossCheckAsync(broker, cancellationToken);
-                await reconciliation.ReconcileAsync(broker, openOrders, cancellationToken);
+                // Protect the committed fill before doing anything to the working remainder.
+                // Reconciliation merges the local fill ledger with the broker snapshot, which
+                // covers the normal interval where Alpaca's position REST view lags the stream.
+                var fillProtectionSource = $"fill_protection_pending:{update.ClientOrderId}";
+                var openOrders = await CrossCheckAndProtectAsync(
+                    fillProtectionSource,
+                    $"Committed fill {update.ClientOrderId} is awaiting broker-resting protection verification.",
+                    cancellationToken);
+
+                if (update.Status == OrderStatus.PartiallyFilled)
+                {
+                    if (await ApplyPartialEntryPolicyAsync(update, cancellationToken))
+                    {
+                        await CrossCheckAndProtectAsync(
+                            fillProtectionSource,
+                            $"Partial-fill decision for {update.ClientOrderId} is awaiting final protection verification.",
+                            cancellationToken);
+                    }
+                }
             }
         }
+    }
+
+    private async Task<bool> ApplyPartialEntryPolicyAsync(
+        OrderUpdate update,
+        CancellationToken cancellationToken)
+    {
+        if (intents is null || orderCommands is null)
+        {
+            return false;
+        }
+
+        var intent = await intents.GetByClientOrderIdAsync(update.ClientOrderId, cancellationToken);
+        if (intent?.Kind is not (OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry))
+        {
+            return false;
+        }
+
+        var horizon = ReadHorizon(intent.RequestJson);
+        if (horizon != "swing" || partialFillOptions is null ||
+            !SwingEntryWindowHasClosed(timeProvider.GetUtcNow(), partialFillOptions.SwingEntryWindowEnd))
+        {
+            return false;
+        }
+
+        var cancellationBlockSource = $"partial_entry_remainder_cancellation:{update.ClientOrderId}";
+        admission?.Block(
+            cancellationBlockSource,
+            "PARTIAL_ENTRY_REMAINDER_CANCELLING",
+            $"Canceling the unfilled remainder of {update.ClientOrderId} after a partial fill.",
+            timeProvider.GetUtcNow());
+        try
+        {
+            var result = await orderCommands.RequestCancelAsync(
+                new OrderCancellationSubmission(
+                    update.ClientOrderId,
+                    update.OrderId,
+                    "partial_entry_fill_remainder",
+                    timeProvider.GetUtcNow().ToUniversalTime()),
+                broker,
+                cancellationToken);
+            if (!OrderStateMachine.IsTerminal(result.State))
+            {
+                throw new OrderCancellationPendingException(update.ClientOrderId, update.OrderId);
+            }
+
+            var finalFilledQuantity = result.FilledQuantity ?? update.FilledQuantity;
+            // Cancellation can race a final broker fill. The cancellation command has already
+            // projected its terminal cumulative quantity; reconcile that projection into a
+            // broker-resting stop before an abort order takes ownership of the exposure.
+            await CrossCheckAndProtectAsync(
+                $"partial_entry_final_fill_protection:{update.ClientOrderId}",
+                $"Terminal cancellation fill {finalFilledQuantity} for {update.ClientOrderId} " +
+                "is awaiting broker-resting protection verification.",
+                cancellationToken);
+
+            var ratioPct = intent.RequestedQuantity > 0m
+                ? finalFilledQuantity / intent.RequestedQuantity * 100m
+                : 0m;
+            if (ratioPct < partialFillOptions.SwingMinimumFillRatioPct)
+            {
+                var quantity = Math.Abs(finalFilledQuantity);
+                var run = await intents.GetRunAsync(intent.RunId, cancellationToken)
+                    ?? throw new InvalidOperationException(
+                        $"Partial-fill intent {intent.IntentId:N} has no production run.");
+                await orderCommands.SubmitPositionExitAsync(
+                    new PositionExitSubmission(
+                        new ExecutionRunContext(
+                            run.RunId,
+                            run.Profile,
+                            run.ConfigHash,
+                            run.CodeVersion,
+                            run.StartedAtUtc),
+                        intent.Symbol,
+                        quantity,
+                        "MIN_FILL_ABORT",
+                        timeProvider.GetUtcNow().ToUniversalTime(),
+                        partialFillOptions.AllowExtendedHoursTrading),
+                    broker,
+                    cancellationToken);
+            }
+
+            admission?.Clear(cancellationBlockSource);
+            return true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            admission?.Block(
+                cancellationBlockSource,
+                "PARTIAL_ENTRY_REMAINDER_UNRESOLVED",
+                $"{update.ClientOrderId}: {exception.Message}",
+                timeProvider.GetUtcNow());
+            logger.LogCritical(
+                exception,
+                "Partial entry remainder could not be canceled. ClientOrderId={ClientOrderId} BrokerOrderId={BrokerOrderId}.",
+                update.ClientOrderId,
+                update.OrderId);
+            throw;
+        }
+    }
+
+    private async Task<bool> HandleRestPartialEntriesAsync(
+        IReadOnlyList<ActiveBrokerOrder> openOrders,
+        CancellationToken cancellationToken)
+    {
+        var handled = false;
+        foreach (var order in openOrders.Where(order =>
+                     order.FilledQuantity > 0m &&
+                     order.Qty is > 0m &&
+                     order.FilledQuantity < order.Qty.Value &&
+                     order.Status.Equals("partially_filled", StringComparison.OrdinalIgnoreCase)))
+        {
+            handled |= await ApplyPartialEntryPolicyAsync(
+                BrokerOrderUpdateFactory.Create(order), cancellationToken);
+        }
+
+        return handled;
+    }
+
+    private async Task<IReadOnlyList<ActiveBrokerOrder>> CrossCheckAndProtectAsync(
+        string blockSource,
+        string detail,
+        CancellationToken cancellationToken)
+    {
+        admission?.Block(
+            blockSource,
+            "FILL_PROTECTION_PENDING",
+            detail,
+            timeProvider.GetUtcNow());
+        try
+        {
+            var openOrders = await coordinator.CrossCheckAsync(broker, cancellationToken);
+            await reconciliation.ReconcileAsync(broker, openOrders, cancellationToken);
+            if (admission is null || !admission.GetSnapshot().Blocks.Any(block =>
+                    block.Source == AccountReconciliationService.ProtectionBlockSource))
+            {
+                admission?.Clear(blockSource);
+                if (admission is not null)
+                {
+                    foreach (var pendingFill in admission.GetSnapshot().Blocks.Where(block =>
+                                 block.Source.StartsWith("fill_protection_pending:", StringComparison.Ordinal)))
+                    {
+                        admission.Clear(pendingFill.Source);
+                    }
+                }
+            }
+
+            return openOrders;
+        }
+        catch
+        {
+            // Keep the block. A later successful reconciliation owns clearing it.
+            throw;
+        }
+    }
+
+    private static string ReadHorizon(string requestJson)
+    {
+        if (String.IsNullOrWhiteSpace(requestJson))
+        {
+            return String.Empty;
+        }
+
+        using var document = JsonDocument.Parse(requestJson);
+        return document.RootElement.TryGetProperty("horizon", out var horizon) &&
+               horizon.ValueKind == JsonValueKind.String
+            ? horizon.GetString()?.Trim().ToLowerInvariant() ?? String.Empty
+            : String.Empty;
+    }
+
+    private static bool SwingEntryWindowHasClosed(DateTimeOffset utcNow, TimeOnly windowEnd)
+    {
+        var eastern = TimeZoneInfo.FindSystemTimeZoneById(
+            OperatingSystem.IsWindows() ? "Eastern Standard Time" : "America/New_York");
+        var local = TimeZoneInfo.ConvertTime(utcNow, eastern);
+        return TimeOnly.FromDateTime(local.DateTime) >= windowEnd;
     }
 
     private async Task PollRestAsync(CancellationToken cancellationToken)
     {
         using var timer = new PeriodicTimer(options.PollInterval, timeProvider);
-        var nextReconciliationAt = timeProvider.GetUtcNow().Add(reconciliationOptions.ReconcileInterval);
         while (await timer.WaitForNextTickAsync(cancellationToken))
         {
-            var openOrders = await coordinator.CrossCheckAsync(broker, cancellationToken);
-            var now = timeProvider.GetUtcNow();
-            if (now >= nextReconciliationAt)
+            var openOrders = await CrossCheckAndProtectAsync(
+                RestProtectionPendingBlockSource,
+                "REST order state is being reconciled and protected.",
+                cancellationToken);
+            if (await HandleRestPartialEntriesAsync(openOrders, cancellationToken))
             {
-                await reconciliation.ReconcileAsync(broker, openOrders, cancellationToken);
-                nextReconciliationAt = now.Add(reconciliationOptions.ReconcileInterval);
+                await CrossCheckAndProtectAsync(
+                    RestProtectionPendingBlockSource,
+                    "REST partial-fill cancellation is being reconciled and protected.",
+                    cancellationToken);
             }
         }
     }

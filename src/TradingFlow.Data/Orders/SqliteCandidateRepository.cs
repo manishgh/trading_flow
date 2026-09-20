@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 using TradingFlow.Data.Context;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
@@ -31,6 +32,13 @@ public sealed class SqliteCandidateRepository(
         {
             candidate.Version = 0;
             context.Candidates.Add(candidate);
+            context.ApplicationEvents.Add(new ApplicationEventRecord
+            {
+                StreamName = $"candidate-runs/{run.RunId:N}",
+                EventType = "candidate.changed",
+                OccurredAtUtc = candidate.RevalidatedAtUtc,
+                PayloadJson = JsonSerializer.Serialize(candidate)
+            });
         }
         else
         {
@@ -123,6 +131,13 @@ public sealed class SqliteCandidateRepository(
         candidate.ExpiresAtUtc = expiresAtUtc;
         candidate.SemanticDecisionSha256 = semanticDecisionSha256;
         candidate.RevalidatedAtUtc = transitions[^1].OccurredAtUtc;
+        context.ApplicationEvents.Add(new ApplicationEventRecord
+        {
+            StreamName = $"candidate-runs/{run.RunId:N}",
+            EventType = "candidate.changed",
+            OccurredAtUtc = candidate.RevalidatedAtUtc,
+            PayloadJson = JsonSerializer.Serialize(candidate)
+        });
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return candidate;
@@ -157,6 +172,24 @@ public sealed class SqliteCandidateRepository(
             .AsNoTracking()
             .Where(item => item.CandidateId == candidateId)
             .OrderBy(item => item.Sequence)
+            .ToArrayAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<CandidateRecord>> ListByRunAsync(
+        Guid runId,
+        CancellationToken cancellationToken = default)
+    {
+        if (runId == Guid.Empty)
+        {
+            return [];
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Candidates
+            .AsNoTracking()
+            .Where(item => item.RunId == runId)
+            .OrderBy(item => item.Symbol)
+            .ThenBy(item => item.SelectedStrategy)
             .ToArrayAsync(cancellationToken);
     }
 
@@ -209,6 +242,7 @@ public sealed class SqliteCandidateRepository(
         if (source.RunId != target.RunId ||
             !source.Symbol.Equals(target.Symbol, StringComparison.OrdinalIgnoreCase) ||
             !source.SelectedStrategy!.Equals(target.SelectedStrategy, StringComparison.Ordinal) ||
+            !source.StrategySemanticVersion.Equals(target.StrategySemanticVersion, StringComparison.Ordinal) ||
             !source.StrategyContentSha256.Equals(target.StrategyContentSha256, StringComparison.Ordinal) ||
             !source.AdmissionProfileId.Equals(target.AdmissionProfileId, StringComparison.Ordinal) ||
             !source.AdmissionProfileVersion.Equals(target.AdmissionProfileVersion, StringComparison.Ordinal) ||

@@ -10,6 +10,11 @@ public interface IOrderLifecycleService
         OrderUpdate update,
         CancellationToken cancellationToken = default);
 
+    Task<OrderStateSnapshot> ApplyBrokerUpdateWithFillAsync(
+        OrderUpdate update,
+        OrderFillProjection positionFill,
+        CancellationToken cancellationToken = default);
+
     Task<OrderStateSnapshot> RequestCancelAsync(
         string clientOrderId,
         string brokerOrderId,
@@ -40,8 +45,30 @@ public static class BrokerOrderUpdateFactory
 /// <summary>
 /// Projects authoritative broker updates into the append-only order lifecycle.
 /// </summary>
-public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrderLifecycleService
+public sealed class OrderLifecycleService : IOrderLifecycleService
 {
+    private readonly IOrderEventRepository events;
+    private readonly TimeProvider timeProvider;
+
+    public OrderLifecycleService(
+        IOrderEventRepository events,
+        TimeProvider? timeProvider = null)
+    {
+        this.events = events;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    public Task<OrderStateSnapshot> ApplyBrokerUpdateAsync(
+        OrderUpdate update,
+        CancellationToken cancellationToken = default) =>
+        ApplyBrokerUpdateCoreAsync(update, positionFill: null, cancellationToken);
+
+    public Task<OrderStateSnapshot> ApplyBrokerUpdateWithFillAsync(
+        OrderUpdate update,
+        OrderFillProjection positionFill,
+        CancellationToken cancellationToken = default) =>
+        ApplyBrokerUpdateCoreAsync(update, positionFill, cancellationToken);
+
     public async Task<OrderStateSnapshot> RequestCancelAsync(
         string clientOrderId,
         string brokerOrderId,
@@ -68,7 +95,7 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
                 current.State,
                 OrderState.CancelPending,
                 Source: "engine",
-                LocalTimestampUtc: DateTimeOffset.UtcNow,
+                LocalTimestampUtc: timeProvider.GetUtcNow().ToUniversalTime(),
                 BrokerOrderId: brokerOrderId,
                 PayloadJson: JsonSerializer.Serialize(new
                 {
@@ -80,8 +107,9 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
         return transition.Snapshot;
     }
 
-    public async Task<OrderStateSnapshot> ApplyBrokerUpdateAsync(
+    private async Task<OrderStateSnapshot> ApplyBrokerUpdateCoreAsync(
         OrderUpdate update,
+        OrderFillProjection? positionFill = null,
         CancellationToken cancellationToken = default)
     {
         Validate(update);
@@ -91,23 +119,38 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
         EnsureBrokerIdentity(current, update.OrderId);
 
         var target = ResolveTargetState(update.Status);
+        if (IsSupersededBrokerObservation(current, update))
+        {
+            return current;
+        }
+
         if (current.State == OrderState.Submitted && target == OrderState.Rejected)
         {
             var rejected = await events.TransitionAsync(
-                CreateRequest(current, OrderState.Rejected, update),
+                CreateRequest(
+                    current,
+                    OrderState.Rejected,
+                    update,
+                    timeProvider.GetUtcNow(),
+                    positionFill),
                 cancellationToken);
             return rejected.Snapshot;
         }
 
         current = await EnsureAcknowledgedAsync(current, update, cancellationToken);
         if (target is null ||
-            (current.State == target && target != OrderState.PartiallyFilled))
+            (current.State == target && target != OrderState.PartiallyFilled && positionFill is null))
         {
             return current;
         }
 
         var transition = await events.TransitionAsync(
-            CreateRequest(current, target.Value, update),
+            CreateRequest(
+                current,
+                target.Value,
+                update,
+                timeProvider.GetUtcNow(),
+                positionFill),
             cancellationToken);
         return transition.Snapshot;
     }
@@ -120,7 +163,11 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
         if (current.State == OrderState.Submitted)
         {
             var acknowledged = await events.TransitionAsync(
-                CreateRequest(current, OrderState.Acked, update),
+                CreateRequest(
+                    current,
+                    OrderState.Acked,
+                    update,
+                    timeProvider.GetUtcNow()),
                 cancellationToken);
             return acknowledged.Snapshot;
         }
@@ -137,7 +184,9 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
     private static OrderTransitionRequest CreateRequest(
         OrderStateSnapshot current,
         OrderState target,
-        OrderUpdate update) => new(
+        OrderUpdate update,
+        DateTimeOffset localTimestampUtc,
+        OrderFillProjection? positionFill = null) => new(
             update.ClientOrderId,
             current.State,
             target,
@@ -147,13 +196,13 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
                 BrokerUpdateSource.BrokerRest => "broker_rest",
                 _ => throw new ArgumentOutOfRangeException(nameof(update.Source), update.Source, "Unknown broker update source.")
             },
-            LocalTimestampUtc: DateTimeOffset.UtcNow,
-            BrokerTimestampUtc: update.Timestamp.ToUniversalTime(),
+            LocalTimestampUtc: localTimestampUtc.ToUniversalTime(),
+            BrokerTimestampUtc: MaxBrokerTimestamp(current.BrokerTimestampUtc, update.Timestamp),
             BrokerOrderId: update.OrderId,
-            FilledQuantity: target is OrderState.PartiallyFilled or OrderState.Filled
+            FilledQuantity: update.FilledQuantity > 0m
                 ? update.FilledQuantity
                 : null,
-            FillPrice: target is OrderState.PartiallyFilled or OrderState.Filled
+            FillPrice: update.FilledQuantity > 0m
                 ? update.FilledPrice
                 : null,
             PayloadJson: JsonSerializer.Serialize(new
@@ -166,7 +215,25 @@ public sealed class OrderLifecycleService(IOrderEventRepository events) : IOrder
                 update.FilledQuantity,
                 update.FilledPrice,
                 update.Timestamp
-            }));
+            }),
+            PositionFill: positionFill);
+
+    private static bool IsSupersededBrokerObservation(
+        OrderStateSnapshot current,
+        OrderUpdate update) =>
+        current.BrokerTimestampUtc is { } currentBrokerTimestamp &&
+        update.Timestamp.ToUniversalTime() < currentBrokerTimestamp.ToUniversalTime() &&
+        update.FilledQuantity <= (current.FilledQuantity ?? 0m);
+
+    private static DateTimeOffset MaxBrokerTimestamp(
+        DateTimeOffset? current,
+        DateTimeOffset observed)
+    {
+        var observedUtc = observed.ToUniversalTime();
+        return current is { } currentTimestamp && currentTimestamp.ToUniversalTime() > observedUtc
+            ? currentTimestamp.ToUniversalTime()
+            : observedUtc;
+    }
 
     private static OrderState? ResolveTargetState(OrderStatus status) => status switch
     {

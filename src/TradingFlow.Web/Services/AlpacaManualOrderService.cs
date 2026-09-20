@@ -111,17 +111,16 @@ public sealed class AlpacaManualOrderService : IDisposable
                 ticketId);
         }
 
-        return await SubmitLimitOrderCoreAsync(
-                normalizedTicker,
-                normalizedSide,
-                quantity,
-                limitPrice,
-                allowExtendedHoursTrading,
-                cancellationToken,
-                ticketId,
-                normalizedType,
-                triggerPrice,
-                normalizedTif);
+        return await SubmitDurableExitAsync(
+            normalizedTicker,
+            quantity,
+            limitPrice,
+            allowExtendedHoursTrading,
+            cancellationToken,
+            ticketId,
+            normalizedType,
+            triggerPrice,
+            normalizedTif);
     }
 
     /// <summary>
@@ -146,7 +145,24 @@ public sealed class AlpacaManualOrderService : IDisposable
         }
 
         var (_, provider) = GetClients();
-        return await provider.CancelOrderAsync(brokerOrderId.Trim(), cancellationToken);
+        var order = (await provider.GetOpenOrdersAsync(cancellationToken))
+            .SingleOrDefault(candidate =>
+                candidate.OrderId.Equals(brokerOrderId.Trim(), StringComparison.Ordinal));
+        if (order is null)
+        {
+            throw new InvalidOperationException(
+                $"Open broker order '{brokerOrderId}' was not found for cancellation.");
+        }
+
+        var state = await orderSubmissions.RequestCancelAsync(
+            new OrderCancellationSubmission(
+                order.ParentClientOrderId ?? order.ClientOrderId,
+                order.OrderId,
+                "operator_cancel_order",
+                DateTimeOffset.UtcNow),
+            provider,
+            cancellationToken);
+        return OrderStateMachine.IsTerminal(state.State);
     }
 
     public async Task<ManualBrokerContext> GetBrokerContextAsync(
@@ -193,9 +209,9 @@ public sealed class AlpacaManualOrderService : IDisposable
         }
 
         var normalizedHorizon = horizon?.Trim().ToLowerInvariant();
-        if (normalizedHorizon is not ("intraday" or "swing"))
+        if (normalizedHorizon != "swing")
         {
-            throw new InvalidOperationException("Operator-direct buy horizon must be intraday or swing.");
+            throw new InvalidOperationException("Operator-direct buy horizon must be swing.");
         }
 
         if (stopLossPrice is not > 0m || stopLossPrice >= limitPrice)
@@ -229,8 +245,8 @@ public sealed class AlpacaManualOrderService : IDisposable
             now);
         var intentId = ticketId ?? OrderIntentIdFactory.Create(runId, strategyId, "buy", ticker, now);
         var candidateId = Guid.NewGuid();
-        var result = await orderSubmissions.SubmitBracketOrderAsync(
-            new BracketOrderSubmission(
+        var result = await orderSubmissions.SubmitEntryOrderAsync(
+            new EntryOrderSubmission(
                 intentId,
                 new ValidatedEntryCandidate(
                     candidateId,
@@ -278,9 +294,8 @@ public sealed class AlpacaManualOrderService : IDisposable
             limitPrice);
     }
 
-    private async Task<ManualOrderResult> SubmitLimitOrderCoreAsync(
+    private async Task<ManualOrderResult> SubmitDurableExitAsync(
         string normalizedTicker,
-        string normalizedSide,
         decimal quantity,
         decimal limitPrice,
         bool allowExtendedHoursTrading,
@@ -290,99 +305,59 @@ public sealed class AlpacaManualOrderService : IDisposable
         decimal? triggerPrice = null,
         string timeInForce = "day")
     {
-        var (client, provider) = GetClients();
+        var (_, provider) = GetClients();
         var now = DateTimeOffset.UtcNow;
-        var session = await provider.GetSessionAsync(now, cancellationToken);
-        // Passing the real settings means the policy refuses an extended-hours market
-        // or stop order rather than silently accepting one described as limit/day.
-        ExtendedHoursOrderPolicy.Validate(
-            session,
-            orderType: orderType == "stop_limit" ? "limit" : orderType,
-            timeInForce: timeInForce,
-            allowExtendedHoursTrading);
-        if (session.Session == EquityTradingSession.Overnight)
-        {
-            var eligibility = await provider.GetEligibilityAsync(normalizedTicker, cancellationToken);
-            ExtendedHoursOrderPolicy.ValidateOvernightAsset(normalizedTicker, eligibility);
-        }
-
-        var positionQuantity = await GetOpenPositionQuantityAsync(
-            client,
-            normalizedTicker,
-            cancellationToken);
-        if (normalizedSide == "sell")
-        {
-            if (positionQuantity <= 0m)
-            {
-                throw new InvalidOperationException($"No open paper position exists for {normalizedTicker}; sell is disabled to avoid accidental shorting.");
-            }
-
-            if (quantity > positionQuantity)
-            {
-                throw new InvalidOperationException($"Sell quantity {quantity} exceeds open paper position {positionQuantity} for {normalizedTicker}.");
-            }
-        }
-
-        var clientOrderId = ticketId is { } stableTicketId
-            ? $"tf-manual-{normalizedSide}-{stableTicketId:N}"
-            : $"tf-manual-{normalizedSide}-{normalizedTicker}-{now:yyyyMMddHHmmssfff}";
-        var submitOutsideRegularHours = session.Session != EquityTradingSession.Regular;
-
-        // Built as a dictionary rather than two anonymous shapes so price fields are
-        // present only for the types that carry them. Alpaca rejects a market order
-        // that arrives with a limit_price.
-        var payload = new Dictionary<string, object>(StringComparer.Ordinal)
-        {
-            ["symbol"] = normalizedTicker,
-            ["qty"] = quantity.ToString("0.########", CultureInfo.InvariantCulture),
-            ["side"] = normalizedSide,
-            ["type"] = orderType,
-            ["time_in_force"] = timeInForce,
-            ["client_order_id"] = clientOrderId
-        };
-        if (orderType is "limit" or "stop_limit")
-        {
-            payload["limit_price"] = FormatPrice(limitPrice);
-        }
-        if (orderType is "stop" or "stop_limit" && triggerPrice is { } trigger)
-        {
-            payload["stop_price"] = FormatPrice(trigger);
-        }
-        if (submitOutsideRegularHours)
-        {
-            payload["extended_hours"] = true;
-        }
-
-        object requestBody = payload;
-
-        using var content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v2/orders") { Content = content };
-        var response = await client.SendAsync(
-            request,
-            "broker-manual-order",
-            correlationId: clientOrderId,
-            attributes: new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["side"] = normalizedSide,
-                ["ticker"] = normalizedTicker
-            },
-            cancellationToken: cancellationToken);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException(AlpacaTradingRestClient.DescribeFailure("manual paper order", response));
-        }
-
-        using var document = JsonDocument.Parse(response.Payload);
-        var orderId = document.RootElement.TryGetProperty("id", out var orderIdElement)
-            ? orderIdElement.GetString() ?? String.Empty
-            : String.Empty;
-        if (String.IsNullOrWhiteSpace(orderId))
+        var brokerPosition = (await provider.GetOpenPositionsAsync(cancellationToken))
+            .SingleOrDefault(position =>
+                position.Ticker.Equals(normalizedTicker, StringComparison.OrdinalIgnoreCase));
+        if (brokerPosition is null || brokerPosition.Qty <= 0m)
         {
             throw new InvalidOperationException(
-                $"Alpaca manual paper order returned no order id. RawArchiveId={response.Archive.Manifest.ArchiveId}.");
+                $"No open long paper position exists for {normalizedTicker}; sell is disabled to avoid accidental shorting.");
         }
 
-        return new ManualOrderResult(orderId, normalizedTicker, normalizedSide, quantity, limitPrice);
+        if (quantity > brokerPosition.Qty)
+        {
+            throw new InvalidOperationException(
+                $"Sell quantity {quantity} exceeds open paper position {brokerPosition.Qty} for {normalizedTicker}.");
+        }
+
+        var runId = ticketId ?? Guid.NewGuid();
+        var runContext = ExecutionRunContextFactory.Create(
+            runId,
+            "paper",
+            new
+            {
+                policy = "operator_exit",
+                symbol = normalizedTicker,
+                quantity,
+                orderType,
+                timeInForce,
+                limitPrice,
+                triggerPrice,
+                allowExtendedHoursTrading
+            },
+            now);
+        var result = await orderSubmissions.SubmitPositionExitAsync(
+            new PositionExitSubmission(
+                runContext,
+                normalizedTicker,
+                quantity,
+                "operator_exit",
+                now,
+                allowExtendedHoursTrading,
+                orderType,
+                timeInForce,
+                orderType is "limit" or "stop_limit" ? limitPrice : null,
+                orderType is "stop" or "stop_limit" ? triggerPrice : null),
+            provider,
+            cancellationToken);
+        return new ManualOrderResult(
+            result.BrokerOrderId,
+            normalizedTicker,
+            "sell",
+            quantity,
+            limitPrice);
     }
 
     private (AlpacaTradingRestClient Trading, AlpacaBrokerClient Provider) GetClients()

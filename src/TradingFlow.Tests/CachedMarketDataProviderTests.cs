@@ -19,7 +19,7 @@ public sealed class CachedMarketDataProviderTests
             new DateOnly(2026, 8, 3),
             CancellationToken.None);
 
-        Assert.True(provider.OmittedIntradayIntervalsMeanNoQualifyingTrades);
+        Assert.True(provider.OmittedSubDailyIntervalsMeanNoQualifyingTrades);
         Assert.Equal(inner.MarketDataProvenance, provider.MarketDataProvenance);
         Assert.True(schedule[new DateOnly(2026, 8, 3)].IsTradingDay);
     }
@@ -31,7 +31,7 @@ public sealed class CachedMarketDataProviderTests
         var inner = new Mock<IMarketDataProvider>();
         var provider = new CachedMarketDataProvider(inner.Object, directory.Path, "reuse");
 
-        Assert.False(provider.OmittedIntradayIntervalsMeanNoQualifyingTrades);
+        Assert.False(provider.OmittedSubDailyIntervalsMeanNoQualifyingTrades);
         Assert.Throws<InvalidOperationException>(() => provider.MarketDataProvenance);
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             provider.LoadMarketSessionSchedulesAsync(
@@ -46,7 +46,7 @@ public sealed class CachedMarketDataProviderTests
         IMarketDataCompletenessProvider,
         IMarketDataProvenanceProvider
     {
-        public bool OmittedIntradayIntervalsMeanNoQualifyingTrades => true;
+        public bool OmittedSubDailyIntervalsMeanNoQualifyingTrades => true;
 
         public MarketDataProvenance MarketDataProvenance { get; } =
             new("alpaca_historical_bars_v2", "sip", "all");

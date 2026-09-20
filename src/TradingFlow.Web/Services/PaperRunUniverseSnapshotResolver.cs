@@ -69,10 +69,18 @@ public sealed class PaperRunUniverseSnapshotResolver(
             }
 
             var strategy = yamlReader.ReadStrategy(strategyPath);
-            var scope = strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)
-                ? ScreenerScope.Swing
-                : ScreenerScope.Intraday;
-            var result = await screener.PreviewAsync(screenerInput, scope, wishlistId, cancellationToken);
+            if (!strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Strategy '{strategy.StrategyName}' is not a swing strategy. " +
+                    "Paper runs require a daily setup timeframe; sub-daily bars may only confirm or time swing entries.");
+            }
+
+            var result = await screener.PreviewAsync(
+                screenerInput,
+                ScreenerScope.Swing,
+                wishlistId,
+                cancellationToken);
             if (!result.Succeeded)
             {
                 throw new InvalidOperationException(result.Error ?? "Finviz screener resolution failed.");

@@ -101,7 +101,7 @@ public sealed class EarningsMonitor
             // report date has passed, so a window that starts at today would never collect them.
             var calendarFrom = from.AddDays(-options.RecentResultLookbackDays);
             var marketSchedules = await marketState.LoadMarketSessionSchedulesAsync(
-                exchangeToday.AddDays(-options.IntradayLookbackDays - 10),
+                exchangeToday.AddDays(-options.SubDailyLookbackDays - 10),
                 to.AddDays(1),
                 timeout.Token);
             analyzer.UpdateMarketSessionSchedules(marketSchedules);

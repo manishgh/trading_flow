@@ -284,12 +284,12 @@ function refreshFreshness() {
 }
 
 if (wishlistId) {
-    createNamedEventStream(`/api/wishlists/${wishlistId}/quotes/stream`, "quotes", {
+    createNamedEventStream(`/api/v1/wishlists/${wishlistId}/quotes/stream`, "quotes", {
         onMessage: applyQuotes,
         onState: setConnectionState,
         onDecodeError: error => console.warn("Quote update rejected.", error)
     });
-    createNamedEventStream(`/api/wishlists/${wishlistId}/activity/stream`, "activity", {
+    createNamedEventStream(`/api/v1/wishlists/${wishlistId}/activity/stream`, "activity", {
         onMessage: applyActivity,
         onState: (state, detail) => {
             if (state !== "connected") {

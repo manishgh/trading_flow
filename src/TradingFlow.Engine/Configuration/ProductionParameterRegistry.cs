@@ -83,7 +83,6 @@ public static class ProductionParameterRegistry
             Choice("account_mode", "margin", ["margin", "cash"], "ACC-05"),
             Decimal("pdt_equity_floor", 25_500m, 25_000m, null, ProductionParameterUnit.UsDollars, "ACC-03"),
             Integer("pdt_recheck_interval_s", 300, 60, 900, ProductionParameterUnit.Seconds, "ACC-02"),
-            Decimal("max_gross_exposure_intraday_pct", 100m, 10m, 200m, ProductionParameterUnit.Percent, "ACC-07"),
             Decimal("max_gross_exposure_overnight_pct", 75m, 10m, 100m, ProductionParameterUnit.Percent, "ACC-07"),
             Boolean("allow_swing_shorts", false, "ACC-10"),
             Integer("asset_check_max_age_s", 3_600, 60, 86_400, ProductionParameterUnit.Seconds, "ACC-11"),
@@ -105,7 +104,6 @@ public static class ProductionParameterRegistry
 
             Time("calendar_fetch_time", new TimeOnly(3, 30), new TimeOnly(0, 0), new TimeOnly(6, 0), "CAL-01"),
             Decimal("min_session_hours_for_close_model", 6.0m, 3m, 6.5m, ProductionParameterUnit.Hours, "CAL-02"),
-            Integer("eod_flatten_offset_min", 10, 2, 30, ProductionParameterUnit.Minutes, "CAL-02"),
             Choice("earnings_calendar_source", "finviz", ["finviz", "other"], "CAL-07"),
 
             Integer("finviz_min_interval_s", 60, 30, 600, ProductionParameterUnit.Seconds, "FVZ-02"),
@@ -145,23 +143,30 @@ public static class ProductionParameterRegistry
             Integer("reconcile_interval_s", 60, 15, 300, ProductionParameterUnit.Seconds, "EXE-08"),
             Integer("order_orphan_timeout_s", 30, 10, 120, ProductionParameterUnit.Seconds, "EXE-02"),
             Integer("order_poll_interval_s", 15, 5, 60, ProductionParameterUnit.Seconds, "EXE-03"),
+            Integer("order_dispatch_lease_s", 30, 10, 120, ProductionParameterUnit.Seconds, "EXE-01"),
+            Integer("order_dispatch_recovery_interval_s", 5, 1, 30, ProductionParameterUnit.Seconds, "EXE-01"),
+            Integer("order_dispatch_recovery_parallelism", 4, 1, 16, ProductionParameterUnit.None, "EXE-01"),
             Decimal("backstop_atr_mult", 1.5m, 1.0m, 3.0m, ProductionParameterUnit.Ratio, "EXE-09"),
             Boolean("allow_multi_strategy_same_symbol", false, "EXE-10", isLockedInLiveV1: true),
             Boolean("allow_extended_hours_trading", false, "EXE-11"),
-            Boolean("shutdown_flatten_day", true, "EXE-13"),
             Boolean("shutdown_flatten_swing", false, "EXE-13"),
+            Integer("shutdown_timeout_s", 30, 5, 120, ProductionParameterUnit.Seconds, "EXE-13"),
+            Integer("shutdown_exit_fill_confirmation_s", 5, 1, 30, ProductionParameterUnit.Seconds, "EXE-13"),
+            Integer("shutdown_exit_fill_poll_ms", 250, 25, 1_000, ProductionParameterUnit.Milliseconds, "EXE-13"),
+            Integer("shutdown_flat_confirmation_observations", 2, 2, 10, ProductionParameterUnit.None, "EXE-13"),
+            Integer("shutdown_protection_restoration_timeout_s", 5, 1, 30, ProductionParameterUnit.Seconds, "EXE-13"),
+            Integer("shutdown_journal_flush_timeout_s", 5, 1, 30, ProductionParameterUnit.Seconds, "EXE-13"),
+            Integer("shutdown_journal_flush_retry_ms", 100, 25, 1_000, ProductionParameterUnit.Milliseconds, "EXE-13"),
 
-            Decimal("per_trade_risk_pct_day", 0.5m, 0.1m, 2.0m, ProductionParameterUnit.Percent, "RSK-01"),
             Decimal("per_trade_risk_pct_swing", 0.5m, 0.1m, 2.0m, ProductionParameterUnit.Percent, "RSK-01"),
             Decimal("max_daily_loss_pct", 2m, 0.5m, 5m, ProductionParameterUnit.Percent, "RSK-01"),
             Decimal("max_weekly_loss_pct", 4m, 1m, 10m, ProductionParameterUnit.Percent, "RSK-01"),
             Integer("max_consecutive_losses", 3, 2, 10, ProductionParameterUnit.None, "RSK-01"),
-            Integer("max_positions_day", 1, 1, 20, ProductionParameterUnit.None, "RSK-01"),
             Integer("max_positions_swing", 3, 1, 20, ProductionParameterUnit.None, "RSK-01"),
             Integer("news_stream_down_max_s", 120, 30, 600, ProductionParameterUnit.Seconds, "RSK-03"),
             Integer("max_order_rejects", 3, 1, 10, ProductionParameterUnit.None, "RSK-03"),
             Boolean("manual_kill_flatten", true, "RSK-04"),
-            Decimal("equity_staleness_haircut_pct", 5m, 1m, 20m, ProductionParameterUnit.Percent, "RSK-06"),
+            Integer("account_snapshot_max_age_s", 60, 5, 300, ProductionParameterUnit.Seconds, "RSK-06"),
 
             StringList("swing_enabled_strategies", ["SWG-A"], "SWG-05"),
             Decimal("swga_min_catalyst", 70m, 50m, 95m, ProductionParameterUnit.Score, "SWG-06"),
@@ -195,7 +200,6 @@ public static class ProductionParameterRegistry
             Choice("swg_stop_order_type", "stop", ["stop", "stop_limit"], "SWG-12"),
             Decimal("swg_news_exit_materiality", 0.7m, 0.5m, 1.0m, ProductionParameterUnit.Ratio, "SWG-13"),
             Integer("swg_earnings_buffer_sessions", 1, 1, 3, ProductionParameterUnit.Sessions, "SWG-14"),
-            Boolean("allow_day_to_swing_conversion", false, "DAY-03", isLockedInLiveV1: true),
             Choice("raw_md_sampling", "full_subscribed", ["full_subscribed"], "PER-01")
         ];
     }

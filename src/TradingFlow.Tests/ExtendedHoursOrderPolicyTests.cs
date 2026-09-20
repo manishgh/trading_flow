@@ -96,7 +96,7 @@ public sealed class ExtendedHoursOrderPolicyTests
                 "day",
                 allowExtendedHoursTrading: true));
 
-        Assert.Contains("does not support broker-protected bracket orders", error.Message, StringComparison.Ordinal);
+        Assert.Contains("cannot attach a broker-resting protective stop", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

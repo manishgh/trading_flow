@@ -27,11 +27,11 @@ public sealed class DiscoverySourceAdapterTests
         screener
             .Setup(source => source.PreviewAsync(
                 "v=111&f=sh_relvol_o2",
-                ScreenerScope.Intraday,
+                ScreenerScope.Swing,
                 null,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ScreenerSyncResult(
-                ScreenerScope.Intraday,
+                ScreenerScope.Swing,
                 "relative-volume screen",
                 "v=111&f=sh_relvol_o2",
                 ["RGTI", "POET"],
@@ -52,7 +52,7 @@ public sealed class DiscoverySourceAdapterTests
             Guid.NewGuid(),
             "v=111&f=sh_relvol_o2",
             ["STALE"],
-            "intraday",
+            "swing",
             TimeSpan.FromMinutes(1),
             TimeSpan.FromMinutes(3),
             null,
@@ -101,7 +101,7 @@ public sealed class DiscoverySourceAdapterTests
             ]);
         var source = new NewsDiscoverySource(
             ["POET"],
-            "intraday",
+            "swing",
             TimeSpan.FromMinutes(1),
             TimeSpan.FromMinutes(3),
             repository.Object,
@@ -124,7 +124,7 @@ public sealed class DiscoverySourceAdapterTests
         pulses.RegisterPulse("RGTI", "breakout", "RGTI accelerating");
         var source = new AlertDiscoverySource(
             ["RGTI"],
-            "intraday",
+            "swing",
             TimeSpan.FromMinutes(1),
             TimeSpan.FromMinutes(3),
             pulses,

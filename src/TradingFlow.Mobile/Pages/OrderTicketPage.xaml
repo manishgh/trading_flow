@@ -39,7 +39,6 @@
                         <Label Text="Horizon" Style="{StaticResource Caption}" />
                         <Picker x:Name="HorizonPicker" SelectedIndex="0">
                             <Picker.Items>
-                                <x:String>intraday</x:String>
                                 <x:String>swing</x:String>
                             </Picker.Items>
                         </Picker>

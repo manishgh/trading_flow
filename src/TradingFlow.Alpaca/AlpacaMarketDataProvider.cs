@@ -25,7 +25,7 @@ public sealed class AlpacaMarketDataProvider :
     private readonly string _marketDataFeed;
     private readonly Polly.Bulkhead.AsyncBulkheadPolicy<HttpResponseMessage> _bulkhead = TradingFlow.Domain.Http.RateLimiterFactory.CreateBulkhead(10, 50);
 
-    public bool OmittedIntradayIntervalsMeanNoQualifyingTrades => true;
+    public bool OmittedSubDailyIntervalsMeanNoQualifyingTrades => true;
 
     public MarketDataProvenance MarketDataProvenance => new(
         "alpaca_historical_bars_v2",

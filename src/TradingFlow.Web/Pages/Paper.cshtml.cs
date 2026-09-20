@@ -251,7 +251,7 @@ public sealed class PaperModel : PageModel
             return Page();
         }
 
-        var job = paperJobs.Start(runName, tempConfigPath);
+        var job = await paperJobs.StartAsync(runName, tempConfigPath, cancellationToken);
         return RedirectToPage("/PaperJob", new { id = job.JobId });
     }
 

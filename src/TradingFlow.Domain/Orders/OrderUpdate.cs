@@ -20,5 +20,6 @@ public record OrderUpdate(
     decimal? PositionQuantity,
     string? ExecutionId,
     DateTimeOffset Timestamp,
-    BrokerUpdateSource Source
+    BrokerUpdateSource Source,
+    decimal? LastFillPrice = null
 );

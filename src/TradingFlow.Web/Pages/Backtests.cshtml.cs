@@ -221,7 +221,7 @@ public sealed class BacktestsModel : PageModel
 
     private const string ElapsedFormat = @"hh\:mm\:ss";
 
-    public IActionResult OnPostOptimize()
+    public async Task<IActionResult> OnPostOptimizeAsync(CancellationToken cancellationToken)
     {
         var form = Request.Form;
         var request = new OptimizationRunRequest(
@@ -234,7 +234,7 @@ public sealed class BacktestsModel : PageModel
             form["MinVolumeSpikeCsv"].ToString());
 
         var configPath = configWriter.WriteOptimizationConfig(request);
-        var job = optJobs.Start(request.RunName, configPath);
+        var job = await optJobs.StartAsync(request.RunName, configPath, cancellationToken);
         return RedirectToPage("/OptimizationJob", new { id = job.JobId });
     }
 
@@ -287,15 +287,15 @@ public sealed class BacktestsModel : PageModel
             []);
 
         var configPath = configWriter.WriteBacktestConfig(request);
-        var job = backtestJobs.Start(request.RunName, configPath);
+        var job = await backtestJobs.StartAsync(request.RunName, configPath, cancellationToken);
         // The run stays on this screen: Configure, Running and Results are three
         // phases of one place rather than a handoff to a second page.
         return RedirectToPage(new { jobId = job.JobId, wishlistId = wishlist.Id });
     }
 
-    public IActionResult OnPostCancelBacktest(Guid id)
+    public async Task<IActionResult> OnPostCancelBacktestAsync(Guid id, CancellationToken cancellationToken)
     {
-        backtestJobs.CancelJob(id);
+        await backtestJobs.CancelJobAsync(id, cancellationToken);
         return RedirectToPage(new
         {
             configPath = SelectedConfigPath,

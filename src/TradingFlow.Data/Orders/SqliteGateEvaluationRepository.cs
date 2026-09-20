@@ -24,6 +24,24 @@ public sealed class SqliteGateEvaluationRepository : IGateEvaluationRepository
         this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    public async Task<IReadOnlyList<GateEvaluationRecord>> ListByCandidateAsync(
+        Guid candidateId,
+        CancellationToken cancellationToken = default)
+    {
+        if (candidateId == Guid.Empty)
+        {
+            return [];
+        }
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.GateEvaluations
+            .AsNoTracking()
+            .Where(item => item.CandidateId == candidateId)
+            .OrderBy(item => item.GateOrder)
+            .ThenBy(item => item.EvaluationId)
+            .ToArrayAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<GateEvaluationRecord>> AppendBatchAsync(
         ProductionRun run,
         IReadOnlyList<GateEvaluationAppendRequest> evaluations,

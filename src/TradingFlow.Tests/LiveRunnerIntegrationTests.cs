@@ -18,6 +18,9 @@ namespace TradingFlow.Tests;
 
 public class LiveRunnerIntegrationTests
 {
+    private static readonly Guid TestExecutionRunId =
+        Guid.Parse("10000000-0000-0000-0000-000000000001");
+
     [Theory]
     [InlineData("accepted")]
     [InlineData("accepted_for_bidding")]
@@ -61,7 +64,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["RGTI"], ["5m"], workerCount: 1, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m")],
                 cts,
                 progress);
 
@@ -128,7 +131,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 run,
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m")],
                 cts,
                 CancelAfterIterations(cts, 1));
 
@@ -177,7 +180,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m")],
                 cts,
                 progress);
 
@@ -233,7 +236,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m")],
                 cts,
                 progress);
 
@@ -284,17 +287,6 @@ public class LiveRunnerIntegrationTests
                 .ReturnsAsync([brokerOrder]);
             broker.Setup(client => client.GetOpenPositionsAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync([]);
-            var orderState = new Mock<IOrderStateRepository>();
-            orderState.Setup(repository => repository.GetOrderAsync("broker-1", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new PersistedOrder
-                {
-                    OrderId = "broker-1",
-                    ClientOrderId = brokerOrder.ClientOrderId,
-                    Ticker = "AAPL",
-                    Status = "accepted"
-                });
-            orderState.Setup(repository => repository.GetActiveOrdersByTickerAsync("AAPL", It.IsAny<CancellationToken>()))
-                .ReturnsAsync([]);
             var lifecycle = new Mock<IOrderLifecycleService>();
             lifecycle
                 .Setup(service => service.ApplyBrokerUpdateAsync(
@@ -314,7 +306,6 @@ public class LiveRunnerIntegrationTests
                 provider.Object,
                 lockService: null,
                 brokerClient: broker.Object,
-                orderStateRepository: orderState.Object,
                 orderLifecycleService: lifecycle.Object);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var progress = new Progress<string>(message =>
@@ -328,7 +319,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m")],
                 cts,
                 progress);
 
@@ -347,7 +338,7 @@ public class LiveRunnerIntegrationTests
     }
 
     [Fact]
-    public async Task RunAsync_DerivesMissingStrategyTimeframe_FromConfiguredBaseInterval()
+    public async Task RunAsync_DerivesMissingDailyPrimaryTimeframe_FromConfiguredBaseInterval()
     {
         var resultsRoot = CreateTempDirectory();
         try
@@ -380,7 +371,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 2, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "15m", executionTimeframe: "5m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m")],
                 cts,
                 progress);
 
@@ -388,11 +379,11 @@ public class LiveRunnerIntegrationTests
             Assert.Equal(["5m"], requestedIntervals);
             Assert.True(
                 File.Exists(Path.Combine(resultsRoot, "live", "LiveRunnerTest", "AAPL", "AAPL_chart.json")),
-                "The 15m strategy chart should be generated from derived 5m bars.");
+                "The daily swing chart should be generated from completed 5m bars.");
 
             var chartJson = await File.ReadAllTextAsync(Path.Combine(resultsRoot, "live", "LiveRunnerTest", "AAPL", "AAPL_chart.json"));
             using var chart = System.Text.Json.JsonDocument.Parse(chartJson);
-            Assert.Equal("15m", chart.RootElement.GetProperty("Timeframe").GetString());
+            Assert.Equal("1d", chart.RootElement.GetProperty("Timeframe").GetString());
         }
         finally
         {
@@ -446,7 +437,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL", "SIVEF"], ["5m"], workerCount: 2, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "15m", executionTimeframe: "5m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m")],
                 cts,
                 progress);
 
@@ -510,7 +501,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 2, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m", confluenceEnabled: true, confluenceTimeframe: "5m", confluenceEmaPeriod: 20)],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m", confluenceEnabled: true, confluenceTimeframe: "5m", confluenceEmaPeriod: 20)],
                 cts,
                 progress);
 
@@ -568,7 +559,7 @@ public class LiveRunnerIntegrationTests
             broker.Setup(x => x.GetOpenOrdersAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
             broker.Setup(x => x.GetOpenPositionsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
             var submissions = new Mock<IOrderSubmissionService>(MockBehavior.Strict);
-            var baseStrategy = CreateStrategy("5m", "5m");
+            var baseStrategy = CreateStrategy("1d", "5m");
             var catalystStrategy = baseStrategy with
             {
                 EntryRules = baseStrategy.EntryRules with
@@ -607,8 +598,8 @@ public class LiveRunnerIntegrationTests
                 cts,
                 progress);
 
-            submissions.Verify(x => x.SubmitBracketOrderAsync(
-                It.IsAny<BracketOrderSubmission>(),
+            submissions.Verify(x => x.SubmitEntryOrderAsync(
+                It.IsAny<EntryOrderSubmission>(),
                 It.IsAny<IBrokerClient>(),
                 It.IsAny<CancellationToken>()), Times.Never);
             broker.Verify(x => x.SubmitOrderAsync(
@@ -658,7 +649,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL", "MSFT"], ["5m"], workerCount: 2, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m", confluenceEnabled: true, confluenceTimeframe: "5m", confluenceEmaPeriod: 20)],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m", confluenceEnabled: true, confluenceTimeframe: "5m", confluenceEmaPeriod: 20)],
                 cts,
                 progress);
 
@@ -709,7 +700,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 2, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m")],
                 cts,
                 progress);
 
@@ -759,7 +750,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL", "MSFT", "NVDA"], ["5m"], workerCount: 1, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m")],
                 cts,
                 progress);
 
@@ -819,35 +810,25 @@ public class LiveRunnerIntegrationTests
                     TradeSuspendedByUser: false,
                     ShortingEnabled: true,
                     BuyingPower: 100_000m,
+                    RegulationTBuyingPower: 100_000m,
                     Equity: 100_000m,
                     LongMarketValue: 0m,
                     ShortMarketValue: 0m,
-                    DateTimeOffset.UtcNow));
+                    RequestedAtUtc: DateTimeOffset.UtcNow,
+                    ObservedAtUtc: DateTimeOffset.UtcNow));
             broker
                 .Setup(x => x.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
                 .Callback<BrokerEntryOrder, CancellationToken>((order, _) => submittedOrder = order.Order)
                 .ReturnsAsync(new BrokerOrderReceipt("order-1", DateTimeOffset.UtcNow));
 
-            var orderRepo = new Mock<IOrderStateRepository>();
-            orderRepo
-                .Setup(x => x.GetActiveOrdersByTickerAsync("AAPL", It.IsAny<CancellationToken>()))
-                .ReturnsAsync([]);
-            orderRepo
-                .Setup(x => x.GetOrderAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((PersistedOrder?)null);
-            orderRepo
-                .Setup(x => x.SaveOrderAsync(It.IsAny<PersistedOrder>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
-
             var runner = CreateRunner(
                 provider.Object,
                 lockService: null,
                 brokerClient: broker.Object,
-                orderStateRepository: orderRepo.Object,
                 orderSubmissionService: CreatePassThroughSubmissionService(),
                 timeProvider: new FixedTimeProvider(
                     new DateTimeOffset(2026, 8, 26, 19, 56, 0, TimeSpan.Zero)));
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             var progressMessages = new System.Collections.Concurrent.ConcurrentQueue<string>();
             var progress = new Progress<string>(message =>
             {
@@ -861,7 +842,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL"], ["1m", "5m"], workerCount: 2, derivedSource: "1m", dryRun: false, allowLiveOrders: true),
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "1m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "1m")],
                 cts,
                 progress);
 
@@ -900,7 +881,7 @@ public class LiveRunnerIntegrationTests
                         "MXL",
                         "sell",
                         "new",
-                        "limit",
+                        "stop",
                         120m,
                         null,
                         100m,
@@ -916,37 +897,52 @@ public class LiveRunnerIntegrationTests
                     new BrokerPosition("MXL", "long", 100m, 108m, 103m, -500m)
                 ]);
             broker
-                .Setup(x => x.CancelOrderAsync("sell-leg-1", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(true);
-            broker
-                .Setup(x => x.ClosePositionAsync("MXL", 100, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(true);
+                .Setup(x => x.GetSessionAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TradingSessionSnapshot(
+                    new DateOnly(2026, 8, 26),
+                    EquityTradingSession.Regular,
+                    new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 8, 26, 13, 30, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 8, 26, 20, 0, 0, TimeSpan.Zero)));
 
-            var orderRepo = new Mock<IOrderStateRepository>();
-            orderRepo
-                .Setup(x => x.GetActiveOrdersByTickerAsync("MXL", It.IsAny<CancellationToken>()))
-                .ReturnsAsync([
-                    new PersistedOrder
-                    {
-                        OrderId = "entry-1",
-                        Ticker = "MXL",
-                        StrategyName = "Test Strategy",
-                        Broker = "alpaca",
-                        Status = "exit_submitted",
-                        EntryPrice = 108m,
-                        StopLossPrice = 98m,
-                        TakeProfitPrice = 128m,
-                        ShareQuantity = 100,
-                        CreatedAt = DateTimeOffset.UtcNow.AddDays(-6),
-                        UpdatedAt = DateTimeOffset.UtcNow.AddDays(-6)
-                    }
-                ]);
-            orderRepo
-                .Setup(x => x.GetOrderAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((PersistedOrder?)null);
-            orderRepo
-                .Setup(x => x.UpdateOrderStatusAsync("entry-1", "technical_exit_submitted", It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
+            var submissions = new Mock<IOrderSubmissionService>(MockBehavior.Strict);
+            submissions.Setup(service => service.RequestCancelAsync(
+                    It.Is<OrderCancellationSubmission>(cancel =>
+                        cancel.ClientOrderId == "broker-generated-exit" &&
+                        cancel.BrokerOrderId == "sell-leg-1" &&
+                        cancel.Reason.Contains("technical_exit_below_ema20", StringComparison.Ordinal)),
+                    broker.Object,
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new OrderStateSnapshot(
+                    Guid.NewGuid(),
+                    "broker-generated-exit",
+                    "sell-leg-1",
+                    OrderState.Canceled,
+                    DateTimeOffset.UtcNow,
+                    null,
+                    null,
+                    null,
+                    1));
+            submissions.Setup(service => service.SubmitPositionExitAsync(
+                    It.Is<PositionExitSubmission>(exit =>
+                        exit.Symbol == "MXL" &&
+                        exit.Quantity == 100m &&
+                        exit.Reason == "technical_exit_below_ema20"),
+                    broker.Object,
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new OrderSubmissionResult(
+                    "exit-1",
+                    "TEST-S-MXL-20260826-001-12345678",
+                    Guid.NewGuid(),
+                    new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero)));
+
+            var journal = CreateFilledPositionJournal(
+                "MXL",
+                100m,
+                108m,
+                80m,
+                128m,
+                new DateTimeOffset(2026, 8, 20, 13, 30, 0, TimeSpan.Zero));
 
             var audits = new List<DecisionAuditRecord>();
             var auditRepo = new Mock<IDecisionAuditRepository>();
@@ -960,7 +956,10 @@ public class LiveRunnerIntegrationTests
                 lockService: null,
                 auditRepo,
                 broker.Object,
-                orderRepo.Object);
+                orderSubmissionService: submissions.Object,
+                orderIntentRepository: journal.Intents.Object,
+                orderEventRepository: journal.Events.Object,
+                positionLedgerRepository: journal.Positions.Object);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var progress = new Progress<string>(message =>
             {
@@ -974,16 +973,21 @@ public class LiveRunnerIntegrationTests
                 runner,
                 CreateRunConfig(resultsRoot, ["MXL"], ["5m"], workerCount: 2, derivedSource: "5m", dryRun: false, allowLiveOrders: true),
                 [CreateStrategy(
-                    signalTimeframe: "5m",
+                    primaryTimeframe: "1d",
                     executionTimeframe: "5m",
                     exitOnCloseBelowEma20: true,
                     minHoldBarsBeforeTechnicalExit: 4)],
                 cts,
                 progress);
 
-            broker.Verify(x => x.CancelOrderAsync("sell-leg-1", It.IsAny<CancellationToken>()), Times.Once);
-            broker.Verify(x => x.ClosePositionAsync("MXL", 100, It.IsAny<CancellationToken>()), Times.Once);
-            orderRepo.Verify(x => x.UpdateOrderStatusAsync("entry-1", "technical_exit_submitted", It.IsAny<CancellationToken>()), Times.Once);
+            submissions.Verify(service => service.RequestCancelAsync(
+                It.IsAny<OrderCancellationSubmission>(),
+                broker.Object,
+                It.IsAny<CancellationToken>()), Times.Never);
+            submissions.Verify(service => service.SubmitPositionExitAsync(
+                It.IsAny<PositionExitSubmission>(),
+                broker.Object,
+                It.IsAny<CancellationToken>()), Times.Once);
             Assert.Contains(audits, audit =>
                 audit.Ticker == "MXL" &&
                 audit.Decision == "ExitSubmitted" &&
@@ -1037,43 +1041,62 @@ public class LiveRunnerIntegrationTests
                 .ReturnsAsync([
                     new BrokerPosition("RGNT", "long", 100m, 100m, 118m, 1800m)
                 ]);
-            broker
-                .Setup(x => x.ModifyOrderAsync("stop-leg-1", It.IsAny<decimal>(), 0m, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(true);
+            var submissions = new Mock<IOrderSubmissionService>(MockBehavior.Strict);
+            submissions.Setup(service => service.ReplaceProtectiveStopAsync(
+                    It.Is<ProtectiveStopReplacementSubmission>(replace =>
+                        replace.OwnerClientOrderId == "broker-generated-exit" &&
+                        replace.BrokerOrderId == "stop-leg-1" &&
+                        replace.StopPrice > 95m),
+                    broker.Object,
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync((ProtectiveStopReplacementSubmission replace, IBrokerClient _, CancellationToken _) =>
+                    new ActiveBrokerOrder(
+                        replace.BrokerOrderId,
+                        replace.Symbol,
+                        "sell",
+                        "new",
+                        "stop",
+                        null,
+                        replace.StopPrice,
+                        100m,
+                        risingBars[^20].Timestamp,
+                        replace.OwnerClientOrderId,
+                        0m,
+                        null,
+                        risingBars[^1].Timestamp));
 
-            var persistedOrder = new PersistedOrder
-            {
-                OrderId = "entry-1",
-                Ticker = "RGNT",
-                StrategyName = "Test Strategy",
-                Broker = "alpaca",
-                Status = "exit_submitted",
-                EntryPrice = 100m,
-                StopLossPrice = 95m,
-                TakeProfitPrice = 1000m,
-                ShareQuantity = 100,
-                CreatedAt = risingBars[^20].Timestamp,
-                UpdatedAt = risingBars[^20].Timestamp
-            };
-
-            PersistedOrder? savedOrder = null;
-            var orderRepo = new Mock<IOrderStateRepository>();
-            orderRepo
-                .Setup(x => x.GetActiveOrdersByTickerAsync("RGNT", It.IsAny<CancellationToken>()))
-                .ReturnsAsync([persistedOrder]);
-            orderRepo
-                .Setup(x => x.GetOrderAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((PersistedOrder?)null);
-            orderRepo
-                .Setup(x => x.SaveOrderAsync(It.IsAny<PersistedOrder>(), It.IsAny<CancellationToken>()))
-                .Callback<PersistedOrder, CancellationToken>((order, _) => savedOrder = order)
-                .Returns(Task.CompletedTask);
+            var journal = CreateFilledPositionJournal(
+                "RGNT",
+                100m,
+                100m,
+                95m,
+                1000m,
+                risingBars[^20].Timestamp);
+            journal.Intents
+                .Setup(repository => repository.GetByClientOrderIdAsync(
+                    "broker-generated-exit",
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new OrderIntentRecord
+                {
+                    IntentId = Guid.NewGuid(),
+                    Kind = OrderIntentKind.ProtectiveStop,
+                    ClientOrderId = "broker-generated-exit",
+                    AccountId = "paper-account",
+                    StrategyId = "BACKSTOP",
+                    Symbol = "RGNT",
+                    PositionGenerationEventId = 1,
+                    RunId = TestExecutionRunId
+                });
 
             var runner = CreateRunner(
                 provider.Object,
                 lockService: null,
                 brokerClient: broker.Object,
-                orderStateRepository: orderRepo.Object);
+                orderSubmissionService: submissions.Object,
+                orderIntentRepository: journal.Intents.Object,
+                orderEventRepository: journal.Events.Object,
+                positionLedgerRepository: journal.Positions.Object,
+                timeProvider: new FixedTimeProvider(risingBars[^1].Timestamp.AddHours(1)));
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var progress = new Progress<string>(message =>
             {
@@ -1087,7 +1110,7 @@ public class LiveRunnerIntegrationTests
                 runner,
                 CreateRunConfig(resultsRoot, ["RGNT"], ["5m"], workerCount: 2, derivedSource: "5m", dryRun: false, allowLiveOrders: true),
                 [CreateStrategy(
-                    signalTimeframe: "5m",
+                    primaryTimeframe: "1d",
                     executionTimeframe: "5m",
                     enableAtrTrailingStop: true,
                     trailingStopAtrMultiple: 2.0m,
@@ -1095,10 +1118,10 @@ public class LiveRunnerIntegrationTests
                 cts,
                 progress);
 
-            broker.Verify(x => x.ModifyOrderAsync("stop-leg-1", It.Is<decimal>(value => value > 95m), 0m, It.IsAny<CancellationToken>()), Times.Once);
-            broker.Verify(x => x.ClosePositionAsync("RGNT", It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
-            Assert.NotNull(savedOrder);
-            Assert.True(savedOrder.StopLossPrice > 95m);
+            submissions.Verify(service => service.ReplaceProtectiveStopAsync(
+                It.IsAny<ProtectiveStopReplacementSubmission>(),
+                broker.Object,
+                It.IsAny<CancellationToken>()), Times.Once);
         }
         finally
         {
@@ -1168,7 +1191,7 @@ public class LiveRunnerIntegrationTests
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AMD"], ["5m"], workerCount: 2, derivedSource: "5m"),
-                [CreateStrategy(signalTimeframe: "5m", executionTimeframe: "5m")],
+                [CreateStrategy(primaryTimeframe: "1d", executionTimeframe: "5m")],
                 cts,
                 progress);
 
@@ -1186,23 +1209,90 @@ public class LiveRunnerIntegrationTests
         }
     }
 
+    private static FilledPositionJournal CreateFilledPositionJournal(
+        string symbol,
+        decimal quantity,
+        decimal entryPrice,
+        decimal stopPrice,
+        decimal takeProfitPrice,
+        DateTimeOffset filledAtUtc)
+    {
+        const string entryClientOrderId = "entry-client";
+        var intent = new OrderIntentRecord
+        {
+            IntentId = Guid.NewGuid(),
+            Kind = OrderIntentKind.StrategyEntry,
+            ClientOrderId = entryClientOrderId,
+            AccountId = "paper-account",
+            StrategyId = "test_strat",
+            Symbol = symbol,
+            Side = "buy",
+            OrderType = "limit",
+            TimeInForce = "day",
+            RequestedQuantity = quantity,
+            LimitPrice = entryPrice,
+            StopPrice = stopPrice,
+            CreatedAtUtc = filledAtUtc,
+            RequestJson = System.Text.Json.JsonSerializer.Serialize(new { takeProfitPrice }),
+            RunId = TestExecutionRunId
+        };
+        var position = new PositionLedgerSnapshot(
+            "paper-account",
+            symbol,
+            quantity,
+            "test_strat",
+            filledAtUtc,
+            filledAtUtc,
+            PositionEventId: 1,
+            PositionGenerationEventId: 1,
+            PositionGenerationClientOrderId: entryClientOrderId,
+            LatestClientOrderId: entryClientOrderId,
+            LatestFillPrice: entryPrice,
+            LatestFillSide: "buy");
+        var intents = new Mock<IOrderIntentRepository>();
+        intents.Setup(repository => repository.GetByClientOrderIdAsync(
+                entryClientOrderId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(intent);
+        var events = new Mock<IOrderEventRepository>();
+        events.Setup(repository => repository.GetCurrentAsync(
+                entryClientOrderId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderStateSnapshot(
+                TestExecutionRunId,
+                entryClientOrderId,
+                "entry-broker-order",
+                OrderState.Filled,
+                filledAtUtc,
+                filledAtUtc,
+                quantity,
+                entryPrice,
+                EventId: 1));
+        var positions = new Mock<IPositionLedgerRepository>();
+        positions.Setup(repository => repository.ListCurrentForRunAsync(
+                TestExecutionRunId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new RunOwnedPositionLedgerSnapshot(position, TestExecutionRunId)
+            ]);
+        return new FilledPositionJournal(intents, events, positions);
+    }
+
     private static LiveRunner CreateRunner(
         IMarketDataProvider provider,
         ITickerLockService? lockService,
         Mock<IDecisionAuditRepository>? auditRepoMock = null,
         IBrokerClient? brokerClient = null,
-        IOrderStateRepository? orderStateRepository = null,
         IOrderSubmissionService? orderSubmissionService = null,
         IOrderLifecycleService? orderLifecycleService = null,
         ICatalystProvider? catalystProvider = null,
         ILiveDiscoverySession? discoverySession = null,
         TimeProvider? timeProvider = null,
-        TimeSpan? iterationInterval = null)
+        TimeSpan? iterationInterval = null,
+        IOrderIntentRepository? orderIntentRepository = null,
+        IOrderEventRepository? orderEventRepository = null,
+        IPositionLedgerRepository? positionLedgerRepository = null)
     {
-        var defaultOrderRepo = new Mock<IOrderStateRepository>();
-        defaultOrderRepo
-            .Setup(x => x.GetActiveOrdersByTickerAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Array.Empty<PersistedOrder>());
         var auditRepo = auditRepoMock ?? new Mock<IDecisionAuditRepository>();
         if (auditRepoMock is null)
         {
@@ -1216,12 +1306,14 @@ public class LiveRunnerIntegrationTests
             catalystProvider,
             brokerClient,
             lockService,
-            orderStateRepository ?? defaultOrderRepo.Object,
+            orderIntentRepository,
+            orderEventRepository,
+            positionLedgerRepository,
             auditRepo.Object,
             NullLogger<LiveRunner>.Instance,
             orderSubmissionService: orderSubmissionService,
             executionRunContext: new ExecutionRunContext(
-                Guid.Parse("10000000-0000-0000-0000-000000000001"),
+                TestExecutionRunId,
                 "paper",
                 new string('a', 64),
                 new string('b', 40),
@@ -1234,16 +1326,21 @@ public class LiveRunnerIntegrationTests
             iterationInterval: iterationInterval);
     }
 
+    private sealed record FilledPositionJournal(
+        Mock<IOrderIntentRepository> Intents,
+        Mock<IOrderEventRepository> Events,
+        Mock<IPositionLedgerRepository> Positions);
+
     private static IOrderSubmissionService CreatePassThroughSubmissionService()
     {
         var service = new Mock<IOrderSubmissionService>();
         service
-            .Setup(candidate => candidate.SubmitBracketOrderAsync(
-                It.IsAny<BracketOrderSubmission>(),
+            .Setup(candidate => candidate.SubmitEntryOrderAsync(
+                It.IsAny<EntryOrderSubmission>(),
                 It.IsAny<IBrokerClient>(),
                 It.IsAny<CancellationToken>()))
             .Returns(async (
-                BracketOrderSubmission submission,
+                EntryOrderSubmission submission,
                 IBrokerClient broker,
                 CancellationToken cancellationToken) =>
             {
@@ -1421,7 +1518,7 @@ public class LiveRunnerIntegrationTests
                 Guid.NewGuid(),
                 ScopeId,
                 symbol,
-                "intraday",
+                "swing",
                 now,
                 now,
                 now.AddMinutes(3),
@@ -1496,7 +1593,7 @@ public class LiveRunnerIntegrationTests
         return new BacktestRunConfig(
             RunName: "LiveRunnerTest",
             Mode: "paper",
-            Engine: new EngineConfig("tpl", workerCount, 100, 50, 120, false),
+            Engine: new EngineConfig("tpl", workerCount, 100, 5, 120, false),
             TimeWindow: new TimeWindowConfig("rolling", 10, null, null),
             Tickers: tickers,
             Provider: "test",
@@ -1532,7 +1629,7 @@ public class LiveRunnerIntegrationTests
     }
 
     private static StrategyDefinition CreateStrategy(
-        string signalTimeframe,
+        string primaryTimeframe,
         string executionTimeframe,
         bool confluenceEnabled = false,
         string confluenceTimeframe = "1h",
@@ -1551,7 +1648,7 @@ public class LiveRunnerIntegrationTests
             StrategyName: "Test Strategy",
             Source: "test",
             Version: 1,
-            Timeframe: signalTimeframe,
+            Timeframe: primaryTimeframe,
             Direction: "long",
             EntryRules: new EntryRules(
                 SetupType: "momentum",
@@ -1567,7 +1664,6 @@ public class LiveRunnerIntegrationTests
                 RequirePriceAboveEma50: false,
                 RequireEma20AboveEma50: false,
                 MaxVwapExtensionAtr: null,
-                OpeningRangeMinutes: 0,
                 RecentHighLookbackBars: 20,
                 VolatilityContractionLookbackBars: 10,
                 VolumeConfirmationMode: "none"),
@@ -1592,9 +1688,9 @@ public class LiveRunnerIntegrationTests
         // Fixed, exchange-aligned bars keep the fixture deterministic and model
         // real provider timestamps. Arbitrary wall-clock seconds would create
         // incomplete 15-minute buckets and must be rejected by the engine.
-        var start = new DateTimeOffset(2026, 8, 20, 13, 30, 0, TimeSpan.Zero);
+        var start = new DateTimeOffset(2026, 7, 20, 13, 30, 0, TimeSpan.Zero);
         var bars = new List<OhlcvBar>();
-        for (var day = 0; day < 7; day++)
+        for (var day = 0; day < 30; day++)
         {
             var sessionStart = AddWeekdays(start, day);
             for (var i = 0; i < 96; i++)
@@ -1656,17 +1752,18 @@ public class LiveRunnerIntegrationTests
 
     private static IReadOnlyList<OhlcvBar> CreateFallingFiveMinuteBars(string ticker)
     {
-        var start = new DateTimeOffset(2026, 8, 20, 13, 30, 0, TimeSpan.Zero);
+        var start = new DateTimeOffset(2026, 7, 20, 13, 30, 0, TimeSpan.Zero);
         var bars = new List<OhlcvBar>();
-        for (var day = 0; day < 7; day++)
+        for (var day = 0; day < 30; day++)
         {
+            var sessionStart = AddWeekdays(start, day);
             for (var i = 0; i < 96; i++)
             {
                 var sequence = (day * 96) + i;
                 var close = 110m - sequence * 0.01m;
                 bars.Add(new OhlcvBar(
                     ticker,
-                    start.AddDays(day).AddMinutes(i * 5),
+                    sessionStart.AddMinutes(i * 5),
                     "5m",
                     close + 0.05m,
                     close + 0.25m,
@@ -1681,17 +1778,18 @@ public class LiveRunnerIntegrationTests
 
     private static IReadOnlyList<OhlcvBar> CreateRisingFiveMinuteBars(string ticker)
     {
-        var start = new DateTimeOffset(2026, 8, 20, 13, 30, 0, TimeSpan.Zero);
+        var start = new DateTimeOffset(2026, 7, 20, 13, 30, 0, TimeSpan.Zero);
         var bars = new List<OhlcvBar>();
-        for (var day = 0; day < 7; day++)
+        for (var day = 0; day < 30; day++)
         {
+            var sessionStart = AddWeekdays(start, day);
             for (var i = 0; i < 96; i++)
             {
                 var sequence = (day * 96) + i;
                 var close = 100m + sequence * 0.04m;
                 bars.Add(new OhlcvBar(
                     ticker,
-                    start.AddDays(day).AddMinutes(i * 5),
+                    sessionStart.AddMinutes(i * 5),
                     "5m",
                     close - 0.02m,
                     close + 0.20m,

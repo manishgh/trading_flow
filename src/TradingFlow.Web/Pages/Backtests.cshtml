@@ -1,5 +1,6 @@
 @page "/Backtests"
 @using TradingFlow.Domain.Backtesting
+@using TradingFlow.Domain.Strategies
 @using TradingFlow.Web.Pages.Shared
 @model TradingFlow.Web.Pages.BacktestsModel
 @{
@@ -102,7 +103,7 @@
                             }
                             @* Research-only strategies must never reach paper or live.
                                Labelling the distinction here is how the operator learns it. *@
-                            <span class="tag tag-neutral">@strategy.Lifecycle.ToString().ToUpperInvariant()</span>
+                            <span class="tag tag-neutral">@(strategy.Lifecycle == StrategyLifecycleState.Research ? "RESEARCH ONLY" : strategy.Lifecycle.ToString().ToUpperInvariant())</span>
                             <span class="lab-strategy-meta">hash @strategy.Identity.ContentSha256[..12]</span>
                         </span>
                     </label>

@@ -12,7 +12,7 @@ This document is the production target for TradingFlow on Azure Kubernetes Servi
 
 Local API:
 
-- `GET /api/mobile/news/latest` returns Alpaca/Benzinga catalyst feed through the same runtime factory used by paper trading.
+- `GET /api/v1/news/latest` returns Alpaca/Benzinga catalyst feed through the same runtime factory used by paper trading.
 - Paper/live runner already loads catalysts when `run.News.Enabled` is true and attaches them to technical snapshots.
 - Negative-news veto is already applied in the live/paper runner when news is enabled.
 - Mobile Paper screen now has a `News Catalysts` preview card.
@@ -117,7 +117,7 @@ Warmup service:
 
 - Deployment: `trading-flow-warmup-service`
 - API: `POST /api/warmup/watchlist`, `POST /api/warmup/run-now`, `GET /api/warmup/runs`
-- Web/mobile proxy: `TradingFlow.Web` calls `WarmupService__BaseUrl=http://trading-flow-warmup-service`, then exposes it through `/Warmup` and `/api/mobile/warmup/*`.
+- Web/mobile proxy: `TradingFlow.Web` calls `WarmupService__BaseUrl=http://trading-flow-warmup-service`, then exposes it through `/Warmup` and `/api/v1/warmup/*`.
 - Purpose: pre-load candle/news/indicator cache before paper/live workers need it.
 - Default schedule: `20:30 America/New_York`, after the regular US close and suitable for next-day preparation.
 - Storage: durable state under `/app/data/warmup`, hot artifacts/candle cache under `/app/cache/warmup`, then optional Blob upload through `Warmup__BlobContainerSasUrl`.
@@ -253,18 +253,18 @@ kubectl apply -k deploy/aks/rendered/live-secrets
 Local test endpoint:
 
 ```powershell
-$catalog = Invoke-RestMethod "http://127.0.0.1:53017/api/mobile/catalog"
+$catalog = Invoke-RestMethod "http://127.0.0.1:53017/api/v1/catalog"
 $config = [uri]::EscapeDataString($catalog.paperConfigs[0].path)
-Invoke-RestMethod "http://127.0.0.1:53017/api/mobile/news/latest?configPath=$config&tickers=MSFT,NVDA,MU&hours=168"
+Invoke-RestMethod "http://127.0.0.1:53017/api/v1/news/latest?configPath=$config&tickers=MSFT,NVDA,MU&hours=168"
 ```
 
 Production test after deployment:
 
 ```powershell
 kubectl port-forward svc/trading-flow-web 5088:80 -n trading-flow-paper
-$catalog = Invoke-RestMethod "http://127.0.0.1:5088/api/mobile/catalog"
+$catalog = Invoke-RestMethod "http://127.0.0.1:5088/api/v1/catalog"
 $config = [uri]::EscapeDataString($catalog.paperConfigs[0].path)
-Invoke-RestMethod "http://127.0.0.1:5088/api/mobile/news/latest?configPath=$config&tickers=MSFT,NVDA,MU&hours=168"
+Invoke-RestMethod "http://127.0.0.1:5088/api/v1/news/latest?configPath=$config&tickers=MSFT,NVDA,MU&hours=168"
 ```
 
 Expected:

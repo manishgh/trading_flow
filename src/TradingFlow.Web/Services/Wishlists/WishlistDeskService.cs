@@ -153,7 +153,7 @@ public sealed record WishlistDeskSnapshot(
 /// <list type="bullet">
 /// <item><description>
 /// <b>Change / Change %</b> needs a prior close. The only previous-close values in
-/// the system are <c>CandidateRecord.PreviousClose</c>, written by the intraday
+/// the system are <c>CandidateRecord.PreviousClose</c>, written by the market-state
 /// candidate discovery pipeline for Finviz-screened symbols, and the daily bars a
 /// backtest spills through <c>ICandleStore</c> under a specific scope/run name.
 /// Neither covers an arbitrary wishlist ticker, and reaching a close for one would

@@ -18,7 +18,7 @@ public sealed class WarmupOptions
 
     public int DefaultNewsLookbackDays { get; init; } = 14;
 
-    public string[] DefaultTimeframes { get; init; } = ["1m", "5m", "15m", "1h", "1d"];
+    public string[] DefaultTimeframes { get; init; } = ["5m", "15m", "1h", "1d"];
 
     public bool IncludeNewsByDefault { get; init; } = true;
 

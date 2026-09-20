@@ -113,13 +113,15 @@ public sealed class StrategyDecisionKernelTests
         var unavailable = kernel.Evaluate(request with { Catalysts = [futureCatalyst] });
         var available = kernel.Evaluate(request with
         {
-            Catalysts = [futureCatalyst with { DecisionKnownAtUtc = request.AsOfUtc.AddMinutes(-1) }]
+            Catalysts = [futureCatalyst with { DecisionKnownAtUtc = request.AsOfUtc.AddMinutes(-5) }]
         });
 
         Assert.NotEqual(StrategyCandidateState.Triggered, unavailable.State);
         Assert.Contains(unavailable.Rules, rule =>
             !rule.Passed && rule.Code.Contains("news", StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(StrategyCandidateState.Triggered, available.State);
+        Assert.True(
+            available.State == StrategyCandidateState.Triggered,
+            $"Expected a triggered candidate, got {available.State}: {available.NoEntryReason}");
         Assert.NotNull(available.Signal?.Catalyst);
     }
 
@@ -274,10 +276,10 @@ public sealed class StrategyDecisionKernelTests
                 asOf.AddSeconds(-1),
                 ImmutableDictionary<string, int>.Empty
                     .WithComparers(StringComparer.OrdinalIgnoreCase)
-                    .Add("1m", bars.Length),
+                    .Add("1d", bars.Length),
                 ImmutableDictionary<string, int>.Empty
                     .WithComparers(StringComparer.OrdinalIgnoreCase)
-                    .Add("1m", 2)),
+                    .Add("1d", 2)),
             new StrategyEligibilityEvidence(
                 true,
                 "fixture-universe",
@@ -300,10 +302,10 @@ public sealed class StrategyDecisionKernelTests
             candidate,
             ImmutableDictionary<string, ImmutableArray<OhlcvBar>>.Empty
                 .WithComparers(StringComparer.OrdinalIgnoreCase)
-                .Add("1m", bars),
+                .Add("1d", bars),
             ImmutableDictionary<string, ImmutableArray<IndicatorSnapshot>>.Empty
                 .WithComparers(StringComparer.OrdinalIgnoreCase)
-                .Add("1m", snapshots),
+                .Add("1d", snapshots),
             [],
             asOf);
     }
@@ -313,7 +315,7 @@ public sealed class StrategyDecisionKernelTests
         "Kernel Golden Fixture",
         "unit-test",
         1,
-        "1m",
+        "1d",
         "long",
         new EntryRules(
             SetupType: "momentum",
@@ -329,13 +331,12 @@ public sealed class StrategyDecisionKernelTests
             RequirePriceAboveEma50: false,
             RequireEma20AboveEma50: false,
             MaxVwapExtensionAtr: null,
-            OpeningRangeMinutes: 5,
             RecentHighLookbackBars: 8,
             VolatilityContractionLookbackBars: 10,
             RequirePositiveNews: requirePositiveNews),
-        new ConfluenceRules(false, "1m", 50, "none"),
+        new ConfluenceRules(false, "1d", 50, "none"),
         new ExitRules(1m, 3m, 2m, false, 1m, 1m, false, false, false, 1),
-        new ExecutionRules("1m", 5m),
+        new ExecutionRules("1d", 5m),
         new SessionRules("America/New_York", 0, 0, 0));
 
     private static StrategyAdmissionProfile CreateProfile() => new(
@@ -352,12 +353,12 @@ public sealed class StrategyDecisionKernelTests
 
     private static ImmutableArray<OhlcvBar> CreateBars()
     {
-        var start = new DateTimeOffset(2026, 6, 11, 14, 0, 0, TimeSpan.Zero);
+        var start = new DateTimeOffset(2026, 6, 8, 14, 0, 0, TimeSpan.Zero);
         return Enumerable.Range(0, 3)
             .Select(index => new OhlcvBar(
                 "RGTI",
-                start.AddMinutes(index),
-                "1m",
+                start.AddDays(index),
+                "1d",
                 10m + index * 0.05m,
                 10.20m + index * 0.05m,
                 9.95m + index * 0.05m,

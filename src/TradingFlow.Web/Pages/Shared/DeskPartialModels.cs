@@ -11,21 +11,14 @@ namespace TradingFlow.Web.Pages.Shared;
 /// and each panel says which of the two it is.
 /// </summary>
 /// <param name="Row">The ranked row, carrying both sides.</param>
-/// <param name="Horizon">intraday or swing; selects which model leg to read.</param>
 /// <param name="Compact">Rail sizing rather than focus-column sizing.</param>
-public sealed record DeskEvidenceModel(RankedDeskRow Row, string Horizon, bool Compact)
+public sealed record DeskEvidenceModel(RankedDeskRow Row, bool Compact)
 {
-    public bool IsIntraday => Horizon.Equals("intraday", StringComparison.OrdinalIgnoreCase);
+    public decimal? Probability => Row.Evidence.Swing?.Probability;
 
-    public decimal? Probability => IsIntraday
-        ? Row.Evidence.Intraday?.OpportunityProbability
-        : Row.Evidence.Swing?.Probability;
+    public string CatalystStatus => Row.Evidence.Swing?.Catalyst.Status ?? "unknown";
 
-    public string CatalystStatus =>
-        (IsIntraday ? Row.Evidence.Intraday?.Catalyst : Row.Evidence.Swing?.Catalyst)?.Status ?? "unknown";
-
-    public string CatalystDirection =>
-        (IsIntraday ? Row.Evidence.Intraday?.Catalyst : Row.Evidence.Swing?.Catalyst)?.Direction ?? "unknown";
+    public string CatalystDirection => Row.Evidence.Swing?.Catalyst.Direction ?? "unknown";
 }
 
 /// <summary>

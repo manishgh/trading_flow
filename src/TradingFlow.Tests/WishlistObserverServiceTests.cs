@@ -103,7 +103,7 @@ public sealed class WishlistObserverServiceTests
             repository,
             new WishlistMarketMonitor(
                 repository,
-                new WishlistBreakoutEvaluator(),
+                new WishlistSwingWatchEvaluator(),
                 new FixedTimeProvider(Now)),
             new EmptyNewsRepository(),
             subscriptions,
@@ -131,12 +131,12 @@ public sealed class WishlistObserverServiceTests
 
     private static TickerMarketState ReadyState(string ticker, decimal previousMacd = 0.03m)
     {
-        var previousTime = Now.AddMinutes(-3);
-        var currentTime = Now.AddMinutes(-2);
+        var previousTime = Now.AddDays(-2);
+        var currentTime = Now.AddDays(-1);
         IReadOnlyList<OhlcvBar> bars =
         [
-            new(ticker, previousTime, "1m", 10m, 10.20m, 9.95m, 10.10m, 80_000m, "sip", "all", previousTime.AddMinutes(1), previousTime.AddMinutes(1)),
-            new(ticker, currentTime, "1m", 10.10m, 10.60m, 10.05m, 10.50m, 120_000m, "sip", "all", currentTime.AddMinutes(1), currentTime.AddMinutes(1))
+            new(ticker, previousTime, "1d", 10m, 10.20m, 9.95m, 10.10m, 800_000m, "sip", "all", previousTime.AddDays(1), previousTime.AddDays(1)),
+            new(ticker, currentTime, "1d", 10.10m, 10.60m, 10.05m, 10.50m, 1_200_000m, "sip", "all", currentTime.AddDays(1), currentTime.AddDays(1))
         ];
         IReadOnlyList<IndicatorSnapshot> snapshots =
         [
@@ -145,15 +145,15 @@ public sealed class WishlistObserverServiceTests
         ];
         return new TickerMarketState(
             ticker,
-            new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase) { ["1m"] = bars },
-            new Dictionary<string, IReadOnlyList<IndicatorSnapshot>>(StringComparer.OrdinalIgnoreCase) { ["1m"] = snapshots });
+            new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase) { ["1d"] = bars },
+            new Dictionary<string, IReadOnlyList<IndicatorSnapshot>>(StringComparer.OrdinalIgnoreCase) { ["1d"] = snapshots });
     }
 
     private static IndicatorSnapshot Snapshot(
         string ticker,
         DateTimeOffset timestamp,
         decimal price,
-        decimal vwap,
+        decimal ignoredVwap,
         decimal ema10,
         decimal ema20,
         decimal macd,
@@ -161,10 +161,10 @@ public sealed class WishlistObserverServiceTests
         new(
             ticker,
             timestamp,
-            "1m",
+            "1d",
             price,
-            100_000m,
-            vwap,
+            1_000_000m,
+            Vwap: null,
             Rsi: 55m,
             Atr: 0.25m,
             Ema20: ema20,

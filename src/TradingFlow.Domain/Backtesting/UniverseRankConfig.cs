@@ -6,7 +6,7 @@ namespace TradingFlow.Domain.Backtesting;
 /// taken from.
 /// </summary>
 /// <param name="ModelEdge">Direction-adjusted model probability, from the predictor.</param>
-/// <param name="MarketStructure">RVOL intraday, trend quality swing, from the indicator engine.</param>
+/// <param name="MarketStructure">Swing trend quality from the indicator engine.</param>
 /// <param name="Catalyst">Catalyst weight, from news, earnings and the screener.</param>
 /// <param name="TechnicalState">Eligibility verdict, from the signal generator and evaluator.</param>
 /// <param name="Liquidity">Spread-derived tradability, from the quote stream.</param>
@@ -34,7 +34,6 @@ public sealed record UniverseRankWeights(
 /// with every persisted ranking run so a stored score can be re-derived.
 /// </summary>
 /// <param name="WeightsVersion">Identifies the weight set a persisted run used.</param>
-/// <param name="Intraday">Weights applied when the desk horizon is intraday.</param>
 /// <param name="Swing">Weights applied when the desk horizon is swing.</param>
 /// <param name="CatalystWeights">
 /// Catalyst kind to weight, keyed by kind: ER, NEWS, SEC, SCRN, NONE.
@@ -48,7 +47,6 @@ public sealed record UniverseRankWeights(
 /// </param>
 public sealed record UniverseRankConfig(
     string WeightsVersion,
-    UniverseRankWeights Intraday,
     UniverseRankWeights Swing,
     IReadOnlyDictionary<string, decimal> CatalystWeights,
     decimal VetoPenalty,
@@ -72,15 +70,20 @@ public sealed record UniverseRankConfig(
 
     public static UniverseRankConfig Default { get; } = new(
         "rank.v1",
-        new UniverseRankWeights(0.38m, 0.22m, 0.18m, 0.14m, 0.08m),
         new UniverseRankWeights(0.34m, 0.28m, 0.16m, 0.14m, 0.08m),
         DefaultCatalystWeights,
         0.12m,
         8m);
 
-    /// <summary>Weights for a horizon. Anything not intraday is treated as swing.</summary>
-    public UniverseRankWeights WeightsFor(string horizon) =>
-        horizon.Equals("intraday", StringComparison.OrdinalIgnoreCase) ? Intraday : Swing;
+    public UniverseRankWeights WeightsFor(string horizon)
+    {
+        if (!horizon.Equals("swing", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentOutOfRangeException(nameof(horizon), "TradingFlow supports the swing horizon only.");
+        }
+
+        return Swing;
+    }
 
     /// <summary>Weight for a catalyst kind, falling back to the no-catalyst weight.</summary>
     public decimal CatalystWeightFor(string kind) =>

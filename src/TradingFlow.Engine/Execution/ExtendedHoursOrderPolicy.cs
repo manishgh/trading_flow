@@ -42,6 +42,10 @@ public interface IAssetTradingEligibilityProvider
 /// <summary>
 /// Validates an exact order contract against an authoritative market-session snapshot.
 /// It never changes the caller's order type, time in force, or extended-hours permission.
+/// Regular entries use a simple order followed by an independently owned GTC stop,
+/// because an Alpaca bracket activates its exits only after the parent is fully filled.
+/// Extended-hours entries remain unavailable because no equivalent immediately
+/// protective broker contract exists; eligible risk-reducing exits are handled separately.
 /// </summary>
 public static class ExtendedHoursOrderPolicy
 {
@@ -105,7 +109,7 @@ public static class ExtendedHoursOrderPolicy
         }
 
         throw new InvalidOperationException(
-            "Extended-hours equity entry is blocked because Alpaca does not support broker-protected bracket orders outside the regular session.");
+            "Extended-hours equity entry is blocked because Alpaca cannot attach a broker-resting protective stop to that entry contract.");
     }
 
     private static string ToDisplayName(EquityTradingSession session) => session switch

@@ -23,6 +23,46 @@ public sealed class AccountReconciliationServiceTests
     }
 
     [Fact]
+    public async Task ProtectionRepairFailure_IsReportedAndKeepsEntriesBlocked()
+    {
+        var fixture = new Fixture();
+        fixture.Protector.Repairs =
+        [
+            new ProtectiveOrderRepair("MSFT", false, "broker rejected protective stop")
+        ];
+
+        var result = await fixture.Service.ReconcileAsync(fixture.Broker, [], CancellationToken.None);
+
+        Assert.False(result.BrokerProtectionReady);
+        Assert.Equal(1, result.ProtectionRepairFailureCount);
+        Assert.False(fixture.Admission.GetSnapshot().EntriesAllowed);
+        Assert.Contains(
+            fixture.Admission.GetSnapshot().Blocks,
+            block => block.Code == "BROKER_SIDE_PROTECTION_FAILED");
+    }
+
+    [Fact]
+    public async Task ProtectionVerificationException_DoesNotPublishReadinessOrReopenEntries()
+    {
+        var fixture = new Fixture();
+        await fixture.Service.ReconcileAsync(fixture.Broker, [], CancellationToken.None);
+        Assert.True(fixture.Admission.GetSnapshot().EntriesAllowed);
+        var lastCompletedAt = fixture.Service.GetHealth().LastCompletedAtUtc;
+        fixture.Protector.Failure = new IOException("protective-order provider unavailable");
+
+        var error = await Assert.ThrowsAsync<IOException>(() =>
+            fixture.Service.ReconcileAsync(fixture.Broker, [], CancellationToken.None));
+
+        Assert.Equal("protective-order provider unavailable", error.Message);
+        Assert.False(fixture.Admission.GetSnapshot().EntriesAllowed);
+        Assert.Equal("protection_verification_failed", fixture.Service.GetHealth().Status);
+        Assert.Equal(lastCompletedAt, fixture.Service.GetHealth().LastCompletedAtUtc);
+        Assert.Contains(
+            fixture.Admission.GetSnapshot().Blocks,
+            block => block.Code == "BROKER_SIDE_PROTECTION_FAILED");
+    }
+
+    [Fact]
     public async Task UnexpectedBrokerPosition_BlocksUntilExplicitAck_AndChangedDiffReblocks()
     {
         var fixture = new Fixture();
@@ -114,12 +154,15 @@ public sealed class AccountReconciliationServiceTests
     {
         var fixture = new Fixture();
         fixture.Positions.Current["MSFT"] = new PositionLedgerSnapshot(
+            "paper-account",
             "MSFT",
             -5m,
             "SWGA",
             fixture.Time.GetUtcNow(),
             fixture.Time.GetUtcNow(),
             1,
+            1,
+            "SWGA-S-MSFT-20260721-001-12345678",
             "SWGA-S-MSFT-20260721-001-12345678",
             100m,
             "sell");
@@ -197,8 +240,8 @@ public sealed class AccountReconciliationServiceTests
         var fixture = new Fixture();
         const string parentClientId = "SWGA-B-MSFT-20260721-001-12345678";
         fixture.Positions.Current["MSFT"] = new PositionLedgerSnapshot(
-            "MSFT", 10m, "SWGA", fixture.Time.GetUtcNow(), fixture.Time.GetUtcNow(), 1,
-            parentClientId, 100m, "buy");
+            "paper-account", "MSFT", 10m, "SWGA", fixture.Time.GetUtcNow(), fixture.Time.GetUtcNow(), 1,
+            1, parentClientId, parentClientId, 100m, "buy");
         fixture.Broker.Positions = [new BrokerPosition("MSFT", "long", 10m, 100m, 101m, 10m)];
         fixture.Orders.Additional[parentClientId] = new OrderStateSnapshot(
             Guid.NewGuid(), parentClientId, "parent-1", OrderState.Filled,
@@ -264,10 +307,17 @@ public sealed class AccountReconciliationServiceTests
                 Current.SingleOrDefault(item => item.ClientOrderId == clientOrderId) ??
                 Additional.GetValueOrDefault(clientOrderId));
 
-        public Task<IReadOnlyList<OrderStateSnapshot>> ListReconcilableAsync(CancellationToken cancellationToken = default) =>
+        public Task<IReadOnlyList<OrderStateSnapshot>> ListReconcilableAsync(
+            string accountId,
+            CancellationToken cancellationToken = default) =>
             Task.FromResult(Current);
 
         public Task<OrderTransitionResult> TransitionAsync(OrderTransitionRequest request, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<OrderStateSnapshot> RecordBrokerReplacementAsync(
+            BrokerOrderReplacementTransition request,
+            CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
     }
 
@@ -275,17 +325,27 @@ public sealed class AccountReconciliationServiceTests
     {
         public Dictionary<string, PositionLedgerSnapshot> Current { get; } = new(StringComparer.Ordinal);
 
-        public Task<decimal> GetAccountedFillQuantityAsync(string brokerOrderId, CancellationToken cancellationToken = default) =>
+        public Task<decimal> GetAccountedFillQuantityAsync(string accountId, string brokerOrderId, CancellationToken cancellationToken = default) =>
             Task.FromResult(0m);
 
-        public Task<PositionLedgerSnapshot?> GetCurrentAsync(string symbol, CancellationToken cancellationToken = default) =>
+        public Task<PositionLedgerSnapshot?> GetCurrentAsync(string accountId, string symbol, CancellationToken cancellationToken = default) =>
             Task.FromResult<PositionLedgerSnapshot?>(Current.GetValueOrDefault(symbol));
 
         public Task<PositionLedgerSnapshot> AppendFillAsync(PositionFillAppendRequest request, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<IReadOnlyList<PositionLedgerSnapshot>> ListCurrentAsync(CancellationToken cancellationToken = default) =>
+        public Task<IReadOnlyList<PositionLedgerSnapshot>> ListCurrentAsync(string accountId, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<PositionLedgerSnapshot>>(Current.Values.ToArray());
+
+        public Task<IReadOnlyList<RunOwnedPositionLedgerSnapshot>> ListCurrentForRunAsync(
+            Guid runId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<RunOwnedPositionLedgerSnapshot>>([]);
+
+        public Task<IReadOnlyList<RunOwnedPositionLedgerSnapshot>> ListCurrentOwnersForSymbolAsync(
+            string symbol,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<RunOwnedPositionLedgerSnapshot>>([]);
     }
 
     private sealed class InMemoryReconciliations : IReconciliationRepository
@@ -354,10 +414,18 @@ public sealed class AccountReconciliationServiceTests
     private sealed class RecordingBroker : IBrokerClient
     {
         public IReadOnlyList<BrokerPosition> Positions { get; set; } = [];
+        public Task<BrokerAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken)
+        {
+            var now = DateTimeOffset.UtcNow;
+            return Task.FromResult(new BrokerAccountSnapshot(
+                "paper-account", "ACTIVE", false, false, false, true,
+                100_000m, 100_000m, 100_000m, 0m, 0m, now, now));
+        }
         public Task<IReadOnlyList<BrokerPosition>> GetOpenPositionsAsync(CancellationToken cancellationToken) => Task.FromResult(Positions);
         public Task<IReadOnlyList<ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ActiveBrokerOrder>>([]);
         public Task<ActiveBrokerOrder?> GetOrderByClientOrderIdAsync(string clientOrderId, CancellationToken cancellationToken) => Task.FromResult<ActiveBrokerOrder?>(null);
         public Task<BrokerOrderReceipt> SubmitOrderAsync(BrokerEntryOrder order, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<BrokerOrderReceipt> SubmitExitOrderAsync(BrokerExitOrder order, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<TradingSessionSnapshot> GetSessionAsync(DateTimeOffset timestampUtc, CancellationToken cancellationToken) =>
             Task.FromResult(new TradingSessionSnapshot(
                 DateOnly.FromDateTime(timestampUtc.UtcDateTime),
@@ -375,24 +443,29 @@ public sealed class AccountReconciliationServiceTests
         public Task<BrokerOrderReceipt> SubmitProtectiveStopAsync(ProtectiveStopOrder order, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> CancelOrderAsync(string orderId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> CancelAllOrdersAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<bool> ModifyOrderAsync(string orderId, decimal newStopLoss, decimal newTakeProfit, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<string[]> SubmitExitOrdersAsync(string ticker, int quantity, decimal stopLossPrice, decimal takeProfitPrice, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<bool> ClosePositionAsync(string ticker, int quantity, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<bool> ClosePositionAsync(string ticker, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ActiveBrokerOrder> ReplaceProtectiveOrderAsync(BrokerProtectiveOrderReplacement replacement, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class RecordingProtector : IProtectiveOrderInvariantService
     {
         public List<string> Symbols { get; } = [];
+        public IReadOnlyList<ProtectiveOrderRepair> Repairs { get; set; } = [];
+        public Exception? Failure { get; set; }
 
         public Task<IReadOnlyList<ProtectiveOrderRepair>> EnsureAsync(
             IBrokerClient broker,
+            string accountId,
             IReadOnlyList<BrokerPosition> brokerPositions,
             IReadOnlyList<ActiveBrokerOrder> openOrders,
             CancellationToken cancellationToken = default)
         {
             Symbols.AddRange(brokerPositions.Select(position => position.Ticker));
-            return Task.FromResult<IReadOnlyList<ProtectiveOrderRepair>>([]);
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
+
+            return Task.FromResult(Repairs);
         }
     }
 

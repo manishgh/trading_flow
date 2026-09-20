@@ -1,135 +1,53 @@
-# Non-ML Strategy Research Implementation Status
+# Swing Research Implementation Status
 
-**Updated:** 2026-07-26  
-**Binding program:** [Non-ML Strategy Research Program](non-ml-strategy-research-program.md)
+**Decision:** `RETAIN_RESEARCH`
 
-**Evidence plan:** [Momentum And Catalyst Evidence Plan](momentum-and-catalyst-evidence-plan.md)
+**Trading horizon:** swing only
 
-**System boundary:** [TradingFlow Operating Boundaries](../operating-boundaries.md)
+## Verified Foundation
 
-This document separates implemented controls from verified behavior and from
-external evidence that TradingFlow does not yet possess. A missing dataset or
-unvalidated assumption is a blocker, never an implied pass.
+- Immutable raw-before-parse market/news evidence and cataloged dataset handles.
+- Point-in-time security identity, listing, universe, exchange-session, and corporate
+  action contracts.
+- Completed-bar decisions, later-bar confirmation, next executable-bar fills, and
+  pre-fill initial-stop construction.
+- Deterministic chronological backtest coordination and execution simulation.
+- Spread, slippage, fees, quote side, participation, partial/non-fill, and impact
+  evidence in the execution journal.
+- Development, validation, and one-use chronological holdout lifecycle controls.
+- Exact strategy identity and promotion authorization firewall.
+- Shared decision, risk, and execution path for backtest and paper modes.
+- Daily-primary swing admission enforced before market observation or broker mutation.
 
-## Checkpoint Status
+## Current Catalog
 
-| Checkpoint | Status | Evidence |
-|---|---|---|
-| R0 research freeze | Verified | The two permitted families, partitions, stop conditions, and promotion boundaries are frozen in the binding program. |
-| R1 registry and inference | Verified | Immutable SQLite trial registration, family trial counts, canonical results, block bootstrap, HAC inference, Holm adjustment, and selection-bias audit tests pass. |
-| R2 swing benchmark | Verified | Fixed formation slots, cash for failed additive gates, point-in-time ranking, isolated VCP and catalyst additions, formation ledger, and canonical outputs are implemented. |
-| R3 intraday event study | Verified | Point-in-time catalyst availability, cumulative same-minute RVOL, robust log-volume evidence, event clustering, market/sector returns, morphology timeline, censoring, and Holm-adjusted tests are implemented. |
-| R4 holdout discipline | Verified | Development/validation readers cannot open outcome partitions crossing holdout. Frozen request mutation fails before observation reads. |
-| R5 execution evidence | Verified | SIP/NBBO quote age, quote-side execution, partial/no-fill, participation, spread, fees, impact, and explicit calibration policies fail closed. |
-| R6 point-in-time correction | Verified | Morphology no longer scans future bars; classifier observation time participates in availability; exact benchmark timestamps and short-return math are enforced. |
-| R7 swing portfolio correction | Verified | Formation-equal weighting, absolute-P&L concentration, leave-one-out audits, and 1x/2x/3x cost stresses are implemented. |
-| R8/R9 atomic holdout result | Verified | Holdout is acquired before reads and completed only by the same run after immutable result registration. A crashed run remains consumed. |
-| R10 one-brain boundary | Verified | Generic sentiment research is explicitly named diagnostic and cannot promote. Evidence-grade Track B is the only promotable intraday analyzer. |
-| R11/R12 promotion gates | Verified | Swing and intraday evaluators enforce every binding criterion, distinguish failed from unavailable evidence, and require explicit human paper-shadow approval. |
-| R13 later-listing eligibility | Verified | The 2016 dataset boundary is not an issuer-age rule. A later listing is admitted after point-in-time membership and its own real completed-bar warm-up. |
-| R14 canonical swing audit | Verified | Catalog momentum runs publish the report, frozen formation ledger, audit report, and research phase as immutable named outputs. |
-| R15-R18 committed research foundation | Verified | A clean committed-only export restores and builds every production project. The later-listing, point-in-time universe, and swing/intraday promotion suites pass from that export. |
+`configs/strategy-catalog.json` contains two research artifacts and thirteen archived
+swing artifacts. None is authorized for a new paper-shadow or live run. Archived
+artifacts remain parseable evidence but are hidden from normal operation.
 
-## Implemented Research Contracts
+## Removed Scope
 
-### Swing
+All same-session strategy families, research analyzers, profiles, YAML artifacts,
+Web/API/mobile exposure, and historical day-trading plans have been removed.
+Sub-daily market plumbing remains only for declared swing confirmation and execution.
 
-- Point-in-time universe membership is separate from price data.
-- Research-adjusted prices rank momentum; as-traded prices model liquidity and
-  execution.
-- Formation membership and configured slots are frozen before forward outcomes.
-- A failed additive condition becomes cash; the portfolio never reranks or backfills
-  from future winners.
-- A1 momentum, A2 trend, A3 VCP, and A4 classified catalyst are isolated paired
-  experiments.
-- Development, validation, and holdout results remain separate.
-- Ticker, month, and formation concentration use absolute P&L contribution.
-- Leave-one-ticker, sector, year, and best-month audits preserve the frozen slot
-  count.
+## Evidence Still Required
 
-### Intraday
+- A promotion-grade, point-in-time universe with complete membership and delisting
+  history for the selected research period.
+- Frozen cross-sectional momentum baseline results across sufficient independent
+  formation periods.
+- One-use holdout results with benchmark, concentration, and parameter-sensitivity
+  reports.
+- Evidence that any VCP, catalyst, or sub-daily confirmation overlay improves the
+  baseline net of costs.
+- A completed paper-shadow window with no strategy mutation.
 
-- News availability is the latest of observed receipt, classifier completion, and
-  classifier observation.
-- Human ground-truth labels are classifier-validation evidence and are never used as
-  historical trading-time predictions.
-- Premarket, regular, postmarket, and overnight cohorts remain distinct.
-- Response begins at the first completed bar after information availability.
-- Morphology state at each horizon uses only bars completed by that horizon.
-- Cumulative RVOL compares the current regular session through the same minute
-  against prior valid regular sessions; the event day is excluded.
-- Quote-side executable returns use ask-to-bid for longs and bid-to-ask for shorts.
-- Missing auction, status, halt/LULD, corporate-action, sector, quote, or clustering
-  evidence blocks promotion.
+Until those items are present, `RETAIN_RESEARCH` is the only valid integrated
+decision.
 
-## Deliberately Diagnostic Paths
+## Verification Boundary
 
-The following paths are useful for data diagnosis but are never promotion evidence:
-
-- static present-day symbol lists projected backward;
-- generic sentiment/keyword catalyst studies;
-- provider publication timestamps without observed first receipt;
-- REST-only news archives without complete revision history;
-- fixed spread or fill assumptions not calibrated against paper observations.
-
-Their APIs and outputs must contain `Diagnostic` in their names or an explicit
-promotion blocker.
-
-## External Evidence Blockers
-
-### Swing history and universe
-
-- The frozen program uses the complete provider-supported history beginning in
-  2016. Alpaca documents US equity history from 2016:
-  <https://docs.alpaca.markets/us/v1.1/docs/historical-stock-data-1>. Dataset
-  manifests must preserve the exact observed coverage; pre-2016 or synthetic rows
-  are prohibited.
-- That provider boundary does not exclude later listings. Their point-in-time
-  membership starts on the real effective date; the completed-history guard then
-  admits them once the selected study's adjusted and as-traded warm-up is met.
-  Eligibility is therefore the later of the real membership/listing date and the
-  strategy-specific warm-up date. The system never synthesizes pre-listing bars.
-- A survivorship-safe, point-in-time US equity membership source with delistings,
-  symbol changes, issuer identity, sectors, and terminal outcomes is not yet
-  available for the complete frozen interval.
-- Benchmark total-return and corporate-action reconciliation must cover the same
-  dates and identities as the universe.
-
-### Intraday B0/B1
-
-- At least 500 resolved human labels, 100 double labels, and 30 untouched examples
-  for every promotable class are still required.
-- Historical first-receipt timestamps and complete revision lineage are not proven
-  for the existing REST news archive.
-- Historical opening-auction, market-status, halt/resume, and LULD evidence is not
-  complete.
-- Global cross-provider story clusters and point-in-time sector benchmarks are not
-  yet published as immutable catalog datasets.
-- Matched no-catalyst controls require a separately frozen matching specification.
-  No matching algorithm has been assumed.
-
-### Execution calibration
-
-- Historical SIP quotes are supported by Alpaca's stock quote endpoint:
-  <https://docs.alpaca.markets/us/reference/stockquotes-1>.
-- Full SIP coverage is distinct from IEX-only data:
-  <https://docs.alpaca.markets/us/docs/about-market-data-api>.
-- Promotion still requires calibration of quote latency, fill probability, partial
-  fills, market impact, and auction behavior against paper observations.
-
-## Current Decision
-
-The integrated decision remains `RETAIN_RESEARCH`.
-
-No swing or intraday configuration is eligible for paper promotion from the current
-evidence. The code now fails closed for the known gaps and provides the machinery to
-evaluate a frozen candidate once the required immutable evidence exists.
-
-## Verification Record
-
-- Clean committed-only export: restore and production-project compilation passed.
-- Completed-history and later-listing analyzer tests: 20 passed.
-- Point-in-time universe plus swing/intraday promotion tests: 19 passed.
-- Full committed-only suite: 903 passed; two unrelated Paper page tests remain
-  blocked by the separate, uncommitted run-config schema migration in the working
-  tree. This does not weaken or bypass the research eligibility controls.
+Engineering verification demonstrates deterministic and safe behavior; it does not
+prove alpha. Strategy promotion remains blocked even when build, unit, integration,
+API, and UI tests are green.
