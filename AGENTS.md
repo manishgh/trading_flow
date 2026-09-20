@@ -16,6 +16,11 @@ weaken those boundaries through code, config, or experiment design.
 
 The source/sink can change by mode, but the strategy signal, indicator, confluence, risk, portfolio, audit, and execution decision path should remain the same.
 
+Keep the trading desk in C# and the separate ML engine in Python. Shared data
+contracts do not require rewriting either application in the other's language.
+Provider collection ownership needs an explicit verified migration; Python may
+read shared analytical datasets directly for feature engineering and modeling.
+
 ## Non-Negotiable Design Rules
 
 - Do not sync GitHub unless explicitly asked.
@@ -24,7 +29,8 @@ The source/sink can change by mode, but the strategy signal, indicator, confluen
 - Strategy behavior must be config-driven. Do not hard-code strategy-specific rules into base engine code except for generic indicator/signal primitives.
 - UI code should manage web events, validation display, partial updates, and API calls only. Business orchestration belongs in services/runners/engine modules.
 - Backtest, paper, and live should use the same signal calculator and evaluator path.
-- Always verify changes with relevant tests. Prefer adding focused tests for engine/risk/pipeline changes.
+- Verify changes under the Risk-Based Verification policy, including its prose-only
+  exception. Add focused tests for engine/risk/pipeline behavior changes.
 - Use standard structured logging so output can later feed Logstash, Elastic, Azure Monitor, or another log sink.
 - Avoid look-ahead bias: signal on completed bar, fill on a later executable bar, warm indicators before scoring, and model realistic slippage/costs.
 
@@ -64,11 +70,46 @@ These rules apply to every Codex/agent session in this repository.
 - Keep one brain. Backtest, paper, and future live trading must share `SignalGenerator`, evaluator, risk, portfolio, and execution-decision logic.
 - Separate concerns strictly: UI calls APIs/services; services orchestrate; engine computes; repositories persist; adapters talk to providers.
 - Make changes observable. Add structured logs, rejection reasons, audit fields, or metrics when behavior would otherwise be invisible.
-- Verify before promotion. Run relevant tests and at least one representative backtest/paper simulation for strategy/risk/pipeline work.
+- Verify before promotion. Apply the Risk-Based Verification policy below; changed
+  strategy/risk/evaluation behavior also needs its representative backtest or paper
+  simulation. An unrelated transport or documentation edit does not trigger one.
 - Prefer deletion over compatibility layers when old code is not production intent, but preserve local secrets, DB state, and cached candle data unless explicitly told otherwise.
 - Record failed experiments. If a tested strategy underperforms, keep the result in the research ledger and do not promote it.
 - Do not optimize on a single lucky run. Compare drawdown, trade count, win rate, expectancy, and whether the rule makes market sense.
 - Keep timestamps explicit. Calculations use New York market time, persisted data uses UTC, and UI/audit should show UTC plus local/operator time where useful.
+
+## Risk-Based Verification
+
+Choose checks by changed behavior and affected consumers, not the total test count.
+Record the tier, commands, results and deliberately unrun checks in the handoff.
+An ordinary commit or component checkpoint is not a release checkpoint.
+
+1. **Every code change:** run focused tests for changed functions/modules and their
+   affected direct consumers. Build the affected C# projects with their compiler,
+   nullable and analyzer checks; run relevant lint/types for any changed Python or
+   frontend code. Small, localized and module-level edits do not need the full suite.
+2. **Component checkpoint:** add affected integration, persistence/data-integrity,
+   causality and contract tests. Shared wire/schema edits require affected C# and
+   Python consumer/parity tests. Changes to signals, fills, costs, risk, admission or
+   order handling require the relevant safety and deterministic replay tests even
+   for a small diff. Keep operational/broker checks isolated from offline tests.
+3. **Release checkpoint:** run the full suite and applicable expensive end-to-end,
+   strategy/model replay and promotion checks against final code. Release means a
+   deployable product release, strategy/model promotion or activation, or an explicit
+   end-to-end readiness review. External checks without credentials/authorization
+   remain unverified; never place real orders merely to satisfy a test tier.
+
+Documentation-only edits need relevant document/contract checks and
+`git diff --check`, not compilation, code lint/types or model/backtest runs when no
+executable code, configuration or generated contracts changed. Executable examples,
+machine-consumed contracts and governance-bound evidence still need affected checks.
+Broaden coverage
+only when dependency analysis or failures establish wider impact, and explain why.
+Retest affected behavior after the final relevant edit. Never skip a known failure
+or weaken the operating-boundary/promotion gates under the name of targeted testing.
+This policy supersedes older blanket full-suite-per-checkpoint instructions; retain
+historical results as records, not recurring mandates. Do not inventory or delete
+tests solely to reduce their count without a separate request.
 
 ## Current Architecture
 
