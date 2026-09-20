@@ -95,7 +95,7 @@ These are already small, single-purpose, tested classes — the target shape for
 - **Catalyst path**: `ICatalystProvider` → `CatalystSnapshotAttacher` attaches the latest
   *fresh* catalyst before signal generation; the evaluator applies news gates; paper/live
   keeps a final negative-news veto. The design is correct. The one substantive gap
-  (already flagged in the edge-recovery plan) is a **per-catalyst lifecycle** so a story
+  is a **per-catalyst lifecycle** so a story
   produces one bounded trade attempt instead of re-firing every bar — that's a feature,
   not a cleanup.
 - The new phase-0 modules are already clean and single-responsibility.
@@ -168,7 +168,7 @@ vs below, `price <= stop` vs `price >= stop`, `confirmed_vwap_failure` vs
    cosmetic bug. Two mirror methods are auditable at a glance; a branchy merged method is not.
 2. The genuinely reusable, direction-agnostic pieces are **already** extracted and take a
    `direction` parameter: `ResolveInitialRisk`, `ResolveTakeProfitPrice`,
-   `ShouldExitFailedBreakout`, `BuildCandidate`, plus per-direction slippage helpers. The
+   `BuildCandidate`, plus per-direction slippage helpers. The
    mechanical duplication is already gone; only the intentional mirror loop remains.
 3. DRY is not an absolute. For correctness-critical mirror logic, explicit beats clever.
 

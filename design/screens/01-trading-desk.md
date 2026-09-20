@@ -65,9 +65,8 @@ Fields use `.field > label` (12px, `--color-text` at 70%) over `.input` at
 
 1. **Wishlist** `<select name="id" data-auto-submit>` — `Model.Wishlists`
 2. **Strategy context** `<select name="strategyId" data-auto-submit>` — `Model.Strategies`
-3. **Finviz screener** — a 132px scope `<select>` (`Swing` / `Intraday (today)`) butted
-   against a monospace query input, `border-right:0` on the select so they read as one
-   control. 11.5px monospace.
+3. **Finviz swing screener** - a query input in 11.5px monospace. Scope is fixed to
+   swing; there is no strategy-horizon selector.
 4. **Search** `<input type="search" name="search">`
 5. **Sync screener** — `.btn.btn-secondary`, 32px, `refresh-cw` icon
 
@@ -84,9 +83,9 @@ Price / spread range filters stay behind the existing `<details class="desk-adva
 - Candidate chips — `.tag.tag-outline` on `background:var(--color-bg)`, 11px/700
 - Right: `Synced HH:MM:SS UTC` 11px, then `.btn.btn-primary` **Add N to wishlist**
 
-Behaviour: **swing** persists; **intraday** is scoped to the current session only and must
-be discarded at the next session boundary. Both accept a full Finviz Elite URL, a saved
-screener name, or a bare query string — normalise all three server-side.
+Behaviour: swing wishlist membership persists. Discovery evidence carries its own
+observation time and expiry; membership alone never admits a trade. Accept a full
+Finviz Elite URL, a saved screener name, or a bare query string and normalise server-side.
 Back it with `ScreenerVerificationService` + `WishlistUniverseResolver`; adding uses the
 existing idempotent `ImportFinviz` handler from `Wishlists.cshtml`.
 
@@ -172,8 +171,7 @@ header strip 10px/700/0.07em uppercase, then one button per symbol,
    - TradingFlow `dl`: Setup · Detected · Severity · Authority (`Authoritative for entry`)
      from `LatestSignal.SignalType`, `DetectedAtUtc`, `Severity`.
    - Predictor `dl`: Probability · Horizon · Catalyst · Readiness from
-     `MobileModelIntelligenceResponse` (`Swing.Probability` or
-     `Intraday.OpportunityProbability`, `ResolvedHorizon`,
+     `MobileModelIntelligenceResponse` (`Swing.Probability`, `ResolvedHorizon` = `10b`,
      `Catalyst.Status`/`Direction`, `ReadinessStatus`).
 3. **Agreement band** — `padding:12px 20px`, fill and colour from the flag table.
    Headline 15px/800/0.04em, note 12.5px.

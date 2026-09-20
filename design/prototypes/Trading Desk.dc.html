@@ -118,7 +118,6 @@
     <div class="field">
       <label for="tf-wl">Wishlist</label>
       <select class="input" id="tf-wl" style="height:32px;min-height:32px;padding:4px 8px">
-        <option>Intraday catalyst · 14 active</option>
         <option>Swing quality · 22 active</option>
         <option>Earnings reaction · 9 active</option>
       </select>
@@ -126,7 +125,6 @@
     <div class="field">
       <label for="tf-strat">Strategy context</label>
       <select class="input" id="tf-strat" style="height:32px;min-height:32px;padding:4px 8px">
-        <option>intraday-ema10-ema20-macd-volume v1</option>
         <option>minervini-trend-template-vcp v4-trend-rider</option>
         <option>swing-reversal-reclaim-bull-quality-no-news v1</option>
         <option>swing-overbought-rollover-short-no-news v5</option>
@@ -135,10 +133,6 @@
     <div class="field">
       <label for="tf-screener">Finviz screener — name, saved view, or query string</label>
       <div style="display:flex;gap:0">
-        <select class="input" style="height:32px;min-height:32px;padding:4px 8px;width:132px;flex:none;border-right:0" value="{{ screenerScope }}" onChange="{{ setScreenerScope }}">
-          <option value="swing">Swing</option>
-          <option value="intraday">Intraday (today)</option>
-        </select>
         <input class="input" id="tf-screener" style="height:32px;min-height:32px;padding:4px 8px;font-family:ui-monospace,monospace;font-size:11.5px" value="{{ screenerQuery }}" onChange="{{ setScreenerQuery }}" />
       </div>
     </div>
@@ -554,101 +548,38 @@ const LOSS = 'var(--color-accent-700)';
 const FLAT = 'var(--color-neutral-700)';
 
 const SEED = [
-  { t: 'NVDA', n: 'NVIDIA Corp', p: 181.42, prev: 178.06, sp: 1.6, rv: 2.4, d: 'ELIGIBLE',
-    r: 'Volume 2.4x 20-bar mean, EMA10 above EMA20, MACD histogram expanding, VWAP extension 0.8 ATR.',
-    setup: 'Intraday continuation', sa: '14:32:08', sev: 'high',
-    m: 'LONG', mp: 0.71, mh: 'intraday 1d', cat: 'confirmed / bullish', rdy: 'ready',
-    mr: 'Opportunity 71%, downside 12%. RVOL 2.4, RSI 61.8, MACD diff +0.0182. Catalyst confirmed 41m ago.',
-    scr: 'both', pos: { q: 120, e: 174.1, src: 'Wishlist', prot: 'Stop 169.80 · Target 188.40' },
-    hl: 'NVIDIA lifts data-centre capacity outlook at partner summit', ha: '14:11:22', ns: 0.62, prov: 'Benzinga' },
   { t: 'AVGO', n: 'Broadcom Inc', p: 312.88, prev: 309.44, sp: 2.1, rv: 1.8, d: 'ELIGIBLE',
     r: 'Reclaim of 20-day with rising relative strength; confluence timeframe 1h EMA50 aligned.',
     setup: 'Swing reclaim', sa: '13:05:41', sev: 'medium',
-    m: 'LONG', mp: 0.66, mh: 'swing 5d', cat: 'confirmed / bullish', rdy: 'ready',
+    m: 'LONG', mp: 0.66, mh: 'swing 10b', cat: 'confirmed / bullish', rdy: 'ready',
     mr: 'Probability 66%, decision score 1.42, rank 3 of 22. Volume z-score 2.1, global context +0.3.',
     scr: 'swing', pos: { q: 40, e: 305.2, src: 'Wishlist', prot: 'Stop 296.10 · Target 328.60' },
     hl: 'Broadcom guides custom accelerator revenue above consensus', ha: '12:48:10', ns: 0.54, prov: 'Alpaca' },
-  { t: 'AMD', n: 'Advanced Micro Devices', p: 148.06, prev: 149.9, sp: 2.4, rv: 1.1, d: 'WATCHING',
-    r: 'Volume spike 1.1x below the 1.5x floor; MACD histogram still contracting.',
-    setup: 'No active setup', sa: '--', sev: 'none',
-    m: 'FLAT', mp: 0.48, mh: 'intraday 1d', cat: 'none / neutral', rdy: 'ready',
-    mr: 'Opportunity 48%, downside 34%. RVOL 1.1, RSI 47.2. No catalyst inside the relevance window.',
-    scr: 'none', pos: null,
-    hl: 'AMD supply commentary unchanged after channel checks', ha: '11:20:03', ns: 0.05, prov: 'Alpaca' },
-  { t: 'PLTR', n: 'Palantir Technologies', p: 41.77, prev: 40.12, sp: 3.8, rv: 3.1, d: 'ELIGIBLE',
-    r: 'Session gain 4.1% on 3.1x volume, holding above VWAP for 9 completed bars.',
-    setup: 'Catalyst participation', sa: '14:38:52', sev: 'high',
-    m: 'SHORT', mp: 0.58, mh: 'intraday 1d', cat: 'confirmed / bearish', rdy: 'ready',
-    mr: 'Downside 58%, opportunity 29%. Extension 3.4 ATR above VWAP flags mean reversion risk.',
-    scr: 'intraday', pos: null,
-    hl: 'Palantir wins expanded federal analytics vehicle', ha: '14:02:44', ns: 0.71, prov: 'Benzinga' },
-  { t: 'MU', n: 'Micron Technology', p: 106.34, prev: 104.9, sp: 2.7, rv: 1.9, d: 'ELIGIBLE',
-    r: 'ATR compression breakout with confirmation on the following bar; spread inside 5 bps.',
-    setup: 'Compression breakout', sa: '14:19:30', sev: 'medium',
-    m: 'LONG', mp: 0.63, mh: 'intraday 1d', cat: 'possible / bullish', rdy: 'ready',
-    mr: 'Opportunity 63%, downside 18%. RVOL 1.9, RSI 58.4, entry stop 1.8%, target 4.1%.',
-    scr: 'both', pos: { q: 90, e: 103.55, src: 'Stock Pulse', prot: 'Stop 100.20 · Target 112.80' },
-    hl: 'Micron HBM4 qualification ahead of schedule, supplier says', ha: '13:31:09', ns: 0.48, prov: 'Alpaca' },
-  { t: 'COIN', n: 'Coinbase Global', p: 244.91, prev: 251.7, sp: 5.9, rv: 2.2, d: 'BLOCKED',
-    r: 'Spread 5.9 bps exceeds the 5.0 bps entry ceiling for this strategy.',
-    setup: 'Intraday continuation', sa: '14:26:11', sev: 'medium',
-    m: 'FLAT', mp: 0.51, mh: 'intraday 1d', cat: 'possible / mixed', rdy: 'degraded',
-    mr: 'Opportunity 51%, downside 41%. Readiness degraded: latest 5-minute bar incomplete.',
-    scr: 'intraday', pos: null,
-    hl: 'Coinbase volumes soften as spot flows rotate', ha: '13:58:37', ns: -0.34, prov: 'Benzinga' },
-  { t: 'SMCI', n: 'Super Micro Computer', p: 38.62, prev: 40.05, sp: 4.4, rv: 2.7, d: 'WATCHING',
-    r: 'Below VWAP with negative MACD histogram; long setups suppressed for the session.',
-    setup: 'No active setup', sa: '--', sev: 'none',
-    m: 'SHORT', mp: 0.64, mh: 'intraday 1d', cat: 'confirmed / bearish', rdy: 'ready',
-    mr: 'Downside 64%, opportunity 21%. RVOL 2.7 on distribution, RSI 38.1.',
-    scr: 'none', pos: null,
-    hl: 'Super Micro margin commentary disappoints channel partners', ha: '12:11:58', ns: -0.52, prov: 'Alpaca' },
   { t: 'ANET', n: 'Arista Networks', p: 128.55, prev: 127.1, sp: 2.9, rv: 1.4, d: 'WATCHING',
     r: 'Trend template satisfied but no entry trigger on the completed bar.',
     setup: 'Trend template', sa: '10:44:19', sev: 'low',
-    m: 'LONG', mp: 0.59, mh: 'swing 5d', cat: 'none / neutral', rdy: 'ready',
+    m: 'LONG', mp: 0.59, mh: 'swing 10b', cat: 'none / neutral', rdy: 'ready',
     mr: 'Probability 59%, decision score 0.88, rank 9 of 22. Volume z-score 0.7.',
     scr: 'swing', pos: null,
     hl: 'Arista reiterates AI networking pipeline at investor day', ha: '09:52:14', ns: 0.31, prov: 'Alpaca' },
-  { t: 'MRVL', n: 'Marvell Technology', p: 74.18, prev: 73.02, sp: 3.2, rv: 1.6, d: 'ELIGIBLE',
-    r: 'VWAP pullback held with rising volume on the confirmation bar.',
-    setup: 'VWAP pullback', sa: '14:35:02', sev: 'medium',
-    m: 'LONG', mp: 0.61, mh: 'intraday 1d', cat: 'possible / bullish', rdy: 'ready',
-    mr: 'Opportunity 61%, downside 22%. RVOL 1.6, RSI 55.9, MACD diff +0.0094.',
-    scr: 'intraday', pos: null,
-    hl: 'Marvell custom silicon win reported by supply chain', ha: '13:14:26', ns: 0.44, prov: 'Benzinga' },
   { t: 'CRWD', n: 'CrowdStrike Holdings', p: 396.4, prev: 392.8, sp: 3.6, rv: 1.2, d: 'WATCHING',
     r: 'RSI 71.4 above the 70.0 entry ceiling; waiting for a reset.',
     setup: 'No active setup', sa: '--', sev: 'none',
-    m: 'LONG', mp: 0.57, mh: 'swing 5d', cat: 'none / neutral', rdy: 'ready',
+    m: 'LONG', mp: 0.57, mh: 'swing 10b', cat: 'none / neutral', rdy: 'ready',
     mr: 'Probability 57%, decision score 0.71, rank 14 of 22.',
     scr: 'swing', pos: null,
     hl: 'CrowdStrike federal renewals tracking ahead of plan', ha: '11:47:51', ns: 0.28, prov: 'Alpaca' },
-  { t: 'SOFI', n: 'SoFi Technologies', p: 22.04, prev: 21.55, sp: 6.8, rv: 2.9, d: 'BLOCKED',
-    r: 'Notional 25% cap reached across open positions for this account.',
-    setup: 'Catalyst participation', sa: '14:12:47', sev: 'medium',
-    m: 'LONG', mp: 0.6, mh: 'intraday 1d', cat: 'confirmed / bullish', rdy: 'ready',
-    mr: 'Opportunity 60%, downside 24%. RVOL 2.9, RSI 63.2.',
-    scr: 'intraday', pos: null,
-    hl: 'SoFi lifts member growth outlook', ha: '14:05:19', ns: 0.58, prov: 'Benzinga' },
   { t: 'DKNG', n: 'DraftKings Inc', p: 44.86, prev: 45.9, sp: 4.1, rv: 1.3, d: 'WATCHING',
     r: 'Confluence timeframe 1h EMA50 not reclaimed.',
     setup: 'No active setup', sa: '--', sev: 'none',
-    m: 'FLAT', mp: 0.46, mh: 'swing 5d', cat: 'none / neutral', rdy: 'ready',
+    m: 'FLAT', mp: 0.46, mh: 'swing 10b', cat: 'none / neutral', rdy: 'ready',
     mr: 'Probability 46%, decision score -0.12, rank 19 of 22.',
     scr: 'none', pos: null,
     hl: 'DraftKings state approvals slip a quarter', ha: '10:33:05', ns: -0.22, prov: 'Alpaca' },
-  { t: 'RIVN', n: 'Rivian Automotive', p: 13.72, prev: 13.28, sp: 7.4, rv: 2.1, d: 'BLOCKED',
-    r: 'Spread 7.4 bps and quote age 4.2s both outside entry tolerance.',
-    setup: 'Compression breakout', sa: '14:08:33', sev: 'low',
-    m: 'FLAT', mp: 0.49, mh: 'intraday 1d', cat: 'possible / mixed', rdy: 'degraded',
-    mr: 'Readiness degraded: relative volume series incomplete for the session.',
-    scr: 'intraday', pos: null,
-    hl: 'Rivian production cadence steady into the quarter', ha: '12:56:41', ns: 0.11, prov: 'Alpaca' },
   { t: 'UBER', n: 'Uber Technologies', p: 88.31, prev: 87.02, sp: 2.2, rv: 1.5, d: 'ELIGIBLE',
     r: 'Reclaim confirmed on the completed bar with volume spike 1.5x.',
     setup: 'Swing reclaim', sa: '13:41:58', sev: 'medium',
-    m: 'LONG', mp: 0.68, mh: 'swing 5d', cat: 'confirmed / bullish', rdy: 'ready',
+    m: 'LONG', mp: 0.68, mh: 'swing 10b', cat: 'confirmed / bullish', rdy: 'ready',
     mr: 'Probability 68%, decision score 1.61, rank 2 of 22. Volume z-score 1.9.',
     scr: 'swing', pos: { q: 60, e: 85.4, src: 'Manual', prot: 'Stop 82.10 · Target 94.90' },
     hl: 'Uber mobility bookings accelerate in core markets', ha: '13:22:07', ns: 0.49, prov: 'Benzinga' }
@@ -661,13 +592,6 @@ const SCREENERS = {
     name: 'Swing — momentum quality',
     hits: 22,
     fresh: ['AVGO', 'UBER', 'ANET', 'LRCX']
-  },
-  intraday: {
-    label: 'Intraday screener',
-    query: 'f=sh_curvol_o1000,sh_relvol_o2,ta_change_u3&ft=4&o=-volume',
-    name: 'Intraday — gap + RVOL (today only)',
-    hits: 17,
-    fresh: ['PLTR', 'SOFI', 'RIVN', 'MARA', 'HOOD']
   }
 };
 
@@ -688,7 +612,7 @@ class Component extends DCLogic {
     search: '',
     sort: 'decision',
     dir: 'desc',
-    selected: 'NVDA',
+    selected: 'AVGO',
     side: 'buy',
     stage: 'entry',
     qty: 120,
@@ -697,8 +621,7 @@ class Component extends DCLogic {
     limitOverride: null,
     stopOverride: null,
     targetOverride: null,
-    screenerScope: 'intraday',
-    screenerQuery: SCREENERS.intraday.query,
+    screenerQuery: SCREENERS.swing.query,
     screenerSyncedAt: '14:36:12 UTC',
     promoted: false,
     newsScope: 'group',
@@ -835,11 +758,10 @@ class Component extends DCLogic {
   }
 
   matchesTab(r) {
-    const scope = this.state.screenerScope;
     switch (this.state.tab) {
       case 'signal': return r.seed.d === 'ELIGIBLE';
       case 'trade': return !!r.seed.pos;
-      case 'screener': return r.seed.scr === 'both' || r.seed.scr === scope;
+      case 'screener': return r.seed.scr === 'swing';
       case 'disagree': return r.sync === 'conflict';
       default: return true;
     }
@@ -902,7 +824,7 @@ class Component extends DCLogic {
     all.forEach(r => { bySym[r.ticker] = r; });
     const rows = this.sortRows(all.filter(r => this.matchesTab(r)).filter(r => this.matchesSearch(r)));
     const sel = bySym[s.selected] || all[0];
-    const screener = SCREENERS[s.screenerScope];
+    const screener = SCREENERS.swing;
 
     const qty = s.qty === null ? (sel.seed.pos ? sel.seed.pos.q : Math.max(1, Math.round(6000 / sel.last))) : s.qty;
     const isBuy = s.side === 'buy';
@@ -1030,12 +952,6 @@ class Component extends DCLogic {
       sortDecision: () => this.toggleSort('decision'),
       sortPl: () => this.toggleSort('pl'),
 
-      screenerScope: s.screenerScope,
-      setScreenerScope: e => this.setState({
-        screenerScope: e.target.value,
-        screenerQuery: SCREENERS[e.target.value].query,
-        promoted: false
-      }),
       screenerQuery: s.screenerQuery,
       setScreenerQuery: e => this.setState({ screenerQuery: e.target.value }),
       screenerLabel: screener.label,
@@ -1047,7 +963,7 @@ class Component extends DCLogic {
       promoteCandidates: () => {
         this.setState({ promoted: true });
         this.fire('Wishlist updated', screener.fresh.join(', ') + ' added to the ' +
-          (s.screenerScope === 'intraday' ? 'intraday catalyst' : 'swing quality') +
+          'swing quality' +
           ' wishlist. The observer picks them up on the next cycle.');
       },
       syncScreener: () => {

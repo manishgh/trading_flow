@@ -41,7 +41,7 @@
   <header style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 16px 10px;border-bottom:2px solid var(--color-divider)">
     <div style="min-width:0">
       <span style="display:block;font-family:var(--font-heading);font-weight:800;font-size:15px;letter-spacing:-0.01em">TRADINGFLOW</span>
-      <span style="display:block;font-size:11px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">Intraday catalyst · {{ clockNy }} NY</span>
+      <span style="display:block;font-size:11px;color:var(--color-neutral-700);font-variant-numeric:tabular-nums">Swing quality · {{ clockNy }} NY</span>
     </div>
     <div style="display:flex;align-items:center;gap:7px;flex:none">
       <span class="tag tag-neutral" style="font-weight:700;font-size:10px;letter-spacing:0.06em">PAPER</span>
@@ -304,80 +304,13 @@ const LOSS = 'var(--color-accent-700)';
 const FLAT = 'var(--color-neutral-700)';
 
 const SEED = [
-  { t: 'NVDA', n: 'NVIDIA Corp', p: 181.42, prev: 178.06, sp: 1.6, rv: 2.4, d: 'ELIGIBLE',
-    r: 'Volume 2.4x 20-bar mean, EMA10 above EMA20, MACD histogram expanding, VWAP extension 0.8 ATR.',
-    setup: 'Intraday continuation', sa: '14:32:08',
-    m: 'LONG', mp: 0.71, mh: 'intraday 1d',
-    mr: 'Opportunity 71%, downside 12%. RVOL 2.4, RSI 61.8, MACD diff +0.0182. Catalyst confirmed 41 minutes ago.',
-    pos: { q: 120, e: 174.1, prot: 'Stop 169.80 · Target 188.40' },
-    news: [['Benzinga', '14:11', 'NVIDIA lifts data-centre capacity outlook at partner summit', 0.62],
-           ['Alpaca', '11:38', 'Supply chain checks point to steady accelerator lead times', 0.28],
-           ['Benzinga', '09:14', 'Analyst raises target ahead of the partner summit', 0.41]] },
-  { t: 'PLTR', n: 'Palantir Technologies', p: 41.77, prev: 40.12, sp: 3.8, rv: 3.1, d: 'ELIGIBLE',
-    r: 'Session gain 4.1% on 3.1x volume, holding above VWAP for 9 completed bars.',
-    setup: 'Catalyst participation', sa: '14:38:52',
-    m: 'SHORT', mp: 0.58, mh: 'intraday 1d',
-    mr: 'Downside 58%, opportunity 29%. Extension 3.4 ATR above VWAP flags mean reversion risk.',
-    pos: null,
-    news: [['Benzinga', '14:02', 'Palantir wins expanded federal analytics vehicle', 0.71],
-           ['Alpaca', '10:47', 'Government software spending holds up in July data', 0.22]] },
-  { t: 'MU', n: 'Micron Technology', p: 106.34, prev: 104.9, sp: 2.7, rv: 1.9, d: 'ELIGIBLE',
-    r: 'ATR compression breakout with confirmation on the following bar; spread inside 5 bps.',
-    setup: 'Compression breakout', sa: '14:19:30',
-    m: 'LONG', mp: 0.63, mh: 'intraday 1d',
-    mr: 'Opportunity 63%, downside 18%. RVOL 1.9, RSI 58.4, entry stop 1.8%, target 4.1%.',
-    pos: { q: 90, e: 103.55, prot: 'Stop 100.20 · Target 112.80' },
-    news: [['Alpaca', '13:31', 'Micron HBM4 qualification ahead of schedule, supplier says', 0.48],
-           ['Benzinga', '10:41', 'Micron beats as HBM pricing holds; capex guide unchanged', 0.58]] },
-  { t: 'MRVL', n: 'Marvell Technology', p: 74.18, prev: 73.02, sp: 3.2, rv: 1.6, d: 'ELIGIBLE',
-    r: 'VWAP pullback held with rising volume on the confirmation bar.',
-    setup: 'VWAP pullback', sa: '14:35:02',
-    m: 'LONG', mp: 0.61, mh: 'intraday 1d',
-    mr: 'Opportunity 61%, downside 22%. RVOL 1.6, RSI 55.9, MACD diff +0.0094.',
-    pos: null,
-    news: [['Benzinga', '13:14', 'Marvell custom silicon win reported by supply chain', 0.44]] },
-  { t: 'AMD', n: 'Advanced Micro Devices', p: 148.06, prev: 149.9, sp: 2.4, rv: 1.1, d: 'WATCHING',
-    r: 'Volume spike 1.1x below the 1.5x floor; MACD histogram still contracting.',
-    setup: 'No active setup', sa: '--',
-    m: 'FLAT', mp: 0.48, mh: 'intraday 1d',
-    mr: 'Opportunity 48%, downside 34%. No catalyst inside the relevance window.',
-    pos: null,
-    news: [['Alpaca', '11:20', 'AMD supply commentary unchanged after channel checks', 0.05]] },
-  { t: 'SMCI', n: 'Super Micro Computer', p: 38.62, prev: 40.05, sp: 4.4, rv: 2.7, d: 'WATCHING',
-    r: 'Below VWAP with negative MACD histogram; long setups suppressed for the session.',
-    setup: 'No active setup', sa: '--',
-    m: 'SHORT', mp: 0.64, mh: 'intraday 1d',
-    mr: 'Downside 64%, opportunity 21%. RVOL 2.7 on distribution, RSI 38.1.',
-    pos: null,
-    news: [['Alpaca', '12:11', 'Super Micro margin commentary disappoints channel partners', -0.52]] },
   { t: 'UBER', n: 'Uber Technologies', p: 88.31, prev: 87.02, sp: 2.2, rv: 1.5, d: 'ELIGIBLE',
     r: 'Reclaim confirmed on the completed bar with volume spike 1.5x.',
     setup: 'Swing reclaim', sa: '13:41:58',
-    m: 'LONG', mp: 0.68, mh: 'swing 5d',
+    m: 'LONG', mp: 0.68, mh: 'swing 10b',
     mr: 'Probability 68%, decision score 1.61, rank 2 of 22. Volume z-score 1.9.',
     pos: { q: 60, e: 85.4, prot: 'Stop 82.10 · Target 94.90' },
-    news: [['Benzinga', '13:22', 'Uber mobility bookings accelerate in core markets', 0.49]] },
-  { t: 'COIN', n: 'Coinbase Global', p: 244.91, prev: 251.7, sp: 5.9, rv: 2.2, d: 'BLOCKED',
-    r: 'Spread 5.9 bps exceeds the 5.0 bps entry ceiling for this strategy.',
-    setup: 'Intraday continuation', sa: '14:26:11',
-    m: 'FLAT', mp: 0.51, mh: 'intraday 1d',
-    mr: 'Opportunity 51%, downside 41%. Readiness degraded: latest 5-minute bar incomplete.',
-    pos: { q: 30, e: 252.1, prot: 'No broker stop on file' },
-    news: [['Benzinga', '13:58', 'Coinbase volumes soften as spot flows rotate', -0.34]] },
-  { t: 'SOFI', n: 'SoFi Technologies', p: 22.04, prev: 21.55, sp: 6.8, rv: 2.9, d: 'BLOCKED',
-    r: 'Notional 25% cap reached across open positions for this account.',
-    setup: 'Catalyst participation', sa: '14:12:47',
-    m: 'LONG', mp: 0.6, mh: 'intraday 1d',
-    mr: 'Opportunity 60%, downside 24%. RVOL 2.9, RSI 63.2.',
-    pos: null,
-    news: [['Benzinga', '14:05', 'SoFi lifts member growth outlook', 0.58]] },
-  { t: 'RIVN', n: 'Rivian Automotive', p: 13.72, prev: 13.28, sp: 7.4, rv: 2.1, d: 'BLOCKED',
-    r: 'Spread 7.4 bps and quote age 4.2 s both outside entry tolerance.',
-    setup: 'Compression breakout', sa: '14:08:33',
-    m: 'FLAT', mp: 0.49, mh: 'intraday 1d',
-    mr: 'Readiness degraded: relative volume series incomplete for the session.',
-    pos: null,
-    news: [['Alpaca', '12:56', 'Rivian production cadence steady into the quarter', 0.11]] }
+    news: [['Benzinga', '13:22', 'Uber mobility bookings accelerate in core markets', 0.49]] }
 ];
 
 const TABS = [
@@ -391,7 +324,7 @@ class Component extends DCLogic {
   state = {
     view: 'list',
     tab: 'all',
-    selected: 'NVDA',
+    selected: 'UBER',
     side: 'buy',
     qty: null,
     tif: 'day',

@@ -305,6 +305,20 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrder
                 : new OrderDispatchExpiredException(intentId, dispatchExpiry);
         }
 
+        if (intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry)
+        {
+            var horizon = await context.PortfolioRiskReservations
+                .Where(record => record.IntentId == intentId)
+                .Select(record => record.Horizon)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (horizon != "swing")
+            {
+                throw intent.DispatchAttemptCount > 0
+                    ? new OrderDispatchAdoptionRequiredException(intentId)
+                    : new OrderDispatchUnsupportedHorizonException(intentId);
+            }
+        }
+
         if (intent.Kind == OrderIntentKind.ProtectiveStop &&
             intent.PositionGenerationEventId is { } positionGenerationEventId &&
             await HasActivePositionExitAsync(
@@ -981,7 +995,7 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrder
         PortfolioRiskReservationRequest risk)
     {
         if (String.IsNullOrWhiteSpace(risk.AccountId) ||
-            risk.Horizon is not ("day" or "swing") ||
+            risk.Horizon != "swing" ||
             risk.AccountEquity <= 0m ||
             risk.AvailableBuyingPower < 0m ||
             risk.BrokerGrossExposure < 0m ||

@@ -170,14 +170,13 @@ when off. **Square controls for independent booleans, never round radio dots.**
    `Add all`. → `OnPostAddTickers`. Note at 11px: "Separate with commas, spaces or new
    lines. Adding is idempotent."
 3. Finviz import, above a `border-top:1px solid var(--color-neutral-300)` —
-   `grid-template-columns:132px minmax(0,1fr) auto`: a **Screener scope** select
-   (Swing / Intraday (today)), the URL-name-or-query input in 11.5px monospace, and an
+   `grid-template-columns:minmax(0,1fr) auto`: a swing URL-name-or-query input
+   in 11.5px monospace, and an
    `Import` button with a `download` icon. → `OnPostImportFinviz`.
-   Note: "Adds returned symbols without removing existing entries. An intraday screen is
-   scoped to the current session only."
+   Note: "Adds returned symbols without removing existing entries."
 
-The scope select is the same control as the desk's screener bar. Keep them consistent —
-same options, same normalisation, same session-scoping rule.
+Import and the desk screener use the same fixed swing scope and normalisation.
+Source observations retain timestamps and expiry; wishlist membership is not admission.
 
 ### Symbols table
 Bulk-action bar appears above the table only when something is selected:

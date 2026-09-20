@@ -134,6 +134,12 @@ public sealed class OrderDispatchRunInactiveException(Guid intentId) : InvalidOp
     public Guid IntentId { get; } = intentId;
 }
 
+public sealed class OrderDispatchUnsupportedHorizonException(Guid intentId) : InvalidOperationException(
+    $"Intent {intentId:N} has no supported swing risk reservation; a new entry submission is prohibited.")
+{
+    public Guid IntentId { get; } = intentId;
+}
+
 public sealed class OrderCancellationPendingException(
     string clientOrderId,
     string brokerOrderId) : InvalidOperationException(

@@ -232,6 +232,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
                     exception is OrderDispatchNoLongerRequiredException or
                     OrderDispatchExpiredException or
                     OrderDispatchRunInactiveException or
+                    OrderDispatchUnsupportedHorizonException or
                     PositionExitInProgressException)
                 {
                     // DispatchAsync durably terminalized these intents before throwing.
@@ -340,7 +341,8 @@ public sealed class OrderDispatchService : IOrderDispatchService
                 cancellationToken);
         }
         catch (Exception exception) when (
-            exception is OrderDispatchExpiredException or OrderDispatchRunInactiveException)
+            exception is OrderDispatchExpiredException or OrderDispatchRunInactiveException or
+                OrderDispatchUnsupportedHorizonException)
         {
             var latest = await events.GetCurrentAsync(intent.ClientOrderId, cancellationToken)
                 ?? throw new InvalidOperationException(
@@ -356,9 +358,12 @@ public sealed class OrderDispatchService : IOrderDispatchService
                         LocalTimestampUtc: timeProvider.GetUtcNow(),
                         PayloadJson: JsonSerializer.Serialize(new
                         {
-                            reason = exception is OrderDispatchExpiredException
-                                ? "dispatch_expired_before_broker_post"
-                                : "owning_run_inactive_before_broker_post"
+                            reason = exception switch
+                            {
+                                OrderDispatchExpiredException => "dispatch_expired_before_broker_post",
+                                OrderDispatchUnsupportedHorizonException => "unsupported_entry_horizon",
+                                _ => "owning_run_inactive_before_broker_post"
+                            }
                         })),
                     cancellationToken);
             }

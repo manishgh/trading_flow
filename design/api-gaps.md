@@ -18,7 +18,7 @@ Two options:
   during the run.
 - **Derive it client-side** by replaying `CompletedTrades` cumulatively. Cheaper, but it
   only reflects realised P/L at exit timestamps, so the curve will be a step function and
-  intraday drawdown will be understated. Acceptable as a first pass; label the axis
+  within-session drawdown will be understated. Acceptable as a first pass; label the axis
   "realised equity" if you do this.
 
 ### 2. Promotion gate evaluation — Backtest Lab
@@ -66,11 +66,9 @@ snapshot record today.
 The desk screener bar and the wishlist import both need: normalise a Finviz URL, saved
 screener name, or bare query string → return symbols → diff against a wishlist → return
 the count not yet present. `ScreenerVerificationService` and the existing
-`ImportFinviz` handler cover most of it, but there is no read-only "what would this
-return" call, and no notion of an **intraday screener scoped to the current session**.
-
-That session scoping is a real requirement, not a UI nicety: an intraday screen must be
-discarded at the session boundary so it cannot leak into the next day's universe.
+`ImportFinviz` handler cover most of it. The read-only preview must carry source,
+observation time, query identity and expiry for swing discovery. Persisted wishlist
+membership is not trading admission or historical point-in-time universe evidence.
 
 ### 8. Unprotected-position flag — Positions
 `MobileRunningTrade` has `StopLossPrice` and `ProtectionSummary`, so "no broker stop on

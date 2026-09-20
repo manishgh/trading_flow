@@ -1,10 +1,82 @@
 # Remaining Implementation Checkpoints
 
-Updated: 2026-09-16. This is the standalone execution checklist for the remaining
+Updated: 2026-09-20. This is the standalone execution checklist for the remaining
 workflow checkpoints. It does not replace the production specification or reopen
 completed phases without a defect.
 
-## Evidence Baseline
+## Bounded Swing Product Cleanup (2026-09-20)
+
+Status: implementation and verification complete. Independent plan and final-diff
+reviews found no remaining blocking issue. This closes day-trading retirement, not
+the unrelated workflow checkpoints below or strategy profitability/promotion.
+
+- Preservation checkpoints pushed before cleanup: TradingFlow `9d50bc1` and Market
+  Predictor `18e07d1` on their respective main branches. Both implementation branches
+  are named `unified-swing-product`. No project runtime was active before edits.
+- Scope: TradingFlow design specifications and four mixed HTML prototypes,
+  obsolete operational-document references, and new swing-focused regression tests.
+- Remove dedicated day-trading screens, strategy examples, predictor fields and
+  defaults; retain usable swing views and completed sub-daily execution evidence.
+- Restore committed-bars/point-in-time-membership momentum tests and signal
+  log-trend coverage; add retired strategy-key rejection tests where absent.
+- Runtime changes are limited to swing-only risk reservation and durable entry
+  dispatch admission. Canonical strategies, providers, jobs, secrets, local DB state,
+  raw/model/candle artifacts and curated research results remain unchanged.
+  No compatibility aliases or strategy promotion.
+- Gates: no active dedicated intraday workflow in the edited designs/docs;
+  prototype script syntax and swing-only state references checked; new tests match
+  current contracts; offline suite, independent review and `git diff --check` pass.
+- Rollback boundary: this checkpoint's code/design/doc/test diff only, never
+  preserved history or artifacts.
+- Runtime gate: reject new
+  day-horizon reservations; before broker POST, dispatch checks the authoritative
+  portfolio-risk horizon and expires unsupported or unavailable entry reservations.
+  Broker adoption, reconciliation, exits and protection continue. Prior ambiguous
+  broker attempts remain adoption-required; they are never treated as unsubmitted.
+  Changes are in `SqliteOrderIntentRepository.cs`, `IOrderIntentRepository.cs`,
+  `OrderDispatchService.cs` and `SqliteDurabilityTests.cs`.
+
+Implementation evidence:
+
+- Removed retired strategy/universe/position/order fixtures from the four mixed
+  prototypes, including their defaults, filters and orphaned lookup entries. Kept
+  the existing swing return series and remaining swing examples; no intraday
+  results were renamed as swing. Deleted the retired failed-breakout trade example
+  rather than changing its exit reason. Promotion gates now say not evaluated,
+  and catalog disposition does not imply execution authorization.
+- Updated `design/api-gaps.md`, `design/screens/01-trading-desk.md`,
+  `design/screens/04-operations.md`, `docs/architecture-and-review.md` and
+  `docs/wishlist-architecture-plan.md` to remove obsolete workflow requirements.
+  Sub-daily swing evidence, within-session drawdown and PDT safeguards remain.
+- Added `SwingEvidenceCatalogResearchRunnerTests.cs` (committed adjusted bars and
+  point-in-time membership, including rejection of late membership),
+  `SwingSignalLogTrendTests.cs` (positive daily log trends and no future-bar reads),
+  and `RetiredStrategyConfigurationTests.cs` (48 rejected retired keys and three
+  retained sub-daily execution timeframes). All 55 cases passed in the full suite.
+- `node --test tests/design/swing-prototypes.test.cjs`: 4 passed, 0 failed.
+  Checks script syntax, component projections, surviving fixture identities and
+  return values, tab/selection paths, fixed swing screening and not-evaluated gates.
+  This is a lightweight component-state check, not a browser visual-verification pass.
+- `git diff --check`: passed. Reference scan found no dedicated intraday workflow
+  in `design`; remaining day-trading mentions in operational docs are exclusions
+  or same-day exit/PDT protections, not active strategy paths.
+- Runtime-focused suite: 97 passed. Full offline C# suite, built after the final
+  code/test edits: 1,546 passed, zero failed, in 1m54s, serial execution.
+  Command: `dotnet test src/TradingFlow.Tests/TradingFlow.Tests.csproj --no-restore
+  --filter "FullyQualifiedName!~AlpacaCandlePipelineIntegrationTests" --verbosity quiet
+  --logger "trx;LogFileName=swing-retirement.trx" --results-directory
+  .test-tmp/swing-retirement -m:1 --disable-build-servers --
+  xUnit.MaxParallelThreads=1 xUnit.ParallelizeTestCollections=false`.
+  Local report: `.test-tmp/swing-retirement/swing-retirement.trx` (not committed).
+  The live Alpaca test was excluded; no provider/broker request or training ran.
+- Two scoped agents completed design/implementation and independent code/design
+  review and are closed. Sampled system memory stayed around 72-73% during tests.
+  No artifact deletion or implicit authorization migration occurred.
+
+## Earlier Evidence Baseline
+
+The following records the earlier checkpoint baseline, not the preservation state
+reported in the bounded cleanup above.
 
 - Phases 0-5 are recorded as complete in the lifecycle plan. Their regression
   evidence must remain intact; this planning review is not a fresh full-suite pass.

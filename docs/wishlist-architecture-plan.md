@@ -61,7 +61,8 @@ Do not alert on "green candle only." First version should look for participation
 - MACD histogram positive or improving.
 - Cumulative volume above historical same-session expectation.
 - Bar closes in the upper part of its range.
-- Break above recent high, opening range, or premarket high.
+- Completed daily swing setup with a declared completed sub-daily confirmation,
+  such as a break above the prior daily high; execution follows the confirming bar.
 - Guard against chasing when price is too extended from VWAP/ATR.
 
 Alerts are informational first. Auto-trading from wishlist signals should be opt-in per wishlist after alert quality is proven.

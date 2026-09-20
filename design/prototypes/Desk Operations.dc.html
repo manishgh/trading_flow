@@ -281,14 +281,7 @@
               <button class="btn btn-secondary" style="height:32px;padding:0 12px;font-size:12px;white-space:nowrap" onClick="{{ addMany }}">Add all</button>
             </div>
             <p style="margin:5px 0 0;font-size:11px;color:var(--color-neutral-700)">Separate with commas, spaces or new lines. Adding is idempotent.</p>
-            <div style="display:grid;grid-template-columns:132px minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:12px;padding-top:12px;border-top:1px solid var(--color-neutral-300)">
-              <div class="field">
-                <label for="wl-scope">Screener scope</label>
-                <select class="input" id="wl-scope" style="height:32px;min-height:32px;padding:4px 8px" value="{{ importScope }}" onChange="{{ setImportScope }}">
-                  <option value="swing">Swing</option>
-                  <option value="intraday">Intraday (today)</option>
-                </select>
-              </div>
+            <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:12px;padding-top:12px;border-top:1px solid var(--color-neutral-300)">
               <div class="field">
                 <label for="wl-finviz">Finviz screener URL, name or query</label>
                 <input class="input" id="wl-finviz" style="height:32px;min-height:32px;padding:4px 8px;font-family:ui-monospace,monospace;font-size:11.5px" value="{{ importQuery }}" onChange="{{ setImportQuery }}" />
@@ -296,7 +289,7 @@
               <button class="btn btn-secondary" style="height:32px;padding:0 12px;font-size:12px;white-space:nowrap" onClick="{{ runImport }}">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"></path><path d="m8 11 4 4 4-4"></path><path d="M8 21h8"></path></svg>Import</button>
             </div>
-            <p style="margin:5px 0 0;font-size:11px;color:var(--color-neutral-700)">Adds returned symbols without removing existing entries. An intraday screen is scoped to the current session only.</p>
+            <p style="margin:5px 0 0;font-size:11px;color:var(--color-neutral-700)">Adds returned symbols without removing existing entries.</p>
           </div>
 
           <div style="padding:14px 20px 28px">
@@ -406,7 +399,7 @@
 
         <div style="min-width:0;padding:15px 20px 28px">
           <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 5px">Entry gate</h2>
-          <p style="margin:0 0 11px;font-size:12px;color:var(--color-neutral-800);line-height:1.45">Blocks are stated with the server code so the reason is auditable, not paraphrased.</p>
+          <p style="margin:0 0 11px;font-size:12px;color:var(--color-neutral-800);line-height:1.45">Not evaluated. No entry authorization.</p>
           <ul style="list-style:none;margin:0 0 18px;padding:0;border:1px solid var(--color-divider)">
             <sc-for list="{{ blocks }}" as="b" hint-placeholder-count="3">
               <li style="padding:9px 11px;border-top:{{ b.border }}">
@@ -423,11 +416,12 @@
           <dl style="margin:0 0 18px;display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px">
             <dt style="color:var(--color-neutral-700)">Window</dt><dd style="margin:0;font-variant-numeric:tabular-nums">240 d · data/backtest/normalized/240d</dd>
             <dt style="color:var(--color-neutral-700)">Manifest written</dt><dd style="margin:0;font-variant-numeric:tabular-nums">04 Aug 06:14:22 UTC</dd>
-            <dt style="color:var(--color-neutral-700)">Coverage</dt><dd style="margin:0;font-variant-numeric:tabular-nums">14 of 14 tickers</dd>
+            <dt style="color:var(--color-neutral-700)">Coverage</dt><dd style="margin:0;font-variant-numeric:tabular-nums">Not evaluated</dd>
             <dt style="color:var(--color-neutral-700)">Oldest observation</dt><dd style="margin:0;font-variant-numeric:tabular-nums">2016-01-04</dd>
           </dl>
 
           <h2 style="font-family:var(--font-heading);font-weight:800;font-size:13px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 8px">Recent events</h2>
+          <p style="font-size:12px;color:var(--color-neutral-700)">No events loaded.</p>
           <ul style="list-style:none;margin:0;padding:0;border-top:1px solid var(--color-neutral-300)">
             <sc-for list="{{ events }}" as="ev" hint-placeholder-count="8">
               <li style="padding:6px 0;border-bottom:1px solid var(--color-neutral-300);display:grid;grid-template-columns:74px 1fr;gap:10px;font-size:11.5px">
@@ -475,65 +469,20 @@ const FLAT = 'var(--color-neutral-700)';
 const OK = 'var(--color-text)';
 
 const POSITIONS = [
-  { t: 'NVDA', side: 'LONG', src: 'Wishlist', q: 120, e: 174.1, last: 181.42,
-    strategy: 'intraday-ema10-ema20-macd-volume v1', prot: 'Stop 169.80 · Target 188.40',
-    ref: 'job 4f2a…91c', protected: true },
   { t: 'AVGO', side: 'LONG', src: 'Wishlist', q: 40, e: 305.2, last: 312.88,
     strategy: 'minervini-trend-template-vcp v4', prot: 'Stop 296.10 · Target 328.60',
     ref: 'job 8c14…2be', protected: true },
-  { t: 'MU', side: 'LONG', src: 'Stock Pulse', q: 90, e: 103.55, last: 106.34,
-    strategy: 'intraday-ema10-ema20-macd-volume v1', prot: 'Stop 100.20 · Target 112.80',
-    ref: 'session 1d90…77a', protected: true },
   { t: 'UBER', side: 'LONG', src: 'Manual', q: 60, e: 85.4, last: 88.31,
     strategy: 'manual entry · swing horizon', prot: 'Stop 82.10 · Target 94.90',
-    ref: 'ticket 6ba2…04f', protected: true },
-  { t: 'COIN', side: 'LONG', src: 'Manual', q: 30, e: 252.1, last: 244.91,
-    strategy: 'manual entry · intraday horizon', prot: 'No broker stop on file',
-    ref: 'ticket 3e77…c15', protected: false }
+    ref: 'ticket 6ba2…04f', protected: true }
 ];
 
 const ORDERS = [
-  { at: '04 Aug 18:33:41', sym: 'MU', side: 'BUY', state: 'Filled', req: 90, fill: 90,
-    type: 'limit / day', price: 'Fill $103.55', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-1c9d4a7e-0b21' },
-  { at: '04 Aug 18:29:12', sym: 'PLTR', side: 'BUY', state: 'New', req: 140, fill: 0,
-    type: 'limit / day', price: 'Limit $41.60', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-77b0e2f1-4d8a' },
-  { at: '04 Aug 18:21:55', sym: 'MRVL', side: 'BUY', state: 'Partially filled', req: 200, fill: 120,
-    type: 'limit / day', price: 'Limit $74.05', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-2a41c8d9-9e03' },
-  { at: '04 Aug 18:12:07', sym: 'SOFI', side: 'BUY', state: 'Rejected', req: 500, fill: 0,
-    type: 'limit / day', price: 'Limit $22.10', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-9f30ab52-1c74' },
-  { at: '04 Aug 17:58:33', sym: 'RIVN', side: 'BUY', state: 'Cancel pending', req: 600, fill: 0,
-    type: 'stop limit / day', price: 'Stop $13.90', strategy: 'intraday-atr-compression-breakout bt-v1', id: 'tf-5d82fe10-7a29' },
-  { at: '04 Aug 17:44:19', sym: 'COIN', side: 'BUY', state: 'Filled', req: 30, fill: 30,
-    type: 'market / day', price: 'Fill $252.10', strategy: 'manual entry', id: 'tf-b104c7a3-3f61' },
-  { at: '04 Aug 16:31:02', sym: 'SMCI', side: 'SELL', state: 'Filled', req: 150, fill: 150,
-    type: 'limit / day', price: 'Fill $39.88', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-e2c9017b-8d40' },
   { at: '04 Aug 15:12:48', sym: 'DKNG', side: 'BUY', state: 'Expired', req: 220, fill: 0,
-    type: 'limit / day', price: 'Limit $44.20', strategy: 'swing-reversal-reclaim-bull-quality v1', id: 'tf-6a7f2b94-05ce' },
-  { at: '04 Aug 14:06:25', sym: 'AMD', side: 'BUY', state: 'Cancelled', req: 180, fill: 0,
-    type: 'limit / day', price: 'Limit $147.20', strategy: 'intraday-ema10-ema20-macd-volume v1', id: 'tf-0b53d8e6-2a17' }
+    type: 'limit / day', price: 'Limit $44.20', strategy: 'swing-reversal-reclaim-bull-quality v1', id: 'tf-6a7f2b94-05ce' }
 ];
 
 const WISHLISTS = {
-  intraday: {
-    name: 'Intraday catalyst', desc: 'Same-session catalyst and participation candidates',
-    observed: true, isDefault: true, extended: false, lastImport: '04 Aug 14:36 UTC',
-    items: [
-      ['NVDA', 'NVIDIA Corp', 'Continuation base above VWAP; partner summit catalyst', '12 Jul'],
-      ['AMD', 'Advanced Micro Devices', 'Reports tonight after the close — no entry before the print', '12 Jul'],
-      ['PLTR', 'Palantir Technologies', 'Federal vehicle award; watch 3.4 ATR extension', '18 Jul'],
-      ['MU', 'Micron Technology', 'HBM pricing; compression breakout candidate', '12 Jul'],
-      ['COIN', 'Coinbase Global', 'Spread routinely over the 5 bps ceiling', '21 Jul'],
-      ['SMCI', 'Super Micro Computer', 'Distribution since the miss; long setups suppressed', '24 Jul'],
-      ['MRVL', 'Marvell Technology', 'VWAP pullback works; keep size at half', '28 Jul'],
-      ['SOFI', 'SoFi Technologies', 'Notional cap keeps blocking this one', '28 Jul'],
-      ['RIVN', 'Rivian Automotive', 'Wide spread and slow quotes; observation only', '30 Jul'],
-      ['TSLA', 'Tesla Inc', 'High RVOL but fails the confluence filter most days', '30 Jul'],
-      ['DKNG', 'DraftKings Inc', 'Needs the 1h EMA50 reclaim first', '02 Aug'],
-      ['HOOD', 'Robinhood Markets', 'From the intraday screener, 01 Aug', '01 Aug'],
-      ['MARA', 'Marathon Digital', 'From the intraday screener, 01 Aug', '01 Aug'],
-      ['UBER', 'Uber Technologies', 'Swing thesis predates the print; reports tomorrow', '19 Jul']
-    ]
-  },
   swing: {
     name: 'Swing quality', desc: 'Cross-sectional momentum with quality screens',
     observed: true, isDefault: false, extended: true, lastImport: '02 Aug 06:10 UTC',
@@ -569,7 +518,6 @@ const WISHLISTS = {
 
 const SCREENER_QUERIES = {
   swing: 'f=cap_midover,sh_avgvol_o500,ta_perf_4w20o,ta_sma50_pa&o=-perfytd',
-  intraday: 'f=sh_curvol_o1000,sh_relvol_o2,ta_change_u3&ft=4&o=-volume'
 };
 
 const SUBSYSTEMS = [
@@ -579,14 +527,14 @@ const SUBSYSTEMS = [
     'Alpaca trade date 2026-08-04. Regular session. Calendar reads are provider-cached.', '18:41:02'],
   ['Quote stream', 'OperationalStatusService', 'connected', true,
     'Newest quote is 0s old. Fresh under the 20-second threshold; stale begins at 2 minutes.', '18:41:24'],
-  ['Order stream', 'IOrderSynchronizationCoordinator', 'connected', true,
-    'Broker order stream connected. Last event 18:33:41 UTC on tf-1c9d4a7e-0b21.', '18:41:20'],
-  ['Account reconciliation', 'IAccountReconciliationService', 'clean', true,
-    'Initial reconciliation completed. Broker positions match the local book on all five symbols.', '18:40:55'],
-  ['Entry gate', 'IEntryAdmissionControl', 'blocked', false,
-    'One block open. New entries are refused for the affected symbol until it clears.', '18:41:24'],
-  ['Market predictor', 'MarketPredictorHttpClient', 'available', true,
-    'Contract v2.4. Unified, swing and intraday modes answering. Read-only evidence.', '18:40:48'],
+  ['Order stream', 'IOrderSynchronizationCoordinator', 'not evaluated', null,
+    'Broker order stream status not evaluated.', '18:41:20'],
+  ['Account reconciliation', 'IAccountReconciliationService', 'not evaluated', null,
+    'Account reconciliation not evaluated.', '18:40:55'],
+  ['Entry gate', 'IEntryAdmissionControl', 'not evaluated', null,
+    'Entry admission not evaluated. No new entry authorization.', '18:41:24'],
+  ['Market predictor', 'MarketPredictorHttpClient', 'not evaluated', null,
+    'Swing 10b evidence only. Read-only; readiness has not been evaluated.', '18:40:48'],
   ['FinBERT sentiment', 'sidecar / FINBERT_SENTIMENT_URL', 'not configured', null,
     'FINBERT_SENTIMENT_URL unset, so sentiment falls back to local VADER scoring.', '18:41:02'],
   ['Warm-up service', 'WarmupServiceClient', 'available', true,
@@ -597,38 +545,24 @@ const SUBSYSTEMS = [
     'Last successful backup 03 Aug 02:00 UTC. Today\u2019s scheduled run has not reported.', '18:00:00']
 ];
 
-const BLOCKS = [
-  ['NOTIONAL_CAP_REACHED', 'high', 'SOFI would take the account to 27.4% of equity in one position, over the 25% max position notional. The order was refused before routing.'],
-  ['SPREAD_OVER_CEILING', 'medium', 'COIN and RIVN quote wider than the 5.0 bps entry ceiling for the selected strategy. Existing positions are unaffected.'],
-  ['UNPROTECTED_POSITION', 'high', 'COIN has no broker stop on file. Protection belonged to the entry; the position needs a stop or an exit.']
-];
+const BLOCKS = [];
 
-const EVENTS = [
-  ['18:41:24', 'entry gate re-evaluated · 3 blocks open', LOSS],
-  ['18:33:41', 'order filled · MU 90 @ $103.55 · tf-1c9d4a7e-0b21', OK],
-  ['18:29:12', 'order accepted · PLTR 140 limit $41.60', OK],
-  ['18:21:55', 'partial fill · MRVL 120 of 200', OK],
-  ['18:12:07', 'order rejected · SOFI · NOTIONAL_CAP_REACHED', LOSS],
-  ['17:58:33', 'cancel requested · RIVN · quote age outside tolerance', FLAT],
-  ['14:36:12', 'finviz screener synced · intraday · 17 hits, 5 new', OK],
-  ['06:14:22', 'warm-up manifest written · 240d · 14 of 14 tickers', OK]
-];
+const EVENTS = [];
 
 class Component extends DCLogic {
   state = {
     page: 'positions',
     source: 'all',
     orderFilter: 'all',
-    wishlist: 'intraday',
+    wishlist: 'swing',
     newName: '',
-    wlName: WISHLISTS.intraday.name,
-    wlDesc: WISHLISTS.intraday.desc,
-    observed: WISHLISTS.intraday.observed,
-    isDefault: WISHLISTS.intraday.isDefault,
-    extended: WISHLISTS.intraday.extended,
+    wlName: WISHLISTS.swing.name,
+    wlDesc: WISHLISTS.swing.desc,
+    observed: WISHLISTS.swing.observed,
+    isDefault: WISHLISTS.swing.isDefault,
+    extended: WISHLISTS.swing.extended,
     selection: [],
-    importScope: 'intraday',
-    importQuery: SCREENER_QUERIES.intraday,
+    importQuery: SCREENER_QUERIES.swing,
     dialog: null,
     toast: null,
     now: new Date(Date.UTC(2026, 7, 4, 18, 41, 24))
@@ -818,8 +752,8 @@ class Component extends DCLogic {
     const opsSummary = [
       { label: 'Environment', value: 'PAPER', detail: 'Live routing disabled pending promotion.', color: OK, bg: 'transparent' },
       { label: 'Market session', value: 'Regular', detail: 'Alpaca trade date 2026-08-04.', color: OK, bg: 'transparent' },
-      { label: 'Broker sync', value: 'Ready', detail: 'Stream connected, reconciliation clean.', color: OK, bg: 'transparent' },
-      { label: 'Entry gate', value: 'Blocked', detail: '3 blocks open. New entries refused for the affected symbols.', color: LOSS, bg: 'var(--color-accent-100)' }
+      { label: 'Broker sync', value: 'Not evaluated', detail: 'Awaiting broker reconciliation evidence.', color: OK, bg: 'transparent' },
+      { label: 'Entry gate', value: 'Not evaluated', detail: 'No entry authorization.', color: LOSS, bg: 'var(--color-accent-100)' }
     ].map((o, i) => ({ ...o, border: i === 3 ? '0' : '1px solid var(--color-neutral-300)' }));
 
     const subsystems = SUBSYSTEMS.map(sub => ({
@@ -905,12 +839,10 @@ class Component extends DCLogic {
       },
       addOne: () => this.fire('Ticker added', 'Added to ' + wl.name + '. The observer picks it up on the next cycle.'),
       addMany: () => this.fire('Symbols added', 'Bulk add applied to ' + wl.name + '. Duplicates were ignored.'),
-      importScope: s.importScope,
-      setImportScope: e => this.setState({ importScope: e.target.value, importQuery: SCREENER_QUERIES[e.target.value] }),
       importQuery: s.importQuery,
       setImportQuery: e => this.setState({ importQuery: e.target.value }),
       runImport: () => this.fire('Screener imported',
-        (s.importScope === 'intraday' ? '17 hits, 5 new' : '22 hits, 4 new') +
+        '22 hits, 4 new' +
         ' added to ' + wl.name + '. Existing entries were left in place.'),
 
       observerState: s.observed ? 'Running · 60 s cadence' : 'Paused',
@@ -933,7 +865,7 @@ class Component extends DCLogic {
         }
       }),
 
-      opsOverall: '3 blocks open · 1 subsystem needs attention',
+      opsOverall: 'Broker and admission evidence not evaluated',
       opsOverallTag: 'tag-accent',
       opsSummary,
       subsystems,

@@ -81,7 +81,6 @@
           <label for="bt-wl">Wishlist</label>
           <select class="input" id="bt-wl" style="height:32px;min-height:32px;padding:4px 8px" value="{{ wishlist }}" onChange="{{ setWishlist }}">
             <option value="swing">Swing quality · 22 active</option>
-            <option value="intraday">Intraday catalyst · 14 active</option>
             <option value="earnings">Earnings reaction · 9 active</option>
           </select>
         </div>
@@ -439,46 +438,25 @@ const FLAT = 'var(--color-neutral-700)';
 
 const UNIVERSES = {
   swing: ['AAPL','ANET','AVGO','CRWD','DKNG','GOOGL','JPM','LIN','LRCX','META','MSFT','MU','NFLX','NOW','NVDA','ORCL','PANW','SHOP','TSM','UBER','V','WMT'],
-  intraday: ['AMD','COIN','DKNG','HOOD','MARA','MRVL','MU','NVDA','PLTR','RIVN','SMCI','SOFI','TSLA','UBER'],
   earnings: ['AMD','ANET','AVGO','COIN','DKNG','ETSY','MU','RIVN','SMCI']
 };
 
 const STRATEGIES = [
-  { id: 's1', name: 'intraday-ema10-ema20-macd-volume', v: 'v1', promoted: true,
-    meta: 'LONG · 5m signal / 5m exec · continuation',
-    audit: 'Audit +14.62% / DD 8.91% / 214 trades / win 47.2% / avg hold 1h 42m',
-    ret: 14.62, daily: 0.0812, net: 1462, dd: 8.91, trades: 214, win: 47.2, hold: '1h 42m', pf: 1.42,
-    curve: [0,0.6,1.4,2.1,1.7,2.9,3.8,4.4,3.9,5.1,6.2,7.0,6.4,7.8,8.9,9.6,9.1,10.4,11.6,12.4,11.9,13.1,14.0,14.62] },
-  { id: 's2', name: 'minervini-trend-template-vcp', v: 'v4-trend-rider', promoted: true,
+  { id: 's2', name: 'minervini-trend-template-vcp', v: 'v4-trend-rider', lifecycle: 'research',
     meta: 'LONG · 1d signal / 1d exec · trend template',
     audit: 'Audit +22.18% / DD 12.40% / 61 trades / win 54.1% / avg hold 11d 4h',
     ret: 22.18, daily: 0.1232, net: 2218, dd: 12.4, trades: 61, win: 54.1, hold: '11d 4h', pf: 1.88,
     curve: [0,1.1,2.4,1.9,3.6,5.2,4.4,6.8,8.4,7.6,9.9,11.8,10.9,13.4,15.1,14.2,16.8,18.4,17.6,19.6,20.8,21.2,21.9,22.18] },
-  { id: 's3', name: 'swing-reversal-reclaim-bull-quality-no-news', v: 'v1', promoted: true,
+  { id: 's3', name: 'swing-reversal-reclaim-bull-quality-no-news', v: 'v1', lifecycle: 'archived',
     meta: 'LONG · 1d signal / 1d exec · reclaim',
     audit: 'Audit +9.04% / DD 7.12% / 88 trades / win 51.1% / avg hold 6d 2h',
     ret: 9.04, daily: 0.0502, net: 904, dd: 7.12, trades: 88, win: 51.1, hold: '6d 2h', pf: 1.24,
     curve: [0,0.4,1.1,0.7,1.6,2.2,1.8,2.8,3.4,3.0,4.1,4.8,4.3,5.4,6.1,5.7,6.6,7.2,6.9,7.8,8.3,8.6,8.9,9.04] },
-  { id: 's4', name: 'swing-overbought-rollover-short-no-news', v: 'v5', promoted: true,
+  { id: 's4', name: 'swing-overbought-rollover-short-no-news', v: 'v5', lifecycle: 'archived',
     meta: 'SHORT · 1d signal / 1d exec · rollover',
     audit: 'Audit −3.41% / DD 9.86% / 47 trades / win 38.3% / avg hold 4d 8h',
     ret: -3.41, daily: -0.0189, net: -341, dd: 9.86, trades: 47, win: 38.3, hold: '4d 8h', pf: 0.86,
-    curve: [0,-0.3,0.4,-0.6,-1.2,-0.4,-1.6,-2.4,-1.8,-2.9,-2.2,-3.4,-4.1,-3.2,-4.4,-3.8,-2.9,-3.9,-4.6,-4.0,-3.2,-3.8,-3.6,-3.41] },
-  { id: 's5', name: 'intraday-vwap-momentum-pullback', v: 'bt-v1', promoted: false,
-    meta: 'LONG · 5m signal / 1m exec · VWAP pullback',
-    audit: 'Audit +18.90% / DD 15.22% / 302 trades / win 44.7% / avg hold 58m',
-    ret: 18.9, daily: 0.105, net: 1890, dd: 15.22, trades: 302, win: 44.7, hold: '58m', pf: 1.31,
-    curve: [0,1.4,2.8,1.9,3.9,5.6,4.2,6.8,8.9,7.1,9.8,12.1,10.4,13.2,15.4,13.8,16.2,18.1,16.4,18.2,19.4,18.1,19.2,18.9] },
-  { id: 's6', name: 'intraday-atr-compression-breakout', v: 'bt-v1', promoted: false,
-    meta: 'LONG · 5m signal / 5m exec · compression',
-    audit: 'Audit +6.72% / DD 11.04% / 178 trades / win 42.1% / avg hold 1h 12m',
-    ret: 6.72, daily: 0.0373, net: 672, dd: 11.04, trades: 178, win: 42.1, hold: '1h 12m', pf: 1.11,
-    curve: [0,0.8,1.6,0.9,2.2,3.1,2.2,3.8,4.6,3.6,4.9,5.8,4.6,5.9,6.8,5.9,6.9,7.6,6.8,7.4,7.1,6.4,6.9,6.72] },
-  { id: 's7', name: 'intraday-macd-divergence-fade', v: 'bt-v1', promoted: false,
-    meta: 'SHORT · 5m signal / 5m exec · divergence fade',
-    audit: 'Audit −7.88% / DD 14.31% / 131 trades / win 35.9% / avg hold 44m',
-    ret: -7.88, daily: -0.0438, net: -788, dd: 14.31, trades: 131, win: 35.9, hold: '44m', pf: 0.74,
-    curve: [0,-0.6,-1.4,-0.8,-2.1,-3.2,-2.4,-3.9,-5.1,-4.2,-5.6,-6.8,-5.9,-7.1,-8.4,-7.6,-8.9,-9.8,-8.9,-9.4,-8.6,-8.1,-7.6,-7.88] }
+    curve: [0,-0.3,0.4,-0.6,-1.2,-0.4,-1.6,-2.4,-1.8,-2.9,-2.2,-3.4,-4.1,-3.2,-4.4,-3.8,-2.9,-3.9,-4.6,-4.0,-3.2,-3.8,-3.6,-3.41] }
 ];
 
 const PHASES = [
@@ -491,42 +469,27 @@ const PHASES = [
 const STAGE_BY_PHASE = ['resolving universe', 'market pipeline', 'running strategy matrix', 'building results'];
 
 const REJECTIONS = {
-  s1: [['volume spike below floor', 4128], ['rsi outside band', 2864], ['vwap extension too wide', 1902], ['confluence timeframe misaligned', 1188]],
   s2: [['trend template not satisfied', 2210], ['base depth outside range', 1044], ['volume dry-up absent', 786], ['distribution day count', 402]],
   s3: [['reclaim not confirmed on next bar', 1866], ['relative strength below peer median', 1120], ['spread over ceiling', 604], ['news present with no-news policy', 288]],
   s4: [['no rollover confirmation', 1502], ['borrow unavailable', 918], ['rsi still rising', 744], ['spread over ceiling', 512]],
-  s5: [['pullback depth outside band', 3402], ['vwap slope negative', 2288], ['participation cap reached', 1466], ['spread over ceiling', 902]],
-  s6: [['compression not established', 2904], ['breakout bar not confirmed', 1810], ['relative volume below floor', 1204], ['session window closed', 688]],
-  s7: [['divergence not confirmed', 2412], ['trend too strong to fade', 1688], ['borrow unavailable', 1002], ['spread over ceiling', 604]]
 };
 
 const SUGGESTIONS = {
-  s1: 'The volume floor refuses more candidates than every other control combined. Test 1.3 and 1.4 before widening the RSI band, and re-run the cost stress at each step.',
   s2: 'Acceptance is already sparse at 61 trades. Loosening the base-depth range would raise trade count but the concentration gate is the binding constraint, not the sample size.',
   s3: 'Next-bar reclaim confirmation is doing most of the filtering and is a timing requirement, not a tunable. The no-news policy is refusing 288 candidates — worth measuring separately.',
   s4: 'Borrow availability refuses 918 candidates that the model wanted. Until borrow is modelled explicitly this strategy cannot be evaluated fairly.',
-  s5: 'Highest candidate count and highest drawdown. Participation caps refuse 1,466 entries, which means the paper-shadow gate will not reproduce this equity curve.',
-  s6: 'Breakout confirmation refuses 1,810 candidates. Compare against s1 on the same universe before treating compression as a separate edge.',
-  s7: 'Negative expectancy with 74% profit factor. Trend strength refuses 1,688 fades and the remainder still loses. Retire rather than tune.'
 };
 
 const TRADES = {
-  s1: [['NVDA','LONG','12 Jun 14:35','12 Jun 15:50','target 2.0R','1h 15m',2.0,412],['MU','LONG','15 Jun 10:05','15 Jun 10:40','structural stop','35m',-1.0,-186],['PLTR','LONG','18 Jun 15:10','18 Jun 16:00','max hold','50m',0.4,74],['AMD','LONG','23 Jun 14:50','23 Jun 16:10','trailing stop','1h 20m',1.4,268],['MRVL','LONG','25 Jun 15:05','25 Jun 15:35','failed breakout guard','30m',-1.0,-142],['SMCI','LONG','01 Jul 14:40','01 Jul 16:20','target 2.0R','1h 40m',2.0,388],['COIN','LONG','07 Jul 15:20','07 Jul 15:55','structural stop','35m',-1.0,-204],['UBER','LONG','10 Jul 14:35','10 Jul 16:05','trailing stop','1h 30m',1.1,196],['TSLA','LONG','16 Jul 15:00','16 Jul 15:40','structural stop','40m',-1.0,-178],['NVDA','LONG','22 Jul 14:45','22 Jul 16:15','target 2.0R','1h 30m',2.0,424]],
   s2: [['MSFT','LONG','04 Mar 09:35','18 Mar 15:50','trailing stop','14d 6h',2.6,684],['NVDA','LONG','11 Mar 09:35','26 Mar 15:50','target 3.0R','15d 6h',3.0,812],['LIN','LONG','19 Mar 09:35','24 Mar 15:50','structural stop','5d 6h',-1.0,-248],['NOW','LONG','02 Apr 09:35','21 Apr 15:50','trailing stop','19d 6h',2.1,542],['AVGO','LONG','15 Apr 09:35','29 Apr 15:50','target 3.0R','14d 6h',3.0,766],['V','LONG','06 May 09:35','12 May 15:50','structural stop','6d 6h',-1.0,-232],['LRCX','LONG','21 May 09:35','09 Jun 15:50','trailing stop','19d 6h',1.8,468],['ORCL','LONG','12 Jun 09:35','19 Jun 15:50','max hold','7d 6h',0.3,78],['ANET','LONG','01 Jul 09:35','17 Jul 15:50','trailing stop','16d 6h',2.2,564],['META','LONG','14 Jul 09:35','24 Jul 15:50','structural stop','10d 6h',-1.0,-256]],
   s3: [['UBER','LONG','09 Apr 09:35','15 Apr 15:50','target 2.0R','6d 6h',2.0,314],['CRWD','LONG','22 Apr 09:35','28 Apr 15:50','structural stop','6d 6h',-1.0,-158],['WMT','LONG','06 May 09:35','14 May 15:50','trailing stop','8d 6h',1.3,204],['TSM','LONG','20 May 09:35','26 May 15:50','structural stop','6d 6h',-1.0,-162],['SHOP','LONG','03 Jun 09:35','11 Jun 15:50','target 2.0R','8d 6h',2.0,308],['JPM','LONG','17 Jun 09:35','23 Jun 15:50','max hold','6d 6h',0.2,32],['PANW','LONG','01 Jul 09:35','08 Jul 15:50','trailing stop','7d 6h',1.1,176],['NFLX','LONG','15 Jul 09:35','21 Jul 15:50','structural stop','6d 6h',-1.0,-154],['GOOGL','LONG','22 Jul 09:35','29 Jul 15:50','target 2.0R','7d 6h',2.0,296],['MU','LONG','29 Jul 09:35','31 Jul 15:50','structural stop','2d 6h',-1.0,-166]],
-  s4: [['SMCI','SHORT','14 Apr 09:35','18 Apr 15:50','target 2.0R','4d 6h',2.0,286],['RIVN','SHORT','28 Apr 09:35','01 May 15:50','structural stop','3d 6h',-1.0,-148],['COIN','SHORT','12 May 09:35','16 May 15:50','structural stop','4d 6h',-1.0,-152],['DKNG','SHORT','26 May 09:35','01 Jun 15:50','trailing stop','6d 6h',0.9,128],['MARA','SHORT','09 Jun 09:35','12 Jun 15:50','structural stop','3d 6h',-1.0,-144],['HOOD','SHORT','23 Jun 09:35','29 Jun 15:50','max hold','6d 6h',-0.3,-44],['SMCI','SHORT','07 Jul 09:35','10 Jul 15:50','target 2.0R','3d 6h',2.0,292],['PLTR','SHORT','21 Jul 09:35','24 Jul 15:50','structural stop','3d 6h',-1.0,-156],['RIVN','SHORT','28 Jul 09:35','30 Jul 15:50','structural stop','2d 6h',-1.0,-146],['COIN','SHORT','31 Jul 09:35','31 Jul 15:50','failed breakout guard','6h',-0.6,-88]],
-  s5: [['NVDA','LONG','12 Jun 10:05','12 Jun 11:00','target 2.0R','55m',2.0,368],['AMD','LONG','12 Jun 14:20','12 Jun 15:05','structural stop','45m',-1.0,-182],['PLTR','LONG','16 Jun 10:35','16 Jun 11:20','trailing stop','45m',1.2,214],['MU','LONG','19 Jun 14:05','19 Jun 14:50','structural stop','45m',-1.0,-176],['TSLA','LONG','24 Jun 10:15','24 Jun 11:25','target 2.0R','1h 10m',2.0,392],['COIN','LONG','30 Jun 14:35','30 Jun 15:10','structural stop','35m',-1.0,-198],['MRVL','LONG','08 Jul 10:20','08 Jul 11:05','trailing stop','45m',1.1,188],['SOFI','LONG','14 Jul 14:10','14 Jul 14:55','structural stop','45m',-1.0,-164],['SMCI','LONG','21 Jul 10:25','21 Jul 11:30','target 2.0R','1h 5m',2.0,376],['UBER','LONG','28 Jul 14:15','28 Jul 15:00','max hold','45m',0.3,52]],
-  s6: [['MU','LONG','11 Jun 10:40','11 Jun 11:55','target 2.0R','1h 15m',2.0,322],['NVDA','LONG','17 Jun 14:25','17 Jun 15:10','structural stop','45m',-1.0,-168],['AMD','LONG','23 Jun 10:50','23 Jun 12:00','trailing stop','1h 10m',1.0,164],['DKNG','LONG','27 Jun 14:15','27 Jun 15:05','structural stop','50m',-1.0,-152],['MRVL','LONG','03 Jul 10:35','03 Jul 11:50','target 2.0R','1h 15m',2.0,318],['HOOD','LONG','09 Jul 14:30','09 Jul 15:20','structural stop','50m',-1.0,-158],['PLTR','LONG','15 Jul 10:45','15 Jul 12:05','max hold','1h 20m',0.2,34],['MARA','LONG','21 Jul 14:20','21 Jul 15:10','structural stop','50m',-1.0,-146],['SOFI','LONG','25 Jul 10:30','25 Jul 11:45','trailing stop','1h 15m',0.9,142],['RIVN','LONG','30 Jul 14:35','30 Jul 15:25','structural stop','50m',-1.0,-154]],
-  s7: [['NVDA','SHORT','10 Jun 14:20','10 Jun 14:55','structural stop','35m',-1.0,-186],['PLTR','SHORT','16 Jun 10:30','16 Jun 11:05','structural stop','35m',-1.0,-178],['TSLA','SHORT','20 Jun 14:35','20 Jun 15:15','target 2.0R','40m',2.0,342],['SMCI','SHORT','26 Jun 10:25','26 Jun 11:00','structural stop','35m',-1.0,-192],['COIN','SHORT','02 Jul 14:40','02 Jul 15:20','structural stop','40m',-1.0,-204],['AMD','SHORT','08 Jul 10:35','08 Jul 11:10','trailing stop','35m',0.6,98],['MU','SHORT','14 Jul 14:25','14 Jul 15:00','structural stop','35m',-1.0,-172],['MARA','SHORT','18 Jul 10:40','18 Jul 11:15','structural stop','35m',-1.0,-168],['HOOD','SHORT','24 Jul 14:30','24 Jul 15:05','target 2.0R','35m',2.0,318],['RIVN','SHORT','30 Jul 10:45','30 Jul 11:20','structural stop','35m',-1.0,-164]]
+  s4: [['SMCI','SHORT','14 Apr 09:35','18 Apr 15:50','target 2.0R','4d 6h',2.0,286],['RIVN','SHORT','28 Apr 09:35','01 May 15:50','structural stop','3d 6h',-1.0,-148],['COIN','SHORT','12 May 09:35','16 May 15:50','structural stop','4d 6h',-1.0,-152],['DKNG','SHORT','26 May 09:35','01 Jun 15:50','trailing stop','6d 6h',0.9,128],['MARA','SHORT','09 Jun 09:35','12 Jun 15:50','structural stop','3d 6h',-1.0,-144],['HOOD','SHORT','23 Jun 09:35','29 Jun 15:50','max hold','6d 6h',-0.3,-44],['SMCI','SHORT','07 Jul 09:35','10 Jul 15:50','target 2.0R','3d 6h',2.0,292],['PLTR','SHORT','21 Jul 09:35','24 Jul 15:50','structural stop','3d 6h',-1.0,-156],['RIVN','SHORT','28 Jul 09:35','30 Jul 15:50','structural stop','2d 6h',-1.0,-146]],
 };
 
 const SNAPSHOTS = [
   { run: 'swing-quality-180d', when: '28 Jul 2026 09:14 UTC', best: 'minervini-trend-template-vcp v4', universe: 'Swing quality', ret: 22.18, dd: 12.4, trades: 61, win: 54.1, decision: 'RETAIN_RESEARCH' },
-  { run: 'intraday-catalyst-90d', when: '24 Jul 2026 17:41 UTC', best: 'intraday-vwap-momentum-pullback bt-v1', universe: 'Intraday catalyst', ret: 18.9, dd: 15.22, trades: 302, win: 44.7, decision: 'RETAIN_RESEARCH' },
-  { run: 'intraday-catalyst-180d', when: '19 Jul 2026 11:08 UTC', best: 'intraday-ema10-ema20-macd-volume v1', universe: 'Intraday catalyst', ret: 14.62, dd: 8.91, trades: 214, win: 47.2, decision: 'PAPER_SHADOW' },
   { run: 'earnings-reaction-120d', when: '11 Jul 2026 15:52 UTC', best: 'swing-reversal-reclaim-bull-quality v1', universe: 'Earnings reaction', ret: 9.04, dd: 7.12, trades: 88, win: 51.1, decision: 'RETAIN_RESEARCH' },
-  { run: 'short-book-180d', when: '02 Jul 2026 08:37 UTC', best: 'swing-overbought-rollover-short v5', universe: 'Swing quality', ret: -3.41, dd: 9.86, trades: 47, win: 38.3, decision: 'FAILED_GATE' },
-  { run: 'fade-book-90d', when: '26 Jun 2026 13:20 UTC', best: 'intraday-macd-divergence-fade bt-v1', universe: 'Intraday catalyst', ret: -7.88, dd: 14.31, trades: 131, win: 35.9, decision: 'FAILED_GATE' }
+  { run: 'short-book-180d', when: '02 Jul 2026 08:37 UTC', best: 'swing-overbought-rollover-short v5', universe: 'Swing quality', ret: -3.41, dd: 9.86, trades: 47, win: 38.3, decision: 'FAILED_GATE' }
 ];
 
 const METRICS = {
@@ -540,12 +503,12 @@ const METRICS = {
 class Component extends DCLogic {
   state = {
     phase: 'results',
-    wishlist: 'intraday',
-    selected: ['s1', 's2', 's5', 's6'],
-    runName: 'intraday-catalyst-180d',
+    wishlist: 'swing',
+    selected: ['s2'],
+    runName: 'swing-quality-180d',
     lookback: 180, capital: 10000, risk: 1, notional: 25, slots: 4, cache: 'use_cache',
     metric: 'ret',
-    drill: 's1',
+    drill: 's2',
     progress: 0.42, phaseIndex: 2, elapsedSec: 224
   };
 
@@ -627,8 +590,8 @@ class Component extends DCLogic {
         name: st.name + ' ' + st.v,
         meta: st.meta,
         audit: st.audit,
-        status: st.promoted ? 'PROMOTED' : 'RESEARCH ONLY',
-        tagCls: st.promoted ? 'tag-accent' : 'tag-neutral',
+        status: st.lifecycle.toUpperCase(),
+        tagCls: 'tag-neutral',
         border: i === 0 ? '0' : '1px solid var(--color-neutral-300)',
         bg: on ? 'var(--color-accent-100)' : 'transparent',
         on,
@@ -742,22 +705,17 @@ class Component extends DCLogic {
     }));
 
     const gates = [
-      ['Universe', false, 'Point-in-time membership and delisting evidence missing for this wishlist.'],
-      ['Timing', true, 'Completed-bar features, later-bar confirmation, next-bar execution enforced.'],
-      ['Execution', true, 'Costs, quote side, spread, slippage and participation stated explicitly.'],
-      ['Statistical', false, 'Development and validation split done; the chronological holdout is unused.'],
-      ['Cost stress', true, 'Survives 2× slippage and 1.5× spread on the winner.'],
-      ['Concentration', false, 'Top two tickers carry 41% of net profit, over the 30% ceiling.'],
-      ['Paper shadow', false, 'No paper-shadow period recorded for this run.']
-    ].map((g, i) => ({
-      label: g[0],
-      glyph: g[1] ? '\u2713' : '\u2715',
-      color: g[1] ? GAIN : LOSS,
-      note: g[2],
+      'Universe', 'Timing', 'Execution', 'Statistical', 'Cost stress',
+      'Concentration', 'Paper shadow'
+    ].map((label, i) => ({
+      label,
+      glyph: '\u2013',
+      color: FLAT,
+      note: 'Not evaluated. No authorization granted.',
       border: i === 0 ? '0' : '1px solid var(--color-neutral-300)'
     }));
 
-    const drillId = picked.some(p => p.id === s.drill) ? s.drill : (picked[0] ? picked[0].id : 's1');
+    const drillId = picked.some(p => p.id === s.drill) ? s.drill : (picked[0] ? picked[0].id : 's2');
     const drillStrategy = STRATEGIES.find(p => p.id === drillId);
     const rej = REJECTIONS[drillId];
     const rejMax = rej[0][1];
@@ -781,7 +739,7 @@ class Component extends DCLogic {
       selectedCountText: picked.length === 0
         ? 'Select at least one strategy. A run with no strategy produces no evidence.'
         : picked.length + ' selected · ' + (picked.length * UNIVERSES[s.wishlist].length) +
-          ' work items · ' + picked.filter(p => !p.promoted).length + ' research-only',
+          ' work items · no execution authorization',
 
       runName: s.runName, setRunName: e => this.setState({ runName: e.target.value }),
       lookback: s.lookback, setLookback: e => this.setState({ lookback: parseInt(e.target.value, 10) || 180 }),
@@ -825,7 +783,7 @@ class Component extends DCLogic {
 
       chart: this.chart(picked),
       legend: picked.map((p, i) => ({
-        name: p.name.replace('intraday-', '').replace('swing-', '') + ' ' + p.v,
+        name: p.name.replace('swing-', '') + ' ' + p.v,
         stroke: '2px ' + (dashes[i % dashes.length] === 'none' ? 'solid' : 'dashed') + ' ' +
           (p.ret >= 0 ? 'var(--color-text)' : 'var(--color-accent)'),
         color: p.ret >= 0 ? GAIN : LOSS,

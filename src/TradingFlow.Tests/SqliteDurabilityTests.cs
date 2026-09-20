@@ -134,6 +134,126 @@ public sealed class SqliteDurabilityTests
         Assert.Equal(8, reserved.Select(result => result.Intent.ClientOrderId).Distinct(StringComparer.Ordinal).Count());
     }
 
+    [Theory]
+    [InlineData("day")]
+    [InlineData("")]
+    [InlineData("unknown")]
+    public async Task ReserveAsync_NonSwingRiskHorizonPersistsNothing(string horizon)
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        await InitializeAsync(options);
+        var intents = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
+        reservation = reservation with { PortfolioRisk = reservation.PortfolioRisk! with { Horizon = horizon } };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            intents.ReserveAsync(CreateRun(Guid.NewGuid()), reservation));
+
+        await using var verification = new TradingFlowDbContext(options);
+        Assert.Empty(await verification.OrderIntents.ToListAsync());
+        Assert.Empty(await verification.PortfolioRiskReservations.ToListAsync());
+        Assert.Empty(await verification.OrderEvents.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData("day", false)]
+    [InlineData("day", true)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public async Task RecoverPendingAsync_NonSwingEntryExpiresWithoutBrokerPost(
+        string? horizon, bool alreadySubmitted)
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        var clock = new MutableTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 31, 0, TimeSpan.Zero));
+        var intents = new SqliteOrderIntentRepository(factory, clock);
+        var events = new SqliteOrderEventRepository(factory);
+        await InitializeAsync(options);
+        var intent = (await intents.ReserveAsync(
+            CreateRun(Guid.NewGuid()), CreateReservation(Guid.NewGuid(), "MSFT"))).Intent;
+        // Simulate a pre-retirement persisted entry without weakening current reservation validation.
+        await using (var context = new TradingFlowDbContext(options))
+        {
+            var risk = await context.PortfolioRiskReservations.SingleAsync();
+            if (horizon is null)
+                context.PortfolioRiskReservations.Remove(risk);
+            else
+                risk.Horizon = horizon;
+            await context.SaveChangesAsync();
+        }
+        if (alreadySubmitted)
+        {
+            await events.TransitionAsync(new OrderTransitionRequest(
+                intent.ClientOrderId, OrderState.Intent, OrderState.Submitted,
+                "engine", clock.GetUtcNow(), PayloadJson: intent.RequestJson));
+        }
+        var broker = CreateDispatchBroker(intent, brokerOrder: null, "must-not-submit");
+        var dispatcher = CreateDispatcher(intents, events, clock);
+
+        Assert.Equal(0, await dispatcher.RecoverPendingAsync(broker.Object));
+        var state = await events.GetCurrentAsync(intent.ClientOrderId);
+        Assert.Equal(OrderState.Expired, state!.State);
+        Assert.Equal(0, (await intents.GetByIntentIdAsync(intent.IntentId))!.DispatchAttemptCount);
+        broker.Verify(client => client.SubmitOrderAsync(
+            It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()), Times.Never);
+        await using var verification = new TradingFlowDbContext(options);
+        var savedRisk = await verification.PortfolioRiskReservations.SingleOrDefaultAsync();
+        if (horizon is not null)
+        {
+            Assert.Equal(horizon, savedRisk!.Horizon);
+            Assert.Equal(PortfolioRiskReservationState.Released, savedRisk.State);
+        }
+        Assert.Equal(0, await dispatcher.RecoverPendingAsync(broker.Object));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DispatchAsync_RetiredHorizonPriorAttemptRequiresBrokerEvidence(bool brokerObserved)
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        var clock = new MutableTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 31, 0, TimeSpan.Zero));
+        var intents = new SqliteOrderIntentRepository(factory, clock);
+        var events = new SqliteOrderEventRepository(factory);
+        await InitializeAsync(options);
+        var intent = (await intents.ReserveAsync(
+            CreateRun(Guid.NewGuid()), CreateReservation(Guid.NewGuid(), "MSFT"))).Intent;
+        await events.TransitionAsync(new OrderTransitionRequest(
+            intent.ClientOrderId, OrderState.Intent, OrderState.Submitted,
+            "engine", clock.GetUtcNow(), PayloadJson: intent.RequestJson));
+        var lease = await intents.TryAcquireDispatchLeaseAsync(
+            intent.IntentId, intent.AccountId, "previous-owner", TimeSpan.FromSeconds(30));
+        await intents.RecordDispatchAttemptAsync(intent.IntentId, lease!.LeaseToken);
+        await intents.ReleaseDispatchLeaseAsync(intent.IntentId, lease.LeaseToken);
+        await using (var context = new TradingFlowDbContext(options))
+        {
+            (await context.PortfolioRiskReservations.SingleAsync()).Horizon = "day";
+            await context.SaveChangesAsync();
+        }
+        clock.Advance(TimeSpan.FromSeconds(31));
+        var brokerOrder = brokerObserved ? CreateMatchingBrokerOrder(intent, "existing-order", "new") : null;
+        var broker = CreateDispatchBroker(intent, brokerOrder, "must-not-submit");
+        var dispatcher = CreateDispatcher(intents, events, clock);
+
+        if (brokerObserved)
+        {
+            Assert.Equal("existing-order", (await dispatcher.DispatchAsync(intent.IntentId, broker.Object)).BrokerOrderId);
+            Assert.Equal(OrderState.Acked, (await events.GetCurrentAsync(intent.ClientOrderId))!.State);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<OrderDispatchAdoptionRequiredException>(() =>
+                dispatcher.DispatchAsync(intent.IntentId, broker.Object));
+            Assert.Equal(OrderState.Submitted, (await events.GetCurrentAsync(intent.ClientOrderId))!.State);
+        }
+        broker.Verify(client => client.SubmitOrderAsync(
+            It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task DispatchAsync_DurableIntentAfterCrash_SubmitsAndAcknowledgesExactlyOnce()
     {
