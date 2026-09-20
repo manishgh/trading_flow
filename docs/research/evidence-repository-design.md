@@ -40,6 +40,24 @@ TradingFlow retains its current fenced live market-stream ownership and all orde
 risk and approval responsibilities. Its prediction client now requires exact
 ten-session swing (`10b`) response evidence; there is no day-trading fallback.
 
+The active shared-collection checkpoint adds Market Predictor-owned raw Alpaca REST
+collection under one configured local root. It requires durable attempt intents,
+immutable v1 receipt bundles, committed results and verified restart. Attempts are
+logical transport attempts: internal HTTP retries and crash recovery do not imply
+exactly-once requests. This is local root ownership, not provider-wide fencing.
+TradingFlow's importer remains wire-compatible; automatic discovery, durable
+consumer acknowledgement, desk/strategy feed migration and normalized catalog
+admission are not completed by this checkpoint. Existing desk REST and news-stream
+consumers remain unchanged. Receipt pins must come from trusted publication
+provenance, not from hashing an untrusted incoming manifest.
+
+Raw evidence supports both one-to-three-week swing and the separate open-ended
+investment cohort. Shared collection does not select investment forecast horizons
+or enable investment execution: the current prediction client and admission remain
+ten-session swing only. Remaining Market Predictor internal intraday retirement and
+historical-model replay are deferred by user instruction; admission restrictions
+and original historical hashes remain unchanged.
+
 ## 1. Purpose
 
 TradingFlow needs a reproducible research repository before it can decide whether a
