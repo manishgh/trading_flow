@@ -302,7 +302,7 @@ public sealed class OperationsHealthService
             "MarketPredictorHttpClient",
             notConfigured ? SubsystemState.NotApplicable : ready ? SubsystemState.Healthy : SubsystemState.Failing,
             notConfigured ? "Not configured" : ready ? "Ready" : "Attention",
-            $"{model.Detail} Contract market_predictor.prediction.v1; swing evidence only. " +
+            $"{model.Detail} Contract {MarketPredictorHttpClient.SupportedContract}; swing evidence only. " +
             "Model output is read-only evidence and cannot authorise an entry.",
             now);
     }

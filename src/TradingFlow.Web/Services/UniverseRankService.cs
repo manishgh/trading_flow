@@ -129,19 +129,12 @@ public sealed class UniverseRankService
 {
     private static readonly HashSet<string> SupportiveSignals = new(StringComparer.OrdinalIgnoreCase)
     {
-        // final_signal
-        "high_conviction_watch",
-        "watch_for_entry",
-        "strong_bullish_watch",
-        "bullish_watch",
-        "watch_for_confirmation"
+        "positive_setup"
     };
 
     private static readonly HashSet<string> OpposedSignals = new(StringComparer.OrdinalIgnoreCase)
     {
-        "low_probability",
-        "avoid_entry",
-        "avoid_entry_downside_risk"
+        "low_probability"
     };
 
     private readonly MarketPredictorHttpClient predictor;
@@ -267,7 +260,7 @@ public sealed class UniverseRankService
                 null,
                 0m,
                 0m,
-                result.AvailabilityReason ?? "No probability was returned for this horizon.");
+                result.AvailabilityReason ?? (result.Errors.Count > 0 ? result.ErrorSummary : "No probability was returned for this horizon."));
         }
 
         var direction = ResolveDirection(result);
@@ -349,9 +342,8 @@ public sealed class UniverseRankService
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Reduces the predictor's signal vocabulary to a direction. The final
-    /// signal is preferred; the per-leg signals are consulted only when the
-    /// final one is neutral, so a leg cannot override the model's own summary.
+    /// Reduces the contracted final signal to a display-only direction.
+    /// Neutral final signals remain neutral; actions are not signal values.
     /// </summary>
     public static ModelDirection ResolveDirection(MarketPredictorResult result)
     {
@@ -370,21 +362,6 @@ public sealed class UniverseRankService
             return ModelDirection.Opposed;
         }
 
-        foreach (var signal in new[] { result.Swing?.Signal })
-        {
-            if (signal is null)
-            {
-                continue;
-            }
-            if (SupportiveSignals.Contains(signal))
-            {
-                return ModelDirection.Supportive;
-            }
-            if (OpposedSignals.Contains(signal))
-            {
-                return ModelDirection.Opposed;
-            }
-        }
 
         return ModelDirection.Neutral;
     }

@@ -269,7 +269,7 @@ public sealed record MobileTradingFlowDecisionResponse(
     DateTimeOffset? QuoteTimestamp);
 
 public sealed record MobileModelIntelligenceResponse(
-    string ContractVersion,
+    string Contract,
     string AvailabilityStatus,
     string? AvailabilityReason,
     bool IsValidPromotedEvidence,

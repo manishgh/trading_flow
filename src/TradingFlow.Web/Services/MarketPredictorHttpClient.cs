@@ -1,6 +1,5 @@
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace TradingFlow.Web.Services;
 
@@ -24,6 +23,7 @@ public sealed class MarketPredictorHttpClient
     /// contract allows; exceeding it is a 422, not a truncation.
     /// </summary>
     internal const int MaximumTickersPerRequest = 100;
+    internal const string SupportedContract = "market_predictor.prediction.v4";
 
     private readonly HttpClient httpClient;
     private readonly MarketPredictorOptions options;
@@ -186,7 +186,22 @@ public sealed class MarketPredictorHttpClient
         foreach (var batch in normalized.Chunk(MaximumTickersPerRequest))
         {
             var requestTime = timeProvider.GetUtcNow();
-            var response = await PostBatchAsync(batch, normalizedMode, normalizedHorizon, requestTime, cancellationToken);
+            PredictorResponse? response;
+            try
+            {
+                response = await PostBatchAsync(batch, normalizedMode, normalizedHorizon, requestTime, cancellationToken);
+            }
+            catch (JsonException exception)
+            {
+                logger.LogWarning(exception, "Market Predictor batch of {Count} symbols was incompatible.", batch.Length);
+                foreach (var ticker in batch)
+                {
+                    results[ticker] = MarketPredictorResult.Unavailable(
+                        ticker, normalizedMode, normalizedHorizon, "incompatible",
+                        "Market Predictor response did not match the supported contract.");
+                }
+                continue;
+            }
             foreach (var ticker in batch)
             {
                 results[ticker] = response is null
@@ -201,7 +216,7 @@ public sealed class MarketPredictorHttpClient
 
     /// <summary>
     /// Sends one batch and returns the payload, or null when the call could not
-    /// be completed. Failure is not thrown: one unreachable batch must degrade
+    /// be completed. Malformed JSON is classified by the caller; transport failures degrade
     /// that batch to unavailable evidence, not fail the whole screen.
     /// </summary>
     private async Task<PredictorResponse?> PostBatchAsync(
@@ -232,14 +247,14 @@ public sealed class MarketPredictorHttpClient
 
             return await response.Content.ReadFromJsonAsync(
                 PredictorJsonContext.Default.PredictorResponse,
-                timeout.Token);
+                timeout.Token) ?? throw new JsonException("Prediction response is null.");
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             logger.LogWarning("Market Predictor batch of {Count} symbols timed out.", tickers.Count);
             return null;
         }
-        catch (Exception exception) when (exception is HttpRequestException or JsonException)
+        catch (HttpRequestException exception)
         {
             logger.LogWarning(exception, "Market Predictor batch of {Count} symbols failed.", tickers.Count);
             return null;
@@ -295,6 +310,10 @@ public sealed class MarketPredictorHttpClient
         {
             return MarketPredictorResult.Unavailable(ticker, mode, horizon, "incompatible", "Prediction evidence is incomplete.");
         }
+        if (!String.Equals(response.Contract, SupportedContract, StringComparison.Ordinal))
+        {
+            return MarketPredictorResult.Unavailable(ticker, mode, horizon, "incompatible", "Unsupported prediction contract.");
+        }
         if (!response.Mode.Equals(mode, StringComparison.OrdinalIgnoreCase))
         {
             return MarketPredictorResult.Unavailable(ticker, mode, horizon, "incompatible", "Prediction mode does not match the request.");
@@ -333,7 +352,7 @@ public sealed class MarketPredictorHttpClient
             return MarketPredictorResult.Unavailable(ticker, mode, horizon, "incompatible", "Ten-session swing model evidence is required.");
         }
         return new MarketPredictorResult(
-            "market_predictor.prediction.v1",
+            response.Contract!,
             ticker,
             mode,
             horizon,
@@ -360,131 +379,3 @@ public sealed class MarketPredictorHttpClient
         return normalized;
     }
 }
-
-public sealed record MarketPredictorHealth(string Status, string Detail);
-
-public sealed record MarketPredictorResult(
-    string ContractVersion,
-    string Ticker,
-    string Mode,
-    string RequestedHorizon,
-    string ResolvedHorizon,
-    string? RequestId,
-    string? SnapshotId,
-    DateTimeOffset? GeneratedAtUtc,
-    string FinalSignal,
-    string ReadinessStatus,
-    IReadOnlyList<string> Errors,
-    PredictorModelInfo? Model,
-    PredictorSwingPrediction? Swing,
-    string AvailabilityStatus,
-    string? AvailabilityReason)
-{
-    public bool IsValidPromotedEvidence =>
-        AvailabilityStatus == "available" &&
-        ReadinessStatus.Equals("valid", StringComparison.OrdinalIgnoreCase) &&
-        String.Equals(Model?.Status, "promoted", StringComparison.OrdinalIgnoreCase);
-
-    public bool IsValidPaperEvidence =>
-        AvailabilityStatus == "available" &&
-        ReadinessStatus.Equals("valid", StringComparison.OrdinalIgnoreCase) &&
-        (String.Equals(Model?.Status, "promoted", StringComparison.OrdinalIgnoreCase) ||
-         String.Equals(Model?.Status, "candidate", StringComparison.OrdinalIgnoreCase));
-
-    public static MarketPredictorResult Unavailable(
-        string ticker,
-        string mode,
-        string horizon,
-        string status,
-        string reason) => new(
-            "market_predictor.prediction.v1",
-            ticker,
-            mode,
-            horizon,
-            horizon,
-            null,
-            null,
-            null,
-            "not_ready",
-            "invalid",
-            [reason],
-            null,
-            null,
-            status,
-            reason);
-}
-
-internal sealed record PredictorRequest(
-    [property: JsonPropertyName("tickers")] IReadOnlyList<string> Tickers,
-    [property: JsonPropertyName("mode")] string Mode,
-    [property: JsonPropertyName("horizon")] string Horizon,
-    [property: JsonPropertyName("as_of")] DateTimeOffset AsOf);
-
-internal sealed record PredictorResponse(
-    [property: JsonPropertyName("request_id")] string RequestId,
-    [property: JsonPropertyName("generated_at_utc")] DateTimeOffset GeneratedAtUtc,
-    [property: JsonPropertyName("mode")] string Mode,
-    [property: JsonPropertyName("horizon")] string? Horizon,
-    [property: JsonPropertyName("resolved_horizons")] IReadOnlyDictionary<string, string> ResolvedHorizons,
-    [property: JsonPropertyName("models")] IReadOnlyDictionary<string, PredictorModelInfo> Models,
-    [property: JsonPropertyName("predictions")] IReadOnlyList<PredictorTickerPrediction> Predictions,
-    [property: JsonPropertyName("errors")] IReadOnlyList<string> Errors,
-    [property: JsonPropertyName("snapshot_id")] string? SnapshotId);
-
-internal sealed record PredictorHealthResponse(
-    [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("reason")] string? Reason);
-
-public sealed record PredictorModelInfo(
-    [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("model_type")] string? ModelType,
-    [property: JsonPropertyName("schema_version")] string? SchemaVersion,
-    [property: JsonPropertyName("target")] string? Target,
-    [property: JsonPropertyName("artifact_sha256")] string? ArtifactSha256,
-    [property: JsonPropertyName("training_data_end")] string? TrainingDataEnd);
-
-internal sealed record PredictorTickerPrediction(
-    [property: JsonPropertyName("ticker")] string Ticker,
-    [property: JsonPropertyName("final_signal")] string FinalSignal,
-    [property: JsonPropertyName("readiness_status")] string ReadinessStatus,
-    [property: JsonPropertyName("swing")] PredictorSwingPrediction? Swing,
-    [property: JsonPropertyName("errors")] IReadOnlyList<string> Errors);
-
-public sealed record PredictorSwingPrediction(
-    [property: JsonPropertyName("probability")] decimal? Probability,
-    [property: JsonPropertyName("decision_score")] decimal? DecisionScore,
-    [property: JsonPropertyName("signal")] string Signal,
-    [property: JsonPropertyName("rank")] int? Rank,
-    [property: JsonPropertyName("return_1d")] decimal? Return1D,
-    [property: JsonPropertyName("volume_z20")] decimal? VolumeZ20,
-    [property: JsonPropertyName("global_context")] PredictorGlobalContext GlobalContext,
-    [property: JsonPropertyName("catalyst")] PredictorCatalyst Catalyst,
-    [property: JsonPropertyName("readiness")] PredictorReadiness Readiness);
-
-public sealed record PredictorReadiness(
-    [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("reasons")] IReadOnlyList<string> Reasons,
-    [property: JsonPropertyName("latest_price_date")] string? LatestPriceDate,
-    [property: JsonPropertyName("price_feed")] string PriceFeed,
-    [property: JsonPropertyName("benchmark_status")] string BenchmarkStatus,
-    [property: JsonPropertyName("market_context_status")] string MarketContextStatus,
-    [property: JsonPropertyName("model_status")] string ModelStatus,
-    [property: JsonPropertyName("source_status")] string SourceStatus);
-
-public sealed record PredictorCatalyst(
-    [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("direction")] string Direction,
-    [property: JsonPropertyName("score")] decimal Score,
-    [property: JsonPropertyName("event_count")] int EventCount,
-    [property: JsonPropertyName("relevance")] decimal Relevance,
-    [property: JsonPropertyName("minutes_since_latest")] decimal? MinutesSinceLatest,
-    [property: JsonPropertyName("reasons")] IReadOnlyList<string> Reasons);
-
-public sealed record PredictorGlobalContext(
-    [property: JsonPropertyName("net_impact")] decimal NetImpact,
-    [property: JsonPropertyName("active_flashpoints")] IReadOnlyList<string> ActiveFlashpoints);
-
-[JsonSerializable(typeof(PredictorRequest))]
-[JsonSerializable(typeof(PredictorResponse))]
-[JsonSerializable(typeof(PredictorHealthResponse))]
-internal sealed partial class PredictorJsonContext : JsonSerializerContext;

@@ -1056,7 +1056,7 @@ public sealed record MobileTradingFlowDecisionResponse(
 }
 
 public sealed record MobileModelIntelligenceResponse(
-    string ContractVersion,
+    string Contract,
     string AvailabilityStatus,
     string? AvailabilityReason,
     bool IsValidPromotedEvidence,

@@ -24,7 +24,7 @@ public sealed class UniverseRankServiceTests : IDisposable
     [Fact]
     public async Task RankAsync_OrdersByScoreAndNumbersFromOne()
     {
-        var service = CreateService(SignalFor("MU", "watch_for_entry"), SignalFor("NVDA", "watch_for_entry"));
+        var service = CreateService(SignalFor("MU", "positive_setup"), SignalFor("NVDA", "positive_setup"));
 
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 1m), WatchingRow("NVDA", spreadBps: 6m)],
@@ -44,7 +44,7 @@ public sealed class UniverseRankServiceTests : IDisposable
     [Fact]
     public async Task RankAsync_PredictorConflictIsAdvisoryAndDoesNotPenalizeCandidate()
     {
-        var service = CreateService(SignalFor("MU", "avoid_entry"));
+        var service = CreateService(SignalFor("MU", "low_probability"));
 
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 1m)],
@@ -70,7 +70,7 @@ public sealed class UniverseRankServiceTests : IDisposable
     {
         // Watching plus "stand aside" is agreement, not conflict: both sides are
         // saying the same thing.
-        var service = CreateService(SignalFor("MU", "avoid_entry"));
+        var service = CreateService(SignalFor("MU", "low_probability"));
 
         var run = await service.RankAsync(
             [WatchingRow("MU", spreadBps: 1m)],
@@ -113,7 +113,7 @@ public sealed class UniverseRankServiceTests : IDisposable
     [Fact]
     public async Task RankAsync_CarriesEveryFactorSoAScoreCanBeExplained()
     {
-        var service = CreateService(SignalFor("MU", "watch_for_entry"));
+        var service = CreateService(SignalFor("MU", "positive_setup"));
 
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 2m)],
@@ -135,7 +135,7 @@ public sealed class UniverseRankServiceTests : IDisposable
     [Fact]
     public async Task RankAsync_AdvisoryFactorsHaveZeroWeightForSwing()
     {
-        var service = CreateService(SignalFor("MU", "watch_for_entry"));
+        var service = CreateService(SignalFor("MU", "positive_setup"));
         var config = UniverseRankConfig.Default;
 
         var swing = await RankSingleAsync(service, config, "swing");
@@ -153,8 +153,8 @@ public sealed class UniverseRankServiceTests : IDisposable
             EligibleRow("BBB", spreadBps: 2m)
         };
         var conflicting = CreateService(
-            SignalFor("AAA", "avoid_entry"),
-            SignalFor("BBB", "watch_for_entry"));
+            SignalFor("AAA", "low_probability"),
+            SignalFor("BBB", "positive_setup"));
         var unavailable = CreateService(
             handler: new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
 
@@ -176,7 +176,7 @@ public sealed class UniverseRankServiceTests : IDisposable
     {
         // The catalyst table is the reason the desk surfaces an earnings name over
         // an otherwise identical screener hit.
-        var service = CreateService(SignalFor("MU", "watch_for_entry"), SignalFor("NVDA", "watch_for_entry"));
+        var service = CreateService(SignalFor("MU", "positive_setup"), SignalFor("NVDA", "positive_setup"));
 
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 2m), EligibleRow("NVDA", spreadBps: 2m)],
@@ -195,7 +195,7 @@ public sealed class UniverseRankServiceTests : IDisposable
     [Fact]
     public async Task RankAsync_PersistsTheRunForAudit()
     {
-        var service = CreateService(SignalFor("MU", "watch_for_entry"));
+        var service = CreateService(SignalFor("MU", "positive_setup"));
 
         var run = await service.RankAsync(
             [EligibleRow("MU", spreadBps: 2m)],
@@ -225,6 +225,43 @@ public sealed class UniverseRankServiceTests : IDisposable
     public void ResolveAgreement_CoversTheFlagTable(bool eligible, ModelDirection direction, AgreementFlag expected)
     {
         Assert.Equal(expected, UniverseRankService.ResolveAgreement(eligible, direction));
+    }
+
+    [Theory]
+    [InlineData("positive_setup", ModelDirection.Supportive)]
+    [InlineData("low_probability", ModelDirection.Opposed)]
+    [InlineData("ranked_candidate", ModelDirection.Neutral)]
+    [InlineData("neutral", ModelDirection.Neutral)]
+    [InlineData("abstain", ModelDirection.Neutral)]
+    [InlineData("watch_for_entry", ModelDirection.Neutral)]
+    [InlineData("bullish_watch", ModelDirection.Neutral)]
+    [InlineData("strong_bullish_watch", ModelDirection.Neutral)]
+    [InlineData("bullish_watch_confirmed", ModelDirection.Neutral)]
+    [InlineData("high_conviction_watch", ModelDirection.Neutral)]
+    [InlineData("watch_for_confirmation", ModelDirection.Neutral)]
+    [InlineData("avoid_entry", ModelDirection.Neutral)]
+    public async Task RankAsync_ClassifiesFinalSignalWithoutChangingOperationalScore(
+        string signal, ModelDirection expected)
+    {
+        var service = CreateService(SignalFor("MU", signal));
+        var result = await RankSingleAsync(service, UniverseRankConfig.Default, "swing");
+        var baseline = await RankSingleAsync(
+            CreateService(SignalFor("MU", "neutral")), UniverseRankConfig.Default, "swing");
+
+        Assert.Equal("available", result.Evidence.AvailabilityStatus);
+        Assert.Equal(expected, result.ModelDirection);
+        Assert.Equal(baseline.Score, result.Score);
+        Assert.Equal(0m, result.VetoPenalty);
+        Assert.All(result.Factors.Where(factor => factor.Key is "model_edge" or "market_structure"), factor =>
+        {
+            Assert.Equal(0m, factor.Weight);
+            Assert.Equal(0m, factor.Contribution);
+        });
+        // A contradictory leg cannot override a neutral final signal.
+        Assert.Equal(expected, UniverseRankService.ResolveDirection(result.Evidence with
+        {
+            Swing = result.Evidence.Swing! with { Signal = "positive_setup" }
+        }));
     }
 
     public void Dispose()
@@ -310,10 +347,10 @@ public sealed class UniverseRankServiceTests : IDisposable
         "readiness_status": "valid",
         "errors": [],
         "swing": {
-          "probability": 0.61, "decision_score": 0.22, "signal": "bullish_watch", "rank": 4,
+          "probability": 0.61, "decision_score": 0.61, "signal": "{{finalSignal}}", "rank": 4,
           "return_1d": 0.01, "volume_z20": 1.2,
           "global_context": {"net_impact":0.1,"active_flashpoints":[]},
-          "catalyst": {"status":"none","direction":"neutral","score":0.0,"event_count":0,"relevance":0.0,"minutes_since_latest":null,"reasons":[]},
+          "catalyst": {"status":"absent","direction":"none","score":0.0,"event_count":0,"relevance":0.0,"minutes_since_latest":null,"reasons":[]},
           "readiness": {"status":"valid","reasons":[],"latest_price_date":"2026-08-06","price_feed":"sip","benchmark_status":"valid","market_context_status":"valid","model_status":"promoted","source_status":"valid"}
         }
       }
@@ -321,6 +358,7 @@ public sealed class UniverseRankServiceTests : IDisposable
 
     private static string Payload(IReadOnlyList<string> predictions) => $$$"""
     {
+      "contract_version": "market_predictor.prediction.v4",
       "request_id": "req-rank",
       "generated_at_utc": "{{{Now.AddSeconds(-5):O}}}",
       "mode": "swing",

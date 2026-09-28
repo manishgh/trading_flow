@@ -96,7 +96,7 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
         }
 
         ReadinessSection.IsVisible = model.ReadinessReasons.Count > 0;
-        ReadinessReasonsLabel.Text = String.Join(Environment.NewLine, model.ReadinessReasons.Select(reason => $"- {reason}"));
+        ReadinessReasonsLabel.Text = String.Join(Environment.NewLine, model.ReadinessReasons.Select(reason => $"- {TradingFlow.Contracts.Evidence.PredictorEvidenceDisplay.FormatReason(reason)}"));
     }
 
     private async void OnRefreshClicked(object? sender, EventArgs e) => await LoadAsync();

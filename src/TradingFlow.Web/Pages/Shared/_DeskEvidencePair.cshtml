@@ -56,6 +56,11 @@
             </p>
         }
         <dl class="fact-list">
+            @if (evidence.Errors.Count > 0)
+            {
+                <dt>Evidence reasons</dt>
+                <dd>@evidence.ErrorSummary</dd>
+            }
             <dt>Probability</dt>
             <dd>@(Model.Probability is { } probability ? probability.ToString("P1") : "—")</dd>
             <dt>Horizon</dt>
