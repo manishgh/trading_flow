@@ -1,12 +1,17 @@
 # Market Predictor integration handoff
 
-Date: 2026-09-28. Branch: main. Status: isolated integration verified for source publication.
+Date: 2026-09-29. Branch: main. Status: verified integration merged and pushed.
 
 The user explicitly requested merging both projects into main and pushing to their
 configured GitHub remotes. Main fast-forwards to the existing unified-swing-product
 history. The original TradingFlow checkout has substantial unrelated uncommitted work
 and a running Web process, so the merge uses this separate worktree. No original source,
 runtime, local settings, broker state or database is modified.
+
+Publication receipt: after the user's renewed approval on September 29, main was
+pushed successfully to `https://github.com/manishgh/trading_flow.git` through
+`e3b6734`. Market Predictor main was also pushed through `8d6a9c6`. The earlier
+automatic approval-review blockers are resolved. Runtime deployment is unchanged.
 
 ## Frozen merge scope
 
