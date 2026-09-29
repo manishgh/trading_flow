@@ -58,11 +58,12 @@ test.describe("UI2 web trading workstation", () => {
   test("desk separates monitoring from wishlist administration", async ({ page }) => {
     await openSeededDesk(page);
 
-    // Seven flat cells rather than the previous collapsed health control: at
-    // seven the strip is still scannable, and the entry gate is the one an
-    // operator must not miss.
+    // Eight flat cells rather than the previous collapsed health control: the
+    // seven operational cells plus the account-wide portfolio. The strip is
+    // still scannable, and the entry gate is the one an operator must not miss.
     await expect(page.locator(".desk-operational")).toBeVisible();
-    await expect(page.locator(".desk-operational > div")).toHaveCount(7);
+    await expect(page.locator(".desk-operational > div")).toHaveCount(8);
+    await expect(page.locator("[data-desk-portfolio]")).toContainText("Portfolio");
     await expect(page.locator("#DeskQuoteConnection")).toHaveCount(1);
 
     // The desk monitors and routes. It never edits the universe.

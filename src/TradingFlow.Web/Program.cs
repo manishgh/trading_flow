@@ -245,6 +245,7 @@ builder.Services.AddHttpClient<OfficialMarketNewsProvider>(client =>
 });
 builder.Services.AddSingleton<NewsFeedService>();
 builder.Services.AddSingleton<WarmupServiceClient>();
+builder.Services.AddSingleton<DeskPreparationService>();
 builder.Services.AddSingleton<WishlistUniverseResolver>();
 builder.Services.AddSingleton<WishlistSwingWatchEvaluator>();
 builder.Services.AddSingleton<WishlistMarketMonitor>();
@@ -830,36 +831,7 @@ app.MapGet("/api/v1/wishlists/{wishlistId:guid}/quotes/stream", async (
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
 
-    httpContext.Response.Headers.CacheControl = "no-cache";
-    httpContext.Response.Headers.Connection = "keep-alive";
-    httpContext.Response.Headers["X-Accel-Buffering"] = "no";
-    httpContext.Response.ContentType = "text/event-stream";
-
-    var feed = ResolveDefaultQuoteFeed(catalog);
-    while (!cancellationToken.IsCancellationRequested)
-    {
-        var quotes = await GetLiveQuotesWithExtendedFallbackAsync(quoteService, tickers, feed, cancellationToken);
-        var payload = quotes.Values
-            .OrderBy(quote => quote.Ticker)
-            .Select(quote => new
-            {
-                ticker = quote.Ticker,
-                bidPrice = quote.BidPrice,
-                askPrice = quote.AskPrice,
-                midPrice = quote.MidPrice,
-                bidText = quote.DisplayBid,
-                askText = quote.DisplayAsk,
-                midText = quote.DisplayPrice,
-                buyCaption = quote.BuyCaption,
-                sellCaption = quote.SellCaption,
-                timestamp = quote.Timestamp
-            });
-
-        await httpContext.Response.WriteAsync("event: quotes\n", cancellationToken);
-        await httpContext.Response.WriteAsync($"data: {JsonSerializer.Serialize(payload)}\n\n", cancellationToken);
-        await httpContext.Response.Body.FlushAsync(cancellationToken);
-        await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
-    }
+    await WriteQuoteStreamAsync(tickers, quoteService, ResolveDefaultQuoteFeed(catalog), httpContext, cancellationToken);
 }).RequireAuthorization();
 app.MapGet("/api/v1/wishlists/{wishlistId:guid}/activity/stream", async (
     Guid wishlistId,
@@ -881,48 +853,42 @@ app.MapGet("/api/v1/wishlists/{wishlistId:guid}/activity/stream", async (
         .Where(ticker => ticker.Length > 0)
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    httpContext.Response.Headers.CacheControl = "no-cache";
-    httpContext.Response.Headers.Connection = "keep-alive";
-    httpContext.Response.Headers["X-Accel-Buffering"] = "no";
-    httpContext.Response.ContentType = "text/event-stream";
-
-    while (!cancellationToken.IsCancellationRequested)
+    await WriteActivityStreamAsync(wishlistId, tickerSet, wishlists, newsFeed, httpContext, cancellationToken);
+}).RequireAuthorization();
+// The desk's universe is not always one wishlist - it can be every wishlist plus
+// held positions, or a screener result - so the desk streams by the exact symbol
+// set it rendered. Same payloads as the wishlist streams above.
+app.MapGet("/api/v1/desk/quotes/stream", async (
+    string? tickers,
+    AlpacaQuoteService quoteService,
+    ConfigCatalogService catalog,
+    HttpContext httpContext,
+    CancellationToken cancellationToken) =>
+{
+    var tickerSet = DeskStreamTickers.Parse(tickers);
+    if (tickerSet.Count == 0)
     {
-        var signalSince = DateTimeOffset.UtcNow.AddMinutes(-20);
-        var newsSince = DateTimeOffset.UtcNow.AddHours(-4);
-        var signals = (await wishlists.GetSignalsAsync(wishlistId, null, signalSince, 30, cancellationToken))
-            .Select(signal => new
-            {
-                id = signal.Id,
-                ticker = signal.Ticker,
-                signalType = signal.SignalType,
-                reason = signal.Reason,
-                detectedAt = signal.DetectedAtUtc,
-                detectedAtText = signal.DetectedAtUtc.ToLocalTime().ToString("dd/MM HH:mm")
-            });
-        var rollingNews = await newsFeed.GetRollingAsync(4, null, cancellationToken);
-        var news = rollingNews.Items
-            .Where(item => SplitTickerDisplay(item.Ticker).Any(tickerSet.Contains))
-            .Where(item => item.Timestamp >= newsSince)
-            .OrderByDescending(item => item.Timestamp)
-            .Take(80)
-            .Select(item => new
-            {
-                ticker = item.Ticker,
-                headline = item.Headline,
-                summary = item.Summary,
-                provider = item.Provider,
-                source = item.Source,
-                url = item.Url,
-                timestamp = item.Timestamp,
-                timestampText = item.Timestamp.ToLocalTime().ToString("dd/MM HH:mm")
-            });
-
-        await httpContext.Response.WriteAsync("event: activity\n", cancellationToken);
-        await httpContext.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { signals, news })}\n\n", cancellationToken);
-        await httpContext.Response.Body.FlushAsync(cancellationToken);
-        await Task.Delay(TimeSpan.FromSeconds(20), cancellationToken);
+        httpContext.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
     }
+
+    await WriteQuoteStreamAsync(tickerSet.ToArray(), quoteService, ResolveDefaultQuoteFeed(catalog), httpContext, cancellationToken);
+}).RequireAuthorization();
+app.MapGet("/api/v1/desk/activity/stream", async (
+    string? tickers,
+    IWishlistRepository wishlists,
+    NewsFeedService newsFeed,
+    HttpContext httpContext,
+    CancellationToken cancellationToken) =>
+{
+    var tickerSet = DeskStreamTickers.Parse(tickers);
+    if (tickerSet.Count == 0)
+    {
+        httpContext.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    await WriteActivityStreamAsync(null, tickerSet, wishlists, newsFeed, httpContext, cancellationToken);
 }).RequireAuthorization();
 app.Run();
 
@@ -1046,6 +1012,100 @@ static string ResolveDefaultQuoteFeed(ConfigCatalogService catalog)
         .FirstOrDefault(config => config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
         ?? catalog.GetPaperConfigs().FirstOrDefault();
     return selected?.Config.Providers.Alpaca.DataFeed ?? "sip";
+}
+
+static void PrepareEventStream(HttpContext httpContext)
+{
+    httpContext.Response.Headers.CacheControl = "no-cache";
+    httpContext.Response.Headers.Connection = "keep-alive";
+    httpContext.Response.Headers["X-Accel-Buffering"] = "no";
+    httpContext.Response.ContentType = "text/event-stream";
+}
+
+static async Task WriteQuoteStreamAsync(
+    IReadOnlyList<string> tickers,
+    AlpacaQuoteService quoteService,
+    string feed,
+    HttpContext httpContext,
+    CancellationToken cancellationToken)
+{
+    PrepareEventStream(httpContext);
+    while (!cancellationToken.IsCancellationRequested)
+    {
+        var quotes = await GetLiveQuotesWithExtendedFallbackAsync(quoteService, tickers, feed, cancellationToken);
+        var payload = quotes.Values
+            .OrderBy(quote => quote.Ticker)
+            .Select(quote => new
+            {
+                ticker = quote.Ticker,
+                bidPrice = quote.BidPrice,
+                askPrice = quote.AskPrice,
+                midPrice = quote.MidPrice,
+                bidText = quote.DisplayBid,
+                askText = quote.DisplayAsk,
+                midText = quote.DisplayPrice,
+                buyCaption = quote.BuyCaption,
+                sellCaption = quote.SellCaption,
+                timestamp = quote.Timestamp
+            });
+
+        await httpContext.Response.WriteAsync("event: quotes\n", cancellationToken);
+        await httpContext.Response.WriteAsync($"data: {JsonSerializer.Serialize(payload)}\n\n", cancellationToken);
+        await httpContext.Response.Body.FlushAsync(cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+    }
+}
+
+// Signals are read for the one wishlist when there is one, otherwise across all
+// lists; either way only the streamed symbols reach the client.
+static async Task WriteActivityStreamAsync(
+    Guid? wishlistId,
+    IReadOnlySet<string> tickerSet,
+    IWishlistRepository wishlists,
+    NewsFeedService newsFeed,
+    HttpContext httpContext,
+    CancellationToken cancellationToken)
+{
+    PrepareEventStream(httpContext);
+    while (!cancellationToken.IsCancellationRequested)
+    {
+        var signalSince = DateTimeOffset.UtcNow.AddMinutes(-20);
+        var newsSince = DateTimeOffset.UtcNow.AddHours(-4);
+        var signals = (await wishlists.GetSignalsAsync(wishlistId, null, signalSince, wishlistId is null ? 200 : 30, cancellationToken))
+            .Where(signal => tickerSet.Contains(signal.Ticker))
+            .Take(30)
+            .Select(signal => new
+            {
+                id = signal.Id,
+                ticker = signal.Ticker,
+                signalType = signal.SignalType,
+                reason = signal.Reason,
+                detectedAt = signal.DetectedAtUtc,
+                detectedAtText = signal.DetectedAtUtc.ToLocalTime().ToString("dd/MM HH:mm")
+            });
+        var rollingNews = await newsFeed.GetRollingAsync(4, null, cancellationToken);
+        var news = rollingNews.Items
+            .Where(item => SplitTickerDisplay(item.Ticker).Any(tickerSet.Contains))
+            .Where(item => item.Timestamp >= newsSince)
+            .OrderByDescending(item => item.Timestamp)
+            .Take(80)
+            .Select(item => new
+            {
+                ticker = item.Ticker,
+                headline = item.Headline,
+                summary = item.Summary,
+                provider = item.Provider,
+                source = item.Source,
+                url = item.Url,
+                timestamp = item.Timestamp,
+                timestampText = item.Timestamp.ToLocalTime().ToString("dd/MM HH:mm")
+            });
+
+        await httpContext.Response.WriteAsync("event: activity\n", cancellationToken);
+        await httpContext.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { signals, news })}\n\n", cancellationToken);
+        await httpContext.Response.Body.FlushAsync(cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(20), cancellationToken);
+    }
 }
 
 static IEnumerable<string> SplitTickerDisplay(string tickerDisplay)

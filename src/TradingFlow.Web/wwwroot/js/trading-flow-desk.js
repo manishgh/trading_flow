@@ -1,7 +1,13 @@
 import { createNamedEventStream, formatAge, isSafeArticleUrl, normalizeTicker } from "./trading-flow-stream.js";
 
 const root = document.querySelector("[data-desk-root]");
-const wishlistId = root?.dataset.wishlistId;
+// The desk streams the exact symbols it rendered: every wishlist plus held
+// positions, one wishlist, or a screener's hits.
+const streamTickers = String(root?.dataset.streamTickers || "")
+    .split(",")
+    .map(normalizeTicker)
+    .filter(Boolean);
+const streamQuery = encodeURIComponent(streamTickers.join(","));
 const selectedTicker = normalizeTicker(root?.dataset.selectedTicker);
 const connectionNode = document.getElementById("DeskQuoteConnection");
 const freshnessNode = document.getElementById("DeskQuoteFreshness");
@@ -283,13 +289,13 @@ function refreshFreshness() {
     }
 }
 
-if (wishlistId) {
-    createNamedEventStream(`/api/v1/wishlists/${wishlistId}/quotes/stream`, "quotes", {
+if (streamTickers.length > 0) {
+    createNamedEventStream(`/api/v1/desk/quotes/stream?tickers=${streamQuery}`, "quotes", {
         onMessage: applyQuotes,
         onState: setConnectionState,
         onDecodeError: error => console.warn("Quote update rejected.", error)
     });
-    createNamedEventStream(`/api/v1/wishlists/${wishlistId}/activity/stream`, "activity", {
+    createNamedEventStream(`/api/v1/desk/activity/stream?tickers=${streamQuery}`, "activity", {
         onMessage: applyActivity,
         onState: (state, detail) => {
             if (state !== "connected") {

@@ -72,8 +72,9 @@ public interface IScreenerSnapshotSource
 /// Reads a Finviz screen and says what it would return, so an operator can see
 /// the result before anything is added to a wishlist.
 ///
-/// Three input shapes are accepted and normalised to one query: a full Finviz
-/// Elite URL, the name of a saved screener preset, or a bare query string. They
+/// Four input shapes are accepted and normalised to one query: a catalogued
+/// Finviz signal (<c>signal:code</c>), a full Finviz Elite URL, the name of a
+/// saved screener preset, or a bare query string. They
 /// are the three things an operator actually has to hand, and making the caller
 /// pick between them would only move the guesswork.
 ///
@@ -189,7 +190,7 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
     }
 
     /// <summary>
-    /// Resolves the three accepted input shapes to one Finviz filter query.
+    /// Resolves the four accepted input shapes to one Finviz filter query.
     /// </summary>
     private async Task<(string Name, string Query)> NormalizeAsync(
         string input,
@@ -197,6 +198,13 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
         CancellationToken cancellationToken)
     {
         var trimmed = input.Trim();
+
+        // 0. A built-in Finviz signal from the desk catalogue (signal:code). Only
+        //    catalogued codes resolve; an unknown one falls through as a query.
+        if (FinvizSignalCatalog.TryResolveInput(trimmed, out var signal))
+        {
+            return ($"Finviz · {signal.Label}", signal.Query);
+        }
 
         // 1. A full Finviz URL: the filter lives in the query string, and the
         //    rest of the URL (view, order, auth) is not ours to forward.

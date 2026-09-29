@@ -39,7 +39,7 @@
         </p>
     }
 
-    <form method="post" asp-page-handler="PreviewTicket" class="desk-ticket-form" data-desk-ticket>
+    <form method="post" asp-page-handler="PreviewTicket" asp-all-route-data="Model.ViewRoute" class="desk-ticket-form" data-desk-ticket>
         <input type="hidden" name="ticker" value="@ticker" />
         <input type="hidden" name="ticket.Ticker" value="@ticker" />
         <input type="hidden" name="env" value="@Model.Env" />
@@ -171,9 +171,8 @@
 
     @if (preview is not null)
     {
-        <form method="post" asp-page-handler="ConfirmTicket" class="desk-ticket-confirm">
+        <form method="post" asp-page-handler="ConfirmTicket" asp-all-route-data="Model.ViewRoute" class="desk-ticket-confirm">
             <input type="hidden" name="ticketToken" value="@preview.TicketToken" />
-            <input type="hidden" name="id" value="@Model.Row.Row.Item.WishlistId" />
             <input type="hidden" name="ticker" value="@ticker" />
             <input type="hidden" name="env" value="@Model.Env" />
             <button class="btn btn-primary btn-block btn-lg" type="submit" disabled="@Model.IsBlocked">

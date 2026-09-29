@@ -10,7 +10,8 @@ import { signIn } from "./sign-in.js";
 
 async function firstWishlistId(page) {
   await page.goto("/TradeDesk");
-  return page.locator("#WishlistSelect option").first().getAttribute("value");
+  // The first option is "All wishlists" (empty value); the first real list follows it.
+  return page.locator('#WishlistSelect option:not([value=""])').first().getAttribute("value");
 }
 
 /** The wishlist id the management screen is currently showing. */
@@ -329,7 +330,7 @@ test.describe("desk order shortcuts", () => {
 
   test("the buy action carries a keyboard hint and never submits on its own", async ({ page }) => {
     await page.goto("/TradeDesk");
-    const id = await page.locator("#WishlistSelect option").first().getAttribute("value");
+    const id = await page.locator('#WishlistSelect option:not([value=""])').first().getAttribute("value");
     const ticker = await page.locator(".trade-desk-table [data-symbol-row]").first().getAttribute("data-symbol");
     test.skip(!ticker, "No symbols seeded.");
 

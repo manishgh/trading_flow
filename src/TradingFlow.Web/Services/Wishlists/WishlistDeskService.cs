@@ -31,44 +31,68 @@ public sealed class WishlistDeskService
         this.newsFeed = newsFeed;
     }
 
-    public async Task<WishlistDeskSnapshot> BuildAsync(
+    public Task<WishlistDeskSnapshot> BuildAsync(
         Wishlist? wishlist,
         string quoteFeed,
         TimeSpan signalWindow,
         TimeSpan newsWindow,
         CancellationToken cancellationToken)
     {
-        if (wishlist is null)
+        return wishlist is null
+            ? Task.FromResult(new WishlistDeskSnapshot([], [], [], [], 0m))
+            : BuildAsync(DeskUniverse.ForWishlist(wishlist), quoteFeed, signalWindow, newsWindow, cancellationToken);
+    }
+
+    /// <summary>
+    /// Builds the desk view over any resolved universe: one wishlist, every
+    /// wishlist, or a screener result.
+    /// </summary>
+    /// <remarks>
+    /// Open positions are read first when the universe takes held positions, so a
+    /// holding on no list still gets a quote, news and a row. Signals are read for
+    /// the one wishlist when the universe is a single list, and across all lists
+    /// otherwise, then narrowed to the universe's symbols.
+    /// </remarks>
+    public async Task<WishlistDeskSnapshot> BuildAsync(
+        DeskUniverse universe,
+        string quoteFeed,
+        TimeSpan signalWindow,
+        TimeSpan newsWindow,
+        CancellationToken cancellationToken)
+    {
+        var runningTradesTask = RunningTradesBuilder.BuildAsync(paperJobs, automation);
+        if (universe.IncludesHeldPositions)
         {
-            return new WishlistDeskSnapshot([], [], [], [], 0m);
+            universe = universe.WithHeldPositions((await runningTradesTask).Select(trade => trade.Ticker));
         }
 
-        var activeItems = wishlist.Items
-            .Where(item => item.Active)
-            .OrderBy(item => item.Ticker)
-            .ToArray();
-        var tickerSet = activeItems
-            .Select(item => item.Ticker.Trim().ToUpperInvariant())
-            .Where(ticker => ticker.Length > 0)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (universe.Members.Count == 0)
+        {
+            var allTrades = await runningTradesTask;
+            return new WishlistDeskSnapshot([], [], [], [], 0m)
+            {
+                Portfolio = DeskPortfolioSummary.From(allTrades)
+            };
+        }
 
+        var tickerSet = universe.Tickers;
         var quotesTask = quoteService.GetLatestQuotesAsync(tickerSet.ToArray(), quoteFeed, cancellationToken);
-        var runningTradesTask = RunningTradesBuilder.BuildAsync(paperJobs, automation);
-        var recentSignalsTask = wishlists.GetSignalsAsync(
-            wishlist.Id,
-            ticker: null,
-            DateTimeOffset.UtcNow.Subtract(signalWindow),
-            limit: 100,
-            cancellationToken);
+        var since = DateTimeOffset.UtcNow.Subtract(signalWindow);
+        var recentSignalsTask = universe.WishlistId is { } wishlistId
+            ? wishlists.GetSignalsAsync(wishlistId, ticker: null, since, limit: 100, cancellationToken)
+            : wishlists.GetSignalsAsync(wishlistId: null, ticker: null, since, limit: 500, cancellationToken);
         var relatedNewsTask = LoadRelatedNewsAsync(tickerSet, newsWindow, cancellationToken);
 
         await Task.WhenAll(quotesTask, runningTradesTask, recentSignalsTask, relatedNewsTask);
 
         var quotes = await quotesTask;
-        var runningTrades = (await runningTradesTask)
+        var everyTrade = await runningTradesTask;
+        var runningTrades = everyTrade
             .Where(trade => tickerSet.Contains(trade.Ticker))
             .ToArray();
-        var recentSignals = await recentSignalsTask;
+        var recentSignals = (await recentSignalsTask)
+            .Where(signal => tickerSet.Contains(signal.Ticker))
+            .ToArray();
         var relatedNews = await relatedNewsTask;
 
         var latestSignalByTicker = recentSignals
@@ -91,18 +115,25 @@ public sealed class WishlistDeskService
                 group => group.OrderByDescending(trade => trade.UpdatedAtUtc ?? DateTimeOffset.MinValue).First(),
                 StringComparer.OrdinalIgnoreCase);
 
-        var rows = activeItems.Select(item =>
+        var rows = universe.Members.Select(member =>
         {
-            var quote = quotes.TryGetValue(item.Ticker, out var quoteValue)
+            var quote = quotes.TryGetValue(member.Ticker, out var quoteValue)
                 ? quoteValue
-                : new AlpacaLatestQuote(item.Ticker, null, null, null, null, null);
-            tradeByTicker.TryGetValue(item.Ticker, out var trade);
-            latestSignalByTicker.TryGetValue(item.Ticker, out var signal);
-            latestNewsByTicker.TryGetValue(item.Ticker, out var news);
-            return new WishlistDeskRow(item, quote, trade, signal, news);
+                : new AlpacaLatestQuote(member.Ticker, null, null, null, null, null);
+            tradeByTicker.TryGetValue(member.Ticker, out var trade);
+            latestSignalByTicker.TryGetValue(member.Ticker, out var signal);
+            latestNewsByTicker.TryGetValue(member.Ticker, out var news);
+            return new WishlistDeskRow(member.Item, quote, trade, signal, news)
+            {
+                Lists = member.Lists,
+                IsPositionOnly = member.IsPositionOnly
+            };
         }).ToArray();
 
-        return new WishlistDeskSnapshot(rows, recentSignals, relatedNews, runningTrades, runningTrades.Sum(trade => trade.UnrealizedPl));
+        return new WishlistDeskSnapshot(rows, recentSignals, relatedNews, runningTrades, runningTrades.Sum(trade => trade.UnrealizedPl))
+        {
+            Portfolio = DeskPortfolioSummary.From(everyTrade)
+        };
     }
 
     private async Task<IReadOnlyList<MobileNewsItem>> LoadRelatedNewsAsync(
@@ -140,7 +171,14 @@ public sealed record WishlistDeskSnapshot(
     IReadOnlyList<WishlistSignal> RecentSignals,
     IReadOnlyList<MobileNewsItem> RelatedNews,
     IReadOnlyList<MobileRunningTrade> RunningTrades,
-    decimal TotalPl);
+    decimal TotalPl)
+{
+    /// <summary>
+    /// Totals over every open position in the environment, not only the ones in
+    /// this view. <see cref="TotalPl"/> stays scoped to the view.
+    /// </summary>
+    public DeskPortfolioSummary Portfolio { get; init; } = DeskPortfolioSummary.Empty;
+}
 
 /// <summary>
 /// One market-grid row. Every member below is a projection of data the desk
@@ -176,6 +214,18 @@ public sealed record WishlistDeskRow(
     MobileNewsItem? LatestNews)
 {
     public string Ticker => Item.Ticker;
+
+    /// <summary>Wishlists holding the symbol, in name order. Empty for a screener hit on no list.</summary>
+    public IReadOnlyList<string> Lists { get; init; } = [];
+
+    /// <summary>True when the row exists only because a position is open in a symbol on no list.</summary>
+    public bool IsPositionOnly { get; init; }
+
+    /// <summary>Quantity times entry price of the tracked position, or null with none open.</summary>
+    public decimal? PositionCost => Trade is null ? null : Math.Abs(Trade.Quantity) * Trade.EntryPrice;
+
+    /// <summary>Quantity times current price of the tracked position, or null with none open.</summary>
+    public decimal? PositionValue => Trade is null ? null : Math.Abs(Trade.Quantity) * Trade.CurrentPrice;
 
     public string DisplayName => String.IsNullOrWhiteSpace(Item.DisplayName) ? Item.Ticker : Item.DisplayName!;
 

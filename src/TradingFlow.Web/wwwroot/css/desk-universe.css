@@ -1,0 +1,130 @@
+/* ---------------------------------------------------------------------------
+   Desk universe, portfolio and preparation
+   The universe switch (wishlists / screener), the preparation band, and the
+   lists, prep and P/L cells. Token-based only; colour is never the sole signal
+   - every state also carries its word.
+   --------------------------------------------------------------------------- */
+
+.desk-universe-switch {
+  margin: 12px 20px 0;
+}
+.desk-universe-switch .seg-opt { text-decoration: none; color: inherit; }
+.desk-universe-switch .seg-opt[aria-current="page"] { background: var(--color-text); color: var(--color-bg); }
+
+/* Three fields and the actions, now that the screener is a universe of its own. */
+.desk-context {
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.4fr) minmax(0, 1.2fr) auto;
+}
+@media (max-width: 1330px) {
+  .desk-context { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .desk-context { grid-template-columns: minmax(0, 1fr); }
+}
+
+.desk-custom-screen {
+  padding: 8px 20px;
+  border-bottom: var(--rule-row);
+  font-size: 12px;
+}
+.desk-custom-screen > summary { cursor: pointer; min-height: 24px; }
+.desk-custom-screen-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.desk-custom-screen-form .input { flex: 1 1 320px; min-width: 0; }
+
+.desk-screener-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.desk-screener-add .input { width: auto; min-width: 160px; }
+.desk-screener-empty { padding: 12px 20px; margin: 0; }
+
+.desk-prep-band {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 9px 20px;
+  border-bottom: var(--rule-section);
+  background: var(--panel-subtle);
+  font-size: 12px;
+}
+.desk-prep-band.is-error { background: var(--warn-surface); }
+.desk-prep-band form { margin: 0; }
+.desk-prep-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.desk-prep-session { font-weight: 700; }
+.desk-prep-counts { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; }
+.desk-prep-run { color: var(--muted); }
+.desk-prep-band .btn-secondary:last-child { margin-left: auto; }
+
+.prep-tag { background: var(--color-neutral-200); color: var(--color-neutral-800); }
+.prep-tag.is-ready { background: var(--good-surface); color: var(--good); border: 1px solid var(--good-border); }
+.prep-tag.is-attention { background: var(--warn-surface); color: var(--warn-ink); border: 1px solid var(--warn-border); }
+.prep-tag.is-failed { background: var(--bad-surface); color: var(--bad); border: 1px solid var(--bad-border); }
+
+.trade-desk-table th.prep-column { width: 96px; }
+.trade-desk-table th.pnl-column { width: 96px; }
+.market-lists {
+  display: block;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.market-lists.is-position-only { font-weight: 700; }
+
+.desk-rail-membership {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  align-items: center;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.desk-rail-prep { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.desk-rail-prep form { margin: 0; }
+.desk-rail-position { margin-top: 10px; }
+
+/* The phone summary and the floating ticket action are phone controls.
+   modernist.css loads after site.css, and its .metric-strip and .btn display
+   rules re-showed both at desktop width; this puts them back behind the phone
+   breakpoint where site.css meant them to be. */
+.desk-page .desk-mobile-summary,
+.desk-page .desk-mobile-action { display: none; }
+@media (max-width: 768px) {
+  .desk-page .desk-mobile-summary { display: grid; }
+  .desk-page .desk-mobile-action { display: inline-flex; }
+}
+
+/* The strip carries eight cells now: the seven operational ones plus the
+   account-wide portfolio. Same breakpoint as the site rule it widens. */
+.desk-page .desk-operational { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+@media (max-width: 1330px) {
+  .desk-page .desk-operational { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* Phone: the universe switch, the custom query, the screener prompt and the
+   preparation band are decisions about the desktop grid, like the screener
+   bar the site sheet already hides here. The phone keeps reading the book. */
+@media (max-width: 768px) {
+  .desk-page .desk-universe-switch,
+  .desk-page .desk-custom-screen,
+  .desk-page .desk-screener-empty,
+  .desk-page .desk-prep-band { display: none; }
+
+  /* The rail is the phone's symbol level, so its prepare action is a thumb
+     target like every other phone control. */
+  .desk-rail-prep .btn { min-height: 44px; }
+}

@@ -54,6 +54,14 @@ public sealed record DeskTicketModel(
     ManualOrderTicketConfirmation? Confirmation)
 {
     /// <summary>
+    /// The desk view the ticket was opened from - scope, wishlist or screener,
+    /// filters and the selected ticker. Both ticket posts carry it, so a preview
+    /// or confirm re-renders the same universe; without it a screener hit that is
+    /// on no wishlist would drop out of the view mid-ticket.
+    /// </summary>
+    public IDictionary<string, string> ViewRoute { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
     /// The six checks the ticket states, mirroring what the server checks at
     /// submit. Rendered from the preview response rather than recomputed
     /// client-side, so the screen cannot disagree with the server.

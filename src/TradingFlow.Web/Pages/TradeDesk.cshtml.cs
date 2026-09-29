@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
+using TradingFlow.Finviz;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Wishlists;
@@ -21,6 +22,7 @@ public sealed class TradeDeskModel : PageModel
     private readonly ScreenerPresetService screenerPresets;
     private readonly ManualOrderTicketService tickets;
     private readonly TradingEnvironmentService environments;
+    private readonly DeskPreparationService preparation;
 
     public TradeDeskModel(
         IWishlistRepository repository,
@@ -32,9 +34,11 @@ public sealed class TradeDeskModel : PageModel
         ScreenerSyncService screener,
         ScreenerPresetService screenerPresets,
         ManualOrderTicketService tickets,
-        TradingEnvironmentService environments)
+        TradingEnvironmentService environments,
+        DeskPreparationService preparation)
     {
         this.environments = environments;
+        this.preparation = preparation;
         this.repository = repository;
         this.catalog = catalog;
         this.deskService = deskService;
@@ -51,7 +55,23 @@ public sealed class TradeDeskModel : PageModel
 
     public TradingEnvironmentState EnvironmentState => environments.GetState(environments.Parse(Env));
 
+    /// <summary>
+    /// The wishlist to monitor. Null means every wishlist at once - the desk's
+    /// default, because the operator follows all of their lists, not one.
+    /// </summary>
     [BindProperty(SupportsGet = true)] public Guid? Id { get; set; }
+
+    /// <summary>
+    /// Where the rows come from: <c>lists</c> (wishlists, the default) or
+    /// <c>screener</c> (the symbols a screen returned).
+    /// </summary>
+    [BindProperty(SupportsGet = true)] public string Scope { get; set; } = "lists";
+
+    /// <summary>Wishlist that screener symbols are added to. Defaults to the default wishlist.</summary>
+    [BindProperty(SupportsGet = true)] public Guid? TargetId { get; set; }
+
+    /// <summary>One symbol to prepare, from the rail. Null prepares every symbol in the view that needs it.</summary>
+    [BindProperty] public string? PrepareTicker { get; set; }
     [BindProperty(SupportsGet = true)] public string Source { get; set; } = "all";
     [BindProperty(SupportsGet = true)] public string? StrategyId { get; set; }
     [BindProperty(SupportsGet = true)] public string? Ticker { get; set; }
@@ -64,7 +84,7 @@ public sealed class TradeDeskModel : PageModel
     [BindProperty(SupportsGet = true)] public string PredictionHorizon { get; set; } = "auto";
     public string ScreenerScopeName => "swing";
 
-    /// <summary>Finviz URL, saved screener name, or bare query string.</summary>
+    /// <summary>Catalogued Finviz signal (<c>signal:code</c>), Finviz URL, saved screener name, or bare query string.</summary>
     [BindProperty(SupportsGet = true)] public string? ScreenerQuery { get; set; }
 
     /// <summary>
@@ -83,6 +103,25 @@ public sealed class TradeDeskModel : PageModel
 
     public IReadOnlyList<Wishlist> Wishlists { get; private set; } = [];
     public Wishlist? SelectedWishlist { get; private set; }
+
+    /// <summary>The symbols this view monitors, resolved from the scope before any quote is read.</summary>
+    public DeskUniverse Universe { get; private set; } = DeskUniverse.Empty;
+
+    /// <summary>Totals over every open position, independent of the view.</summary>
+    public DeskPortfolioSummary Portfolio { get; private set; } = DeskPortfolioSummary.Empty;
+
+    /// <summary>Warmup-service preparation state for every symbol on the desk.</summary>
+    public DeskPreparationSnapshot Preparation { get; private set; } =
+        new(false, "Preparation state has not loaded.", new Dictionary<string, DeskPreparationStatus>(), null);
+
+    public bool IsScreenerScope => String.Equals(Scope, "screener", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Wishlist the screener band adds to.</summary>
+    public Wishlist? TargetWishlist { get; private set; }
+
+    /// <summary>Built-in Finviz signals offered as ready-made screens, grouped for the picker.</summary>
+    public static IReadOnlyList<IGrouping<string, FinvizSignal>> SignalGroups { get; } =
+        FinvizSignalCatalog.All.GroupBy(signal => signal.Group).ToArray();
     public IReadOnlyList<StrategyOption> Strategies { get; private set; } = [];
     public string? SelectedStrategyId { get; private set; }
     public string? SelectedPaperConfigPath { get; private set; }
@@ -124,17 +163,19 @@ public sealed class TradeDeskModel : PageModel
         "attention", "Broker state has not loaded.", "blocked", "Admission state has not loaded.");
 
     /// <summary>
-    /// Views over the ranked universe. All / Signals / In trade are properties of
-    /// the row; Screener is membership of the active screener result; Disagree is
-    /// the agreement flag. The last two are why the desk ranks a universe rather
-    /// than filtering a list: both are only answerable after scoring.
+    /// Views over the ranked universe. All / Observed setups / In trade / With news
+    /// are properties of the row; Needs prep is the preparation state; Disagree is
+    /// the agreement flag, which is why the desk ranks a universe rather than
+    /// filtering a list: it is only answerable after scoring. Screener membership
+    /// is no longer a view: a screener is now a universe of its own.
     /// </summary>
     public static IReadOnlyList<(string Key, string Label)> Filters { get; } =
     [
         ("all", "All"),
         ("signal", "Observed setups"),
         ("trade", "In trade"),
-        ("screener", "Screener"),
+        ("news", "With news"),
+        ("prep", "Needs prep"),
         ("disagree", "Disagree")
     ];
 
@@ -150,7 +191,7 @@ public sealed class TradeDeskModel : PageModel
     {
         await repository.SetObservedAsync(wishlistId, isObserved, cancellationToken);
         StatusMessage = isObserved ? "Wishlist observer started." : "Wishlist observer paused.";
-        return RedirectToPage("/TradeDesk", new { id = wishlistId, source = Source, strategyId = StrategyId, ticker = Ticker, env = Env });
+        return RedirectToPage("/TradeDesk", RouteWith(("id", wishlistId.ToString())));
     }
 
     /// <summary>
@@ -176,25 +217,23 @@ public sealed class TradeDeskModel : PageModel
     /// </summary>
     public async Task<IActionResult> OnPostAddScreenerAsync(CancellationToken cancellationToken)
     {
-        if (Id is not { } wishlistId)
+        await LoadAsync(cancellationToken);
+        if (TargetWishlist is not { } target)
         {
-            ErrorMessage = "Select a wishlist before adding screener symbols.";
-            await LoadAsync(cancellationToken);
+            ErrorMessage = "Choose a wishlist to add the screener symbols to.";
             return Page();
         }
 
-        var result = await screener.PreviewAsync(ScreenerQuery ?? String.Empty, ScreenerScope.Swing, wishlistId, cancellationToken);
-        if (!result.Succeeded)
+        if (ScreenerResult is not { Succeeded: true } result)
         {
-            ErrorMessage = result.Error;
-            await LoadAsync(cancellationToken);
+            ErrorMessage = ScreenerResult?.Error ?? "Choose a screener first.";
             return Page();
         }
 
         foreach (var symbol in result.NotInWishlist)
         {
             await repository.AddOrUpdateItemAsync(
-                wishlistId,
+                target.Id,
                 symbol,
                 displayName: null,
                 notes: $"Added from {result.Name}",
@@ -202,18 +241,47 @@ public sealed class TradeDeskModel : PageModel
         }
 
         StatusMessage = result.NotInWishlist.Count == 0
-            ? "Every screener symbol is already in the wishlist."
-            : $"Added {result.NotInWishlist.Count} symbol(s) from {result.Name}.";
-        return RedirectToPage("/TradeDesk", new
+            ? $"Every screener symbol is already in {target.Name}."
+            : $"Added {result.NotInWishlist.Count} symbol(s) from {result.Name} to {target.Name}.";
+        return RedirectToPage("/TradeDesk", RouteWith());
+    }
+
+    /// <summary>
+    /// Asks the warmup service to prepare the symbols in this view that are not
+    /// ready - or the one symbol posted from the rail. The desk never warms data
+    /// itself; it queues the request and shows the service's answer.
+    /// </summary>
+    public async Task<IActionResult> OnPostPrepareAsync(CancellationToken cancellationToken)
+    {
+        await LoadAsync(cancellationToken);
+        if (!Preparation.Available)
         {
-            id = wishlistId,
-            source = Source,
-            strategyId = StrategyId,
-            ticker = Ticker,
-            env = Env,
-            screenerScopeName = ScreenerScopeName,
-            screenerQuery = ScreenerQuery
-        });
+            ErrorMessage = Preparation.Error;
+            return Page();
+        }
+
+        IReadOnlyList<string> tickers = String.IsNullOrWhiteSpace(PrepareTicker)
+            ? Preparation.NeedingPreparation
+            : Universe.Tickers.Contains(PrepareTicker.Trim())
+                ? [PrepareTicker.Trim().ToUpperInvariant()]
+                : [];
+        if (!String.IsNullOrWhiteSpace(PrepareTicker) && tickers.Count == 0)
+        {
+            ErrorMessage = $"{PrepareTicker.Trim().ToUpperInvariant()} is not in this view.";
+            return Page();
+        }
+
+        try
+        {
+            StatusMessage = await preparation.PrepareAsync(tickers, Universe.Label, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or HttpRequestException or TaskCanceledException)
+        {
+            ErrorMessage = $"Preparation request failed: {exception.Message}";
+            return Page();
+        }
+
+        return RedirectToPage("/TradeDesk", RouteWith());
     }
 
     /// <summary>
@@ -310,19 +378,45 @@ public sealed class TradeDeskModel : PageModel
         SelectedPaperConfigPath = ResolvePaperConfigPath();
         RankConfig = ResolveRankConfig();
         Wishlists = await repository.ListAsync(cancellationToken);
+        Scope = IsScreenerScope ? "screener" : "lists";
         SelectedWishlist = Id.HasValue
             ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == Id.Value)
-            : Wishlists.FirstOrDefault(wishlist => wishlist.IsDefault) ?? Wishlists.FirstOrDefault();
+            : null;
         Id = SelectedWishlist?.Id;
+        TargetWishlist = (TargetId.HasValue ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == TargetId.Value) : null)
+            ?? Wishlists.FirstOrDefault(wishlist => wishlist.IsDefault)
+            ?? Wishlists.FirstOrDefault();
+        TargetId = TargetWishlist?.Id;
+        ScreenerPresets = await screenerPresets.ListAsync(ScreenerScope.Swing, cancellationToken);
+
+        if (IsScreenerScope)
+        {
+            // The screener result is the universe. It is diffed against the target
+            // wishlist so the band can say how many hits are new to that list.
+            ScreenerResult = await ResolveScreenerResultAsync(cancellationToken);
+            Universe = ScreenerResult is { Succeeded: true } hits
+                ? DeskUniverse.ForScreener(hits.Name, hits.Symbols, Wishlists)
+                : DeskUniverse.Empty with { Kind = DeskUniverseKind.Screener, Label = ScreenerDisplayName };
+        }
+        else
+        {
+            Universe = SelectedWishlist is null
+                ? DeskUniverse.ForAllWishlists(Wishlists)
+                : DeskUniverse.ForWishlist(SelectedWishlist);
+        }
 
         var quoteFeed = ResolveQuoteFeed();
         var snapshot = await deskService.BuildAsync(
-            SelectedWishlist,
+            Universe,
             quoteFeed,
             TimeSpan.FromMinutes(20),
             TimeSpan.FromHours(4),
             cancellationToken);
+        var preparationTask = preparation.GetAsync(
+            snapshot.Rows.Select(row => row.Ticker).ToArray(),
+            cancellationToken);
 
+        Portfolio = snapshot.Portfolio;
         RunningTrades = snapshot.RunningTrades;
         TotalPl = snapshot.TotalPl;
         RecentSignals = snapshot.RecentSignals;
@@ -342,12 +436,10 @@ public sealed class TradeDeskModel : PageModel
             .ToArray();
 
         PredictionHorizon = String.IsNullOrWhiteSpace(PredictionHorizon) ? "auto" : PredictionHorizon.Trim().ToLowerInvariant();
-        ScreenerPresets = await screenerPresets.ListAsync(ScreenerScope.Swing, cancellationToken);
 
-        // The screener result is resolved for the current swing universe.
-        ScreenerResult = await ResolveScreenerResultAsync(cancellationToken);
-        var screenerSymbols = ScreenerResult?.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase)
-            ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var screenerSymbols = IsScreenerScope && ScreenerResult is { Succeeded: true } screened
+            ? screened.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var earningsSymbols = snapshot.Rows
             .Where(row => row.LatestSignal?.SignalType.Contains("earnings", StringComparison.OrdinalIgnoreCase) == true)
             .Select(row => row.Ticker)
@@ -360,8 +452,9 @@ public sealed class TradeDeskModel : PageModel
             PredictionHorizon,
             screenerSymbols,
             earningsSymbols,
-            SelectedWishlist is null ? "wishlist:none" : $"wishlist:{SelectedWishlist.Name}",
+            UniverseSource,
             cancellationToken);
+        Preparation = await preparationTask;
 
         AllRows = ranked.Rows;
         Rows = SortRows(AllRows.Where(MatchesFilter).Where(MatchesQuery)).ToArray();
@@ -396,7 +489,60 @@ public sealed class TradeDeskModel : PageModel
             return null;
         }
 
-        return await screener.PreviewAsync(ScreenerQuery, ScreenerScope.Swing, Id, cancellationToken);
+        return await screener.PreviewAsync(ScreenerQuery, ScreenerScope.Swing, TargetId, cancellationToken);
+    }
+
+    /// <summary>Recorded on the ranking run so an audit can tell which universe was scored.</summary>
+    private string UniverseSource => Universe.Kind switch
+    {
+        DeskUniverseKind.AllWishlists => "wishlists:all",
+        DeskUniverseKind.Screener => $"screener:{Universe.Label}",
+        _ => $"wishlist:{Universe.Label}"
+    };
+
+    /// <summary>Display name of the current screener input: the catalogue label, or the input itself.</summary>
+    public string ScreenerDisplayName => FinvizSignalCatalog.TryResolveInput(ScreenerQuery, out var signal)
+        ? $"Finviz · {signal.Label}"
+        : ScreenerResult?.Name ?? ScreenerQuery ?? "No screener";
+
+    /// <summary>Whether the current screener input is one of the pickable entries rather than a custom query.</summary>
+    public bool ScreenerIsFromPicker =>
+        FinvizSignalCatalog.TryResolveInput(ScreenerQuery, out _) ||
+        ScreenerPresets.Any(preset => String.Equals(preset.Name, ScreenerQuery?.Trim(), StringComparison.Ordinal));
+
+    /// <summary>
+    /// The current view state as route values, with <paramref name="overrides"/>
+    /// applied. Every link and redirect on the desk goes through this, so no
+    /// control can silently drop the scope, sort or filter the operator chose.
+    /// Null or empty values are left out of the URL.
+    /// </summary>
+    public Dictionary<string, string> RouteWith(params (string Key, string? Value)[] overrides)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["env"] = Env,
+            ["scope"] = IsScreenerScope ? "screener" : null,
+            ["id"] = IsScreenerScope ? null : Id?.ToString(),
+            ["screenerQuery"] = IsScreenerScope ? ScreenerQuery : null,
+            ["targetId"] = IsScreenerScope ? TargetId?.ToString() : null,
+            ["source"] = String.Equals(Source, "all", StringComparison.OrdinalIgnoreCase) ? null : Source,
+            ["strategyId"] = StrategyId,
+            ["ticker"] = Ticker,
+            ["search"] = Search,
+            ["minPrice"] = MinPrice?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxPrice"] = MaxPrice?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxSpreadBps"] = MaxSpreadBps?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["sort"] = Sort,
+            ["dir"] = Dir
+        };
+        foreach (var (key, value) in overrides)
+        {
+            values[key] = value;
+        }
+
+        return values
+            .Where(pair => !String.IsNullOrWhiteSpace(pair.Value))
+            .ToDictionary(pair => pair.Key, pair => pair.Value!, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -451,7 +597,9 @@ public sealed class TradeDeskModel : PageModel
         new("eligibility", "Setup watch", "eligibility-column", "Non-authorizing technical observation and its reason.", false, true),
         new("predictor", "Predictor", "predictor-column", "Model signal, probability and horizon.", false, true),
         new("sync", "Sync", "sync-column", "Whether the verdict and the model agree.", false, true),
-        new("pl", "Position", "position-column", "Tracked position and open P/L.", false, true, true),
+        new("prep", "Prep", "prep-column", "Warmup preparation state: candles, indicators and catalysts cached.", true, true),
+        new("pl", "Position", "position-column", "Quantity at average entry, cost and market value.", false, true, true),
+        new("pnl", "P/L", "pnl-column", "Open P/L in money and percent of cost.", false, true, true),
         new("news", "Latest news", "news-column", "Most recent story matched to the symbol.", true, false)
     ];
 
@@ -536,7 +684,9 @@ public sealed class TradeDeskModel : PageModel
             "spread" => Order(rows, row => row.Row.SpreadBps ?? Decimal.MaxValue, descending),
             "rvol" => Order(rows, row => row.Evidence.Swing?.VolumeZ20 ?? Decimal.MinValue, descending),
             "eligibility" => Order(rows, row => row.Row.HasSignal ? 1m : 0m, descending),
-            "pl" => Order(rows, row => row.Row.Trade?.UnrealizedPl ?? Decimal.MinValue, descending),
+            "pl" => Order(rows, row => row.Row.PositionValue ?? Decimal.MinValue, descending),
+            "pnl" => Order(rows, row => row.Row.Trade?.UnrealizedPl ?? Decimal.MinValue, descending),
+            "prep" => Order(rows, row => (int)Preparation.For(row.Ticker).State, descending),
             "news" => Order(rows, row => row.Row.NewsTimestamp ?? DateTimeOffset.MinValue, descending),
             "ticker" => descending
                 ? rows.OrderByDescending(row => row.Ticker, StringComparer.OrdinalIgnoreCase)
@@ -559,12 +709,13 @@ public sealed class TradeDeskModel : PageModel
 
     private bool MatchesFilter(RankedDeskRow row) => MatchesFilter(row, Source);
 
-    private static bool MatchesFilter(RankedDeskRow row, string? source) => source?.ToLowerInvariant() switch
+    private bool MatchesFilter(RankedDeskRow row, string? source) => source?.ToLowerInvariant() switch
     {
         "trade" => row.Row.HasTrade,
         // Predictor disagreement is advisory and cannot hide observed technical setups.
         "signal" => row.Row.HasSignal,
-        "screener" => row.FromScreener,
+        "news" => row.Row.HasNews,
+        "prep" => Preparation.For(row.Ticker).NeedsPreparation,
         "disagree" => row.Agreement == AgreementFlag.Conflict,
         _ => true
     };
