@@ -1,6 +1,9 @@
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Finviz;
 using TradingFlow.Web.Models;
+using TradingFlow.Web.Pages;
+using TradingFlow.Web.Pages.Shared;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Wishlists;
 
@@ -78,6 +81,52 @@ public sealed class DeskUniverseTests
         Assert.Contains("TSLA", all.Tickers);
         Assert.DoesNotContain("TSLA", single.Tickers);
         Assert.DoesNotContain("TSLA", screener.Tickers);
+    }
+
+    [Fact]
+    public void ForSymbols_AnnotatesListsAndNeverAddsHoldings()
+    {
+        var swing = List("Swing", ("MU", "Micron", true));
+
+        var universe = DeskUniverse.ForSymbols("Orders", ["mu", "msft"], [swing]).WithHeldPositions(["TSLA"]);
+
+        Assert.Equal(DeskUniverseKind.Symbols, universe.Kind);
+        Assert.False(universe.IncludesHeldPositions);
+        Assert.Equal(["MU", "MSFT"], universe.Members.Select(member => member.Ticker));
+        Assert.Equal(["Swing"], universe.Members[0].Lists);
+        Assert.Empty(universe.Members[1].Lists);
+    }
+
+    [Fact]
+    public void TicketDefaults_FollowStrategyExitsOrFallBackAndHonourAReplacedLimit()
+    {
+        var fallback = DeskTicketDefaults.For(ask: 100m, mid: 99.5m, exits: null);
+        Assert.Equal(new DeskTicketDefaults(100m, 96.50m, 107.00m), fallback);
+
+        var fromMid = DeskTicketDefaults.For(ask: null, mid: 50m, exits: null);
+        Assert.Equal(50m, fromMid.Limit);
+
+        var replaced = DeskTicketDefaults.For(ask: 100m, mid: 99.5m, exits: null, limitOverride: 80m);
+        Assert.Equal(new DeskTicketDefaults(80m, 77.20m, 85.60m), replaced);
+
+        var exits = new ExitRules(2m, 3m, 48m, false, 0m, 0m, false, false, false, 0);
+        var strategy = DeskTicketDefaults.For(ask: 100m, mid: 99.5m, exits);
+        Assert.Equal(new DeskTicketDefaults(100m, 98.00m, 106.00m), strategy);
+
+        var noQuote = DeskTicketDefaults.For(ask: null, mid: null, exits: null, limitOverride: 0m);
+        Assert.Equal(new DeskTicketDefaults(0m, 0m, 0m), noQuote);
+    }
+
+    [Theory]
+    [InlineData(" msft ", "MSFT")]
+    [InlineData("BRK.B", "BRK.B")]
+    [InlineData("", null)]
+    [InlineData(null, null)]
+    [InlineData("MSFT,AAPL", null)]
+    [InlineData("<script>", null)]
+    public void OrdersTicketSymbol_AcceptsExactlyOneValidSymbol(string? input, string? expected)
+    {
+        Assert.Equal(expected, OrdersModel.NormalizeSymbol(input));
     }
 
     [Fact]

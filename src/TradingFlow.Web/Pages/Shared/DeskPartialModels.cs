@@ -1,4 +1,6 @@
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Pages.Shared;
 
@@ -25,12 +27,13 @@ public sealed record DeskEvidenceModel(RankedDeskRow Row, bool Compact)
 /// The inline order ticket.
 ///
 /// It lives on the desk so a reviewed order does not require leaving the
-/// evidence behind. Stage one previews and the server re-checks quote, spread,
+/// evidence behind, and on the Orders screen so another order can be placed
+/// beside the journal. Stage one previews and the server re-checks quote, spread,
 /// session, account, exposure and duplicates; stage two confirms against the
 /// token that preview issued. The checklist renders that response - it is a
 /// preview of what the server checked, never a substitute for it.
 /// </summary>
-/// <param name="Row">The selected ranked row.</param>
+/// <param name="Row">The selected desk row: quote, position and identity. No ranking is needed to trade.</param>
 /// <param name="Env">Environment slug carried through the post.</param>
 /// <param name="Horizon">Ticket horizon, following the desk's own horizon.</param>
 /// <param name="DefaultLimit">Ask on a buy, bid on a sell.</param>
@@ -43,7 +46,7 @@ public sealed record DeskEvidenceModel(RankedDeskRow Row, bool Compact)
 /// <param name="Preview">Server preview, or null before one has been requested.</param>
 /// <param name="Confirmation">Accepted order, or null.</param>
 public sealed record DeskTicketModel(
-    RankedDeskRow Row,
+    WishlistDeskRow Row,
     string? Env,
     string Horizon,
     decimal DefaultLimit,
@@ -60,6 +63,13 @@ public sealed record DeskTicketModel(
     /// on no wishlist would drop out of the view mid-ticket.
     /// </summary>
     public IDictionary<string, string> ViewRoute { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
+    /// Side the ticket opens on before any preview. Replace on the Orders screen
+    /// opens a sell ticket for a sell order; it only takes effect where a tracked
+    /// position exists, because SELL is not offered otherwise.
+    /// </summary>
+    public string DefaultSide { get; init; } = "buy";
 
     /// <summary>
     /// The six checks the ticket states, mirroring what the server checks at
@@ -101,4 +111,67 @@ public sealed record DeskTicketModel(
         Checks.Where(check => !check.Passed).Select(check => check.Label).ToArray();
 
     public bool IsBlocked => Preview is not null && !Preview.CanSubmit;
+}
+
+/// <summary>
+/// Inline ticket fields, posted by both the desk and the Orders screen. Maps
+/// one-to-one onto <see cref="ManualOrderDraft"/>.
+/// </summary>
+public sealed class DeskTicketForm
+{
+    public string Ticker { get; set; } = String.Empty;
+    public string Side { get; set; } = "buy";
+    public decimal Quantity { get; set; } = 1m;
+    public decimal LimitPrice { get; set; }
+    public decimal? StopLossPrice { get; set; }
+    public decimal? TakeProfitPrice { get; set; }
+    public string Horizon { get; set; } = "swing";
+    public string OrderType { get; set; } = "limit";
+    public decimal? TriggerPrice { get; set; }
+    public string TimeInForce { get; set; } = "day";
+    public bool AllowExtendedHoursTrading { get; set; }
+
+    public bool IsExit => String.Equals(Side, "sell", StringComparison.OrdinalIgnoreCase);
+
+    public ManualOrderDraft ToDraft() => new(
+        Ticker.Trim().ToUpperInvariant(),
+        IsExit ? "sell" : "buy",
+        Quantity,
+        LimitPrice,
+        // An exit carries no bracket: the protection belonged to the entry.
+        IsExit ? null : StopLossPrice,
+        IsExit ? null : TakeProfitPrice,
+        "swing",
+        AllowExtendedHoursTrading,
+        "sip",
+        IsExit ? OrderType : "limit",
+        TriggerPrice,
+        TimeInForce);
+}
+
+/// <summary>
+/// Placeholder prices a ticket opens with before the operator edits them.
+/// </summary>
+/// <remarks>
+/// Placeholders only. With a strategy, the stop and target follow its exit rules,
+/// so a ticket opened against a strategy inherits that strategy's risk shape
+/// rather than a number invented by the screen. Without one they fall back to a
+/// 3.5% stop and a 7% target. The server re-checks whatever is posted.
+/// </remarks>
+public sealed record DeskTicketDefaults(decimal Limit, decimal Stop, decimal Target)
+{
+    /// <param name="ask">Inside ask, used as the limit when present.</param>
+    /// <param name="mid">Inside mid, the fallback limit.</param>
+    /// <param name="exits">Exit rules of the strategy in context, or null.</param>
+    /// <param name="limitOverride">A limit carried in, such as the order being replaced.</param>
+    public static DeskTicketDefaults For(decimal? ask, decimal? mid, ExitRules? exits, decimal? limitOverride = null)
+    {
+        var limit = limitOverride is > 0m ? limitOverride.Value : ask ?? mid ?? 0m;
+        var stopFraction = exits is null ? 0.035m : Math.Clamp(exits.StopAtrMultiple * 0.01m, 0.005m, 0.20m);
+        var targetFraction = exits is null ? 0.07m : stopFraction * Math.Max(1m, exits.TargetRMultiple);
+        return new DeskTicketDefaults(
+            limit,
+            Math.Round(limit * (1m - stopFraction), 2),
+            Math.Round(limit * (1m + targetFraction), 2));
+    }
 }

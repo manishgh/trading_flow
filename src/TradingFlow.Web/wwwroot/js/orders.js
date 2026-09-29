@@ -21,7 +21,7 @@
         item.limitPrice != null ? `Limit ${money(item.limitPrice)}` :
         item.stopPrice != null ? `Stop ${money(item.stopPrice)}` : "Market";
     const columns = [
-        ["updated", "Updated", ""], ["symbol", "Symbol", ""], ["status", "Status", ""],
+        ["updated", "Updated", ""], ["symbol", "Symbol", ""], [null, "Last", "num"], ["status", "Status", ""],
         ["requested", "Requested", "num"], ["filled", "Filled", "num"],
         [null, "Order", ""], [null, "Price", ""], [null, "Strategy", ""],
         [null, "Client order", ""], [null, "Actions", "visually-hidden"]
@@ -42,6 +42,19 @@
         status.classList.toggle("status-banner", state === "stale");
         status.classList.toggle("error", state === "stale");
         status.classList.toggle("muted", state !== "stale");
+    }
+
+    /* The same page with the rail ticket opened on a symbol. Filter, sort and
+       environment ride along; a replace adds the side and limit to prefill. */
+    function ticketUrl(symbol, side, limitPrice) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("ticker", symbol);
+        url.searchParams.delete("side");
+        url.searchParams.delete("limitPrice");
+        url.searchParams.delete("handler");
+        if (side) url.searchParams.set("side", String(side).toLowerCase());
+        if (limitPrice != null) url.searchParams.set("limitPrice", limitPrice);
+        return `${url.pathname}${url.search}`;
     }
 
     function addHidden(form, name, value) {
@@ -72,14 +85,8 @@
         cell.append(form);
 
         const replace = append(cell, "a", "Replace", "btn btn-secondary btn-sm");
-        const url = new URL("/OrderTicket", window.location.origin);
-        url.searchParams.set("ticker", item.symbol);
-        url.searchParams.set("side", String(item.side || "buy").toLowerCase());
-        if (item.limitPrice != null) url.searchParams.set("limitPrice", item.limitPrice);
-        const environment = new URLSearchParams(window.location.search).get("env");
-        if (environment) url.searchParams.set("env", environment);
-        replace.href = `${url.pathname}${url.search}`;
-        replace.title = "Replace opens a fresh reviewed ticket; it does not amend this order in place.";
+        replace.href = ticketUrl(item.symbol, item.side || "buy", item.limitPrice);
+        replace.title = "Replace opens a fresh reviewed ticket beside the journal; it does not amend this order in place.";
     }
 
     function updateRow(row, item) {
@@ -113,12 +120,17 @@
     function createRow(item) {
         const row = document.createElement("tr");
         row.dataset.clientOrderId = item.clientOrderId;
+        row.dataset.quoteRow = String(item.symbol || "").toUpperCase();
         const updated = append(row, "td");
         append(updated, "time", "").dataset.orderTime = "";
         append(updated, "span", "", "cell-sub").dataset.orderLocalTime = "";
         const symbol = append(row, "td");
-        append(symbol, "strong", item.symbol);
+        const symbolLink = append(symbol, "a", null, "order-symbol");
+        symbolLink.href = ticketUrl(item.symbol);
+        symbolLink.setAttribute("aria-label", `Open ticket for ${item.symbol}`);
+        append(symbolLink, "strong", item.symbol);
         append(symbol, "span", String(item.side || "").toUpperCase(), "cell-sub");
+        append(append(row, "td", null, "num"), "span", "—").dataset.quoteField = "mid";
         append(append(row, "td"), "span", "").dataset.orderState = "";
         append(row, "td", quantity(item.requestedQuantity), "num");
         append(row, "td", "", "num").dataset.orderFilled = "";

@@ -98,6 +98,9 @@ test.describe("incremental live-list membership", () => {
     await page.addScriptTag({ path: path.join(webRoot, "orders.js") });
 
     await expect(page.locator('[data-client-order-id="order-a"]')).toContainText("AAPL");
+    // A row added in place links into the rail ticket and carries the live Last cell.
+    await expect(page.locator('[data-client-order-id="order-a"] a.order-symbol')).toHaveAttribute("href", /\/Orders\?ticker=AAPL/);
+    await expect(page.locator('[data-quote-row="AAPL"] [data-quote-field="mid"]')).toHaveCount(1);
     payload = [order("order-b", "MSFT")];
 
     await preserveFocusAndScroll(page, async () => {

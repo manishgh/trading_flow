@@ -1,9 +1,17 @@
 @page
 @model TradingFlow.Web.Pages.OrdersModel
 @using TradingFlow.Domain.Orders
+@using TradingFlow.Web.Pages.Shared
+@using TradingFlow.Web.Services.Wishlists
 @{
     ViewData["Title"] = "Orders";
     ViewData["MainClass"] = "shell-flush orders-page";
+    var status = Model.OperationalStatus;
+    var portfolio = Model.Portfolio;
+    var selected = Model.SelectedRow;
+    var streamTickers = Model.StreamSymbols
+        .Concat(selected is null ? [] : [selected.Ticker.ToUpperInvariant()])
+        .Distinct(StringComparer.OrdinalIgnoreCase);
 
     static string StateLabel(OrderState state) => state switch
     {
@@ -22,6 +30,7 @@
     {
         ("updated", "Updated", null),
         ("symbol", "Symbol", null),
+        (null, "Last", "num"),
         ("status", "Status", null),
         ("requested", "Requested", "num"),
         ("filled", "Filled", "num"),
@@ -33,6 +42,19 @@
 }
 
 @functions {
+    static string Money(decimal? value) => value is null ? "unknown" : value.Value.ToString("C2");
+
+    static string SignedClass(decimal? value) =>
+        value is null ? "value-signed flat" : value > 0 ? "value-signed up" : value < 0 ? "value-signed down" : "value-signed flat";
+
+    static string SignedMoney(decimal? value) => value is null
+        ? "—"
+        : (value > 0 ? "+" : value < 0 ? "−" : String.Empty) + Math.Abs(value.Value).ToString("C2");
+
+    static string SignedPercent(decimal? value) => value is null
+        ? "—"
+        : (value > 0 ? "+" : value < 0 ? "−" : String.Empty) + Math.Abs(value.Value).ToString("0.00") + "%";
+
     // Working states are the ones that still need a decision, so they carry the
     // accent. Terminal states are neutral or outlined - nothing to act on.
     static string StateTagClass(OrderState state) => state switch
@@ -58,11 +80,15 @@
         <span class="eyebrow">Broker lifecycle</span>
         <h1>Orders</h1>
         <p class="standfirst">
-            Durable order state from intent through terminal state. Replace is cancel plus a fresh
-            reviewed ticket, so an amended order is re-checked against quote, spread and session.
+            Every order from intent through terminal state, with the desk's reviewed ticket beside it.
+            Replace is cancel plus a fresh reviewed ticket, so an amended order is re-checked against
+            quote, spread and session.
         </p>
     </div>
-    <a class="btn btn-secondary btn-md" asp-page="/RunningTrades" asp-route-env="@Model.Env">Open positions</a>
+    <div class="orders-head-actions">
+        <a class="btn btn-secondary btn-md" asp-page="/TradeDesk" asp-route-env="@Model.Env">Open the desk</a>
+        <a class="btn btn-secondary btn-md" asp-page="/RunningTrades" asp-route-env="@Model.Env">Open positions</a>
+    </div>
 </div>
 
 @if (!String.IsNullOrWhiteSpace(Model.StatusMessage))
@@ -75,6 +101,32 @@
 {
     <div class="status-banner error" role="alert" tabindex="-1" data-orders-banner>@Model.ErrorMessage</div>
 }
+
+@* The desk's account cells, so an order is placed knowing the session, the entry
+   gate, the book and the buying power. Separate from the order counts, which
+   orders.js keeps current in place. *@
+<section class="metric-strip orders-account" aria-label="Session and account">
+    <div>
+        <span class="micro-label">Market session</span>
+        <span class="metric-value" title="@status.MarketSessionDetail">@status.MarketSession</span>
+    </div>
+    <div class="@(status.AdmissionStatus == "allowed" ? null : "is-attention")">
+        <span class="micro-label">Entry gate</span>
+        <span class="metric-value" title="@status.AdmissionDetail">@status.AdmissionStatus</span>
+    </div>
+    <div data-orders-portfolio>
+        <span class="micro-label">Portfolio · @portfolio.Positions open</span>
+        <span class="metric-value">@Money(portfolio.MarketValue)</span>
+        <span class="metric-detail">
+            cost @Money(portfolio.CostBasis) ·
+            <span class="@SignedClass(portfolio.UnrealizedPl)">@SignedMoney(portfolio.UnrealizedPl) (@SignedPercent(portfolio.UnrealizedPlPct))</span>
+        </span>
+    </div>
+    <div>
+        <span class="micro-label">Buying power</span>
+        <span class="metric-value @(status.BuyingPower is null ? "unknown" : null)" title="@status.AccountDetail">@Money(status.BuyingPower)</span>
+    </div>
+</section>
 
 <section class="metric-strip metric-strip-lg orders-summary" data-orders-page data-filter="@Model.Filter"
          aria-label="Order summary">
@@ -100,7 +152,32 @@
     </div>
 </section>
 
+<div class="orders-shell" data-orders-stream-tickers="@String.Join(",", streamTickers)">
 <div class="orders-body">
+    @* Place another order: any symbol opens the rail ticket. A plain GET, so the
+       selection survives reload like every other view state here. A locked
+       environment offers no way to start an order at all. *@
+    @if (Model.EnvironmentState.IsEnabled)
+    {
+    <form method="get" class="orders-new-order" role="search" aria-label="New order">
+        <label for="OrdersNewTicker">New order</label>
+        <input class="input input-mono" id="OrdersNewTicker" name="ticker" type="text" list="OrdersSymbolChoices"
+               value="@Model.Ticker" autocomplete="off" autocapitalize="characters" spellcheck="false"
+               placeholder="Symbol, e.g. MSFT" />
+        <datalist id="OrdersSymbolChoices">
+            @foreach (var symbol in Model.SymbolChoices)
+            {
+                <option value="@symbol"></option>
+            }
+        </datalist>
+        <input type="hidden" name="filter" value="@(Model.Filter == "all" ? null : Model.Filter)" />
+        <input type="hidden" name="sort" value="@Model.Sort" />
+        <input type="hidden" name="dir" value="@Model.Dir" />
+        <input type="hidden" name="env" value="@Model.Env" />
+        <button class="btn btn-primary btn-md" type="submit">Open ticket</button>
+    </form>
+    }
+
     <div class="orders-controls">
         <nav class="tab-strip" aria-label="Order status filters">
             @foreach (var (key, label) in TradingFlow.Web.Pages.OrdersModel.Filters)
@@ -108,16 +185,14 @@
                 var active = Model.Filter == key;
                 @* Tabs carry the sort state so narrowing the status never silently
                    discards the column the operator chose to order by. *@
-                <a asp-page="/Orders" asp-route-filter="@key"
-                   asp-route-sort="@Model.Sort"
-                   asp-route-dir="@Model.Dir"
-                   asp-route-env="@Model.Env"
+                <a asp-page="/Orders" asp-all-route-data='Model.RouteWith(("filter", key))'
                    aria-current="@(active ? "page" : null)">@label</a>
             }
         </nav>
         <p id="OrdersConnection" class="note" role="status" aria-live="polite" data-state="live">
             Latest persisted state · checking every 10 s
         </p>
+        <p id="OrdersQuoteState" class="note" data-state="idle">@(Model.StreamSymbols.Count == 0 ? "No working order to quote" : "Quotes connecting")</p>
     </div>
 
     @if (Model.Items.Count == 0)
@@ -127,9 +202,8 @@
         </p>
         @if (Model.EmptyStateOffersAllFilter)
         {
-            <a class="btn btn-secondary btn-md orders-empty-action" asp-page="/Orders" asp-route-filter="all"
-               asp-route-sort="@Model.Sort" asp-route-dir="@Model.Dir"
-               asp-route-env="@Model.Env">Show all orders</a>
+            <a class="btn btn-secondary btn-md orders-empty-action" asp-page="/Orders"
+               asp-all-route-data='Model.RouteWith(("filter", null))'>Show all orders</a>
         }
         else
         {
@@ -153,10 +227,7 @@
                                 {
                                     <a class="sort-header"
                                        asp-page="/Orders"
-                                       asp-route-filter="@Model.Filter"
-                                       asp-route-env="@Model.Env"
-                                       asp-route-sort="@column.Key"
-                                       asp-route-dir="@Model.NextDirectionFor(column.Key)">@column.Label</a>
+                                       asp-all-route-data='Model.RouteWith(("sort", column.Key), ("dir", Model.NextDirectionFor(column.Key)))'>@column.Label</a>
                                 }
                             </th>
                         }
@@ -166,7 +237,9 @@
                 <tbody data-orders-body>
                     @foreach (var item in Model.Items)
                     {
-                        <tr data-client-order-id="@item.ClientOrderId">
+                        var isSelected = selected?.Ticker.Equals(item.Symbol, StringComparison.OrdinalIgnoreCase) == true;
+                        <tr data-client-order-id="@item.ClientOrderId" data-quote-row="@item.Symbol.ToUpperInvariant()"
+                            aria-selected="@(isSelected ? "true" : null)">
                             <td>
                                 <time data-order-time datetime="@item.UpdatedAtUtc.ToUniversalTime().ToString("O")">
                                     @item.UpdatedAtUtc.ToUniversalTime().ToString("dd MMM HH:mm:ss") UTC
@@ -174,9 +247,14 @@
                                 <span class="cell-sub" data-order-local-time></span>
                             </td>
                             <td>
-                                <strong>@item.Symbol</strong>
+                                @* The symbol opens the rail ticket on it: the journal is where
+                                   the next order for a name usually starts. *@
+                                <a class="order-symbol" asp-page="/Orders"
+                                   asp-all-route-data='Model.RouteWith(("ticker", item.Symbol), ("side", null), ("limitPrice", null))'
+                                   aria-label="Open ticket for @item.Symbol"><strong>@item.Symbol</strong></a>
                                 <span class="cell-sub">@item.Side.ToUpperInvariant()</span>
                             </td>
+                            <td class="num"><span data-quote-field="mid">—</span></td>
                             <td><span class="@StateTagClass(item.State)" data-order-state>@StateLabel(item.State)</span></td>
                             <td class="num">@item.RequestedQuantity.ToString("0.####")</td>
                             <td class="num @FilledClass(item)" data-order-filled>@((item.FilledQuantity ?? 0m).ToString("0.####"))</td>
@@ -197,18 +275,16 @@
                                         <input type="hidden" name="Filter" value="@Model.Filter" />
                                         <input type="hidden" name="Sort" value="@Model.Sort" />
                                         <input type="hidden" name="Dir" value="@Model.Dir" />
+                                        <input type="hidden" name="Ticker" value="@Model.Ticker" />
                                         <button class="btn btn-danger btn-sm" type="submit"
                                                 data-confirm="Cancel the working @item.Symbol order? The broker may still fill it before the cancel is acknowledged.">Cancel</button>
                                     </form>
                                     @* Replace is cancel plus a fresh reviewed ticket, so an amended
                                        order is re-checked against quote, spread, and session. *@
                                     <a class="btn btn-secondary btn-sm"
-                                       asp-page="/OrderTicket"
-                                       asp-route-ticker="@item.Symbol"
-                                       asp-route-side="@item.Side.ToLowerInvariant()"
-                                       asp-route-limitPrice="@item.LimitPrice"
-                                       asp-route-env="@Model.Env"
-                                       title="Replace opens a fresh reviewed ticket; it does not amend this order in place.">Replace</a>
+                                       asp-page="/Orders"
+                                       asp-all-route-data='Model.RouteWith(("ticker", item.Symbol), ("side", item.Side.ToLowerInvariant()), ("limitPrice", item.LimitPrice?.ToString(System.Globalization.CultureInfo.InvariantCulture)))'
+                                       title="Replace opens a fresh reviewed ticket beside the journal; it does not amend this order in place.">Replace</a>
                                 }
                                 else
                                 {
@@ -229,6 +305,105 @@
     </p>
 </div>
 
+@* The desk's rail, reduced to what placing an order needs: the symbol's quote,
+   its position and lists, its recent orders, and the same two-stage reviewed
+   ticket. The predictor and technical evidence stay on the desk. *@
+<aside class="desk-rail orders-rail" aria-label="Order ticket">
+    @if (!Model.EnvironmentState.IsEnabled)
+    {
+        <section class="desk-rail-block">
+            <p class="empty-state">@Model.EnvironmentState.LockReason</p>
+        </section>
+    }
+    else if (selected is null)
+    {
+        <section class="desk-rail-block">
+            <p class="empty-state">
+                Choose a symbol in the journal, or type one under New order, to open a reviewed ticket.
+                Replace opens the ticket prefilled from that order.
+            </p>
+        </section>
+    }
+    else
+    {
+        var row = selected;
+        <section class="desk-rail-block desk-rail-symbol" data-selected-symbol="@row.Ticker.ToUpperInvariant()">
+            <div class="desk-rail-identity">
+                <div>
+                    <span class="eyebrow">Ticket symbol</span>
+                    <strong class="desk-rail-ticker">@row.Ticker</strong>
+                    <span class="desk-rail-name">@row.DisplayName</span>
+                </div>
+                <div class="desk-rail-price">
+                    <strong data-selected-quote="mid">@row.Quote.DisplayPrice</strong>
+                </div>
+            </div>
+            <div class="cell-strip">
+                <div><span class="cell-label">Bid</span><span class="cell-value" data-selected-quote="bid">@row.Quote.DisplayBid</span></div>
+                <div><span class="cell-label">Ask</span><span class="cell-value" data-selected-quote="ask">@row.Quote.DisplayAsk</span></div>
+                <div><span class="cell-label">Spread</span><span class="cell-value">@(row.SpreadBps is null ? "—" : row.SpreadBps.Value.ToString("0.0") + " bps")</span></div>
+            </div>
+            <div class="desk-rail-membership">
+                <span class="cell-label">Lists</span>
+                <span>@(row.Lists.Count == 0 ? "Not on a list" : String.Join(", ", row.Lists))</span>
+            </div>
+            @if (row.Trade is { } held)
+            {
+                <div class="cell-strip desk-rail-position" aria-label="Position in @row.Ticker">
+                    <div><span class="cell-label">Shares</span><span class="cell-value">@held.Quantity.ToString("0.####")</span></div>
+                    <div><span class="cell-label">Avg entry</span><span class="cell-value">@held.EntryPrice.ToString("C2")</span></div>
+                    <div><span class="cell-label">Invested</span><span class="cell-value">@Money(row.PositionCost)</span></div>
+                    <div><span class="cell-label">Value</span><span class="cell-value">@Money(row.PositionValue)</span></div>
+                    <div><span class="cell-label">Open P/L</span><span class="cell-value @SignedClass(held.UnrealizedPl)">@SignedMoney(held.UnrealizedPl) · @SignedPercent(held.UnrealizedPlPct)</span></div>
+                </div>
+            }
+            else
+            {
+                <p class="note">No open position in @row.Ticker.</p>
+            }
+            <a class="btn btn-secondary btn-sm orders-rail-desk" asp-page="/TradeDesk"
+               asp-route-ticker="@row.Ticker" asp-route-env="@Model.Env">Evidence on the desk</a>
+        </section>
+
+        <section class="desk-rail-block orders-rail-history" aria-labelledby="OrdersSymbolHistory">
+            <h2 id="OrdersSymbolHistory" class="section-heading">Orders in @row.Ticker</h2>
+            @if (Model.SelectedOrders.Count == 0)
+            {
+                <p class="note">No order for @row.Ticker in the journal yet.</p>
+            }
+            else
+            {
+                <ul class="orders-rail-list">
+                    @foreach (var order in Model.SelectedOrders)
+                    {
+                        <li>
+                            <span>@order.Side.ToUpperInvariant() @order.RequestedQuantity.ToString("0.####") · @PriceSummary(order)</span>
+                            <span class="@StateTagClass(order.State)">@StateLabel(order.State)</span>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+
+        var defaults = Model.TicketDefaults;
+        var ticketRoute = Model.RouteWith();
+        var ticketHorizon = "swing";
+        <partial name="_DeskOrderTicket" model="new DeskTicketModel(
+            row,
+            Model.Env,
+            ticketHorizon,
+            defaults.Limit,
+            defaults.Stop,
+            defaults.Target,
+            row.Trade is not null,
+            Model.TicketPreview,
+            Model.TicketConfirmation) { ViewRoute = ticketRoute, DefaultSide = Model.TicketSide }" />
+    }
+</aside>
+</div>
+
 @section Scripts {
     <script src="~/js/orders.js" asp-append-version="true"></script>
+    <script type="module" src="~/js/orders-quotes.js" asp-append-version="true"></script>
+    <script src="~/js/desk-ticket.js" asp-append-version="true" defer></script>
 }

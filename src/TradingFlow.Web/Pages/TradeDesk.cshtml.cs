@@ -5,6 +5,7 @@ using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Finviz;
 using TradingFlow.Web.Models;
+using TradingFlow.Web.Pages.Shared;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Wishlists;
 
@@ -290,7 +291,7 @@ public sealed class TradeDeskModel : PageModel
     /// renders that response rather than recomputing it client-side.
     /// </summary>
     public async Task OnPostPreviewTicketAsync(
-        [FromForm] TicketForm ticket,
+        [FromForm] DeskTicketForm ticket,
         CancellationToken cancellationToken)
     {
         await LoadAsync(cancellationToken);
@@ -332,39 +333,6 @@ public sealed class TradeDeskModel : PageModel
         {
             ErrorMessage = exception.Message;
         }
-    }
-
-    /// <summary>Inline ticket fields. Maps one-to-one onto <see cref="ManualOrderDraft"/>.</summary>
-    public sealed class TicketForm
-    {
-        public string Ticker { get; set; } = String.Empty;
-        public string Side { get; set; } = "buy";
-        public decimal Quantity { get; set; } = 1m;
-        public decimal LimitPrice { get; set; }
-        public decimal? StopLossPrice { get; set; }
-        public decimal? TakeProfitPrice { get; set; }
-        public string Horizon { get; set; } = "swing";
-        public string OrderType { get; set; } = "limit";
-        public decimal? TriggerPrice { get; set; }
-        public string TimeInForce { get; set; } = "day";
-        public bool AllowExtendedHoursTrading { get; set; }
-
-        public bool IsExit => String.Equals(Side, "sell", StringComparison.OrdinalIgnoreCase);
-
-        public ManualOrderDraft ToDraft() => new(
-            Ticker.Trim().ToUpperInvariant(),
-            IsExit ? "sell" : "buy",
-            Quantity,
-            LimitPrice,
-            // An exit carries no bracket: the protection belonged to the entry.
-            IsExit ? null : StopLossPrice,
-            IsExit ? null : TakeProfitPrice,
-            "swing",
-            AllowExtendedHoursTrading,
-            "sip",
-            IsExit ? OrderType : "limit",
-            TriggerPrice,
-            TimeInForce);
     }
 
     private async Task LoadAsync(CancellationToken cancellationToken)

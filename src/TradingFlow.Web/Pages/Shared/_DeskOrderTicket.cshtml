@@ -10,14 +10,14 @@
 @using TradingFlow.Web.Pages.Shared
 @model TradingFlow.Web.Pages.Shared.DeskTicketModel
 @{
-    var row = Model.Row.Row;
+    var row = Model.Row;
     var preview = Model.Preview;
     var ticker = row.Ticker;
     var quantityDefault = preview?.Quantity ?? 1m;
     var limitDefault = preview?.LimitPrice ?? Model.DefaultLimit;
     var stopDefault = preview?.StopLossPrice ?? Model.DefaultStop;
     var targetDefault = preview?.TakeProfitPrice ?? Model.DefaultTarget;
-    var side = preview?.Side ?? "buy";
+    var side = preview?.Side ?? (Model.HasPosition ? Model.DefaultSide : "buy");
     var isExit = String.Equals(side, "sell", StringComparison.OrdinalIgnoreCase);
     var notional = preview?.Notional ?? quantityDefault * limitDefault;
     var riskPerShare = limitDefault - stopDefault;

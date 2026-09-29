@@ -1006,13 +1006,7 @@ static async Task<IReadOnlyDictionary<string, AlpacaLatestQuote>> GetLiveQuotesW
         StringComparer.OrdinalIgnoreCase);
 }
 
-static string ResolveDefaultQuoteFeed(ConfigCatalogService catalog)
-{
-    var selected = catalog.GetPaperConfigs()
-        .FirstOrDefault(config => config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
-        ?? catalog.GetPaperConfigs().FirstOrDefault();
-    return selected?.Config.Providers.Alpaca.DataFeed ?? "sip";
-}
+static string ResolveDefaultQuoteFeed(ConfigCatalogService catalog) => catalog.DefaultQuoteFeed();
 
 static void PrepareEventStream(HttpContext httpContext)
 {

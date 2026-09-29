@@ -37,7 +37,7 @@ test.describe("trading environment separation", () => {
   });
 
   test("a locked environment renders no order control anywhere in the document", async ({ page }) => {
-    for (const route of ["/TradeDesk?env=live", "/OrderTicket?env=live&ticker=AAPL"]) {
+    for (const route of ["/TradeDesk?env=live", "/OrderTicket?env=live&ticker=AAPL", "/Orders?env=live&ticker=AAPL"]) {
       await page.goto(route);
       // Fail closed: the controls are absent, not merely disabled. Scoped to the
       // page body - the shared chrome's sign-out form is not an order control,

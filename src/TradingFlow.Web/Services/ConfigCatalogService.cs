@@ -40,6 +40,19 @@ public sealed class ConfigCatalogService
     public IReadOnlyList<RunConfigSummary> GetBacktestConfigs() =>
         GetRunConfigs(paths.BacktestConfigsRoot);
 
+    /// <summary>
+    /// The quote feed of the default paper profile (<c>alpaca-paper.yaml</c>, else the
+    /// first profile), or <c>sip</c> when no profile names one. Screens that are not
+    /// reading against a chosen profile quote on this feed.
+    /// </summary>
+    public string DefaultQuoteFeed()
+    {
+        var configs = GetPaperConfigs();
+        var selected = configs.FirstOrDefault(config => config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
+            ?? configs.FirstOrDefault();
+        return selected?.Config.Providers.Alpaca.DataFeed ?? "sip";
+    }
+
     public IReadOnlyList<RunConfigSummary> GetPaperConfigs() =>
         GetRunConfigs(paths.PaperConfigsRoot);
 

@@ -13,7 +13,10 @@ public enum DeskUniverseKind
     Wishlist,
 
     /// <summary>The symbols a screener returned.</summary>
-    Screener
+    Screener,
+
+    /// <summary>An explicit symbol set, such as the symbol an Orders-screen ticket is open on.</summary>
+    Symbols
 }
 
 /// <summary>
@@ -97,6 +100,24 @@ public sealed record DeskUniverse(
     public static DeskUniverse ForScreener(
         string label,
         IEnumerable<string> symbols,
+        IEnumerable<Wishlist> wishlists) =>
+        ForExplicit(DeskUniverseKind.Screener, label, symbols, wishlists);
+
+    /// <summary>
+    /// An explicit symbol set, annotated with the wishlists that hold each symbol.
+    /// Used where the symbols come from the operator rather than from a list or a
+    /// screen - the Orders screen's ticket, for one.
+    /// </summary>
+    public static DeskUniverse ForSymbols(
+        string label,
+        IEnumerable<string> symbols,
+        IEnumerable<Wishlist> wishlists) =>
+        ForExplicit(DeskUniverseKind.Symbols, label, symbols, wishlists);
+
+    private static DeskUniverse ForExplicit(
+        DeskUniverseKind kind,
+        string label,
+        IEnumerable<string> symbols,
         IEnumerable<Wishlist> wishlists)
     {
         var index = Index(wishlists);
@@ -108,7 +129,7 @@ public sealed record DeskUniverse(
                 ? new DeskUniverseMember(ticker, known.Item, known.Lists)
                 : new DeskUniverseMember(ticker, Transient(ticker), []))
             .ToArray();
-        return new DeskUniverse(DeskUniverseKind.Screener, label, members, null);
+        return new DeskUniverse(kind, label, members, null);
     }
 
     /// <summary>

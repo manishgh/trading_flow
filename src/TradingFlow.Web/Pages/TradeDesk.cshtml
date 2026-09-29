@@ -809,31 +809,28 @@ else if (Model.IsScreenerScope)
                         <div><span class="cell-label">Open P/L</span><span class="cell-value @SignedClass(held.UnrealizedPl)">@SignedMoney(held.UnrealizedPl) · @SignedPercent(held.UnrealizedPlPct)</span></div>
                     </div>
                 }
+                @* The Orders screen is the desk's order subset: the journal for this
+                   symbol, with the same reviewed ticket beside it. *@
+                <a class="btn btn-secondary btn-sm desk-rail-orders" asp-page="/Orders"
+                   asp-route-ticker="@row.Ticker" asp-route-env="@Model.Env">Orders in @row.Ticker</a>
             </section>
 
             <partial name="_DeskEvidencePair" model="new DeskEvidenceModel(selected, true)" />
             <partial name="_DeskAgreementBand" model="selected" />
 
-            // Placeholders only. The real protection distances come from the
-            // selected strategy's exit rules, so a ticket opened against a
-            // strategy inherits that strategy's risk shape rather than a number
-            // invented by the screen.
-            var exits = selectedStrategy?.Definition.ExitRules;
-            var defaultLimit = row.Quote.AskPrice ?? row.Quote.MidPrice ?? 0m;
-            var stopFraction = exits is null ? 0.035m : Math.Clamp(exits.StopAtrMultiple * 0.01m, 0.005m, 0.20m);
-            var defaultStop = Math.Round(defaultLimit * (1m - stopFraction), 2);
-            var targetFraction = exits is null ? 0.07m : stopFraction * Math.Max(1m, exits.TargetRMultiple);
-            var defaultTarget = Math.Round(defaultLimit * (1m + targetFraction), 2);
+            // Placeholders only: the shared defaults follow the selected strategy's exit
+            // rules, so a ticket opened against a strategy inherits its risk shape.
+            var defaults = DeskTicketDefaults.For(row.Quote.AskPrice, row.Quote.MidPrice, selectedStrategy?.Definition.ExitRules);
             var preview = Model.TicketPreview;
             var hasPosition = row.Trade is not null;
             var ticketRoute = Model.RouteWith(("ticker", selected.Ticker));
             <partial name="_DeskOrderTicket" model="new DeskTicketModel(
-                selected,
+                row,
                 Model.Env,
                 Model.DeskHorizon,
-                defaultLimit,
-                defaultStop,
-                defaultTarget,
+                defaults.Limit,
+                defaults.Stop,
+                defaults.Target,
                 hasPosition,
                 preview,
                 Model.TicketConfirmation) { ViewRoute = ticketRoute }" />
@@ -883,4 +880,5 @@ else if (Model.IsScreenerScope)
 @section Scripts {
     <script type="module" src="~/js/trading-flow-desk.js" asp-append-version="true"></script>
     <script src="~/js/desk-layout.js" asp-append-version="true" defer></script>
+    <script src="~/js/desk-ticket.js" asp-append-version="true" defer></script>
 }
