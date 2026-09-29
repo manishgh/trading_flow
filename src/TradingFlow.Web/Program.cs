@@ -246,6 +246,7 @@ builder.Services.AddHttpClient<OfficialMarketNewsProvider>(client =>
 builder.Services.AddSingleton<NewsFeedService>();
 builder.Services.AddSingleton<WarmupServiceClient>();
 builder.Services.AddSingleton<DeskPreparationService>();
+builder.Services.AddSingleton<DeskTicketPlanService>();
 builder.Services.AddSingleton<WishlistUniverseResolver>();
 builder.Services.AddSingleton<WishlistSwingWatchEvaluator>();
 builder.Services.AddSingleton<WishlistMarketMonitor>();

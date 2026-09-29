@@ -134,10 +134,32 @@ public sealed class ScreenerPresetService
         if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
-            var filter = System.Web.HttpUtility.ParseQueryString(uri.Query)["f"];
-            return String.IsNullOrWhiteSpace(filter) ? trimmed : filter;
+            var query = SelectingParameters(uri.Query);
+            return String.IsNullOrWhiteSpace(query) ? trimmed : query;
         }
 
-        return trimmed.StartsWith("f=", StringComparison.OrdinalIgnoreCase) ? trimmed[2..] : trimmed;
+        return trimmed.StartsWith("f=", StringComparison.OrdinalIgnoreCase) && !trimmed.Contains('&')
+            ? trimmed[2..]
+            : trimmed;
+    }
+
+    /// <summary>
+    /// The parameters that decide which stocks a Finviz screen returns - filters
+    /// (<c>f</c>) and signal (<c>s</c>) - from a URL query string. A filters-only
+    /// screen reduces to the bare filter list, the stored form a hand-typed screen
+    /// also takes, so the two save as one preset. The Finviz client sends a bare
+    /// list as <c>f=</c>.
+    /// </summary>
+    internal static string SelectingParameters(string urlQuery)
+    {
+        var parameters = System.Web.HttpUtility.ParseQueryString(urlQuery);
+        var filter = parameters["f"]?.Trim();
+        var signal = parameters["s"]?.Trim();
+        if (String.IsNullOrWhiteSpace(signal))
+        {
+            return filter ?? String.Empty;
+        }
+
+        return String.IsNullOrWhiteSpace(filter) ? $"s={signal}" : $"f={filter}&s={signal}";
     }
 }

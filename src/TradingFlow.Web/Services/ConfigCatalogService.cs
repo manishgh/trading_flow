@@ -45,12 +45,19 @@ public sealed class ConfigCatalogService
     /// first profile), or <c>sip</c> when no profile names one. Screens that are not
     /// reading against a chosen profile quote on this feed.
     /// </summary>
-    public string DefaultQuoteFeed()
+    public string DefaultQuoteFeed() =>
+        DefaultPaperConfig()?.Config.Providers.Alpaca.DataFeed ?? "sip";
+
+    /// <summary>
+    /// The default paper profile: <c>alpaca-paper.yaml</c>, else the first profile,
+    /// else null. Its engine and portfolio settings (indicator warm-up, risk budget)
+    /// are what a screen without its own profile choice reads against.
+    /// </summary>
+    public RunConfigSummary? DefaultPaperConfig()
     {
         var configs = GetPaperConfigs();
-        var selected = configs.FirstOrDefault(config => config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
+        return configs.FirstOrDefault(config => config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
             ?? configs.FirstOrDefault();
-        return selected?.Config.Providers.Alpaca.DataFeed ?? "sip";
     }
 
     public IReadOnlyList<RunConfigSummary> GetPaperConfigs() =>

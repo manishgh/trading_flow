@@ -23,16 +23,16 @@ public sealed record FinvizSignal(string Code, string Label, string Group)
 /// <remarks>
 /// Finviz has no endpoint that lists its signals or the screens an Elite user
 /// saved in the browser, so this list is maintained by hand. Every code below was
-/// checked against a live Finviz screener URL carrying that exact <c>s=</c> value
-/// and label (September 2026). Signals whose code could not be confirmed that way
-/// (for example Top Losers, New Low, Overbought, Most Volatile, TL Resistance,
-/// Horizontal S/R, Triangle Descending and Recent Insider Selling) are left out
-/// rather than guessed; add them once confirmed.
+/// checked against a live Finviz screener page whose title carries that exact
+/// label for that exact <c>s=</c> value (September 2026). A signal that cannot be
+/// confirmed that way is left out rather than guessed. The grouping is the desk's
+/// own reading aid, not a Finviz classification.
 /// </remarks>
 public static class FinvizSignalCatalog
 {
     public const string BullishPatterns = "Swing patterns · bullish";
     public const string Momentum = "Momentum";
+    public const string BearishMomentum = "Momentum · bearish";
     public const string MeanReversion = "Mean reversion";
     public const string Catalysts = "Catalysts";
     public const string BearishPatterns = "Swing patterns · bearish";
@@ -55,8 +55,13 @@ public static class FinvizSignalCatalog
         new("ta_topgainers", "Top Gainers", Momentum),
         new("ta_unusualvolume", "Unusual Volume", Momentum),
         new("ta_mostactive", "Most Active", Momentum),
+        new("ta_mostvolatile", "Most Volatile", Momentum),
+
+        new("ta_toplosers", "Top Losers", BearishMomentum),
+        new("ta_newlow", "New Low", BearishMomentum),
 
         new("ta_oversold", "Oversold", MeanReversion),
+        new("ta_overbought", "Overbought", MeanReversion),
 
         new("n_upgrades", "Upgrades", Catalysts),
         new("n_downgrades", "Downgrades", Catalysts),
@@ -64,14 +69,18 @@ public static class FinvizSignalCatalog
         new("n_earningsafter", "Earnings After", Catalysts),
         new("n_majornews", "Major News", Catalysts),
         new("it_latestbuys", "Recent Insider Buying", Catalysts),
+        new("it_latestsales", "Recent Insider Selling", Catalysts),
 
         new("ta_p_channel", "Channel", NeutralPatterns),
         new("ta_p_wedge", "Wedge", NeutralPatterns),
+        new("ta_p_horizontal", "Horizontal S/R", NeutralPatterns),
+        new("ta_p_tlresistance", "TL Resistance", NeutralPatterns),
 
         new("ta_p_channeldown", "Channel Down", BearishPatterns),
         new("ta_p_doubletop", "Double Top", BearishPatterns),
         new("ta_p_multipletop", "Multiple Top", BearishPatterns),
         new("ta_p_wedgedown", "Wedge Down", BearishPatterns),
+        new("ta_p_wedgesupport", "Triangle Descending", BearishPatterns),
         new("ta_p_headandshoulders", "Head & Shoulders", BearishPatterns)
     ];
 

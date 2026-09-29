@@ -365,6 +365,26 @@
                asp-route-ticker="@row.Ticker" asp-route-env="@Model.Env">Evidence on the desk</a>
         </section>
 
+        @* The strategy the ticket's stop and target follow. A plain GET, so the
+           choice survives reload like the rest of this screen's state. *@
+        <form method="get" class="desk-rail-block orders-rail-strategy">
+            <label for="OrdersStrategy">Strategy context</label>
+            <select class="input" id="OrdersStrategy" name="strategyId" data-auto-submit>
+                @foreach (var strategy in Model.Strategies)
+                {
+                    var lifecycle = strategy.Lifecycle == TradingFlow.Domain.Strategies.StrategyLifecycleState.Research
+                        ? "RESEARCH ONLY"
+                        : strategy.Lifecycle.ToString().ToUpperInvariant();
+                    <option value="@strategy.Definition.StrategyId" selected="@(Model.StrategyId == strategy.Definition.StrategyId)">@strategy.Definition.StrategyName · @lifecycle</option>
+                }
+            </select>
+            @foreach (var (key, value) in Model.RouteWith(("strategyId", null)))
+            {
+                <input type="hidden" name="@key" value="@value" />
+            }
+            <noscript><button class="btn btn-secondary btn-sm" type="submit">Apply</button></noscript>
+        </form>
+
         <section class="desk-rail-block orders-rail-history" aria-labelledby="OrdersSymbolHistory">
             <h2 id="OrdersSymbolHistory" class="section-heading">Orders in @row.Ticker</h2>
             @if (Model.SelectedOrders.Count == 0)
@@ -385,16 +405,13 @@
             }
         </section>
 
-        var defaults = Model.TicketDefaults;
         var ticketRoute = Model.RouteWith();
         var ticketHorizon = "swing";
         <partial name="_DeskOrderTicket" model="new DeskTicketModel(
             row,
             Model.Env,
             ticketHorizon,
-            defaults.Limit,
-            defaults.Stop,
-            defaults.Target,
+            Model.TicketPlan,
             row.Trade is not null,
             Model.TicketPreview,
             Model.TicketConfirmation) { ViewRoute = ticketRoute, DefaultSide = Model.TicketSide }" />

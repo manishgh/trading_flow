@@ -24,6 +24,7 @@ public sealed class TradeDeskModel : PageModel
     private readonly ManualOrderTicketService tickets;
     private readonly TradingEnvironmentService environments;
     private readonly DeskPreparationService preparation;
+    private readonly DeskTicketPlanService ticketPlans;
 
     public TradeDeskModel(
         IWishlistRepository repository,
@@ -36,8 +37,10 @@ public sealed class TradeDeskModel : PageModel
         ScreenerPresetService screenerPresets,
         ManualOrderTicketService tickets,
         TradingEnvironmentService environments,
-        DeskPreparationService preparation)
+        DeskPreparationService preparation,
+        DeskTicketPlanService ticketPlans)
     {
+        this.ticketPlans = ticketPlans;
         this.environments = environments;
         this.preparation = preparation;
         this.repository = repository;
@@ -73,6 +76,9 @@ public sealed class TradeDeskModel : PageModel
 
     /// <summary>One symbol to prepare, from the rail. Null prepares every symbol in the view that needs it.</summary>
     [BindProperty] public string? PrepareTicker { get; set; }
+
+    /// <summary>Name to save the current custom screen under.</summary>
+    [BindProperty] public string? PresetName { get; set; }
     [BindProperty(SupportsGet = true)] public string Source { get; set; } = "all";
     [BindProperty(SupportsGet = true)] public string? StrategyId { get; set; }
     [BindProperty(SupportsGet = true)] public string? Ticker { get; set; }
@@ -157,6 +163,13 @@ public sealed class TradeDeskModel : PageModel
     public ManualOrderTicketPreview? TicketPreview { get; private set; }
 
     public ManualOrderTicketConfirmation? TicketConfirmation { get; private set; }
+
+    /// <summary>
+    /// Opening limit, stop and target for the selected symbol, from the selected
+    /// strategy's own rules on live market state. Empty values carry a reason.
+    /// </summary>
+    public DeskTicketPlan TicketPlan { get; private set; } =
+        DeskTicketPlan.Unavailable(null, "No symbol selected.", null);
 
     public OperationalStatusSnapshot OperationalStatus { get; private set; } = new(
         "UNKNOWN", "unknown", "Status has not loaded.", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
@@ -245,6 +258,36 @@ public sealed class TradeDeskModel : PageModel
             ? $"Every screener symbol is already in {target.Name}."
             : $"Added {result.NotInWishlist.Count} symbol(s) from {result.Name} to {target.Name}.";
         return RedirectToPage("/TradeDesk", RouteWith());
+    }
+
+    /// <summary>
+    /// Saves the screen in view as a named preset, so it is offered by name under
+    /// "My saved screens". Finviz cannot list the screens saved in its own UI, so
+    /// this is how one of those becomes pickable: paste its URL, run it, save it.
+    /// Saving the same name again replaces the query and clears any verification.
+    /// </summary>
+    public async Task<IActionResult> OnPostSaveScreenerAsync(CancellationToken cancellationToken)
+    {
+        var name = PresetName?.Trim() ?? String.Empty;
+        var query = ScreenerQuery?.Trim() ?? String.Empty;
+        string? problem = name.Length == 0 || query.Length == 0
+            ? "Run a custom screen and give it a name before saving it."
+            : name.Length > 120
+                ? "A preset name can be at most 120 characters."
+                : name.StartsWith(FinvizSignalCatalog.InputPrefix, StringComparison.OrdinalIgnoreCase)
+                    ? $"A preset name cannot start with \"{FinvizSignalCatalog.InputPrefix}\"."
+                    : null;
+        if (problem is not null)
+        {
+            ErrorMessage = problem;
+            await LoadAsync(cancellationToken);
+            return Page();
+        }
+
+        var filterQuery = FinvizSignalCatalog.TryResolveInput(query, out var signal) ? signal.Query : query;
+        var preset = await screenerPresets.SaveAsync(name, ScreenerScope.Swing, filterQuery, cancellationToken);
+        StatusMessage = $"Saved \"{preset.Name}\". It is listed under My saved screens.";
+        return RedirectToPage("/TradeDesk", RouteWith(("scope", "screener"), ("screenerQuery", preset.Name)));
     }
 
     /// <summary>
@@ -447,6 +490,20 @@ public sealed class TradeDeskModel : PageModel
             await Task.WhenAll(operationalStatusTask, symbolIntelligenceTask);
             OperationalStatus = await operationalStatusTask;
             SymbolIntelligence = await symbolIntelligenceTask;
+
+            var profile = catalog.GetPaperConfigs()
+                .FirstOrDefault(config => config.Path.Equals(SelectedPaperConfigPath, StringComparison.OrdinalIgnoreCase));
+            var strategy = Strategies.FirstOrDefault(option =>
+                option.Definition.StrategyId.Equals(SelectedStrategyId, StringComparison.OrdinalIgnoreCase))?.Definition;
+            TicketPlan = await ticketPlans.PlanAsync(
+                strategy,
+                SelectedRow.Ticker,
+                SelectedRow.Row.Quote.AskPrice,
+                SelectedRow.Row.Quote.MidPrice,
+                limitOverride: null,
+                profile?.Config.Engine.IndicatorWarmupBars ?? 0,
+                DeskTicketPlanService.RiskBudget(OperationalStatus.Equity, profile?.Config.Portfolio.AccountRiskBudgetPct),
+                cancellationToken);
         }
     }
 
@@ -558,7 +615,8 @@ public sealed class TradeDeskModel : PageModel
     public static IReadOnlyList<DeskColumn> Columns { get; } =
     [
         new("ticker", "Market", "market-column", "Symbol and display name.", false, true),
-        new("price", "Last", "last-column", "Mid of the inside quote with the session change.", false, true, true),
+        new("price", "Last", "last-column", "Mid of the inside quote with the change against the previous close.", false, true, true),
+        new("change", "Chg %", "change-column", "Change against the previous session close, in percent.", true, false, true),
         new("bidask", "Bid / Ask", "quote-column", "Inside bid and ask with quoted sizes.", false, true),
         new("spread", "Spread", "spread-column", "Inside spread in basis points.", false, true, true),
         new("rvol", "RVOL", "rvol-column", "Relative volume against the same time of day.", true, false, true),
@@ -648,6 +706,9 @@ public sealed class TradeDeskModel : PageModel
         return (Sort?.ToLowerInvariant()) switch
         {
             "price" => Order(rows, row => row.Row.LastPrice ?? Decimal.MinValue, descending),
+            // Unknown change sorts last in both directions' natural reading: it is
+            // not a small move, it is no reference.
+            "change" => Order(rows, row => row.Row.ChangePct ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
             "bidask" => Order(rows, row => row.Row.Quote.BidPrice ?? Decimal.MinValue, descending),
             "spread" => Order(rows, row => row.Row.SpreadBps ?? Decimal.MaxValue, descending),
             "rvol" => Order(rows, row => row.Evidence.Swing?.VolumeZ20 ?? Decimal.MinValue, descending),

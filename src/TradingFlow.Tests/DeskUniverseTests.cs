@@ -1,9 +1,7 @@
-using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Finviz;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Pages;
-using TradingFlow.Web.Pages.Shared;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Wishlists;
 
@@ -95,26 +93,6 @@ public sealed class DeskUniverseTests
         Assert.Equal(["MU", "MSFT"], universe.Members.Select(member => member.Ticker));
         Assert.Equal(["Swing"], universe.Members[0].Lists);
         Assert.Empty(universe.Members[1].Lists);
-    }
-
-    [Fact]
-    public void TicketDefaults_FollowStrategyExitsOrFallBackAndHonourAReplacedLimit()
-    {
-        var fallback = DeskTicketDefaults.For(ask: 100m, mid: 99.5m, exits: null);
-        Assert.Equal(new DeskTicketDefaults(100m, 96.50m, 107.00m), fallback);
-
-        var fromMid = DeskTicketDefaults.For(ask: null, mid: 50m, exits: null);
-        Assert.Equal(50m, fromMid.Limit);
-
-        var replaced = DeskTicketDefaults.For(ask: 100m, mid: 99.5m, exits: null, limitOverride: 80m);
-        Assert.Equal(new DeskTicketDefaults(80m, 77.20m, 85.60m), replaced);
-
-        var exits = new ExitRules(2m, 3m, 48m, false, 0m, 0m, false, false, false, 0);
-        var strategy = DeskTicketDefaults.For(ask: 100m, mid: 99.5m, exits);
-        Assert.Equal(new DeskTicketDefaults(100m, 98.00m, 106.00m), strategy);
-
-        var noQuote = DeskTicketDefaults.For(ask: null, mid: null, exits: null, limitOverride: 0m);
-        Assert.Equal(new DeskTicketDefaults(0m, 0m, 0m), noQuote);
     }
 
     [Theory]
@@ -238,4 +216,24 @@ public sealed class DeskUniverseTests
 
     private static WarmupRunRecordDto Run(string id, DateTimeOffset startedAt) =>
         new(id, "desk", startedAt, startedAt.AddMinutes(5), "completed", 1, 1, 0, []);
+}
+
+/// <summary>
+/// Saved screens keep every parameter that decides which stocks a Finviz screen
+/// returns: the filters and the signal. A filters-only screen keeps the bare
+/// list form a hand-typed screen takes, so the two save as one preset.
+/// </summary>
+public sealed class ScreenerPresetQueryTests
+{
+    [Theory]
+    [InlineData("https://elite.finviz.com/screener.ashx?v=111&f=cap_smallover,sh_price_o5&o=-change&auth=x", "cap_smallover,sh_price_o5")]
+    [InlineData("https://elite.finviz.com/screener.ashx?v=211&f=cap_smallover&s=ta_p_channelup", "f=cap_smallover&s=ta_p_channelup")]
+    [InlineData("https://elite.finviz.com/screener.ashx?v=211&s=ta_p_doublebottom", "s=ta_p_doublebottom")]
+    [InlineData("f=cap_smallover", "cap_smallover")]
+    [InlineData("f=cap_smallover&s=ta_newhigh", "f=cap_smallover&s=ta_newhigh")]
+    [InlineData("s=ta_newhigh", "s=ta_newhigh")]
+    public void NormalizeQuery_KeepsFiltersAndSignal(string input, string expected)
+    {
+        Assert.Equal(expected, TradingFlow.Web.Services.Wishlists.ScreenerPresetService.NormalizeQuery(input));
+    }
 }

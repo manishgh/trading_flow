@@ -1,4 +1,3 @@
-using TradingFlow.Domain.Strategies;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Wishlists;
 
@@ -36,9 +35,10 @@ public sealed record DeskEvidenceModel(RankedDeskRow Row, bool Compact)
 /// <param name="Row">The selected desk row: quote, position and identity. No ranking is needed to trade.</param>
 /// <param name="Env">Environment slug carried through the post.</param>
 /// <param name="Horizon">Ticket horizon, following the desk's own horizon.</param>
-/// <param name="DefaultLimit">Ask on a buy, bid on a sell.</param>
-/// <param name="DefaultStop">Placeholder stop, derived from the strategy's exit rules.</param>
-/// <param name="DefaultTarget">Placeholder target, derived from the strategy's exit rules.</param>
+/// <param name="Plan">
+/// Opening limit, stop and target from market data and the strategy's own rules.
+/// A value that cannot be derived is empty on the ticket, with the reason shown.
+/// </param>
 /// <param name="HasPosition">
 /// Whether a tracked position exists. SELL renders only when it does, so the
 /// control cannot invite an accidental short.
@@ -49,9 +49,7 @@ public sealed record DeskTicketModel(
     WishlistDeskRow Row,
     string? Env,
     string Horizon,
-    decimal DefaultLimit,
-    decimal DefaultStop,
-    decimal DefaultTarget,
+    DeskTicketPlan Plan,
     bool HasPosition,
     ManualOrderTicketPreview? Preview,
     ManualOrderTicketConfirmation? Confirmation)
@@ -147,31 +145,4 @@ public sealed class DeskTicketForm
         IsExit ? OrderType : "limit",
         TriggerPrice,
         TimeInForce);
-}
-
-/// <summary>
-/// Placeholder prices a ticket opens with before the operator edits them.
-/// </summary>
-/// <remarks>
-/// Placeholders only. With a strategy, the stop and target follow its exit rules,
-/// so a ticket opened against a strategy inherits that strategy's risk shape
-/// rather than a number invented by the screen. Without one they fall back to a
-/// 3.5% stop and a 7% target. The server re-checks whatever is posted.
-/// </remarks>
-public sealed record DeskTicketDefaults(decimal Limit, decimal Stop, decimal Target)
-{
-    /// <param name="ask">Inside ask, used as the limit when present.</param>
-    /// <param name="mid">Inside mid, the fallback limit.</param>
-    /// <param name="exits">Exit rules of the strategy in context, or null.</param>
-    /// <param name="limitOverride">A limit carried in, such as the order being replaced.</param>
-    public static DeskTicketDefaults For(decimal? ask, decimal? mid, ExitRules? exits, decimal? limitOverride = null)
-    {
-        var limit = limitOverride is > 0m ? limitOverride.Value : ask ?? mid ?? 0m;
-        var stopFraction = exits is null ? 0.035m : Math.Clamp(exits.StopAtrMultiple * 0.01m, 0.005m, 0.20m);
-        var targetFraction = exits is null ? 0.07m : stopFraction * Math.Max(1m, exits.TargetRMultiple);
-        return new DeskTicketDefaults(
-            limit,
-            Math.Round(limit * (1m - stopFraction), 2),
-            Math.Round(limit * (1m + targetFraction), 2));
-    }
 }

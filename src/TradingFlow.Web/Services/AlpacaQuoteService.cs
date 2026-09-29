@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
@@ -39,6 +40,15 @@ public sealed record AlpacaLatestQuote(
 }
 
 /// <summary>
+/// The last completed regular-session close before today in New York, from
+/// Alpaca's daily bars. The desk's Change and Change % read against it.
+/// </summary>
+/// <param name="Ticker">Upper-case symbol.</param>
+/// <param name="Close">That session's closing price.</param>
+/// <param name="SessionDate">The New York date of that session.</param>
+public sealed record AlpacaPreviousClose(string Ticker, decimal Close, DateOnly SessionDate);
+
+/// <summary>
 /// Reads Alpaca's latest stock quotes for the selected wishlist. This is kept
 /// separate from the paper runner because watchlist display needs bid/ask now,
 /// while strategy execution still owns its own warmed candle pipeline.
@@ -50,6 +60,14 @@ public sealed class AlpacaQuoteService
     private readonly AlpacaCredentialProvider credentials;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly ILogger<AlpacaQuoteService> logger;
+
+    /// <summary>
+    /// Previous closes by symbol and New York date. A close only changes once a
+    /// day, so a symbol is read from Alpaca once per day; failures are not cached.
+    /// </summary>
+    private readonly ConcurrentDictionary<(string Symbol, DateOnly Date), AlpacaPreviousClose> previousCloses = new();
+
+    private const int SnapshotBatchSize = 100;
 
     public AlpacaQuoteService(
         AlpacaCredentialProvider credentials,
@@ -203,6 +221,168 @@ public sealed class AlpacaQuoteService
     }
 
     private static AlpacaLatestQuote Empty(string ticker) => new(ticker, null, null, null, null, null);
+
+    /// <summary>
+    /// The previous close for each symbol, from Alpaca's snapshot endpoint
+    /// (<c>/v2/stocks/snapshots</c>, its <c>dailyBar</c> and <c>prevDailyBar</c>).
+    /// A symbol Alpaca cannot answer for is simply absent: the desk shows its
+    /// change as unknown rather than inventing a reference price.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, AlpacaPreviousClose>> GetPreviousClosesAsync(
+        IReadOnlyCollection<string> tickers,
+        string feed,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var today = NewYorkDate(now);
+        var symbols = tickers
+            .Select(ticker => ticker.Trim().ToUpperInvariant())
+            .Where(ticker => ticker.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var results = new Dictionary<string, AlpacaPreviousClose>(StringComparer.OrdinalIgnoreCase);
+        foreach (var symbol in symbols)
+        {
+            if (previousCloses.TryGetValue((symbol, today), out var cached))
+            {
+                results[symbol] = cached;
+            }
+        }
+
+        var missing = symbols.Where(symbol => !results.ContainsKey(symbol)).ToArray();
+        if (missing.Length == 0 || !credentials.IsConfigured)
+        {
+            return results;
+        }
+
+        try
+        {
+            var client = httpClientFactory.CreateClient(HttpClientName);
+            foreach (var batch in missing.Chunk(SnapshotBatchSize))
+            {
+                foreach (var (symbol, close) in await GetSnapshotBatchAsync(client, batch, NormalizeFeed(feed), today, cancellationToken))
+                {
+                    results[symbol] = close;
+                    previousCloses[(symbol, today)] = close;
+                }
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Alpaca snapshots request failed; previous closes stay unknown.");
+        }
+
+        return results;
+    }
+
+    private async Task<IReadOnlyDictionary<string, AlpacaPreviousClose>> GetSnapshotBatchAsync(
+        HttpClient client,
+        IReadOnlyList<string> symbols,
+        string feed,
+        DateOnly today,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/v2/stocks/snapshots?symbols={String.Join(",", symbols.Select(Uri.EscapeDataString))}&feed={feed}");
+        request.Headers.Add("APCA-API-KEY-ID", credentials.KeyId);
+        request.Headers.Add("APCA-API-SECRET-KEY", credentials.SecretKey);
+
+        using var response = await client.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (response.IsSuccessStatusCode)
+        {
+            return ParsePreviousCloses(body, today);
+        }
+
+        // One invalid symbol rejects the whole request; drop it and read the rest.
+        if (response.StatusCode == HttpStatusCode.BadRequest && symbols.Count > 1 &&
+            TryReadInvalidSymbol(body, symbols) is { } invalidSymbol)
+        {
+            var valid = symbols.Where(symbol => !symbol.Equals(invalidSymbol, StringComparison.OrdinalIgnoreCase)).ToArray();
+            return await GetSnapshotBatchAsync(client, valid, feed, today, cancellationToken);
+        }
+
+        logger.LogWarning(
+            "Alpaca snapshots request failed for {TickerCount} symbol(s) with {StatusCode}: {Body}",
+            symbols.Count,
+            response.StatusCode,
+            body);
+        return new Dictionary<string, AlpacaPreviousClose>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Reads previous closes from a snapshots response. The multi-symbol response
+    /// is keyed by symbol; a <c>snapshots</c> wrapper is accepted too. Either bar
+    /// may be null. Pure, so the selection rule is testable against fixtures.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, AlpacaPreviousClose> ParsePreviousCloses(string body, DateOnly today)
+    {
+        var results = new Dictionary<string, AlpacaPreviousClose>(StringComparer.OrdinalIgnoreCase);
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement.TryGetProperty("snapshots", out var wrapped) ? wrapped : document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return results;
+        }
+
+        foreach (var entry in root.EnumerateObject())
+        {
+            if (entry.Value.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var bars = new[] { "dailyBar", "prevDailyBar" }
+                .Select(name => entry.Value.TryGetProperty(name, out var bar) && bar.ValueKind == JsonValueKind.Object
+                    ? (Timestamp: ReadTimestamp(bar, "t"), Close: ReadDecimal(bar, "c"))
+                    : (Timestamp: (DateTimeOffset?)null, Close: (decimal?)null))
+                .Where(bar => bar.Timestamp is not null && bar.Close is > 0m)
+                .Select(bar => (bar.Timestamp!.Value, bar.Close!.Value));
+            if (SelectPreviousClose(bars, today) is { } selected)
+            {
+                var symbol = entry.Name.ToUpperInvariant();
+                results[symbol] = new AlpacaPreviousClose(symbol, selected.Close, selected.Date);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// The most recent daily bar whose New York date is before today. In the
+    /// regular session and after hours today's bar is skipped for yesterday's;
+    /// before the open the latest bar already is the previous session.
+    /// </summary>
+    internal static (decimal Close, DateOnly Date)? SelectPreviousClose(
+        IEnumerable<(DateTimeOffset Timestamp, decimal Close)> dailyBars,
+        DateOnly today)
+    {
+        return dailyBars
+            .Select(bar => (bar.Close, Date: NewYorkDate(bar.Timestamp)))
+            .Where(bar => bar.Date < today)
+            .OrderByDescending(bar => bar.Date)
+            .Select(bar => ((decimal Close, DateOnly Date)?)bar)
+            .FirstOrDefault();
+    }
+
+    internal static DateOnly NewYorkDate(DateTimeOffset instant) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(instant, NewYork).DateTime);
+
+    private static readonly TimeZoneInfo NewYork = ResolveNewYork();
+
+    // Same resolution as the operational strip: IANA id, else the Windows id.
+    private static TimeZoneInfo ResolveNewYork()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        }
+    }
 
     private static string NormalizeFeed(string feed)
     {

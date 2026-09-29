@@ -151,7 +151,17 @@ public sealed partial class FinvizClient : IDisposable
 
         var parts = trimmed
             .Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(part => !part.StartsWith("auth=", StringComparison.OrdinalIgnoreCase));
+            .Where(part => !part.StartsWith("auth=", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        // A bare filter list ("cap_smallover,sh_price_o5") is what saved presets and
+        // the desk's screener box store. Without its key the export endpoint cannot
+        // read it as filters, so it is sent as the f= parameter it is.
+        if (parts.Length == 1 && !parts[0].Contains('=', StringComparison.Ordinal))
+        {
+            return $"f={parts[0]}";
+        }
+
         return String.Join('&', parts);
     }
 

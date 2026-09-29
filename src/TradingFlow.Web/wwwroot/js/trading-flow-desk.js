@@ -55,6 +55,29 @@ function patchField(container, selector, value) {
     container.querySelectorAll(selector).forEach(node => setText(node, value || "--"));
 }
 
+// Change against the previous session close, recomputed from each live mid. The
+// server renders the reference close on the node; without one the dash stays.
+// Direction is glyph, sign and colour together, as in the server rendering.
+function signed(value, digits) {
+    const sign = value > 0 ? "+" : value < 0 ? "\u2212" : "";
+    return `${sign}${Math.abs(value).toFixed(digits)}`;
+}
+
+function patchChange(node, mid) {
+    const previous = Number.parseFloat(node.dataset.prevClose || "");
+    const last = Number(mid);
+    if (!Number.isFinite(previous) || previous <= 0 || mid == null || !Number.isFinite(last)) {
+        return;
+    }
+    const change = last - previous;
+    const percent = change / previous * 100;
+    setText(node, node.dataset.changeMode === "pct"
+        ? `${signed(percent, 2)}%`
+        : `${signed(change, 2)} (${signed(percent, 2)}%)`);
+    node.classList.remove("up", "down", "flat");
+    node.classList.add("value-signed", percent > 0 ? "up" : percent < 0 ? "down" : "flat");
+}
+
 function applyQuotes(quotes) {
     for (const quote of Array.isArray(quotes) ? quotes : []) {
         const ticker = normalizeTicker(quote.ticker);
@@ -64,11 +87,13 @@ function applyQuotes(quotes) {
             patchField(row, '[data-quote-field="ask"]', quote.askText);
             patchField(row, '[data-quote-field="mid"]', quote.midText);
             patchField(row, "[data-quote-age]", formatAge(quote.timestamp));
+            row.querySelectorAll("[data-change-field]").forEach(node => patchChange(node, quote.midPrice));
         });
         if (ticker === selectedTicker) {
             patchField(document, '[data-selected-quote="bid"]', quote.bidText);
             patchField(document, '[data-selected-quote="ask"]', quote.askText);
             patchField(document, '[data-selected-quote="mid"]', quote.midText);
+            document.querySelectorAll("[data-selected-change]").forEach(node => patchChange(node, quote.midPrice));
         }
 
         const parsed = Date.parse(quote.timestamp || "");

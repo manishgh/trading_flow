@@ -115,16 +115,60 @@
   .desk-page .desk-operational { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
-/* Phone: the universe switch, the custom query, the screener prompt and the
-   preparation band are decisions about the desktop grid, like the screener
-   bar the site sheet already hides here. The phone keeps reading the book. */
+/* Phone: choosing what to monitor happens at the list level - the universe
+   switch, the wishlist or screener, strategy, search, the screener result and
+   preparation. The symbol and ticket levels stay on the one symbol. Every
+   control is a thumb target, and text inputs use 16px so iOS does not zoom. */
 @media (max-width: 768px) {
   .desk-page .desk-universe-switch,
   .desk-page .desk-custom-screen,
   .desk-page .desk-screener-empty,
   .desk-page .desk-prep-band { display: none; }
 
+  .desk-page:has(.desk-shell[data-mobile-level="list"]) .desk-universe-switch {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: auto;
+    margin: 10px 16px 0;
+  }
+  .desk-page:has(.desk-shell[data-mobile-level="list"]) .desk-universe-switch .seg-opt {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    font-size: 13px;
+  }
+  .desk-page:has(.desk-shell[data-mobile-level="list"]) .desk-context {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px 16px 12px;
+  }
+  .desk-page:has(.desk-shell[data-mobile-level="list"]) .desk-custom-screen,
+  .desk-page:has(.desk-shell[data-mobile-level="list"]) .desk-screener-empty { display: block; padding-left: 16px; padding-right: 16px; }
+  .desk-page:has(.desk-shell[data-mobile-level="list"]) .desk-screener-band,
+  .desk-page:has(.desk-shell[data-mobile-level="list"]) .desk-prep-band { display: flex; padding-left: 16px; padding-right: 16px; }
+  .desk-page .desk-custom-screen > summary { display: flex; align-items: center; min-height: 44px; }
+  .desk-page .desk-context .input,
+  .desk-page .desk-custom-screen .input,
+  .desk-page .desk-screener-add .input { min-height: 44px; font-size: 16px; }
+  .desk-page .desk-context .btn,
+  .desk-page .desk-custom-screen .btn,
+  .desk-page .desk-screener-band .btn,
+  .desk-page .desk-prep-band .btn { min-height: 44px; }
+  .desk-page .desk-context-actions { flex-wrap: wrap; }
+  .desk-page .desk-prep-band .btn-secondary:last-child { margin-left: 0; }
+
   /* The rail is the phone's symbol level, so its prepare action is a thumb
      target like every other phone control. */
   .desk-rail-prep .btn { min-height: 44px; }
+}
+
+/* The ticket says where each opening price came from, or why it is empty. */
+.desk-ticket .field-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
 }

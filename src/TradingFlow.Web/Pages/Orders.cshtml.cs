@@ -2,7 +2,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
+using TradingFlow.Web.Models;
 using TradingFlow.Web.Pages.Shared;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Wishlists;
@@ -23,7 +25,8 @@ public sealed class OrdersModel(
     WishlistDeskService desk,
     ManualOrderTicketService tickets,
     OperationalStatusService operationalStatus,
-    ConfigCatalogService catalog) : PageModel
+    ConfigCatalogService catalog,
+    DeskTicketPlanService ticketPlans) : PageModel
 {
     public static IReadOnlyList<(string Key, string Label)> Filters { get; } =
     [
@@ -68,6 +71,15 @@ public sealed class OrdersModel(
     [BindProperty(SupportsGet = true)]
     public decimal? LimitPrice { get; set; }
 
+    /// <summary>
+    /// Strategy the ticket's stop and target follow, as on the desk. Defaults to
+    /// the first strategy the environment may run, the desk's own default.
+    /// </summary>
+    [BindProperty(SupportsGet = true)]
+    public string? StrategyId { get; set; }
+
+    public IReadOnlyList<StrategyOption> Strategies { get; private set; } = [];
+
     /// <summary>The selected symbol's quote, position and wishlist membership.</summary>
     public WishlistDeskRow? SelectedRow { get; private set; }
 
@@ -91,8 +103,12 @@ public sealed class OrdersModel(
     public ManualOrderTicketPreview? TicketPreview { get; private set; }
     public ManualOrderTicketConfirmation? TicketConfirmation { get; private set; }
 
-    /// <summary>Opening prices for the rail ticket; placeholders the server re-checks.</summary>
-    public DeskTicketDefaults TicketDefaults { get; private set; } = new(0m, 0m, 0m);
+    /// <summary>
+    /// Opening limit, stop and target for the rail ticket, from the selected
+    /// strategy's own rules on live market state. Empty values carry a reason.
+    /// </summary>
+    public DeskTicketPlan TicketPlan { get; private set; } =
+        DeskTicketPlan.Unavailable(null, "No symbol selected.", null);
 
     public TradingEnvironmentState EnvironmentState => environments.GetState(environments.Parse(Env));
 
@@ -140,6 +156,15 @@ public sealed class OrdersModel(
         }
         Ticker = symbol;
 
+        Strategies = await catalog.GetStrategiesAsync(
+            environments.Parse(Env) == TradingEnvironment.Live
+                ? StrategySelectionMode.RunLive
+                : StrategySelectionMode.RunPaperExperiment,
+            cancellationToken);
+        StrategyId = Strategies.FirstOrDefault(option =>
+                option.Definition.StrategyId.Equals(StrategyId, StringComparison.OrdinalIgnoreCase))?.Definition.StrategyId
+            ?? Strategies.FirstOrDefault()?.Definition.StrategyId;
+
         var feed = catalog.DefaultQuoteFeed();
         var universe = symbol is null
             ? DeskUniverse.Empty
@@ -173,7 +198,16 @@ public sealed class OrdersModel(
                 .OrderByDescending(item => item.UpdatedAtUtc)
                 .Take(8)
                 .ToArray();
-            TicketDefaults = DeskTicketDefaults.For(row.Quote.AskPrice, row.Quote.MidPrice, exits: null, LimitPrice);
+            var profile = catalog.DefaultPaperConfig();
+            TicketPlan = await ticketPlans.PlanAsync(
+                Strategies.FirstOrDefault(option => option.Definition.StrategyId == StrategyId)?.Definition,
+                row.Ticker,
+                row.Quote.AskPrice,
+                row.Quote.MidPrice,
+                LimitPrice,
+                profile?.Config.Engine.IndicatorWarmupBars ?? 0,
+                DeskTicketPlanService.RiskBudget(OperationalStatus.Equity, profile?.Config.Portfolio.AccountRiskBudgetPct),
+                cancellationToken);
         }
     }
 
@@ -242,7 +276,8 @@ public sealed class OrdersModel(
             ["filter"] = Filter == "all" ? null : Filter,
             ["sort"] = Sort,
             ["dir"] = Dir,
-            ["ticker"] = Ticker
+            ["ticker"] = Ticker,
+            ["strategyId"] = StrategyId
         };
         foreach (var (key, value) in overrides)
         {

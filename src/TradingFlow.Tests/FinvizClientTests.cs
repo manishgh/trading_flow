@@ -83,6 +83,26 @@ No.,Ticker,Company,Rel Volume
         Assert.Equal(["RDW"], tickers);
     }
 
+    [Theory]
+    [InlineData("cap_smallover,sh_price_o5", "/export?f=cap_smallover,sh_price_o5&auth=test-token")]
+    [InlineData("s=ta_p_channelup", "/export?s=ta_p_channelup&auth=test-token")]
+    [InlineData("f=cap_smallover&s=ta_p_channelup", "/export?f=cap_smallover&s=ta_p_channelup&auth=test-token")]
+    public async Task GetScreenerRowsAsync_SendsABareFilterListAsTheFParameter(string query, string expectedPath)
+    {
+        var handler = new CsvHandler("""
+No.,Ticker,Company,Rel Volume
+1,VELO,Velo3D,2.75
+""");
+        using var client = new FinvizClient(
+            new HttpClient(handler),
+            new FinvizOptions(new Uri("https://finviz.com"), "test-token"),
+            CreateArchiveWriter());
+
+        await client.GetScreenerRowsAsync(query, CancellationToken.None);
+
+        Assert.Equal(expectedPath, handler.LastRequestPathAndQuery);
+    }
+
     [Fact]
     public async Task GetScreenerRowsAsync_AcceptsFullFinvizScreenerUrl()
     {

@@ -14,15 +14,17 @@
     var preview = Model.Preview;
     var ticker = row.Ticker;
     var quantityDefault = preview?.Quantity ?? 1m;
-    var limitDefault = preview?.LimitPrice ?? Model.DefaultLimit;
-    var stopDefault = preview?.StopLossPrice ?? Model.DefaultStop;
-    var targetDefault = preview?.TakeProfitPrice ?? Model.DefaultTarget;
+    // No stand-in numbers: each value is the server's preview, else the plan
+    // derived from market data and the strategy's rules, else empty.
+    decimal? limitDefault = preview?.LimitPrice ?? Model.Plan.Limit;
+    decimal? stopDefault = preview?.StopLossPrice ?? Model.Plan.Stop;
+    decimal? targetDefault = preview?.TakeProfitPrice ?? Model.Plan.Target;
     var side = preview?.Side ?? (Model.HasPosition ? Model.DefaultSide : "buy");
     var isExit = String.Equals(side, "sell", StringComparison.OrdinalIgnoreCase);
     var notional = preview?.Notional ?? quantityDefault * limitDefault;
     var riskPerShare = limitDefault - stopDefault;
-    var risk = riskPerShare > 0 ? riskPerShare * quantityDefault : (decimal?)null;
-    var rMultiple = riskPerShare > 0 ? (targetDefault - limitDefault) / riskPerShare : (decimal?)null;
+    var risk = riskPerShare > 0 ? riskPerShare * quantityDefault : null;
+    var rMultiple = riskPerShare > 0 ? (targetDefault - limitDefault) / riskPerShare : null;
 }
 
 <section class="desk-rail-block desk-ticket" aria-labelledby="TicketHeading">
@@ -81,7 +83,7 @@
             <div class="field">
                 <label for="TicketLimit">Limit price</label>
                 <input class="input" id="TicketLimit" name="ticket.LimitPrice" type="number"
-                       inputmode="decimal" step="0.01" min="0" value="@limitDefault.ToString("0.00")" />
+                       inputmode="decimal" step="0.01" min="0" value="@(limitDefault?.ToString("0.00"))" />
             </div>
             <div class="field">
                 <label for="TicketTif">Time in force</label>
@@ -96,12 +98,16 @@
                 <div class="field">
                     <label for="TicketStop">Stop price</label>
                     <input class="input" id="TicketStop" name="ticket.StopLossPrice" type="number"
-                           inputmode="decimal" step="0.01" min="0" value="@stopDefault.ToString("0.00")" />
+                           inputmode="decimal" step="0.01" min="0" value="@(stopDefault?.ToString("0.00"))"
+                           aria-describedby="TicketStopNote" />
+                    <span class="field-hint" id="TicketStopNote" data-ticket-stop-note>@Model.Plan.StopNote</span>
                 </div>
                 <div class="field">
                     <label for="TicketTarget">Take profit</label>
                     <input class="input" id="TicketTarget" name="ticket.TakeProfitPrice" type="number"
-                           inputmode="decimal" step="0.01" min="0" value="@targetDefault.ToString("0.00")" />
+                           inputmode="decimal" step="0.01" min="0" value="@(targetDefault?.ToString("0.00"))"
+                           aria-describedby="TicketTargetNote" />
+                    <span class="field-hint" id="TicketTargetNote" data-ticket-target-note>@Model.Plan.TargetNote</span>
                 </div>
             }
         </div>
@@ -109,17 +115,22 @@
         @* Size presets are client-side conveniences over the quantity field. They
            change what is proposed, never what is submitted: the server sizes
            nothing and re-checks everything. *@
-        <div class="desk-ticket-presets" role="group" aria-label="Size presets">
+        <div class="desk-ticket-presets" role="group" aria-label="Size presets"
+             data-risk-budget="@(Model.Plan.RiskBudget?.ToString(System.Globalization.CultureInfo.InvariantCulture))">
             <button class="btn btn-secondary btn-sm" type="button" data-size-preset="0.25">25%</button>
             <button class="btn btn-secondary btn-sm" type="button" data-size-preset="0.5">50%</button>
             <button class="btn btn-secondary btn-sm" type="button" data-size-preset="1">100%</button>
-            <button class="btn btn-secondary btn-sm" type="button" data-size-preset="risk">1R risk</button>
+            @* 1R sizes to the account's risk budget (equity times the profile's
+               risk percent) over the stop distance. Without both it is not offered. *@
+            <button class="btn btn-secondary btn-sm" type="button" data-size-preset="risk"
+                    disabled="@(Model.Plan.RiskBudget is null)"
+                    title="@(Model.Plan.RiskBudget is { } budget ? $"Sizes to a {budget:C2} risk budget over the stop distance." : "Account equity or the profile's risk budget is unknown.")">1R risk</button>
         </div>
 
         <div class="cell-strip desk-ticket-derived">
             <div>
                 <span class="cell-label">Notional</span>
-                <span class="cell-value" data-ticket-notional>@notional.ToString("C2")</span>
+                <span class="cell-value" data-ticket-notional>@(notional is { } notionalValue ? notionalValue.ToString("C2") : "—")</span>
             </div>
             <div>
                 <span class="cell-label">Risk</span>

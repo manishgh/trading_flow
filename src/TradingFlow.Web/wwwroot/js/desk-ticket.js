@@ -67,14 +67,13 @@
 
             const mode = preset.dataset.sizePreset;
             if (mode === "risk") {
-                // 1R sizes to the account risk budget over the stop distance. The
-                // budget is not on this screen, so the preset states what it is
-                // sizing against rather than inventing a balance: it uses the
-                // current notional as the ceiling and the stop distance as the risk.
+                // 1R sizes to the account's risk budget - equity times the paper
+                // profile's risk percent, rendered by the server - over the stop
+                // distance. Without a budget the button is disabled server-side.
+                const budget = Number.parseFloat(preset.closest("[data-risk-budget]")?.dataset.riskBudget ?? "");
                 const stopPrice = numberOf(stop);
                 const perShare = stopPrice === null ? null : limitPrice - stopPrice;
-                if (perShare === null || perShare <= 0) return;
-                const budget = numberOf(quantity) * limitPrice * 0.01;
+                if (!Number.isFinite(budget) || budget <= 0 || perShare === null || perShare <= 0) return;
                 quantity.value = String(Math.max(1, Math.floor(budget / perShare)));
             } else {
                 const fraction = Number.parseFloat(mode);

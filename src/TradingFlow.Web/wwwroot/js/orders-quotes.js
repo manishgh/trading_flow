@@ -47,3 +47,9 @@ if (tickers.length > 0) {
         onDecodeError: error => console.warn("Quote update rejected.", error)
     });
 }
+
+// A choice list that changes the view (the strategy the ticket follows) submits
+// its own GET form on change, as on the desk.
+document.querySelectorAll("[data-auto-submit]").forEach(control => {
+    control.addEventListener("change", () => control.form?.requestSubmit());
+});

@@ -1,6 +1,6 @@
 # Desk Universe, Screeners, Portfolio, Preparation And Orders
 
-Status: web screen 1 (desk) and screen 2 (orders) implemented 2026-09-29
+Status: web screen 1 (desk), screen 2 (orders) and the follow-up round implemented 2026-09-29
 Applies to: `src/TradingFlow.Web` desk (`/TradeDesk`) and orders screen (`/Orders`)
 
 ## Request
@@ -53,25 +53,24 @@ Koyfin column chooser) is recorded in `docs/ui-trading-desk-plan.md` and
 
 Finviz has no endpoint that lists its signals or an Elite user's saved screens. The
 catalogue is in `src/TradingFlow.Finviz/FinvizSignalCatalog.cs`. It includes only codes
-confirmed against a live Finviz screener URL with that exact `s=` value and label:
+confirmed against a live Finviz screener page whose title carries that exact label
+for that exact `s=` value. All 33 below are confirmed; the grouping is the desk's own:
 
 - Swing patterns, bullish: Channel Up, Double Bottom, Multiple Bottom, Wedge Up,
   Triangle Ascending, TL Support, Head & Shoulders Inverse
-- Momentum: New High, Top Gainers, Unusual Volume, Most Active
-- Mean reversion: Oversold
+- Momentum: New High, Top Gainers, Unusual Volume, Most Active, Most Volatile
+- Momentum, bearish: Top Losers, New Low
+- Mean reversion: Oversold, Overbought
 - Catalysts: Upgrades, Downgrades, Earnings Before, Earnings After, Major News,
-  Recent Insider Buying
-- Swing patterns, neutral: Channel, Wedge
+  Recent Insider Buying, Recent Insider Selling
+- Swing patterns, neutral: Channel, Wedge, Horizontal S/R, TL Resistance
 - Swing patterns, bearish: Channel Down, Double Top, Multiple Top, Wedge Down,
-  Head & Shoulders
+  Triangle Descending, Head & Shoulders
 
-Not included, because their codes could not be confirmed: Top Losers, New Low,
-Overbought, Most Volatile, TL Resistance, Horizontal S/R, Triangle Descending and
-Recent Insider Selling. Add them once confirmed.
-
-Screens saved in the Finviz browser UI cannot be listed. They must be saved locally
-by name as screener presets on the Wishlists screen. Presets appear first in the
-picker under "My saved screens".
+Screens saved in the Finviz browser UI cannot be listed: Finviz has no endpoint for
+them. To make one pickable, paste its URL into the desk's custom query, run it and
+use **Save as preset** (or save it on the Wishlists screen). Presets appear first in
+the picker under "My saved screens".
 
 ## Design
 
@@ -120,9 +119,10 @@ Tabs: All · Observed setups · In trade · With news · Needs prep · Disagree
 - **Links.** Every desk link, sort header, tab and redirect goes through one
   `RouteWith` helper. None of them can drop the scope, screener, sort or filter
   the operator chose.
-- **Phone.** The phone treatment is unchanged: four tabs, list, then symbol, then
-  ticket. The universe switch, custom query and preparation band are desktop-only,
-  like the screener bar before them. The phone shows the all-wishlists view.
+- **Phone.** Four tabs, list, then symbol, then ticket. At the list level the phone
+  also shows the universe switch, the wishlist or screener choice, strategy,
+  search, the screener result and preparation, all as 44 px targets. The symbol
+  and ticket levels stay on the one symbol.
 
 Boundaries kept: the predictor stays advisory; rows never submit orders; the ticket
 keeps server review before confirm; the desk only reads and queues preparation, it
@@ -183,12 +183,11 @@ Tabs: All · Working · Filled · Rejected · Cancelled / Expired
 - **Live.** `orders.js` keeps polling the journal in place. A Last column streams
   quotes for symbols with a working order and for the ticket symbol, through the
   desk's symbol-set quote stream.
-- **Shared pieces.** The ticket model now takes a desk row (no ranking run is
-  needed to trade). The ticket form, opening prices (`DeskTicketDefaults`) and the
-  ticket script (`desk-ticket.js`, split out of `desk-layout.js`) are shared by both
-  screens. Stop and target on the Orders screen use the no-strategy fallback
-  (3.5% stop, 7% target), since the screen has no strategy context. The server
-  re-checks everything either way.
+- **Shared pieces.** The ticket model takes a desk row (no ranking run is needed to
+  trade). The ticket form, the opening-price plan (`DeskTicketPlanService`, below)
+  and the ticket script (`desk-ticket.js`, split out of `desk-layout.js`) are shared
+  by both screens. The Orders rail has its own strategy picker, defaulting to the
+  desk's default strategy.
 - **Phone.** The rail stacks under the journal; with a symbol open, the ticket
   comes first. New controls meet the 44 px target.
 
@@ -210,13 +209,86 @@ Tier: component. Nothing was confirmed or sent to a broker.
 - Full .NET suite: 1,628 passed, 39 failed. The failing set is identical to the
   39 recorded under screen 1, which fail the same way on the unchanged base commit.
 
+## Follow-up round
+
+Request: implement the remaining items, with no fixed stop or take-profit numbers
+anywhere, then merge to main once verified and tested.
+
+### Ticket prices: nothing fixed
+
+The ticket used to open with a fixed 3.5% stop and 7% target when no strategy was
+in context, and read the strategy's ATR multiple as a percent with fixed bounds.
+Both are gone. `DeskTicketPlanService` derives the opening prices with the engine's
+own code, the same path paper and live take:
+
+- **Limit:** the order being replaced, else the inside ask, else the mid, else empty.
+- **Stop:** `SignalGenerator.CreateTradeSignal` on the strategy's setup timeframe,
+  then `StrategyInitialStopResolver` on its execution timeframe (atr,
+  vwap_minus_atr or swing_low, as the strategy says).
+- **Target:** the `StrategyOrderPlanner` rule: VWAP mode targets the execution VWAP;
+  otherwise entry plus the stop distance times the target R multiple. A target not
+  above the entry is not offered.
+- **Market state:** the live streaming processor, warmed to the paper profile's
+  `IndicatorWarmupBars`. A symbol the processor does not already track is not
+  queried (querying would register a pipeline that only explicit eviction removes).
+- **Empty, with a reason:** without a strategy, a quote, streamed state or warm
+  indicators, the field is empty and a note under it says why. The operator enters
+  it, and the server's review re-checks whatever is posted.
+- **1R preset:** sizes to account equity times the profile's `AccountRiskBudgetPct`
+  over the stop distance; disabled when either is unknown. It used a fixed 1% of
+  the current notional before.
+
+The quantity still opens at 1 share, as before; it is a starting count, not a price.
+
+### Change and Change %
+
+The Last cell shows the change against the previous session close, with the close
+and its date in the tooltip, and an optional sortable Chg % column. The close comes
+from Alpaca's snapshot endpoint (`/v2/stocks/snapshots`, `dailyBar` and
+`prevDailyBar`) in one batched request per view, cached per symbol per New York day.
+The reference is the latest daily bar dated before today in New York, which is right
+before the open, in the session and after hours. The desk script recomputes the
+change from every live quote. A symbol Alpaca does not answer for shows a dash.
+
+Sources: [Alpaca snapshot API guide](https://alpaca.markets/learn/snapshot-api),
+[Alpaca snapshots reference](https://docs.alpaca.markets/reference/stocksnapshots-1).
+The endpoint's response format could not be fetched from this environment (Alpaca's
+hosts are blocked); it is taken from those pages' published examples via search, and
+the parser accepts either a symbol-keyed body or a `snapshots` wrapper.
+
+### Finviz: saved screens and a query fix
+
+- **Save as preset** on the desk's custom query saves the screen in view by name.
+- **Fix:** a saved preset, a pasted URL or an `f=` string reached Finviz as a bare
+  filter list (`/export?cap_smallover,...`) without its `f=` key, so the filters
+  were likely not applied. `FinvizClient` now sends a bare list as `f=`, and pasted
+  URLs keep their `s=` signal as well as their filters. This also covers the
+  Wishlists screen's presets and screener verification.
+
+### Verification
+
+Tier: component. Nothing was confirmed or sent to a broker; no live Alpaca, Finviz
+or warmup-service call was possible here.
+
+- Solution build: 0 warnings, 0 errors.
+- New .NET tests: `DeskTicketPlanTests` (atr stop and R target, VWAP target on
+  either side of the entry, missing indicators, resolver rejection, too few bars,
+  limit selection, risk budget, no strategy / quote / state, and an untracked
+  symbol never queried), `AlpacaPreviousCloseTests` (in-session, pre-open, null
+  bars, wrapper shape, New York dates, row change), the snapshot request and cache
+  test, the bare-filter client test and the preset normalization tests. All pass.
+- Full .NET suite: 1,655 passed, 39 failed; the same 39 as the unchanged base commit.
+- Full Playwright UI suite: 91 of 91 passed, on a fresh UI data root and again on the
+  persisted one. New `desk-ticket-change-preset.spec.js` covers empty ticket prices
+  with reasons and a disabled 1R on both screens, change text and its live
+  recompute, the phone picker at list level only, the eight new signals, and saving
+  a custom screen.
+
 ## Not delivered yet
 
-- A universe picker on the phone.
-- Change and Change % columns. The quote payload has no previous close; see the
+- A Volume / RVOL column: indicator state is not kept for watching rows; see the
   remarks on `WishlistDeskRow`.
-- Listing Finviz browser-saved screens (no Finviz endpoint exists) and the
-  unconfirmed signals listed above.
+- Listing the screens saved in the Finviz browser UI: Finviz has no endpoint for it.
 
 ## Verification: screen 1
 

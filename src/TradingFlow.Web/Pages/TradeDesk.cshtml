@@ -59,6 +59,18 @@
         _ => source
     };
 
+    // Change against the previous session close, with its date and price in the
+    // title, so the reference is never implied. Unknown renders as a dash.
+    static string ChangeText(decimal? change, decimal? pct) =>
+        change is null || pct is null ? "—" : $"{Signed(change, "0.00")} ({SignedPercent(pct)})";
+
+    static string ChangeTitle(AlpacaPreviousClose? close) => close is null
+        ? "No previous close from Alpaca for this symbol."
+        : $"Change vs the {close.SessionDate:dd MMM} close of {close.Close:C2}.";
+
+    static string? PreviousCloseValue(AlpacaPreviousClose? close) =>
+        close?.Close.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
     static string ListsText(IReadOnlyList<string> lists) =>
         lists.Count == 0 ? "Not on a list" : String.Join(", ", lists);
 
@@ -260,6 +272,17 @@
                    placeholder="Finviz Elite URL, f=… filter string, or s=… signal" />
             <button class="btn btn-secondary" type="submit">Run screen</button>
         </form>
+        @if (!String.IsNullOrWhiteSpace(Model.ScreenerQuery) && !Model.ScreenerIsFromPicker)
+        {
+            @* Finviz cannot list the screens saved in its own UI. Pasting one here,
+               running it and saving it by name makes it pickable from then on. *@
+            <form method="post" asp-page-handler="SaveScreener" asp-all-route-data="Model.RouteWith()" class="desk-custom-screen-form">
+                <label class="visually-hidden" for="PresetName">Preset name</label>
+                <input class="input" id="PresetName" name="presetName" type="text" maxlength="120" required
+                       autocomplete="off" placeholder="Name this screen to save it" />
+                <button class="btn btn-secondary" type="submit">Save as preset</button>
+            </form>
+        }
     </details>
 }
 
@@ -588,14 +611,20 @@ else if (Model.IsScreenerScope)
                                     <span class="cell-sub">@row.DisplayName</span>
                                     <span class="cell-sub market-lists @(row.IsPositionOnly ? "is-position-only" : null)" title="@ListsText(row.Lists)">@ListsText(row.Lists)</span>
                                 </td>
-                                @* Session change needs a previous close, which the quote
-                                   payload does not carry. It renders as unknown rather
-                                   than borrowing the position's P/L, which would read as
-                                   a price move it is not. *@
+                                @* Change against the previous session close from Alpaca's
+                                   snapshot. Unknown stays unknown rather than borrowing the
+                                   position's P/L, which would read as a price move it is not.
+                                   The desk script recomputes it on every live quote. *@
                                 <td class="num" data-column="price">
                                     <strong data-quote-field="mid">@row.Quote.DisplayPrice</strong>
-                                    <span class="cell-sub value-signed flat"
-                                          title="Session change needs a previous close, which the quote feed does not carry.">—</span>
+                                    <span class="cell-sub @SignedClass(row.ChangePct)" data-change-field
+                                          data-prev-close="@PreviousCloseValue(row.PreviousClose)"
+                                          title="@ChangeTitle(row.PreviousClose)">@ChangeText(row.Change, row.ChangePct)</span>
+                                </td>
+                                <td class="num" data-column="change" hidden="@startsHidden.Contains("change")">
+                                    <span class="@SignedClass(row.ChangePct)" data-change-field data-change-mode="pct"
+                                          data-prev-close="@PreviousCloseValue(row.PreviousClose)"
+                                          title="@ChangeTitle(row.PreviousClose)">@SignedPercent(row.ChangePct)</span>
                                 </td>
                                 <td class="quote-cell" data-column="bidask">
                                     <span data-quote-field="bid">@row.Quote.DisplayBid</span> / <span data-quote-field="ask">@row.Quote.DisplayAsk</span>
@@ -697,7 +726,9 @@ else if (Model.IsScreenerScope)
                 </div>
                 <div class="desk-focus-price">
                     <strong data-selected-quote="mid">@row.Quote.DisplayPrice</strong>
-                    <span class="@SignedClass(row.Trade?.UnrealizedPlPct)">@(row.Trade is null ? "—" : SignedPercent(row.Trade.UnrealizedPlPct))</span>
+                    <span class="@SignedClass(row.ChangePct)" data-selected-change
+                          data-prev-close="@PreviousCloseValue(row.PreviousClose)"
+                          title="@ChangeTitle(row.PreviousClose)">@ChangeText(row.Change, row.ChangePct)</span>
                 </div>
                 <div class="cell-strip desk-focus-strip">
                     <div><span class="cell-label">Bid</span><span class="cell-value" data-selected-quote="bid">@row.Quote.DisplayBid</span></div>
@@ -772,7 +803,9 @@ else if (Model.IsScreenerScope)
                     </div>
                     <div class="desk-rail-price">
                         <strong data-selected-quote="mid">@row.Quote.DisplayPrice</strong>
-                        <span class="@SignedClass(row.Trade?.UnrealizedPlPct)">@(row.Trade is null ? "—" : SignedPercent(row.Trade.UnrealizedPlPct))</span>
+                        <span class="@SignedClass(row.ChangePct)" data-selected-change
+                              data-prev-close="@PreviousCloseValue(row.PreviousClose)"
+                              title="@ChangeTitle(row.PreviousClose)">@ChangeText(row.Change, row.ChangePct)</span>
                     </div>
                 </div>
                 <div class="cell-strip">
@@ -818,9 +851,6 @@ else if (Model.IsScreenerScope)
             <partial name="_DeskEvidencePair" model="new DeskEvidenceModel(selected, true)" />
             <partial name="_DeskAgreementBand" model="selected" />
 
-            // Placeholders only: the shared defaults follow the selected strategy's exit
-            // rules, so a ticket opened against a strategy inherits its risk shape.
-            var defaults = DeskTicketDefaults.For(row.Quote.AskPrice, row.Quote.MidPrice, selectedStrategy?.Definition.ExitRules);
             var preview = Model.TicketPreview;
             var hasPosition = row.Trade is not null;
             var ticketRoute = Model.RouteWith(("ticker", selected.Ticker));
@@ -828,9 +858,7 @@ else if (Model.IsScreenerScope)
                 row,
                 Model.Env,
                 Model.DeskHorizon,
-                defaults.Limit,
-                defaults.Stop,
-                defaults.Target,
+                Model.TicketPlan,
                 hasPosition,
                 preview,
                 Model.TicketConfirmation) { ViewRoute = ticketRoute }" />

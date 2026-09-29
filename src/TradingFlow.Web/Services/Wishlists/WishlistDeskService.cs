@@ -77,15 +77,17 @@ public sealed class WishlistDeskService
 
         var tickerSet = universe.Tickers;
         var quotesTask = quoteService.GetLatestQuotesAsync(tickerSet.ToArray(), quoteFeed, cancellationToken);
+        var previousClosesTask = quoteService.GetPreviousClosesAsync(tickerSet.ToArray(), quoteFeed, DateTimeOffset.UtcNow, cancellationToken);
         var since = DateTimeOffset.UtcNow.Subtract(signalWindow);
         var recentSignalsTask = universe.WishlistId is { } wishlistId
             ? wishlists.GetSignalsAsync(wishlistId, ticker: null, since, limit: 100, cancellationToken)
             : wishlists.GetSignalsAsync(wishlistId: null, ticker: null, since, limit: 500, cancellationToken);
         var relatedNewsTask = LoadRelatedNewsAsync(tickerSet, newsWindow, cancellationToken);
 
-        await Task.WhenAll(quotesTask, runningTradesTask, recentSignalsTask, relatedNewsTask);
+        await Task.WhenAll(quotesTask, previousClosesTask, runningTradesTask, recentSignalsTask, relatedNewsTask);
 
         var quotes = await quotesTask;
+        var previousCloses = await previousClosesTask;
         var everyTrade = await runningTradesTask;
         var runningTrades = everyTrade
             .Where(trade => tickerSet.Contains(trade.Ticker))
@@ -126,7 +128,8 @@ public sealed class WishlistDeskService
             return new WishlistDeskRow(member.Item, quote, trade, signal, news)
             {
                 Lists = member.Lists,
-                IsPositionOnly = member.IsPositionOnly
+                IsPositionOnly = member.IsPositionOnly,
+                PreviousClose = previousCloses.GetValueOrDefault(member.Ticker)
             };
         }).ToArray();
 
@@ -186,17 +189,12 @@ public sealed record WishlistDeskSnapshot(
 /// Nothing here calls a provider or re-derives an engine decision.
 /// </summary>
 /// <remarks>
-/// Two TradingView-parity columns were investigated and deliberately left out
-/// because no honest server-side source exists on this path:
+/// <b>Change / Change %</b> read against <see cref="PreviousClose"/>, which comes
+/// from Alpaca's batched snapshot endpoint - one request for the whole view,
+/// cached per symbol per New York day - rather than a per-symbol bar request.
+/// A symbol Alpaca does not answer for shows its change as unknown.
+/// One TradingView-parity column is still deliberately left out:
 /// <list type="bullet">
-/// <item><description>
-/// <b>Change / Change %</b> needs a prior close. The only previous-close values in
-/// the system are <c>CandidateRecord.PreviousClose</c>, written by the market-state
-/// candidate discovery pipeline for Finviz-screened symbols, and the daily bars a
-/// backtest spills through <c>ICandleStore</c> under a specific scope/run name.
-/// Neither covers an arbitrary wishlist ticker, and reaching a close for one would
-/// mean a new market-data request per symbol on every desk render.
-/// </description></item>
 /// <item><description>
 /// <b>Volume / RVOL</b> needs indicator state. <c>IndicatorSnapshot</c> is computed
 /// inside <see cref="WishlistObserverService"/> and discarded after evaluation; only
@@ -220,6 +218,17 @@ public sealed record WishlistDeskRow(
 
     /// <summary>True when the row exists only because a position is open in a symbol on no list.</summary>
     public bool IsPositionOnly { get; init; }
+
+    /// <summary>The last completed session close before today, or null when Alpaca did not supply one.</summary>
+    public AlpacaPreviousClose? PreviousClose { get; init; }
+
+    /// <summary>Last (inside mid) minus the previous close, or null when either is unknown.</summary>
+    public decimal? Change => LastPrice is { } last && PreviousClose is { } previous ? last - previous.Close : null;
+
+    /// <summary>Change as a percentage of the previous close, or null when unknown.</summary>
+    public decimal? ChangePct => Change is { } change && PreviousClose is { Close: > 0m } previous
+        ? change / previous.Close * 100m
+        : null;
 
     /// <summary>Quantity times entry price of the tracked position, or null with none open.</summary>
     public decimal? PositionCost => Trade is null ? null : Math.Abs(Trade.Quantity) * Trade.EntryPrice;

@@ -206,14 +206,14 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             return ($"Finviz · {signal.Label}", signal.Query);
         }
 
-        // 1. A full Finviz URL: the filter lives in the query string, and the
-        //    rest of the URL (view, order, auth) is not ours to forward.
+        // 1. A full Finviz URL: the filters (f=) and the signal (s=) both decide
+        //    which stocks the screen returns, so both are kept. View, order and
+        //    auth are not ours to forward.
         if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
-            var parameters = HttpUtility.ParseQueryString(uri.Query);
-            var filter = parameters["f"];
-            return (String.IsNullOrWhiteSpace(filter) ? trimmed : $"Finviz screen {filter}", filter ?? String.Empty);
+            var selecting = ScreenerPresetService.SelectingParameters(uri.Query);
+            return (String.IsNullOrWhiteSpace(selecting) ? trimmed : $"Finviz screen {selecting}", selecting);
         }
 
         // 2. A saved swing screener preset, matched by name.
