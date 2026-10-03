@@ -12,7 +12,7 @@ record with research sources) before changing anything.
 | Repository | `https://github.com/manishgh/trading_flow` |
 | Implementation | on `main` at `cbc8116`, also on branch `claude/sharp-johnson-qd88ey` |
 | Base before this work | `93bd5a5` (Record successful main publication) |
-| This handoff file | committed on `claude/sharp-johnson-qd88ey` on top of `cbc8116` |
+| This handoff file | on `main` and `claude/sharp-johnson-qd88ey`, in docs-only commits on top of `cbc8116` |
 
 The three implementation commits, oldest first:
 
@@ -41,7 +41,7 @@ git status
 git fetch origin
 git rev-list --left-right --count main...origin/main   # local-only / remote-only commits
 git log --oneline origin/main..main                     # commits only on your machine
-git log --oneline main..origin/main                     # should be 0720173, c41f3f4, cbc8116
+git log --oneline main..origin/main                     # 0720173, c41f3f4, cbc8116 and the handoff doc commits
 git stash list
 ```
 
