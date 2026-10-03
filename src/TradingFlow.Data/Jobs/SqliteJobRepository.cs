@@ -49,6 +49,8 @@ public sealed class SqliteJobRepository : IDurableJobRepository
         await context.Database.UseTransactionAsync(transaction, cancellationToken);
         try
         {
+            if (await context.Jobs.AnyAsync(candidate => candidate.Id == job.Id, cancellationToken))
+                return false;
             var nonTerminalCount = await context.Jobs.CountAsync(candidate =>
                 candidate.JobType == job.JobType &&
                 candidate.Status != "completed" &&

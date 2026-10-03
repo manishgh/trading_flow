@@ -1,4 +1,4 @@
-﻿using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Strategies;
 
 namespace TradingFlow.Web.Models;
@@ -39,7 +39,12 @@ public sealed record BacktestRunRequest(
     decimal MaxPositionNotionalPct,
     int MaxConcurrentPositions,
     string CachePolicy,
-    IReadOnlyList<StrategyParameterOverride> StrategyOverrides);
+    IReadOnlyList<StrategyParameterOverride> StrategyOverrides,
+    DateTimeOffset? TestWindowStartUtc = null,
+    DateTimeOffset? TestWindowEndUtc = null,
+    Guid? UniverseSnapshotId = null,
+    DateTimeOffset? UniverseResolvedAtUtc = null,
+    string UniverseSource = "wishlist");
 
 public sealed record StrategyParameterOverride(
     string StrategyPath,
@@ -144,7 +149,8 @@ public sealed record BacktestJobSnapshot(
     IReadOnlyList<string> Events,
     BacktestResult? Result,
     IReadOnlyList<BacktestStrategyRunGroup>? StrategyGroups = null,
-    DateTimeOffset? CancellationRequestedAt = null);
+    DateTimeOffset? CancellationRequestedAt = null,
+    string? ArtifactDirectory = null);
 
 public sealed record BacktestStrategyRunGroup(
     string StrategyName,
@@ -197,4 +203,3 @@ public sealed record OptimizationRunSnapshot(
     int? WinningTradeCount,
     int? LosingTradeCount,
     string Status);
-

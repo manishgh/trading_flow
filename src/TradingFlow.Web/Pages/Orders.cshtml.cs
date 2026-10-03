@@ -3,12 +3,14 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Web.Services;
+using TradingFlow.Contracts.V1;
 
 namespace TradingFlow.Web.Pages;
 
 public sealed class OrdersModel(
     IOrderActivityQuery orders,
-    AlpacaManualOrderService manualOrders,
+    IOrderWorkflowService workflow,
+    IOrderIntentRepository intents,
     TradingEnvironmentService environments) : PageModel
 {
     public static IReadOnlyList<(string Key, string Label)> Filters { get; } =
@@ -140,7 +142,8 @@ public sealed class OrdersModel(
     /// does not stop a POST.
     /// </remarks>
     public async Task<IActionResult> OnPostCancelAsync(
-        string brokerOrderId,
+        string clientOrderId,
+        string idempotencyKey,
         CancellationToken cancellationToken)
     {
         if (!EnvironmentState.IsEnabled)
@@ -152,10 +155,12 @@ public sealed class OrdersModel(
 
         try
         {
-            var cancelled = await manualOrders.CancelOrderAsync(brokerOrderId, cancellationToken);
-            StatusMessage = cancelled
-                ? "Cancel request accepted. The order journal will show the terminal state once the broker confirms."
-                : "The broker did not accept the cancel request; the order may already be terminal.";
+            var intent = await intents.GetByClientOrderIdAsync(clientOrderId, cancellationToken)
+                ?? throw new InvalidOperationException("The journaled order was not found.");
+            var result = await workflow.CancelAsync(new CancelOrderRequest(
+                ContractVersions.VersionOne, intent.AccountId, intent.IntentId,
+                "Operator requested cancellation from the order journal.", idempotencyKey), cancellationToken);
+            StatusMessage = $"{result.State}: {result.RejectionReason ?? "Cancellation is recorded; the journal updates when the broker confirms."}";
         }
         catch (InvalidOperationException exception)
         {

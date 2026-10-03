@@ -1,0 +1,61 @@
+@page
+@{
+    ViewData["Title"] = "Candidate audit";
+}
+<section class="panel">
+    <h1>Candidate audit</h1>
+    <p data-audit-status role="status">Loading durable evidence…</p>
+    <div data-audit-content></div>
+    <a asp-page="/TradeDesk" asp-route-runId="@Request.Query["runId"]" asp-route-env="@Request.Query["env"]">Return to candidates</a>
+</section>
+@section Scripts {
+<script>
+(async () => {
+    const status = document.querySelector("[data-audit-status]");
+    const content = document.querySelector("[data-audit-content]");
+    const id = new URLSearchParams(location.search).get("candidateId");
+    function section(title, value) {
+        const heading = document.createElement("h2"); heading.textContent = title;
+        const text = document.createElement("p"); text.style.whiteSpace = "pre-wrap"; text.style.overflowWrap = "anywhere";
+        text.textContent = value; content.append(heading, text);
+    }
+    try {
+        if (!id) throw new Error("A candidate identifier is required.");
+        const response = await window.tradingFlowFetch("/api/v1/candidates/" + encodeURIComponent(id) + "/audit", { cache: "no-store" });
+        if (!response.ok) throw new Error(response.status === 404 ? "Candidate evidence was not found." : "Evidence is unavailable.");
+        const audit = await response.json();
+        status.textContent = audit.candidate.symbol + " · " + audit.candidate.readiness.replaceAll("_", " ");
+        section("Strategy identity", audit.candidate.strategy.strategyId + " · " + audit.candidate.strategy.semanticVersion + "\n" + audit.candidate.strategy.contentSha256);
+        section("Decision history", audit.transitions.map(item => item.occurredAtUtc + " · " + item.newState + " · " + item.reasonCode).join("\n") || "No decision transition recorded.");
+        section("Gate evidence", audit.gateEvaluations.length ? "Expand a gate to inspect its recorded inputs." : "No gate evaluation recorded.");
+        for (const gate of audit.gateEvaluations) {
+            const details = document.createElement("details"), heading = document.createElement("summary"), inputs = document.createElement("p");
+            heading.textContent = gate.gateName + ": " + (gate.passed ? "passed" : gate.rejectionCode);
+            inputs.style.overflowWrap = "anywhere"; inputs.textContent = JSON.stringify(gate.inputs);
+            details.append(heading, inputs); content.append(details);
+        }        const market = audit.marketEvidence;
+        section("Completed market evidence", market
+            ? "Candle: " + (market.latestCompletedCandleAtUtc || "unavailable") + "\nSession: " + market.session +
+              "\nPrice: " + (market.lastPrice ?? "unavailable") + " · spread: " + (market.spreadBps ?? "unavailable") +
+              " bps\nSame-time relative volume: " + (market.sameTimeRelativeVolume ?? "unavailable") +
+              " · samples: " + (market.relativeVolumeSampleCount ?? "unavailable")
+            : "Market inputs incomplete.");
+        const execution = audit.executionEvidence;
+        section("Execution", execution
+            ? execution.state + "\nRequested: " + (execution.requestedQuantity ?? "unavailable") +
+              " · filled: " + (execution.filledQuantity ?? "unavailable") + "\nFill price: " +
+              (execution.averageFillPrice ?? "unavailable") + "\nOrder: " + (execution.brokerOrderId || execution.clientOrderId || "unavailable")
+            : "No order evidence recorded.");
+        const news = audit.catalystEvidence;
+        section("Attached catalyst", news ? (news.headline || "Headline unavailable") + "\n" + news.provider + " · " + news.providerArticleId : "No catalyst attached to this decision.");
+        if (news?.url) {
+            const url = new URL(news.url);
+            if (["http:", "https:"].includes(url.protocol)) {
+                const link = document.createElement("a"); link.href = url.href; link.textContent = "Open attached article";
+                link.target = "_blank"; link.rel = "noopener noreferrer"; content.append(link);
+            }
+        }
+    } catch (error) { status.textContent = error.message; }
+})();
+</script>
+}

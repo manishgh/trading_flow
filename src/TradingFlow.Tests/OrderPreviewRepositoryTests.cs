@@ -81,7 +81,7 @@ public sealed class OrderPreviewRepositoryTests
     }
 
     [Fact]
-    public async Task ExpiredPreview_IsRejectedWithoutOwningConfirmation()
+    public async Task ExpiredUnsubmittedPreview_ClaimsOwnerForWorkflowToPersistFullRejection()
     {
         await using var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
@@ -99,9 +99,9 @@ public sealed class OrderPreviewRepositoryTests
             createdAt.AddSeconds(6),
             TimeSpan.FromSeconds(20));
 
-        Assert.False(claim.OwnsConfirmation);
-        Assert.Equal("rejected", claim.Preview.Status);
-        Assert.Contains("preview_expired", claim.Preview.OutcomeJson, StringComparison.Ordinal);
+        Assert.True(claim.OwnsConfirmation);
+        Assert.Equal("validating", claim.Preview.Status);
+        Assert.Null(claim.Preview.OutcomeJson);
     }
 
     private static OrderPreviewRecord CreatePreview(

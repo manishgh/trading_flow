@@ -69,12 +69,11 @@ public sealed class UniverseCandidateWorkflowTests
                     new string('b', 64))])
         };
         var preview = ToPreview(snapshotId, aggregates);
-        var workflowStore = new WorkflowStore(preview);
         var store = new CandidateStore();
+        var workflowStore = new WorkflowStore(preview, store);
         var strategyResolver = new Mock<IStrategyIdentityResolver>();
         var service = new CandidateWorkflowService(
             workflowStore,
-            store,
             store,
             strategyResolver.Object,
             new FixedTimeProvider(Now));
@@ -94,7 +93,7 @@ public sealed class UniverseCandidateWorkflowTests
         Assert.Equal(strategy, candidate.Strategy);
         Assert.Equal("swing", store.Records.Single().Horizon);
         Assert.Single(store.Records);
-        strategyResolver.Verify(item => item.RequireSwingStrategyAsync(strategy, "backtest", It.IsAny<CancellationToken>()), Times.Exactly(2));
+        strategyResolver.Verify(item => item.RequireSwingStrategyAsync(strategy, "backtest", It.IsAny<CancellationToken>()), Times.Once());
     }
 
     [Fact]
@@ -105,8 +104,8 @@ public sealed class UniverseCandidateWorkflowTests
         strategies.Setup(item => item.RequireSwingStrategyAsync(It.IsAny<StrategyReference>(), "backtest", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("content hash mismatch"));
         var store = new CandidateStore();
-        var workflowStore = new WorkflowStore(null);
-        var service = new CandidateWorkflowService(workflowStore, store, store, strategies.Object, new FixedTimeProvider(Now));
+        var workflowStore = new WorkflowStore(null, store);
+        var service = new CandidateWorkflowService(workflowStore, store, strategies.Object, new FixedTimeProvider(Now));
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(
             new CreateCandidateRunRequest(
@@ -129,10 +128,10 @@ public sealed class UniverseCandidateWorkflowTests
             new ActiveDiscoveryAggregate(Guid.NewGuid(), snapshotId, "MSFT", "swing", Now, Now, Now.AddMinutes(2), 1,
                 [new DiscoverySourceEvidence("wishlist", "watch", Now, Now.AddMinutes(2), "{}", Guid.NewGuid(), 1, Now, false, "wishlist:watch", new string('d', 64))])
         };
-        var workflowStore = new WorkflowStore(ToPreview(snapshotId, aggregates));
         var candidates = new CandidateStore();
+        var workflowStore = new WorkflowStore(ToPreview(snapshotId, aggregates), candidates);
         var resolver = Mock.Of<IStrategyIdentityResolver>();
-        var service = new CandidateWorkflowService(workflowStore, candidates, candidates, resolver, new FixedTimeProvider(Now));
+        var service = new CandidateWorkflowService(workflowStore, candidates, resolver, new FixedTimeProvider(Now));
         var first = new CreateCandidateRunRequest(ContractVersions.VersionOne, "same-key", "backtest", snapshotId,
             [new StrategyReference("swing.one", "1.0.0", new string('1', 64))], Now);
         var changed = first with
@@ -234,7 +233,7 @@ public sealed class UniverseCandidateWorkflowTests
             Task.FromResult<IReadOnlyList<CandidateTransitionRecord>>([]);
     }
 
-    private sealed class WorkflowStore(UniversePreviewRecord? preview) : IUniversePreviewRepository, IApplicationEventRepository
+    private sealed class WorkflowStore(UniversePreviewRecord? preview, CandidateStore candidates) : IUniversePreviewRepository, IApplicationEventRepository
     {
         private readonly Dictionary<string, CandidateRunRequestRecord> requests = new(StringComparer.Ordinal);
         private readonly List<ApplicationEventRecord> events = [];
@@ -243,7 +242,11 @@ public sealed class UniverseCandidateWorkflowTests
         public Task<UniversePreviewRecord?> GetAsync(Guid universeSnapshotId, CancellationToken cancellationToken = default) =>
             Task.FromResult(preview?.UniverseSnapshotId == universeSnapshotId ? preview : null);
 
-        public Task<CandidateRunReservation> ReserveCandidateRunAsync(CandidateRunRequestRecord request, CancellationToken cancellationToken = default)
+        public Task<CandidateRunRequestRecord?> FindCandidateRunAsync(string key, CancellationToken cancellationToken = default) =>
+            Task.FromResult(requests.GetValueOrDefault(key));
+
+        public async Task<CandidateRunReservation> CreateCandidateRunAsync(CandidateRunRequestRecord request,
+            ProductionRun run, IReadOnlyList<CandidateRecord> records, CancellationToken cancellationToken = default)
         {
             if (requests.TryGetValue(request.IdempotencyKey, out var existing))
             {
@@ -251,10 +254,11 @@ public sealed class UniverseCandidateWorkflowTests
                 {
                     throw new IdempotencyKeyConflictException(request.IdempotencyKey);
                 }
-                return Task.FromResult(new CandidateRunReservation(existing.CandidateRunId, false));
+                return new CandidateRunReservation(existing.CandidateRunId, false);
             }
             requests.Add(request.IdempotencyKey, request);
-            return Task.FromResult(new CandidateRunReservation(request.CandidateRunId, true));
+            foreach (var record in records) await candidates.UpsertDiscoveryAsync(run, record, cancellationToken);
+            return new CandidateRunReservation(request.CandidateRunId, true);
         }
 
         public Task<long> AppendAsync(string streamName, string eventType, DateTimeOffset occurredAtUtc, string payloadJson, CancellationToken cancellationToken = default)

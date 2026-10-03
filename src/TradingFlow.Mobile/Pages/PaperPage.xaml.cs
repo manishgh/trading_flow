@@ -1,10 +1,11 @@
+using TradingFlow.Contracts.V1;
 using System.Collections.ObjectModel;
 using TradingFlow.Mobile.Services;
 using TradingFlow.Mobile.Resources.Styles;
 
 namespace TradingFlow.Mobile.Pages;
 
-public partial class PaperPage : ContentPage
+public partial class PaperPage : ContentPage, IQueryAttributable
 {
     private readonly TradingFlowApiClient api = AppServices.Api;
     private readonly ObservableCollection<BacktestJobSnapshot> jobs = new();
@@ -16,8 +17,15 @@ public partial class PaperPage : ContentPage
     private IReadOnlyList<MobileWishlistResponse> wishlists = Array.Empty<MobileWishlistResponse>();
     private BacktestJobSnapshot? selectedJob;
     private BacktestJobSnapshot? lastRun;
+    private StartPaperRunRequest? pendingRequest;
+    private string? preparationKey;
+    public void ApplyQueryAttributes(IDictionary<string,object> query)
+    { if(query.TryGetValue("preparationKey",out var key)) { preparationKey=Uri.UnescapeDataString(key.ToString()??""); pendingRequest=null; } }
     private bool isLoading;
+    private CancellationTokenSource? pageLifetime;
     private bool suppressPersist;
+    private bool refreshingForm;
+    private bool updatingJobs;
     private bool formRestored;
 
     public PaperPage()
@@ -43,14 +51,31 @@ public partial class PaperPage : ContentPage
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        pageLifetime?.Cancel(); pageLifetime?.Dispose(); pageLifetime = new();
+        api.SessionChanged += OnSessionChanged;
         refreshTimer.Start();
         await LoadAsync();
+        if(preparationKey is not null)
+        {
+            try {var review=await api.Workflow.AcceptedPreparationAsync(preparationKey,pageLifetime.Token);
+                StatusLabel.Text=$"Preparation {review.UniverseSnapshotId}: {String.Join(", ",review.Symbols)}. Expires {review.ExpiresAtUtc.ToLocalTime():g}. Source selectors are replaced by this accepted membership.";
+                WishlistPicker.IsEnabled=false;ScreenerEntry.IsEnabled=false;
+            } catch(Exception ex) {StatusLabel.Text=ex.Message;}
+        }
     }
 
     protected override void OnDisappearing()
     {
-        refreshTimer.Stop();
+        refreshTimer.Stop(); pageLifetime?.Cancel();
+        api.SessionChanged -= OnSessionChanged;
         base.OnDisappearing();
+    }
+
+    private void OnSessionChanged(object? sender, EventArgs e)
+    {
+        pageLifetime?.Cancel(); refreshTimer.Stop(); catalog = null; pendingRequest = null; preparationKey = null;
+        jobs.Clear(); selectedJob = null; RenderSelectedJob();
+        StatusLabel.Text = "Connection changed. Reopen this page after signing in.";
     }
 
     private async Task LoadAsync(bool showBusy = true)
@@ -60,18 +85,26 @@ public partial class PaperPage : ContentPage
             return;
         }
 
+        var token = pageLifetime?.Token ?? new CancellationToken(true);
+        if (token.IsCancellationRequested) return;
         isLoading = true;
         BusyIndicator.IsVisible = showBusy;
         BusyIndicator.IsRunning = showBusy;
         try
         {
-            var healthy = await api.CheckHealthAsync();
+            var healthy = await api.CheckHealthAsync(token);
+            token.ThrowIfCancellationRequested();
             StatusLabel.Text = healthy
                 ? $"Connected: {api.BaseUrl}"
                 : $"Backend unreachable: {api.BaseUrl}";
             StatusLabel.TextColor = healthy ? ThemePalette.Positive : ThemePalette.Negative;
 
-            catalog ??= await api.GetCatalogAsync();
+            if (showBusy || catalog is null) {
+            refreshingForm = true;
+            var previousConfig = (ConfigPicker.SelectedItem as MobileRunConfigOption)?.Path;
+            var previousStrategy = (StrategyPicker.SelectedItem as MobileStrategyOption)?.Path;
+            catalog = await api.GetCatalogAsync(token);
+            token.ThrowIfCancellationRequested();
             ConfigPicker.ItemsSource = catalog?.PaperConfigs.ToList();
             RestoreFormState();
             ApplyPaperModeSelection();
@@ -88,7 +121,8 @@ public partial class PaperPage : ContentPage
             }
 
             var previousWishlistId = (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Id;
-            wishlists = await api.GetWishlistsAsync() ?? Array.Empty<MobileWishlistResponse>();
+            wishlists = await api.GetWishlistsAsync(token) ?? Array.Empty<MobileWishlistResponse>();
+            token.ThrowIfCancellationRequested();
             suppressPersist = true;
             WishlistPicker.ItemsSource = wishlists.ToList();
             WishlistPicker.SelectedItem = wishlists.FirstOrDefault(wishlist => wishlist.Id == previousWishlistId)
@@ -97,28 +131,37 @@ public partial class PaperPage : ContentPage
                 ?? wishlists.FirstOrDefault();
             suppressPersist = false;
 
-            var latestJobs = await api.GetPaperJobsAsync() ?? Array.Empty<BacktestJobSnapshot>();
-            var latestAutomationSessions = await api.GetAutomationSessionsAsync() ?? Array.Empty<MobileAutomationSessionSnapshot>();
+            if (previousConfig is not null) SelectConfigByPath(previousConfig);
+            if (previousStrategy is not null) SelectStrategyByPath(previousStrategy);
+            refreshingForm = false;
+            }
+            var latestJobs = await api.GetPaperJobsAsync(token) ?? Array.Empty<BacktestJobSnapshot>();
+            token.ThrowIfCancellationRequested();
+            var latestAutomationSessions = await api.GetAutomationSessionsAsync(token) ?? Array.Empty<MobileAutomationSessionSnapshot>();
+            token.ThrowIfCancellationRequested();
             lastRun = latestJobs.FirstOrDefault();
             RenderLastRun();
 
+            updatingJobs = true;
             jobs.Clear();
             foreach (var job in latestJobs.Where(IsActiveJob).Take(12))
             {
                 jobs.Add(job);
             }
 
+            JobsView.SelectedItem = jobs.FirstOrDefault(item => item.JobId == selectedJob?.JobId);
+            updatingJobs = false;
             automationSessions.Clear();
             foreach (var session in latestAutomationSessions.Take(12))
             {
                 automationSessions.Add(session);
             }
 
-            selectedJob = selectedJob is null
-                ? null
-                : latestJobs.FirstOrDefault(job => job.JobId == selectedJob.JobId);
+            if (selectedJob is { } selection) await RefreshSelectedAsync(selection.JobId, token);
+            token.ThrowIfCancellationRequested();
             RenderSelectedJob();
         }
+        catch (OperationCanceledException) { }
         catch (Exception exception)
         {
             StatusLabel.Text = $"Error: {exception.Message}";
@@ -127,6 +170,7 @@ public partial class PaperPage : ContentPage
         }
         finally
         {
+            refreshingForm = false; updatingJobs = false;
             isLoading = false;
             BusyIndicator.IsRunning = false;
             BusyIndicator.IsVisible = false;
@@ -208,22 +252,28 @@ public partial class PaperPage : ContentPage
         try
         {
             RunButton.IsEnabled = false;
-            var request = new MobilePaperRunRequest(
-                config.Path,
-                strategy.Path,
-                String.IsNullOrWhiteSpace(RunNameEntry.Text)
-                    ? $"paper_{DateTimeOffset.Now:yyyyMMdd_HHmmss}"
-                    : RunNameEntry.Text.Trim(),
-                Array.Empty<string>(),
-                String.IsNullOrWhiteSpace(ScreenerEntry.Text) ? null : ScreenerEntry.Text.Trim(),
-                AllowExtendedHoursTradingCheck.IsChecked,
-                NewsCheck.IsChecked,
-                OrderExpirationPicker.SelectedItem?.ToString() ?? "day",
-                EntryOrderTypePicker.SelectedItem?.ToString() ?? "market",
-                (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Id,
-                PaperModePicker.SelectedIndex == 1 ? "experiment" : "shadow");
-            var job = await api.StartPaperRunAsync(request);
-            if (job is not null)
+            if (pendingRequest is null)
+            {
+                var sources = new List<UniverseSourceSelectionRequest>();
+                if (WishlistPicker.SelectedItem is MobileWishlistResponse wishlist)
+                    sources.Add(new("wishlist", wishlist.Id.ToString(), wishlist.Id));
+                if (!String.IsNullOrWhiteSpace(ScreenerEntry.Text))
+                    sources.Add(new("finviz", ScreenerEntry.Text.Trim(), Query: ScreenerEntry.Text.Trim()));
+                Guid universeId;
+                if(preparationKey is not null) {
+                    var accepted=await api.Workflow.AcceptedPreparationAsync(preparationKey);
+                    if(DateTimeOffset.UtcNow>=accepted.ExpiresAtUtc)throw new InvalidOperationException("Preparation expired. Collect a new morning review.");
+                    universeId=accepted.UniverseSnapshotId;
+                } else universeId=(await api.Workflow.PreviewAsync(new(ContractVersions.VersionOne,"swing",null,sources))).UniverseSnapshotId;
+                pendingRequest = new(ContractVersions.VersionOne,
+                    String.IsNullOrWhiteSpace(RunNameEntry.Text) ? $"paper_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}" : RunNameEntry.Text.Trim(),
+                    universeId, new(strategy.ArtifactStrategyId, strategy.SemanticVersion, strategy.ContentSha256),
+                    NewsCheck.IsChecked, AllowExtendedHoursTradingCheck.IsChecked, EntryOrderTypePicker.SelectedItem?.ToString() ?? "limit",
+                    OrderExpirationPicker.SelectedItem?.ToString() ?? "day", "strategy_validated", Guid.NewGuid().ToString("N"),
+                    PaperModePicker.SelectedIndex == 1 ? "paper_experiment" : "paper_shadow", config.FileName);
+            }
+            var job = await api.StartPaperRunAsync(pendingRequest);
+            pendingRequest = null;            if (job is not null)
             {
                 jobs.Insert(0, job);
                 selectedJob = job;
@@ -243,6 +293,7 @@ public partial class PaperPage : ContentPage
 
     private void OnJobSelected(object? sender, SelectionChangedEventArgs e)
     {
+        if (updatingJobs) return;
         selectedJob = e.CurrentSelection.FirstOrDefault() as BacktestJobSnapshot;
         RenderSelectedJob();
     }
@@ -283,6 +334,11 @@ public partial class PaperPage : ContentPage
         LastRunStatusLabel.Text = $"{lastRun.Status} - {lastRun.LatestEvent}";
     }
 
+    private async Task RefreshSelectedAsync(Guid id, CancellationToken token)
+    {
+        var detail = await api.GetPaperJobAsync(id, token);
+        if (!token.IsCancellationRequested && selectedJob?.JobId == id) selectedJob = detail ?? selectedJob;
+    }
     private void RenderSelectedJob()
     {
         DetailCard.IsVisible = selectedJob is not null;
@@ -294,6 +350,10 @@ public partial class PaperPage : ContentPage
         }
 
         DetailTitle.Text = selectedJob.RunName;
+        var candidateLink = new Button { Text = "Open this run's candidates and audit" };
+        var candidateRunId = selectedJob.JobId;
+        candidateLink.Clicked += async (_, _) => await Shell.Current.GoToAsync(nameof(CandidatesPage) + "?runId=" + candidateRunId);
+        EventsStack.Add(candidateLink);
         DetailStatus.Text = $"{selectedJob.Status} - {selectedJob.ProgressText}";
         ResultLabel.Text = selectedJob.ResultSummary;
         foreach (var item in selectedJob.Events.Reverse().Take(8))
@@ -313,8 +373,9 @@ public partial class PaperPage : ContentPage
     {
         try
         {
-            var latest = await api.GetPaperPositionsAsync(jobId) ?? Array.Empty<MobilePaperPositionResponse>();
-            if (selectedJob?.JobId != jobId)
+            var token = pageLifetime?.Token ?? new CancellationToken(true);
+            var latest = await api.GetPaperPositionsAsync(jobId, token) ?? Array.Empty<MobilePaperPositionResponse>();
+            if (token.IsCancellationRequested || selectedJob?.JobId != jobId)
             {
                 return; // Selection changed while loading.
             }
@@ -372,6 +433,7 @@ public partial class PaperPage : ContentPage
 
     private void OnFormChanged(object? sender, EventArgs e)
     {
+        if (!suppressPersist && !refreshingForm) pendingRequest = null;
         if (AllowExtendedHoursTradingCheck.IsChecked)
         {
             SelectByValue(OrderExpirationPicker, "day");
@@ -411,7 +473,8 @@ public partial class PaperPage : ContentPage
 
     private void SaveFormState()
     {
-        if (suppressPersist)
+        if (!suppressPersist && !refreshingForm) pendingRequest = null;
+        if (suppressPersist || refreshingForm)
         {
             return;
         }

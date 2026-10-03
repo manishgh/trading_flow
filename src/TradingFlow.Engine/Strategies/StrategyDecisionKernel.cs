@@ -82,6 +82,9 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 semantic,
                 discovery = request.Candidate.Discovery,
                 marketState = request.Candidate.MarketState,
+                market = CreateMarketAudit(request),
+                attachedCatalyst = signal?.Catalyst is null ? null : AvailableCatalysts(request.Catalysts, asOfUtc)
+                    .LastOrDefault(item => item.Event == signal.Catalyst),
                 universe = request.Candidate.Universe,
                 regime = request.Candidate.Regime,
                 rules
@@ -586,6 +589,21 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
             StringComparer.OrdinalIgnoreCase);
     }
 
+    private static object? CreateMarketAudit(StrategyDecisionRequest request)
+    {
+        var timeframe = request.Strategy.Execution.Timeframe;
+        if (!request.SnapshotsByTimeframe.TryGetValue(timeframe, out var snapshots) || snapshots.IsDefaultOrEmpty) return null;
+        var snapshot = snapshots[^1];
+        return new {
+            asOfUtc = request.AsOfUtc,
+            latestCompletedCandleAtUtc = snapshot.Timestamp.Add(TimeframeParser.Parse(timeframe)),
+            timeframe,
+            session = snapshot.RelativeVolumeCohort ?? "unknown",
+            lastPrice = snapshot.CurrentPrice,
+            sameTimeRelativeVolume = snapshot.RelativeVolume,
+            relativeVolumeSampleCount = snapshot.RelativeVolumeSampleCount
+        };
+    }
     private static bool AllowsLong(StrategyDefinition strategy) =>
         strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase) ||
         strategy.Direction.Equals("long_short", StringComparison.OrdinalIgnoreCase);

@@ -1,3 +1,5 @@
+using System.Text.Json;
+using TradingFlow.Data.Orders;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Data.Context;
@@ -20,7 +22,9 @@ public sealed class SqliteApplicationWorkflowRepository(
         if (existing is not null)
         {
             if (!existing.ContentSha256.Equals(preview.ContentSha256, StringComparison.Ordinal) ||
-                !existing.RequestSha256.Equals(preview.RequestSha256, StringComparison.Ordinal))
+                !existing.RequestSha256.Equals(preview.RequestSha256, StringComparison.Ordinal) ||
+                existing.Horizon != preview.Horizon || existing.ResolvedAtUtc != preview.ResolvedAtUtc ||
+                existing.ExpiresAtUtc != preview.ExpiresAtUtc || existing.PreviewJson != preview.PreviewJson)
             {
                 throw new InvalidOperationException("An immutable universe preview cannot be replaced with different content.");
             }
@@ -38,8 +42,16 @@ public sealed class SqliteApplicationWorkflowRepository(
             .SingleOrDefaultAsync(item => item.UniverseSnapshotId == universeSnapshotId, cancellationToken);
     }
 
-    public async Task<CandidateRunReservation> ReserveCandidateRunAsync(
+    public async Task<CandidateRunRequestRecord?> FindCandidateRunAsync(string idempotencyKey, CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.CandidateRunRequests.AsNoTracking().SingleOrDefaultAsync(item => item.IdempotencyKey == idempotencyKey, cancellationToken);
+    }
+
+    public async Task<CandidateRunReservation> CreateCandidateRunAsync(
         CandidateRunRequestRecord request,
+        ProductionRun run,
+        IReadOnlyList<CandidateRecord> candidates,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -58,7 +70,28 @@ public sealed class SqliteApplicationWorkflowRepository(
             return new CandidateRunReservation(existing.CandidateRunId, false);
         }
 
+        if (request.CandidateRunId != run.RunId || request.UniverseSnapshotId != run.UniverseSnapshotId ||
+            request.RequestSha256 != run.ConfigHash || request.Mode != run.Profile || candidates.Count == 0 ||
+            candidates.Select(item => item.CandidateId).Distinct().Count() != candidates.Count)
+            throw new InvalidOperationException("Candidate start identity is inconsistent.");
+        foreach (var candidate in candidates)
+        {
+            SqliteCandidateRepository.ValidateDiscovery(candidate);
+            if (candidate.RunId != run.RunId || candidate.ConfigHash != run.ConfigHash || candidate.CodeVersion != run.CodeVersion)
+                throw new InvalidOperationException("Candidate does not belong to the requested run.");
+        }
+        await ProductionRunPersistence.EnsureAsync(context, run, cancellationToken);
         context.CandidateRunRequests.Add(request);
+        foreach (var candidate in candidates)
+        {
+            candidate.Version = 0;
+            context.Candidates.Add(candidate);
+            context.ApplicationEvents.Add(new ApplicationEventRecord
+            {
+                StreamName = $"candidate-runs/{run.RunId:N}", EventType = "candidate.changed",
+                OccurredAtUtc = candidate.RevalidatedAtUtc, PayloadJson = JsonSerializer.Serialize(candidate)
+            });
+        }
         try
         {
             await context.SaveChangesAsync(cancellationToken);
@@ -118,13 +151,13 @@ public sealed class SqliteApplicationWorkflowRepository(
         CancellationToken cancellationToken = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var values = await context.ApplicationEvents.AsNoTracking()
+        var bounds = await context.ApplicationEvents.AsNoTracking()
             .Where(item => item.StreamName == streamName)
-            .Select(item => item.EventSequence)
-            .ToArrayAsync(cancellationToken);
-        return values.Length == 0 ? (0, 0) : (values.Min(), values.Max());
+            .GroupBy(item => item.StreamName)
+            .Select(group => new { Floor = group.Min(item => item.EventSequence), Latest = group.Max(item => item.EventSequence) })
+            .SingleOrDefaultAsync(cancellationToken);
+        return bounds is null ? (0, 0) : (bounds.Floor, bounds.Latest);
     }
-
     public async Task<OrderPreviewRecord> SaveAsync(OrderPreviewRecord preview, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(preview);
@@ -158,6 +191,11 @@ public sealed class SqliteApplicationWorkflowRepository(
         }
     }
 
+    public async Task<OrderPreviewRecord?> FindByKeyAsync(string idempotencyKey, CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.OrderPreviews.AsNoTracking().SingleOrDefaultAsync(item => item.IdempotencyKey == idempotencyKey, cancellationToken);
+    }
     public async Task<OrderPreviewRecord?> GetByTokenHashAsync(
         string tokenSha256,
         CancellationToken cancellationToken = default)
@@ -189,22 +227,13 @@ public sealed class SqliteApplicationWorkflowRepository(
         {
             return new OrderPreviewConfirmationClaim(preview, null, false);
         }
-        if (preview.ExpiresAtUtc <= nowUtc)
-        {
-            preview.Status = "rejected";
-            preview.OutcomeJson = "{\"code\":\"preview_expired\"}";
-            preview.Version++;
-            await context.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+        // A submission may have reached the broker. Expiry is not evidence of
+        // rejection, and an expired lease is never permission to submit again.
+        // The workflow reconciles the durable intent before publishing an outcome.
+        if (preview.Status == "confirming" || (preview.Status == "validating" && preview.ConfirmationLeaseExpiresAtUtc > nowUtc))
             return new OrderPreviewConfirmationClaim(preview, null, false);
-        }
-        if (preview.Status == "confirming" && preview.ConfirmationLeaseExpiresAtUtc > nowUtc)
-        {
-            return new OrderPreviewConfirmationClaim(preview, null, false);
-        }
-
         var lease = Guid.NewGuid();
-        preview.Status = "confirming";
+        preview.Status = "validating";
         preview.ConfirmationLeaseToken = lease;
         preview.ConfirmationLeaseExpiresAtUtc = nowUtc + leaseDuration;
         preview.Version++;
@@ -213,6 +242,19 @@ public sealed class SqliteApplicationWorkflowRepository(
         return new OrderPreviewConfirmationClaim(preview, lease, true);
     }
 
+    public async Task<bool> TryBeginSubmissionAsync(Guid previewId, Guid leaseToken, DateTimeOffset nowUtc, CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, cancellationToken);
+        var row = await context.OrderPreviews.SingleAsync(item => item.PreviewId == previewId, cancellationToken);
+        if (row.Status != "validating" || row.ConfirmationLeaseToken != leaseToken || row.ConfirmationLeaseExpiresAtUtc <= nowUtc || row.ExpiresAtUtc <= nowUtc)
+            return false;
+        row.Status = "confirming";
+        row.Version++;
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
     public async Task<OrderPreviewRecord> CompleteAsync(
         Guid previewId,
         Guid leaseToken,

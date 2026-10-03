@@ -238,61 +238,7 @@ public sealed class BacktestsModel : PageModel
         return RedirectToPage("/OptimizationJob", new { id = job.JobId });
     }
 
-    public async Task<IActionResult> OnPostRunBacktestAsync(CancellationToken cancellationToken)
-    {
-        var form = Request.Form;
-        var baseConfigPath = form["SelectedConfigPath"].ToString();
-        var wishlistIdValue = ParseGuid(form["WishlistId"].ToString());
-        var strategyPaths = form["StrategyPaths"]
-            .Select(x => x?.Trim())
-            .Where(x => !String.IsNullOrWhiteSpace(x))
-            .Cast<string>()
-            .ToArray();
-
-        if (String.IsNullOrWhiteSpace(baseConfigPath) || strategyPaths.Length == 0 || wishlistIdValue is null)
-        {
-            return RedirectToPage(new { configPath = baseConfigPath, strategyPath = form["SelectedStrategyPath"].ToString(), wishlistId = wishlistIdValue });
-        }
-
-        var wishlist = await wishlists.GetByIdAsync(wishlistIdValue.Value, cancellationToken);
-        if (wishlist is null)
-        {
-            return RedirectToPage(new { configPath = baseConfigPath, strategyPath = form["SelectedStrategyPath"].ToString() });
-        }
-
-        var tickers = wishlist.Items
-            .Where(item => item.Active)
-            .Select(item => item.Ticker.Trim().ToUpperInvariant())
-            .Where(ticker => ticker.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (tickers.Length == 0)
-        {
-            return RedirectToPage(new { configPath = baseConfigPath, strategyPath = form["SelectedStrategyPath"].ToString(), wishlistId = wishlistIdValue });
-        }
-
-        var request = new BacktestRunRequest(
-            baseConfigPath,
-            form["RunName"].ToString(),
-            ParseInt(form["LookbackDays"].ToString(), 180),
-            wishlist.Id,
-            wishlist.Name,
-            tickers,
-            strategyPaths,
-            ParseDecimal(form["StartingCapital"].ToString(), 10000m),
-            ParseDecimal(form["AccountRiskBudgetPct"].ToString(), 1m),
-            ParseDecimal(form["MaxPositionNotionalPct"].ToString(), 25m),
-            ParseInt(form["MaxConcurrentPositions"].ToString(), 4),
-            form["CachePolicy"].ToString(),
-            []);
-
-        var configPath = configWriter.WriteBacktestConfig(request);
-        var job = await backtestJobs.StartAsync(request.RunName, configPath, cancellationToken);
-        // The run stays on this screen: Configure, Running and Results are three
-        // phases of one place rather than a handoff to a second page.
-        return RedirectToPage(new { jobId = job.JobId, wishlistId = wishlist.Id });
-    }
-
+    public IActionResult OnPostRunBacktest() => BadRequest("reviewed_run_required: Use the reviewed run workflow.");
     public async Task<IActionResult> OnPostCancelBacktestAsync(Guid id, CancellationToken cancellationToken)
     {
         await backtestJobs.CancelJobAsync(id, cancellationToken);

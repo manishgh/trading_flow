@@ -514,7 +514,7 @@
         status.classList.remove("accent-note");
         try {
             if (forceRefresh) {
-                const refreshResponse = await fetch("/api/earnings/refresh", { method: "POST" });
+                const refreshResponse = await window.tradingFlowFetch("/api/earnings/refresh", { method: "POST" });
                 if (!refreshResponse.ok) throw new Error(await readError(refreshResponse, `Refresh failed (${refreshResponse.status}).`));
             }
 
@@ -531,7 +531,7 @@
                 query.set("to", to);
             }
             const endpoint = useRange ? "calendar" : "today-next-business-day";
-            const response = await fetch(`/api/earnings/${endpoint}?${query}`, {
+            const response = await window.tradingFlowFetch(`/api/earnings/${endpoint}?${query}`, {
                 headers: { Accept: "application/json" },
                 cache: "no-store"
             });

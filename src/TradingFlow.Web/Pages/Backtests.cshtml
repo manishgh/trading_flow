@@ -46,6 +46,7 @@
        Left rail - configuration
        ======================================================================= *@
     <form class="lab-rail" method="post" asp-page-handler="RunBacktest">
+        <details class="research-configuration" open="@(Model.Phase == "configure")"><summary>@(Model.Phase == "configure" ? "Configure backtest" : "Configure another run")</summary>
         <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
 
         <section class="lab-block">
@@ -115,7 +116,7 @@
         </section>
 
         <section class="lab-block">
-            <h2 class="section-heading">Run parameters</h2>
+            <details class="advanced-run-parameters"><summary>Run parameters and risk limits</summary>
             <div class="lab-parameters">
                 <div class="field">
                     <label for="RunName">Run name</label>
@@ -153,8 +154,10 @@
                 Completed-bar features, later-bar confirmation and next-bar execution are mandatory
                 and not configurable.
             </p>
+        </details>
         </section>
 
+        </details>
         <section class="lab-block lab-run">
             @if (Model.Phase == "running" && job is not null)
             {
@@ -265,6 +268,7 @@
 </div>
 
 @section Scripts {
+    <script src="~/js/run-workflow.js" asp-append-version="true" defer></script>
     @if (Model.Phase == "running" && job is not null)
     {
         <script src="~/js/lab-progress.js" asp-append-version="true" data-job-id="@job.JobId" defer></script>

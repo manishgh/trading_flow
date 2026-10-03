@@ -60,8 +60,12 @@ public interface IUniversePreviewRepository
         Guid universeSnapshotId,
         CancellationToken cancellationToken = default);
 
-    Task<CandidateRunReservation> ReserveCandidateRunAsync(
+    Task<CandidateRunRequestRecord?> FindCandidateRunAsync(string idempotencyKey, CancellationToken cancellationToken = default);
+
+    Task<CandidateRunReservation> CreateCandidateRunAsync(
         CandidateRunRequestRecord request,
+        ProductionRun run,
+        IReadOnlyList<CandidateRecord> candidates,
         CancellationToken cancellationToken = default);
 }
 
@@ -93,6 +97,7 @@ public sealed record OrderPreviewConfirmationClaim(
 public interface IOrderPreviewRepository
 {
     Task<OrderPreviewRecord> SaveAsync(OrderPreviewRecord preview, CancellationToken cancellationToken = default);
+    Task<OrderPreviewRecord?> FindByKeyAsync(string idempotencyKey, CancellationToken cancellationToken = default);
     Task<OrderPreviewRecord?> GetByTokenHashAsync(string tokenSha256, CancellationToken cancellationToken = default);
     Task<OrderPreviewConfirmationClaim> ClaimConfirmationAsync(
         string tokenSha256,
@@ -100,6 +105,7 @@ public interface IOrderPreviewRepository
         DateTimeOffset nowUtc,
         TimeSpan leaseDuration,
         CancellationToken cancellationToken = default);
+    Task<bool> TryBeginSubmissionAsync(Guid previewId, Guid leaseToken, DateTimeOffset nowUtc, CancellationToken cancellationToken = default);
     Task<OrderPreviewRecord> CompleteAsync(
         Guid previewId,
         Guid leaseToken,

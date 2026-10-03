@@ -199,7 +199,7 @@ test.describe("UI2 web trading workstation", () => {
     await expect(page).toHaveURL(new RegExp(`ticker=${testTicker}`));
     await expect(page.locator(`[data-selected-symbol="${testTicker}"]`)).toBeVisible();
 
-    await page.getByRole("link", { name: "Positions", exact: true }).click();
+    await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Trading", exact: true }).click();
     await expect(page).toHaveURL(/\/RunningTrades/);
     await expect(page.getByRole("heading", { name: "Positions", level: 1 })).toBeVisible();
   });
@@ -224,7 +224,7 @@ test.describe("UI2 web trading workstation", () => {
 
     // Stage one only. There is no confirm control, and no gate checklist,
     // before the server has actually checked anything.
-    await expect(page.getByRole("button", { name: /^Review protected buy/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Review an operator order" })).toHaveAttribute("href", /OrderTicket/);
     await expect(page.getByRole("button", { name: /^Confirm paper/ })).toHaveCount(0);
     await expect(page.locator(".desk-ticket .check-list")).toHaveCount(0);
   });
@@ -234,7 +234,7 @@ test.describe("UI2 web trading workstation", () => {
     await page.goto(`/TradeDesk?id=${targetId}&ticker=${testTicker}`);
     // The seeded symbol has no position, so the control cannot invite a short.
     await expect(page.locator('input[name="ticket.Side"][value="sell"]')).toHaveCount(0);
-    await expect(page.locator('input[name="ticket.Side"][value="buy"]')).toHaveCount(1);
+    await expect(page.getByRole("link", { name: "Review an operator order" })).toBeVisible();
   });
 
   test("keyed quote patches preserve focused controls", async ({ page }) => {

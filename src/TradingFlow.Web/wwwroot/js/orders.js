@@ -5,7 +5,7 @@
 
     const status = document.getElementById("OrdersConnection");
     const filter = summary.dataset.filter || "all";
-    const cancelTemplate = body.querySelector(".order-actions form")?.cloneNode(true) ?? null;
+    const cancelTemplate = body.querySelector(".order-actions form")?.cloneNode(true) ?? document.querySelector("[data-order-cancel-template]")?.content.firstElementChild?.cloneNode(true) ?? null;
     let loading = false;
 
     const workingStates = ["Intent", "Submitted", "Acked", "PartiallyFilled", "CancelPending"];
@@ -56,15 +56,18 @@
     }
 
     function updateActions(cell, item) {
-        cell.replaceChildren();
         if (!cancelTemplate || !isWorking(item.state) || item.state === "CancelPending" || !item.brokerOrderId) {
+            cell.replaceChildren();
             const label = isWorking(item.state) ? "Working - no inline action" : "Terminal - no action";
             append(cell, "span", label, "note orders-terminal");
             return;
         }
 
+        if (cell.querySelector('input[name="clientOrderId"]')?.value === item.clientOrderId) return;
+        cell.replaceChildren();
         const form = cancelTemplate.cloneNode(true);
-        addHidden(form, "brokerOrderId", item.brokerOrderId);
+        addHidden(form, "clientOrderId", item.clientOrderId);
+        addHidden(form, "idempotencyKey", crypto.randomUUID());
         const button = form.querySelector("button");
         if (button) {
             button.dataset.confirm = `Cancel the working ${item.symbol} order? The broker may still fill it before the cancel is acknowledged.`;
@@ -247,7 +250,7 @@
         if (loading) return;
         loading = true;
         try {
-            const response = await fetch("/api/v1/orders?limit=500", { headers: { Accept: "application/json" } });
+            const response = await window.tradingFlowFetch("/api/v1/orders?limit=500", { headers: { Accept: "application/json" } });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const items = await response.json();
             updateSummary(items);

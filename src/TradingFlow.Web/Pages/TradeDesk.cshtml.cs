@@ -19,7 +19,6 @@ public sealed class TradeDeskModel : PageModel
     private readonly UniverseRankService ranking;
     private readonly ScreenerSyncService screener;
     private readonly ScreenerPresetService screenerPresets;
-    private readonly ManualOrderTicketService tickets;
     private readonly TradingEnvironmentService environments;
 
     public TradeDeskModel(
@@ -31,7 +30,6 @@ public sealed class TradeDeskModel : PageModel
         UniverseRankService ranking,
         ScreenerSyncService screener,
         ScreenerPresetService screenerPresets,
-        ManualOrderTicketService tickets,
         TradingEnvironmentService environments)
     {
         this.environments = environments;
@@ -43,7 +41,6 @@ public sealed class TradeDeskModel : PageModel
         this.ranking = ranking;
         this.screener = screener;
         this.screenerPresets = screenerPresets;
-        this.tickets = tickets;
     }
 
     /// <summary>Environment this screen is operating against, from the route segment.</summary>
@@ -114,9 +111,7 @@ public sealed class TradeDeskModel : PageModel
     /// Null on a plain GET: the checklist states what the server checked, so it
     /// cannot be rendered before the server has checked anything.
     /// </summary>
-    public ManualOrderTicketPreview? TicketPreview { get; private set; }
 
-    public ManualOrderTicketConfirmation? TicketConfirmation { get; private set; }
 
     public OperationalStatusSnapshot OperationalStatus { get; private set; } = new(
         "UNKNOWN", "unknown", "Status has not loaded.", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
@@ -214,89 +209,6 @@ public sealed class TradeDeskModel : PageModel
             screenerScopeName = ScreenerScopeName,
             screenerQuery = ScreenerQuery
         });
-    }
-
-    /// <summary>
-    /// Stage one of the inline ticket. The server checks quote, spread, session,
-    /// account, exposure and duplicates and returns what it found; the checklist
-    /// renders that response rather than recomputing it client-side.
-    /// </summary>
-    public async Task OnPostPreviewTicketAsync(
-        [FromForm] TicketForm ticket,
-        CancellationToken cancellationToken)
-    {
-        await LoadAsync(cancellationToken);
-        if (!EnvironmentState.IsEnabled)
-        {
-            ErrorMessage = EnvironmentState.LockReason;
-            return;
-        }
-
-        try
-        {
-            TicketPreview = await tickets.PreviewAsync(ticket.ToDraft(), cancellationToken);
-        }
-        catch (InvalidOperationException exception)
-        {
-            ErrorMessage = exception.Message;
-        }
-    }
-
-    /// <summary>
-    /// Stage two. The token is what the server issued at preview; posting without
-    /// one, or with an expired one, fails closed at the service.
-    /// </summary>
-    public async Task OnPostConfirmTicketAsync(string? ticketToken, CancellationToken cancellationToken)
-    {
-        await LoadAsync(cancellationToken);
-        if (!EnvironmentState.IsEnabled)
-        {
-            ErrorMessage = EnvironmentState.LockReason;
-            return;
-        }
-
-        try
-        {
-            TicketConfirmation = await tickets.ConfirmAsync(ticketToken ?? String.Empty, cancellationToken);
-            StatusMessage = $"Paper order accepted for {TicketConfirmation.Ticker}.";
-        }
-        catch (InvalidOperationException exception)
-        {
-            ErrorMessage = exception.Message;
-        }
-    }
-
-    /// <summary>Inline ticket fields. Maps one-to-one onto <see cref="ManualOrderDraft"/>.</summary>
-    public sealed class TicketForm
-    {
-        public string Ticker { get; set; } = String.Empty;
-        public string Side { get; set; } = "buy";
-        public decimal Quantity { get; set; } = 1m;
-        public decimal LimitPrice { get; set; }
-        public decimal? StopLossPrice { get; set; }
-        public decimal? TakeProfitPrice { get; set; }
-        public string Horizon { get; set; } = "swing";
-        public string OrderType { get; set; } = "limit";
-        public decimal? TriggerPrice { get; set; }
-        public string TimeInForce { get; set; } = "day";
-        public bool AllowExtendedHoursTrading { get; set; }
-
-        public bool IsExit => String.Equals(Side, "sell", StringComparison.OrdinalIgnoreCase);
-
-        public ManualOrderDraft ToDraft() => new(
-            Ticker.Trim().ToUpperInvariant(),
-            IsExit ? "sell" : "buy",
-            Quantity,
-            LimitPrice,
-            // An exit carries no bracket: the protection belonged to the entry.
-            IsExit ? null : StopLossPrice,
-            IsExit ? null : TakeProfitPrice,
-            "swing",
-            AllowExtendedHoursTrading,
-            "sip",
-            IsExit ? OrderType : "limit",
-            TriggerPrice,
-            TimeInForce);
     }
 
     private async Task LoadAsync(CancellationToken cancellationToken)

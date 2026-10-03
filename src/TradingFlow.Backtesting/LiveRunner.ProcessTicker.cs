@@ -539,7 +539,9 @@ public sealed partial class LiveRunner
         CodeVersion = context.CodeVersion,
         Profile = context.Profile,
         Status = "running",
-        StartedAtUtc = context.StartedAtUtc
+        StartedAtUtc = context.StartedAtUtc,
+        UniverseSnapshotId = context.UniverseSnapshotId,
+        DecisionRunId = context.DecisionRunId
     };
 
     private static string ResolveEntryOrderType(BacktestRunConfig run) =>

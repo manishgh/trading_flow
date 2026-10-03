@@ -220,24 +220,25 @@ test.describe("order ticket breadth", () => {
   test("an entry stays a protected limit while an exit offers the wider set", async ({ page }) => {
     await page.goto("/OrderTicket?ticker=AAPL&side=buy");
     // A bracketed entry must not offer market or stop: that would drop the protection.
-    await expect(page.locator("#OrderType option")).toHaveCount(1);
-    await expect(page.locator("#StopLossPrice")).toBeVisible();
+    await expect(page.locator("[name=orderType] option")).toHaveCount(1);
+    await expect(page.locator("[name=stop]")).toBeVisible();
 
     await page.goto("/OrderTicket?ticker=AAPL&side=sell");
-    await expect(page.locator("#OrderType option")).toHaveCount(4);
-    await expect(page.locator("#TriggerPrice")).toBeVisible();
+    await expect(page.locator("[name=orderType] option")).toHaveCount(4);
+    await page.locator("[name=orderType]").selectOption("stop");
+    await expect(page.locator("[name=trigger]")).toBeVisible();
     // An exit carries no bracket; protection belonged to the entry.
-    await expect(page.locator("#StopLossPrice")).toHaveCount(0);
+    await expect(page.locator("[name=stop]")).toBeHidden();
   });
 
   test("time in force is selectable on both sides", async ({ page }) => {
     await page.goto("/OrderTicket?ticker=AAPL&side=sell");
-    await expect(page.locator("#TimeInForce option")).toHaveCount(4);
+    await expect(page.locator("[name=timeInForce] option")).toHaveCount(4);
   });
 
   test("a locked environment exposes no ticket form at all", async ({ page }) => {
     await page.goto("/OrderTicket?ticker=AAPL&side=sell&env=live");
-    await expect(page.locator("#OrderType")).toHaveCount(0);
+    await expect(page.locator("[name=orderType]")).toHaveCount(0);
     await expect(page.locator('main button[type="submit"]')).toHaveCount(0);
   });
 });
@@ -336,7 +337,7 @@ test.describe("desk order shortcuts", () => {
     await page.goto(`/TradeDesk?id=${id}&ticker=${ticker}`);
     // The ticket is inline on the desk now. Stage one reviews; it never submits,
     // and no confirm control exists until the server has checked the draft.
-    const review = page.getByRole("button", { name: /^Review protected buy/ });
+    const review = page.getByRole("link", { name: "Review an operator order" });
     await expect(review).toBeVisible();
     await expect(page.getByRole("button", { name: /^Confirm paper/ })).toHaveCount(0);
   });

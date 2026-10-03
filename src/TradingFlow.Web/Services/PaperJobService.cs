@@ -551,11 +551,18 @@ public sealed class PaperJobService : IDurableJobHandler
                 job.JobId,
                 logicalRunConfig.Mode,
                 new { Run = logicalRunConfig, Strategies = strategies },
-                job.StartedAt ?? DateTimeOffset.UtcNow);
+                job.StartedAt ?? DateTimeOffset.UtcNow) with
+                {
+                    UniverseSnapshotId = request.Workflow?.Provenance.UniverseSnapshotId ?? Guid.Empty,
+                    DecisionRunId = request.Workflow?.Provenance.DecisionRunId,
+                    Profile = request.Workflow?.Provenance.Mode ?? logicalRunConfig.Mode
+                };
             var runConfig = ScopeAttemptArtifacts(
                 logicalRunConfig,
                 job.JobId,
                 context.LeaseToken);
+            job.ArtifactDirectory = Path.GetFullPath(Path.Combine(runConfig.ResultsRoot, "live", runConfig.RunName));
+            await context.SaveSnapshotAsync(JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions), cancellationToken);
             ClearLiveChartSnapshots(runConfig);
             Directory.CreateDirectory(Path.Combine(runConfig.ResultsRoot, "live", runConfig.RunName));
 
@@ -794,6 +801,7 @@ public sealed class PaperJobService : IDurableJobHandler
         public DateTimeOffset? StartedAt { get; set; }
         public DateTimeOffset? FinishedAt { get; set; }
         public string? ErrorMessage { get; set; }
+        public string? ArtifactDirectory { get; set; }
         public string CurrentStage { get; private set; } = "queued";
         public int CompletedTickerCount { get; private set; }
         public int TotalTickerCount { get; private set; }
@@ -824,6 +832,7 @@ public sealed class PaperJobService : IDurableJobHandler
         {
             lock (stateLock)
             {
+                ArtifactDirectory = snapshot.ArtifactDirectory;
                 CurrentStage = snapshot.CurrentStage;
                 CompletedTickerCount = snapshot.CompletedTickerCount;
                 TotalTickerCount = snapshot.TotalTickerCount;
@@ -847,7 +856,7 @@ public sealed class PaperJobService : IDurableJobHandler
             {
                 return new BacktestJobSnapshot(
                     JobId, RunName, ConfigPath, status, CreatedAt, StartedAt, finishedAt, error,
-                    CurrentStage, CompletedTickerCount, TotalTickerCount, Events.ToArray(), null);
+                    CurrentStage, CompletedTickerCount, TotalTickerCount, Events.ToArray(), null, ArtifactDirectory: ArtifactDirectory);
             }
         }
     }

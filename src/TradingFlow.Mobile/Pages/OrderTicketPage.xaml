@@ -14,34 +14,30 @@
                 <controls:EnvironmentBadgeView Grid.Column="1" />
             </Grid>
 
-            <Label x:Name="ErrorLabel" IsVisible="False" TextColor="{StaticResource StateError}" LineBreakMode="WordWrap" />
+            <Label x:Name="ErrorLabel" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" LineBreakMode="WordWrap" />
             <ActivityIndicator x:Name="BusyIndicator" IsVisible="False" IsRunning="False" Color="{StaticResource Primary}" />
 
             <VerticalStackLayout x:Name="DraftSection" Spacing="10">
                 <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="10">
                     <VerticalStackLayout>
-                        <Label Text="Quantity" Style="{StaticResource Caption}" />
+                        <Label Text="Quantity" Style="{StaticResource SubHeadline}" />
                         <Entry x:Name="QuantityEntry" Text="1" Keyboard="Numeric" />
                     </VerticalStackLayout>
                     <VerticalStackLayout Grid.Column="1">
-                        <Label Text="Limit price" Style="{StaticResource Caption}" />
+                        <Label Text="Limit price" Style="{StaticResource SubHeadline}" />
                         <Entry x:Name="LimitEntry" Keyboard="Numeric" />
                     </VerticalStackLayout>
                     <VerticalStackLayout Grid.Row="1">
-                        <Label Text="Stop price" Style="{StaticResource Caption}" />
+                        <Label Text="Stop price" Style="{StaticResource SubHeadline}" />
                         <Entry x:Name="StopEntry" Keyboard="Numeric" />
                     </VerticalStackLayout>
                     <VerticalStackLayout Grid.Row="1" Grid.Column="1">
-                        <Label Text="Take-profit price" Style="{StaticResource Caption}" />
+                        <Label Text="Take-profit price" Style="{StaticResource SubHeadline}" />
                         <Entry x:Name="TargetEntry" Keyboard="Numeric" />
                     </VerticalStackLayout>
                     <VerticalStackLayout Grid.Row="2">
-                        <Label Text="Horizon" Style="{StaticResource Caption}" />
-                        <Picker x:Name="HorizonPicker" SelectedIndex="0">
-                            <Picker.Items>
-                                <x:String>swing</x:String>
-                            </Picker.Items>
-                        </Picker>
+                        <Label Text="Horizon" Style="{StaticResource SubHeadline}" />
+                        <Label Text="Swing" FontAttributes="Bold" SemanticProperties.Description="Trading horizon: Swing" />
                     </VerticalStackLayout>
                     <HorizontalStackLayout Grid.Row="2" Grid.Column="1" VerticalOptions="Center" Spacing="8">
                         <CheckBox x:Name="ExtendedHoursCheckBox" />
@@ -49,7 +45,7 @@
                     </HorizontalStackLayout>
                 </Grid>
                 <Label Text="Extended-hours requests fail closed unless the session, asset, order type, and broker protection are eligible."
-                       Style="{StaticResource Caption}" LineBreakMode="WordWrap" />
+                       Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
                 <Button Text="Review order" Clicked="OnPreviewClicked" />
             </VerticalStackLayout>
 
@@ -57,8 +53,8 @@
                 <Label x:Name="ReviewStatusLabel" FontAttributes="Bold" FontSize="18" />
                 <Label x:Name="ReviewSummaryLabel" LineBreakMode="WordWrap" />
                 <Label x:Name="MarketEvidenceLabel" FontFamily="monospace" LineBreakMode="WordWrap" />
-                <Label x:Name="PolicyLabel" Style="{StaticResource Caption}" LineBreakMode="WordWrap" />
-                <Label x:Name="RejectionsLabel" IsVisible="False" TextColor="{StaticResource StateError}" LineBreakMode="WordWrap" />
+                <Label x:Name="PolicyLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                <Label x:Name="RejectionsLabel" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" LineBreakMode="WordWrap" />
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
                     <Button Text="Edit" Clicked="OnEditClicked" />
                     <Button x:Name="ConfirmButton" Grid.Column="1" Text="Confirm paper order" Clicked="OnConfirmClicked" />
@@ -66,7 +62,7 @@
             </VerticalStackLayout>
 
             <VerticalStackLayout x:Name="ConfirmationSection" IsVisible="False" Spacing="8">
-                <Label Text="Order accepted" FontAttributes="Bold" FontSize="20" TextColor="{StaticResource StateSuccess}" />
+                <Label Text="Order outcome" FontAttributes="Bold" FontSize="20" TextColor="{AppThemeBinding Light={StaticResource StatePositiveLight}, Dark={StaticResource StatePositiveDark}}" />
                 <Label x:Name="ConfirmationLabel" LineBreakMode="WordWrap" />
             </VerticalStackLayout>
         </VerticalStackLayout>

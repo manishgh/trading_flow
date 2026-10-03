@@ -70,7 +70,7 @@
             async function refreshSnapshot() {
                 let data;
                 try {
-                    const response = await fetch(`?handler=Snapshot&id=${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+                    const response = await window.tradingFlowFetch(`?handler=Snapshot&id=${encodeURIComponent(jobId)}`, { cache: 'no-store' });
                     if (!response.ok) return;
                     data = await response.json();
                 } catch {

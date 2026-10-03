@@ -1,4 +1,4 @@
-﻿# Architecture
+# Architecture
 
 ## Current System View
 
@@ -494,3 +494,7 @@ wishlist evaluator, including prior-bar momentum and same-time RVOL. Unchanged e
 is not reevaluated, while an accepted revision to an earlier bar/baseline changes the
 fingerprint and is evaluated once.
 
+
+## Shared operator workflow implementation
+
+[Application workflows](application-workflows.md) describes the application-service boundaries used by Web and Android, durable retry semantics, bounded results, exact decision evidence and alert navigation. [Closure evidence](verification/workflow-integration-closure.md) separates automated verification from device and external paper acceptance.

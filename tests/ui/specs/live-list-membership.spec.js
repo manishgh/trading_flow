@@ -95,6 +95,7 @@ test.describe("incremental live-list membership", () => {
       return route.fulfill({ contentType: "text/html", body: ordersDocument });
     });
     await page.goto("http://tradingflow.test/Orders");
+    await page.addScriptTag({ path: path.join(webRoot, "api-client.js") });
     await page.addScriptTag({ path: path.join(webRoot, "orders.js") });
 
     await expect(page.locator('[data-client-order-id="order-a"]')).toContainText("AAPL");
@@ -125,6 +126,7 @@ test.describe("incremental live-list membership", () => {
       return route.fulfill({ contentType: "text/html", body: positionsDocument });
     });
     await page.goto("http://tradingflow.test/RunningTrades");
+    await page.addScriptTag({ path: path.join(webRoot, "api-client.js") });
     await page.addScriptTag({ path: path.join(webRoot, "running-trades.js") });
 
     await expect(page.locator('[data-trade-key$=":AAPL"]')).toContainText("AAPL");

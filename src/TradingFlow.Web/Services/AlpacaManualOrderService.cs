@@ -11,7 +11,7 @@ using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Web.Services;
 
-public sealed record ManualOrderResult(string OrderId, string Ticker, string Side, decimal Quantity, decimal LimitPrice);
+public sealed record ManualOrderResult(string OrderId, string Ticker, string Side, decimal Quantity, decimal LimitPrice, Guid? IntentId = null, string? ClientOrderId = null);
 
 public sealed record ManualBrokerContext(
     EquityTradingSession Session,
@@ -21,14 +21,15 @@ public sealed record ManualBrokerContext(
     decimal OpenPositionQuantity,
     bool AssetActive,
     bool AssetTradable,
-    bool OvernightTradable);
+    bool OvernightTradable,
+    string AccountId = "");
 
 /// <summary>
 /// Manual paper-trading order helper for the wishlist UI. It intentionally keeps
 /// sell conservative: sell is treated as closing an existing paper position, not
 /// opening a short position from the watchlist.
 /// </summary>
-public sealed class AlpacaManualOrderService : IDisposable
+public sealed class AlpacaManualOrderService : IDisposable, IReviewedOrderBroker
 {
     private readonly AlpacaCredentialProvider credentials;
     private readonly IRawArchiveWriter rawArchiveWriter;
@@ -189,7 +190,8 @@ public sealed class AlpacaManualOrderService : IDisposable
             positionQuantity,
             eligibility.Active,
             eligibility.Tradable,
-            eligibility.OvernightTradable);
+            eligibility.OvernightTradable,
+            account.AccountId);
     }
 
     private async Task<ManualOrderResult> SubmitOperatorDirectBuyAsync(
@@ -291,7 +293,9 @@ public sealed class AlpacaManualOrderService : IDisposable
             ticker,
             "buy",
             quantity,
-            limitPrice);
+            limitPrice,
+            result.IntentId,
+            result.ClientOrderId);
     }
 
     private async Task<ManualOrderResult> SubmitDurableExitAsync(
@@ -357,9 +361,33 @@ public sealed class AlpacaManualOrderService : IDisposable
             normalizedTicker,
             "sell",
             quantity,
-            limitPrice);
+            limitPrice, result.IntentId, result.ClientOrderId);
     }
 
+    public async Task<ManualOrderResult> SubmitStrategyEntryAsync(
+        TradingFlow.Contracts.V1.PreviewOrderRequest request, Guid intentId,
+        TradingFlow.Domain.Persistence.CandidateRecord candidate, TradingFlow.Domain.Persistence.ProductionRun run,
+        CancellationToken cancellationToken)
+    {
+        var (_, provider) = GetClients();
+        var identity = new TradingFlow.Domain.Strategies.StrategyArtifactIdentity(
+            request.Strategy.StrategyId, request.Strategy.SemanticVersion, request.Strategy.ContentSha256);
+        var selection = run.Profile switch
+        {
+            "paper_experiment" => TradingFlow.Domain.Strategies.StrategySelectionMode.RunPaperExperiment,
+            "paper_shadow" or "paper" => TradingFlow.Domain.Strategies.StrategySelectionMode.RunPaperShadow,
+            _ => throw new InvalidOperationException("Reviewed entries require an authorized paper candidate run.")
+        };
+        var now = DateTimeOffset.UtcNow;
+        var result = await orderSubmissions.SubmitEntryOrderAsync(new EntryOrderSubmission(
+            intentId, new ValidatedEntryCandidate(candidate.CandidateId, candidate.DiscoverySource, candidate.Horizon,
+                candidate.DiscoveredAtUtc, candidate.RevalidatedAtUtc, candidate.SetupScoresJson, candidate.Version, candidate.SemanticDecisionSha256),
+            new ExecutionRunContext(run.RunId, run.Profile, run.ConfigHash, run.CodeVersion, run.StartedAtUtc, run.UniverseSnapshotId, run.DecisionRunId),
+            request.Strategy.StrategyId, "buy", "limit", "day", ExecutionRunContextFactory.ResolveSessionDate(now, "America/New_York"), now,
+            new FinalizedOrder(request.Symbol, request.Strategy.StrategyId, Decimal.ToInt32(request.Quantity), request.LimitPrice!.Value,
+                request.StopLossPrice, request.TakeProfitPrice!.Value, now), request.AllowExtendedHoursTrading, identity, selection), provider, cancellationToken);
+        return new ManualOrderResult(result.BrokerOrderId, request.Symbol, "buy", request.Quantity, request.LimitPrice.Value, result.IntentId, result.ClientOrderId);
+    }
     private (AlpacaTradingRestClient Trading, AlpacaBrokerClient Provider) GetClients()
     {
         lock (clientLock)

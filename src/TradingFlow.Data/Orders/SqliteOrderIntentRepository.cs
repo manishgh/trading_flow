@@ -869,6 +869,7 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrder
                 ConfigHash = run.ConfigHash,
                 CodeVersion = run.CodeVersion
             });
+            await CandidateProjectionEvents.AppendAsync(context, intent.CandidateId, intent.CreatedAtUtc, cancellationToken);
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new OrderIntentReservationResult(intent, Created: true, run.Status);

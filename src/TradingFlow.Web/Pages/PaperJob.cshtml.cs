@@ -12,16 +12,16 @@ namespace TradingFlow.Web.Pages;
 public sealed class PaperJobModel : PageModel
 {
     private readonly PaperJobService jobs;
-    private readonly ProjectPaths paths;
+    private readonly PaperRunViewService views;
     private readonly ConfigCatalogService catalog;
-    private readonly TradingFlow.Domain.Audit.IDecisionAuditRepository auditRepo;
 
-    public PaperJobModel(PaperJobService jobs, ProjectPaths paths, ConfigCatalogService catalog, TradingFlow.Domain.Audit.IDecisionAuditRepository auditRepo)
+
+    public PaperJobModel(PaperJobService jobs, PaperRunViewService views, ConfigCatalogService catalog)
     {
         this.jobs = jobs;
-        this.paths = paths;
+        this.views = views;
         this.catalog = catalog;
-        this.auditRepo = auditRepo;
+
     }
 
     public BacktestJobSnapshot? Job { get; private set; }
@@ -51,11 +51,11 @@ public sealed class PaperJobModel : PageModel
             }
             catch { /* Ignore if config missing */ }
 
-            ChartDataList = LoadChartData(Job);
+            try { ChartDataList = views.LoadChartData(Job); } catch (IOException) { } catch (InvalidOperationException) { }
 
             try
             {
-                RecentAudits = await LoadRecentAuditsAsync(Job.RunName);
+                RecentAudits = await views.LoadRecentAuditsAsync(Job, HttpContext.RequestAborted);
             }
             catch { /* Ignore audit db errors */ }
         }
@@ -75,7 +75,7 @@ public sealed class PaperJobModel : PageModel
             return new JsonResult(new { success = false });
         }
 
-        var chartData = LoadChartData(job);
+        var chartData = views.LoadChartData(job);
         var brokerOrders = await jobs.GetOpenOrdersAsync(id);
         var openOrders = brokerOrders
             .Select(order =>
@@ -110,7 +110,7 @@ public sealed class PaperJobModel : PageModel
         List<DecisionAuditRecord> audits;
         try
         {
-            audits = await LoadRecentAuditsAsync(job.RunName);
+            audits = await views.LoadRecentAuditsAsync(job, HttpContext.RequestAborted);
         }
         catch
         {
@@ -206,73 +206,6 @@ public sealed class PaperJobModel : PageModel
         return UiDisplayFormatter.FormatRejectionReason(reason);
     }
 
-    private async Task<List<DecisionAuditRecord>> LoadRecentAuditsAsync(string runName)
-    {
-        var allAudits = await auditRepo.GetAuditsByRunNameAsync(runName, default);
-        return allAudits.OrderByDescending(a => a.Timestamp).Take(50).ToList();
-    }
-
-    private List<ChartDataPoint> LoadChartData(BacktestJobSnapshot job)
-    {
-        string? resultsRoot = null;
-        var allowedTickers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var strategyTimeframes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            var config = catalog.GetConfig(job.ConfigPath);
-            resultsRoot = paths.ResolveRepositoryPath(config.Config.ResultsRoot);
-            foreach (var ticker in config.Config.Tickers)
-            {
-                allowedTickers.Add(ticker);
-            }
-
-            foreach (var strategy in config.Strategies.Select(x => x.Definition))
-            {
-                strategyTimeframes[strategy.StrategyName] = strategy.Timeframe;
-            }
-        }
-        catch
-        {
-            // Keep the page responsive if the generated config was deleted.
-        }
-
-        var resultsDir = Path.Combine(resultsRoot ?? paths.ResolveRepositoryPath(Path.Combine("data", "paper", "results")), "live", job.RunName);
-
-        if (!Directory.Exists(resultsDir))
-        {
-            return new List<ChartDataPoint>();
-        }
-
-        var points = new List<ChartDataPoint>();
-        foreach (var tickerDir in Directory.GetDirectories(resultsDir))
-        {
-            foreach (var file in Directory.GetFiles(tickerDir, "*_chart.json"))
-            {
-                try
-                {
-                    var json = System.IO.File.ReadAllText(file);
-                    var data = JsonSerializer.Deserialize<ChartDataPoint>(json);
-                    if (data != null && (allowedTickers.Count == 0 || allowedTickers.Contains(data.Ticker)))
-                    {
-                        if (String.IsNullOrWhiteSpace(data.Timeframe) &&
-                            strategyTimeframes.TryGetValue(data.StrategyName, out var timeframe))
-                        {
-                            data.Timeframe = timeframe;
-                        }
-
-                        points.Add(data);
-                    }
-                }
-                catch
-                {
-                    // Skip partial writes while the live runner is replacing the chart file.
-                }
-            }
-        }
-
-        return points;
-    }
-
     private string ResolveMarketDataFeedLabel(BacktestJobSnapshot job)
     {
         try
@@ -315,51 +248,4 @@ public sealed class PaperJobModel : PageModel
             }).ToArray()
         };
     }
-}
-
-public class ChartDataPoint
-{
-    public DateTimeOffset Timestamp { get; set; }
-    public string Ticker { get; set; } = String.Empty;
-    public string StrategyName { get; set; } = String.Empty;
-    public string Timeframe { get; set; } = String.Empty;
-    public decimal Close { get; set; }
-    public decimal Atr { get; set; }
-    public decimal? RelativeVolume { get; set; }
-    public decimal? SlotRelativeVolume { get; set; }
-    public string RelativeVolumeSource { get; set; } = String.Empty;
-    public decimal? SlotMedianVolume { get; set; }
-    public decimal? CumulativeSameTimeMedianVolume { get; set; }
-    public int RelativeVolumeSampleCount { get; set; }
-    public int SlotRelativeVolumeSampleCount { get; set; }
-    public string MarketEvidenceProfileVersion { get; set; } = String.Empty;
-    public string RelativeVolumeCohort { get; set; } = String.Empty;
-    public string DataFeed { get; set; } = String.Empty;
-    public string AdjustmentPolicy { get; set; } = String.Empty;
-    public string MarketEvidenceReliability { get; set; } = String.Empty;
-    public decimal Volume { get; set; }
-    public decimal? Rsi { get; set; }
-    public decimal? Vwap { get; set; }
-}
-
-public class OrderDisplayViewModel
-{
-    public OrderDisplayViewModel(TradingFlow.Domain.Orders.ActiveBrokerOrder order, decimal? currentPrice)
-    {
-        Order = order;
-        CurrentPrice = currentPrice;
-    }
-
-    public TradingFlow.Domain.Orders.ActiveBrokerOrder Order { get; }
-    public decimal? CurrentPrice { get; }
-
-    public decimal? DistancePct
-    {
-        get
-        {
-            if (Order.LimitPrice == null || CurrentPrice == null || CurrentPrice == 0) return null;
-            return (CurrentPrice - Order.LimitPrice) / CurrentPrice * 100m;
-        }
-    }
-
 }

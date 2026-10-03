@@ -37,6 +37,9 @@ public sealed record ScreenerSyncResult(
     string? Error)
 {
     public bool Succeeded => Error is null;
+    public int TotalCount { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<string> AllSymbols { get; init; } = [];
 
     /// <summary>
     /// Provider values retained for discovery display and audit only. Strategy
@@ -180,6 +183,8 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             null,
             null)
         {
+            AllSymbols = snapshot.Rows.Where(x => !String.IsNullOrWhiteSpace(x.Ticker)).Select(x => x.Ticker.Trim().ToUpperInvariant()).Distinct().Order(StringComparer.Ordinal).ToArray(),
+            TotalCount = snapshot.Rows.Where(x => !String.IsNullOrWhiteSpace(x.Ticker)).Select(x => x.Ticker.Trim().ToUpperInvariant()).Distinct().Count(),
             SymbolDetails = symbolDetails,
             ProviderTimestampUtc = snapshot.ReceivedAtUtc,
             RawReference = $"finviz:{snapshot.NormalizedQuery}|{snapshot.RawReference}"

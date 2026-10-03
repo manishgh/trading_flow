@@ -192,7 +192,8 @@
                                        dropped back to the unsorted All tab. Plain name/value pairs, not
                                        asp-for: a tag helper would stamp one id onto every row. *@
                                     <form method="post" asp-page-handler="Cancel">
-                                        <input type="hidden" name="brokerOrderId" value="@item.BrokerOrderId" />
+                                        <input type="hidden" name="idempotencyKey" value="@Guid.NewGuid().ToString("N")" />
+                                        <input type="hidden" name="clientOrderId" value="@item.ClientOrderId" />
                                         <input type="hidden" name="Env" value="@Model.Env" />
                                         <input type="hidden" name="Filter" value="@Model.Filter" />
                                         <input type="hidden" name="Sort" value="@Model.Sort" />
@@ -231,4 +232,17 @@
 
 @section Scripts {
     <script src="~/js/orders.js" asp-append-version="true"></script>
+}
+
+
+@if (Model.EnvironmentState.IsEnabled)
+{
+    <template data-order-cancel-template>
+        <form method="post" action="/Orders?handler=Cancel">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="Filter" value="@Model.Filter" />
+            <input type="hidden" name="Env" value="@Model.Env" />
+            <button type="submit" class="btn btn-danger btn-sm">Cancel</button>
+        </form>
+    </template>
 }

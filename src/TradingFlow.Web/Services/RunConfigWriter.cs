@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text;
 using TradingFlow.Domain.Research;
 using TradingFlow.Domain.Strategies;
@@ -70,18 +70,19 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  fail_fast: {baseConfig.Engine.FailFast.ToString().ToLowerInvariant()}");
         yaml.AppendLine();
         yaml.AppendLine("time_window:");
-        yaml.AppendLine("  type: rolling");
+        yaml.AppendLine(request.TestWindowStartUtc is null ? "  type: rolling" : "  type: fixed");
         yaml.AppendLine($"  lookback_days: {request.LookbackDays}");
         yaml.AppendLine($"  warmup_lookback_days: {baseConfig.TimeWindow.WarmupLookbackDays}");
-        yaml.AppendLine("  start:");
-        yaml.AppendLine("  end:");
+        yaml.AppendLine("  start: " + request.TestWindowStartUtc?.ToString("O", CultureInfo.InvariantCulture));
+        yaml.AppendLine("  end: " + request.TestWindowEndUtc?.ToString("O", CultureInfo.InvariantCulture));
         yaml.AppendLine();
         yaml.AppendLine("universe:");
         yaml.AppendLine("  mode: resolved_snapshot");
-        yaml.AppendLine("  source: wishlist");
+        yaml.AppendLine($"  source: {request.UniverseSource}");
+        if (request.UniverseSnapshotId is { } snapshotId) yaml.AppendLine($"  snapshot_id: {snapshotId}");
         yaml.AppendLine($"  wishlist_id: {request.WishlistId?.ToString() ?? String.Empty}");
         yaml.AppendLine($"  wishlist_name: {request.WishlistName ?? String.Empty}");
-        yaml.AppendLine("  resolved_at_utc: " + DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        yaml.AppendLine("  resolved_at_utc: " + (request.UniverseResolvedAtUtc ?? DateTimeOffset.UtcNow).ToString("O", CultureInfo.InvariantCulture));
         yaml.AppendLine();
         yaml.AppendLine("tickers:");
         foreach (var ticker in request.Tickers.Select(x => x.Trim().ToUpperInvariant()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -309,7 +310,8 @@ public sealed class RunConfigWriter
         string universeSource = "ephemeral",
         DateTimeOffset? universeResolvedAtUtc = null,
         IEnumerable<string>? selectedSourceTickers = null,
-        IEnumerable<string>? resolvedScreenerTickers = null)
+        IEnumerable<string>? resolvedScreenerTickers = null,
+        Guid? universeSnapshotId = null)
     {
         ArgumentNullException.ThrowIfNull(strategyArtifact);
         var authorized = selectionMode switch
@@ -417,6 +419,7 @@ public sealed class RunConfigWriter
             if (line.Trim().Equals("mode: unresolved_wishlist", StringComparison.OrdinalIgnoreCase))
             {
                 newYaml.AppendLine("  mode: resolved_snapshot");
+                if (universeSnapshotId is { } snapshotId) newYaml.AppendLine($"  snapshot_id: {snapshotId}");
                 newYaml.AppendLine($"  source: {universeSource}");
                 if (wishlistId is not null)
                 {

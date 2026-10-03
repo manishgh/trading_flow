@@ -196,65 +196,9 @@ public sealed class PaperModel : PageModel
             return Page();
         }
 
-        var source = NormalizeUniverseSource(form["UniverseSource"].ToString());
-        UniverseSource = source;
-
-        // A screener-only run ignores the wishlist outright rather than merging
-        // with it: the operator asked to trade the screen, and silently adding
-        // curated names would make the universe something neither source states.
-        var usesWishlist = source is "wishlist" or "both";
-        var usesScreener = source is "screener" or "both";
-        var wishlistTickers = usesWishlist
-            ? SelectedWishlist?.Items
-                .Where(item => item.Active)
-                .Select(item => item.Ticker)
-                .Where(ticker => !String.IsNullOrWhiteSpace(ticker))
-                .ToArray() ?? []
-            : [];
-        string tempConfigPath;
-        try
-        {
-            var universe = await universeSnapshots.ResolveAsync(
-                wishlistTickers,
-                usesWishlist,
-                "wishlist",
-                screenerFilter,
-                usesScreener,
-                usesWishlist ? SelectedWishlist?.Id : null,
-                strategyPath,
-                cancellationToken);
-            tempConfigPath = configWriter.SaveTempConfig(
-                baseConfigPath,
-                universe.Tickers,
-                selectedPaperStrategy.Artifact,
-                ResolvePaperSelectionMode(),
-                orderExpiration,
-                entryOrderType,
-                allowExtendedHoursTrading,
-                universe.ScreenerQuery,
-                runName,
-                newsEnabled,
-                usesWishlist ? SelectedWishlist?.Id : null,
-                usesWishlist ? SelectedWishlist?.Name : null,
-                universe.Source,
-                universe.ResolvedAtUtc,
-                universe.SelectedSourceTickers,
-                universe.ScreenerTickers);
-        }
-        catch (InvalidOperationException exception)
-        {
-            logger.LogInformation(
-                "Paper run {RunName} rejected before job creation: {Reason}",
-                runName,
-                exception.Message);
-            ModelState.AddModelError(String.Empty, exception.Message);
-            return Page();
-        }
-
-        var job = await paperJobs.StartAsync(runName, tempConfigPath, cancellationToken);
-        return RedirectToPage("/PaperJob", new { id = job.JobId });
+        ModelState.AddModelError(String.Empty, "reviewed_run_required: Use the reviewed run workflow.");
+        return Page();
     }
-
     public async Task<IActionResult> OnPostCreateExperimentAsync(CancellationToken cancellationToken)
     {
         PaperExecutionMode = "experiment";
