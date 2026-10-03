@@ -195,7 +195,7 @@ public sealed class MarketPredictorHttpClientTests
 
     private const string FixtureSourceRoot = @"C:\project\market-predictor";
     private const string FixtureRelativePath = "tests/fixtures/contracts/swing_prediction_response.json";
-    private const string FixtureSha256 = "b62f577dbd9ca1a09c9959d5da84df0db9040d8e6b3c17d26eabfcb4f369f1cf";
+    private const string FixtureSha256 = "96cbcd133b8e96253b034fabba10624be79b0d80550f043f3869905251bec522";
     private static readonly DateTimeOffset FixtureTime = new(2026, 7, 8, 22, 5, 5, TimeSpan.Zero);
 
     private static string FixturePath => Path.Combine(
@@ -218,6 +218,7 @@ public sealed class MarketPredictorHttpClientTests
     [InlineData("T000", "positive_setup", null, null)]
     [InlineData("T059", "ranked_candidate", null, null)]
     [InlineData("T060", "abstain", "live_inputs_incomplete", "inputs incomplete at the decision")]
+    [InlineData("T061", "abstain", "sector_peer_floor", "too few eligible sector peers for ranking")]
     [InlineData("MISSING", "abstain", "out_of_universe", "not in the point-in-time universe")]
     public async Task GetAsync_GoldenFixtureRetainsEachOutcome(
         string ticker, string signal, string? reason, string? displayReason)
@@ -233,18 +234,19 @@ public sealed class MarketPredictorHttpClientTests
     }
 
     [Fact]
-    public async Task GetBatchAsync_GoldenFixtureRetainsAllFourOutcomes()
+    public async Task GetBatchAsync_GoldenFixtureRetainsAllFiveOutcomes()
     {
         var payload = await File.ReadAllTextAsync(FixturePath);
         var handler = new StubHandler(_ => JsonResponse(payload));
         var client = CreateClient(handler, now: FixtureTime);
-        var results = await client.GetBatchAsync(["T000", "T059", "T060", "MISSING"], "auto", CancellationToken.None);
+        var results = await client.GetBatchAsync(["T000", "T059", "T060", "T061", "MISSING"], "auto", CancellationToken.None);
 
         Assert.Equal(1, handler.RequestCount);
-        Assert.Equal(4, results.Count);
+        Assert.Equal(5, results.Count);
         AssertGoldenOutcome(results["T000"], "T000", "positive_setup", null, null);
         AssertGoldenOutcome(results["T059"], "T059", "ranked_candidate", null, null);
         AssertGoldenOutcome(results["T060"], "T060", "abstain", "live_inputs_incomplete", "inputs incomplete at the decision");
+        AssertGoldenOutcome(results["T061"], "T061", "abstain", "sector_peer_floor", "too few eligible sector peers for ranking");
         AssertGoldenOutcome(results["MISSING"], "MISSING", "abstain", "out_of_universe", "not in the point-in-time universe");
     }
 
@@ -252,7 +254,7 @@ public sealed class MarketPredictorHttpClientTests
         MarketPredictorResult result, string ticker, string signal, string? reason, string? displayReason)
     {
         Assert.Equal("available", result.AvailabilityStatus);
-        Assert.Equal("market_predictor.prediction", result.Contract);
+        Assert.Equal("market_predictor.prediction.v4", result.Contract);
         Assert.Equal(ticker, result.Ticker);
         Assert.Equal("10b", result.ResolvedHorizon);
         Assert.Equal(signal, result.FinalSignal);
@@ -292,11 +294,15 @@ public sealed class MarketPredictorHttpClientTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("market_predictor.other")]
+    [InlineData("market_predictor.prediction")]
+    [InlineData("market_predictor.prediction.v1")]
+    [InlineData("market_predictor.prediction.v3")]
+    [InlineData("MARKET_PREDICTOR.PREDICTION.V4")]
     [InlineData("MARKET_PREDICTOR.PREDICTION")]
     public async Task BothRequestPaths_RejectUnsupportedContracts(string? contract)
     {
         var payload = System.Text.Json.Nodes.JsonNode.Parse(ValidSwingPayload(Now))!;
-        payload["contract"] = contract;
+        payload["contract_version"] = contract;
         await AssertIncompatibleContractAsync(payload.ToJsonString());
     }
 
@@ -304,7 +310,7 @@ public sealed class MarketPredictorHttpClientTests
     public async Task BothRequestPaths_RejectMissingContract()
     {
         var payload = System.Text.Json.Nodes.JsonNode.Parse(ValidSwingPayload(Now))!.AsObject();
-        Assert.True(payload.Remove("contract"));
+        Assert.True(payload.Remove("contract_version"));
         await AssertIncompatibleContractAsync(payload.ToJsonString());
     }
 
@@ -330,7 +336,7 @@ public sealed class MarketPredictorHttpClientTests
     public async Task BothRequestPaths_RejectWrongContractType(string value)
     {
         var payload = System.Text.Json.Nodes.JsonNode.Parse(ValidSwingPayload(Now))!;
-        payload["contract"] = System.Text.Json.Nodes.JsonNode.Parse(value);
+        payload["contract_version"] = System.Text.Json.Nodes.JsonNode.Parse(value);
         await AssertIncompatibleContractAsync(payload.ToJsonString());
     }
 
@@ -338,8 +344,8 @@ public sealed class MarketPredictorHttpClientTests
     public async Task BothRequestPaths_DoNotAcceptTheRetiredContractField()
     {
         var payload = System.Text.Json.Nodes.JsonNode.Parse(ValidSwingPayload(Now))!.AsObject();
-        Assert.True(payload.Remove("contract"));
-        payload["contract_version"] = "market_predictor.prediction";
+        Assert.True(payload.Remove("contract_version"));
+        payload["contract"] = "market_predictor.prediction.v4";
         await AssertIncompatibleContractAsync(payload.ToJsonString());
     }
 
@@ -362,7 +368,7 @@ public sealed class MarketPredictorHttpClientTests
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
         using var document = System.Text.Json.JsonDocument.Parse(json);
         var root = document.RootElement;
-        Assert.Equal("market_predictor.prediction", root.GetProperty("contract").GetString());
+        Assert.Equal("market_predictor.prediction.v4", root.GetProperty("contract").GetString());
         Assert.False(root.TryGetProperty("contractVersion", out _));
         Assert.Equal("available", root.GetProperty("availabilityStatus").GetString());
         Assert.Equal("abstain", root.GetProperty("finalSignal").GetString());
@@ -382,7 +388,7 @@ public sealed class MarketPredictorHttpClientTests
         });
         var client = CreateClient(handler, now: FixtureTime);
         await client.GetAsync("t000", "auto", CancellationToken.None);
-        await client.GetBatchAsync(["T000", "T059", "T060", "MISSING"], "auto", CancellationToken.None);
+        await client.GetBatchAsync(["T000", "T059", "T060", "T061", "MISSING"], "auto", CancellationToken.None);
 
         var bodies = handler.RequestBodies;
         Assert.Equal(2, bodies.Count);
@@ -394,7 +400,7 @@ public sealed class MarketPredictorHttpClientTests
             Assert.Equal("swing", root.GetProperty("mode").GetString());
             Assert.Equal("auto", root.GetProperty("horizon").GetString());
             Assert.Equal(FixtureTime, root.GetProperty("as_of").GetDateTimeOffset());
-            Assert.Equal(index == 0 ? ["T000"] : ["T000", "T059", "T060", "MISSING"],
+            Assert.Equal(index == 0 ? ["T000"] : ["T000", "T059", "T060", "T061", "MISSING"],
                 root.GetProperty("tickers").EnumerateArray().Select(item => item.GetString()));
         }
     }
@@ -439,7 +445,7 @@ public sealed class MarketPredictorHttpClientTests
         var predictions = String.Join(",", (tickers.Length == 0 ? ["MU"] : tickers).Select(PredictionFor));
         return $$$"""
         {
-          "contract": "market_predictor.prediction",
+          "contract_version": "market_predictor.prediction.v4",
           "request_id": "req-1",
           "generated_at_utc": "{{{generatedAtUtc:O}}}",
           "mode": "swing",

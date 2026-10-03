@@ -1,0 +1,10 @@
+#OrderWorkflowForm {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px}
+#OrderWorkflowForm label {display:flex;flex-direction:column;gap:6px;min-width:0;font-size:13px;font-weight:600}
+#OrderWorkflowForm .input {width:100%;min-width:0;min-height:44px;font-size:16px}
+#OrderWorkflowForm input[type=checkbox] {width:22px;min-height:22px;align-self:flex-start}
+#OrderWorkflowForm span {font-size:12px;font-weight:400;line-height:1.4}
+#OrderWorkflowForm button,[data-order-review] button {min-height:44px}
+[data-order-review] {margin:16px 0}
+[data-order-summary] {white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6}
+[data-order-status],[data-order-help] {font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+#OrderWorkflowForm[hidden],[data-order-review][hidden] {display:none!important}

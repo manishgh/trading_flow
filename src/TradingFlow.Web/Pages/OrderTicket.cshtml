@@ -11,29 +11,7 @@
 }
 <section class="panel">
     <h1>Review paper order</h1>
-    <p data-order-status role="status">Loading order context…</p>
-    <form id="OrderWorkflowForm" class="candidate-controls">
-        <label>Symbol <input name="symbol" required /></label>
-        <label data-order-strategy>Exact strategy <select name="strategy" required></select></label>
-        <label>Quantity <input name="quantity" type="number" min="1" step="1" value="1" required /></label>
-        <label>Order type <select name="orderType"><option value="limit">Limit</option></select></label>
-        <label>Time in force <select name="timeInForce"><option value="day">Day</option></select></label>
-        <label data-exit-trigger hidden>Trigger price <input name="trigger" type="number" min="0.01" step="0.01" /></label>
-        <label>Limit price <input name="limit" type="number" min="0.01" step="0.01" required /></label>
-        <label data-entry-only>Stop price <input name="stop" type="number" min="0.01" step="0.01" /></label>
-        <label data-entry-only>Target price <input name="target" type="number" min="0.01" step="0.01" /></label>
-        <label>Extended hours <input name="extended" type="checkbox" /></label>
-        <button type="submit">Review order</button>
-    </form>
-    <section data-order-review hidden>
-        <h2>Review</h2><pre style="white-space:pre-wrap;overflow-wrap:anywhere" data-order-summary></pre>
-        <button type="button" data-order-confirm>Confirm paper order</button>
-        <button type="button" data-order-edit>Edit</button>
-    </section>
+    <partial name="_OrderWorkflow" />
     <a asp-page="/TradeDesk" asp-route-runId="@Request.Query["runId"]" asp-route-env="@Request.Query["env"]">Return to candidates</a>
 </section>
-<style>
-#OrderWorkflowForm {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px}
-#OrderWorkflowForm label{display:flex;flex-direction:column;min-width:0}
-</style>
 @section Scripts { <script src="~/js/order-workflow.js" asp-append-version="true" defer></script> }

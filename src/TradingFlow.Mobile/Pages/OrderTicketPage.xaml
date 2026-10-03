@@ -46,6 +46,9 @@
                 </Grid>
                 <Label Text="Extended-hours requests fail closed unless the session, asset, order type, and broker protection are eligible."
                        Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                <Label x:Name="PlanNotesLabel" Text="Strategy prices remain empty when completed evidence is unavailable." LineBreakMode="WordWrap" />
+                <Button Text="Use strategy prices" Clicked="OnPlanClicked" />
+                <Button x:Name="RiskSizeButton" Text="Size to 1R" IsEnabled="False" Clicked="OnRiskSizeClicked" />
                 <Button Text="Review order" Clicked="OnPreviewClicked" />
             </VerticalStackLayout>
 
@@ -56,7 +59,7 @@
                 <Label x:Name="PolicyLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
                 <Label x:Name="RejectionsLabel" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" LineBreakMode="WordWrap" />
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                    <Button Text="Edit" Clicked="OnEditClicked" />
+                    <Button x:Name="EditButton" Text="Edit" Clicked="OnEditClicked" />
                     <Button x:Name="ConfirmButton" Grid.Column="1" Text="Confirm paper order" Clicked="OnConfirmClicked" />
                 </Grid>
             </VerticalStackLayout>

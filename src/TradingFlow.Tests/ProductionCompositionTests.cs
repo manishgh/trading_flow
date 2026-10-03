@@ -248,7 +248,7 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
-    public void WishlistObservation_ConsumesSharedStreamStateWithoutRestPolling()
+    public void WishlistObservation_ConsumesBoundedDailyEvidenceWithoutExecutionStream()
     {
         var root = TestRepository.FindRoot();
         var observerPath = Path.Combine(
@@ -260,10 +260,10 @@ public sealed class ProductionCompositionTests
             "WishlistObserverService.cs");
         var source = File.ReadAllText(observerPath);
 
-        Assert.Contains("IDiscoverySubscriptionSink", source, StringComparison.Ordinal);
-        Assert.Contains("IMarketStateSnapshotProvider", source, StringComparison.Ordinal);
-        Assert.Contains("ReplaceScopeAsync", source, StringComparison.Ordinal);
-        Assert.Contains("GetTickerStateAsync", source, StringComparison.Ordinal);
+        Assert.Contains("IDailyObservationService", source, StringComparison.Ordinal);
+        Assert.Contains("dailyObservations.GetAsync", source, StringComparison.Ordinal);
+        Assert.Contains("daily.State != \"ready\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReplaceScopeAsync", source, StringComparison.Ordinal);
         Assert.DoesNotContain("AlpacaMarketDataProvider", source, StringComparison.Ordinal);
         Assert.DoesNotContain("GetBarsAsync", source, StringComparison.Ordinal);
     }

@@ -19,8 +19,8 @@
 
         <ShellContent
             Title="Trading"
-            ContentTemplate="{DataTemplate pages:RunningTradesPage}"
-            Route="RunningTradesPage" />
+            ContentTemplate="{DataTemplate pages:OrdersPage}"
+            Route="TradingRoot" />
 
         <ShellContent
             Title="Research"

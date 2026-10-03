@@ -7,6 +7,7 @@ public sealed class PredictorEvidencePresentationTests
 {
     [Theory]
     [InlineData("live_inputs_incomplete", "inputs incomplete at the decision")]
+    [InlineData("sector_peer_floor", "too few eligible sector peers for ranking")]
     [InlineData("out_of_universe", "not in the point-in-time universe")]
     public void Abstention_PreservesAvailableEvidenceAndDistinctReason(string reason, string label)
     {

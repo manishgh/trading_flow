@@ -58,16 +58,17 @@ test.describe("UI2 web trading workstation", () => {
   test("desk separates monitoring from wishlist administration", async ({ page }) => {
     await openSeededDesk(page);
 
-    // Seven flat cells rather than the previous collapsed health control: at
-    // seven the strip is still scannable, and the entry gate is the one an
-    // operator must not miss.
+    // Eight flat cells rather than the previous collapsed health control: the
+    // seven operational cells plus the account-wide portfolio. The strip is
+    // still scannable, and the entry gate is the one an operator must not miss.
     await expect(page.locator(".desk-operational")).toBeVisible();
-    await expect(page.locator(".desk-operational > div")).toHaveCount(7);
+    await expect(page.locator(".desk-operational > div")).toHaveCount(8);
+    await expect(page.locator("[data-desk-portfolio]")).toContainText("Portfolio");
     await expect(page.locator("#DeskQuoteConnection")).toHaveCount(1);
 
     // The desk monitors and routes. It never edits the universe.
     await expect(page.locator('form[action*="AddTicker"], input[name="Ticker"]:not([type="hidden"]), input[name="FinvizFilter"]')).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Manage wishlist" })).toHaveAttribute("href", /Wishlists/);
+    await expect(page.locator("#DeskFilterForm").getByRole("link", { name: "Manage wishlists", exact: true })).toHaveAttribute("href", /Wishlists/);
 
     await page.goto("/Wishlists");
     await expect(page.locator("#TickerTop")).toBeVisible();
@@ -188,7 +189,7 @@ test.describe("UI2 web trading workstation", () => {
   test("operator links complete their intended navigation", async ({ page }) => {
     const targetId = await openSeededDesk(page);
 
-    await page.getByRole("link", { name: "Manage wishlist" }).click();
+    await page.locator("#DeskFilterForm").getByRole("link", { name: "Manage wishlists", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/Wishlists\\?id=${targetId}`));
     await expect(page.getByRole("heading", { name: "Wishlists", level: 1 })).toBeVisible();
 
@@ -199,7 +200,8 @@ test.describe("UI2 web trading workstation", () => {
     await expect(page).toHaveURL(new RegExp(`ticker=${testTicker}`));
     await expect(page.locator(`[data-selected-symbol="${testTicker}"]`)).toBeVisible();
 
-    await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Trading", exact: true }).click();
+    await page.locator(".primary-nav").getByRole("link", { name: "Orders", exact: true }).click();
+    await page.locator(".section-nav").getByRole("link", { name: "Positions", exact: true }).click();
     await expect(page).toHaveURL(/\/RunningTrades/);
     await expect(page.getByRole("heading", { name: "Positions", level: 1 })).toBeVisible();
   });
@@ -219,13 +221,14 @@ test.describe("UI2 web trading workstation", () => {
   });
 
   test("an order needs a server-reviewed ticket before it can be confirmed", async ({ page }) => {
+    await page.route("**/api/v1/orders/context", route => route.fulfill({contentType:"application/json",body:JSON.stringify({accountId:"fixture",operatorOverrideAllowed:true})}));
     const targetId = await openSeededDesk(page);
     await page.goto(`/TradeDesk?id=${targetId}&ticker=${testTicker}`);
 
     // Stage one only. There is no confirm control, and no gate checklist,
     // before the server has actually checked anything.
-    await expect(page.getByRole("link", { name: "Review an operator order" })).toHaveAttribute("href", /OrderTicket/);
-    await expect(page.getByRole("button", { name: /^Confirm paper/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Review order", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Confirm paper/ })).toBeHidden();
     await expect(page.locator(".desk-ticket .check-list")).toHaveCount(0);
   });
 
@@ -234,7 +237,8 @@ test.describe("UI2 web trading workstation", () => {
     await page.goto(`/TradeDesk?id=${targetId}&ticker=${testTicker}`);
     // The seeded symbol has no position, so the control cannot invite a short.
     await expect(page.locator('input[name="ticket.Side"][value="sell"]')).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Review an operator order" })).toBeVisible();
+    await expect(page.locator("[data-order-status]")).toContainText("authorized paper candidate");
+    await expect(page.locator("#OrderWorkflowForm")).toBeHidden();
   });
 
   test("keyed quote patches preserve focused controls", async ({ page }) => {

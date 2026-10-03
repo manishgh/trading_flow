@@ -155,6 +155,20 @@ public static class TradingApiV1Endpoints
             return Results.Ok(ToMobileWishlistDesk(wishlist, snapshot));
         });
 
+        group.MapGet("/symbols/{ticker}/intelligence", async (string ticker,
+            TradingFlow.Web.Services.Desk.DeskSources sources, WishlistDeskService desk,
+            SymbolIntelligenceService intelligence, CancellationToken cancellationToken) =>
+        {
+            var parsed = DeskStreamTickers.Parse(ticker);
+            if (parsed.Count != 1 || ticker.Contains(',')) return Results.BadRequest();
+            var symbol = parsed.Single();
+            var lists = await sources.FollowedListsAsync(cancellationToken);
+            var snapshot = await desk.BuildAsync(DeskUniverse.ForSymbols("Symbol observation", [symbol], lists),
+                "sip", TimeSpan.FromMinutes(20), TimeSpan.FromHours(4), cancellationToken);
+            var row = snapshot.Rows.SingleOrDefault();
+            return row is null ? Results.NotFound() : Results.Ok(await intelligence.BuildAsync(row, cancellationToken));
+        });
+
         group.MapGet("/wishlists/{wishlistId:guid}/symbols/{ticker}/intelligence", async (
             Guid wishlistId,
             string ticker,

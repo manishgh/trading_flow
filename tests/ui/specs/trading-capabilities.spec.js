@@ -10,7 +10,8 @@ import { signIn } from "./sign-in.js";
 
 async function firstWishlistId(page) {
   await page.goto("/TradeDesk");
-  return page.locator("#WishlistSelect option").first().getAttribute("value");
+  // The first option is "All wishlists" (empty value); the first real list follows it.
+  return page.locator('#WishlistSelect option:not([value=""])').first().getAttribute("value");
 }
 
 /** The wishlist id the management screen is currently showing. */
@@ -36,7 +37,7 @@ test.describe("trading environment separation", () => {
   });
 
   test("a locked environment renders no order control anywhere in the document", async ({ page }) => {
-    for (const route of ["/TradeDesk?env=live", "/OrderTicket?env=live&ticker=AAPL"]) {
+    for (const route of ["/TradeDesk?env=live", "/OrderTicket?env=live&ticker=AAPL", "/Orders?env=live&ticker=AAPL"]) {
       await page.goto(route);
       // Fail closed: the controls are absent, not merely disabled. Scoped to the
       // page body - the shared chrome's sign-out form is not an order control,
@@ -215,6 +216,7 @@ test.describe("backtest audit", () => {
 test.describe("order ticket breadth", () => {
   test.beforeEach(async ({ page }) => {
     await signIn(page);
+    await page.route("**/api/v1/orders/context", route => route.fulfill({contentType:"application/json",body:JSON.stringify({accountId:"fixture",operatorOverrideAllowed:true})}));
   });
 
   test("an entry stays a protected limit while an exit offers the wider set", async ({ page }) => {
@@ -330,15 +332,15 @@ test.describe("desk order shortcuts", () => {
 
   test("the buy action carries a keyboard hint and never submits on its own", async ({ page }) => {
     await page.goto("/TradeDesk");
-    const id = await page.locator("#WishlistSelect option").first().getAttribute("value");
+    const id = await page.locator('#WishlistSelect option:not([value=""])').first().getAttribute("value");
     const ticker = await page.locator(".trade-desk-table [data-symbol-row]").first().getAttribute("data-symbol");
     test.skip(!ticker, "No symbols seeded.");
 
     await page.goto(`/TradeDesk?id=${id}&ticker=${ticker}`);
     // The ticket is inline on the desk now. Stage one reviews; it never submits,
     // and no confirm control exists until the server has checked the draft.
-    const review = page.getByRole("link", { name: "Review an operator order" });
+    const review = page.getByRole("link", { name: "Open candidate review" });
     await expect(review).toBeVisible();
-    await expect(page.getByRole("button", { name: /^Confirm paper/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Confirm paper/ })).toBeHidden();
   });
 });

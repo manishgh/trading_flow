@@ -65,7 +65,7 @@ internal sealed record PredictorRequest(
     [property: JsonPropertyName("as_of")] DateTimeOffset AsOf);
 
 internal sealed record PredictorResponse(
-    [property: JsonPropertyName("contract")] string? Contract,
+    [property: JsonPropertyName("contract_version")] string? Contract,
     [property: JsonPropertyName("request_id")] string RequestId,
     [property: JsonPropertyName("generated_at_utc")] DateTimeOffset GeneratedAtUtc,
     [property: JsonPropertyName("mode")] string Mode,

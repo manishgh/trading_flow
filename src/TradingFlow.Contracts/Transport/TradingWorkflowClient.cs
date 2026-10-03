@@ -15,6 +15,11 @@ public sealed class TradingWorkflowClient(HttpClient http, Func<string> baseUrl)
     public Task<CandidateRunResponse> CandidatesAsync(Guid run, CancellationToken token = default) => GetAsync<CandidateRunResponse>($"candidate-runs/{run}", token);
     public Task<CandidateAuditResponse> AuditAsync(Guid id, CancellationToken token = default) => GetAsync<CandidateAuditResponse>($"candidates/{id}/audit", token);
     public Task<OrderPreviewResponse> PreviewOrderAsync(PreviewOrderRequest request, CancellationToken token = default) => PostAsync<PreviewOrderRequest, OrderPreviewResponse>("orders/preview", request, token);
+    public Task<OrderTicketPlanResponse> PlanOrderAsync(OrderTicketPlanRequest request, CancellationToken token = default) => PostAsync<OrderTicketPlanRequest, OrderTicketPlanResponse>("orders/plan", request, token);
+    public Task<PortfolioResponse> PortfolioAsync(CancellationToken token = default) => GetAsync<PortfolioResponse>("portfolio", token);
+    public Task<OrderJournalEntry[]> OrderJournalAsync(CancellationToken token = default) => GetAsync<OrderJournalEntry[]>("orders/journal", token);
+    public Task<OrderCommandResponse> CancelOrderAsync(CancelOrderRequest request, CancellationToken token = default) => PostAsync<CancelOrderRequest, OrderCommandResponse>("orders/cancel", request, token);
+    public Task<OrderCommandResponse> ClosePositionAsync(ClosePositionRequest request, CancellationToken token = default) => PostAsync<ClosePositionRequest, OrderCommandResponse>("positions/close", request, token);
     public Task<OrderCommandResponse> ConfirmOrderAsync(ConfirmOrderRequest request, CancellationToken token = default) => PostAsync<ConfirmOrderRequest, OrderCommandResponse>("orders/confirm", request, token);
     public Task<RunJobResponse> StartAsync(StartBacktestRequest request, CancellationToken token = default) => PostAsync<StartBacktestRequest, RunJobResponse>("backtests/runs", request, token);
     public Task<RunJobResponse> StartAsync(StartPaperRunRequest request, CancellationToken token = default) => PostAsync<StartPaperRunRequest, RunJobResponse>("paper/runs", request, token);

@@ -21,7 +21,7 @@ public sealed record DeskSelection(DeskSource Source, IReadOnlyList<DeskMembersh
 /// <summary>Resolves observational membership without creating universes, candidates or orders.</summary>
 public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactory,
     IWishlistRepository wishlists, ScreenerPresetService presets, IScreenerSnapshotSource screener,
-    IMemoryCache cache)
+    IMemoryCache cache, IDeskAccountReader? account = null)
 {
     public const int DisplayLimit = 50;
     public static readonly IReadOnlyList<DeskSource> BuiltIns = [
@@ -47,6 +47,7 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
         return new[] { new DeskSource("all", "All followed stocks", "Following", "All active stocks across your wishlists, without duplicates.") }
             .Concat(lists.Select(x => new DeskSource("wishlist:" + x.Id, x.Name, "Wishlists", x.IsObserved ? "Background daily wishlist alerts enabled" : "Market monitoring; background wishlist alerts off")))
             .Concat(BuiltIns)
+            .Concat(TradingFlow.Finviz.FinvizSignalCatalog.All.Select(x => new DeskSource("signal:" + x.Code, x.Label, "Finviz · " + x.Group, "Finviz discovery only; normal strategy admission is still required.", x.Query)))
             .Concat(saved.Select(x => new DeskSource("saved:" + x.Id, x.Name, "Saved Elite screens", "Locally saved/imported filters; not automatically synced with Finviz.", x.FilterQuery)))
             .ToArray();
     }
@@ -69,6 +70,14 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
         if (source.Query is null)
         {
             var members = key == "all" ? all : Merge(lists.Where(x => "wishlist:" + x.Id == key));
+            if (key == "all" && account is not null)
+            {
+                var holdings = await account.ReadAsync(ct);
+                if (holdings.Available)
+                    members = members.Concat(holdings.Holdings.Where(x => x.Quantity != 0m)
+                        .Select(x => new DeskMembership(x.Symbol, "Held position", [])))
+                        .DistinctBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase).OrderBy(x => x.Symbol).ToArray();
+            }
             return Window(source, members, members.Count, null, null, page, search);
         }
         // Snapshot membership changes at most once a minute; quotes remain independent.
@@ -114,10 +123,10 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
         {
             if (uri.Scheme != "https" || !(uri.Host == "finviz.com" || uri.Host == "www.finviz.com" || uri.Host == "elite.finviz.com"))
                 throw new ArgumentException("Use an HTTPS Finviz screener URL or its filter list.");
-            query = System.Web.HttpUtility.ParseQueryString(uri.Query)["f"] ?? "";
+            query = ScreenerPresetService.SelectingParameters(uri.Query);
         }
-        if (query.StartsWith("f=", StringComparison.OrdinalIgnoreCase)) query = query[2..];
-        if (query.Length is < 1 or > 2000 || !Regex.IsMatch(query, @"\A[a-zA-Z0-9_,.\-]+\z"))
+        if (query.StartsWith("f=", StringComparison.OrdinalIgnoreCase) && !query.Contains('&')) query = query[2..];
+        if (query.Length is < 1 or > 2000 || !Regex.IsMatch(query, @"\A(?:[a-zA-Z0-9_,.\-]+|s=[a-zA-Z0-9_]+|f=[a-zA-Z0-9_,.\-]+&s=[a-zA-Z0-9_]+)\z"))
             throw new ArgumentException("Paste a Finviz screener URL containing filters, or a comma-separated filter list. Credentials are not saved.");
         return query;
     }

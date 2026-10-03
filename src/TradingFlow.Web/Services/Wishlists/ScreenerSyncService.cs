@@ -75,8 +75,9 @@ public interface IScreenerSnapshotSource
 /// Reads a Finviz screen and says what it would return, so an operator can see
 /// the result before anything is added to a wishlist.
 ///
-/// Three input shapes are accepted and normalised to one query: a full Finviz
-/// Elite URL, the name of a saved screener preset, or a bare query string. They
+/// Four input shapes are accepted and normalised to one query: a catalogued
+/// Finviz signal (<c>signal:code</c>), a full Finviz Elite URL, the name of a
+/// saved screener preset, or a bare query string. They
 /// are the three things an operator actually has to hand, and making the caller
 /// pick between them would only move the guesswork.
 ///
@@ -194,7 +195,7 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
     }
 
     /// <summary>
-    /// Resolves the three accepted input shapes to one Finviz filter query.
+    /// Resolves the four accepted input shapes to one Finviz filter query.
     /// </summary>
     private async Task<(string Name, string Query)> NormalizeAsync(
         string input,
@@ -203,14 +204,21 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
     {
         var trimmed = input.Trim();
 
-        // 1. A full Finviz URL: the filter lives in the query string, and the
-        //    rest of the URL (view, order, auth) is not ours to forward.
+        // 0. A built-in Finviz signal from the desk catalogue (signal:code). Only
+        //    catalogued codes resolve; an unknown one falls through as a query.
+        if (FinvizSignalCatalog.TryResolveInput(trimmed, out var signal))
+        {
+            return ($"Finviz · {signal.Label}", signal.Query);
+        }
+
+        // 1. A full Finviz URL: the filters (f=) and the signal (s=) both decide
+        //    which stocks the screen returns, so both are kept. View, order and
+        //    auth are not ours to forward.
         if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
-            var parameters = HttpUtility.ParseQueryString(uri.Query);
-            var filter = parameters["f"];
-            return (String.IsNullOrWhiteSpace(filter) ? trimmed : $"Finviz screen {filter}", filter ?? String.Empty);
+            var selecting = ScreenerPresetService.SelectingParameters(uri.Query);
+            return (String.IsNullOrWhiteSpace(selecting) ? trimmed : $"Finviz screen {selecting}", selecting);
         }
 
         // 2. A saved swing screener preset, matched by name.

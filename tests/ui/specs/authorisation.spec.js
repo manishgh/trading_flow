@@ -31,6 +31,8 @@ const protectedApis = [
   "/api/v1/paper/jobs",
   "/api/v1/wishlists/00000000-0000-0000-0000-000000000000/quotes/stream",
   "/api/v1/wishlists/00000000-0000-0000-0000-000000000000/activity/stream",
+  "/api/v1/desk/quotes/stream?tickers=MSFT",
+  "/api/v1/desk/activity/stream?tickers=MSFT",
   "/api/profiler/alpaca",
 ];
 

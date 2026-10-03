@@ -1,4 +1,5 @@
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Pages.Shared;
 

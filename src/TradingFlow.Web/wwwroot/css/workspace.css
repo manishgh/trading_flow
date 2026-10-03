@@ -24,7 +24,7 @@
 @media(max-width:1000px){.topbar .primary-nav{order:3;flex-basis:100%;justify-content:flex-start}.topbar .primary-nav a{flex:1;text-align:center}.topbar-tail .theme-control,.topbar-clocks{display:none}}
 @media(max-width:768px){.topbar{flex-direction:row;padding:8px 12px;gap:6px}.topbar .primary-nav{display:flex;width:100%;gap:0}.topbar .primary-nav a{padding:12px 6px;font-size:13px}.topbar-tail{gap:5px}.section-nav{padding:4px 8px}.section-nav a{padding:10px 9px;font-size:13px}.prep-page{padding:0 4px 24px}.prep-toolbar>*{max-width:100%}.prep-page .page-head{display:block}.desk-page{padding-bottom:16px}}
 
-@media(max-width:768px){.desk-page [data-desk-panel=market] .desk-context{display:flex;flex-wrap:wrap}.desk-context .field{flex:1 1 160px;min-width:0}}
+
 
 .research-configuration>summary,.advanced-run-parameters>summary,.paper-experiment-registration>summary{cursor:pointer;font-weight:600;padding:12px 0}.research-configuration{min-width:0}.lab-rail{display:block}
 

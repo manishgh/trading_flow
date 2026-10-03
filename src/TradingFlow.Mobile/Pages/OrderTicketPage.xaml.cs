@@ -14,12 +14,16 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
     private PreviewOrderRequest? pending;
     private string commandKey = Guid.NewGuid().ToString("N");
     private bool isBusy;
+    private bool confirmationStarted;
+    private long sessionVersion = -1;
+    private StrategyReference? plannedStrategy;
+    private OrderTicketPlanResponse? pricePlan;
     private CancellationTokenSource? lifetime;
 
     public OrderTicketPage()
     {
         InitializeComponent();
-        void Changed() { if (!isBusy) { pending = null; commandKey = Guid.NewGuid().ToString("N"); } }
+        void Changed() { if (!isBusy) { pending = null; pricePlan = null; RiskSizeButton.IsEnabled = false; commandKey = Guid.NewGuid().ToString("N"); } }
         foreach (var entry in new[] { QuantityEntry, LimitEntry, StopEntry, TargetEntry })
             entry.TextChanged += (_, _) => Changed();
         ExtendedHoursCheckBox.CheckedChanged += (_, _) => Changed();
@@ -27,7 +31,9 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
 
     protected override void OnAppearing()
     {
-        base.OnAppearing(); lifetime?.Dispose(); lifetime = new();
+        base.OnAppearing();
+        if (sessionVersion != AppServices.Api.SessionVersion) { OnSessionChanged(null, EventArgs.Empty); sessionVersion = AppServices.Api.SessionVersion; }
+        lifetime?.Dispose(); lifetime = new();
         AppServices.Api.SessionChanged += OnSessionChanged;
     }
     protected override void OnDisappearing()
@@ -37,7 +43,9 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
     }
     private void OnSessionChanged(object? sender, EventArgs e)
     {
-        lifetime?.Cancel(); pending = null; reviewed = null;
+        lifetime?.Cancel(); pending = null; reviewed = null; plannedStrategy = null; pricePlan = null; confirmationStarted = false; EditButton.IsEnabled = true;
+        DraftSection.IsVisible = true; ReviewSection.IsVisible = false; ConfirmationSection.IsVisible = false;
+        commandKey = Guid.NewGuid().ToString("N");
         ConfirmButton.IsEnabled = false; ShowError("Connection changed. Reopen and review this order.");
     }
     public void ApplyQueryAttributes(IDictionary<string, object> query)
@@ -58,6 +66,57 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
         if (query.TryGetValue("candidateId", out var candidateValue)) Guid.TryParse(candidateValue?.ToString(), out candidateId);
         if (query.TryGetValue("runId", out var runValue)) Guid.TryParse(runValue?.ToString(), out runId);
         TickerLabel.Text = $"{ticker} | PAPER";
+    }
+
+    private async Task<StrategyReference?> SelectStrategyAsync(CancellationToken token)
+    {
+        var catalog = await AppServices.Api.Workflow.CatalogAsync("backtest", token);
+        var choices = catalog.Strategies.ToArray();
+        var labels = choices.Select(item => item.Name + " · " + item.Identity.SemanticVersion + " · " + item.Identity.ContentSha256[..12]).ToArray();
+        token.ThrowIfCancellationRequested();
+        var choice = await DisplayActionSheetAsync("Exact strategy", "Cancel", null, labels);
+        token.ThrowIfCancellationRequested();
+        var index = Array.IndexOf(labels, choice);
+        return index < 0 ? null : choices[index].Identity;
+    }
+
+    private async void OnPlanClicked(object? sender, EventArgs e) => await RunAsync(async token =>
+    {
+        StrategyReference? strategy;
+        if (candidateId != Guid.Empty && runId != Guid.Empty)
+        {
+            var run = await AppServices.Api.Workflow.CandidatesAsync(runId, token);
+            if (run.Provenance.Mode is not ("paper" or "paper_shadow" or "paper_experiment"))
+                throw new InvalidOperationException("Research candidates cannot open executable orders.");
+            var candidate = run.Candidates.SingleOrDefault(x => x.CandidateId == candidateId)
+                ?? throw new InvalidOperationException("The exact candidate is unavailable.");
+            ticker = candidate.Symbol; strategy = candidate.Strategy;
+        }
+        else
+        {
+            var context = await AppServices.Api.GetOrderContextAsync(token);
+            if (context?.OperatorOverrideAllowed != true) throw new InvalidOperationException("Open an authorized paper candidate.");
+            strategy = await SelectStrategyAsync(token);
+            if (strategy is null) return;
+        }
+        var limit = TryReadDecimal(LimitEntry.Text, out var entered) && entered > 0m ? entered : (decimal?)null;
+        var plan = await AppServices.Api.Workflow.PlanOrderAsync(new(ContractVersions.VersionOne, ticker, strategy, limit), token);
+        token.ThrowIfCancellationRequested();
+        plannedStrategy = strategy; pricePlan = plan; pending = null; commandKey = Guid.NewGuid().ToString("N");
+        TickerLabel.Text = $"{ticker} | PAPER";
+        LimitEntry.Text = plan.Limit?.ToString("0.####", CultureInfo.CurrentCulture);
+        StopEntry.Text = plan.Stop?.ToString("0.####", CultureInfo.CurrentCulture);
+        TargetEntry.Text = plan.Target?.ToString("0.####", CultureInfo.CurrentCulture);
+        PlanNotesLabel.Text = plan.StopNote + "\n" + plan.TargetNote;
+        RiskSizeButton.IsEnabled = plan.RiskBudget is > 0m && plan.Stop is > 0m && plan.Limit > plan.Stop;
+    });
+
+    private void OnRiskSizeClicked(object? sender, EventArgs e)
+    {
+        if (isBusy || pricePlan is not { RiskBudget: > 0m, Limit: { } limit, Stop: { } stop } || limit <= stop) return;
+        var shares = Decimal.Floor(pricePlan.RiskBudget.Value / (limit - stop));
+        if (shares < 1m) { ShowError("The account risk budget does not allow one share at this stop distance."); return; }
+        QuantityEntry.Text = shares.ToString(CultureInfo.CurrentCulture);
     }
 
     private async void OnPreviewClicked(object? sender, EventArgs e)
@@ -97,14 +156,8 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
                 {
                     if (!context.OperatorOverrideAllowed) throw new InvalidOperationException("Select an authorized candidate. Operator override requires Administrator.");
                     if (wishlistId == Guid.Empty) throw new InvalidOperationException("Open an operator ticket from a wishlist.");
-                    var catalog = await AppServices.Api.Workflow.CatalogAsync("backtest", token);
-                    var choices = catalog.Strategies.ToArray();
-                    if (choices.Length == 0) throw new InvalidOperationException("No exact strategy is available.");
-                    var labels = choices.Select(item => item.Name + " · " + item.Identity.SemanticVersion + " · " + item.Identity.ContentSha256[..12]).ToArray();
-                    var selected = await DisplayActionSheetAsync("Select exact strategy", "Cancel", null, labels);
-                    var index = Array.IndexOf(labels, selected);
-                    if (index < 0) return;
-                    identity = choices[index].Identity;
+                    identity = plannedStrategy ?? await SelectStrategyAsync(token)
+                        ?? throw new InvalidOperationException("Select an exact strategy before reviewing.");
                     var universe = await AppServices.Api.Workflow.PreviewAsync(new(ContractVersions.VersionOne, "swing", null,
                         [new("wishlist", wishlistId.ToString(), wishlistId)]), token);
                     universeId = universe.UniverseSnapshotId;
@@ -132,6 +185,7 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
             return;
         }
 
+        confirmationStarted = true; EditButton.IsEnabled = false;
         ConfirmButton.IsEnabled = false;
         await RunAsync(async token =>
         {
@@ -145,6 +199,7 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
             ReviewSection.IsVisible = false;
             ConfirmationSection.IsVisible = true;
             ConfirmationLabel.Text = $"{confirmation.State}: {confirmation.RequestedQuantity:0.####} {confirmation.Symbol}\n{confirmation.RejectionReason ?? confirmation.BrokerOrderId ?? confirmation.ClientOrderId}";
+            if (confirmation.State == "rejected") { confirmationStarted = false; EditButton.IsEnabled = true; ReviewSection.IsVisible = true; ConfirmButton.IsVisible = false; }
             if (confirmation.State == "confirmation_pending")
             {
                 ReviewSection.IsVisible = true;
@@ -157,10 +212,12 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
 
     private void OnEditClicked(object? sender, EventArgs e)
     {
+        if (isBusy || confirmationStarted) return;
         reviewed = null;
         pending = null;
         commandKey = Guid.NewGuid().ToString("N");
         ReviewSection.IsVisible = false;
+        ConfirmationSection.IsVisible = false;
         DraftSection.IsVisible = true;
         ErrorLabel.IsVisible = false;
     }
@@ -171,9 +228,9 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
         DraftSection.IsVisible = false;
         ReviewSection.IsVisible = true;
         ReviewStatusLabel.Text = "Ready to confirm";
-        ReviewSummaryLabel.Text = $"{preview.Quantity} {preview.Symbol} at {preview.LimitPrice:C2}\nNotional {preview.EstimatedNotional:C2} · maximum loss {preview.MaximumLoss:C2}";
+        ReviewSummaryLabel.Text = $"{preview.Quantity} {preview.Symbol} · {preview.OrderType}/{preview.TimeInForce} at {preview.LimitPrice:C2}\nStop {preview.StopLossPrice:C2} · target {preview.TakeProfitPrice:C2}\nExtended hours {pending?.AllowExtendedHoursTrading}\nNotional {preview.EstimatedNotional:C2} · maximum loss {preview.MaximumLoss:C2}";
         MarketEvidenceLabel.Text = $"Quote {preview.QuoteTimestampUtc:O}\nExpires {preview.ExpiresAtUtc:O}";
-        PolicyLabel.Text = $"Policy {preview.ExecutionPolicy} · {preview.Strategy.StrategyId} · {preview.Strategy.SemanticVersion}";
+        PolicyLabel.Text = $"Policy {preview.ExecutionPolicy} · {preview.Strategy.StrategyId} · {preview.Strategy.SemanticVersion}\n{preview.Strategy.ContentSha256}";
         RejectionsLabel.Text = String.Join(Environment.NewLine, preview.Warnings);
         RejectionsLabel.IsVisible = preview.Warnings.Count > 0;
         ConfirmButton.IsVisible = true;

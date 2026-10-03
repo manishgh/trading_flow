@@ -18,6 +18,25 @@ namespace TradingFlow.Tests;
 
 public sealed class DeskReadModelTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DefaultDesk_AddsOnlyAvailableHeldSymbols_AndKeepsNarrowedWishlist(bool available)
+    {
+        await using var db = new CandidateWorkflowTestDatabase(); await db.InitializeAsync();
+        var repository = new SqliteWishlistRepository(db);
+        var list = await repository.SaveAsync(List("Followed", "AAPL"), default);
+        var reader = new Mock<IDeskAccountReader>();
+        reader.Setup(x => x.ReadAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new DeskAccount(available, "fixture", Now,
+            [new("AAPL", 2, 100, 200, 220, 20), new("HELD", 1, 10, 10, 11, 1), new("ZERO", 0, null, null, null, null)]));
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var sources = new DeskSources(db, repository, new ScreenerPresetService(db, TimeProvider.System), Mock.Of<IScreenerSnapshotSource>(), cache, reader.Object);
+        var all = await sources.ResolveAsync("all", default);
+        Assert.Equal(available ? new[] { "AAPL", "HELD" } : new[] { "AAPL" }, all.Members.Select(x => x.Symbol));
+        Assert.Single(all.Members.Single(x => x.Symbol == "AAPL").Wishlists);
+        Assert.Equal("AAPL", Assert.Single((await sources.ResolveAsync("wishlist:" + list.Id, default)).Members).Symbol);
+        Assert.Equal(TradingFlow.Finviz.FinvizSignalCatalog.All.Count, (await sources.CatalogAsync(default)).Count(x => x.Key.StartsWith("signal:")));
+    }
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-09-28T15:00:00Z");
     [Fact]
     public void AllFollowed_DeduplicatesAndKeepsEverySource_WithoutChangingObservation()
@@ -94,6 +113,8 @@ public sealed class DeskReadModelTests
     [Theory]
     [InlineData("https://elite.finviz.com/screener.ashx?f=ta_sma50_pa&auth=secret", "ta_sma50_pa")]
     [InlineData("f=sh_price_o10,ta_sma50_pa", "sh_price_o10,ta_sma50_pa")]
+    [InlineData("https://elite.finviz.com/screener.ashx?f=cap_smallover&s=ta_p_channelup&auth=secret", "f=cap_smallover&s=ta_p_channelup")]
+    [InlineData("s=ta_topgainers", "s=ta_topgainers")]
     public void Import_SavesOnlyFilters(string input,string expected) => Assert.Equal(expected,DeskSources.ImportFilter(input));
     [Theory]
     [InlineData("https://attacker.example/screener?f=ta_sma50_pa")]

@@ -116,7 +116,7 @@ public sealed class CandidatesPage : ContentPage, IQueryAttributable
             }
             ((Label)card.Children[0]).Text = candidate.Symbol + " · " + candidate.Readiness.Replace('_', ' ');
             ((Label)card.Children[1]).Text = String.Join("\n", candidate.Rejections.Select(item => item.Message));
-            ((Button)card.Children[3]).IsVisible = candidate.State.Equals("triggered", StringComparison.OrdinalIgnoreCase);
+            ((Button)card.Children[3]).IsVisible = snapshot.Provenance.Mode is "paper" or "paper_shadow" or "paper_experiment" && candidate.State.Equals("triggered", StringComparison.OrdinalIgnoreCase);
         }
     }
     private async Task ShowAuditSafelyAsync(Guid id)

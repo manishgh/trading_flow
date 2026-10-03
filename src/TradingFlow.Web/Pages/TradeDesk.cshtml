@@ -2,12 +2,14 @@
 @using TradingFlow.Web.Pages.Shared
 @using TradingFlow.Web.Services
 @using TradingFlow.Web.Services.Wishlists
+@using TradingFlow.Finviz
 @model TradingFlow.Web.Pages.TradeDeskModel
 @{
-    ViewData["Title"] = "Desk";
+    ViewData["Title"] = "Candidates";
     ViewData["MainClass"] = "shell-flush desk-page";
-    var selectedId = Model.SelectedWishlist?.Id;
-    var selectedName = Model.SelectedWishlist?.Name ?? "No wishlist";
+    var selectedName = Model.Universe.Label;
+    var portfolio = Model.Portfolio;
+    var prep = Model.Preparation;
     var status = Model.OperationalStatus;
     var selected = Model.SelectedRow;
     var screener = Model.ScreenerResult;
@@ -57,6 +59,21 @@
         _ => source
     };
 
+    // Change against the previous session close, with its date and price in the
+    // title, so the reference is never implied. Unknown renders as a dash.
+    static string ChangeText(decimal? change, decimal? pct) =>
+        change is null || pct is null ? "—" : $"{Signed(change, "0.00")} ({SignedPercent(pct)})";
+
+    static string ChangeTitle(AlpacaPreviousClose? close) => close is null
+        ? "No previous close from Alpaca for this symbol."
+        : $"Change vs the {close.SessionDate:dd MMM} close of {close.Close:C2}.";
+
+    static string? PreviousCloseValue(AlpacaPreviousClose? close) =>
+        close?.Close.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    static string ListsText(IReadOnlyList<string> lists) =>
+        lists.Count == 0 ? "Not on a list" : String.Join(", ", lists);
+
     static string Verdict(bool hasSignal, bool hasQuote) =>
         hasSignal ? "OBSERVED SETUP" : hasQuote ? "WATCHING" : "NO QUOTE";
 
@@ -73,9 +90,6 @@
 @* The desk carries no visible page title - the design gives the screen to the
    grid and the chrome names it. The heading still exists for assistive tech, so
    the page has exactly one h1 like every other screen. *@
-
-<div id="DeskConnectionAnnouncement" class="visually-hidden" role="status" aria-live="polite"></div>
-
 <div class="page-head"><div><h1>Candidates</h1><p>Review a strategy run, or explore your source symbols.</p></div></div>
 <div class="view-switch" role="group" aria-label="Candidate view">
     <button type="button" data-desk-view="candidates" aria-pressed="true">Strategy candidates</button>
@@ -83,10 +97,11 @@
 </div>
 <div data-desk-panel="candidates"><partial name="_CandidateWorkflow" /></div>
 <div data-desk-panel="market" hidden>
+<div id="DeskConnectionAnnouncement" class="visually-hidden" role="status" aria-live="polite"></div>
 
 @if (!String.IsNullOrWhiteSpace(Model.StatusMessage))
 {
-<div class="status-banner" role="status">@Model.StatusMessage</div>
+    <div class="status-banner" role="status">@Model.StatusMessage</div>
 }
 @if (!String.IsNullOrWhiteSpace(Model.ErrorMessage))
 {
@@ -121,8 +136,18 @@
         <span class="metric-value" title="@status.AdmissionDetail">@status.AdmissionStatus</span>
     </div>
     <div>
-        <span class="micro-label">Open P/L</span>
+        <span class="micro-label">Open P/L · this view</span>
         <span class="metric-value @SignedClass(Model.TotalPl)">@SignedMoney(Model.TotalPl)</span>
+    </div>
+    @* Account-wide, not scoped to the view: the operator's whole book should be
+       one glance away whichever list or screener is on screen. *@
+    <div data-desk-portfolio>
+        <span class="micro-label">Portfolio · @(Model.Account.Available ? Model.Account.Holdings.Count + " open" : "unavailable")</span>
+        <span class="metric-value">@Money(Model.Account.Available ? portfolio.MarketValue : null)</span>
+        <span class="metric-detail">
+            cost @Money(Model.Account.Available ? portfolio.CostBasis : null) ·
+            <span class="@SignedClass(portfolio.UnrealizedPl)">@SignedMoney(Model.Account.Available ? portfolio.UnrealizedPl : null) (@SignedPercent(Model.Account.Available ? portfolio.UnrealizedPlPct : null))</span>
+        </span>
     </div>
     <div>
         <span class="micro-label">Buying power</span>
@@ -138,16 +163,69 @@
    Hidden inputs carry source, sort, dir and env so filtering never drops the
    sort state an operator chose.
    =========================================================================== *@
+@* The universe decides which symbols are on screen: every wishlist (default),
+   one wishlist, or a screener's hits. Switching is a plain link so it survives
+   reload and can be bookmarked like every other view state here. *@
+<nav class="desk-universe-switch seg" aria-label="Universe">
+    <a class="seg-opt" asp-page="/TradeDesk"
+       asp-all-route-data='Model.RouteWith(("scope", null), ("screenerQuery", null), ("targetId", null), ("ticker", null))'
+       aria-current="@(Model.IsScreenerScope ? null : "page")">Wishlists</a>
+    <a class="seg-opt" asp-page="/TradeDesk"
+       asp-all-route-data='Model.RouteWith(("scope", "screener"), ("id", null), ("ticker", null))'
+       aria-current="@(Model.IsScreenerScope ? "page" : null)">Screener</a>
+</nav>
+
 <form method="get" class="desk-context" id="DeskFilterForm">
-    <div class="field">
-        <label for="WishlistSelect">Wishlist</label>
-        <select class="input" id="WishlistSelect" name="id" data-auto-submit>
-            @foreach (var wishlist in Model.Wishlists)
-            {
-                <option value="@wishlist.Id" selected="@(Model.SelectedWishlist?.Id == wishlist.Id)">@wishlist.Name</option>
-            }
-        </select>
-    </div>
+    @if (Model.IsScreenerScope)
+    {
+        <div class="field desk-universe-field">
+            <label for="ScreenerPick">Screener</label>
+            <select class="input" id="ScreenerPick" name="screenerQuery" data-auto-submit>
+                <option value="" selected="@String.IsNullOrWhiteSpace(Model.ScreenerQuery)">Choose a screener…</option>
+                @if (Model.ScreenerPresets.Count > 0)
+                {
+                    <optgroup label="My saved screens">
+                        @foreach (var preset in Model.ScreenerPresets)
+                        {
+                            <option value="@preset.Name" selected="@(String.Equals(Model.ScreenerQuery?.Trim(), preset.Name, StringComparison.Ordinal))">@preset.Name@(preset.IsVerified ? " · verified" : "")</option>
+                        }
+                    </optgroup>
+                }
+                @foreach (var group in TradeDeskModel.SignalGroups)
+                {
+                    <optgroup label="Finviz · @group.Key">
+                        @foreach (var signal in group)
+                        {
+                            var value = FinvizSignalCatalog.ToInput(signal);
+                            <option value="@value" selected="@(String.Equals(Model.ScreenerQuery?.Trim(), value, StringComparison.OrdinalIgnoreCase))">@signal.Label</option>
+                        }
+                    </optgroup>
+                }
+                @if (!String.IsNullOrWhiteSpace(Model.ScreenerQuery) && !Model.ScreenerIsFromPicker)
+                {
+                    <option value="@Model.ScreenerQuery" selected>Custom · @Model.ScreenerQuery</option>
+                }
+            </select>
+        </div>
+        <input type="hidden" name="scope" value="screener" />
+        <input type="hidden" name="targetId" value="@Model.TargetId" />
+    }
+    else
+    {
+        <div class="field desk-universe-field">
+            <label for="WishlistSelect">Wishlist</label>
+            <select class="input" id="WishlistSelect" name="id" data-auto-submit>
+                @{
+                    var everySymbol = DeskUniverse.ForAllWishlists(Model.Wishlists).Members.Count;
+                }
+                <option value="" selected="@(Model.SelectedWishlist is null)">All wishlists · @everySymbol symbols</option>
+                @foreach (var wishlist in Model.Wishlists)
+                {
+                    <option value="@wishlist.Id" selected="@(Model.SelectedWishlist?.Id == wishlist.Id)">@wishlist.Name · @wishlist.Items.Count(item => item.Active)</option>
+                }
+            </select>
+        </div>
+    }
     <div class="field">
         <label for="StrategyId">Strategy context</label>
         <select class="input" id="StrategyId" name="strategyId" data-auto-submit>
@@ -161,23 +239,6 @@
         </select>
     </div>
     <div class="field">
-        <label for="ScreenerQuery">Finviz screener</label>
-        <div class="input-group">
-            @* Saved screens are offered by name because Finviz has no endpoint
-               that lists the ones saved in its own UI. The box still accepts a
-               raw URL or query for a one-off. *@
-            <input class="input input-mono" id="ScreenerQuery" name="screenerQuery" type="text"
-                   value="@Model.ScreenerQuery" autocomplete="off" list="DeskSavedScreens"
-                   placeholder="Saved screen name, Finviz URL, or query string" />
-            <datalist id="DeskSavedScreens">
-                @foreach (var preset in Model.ScreenerPresets)
-                {
-                    <option value="@preset.Name">@preset.FilterQuery</option>
-                }
-            </datalist>
-        </div>
-    </div>
-    <div class="field">
         <label for="Search">Search</label>
         <input class="input" id="Search" name="search" type="search" value="@Model.Search"
                placeholder="Ticker or name" autocomplete="off" />
@@ -188,45 +249,77 @@
     <input type="hidden" name="env" value="@Model.Env" />
     <input type="hidden" name="ticker" value="@Model.Ticker" />
     <div class="desk-context-actions">
-        <button class="btn btn-secondary" type="submit" formmethod="post" formaction="?handler=SyncScreener">
-            <partial name="_Icon" model='new IconModel("refresh-cw", 14)' />Sync screener
-        </button>
+        @if (Model.IsScreenerScope)
+        {
+            <button class="btn btn-secondary" type="submit" formmethod="post" formaction="?handler=SyncScreener">
+                <partial name="_Icon" model='new IconModel("refresh-cw", 14)' />Refresh screener
+            </button>
+        }
         @* Administration lives on its own screen. The desk monitors and routes; it
            never edits the universe, so this is a link out rather than a form. *@
-        <a class="btn btn-secondary" asp-page="/Wishlists" asp-route-id="@selectedId">Manage wishlist</a>
+        <a class="btn btn-secondary" asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Manage wishlists</a>
     </div>
 </form>
 
+@if (Model.IsScreenerScope)
+{
+    @* A one-off Finviz URL or filter string, for a screen that is neither saved
+       nor in the catalogue. Saving it by name happens on the Wishlists screen. *@
+    <details class="desk-custom-screen" open="@(!String.IsNullOrWhiteSpace(Model.ScreenerQuery) && !Model.ScreenerIsFromPicker)">
+        <summary>Custom Finviz query</summary>
+        <form method="get" class="desk-custom-screen-form">
+            <input type="hidden" name="scope" value="screener" />
+            <input type="hidden" name="env" value="@Model.Env" />
+            <input type="hidden" name="strategyId" value="@Model.StrategyId" />
+            <input type="hidden" name="targetId" value="@Model.TargetId" />
+            <label class="visually-hidden" for="CustomScreenerQuery">Finviz URL or filter query</label>
+            <input class="input input-mono" id="CustomScreenerQuery" name="screenerQuery" type="text"
+                   value="@(Model.ScreenerIsFromPicker ? null : Model.ScreenerQuery)" autocomplete="off"
+                   placeholder="Finviz Elite URL, f=… filter string, or s=… signal" />
+            <button class="btn btn-secondary" type="submit">Run screen</button>
+        </form>
+        @if (!String.IsNullOrWhiteSpace(Model.ScreenerQuery) && !Model.ScreenerIsFromPicker)
+        {
+            @* Finviz cannot list the screens saved in its own UI. Pasting one here,
+               running it and saving it by name makes it pickable from then on. *@
+            <form method="post" asp-page-handler="SaveScreener" asp-all-route-data="Model.RouteWith()" class="desk-custom-screen-form">
+                <label class="visually-hidden" for="PresetName">Preset name</label>
+                <input class="input" id="PresetName" name="presetName" type="text" maxlength="120" required
+                       autocomplete="off" placeholder="Name this screen to save it" />
+                <button class="btn btn-secondary" type="submit">Save as preset</button>
+            </form>
+        }
+    </details>
+}
+
 @* ===========================================================================
-   3. Screener result band
+   3. Screener result band - screener scope only. The hits are the rows below;
+   this band says what the screen returned and offers to keep the new ones.
    =========================================================================== *@
-@if (screener is not null)
+@if (Model.IsScreenerScope && screener is not null)
 {
     <section class="desk-screener-band @(screener.Succeeded ? null : "is-error")" aria-label="Screener result">
-        <span class="desk-screener-scope-label">Swing screener</span>
+        <span class="desk-screener-scope-label">@Model.ScreenerDisplayName</span>
         @if (screener.Succeeded)
         {
             <span class="desk-screener-summary">
-                @screener.Name — @screener.Symbols.Count hit@(screener.Symbols.Count == 1 ? "" : "s"),
-                @screener.NotInWishlist.Count not yet in the wishlist
-            </span>
-            <span class="desk-screener-chips">
-                @foreach (var symbol in screener.NotInWishlist.Take(8))
-                {
-                    <span class="tag tag-outline">@symbol</span>
-                }
+                @screener.Symbols.Count hit@(screener.Symbols.Count == 1 ? "" : "s"),
+                @screener.NotInWishlist.Count not yet in @(Model.TargetWishlist?.Name ?? "a wishlist")
             </span>
             <span class="desk-screener-synced">Synced @screener.SyncedAtUtc.UtcDateTime.ToString("HH:mm:ss") UTC</span>
-            @if (screener.NotInWishlist.Count > 0 && selectedId is not null)
+            @if (Model.Wishlists.Count > 0)
             {
-                <form method="post" asp-page-handler="AddScreener">
-                    <input type="hidden" name="id" value="@selectedId" />
-                    <input type="hidden" name="source" value="@Model.Source" />
-                    <input type="hidden" name="strategyId" value="@Model.SelectedStrategyId" />
-                    <input type="hidden" name="env" value="@Model.Env" />
-                    <input type="hidden" name="screenerScopeName" value="@Model.ScreenerScopeName" />
-                    <input type="hidden" name="screenerQuery" value="@Model.ScreenerQuery" />
-                    <button class="btn btn-primary btn-md" type="submit">Add @screener.NotInWishlist.Count to wishlist</button>
+                <form method="post" asp-page-handler="AddScreener" asp-all-route-data="Model.RouteWith()" class="desk-screener-add">
+                    <label class="visually-hidden" for="ScreenerTarget">Add to wishlist</label>
+                    <select class="input" id="ScreenerTarget" name="targetId">
+                        @foreach (var wishlist in Model.Wishlists)
+                        {
+                            <option value="@wishlist.Id" selected="@(Model.TargetWishlist?.Id == wishlist.Id)">@wishlist.Name</option>
+                        }
+                    </select>
+                    <button class="btn btn-primary btn-md" type="submit" disabled="@(screener.NotInWishlist.Count == 0)">
+                        Add @screener.NotInWishlist.Count new to wishlist
+                    </button>
                 </form>
             }
         }
@@ -236,6 +329,51 @@
         }
     </section>
 }
+else if (Model.IsScreenerScope)
+{
+    <p class="empty-state desk-screener-empty">
+        Choose one of your saved screens or a Finviz signal. Its hits become the monitored rows, with live quotes, news and any position you hold.
+    </p>
+}
+
+@* ===========================================================================
+   Preparation band. Preparation is the warmup service caching candles,
+   indicators and news catalysts before a session needs them; the desk reads
+   that state for every symbol on screen and can queue the ones that are not
+   ready. The warmup service is a separate process, so its absence renders as
+   unknown and never blocks the desk.
+   =========================================================================== *@
+<section class="desk-prep-band @(prep.Available ? null : "is-error")" aria-labelledby="DeskPrepHeading" data-desk-preparation>
+    <h2 id="DeskPrepHeading" class="desk-prep-title">Market-data warmup</h2>
+    <span class="desk-prep-session" title="@status.MarketSessionDetail">Session · @status.MarketSession</span>
+    @if (prep.Available)
+    {
+        <span class="desk-prep-counts">
+            <span>@prep.Count(DeskPreparationState.Ready) ready</span>
+            <span>@prep.Count(DeskPreparationState.Queued) queued</span>
+            <span>@prep.Count(DeskPreparationState.Stale) stale</span>
+            <span>@prep.Count(DeskPreparationState.Failed) failed</span>
+            <span>@prep.Count(DeskPreparationState.NotPrepared) not prepared</span>
+        </span>
+        @if (prep.LatestRun is { } run)
+        {
+            <span class="desk-prep-run">
+                Last run @run.Status · @run.StartedAtUtc.UtcDateTime.ToString("dd/MM HH:mm") UTC ·
+                @run.SucceededTickerCount/@run.RequestedTickerCount ok
+            </span>
+        }
+        <form method="post" asp-page-handler="Prepare" asp-all-route-data="Model.RouteWith()">
+            <button class="btn btn-primary btn-md" type="submit" disabled="@(prep.NeedingPreparation.Count == 0)">
+                @(prep.NeedingPreparation.Count == 0 ? "All prepared" : $"Prepare {prep.NeedingPreparation.Count} symbol{(prep.NeedingPreparation.Count == 1 ? "" : "s")}")
+            </button>
+        </form>
+    }
+    else
+    {
+        <span class="desk-prep-counts">@prep.Error</span>
+    }
+    <a class="btn btn-secondary btn-md" asp-page="/Warmup">Warmup details</a>
+</section>
 
 @* ===========================================================================
    4. View controls
@@ -246,23 +384,11 @@
         {
             var active = Model.Source.Equals(key, StringComparison.OrdinalIgnoreCase);
             <a asp-page="/TradeDesk"
-               asp-route-id="@selectedId"
-               asp-route-source="@key"
-               asp-route-strategyId="@Model.SelectedStrategyId"
-               asp-route-ticker="@Model.Ticker"
-               asp-route-search="@Model.Search"
-               asp-route-minPrice="@Model.MinPrice"
-               asp-route-maxPrice="@Model.MaxPrice"
-               asp-route-maxSpreadBps="@Model.MaxSpreadBps"
-               asp-route-sort="@Model.Sort"
-               asp-route-dir="@Model.Dir"
-               asp-route-env="@Model.Env"
-               asp-route-screenerScopeName="@Model.ScreenerScopeName"
-               asp-route-screenerQuery="@Model.ScreenerQuery"
+               asp-all-route-data='Model.RouteWith(("source", key))'
                aria-current="@(active ? "page" : null)">@label<span class="count">@Model.CountFor(key)</span></a>
         }
     </nav>
-    <span class="note">@Model.Rows.Count of @Model.UnfilteredCount symbols · ranked on @Model.DeskHorizon weights @Model.RankConfig.WeightsVersion</span>
+    <span class="note">@selectedName · @Model.Rows.Count of @Model.UnfilteredCount symbols · ranked on @Model.DeskHorizon weights @Model.RankConfig.WeightsVersion</span>
     <div class="desk-view-options">
         <div class="seg" role="group" aria-label="Layout" data-desk-layout-group>
             <button type="button" class="seg-opt" data-desk-layout="rail" aria-pressed="true">Grid + rail</button>
@@ -332,14 +458,13 @@
 </section>
 
 <nav class="desk-mobile-tabs" aria-label="Desk views">
-    @foreach (var (key, label) in TradeDeskModel.Filters.Where(filter => filter.Key != "screener"))
+    @* Four tabs fit a 320px phone. News and preparation are desktop views: the
+       phone has no preparation band and keeps news in the symbol level. *@
+    @foreach (var (key, label) in TradeDeskModel.Filters.Where(filter => filter.Key is not ("news" or "prep")))
     {
         var active = Model.Source.Equals(key, StringComparison.OrdinalIgnoreCase);
         <a asp-page="/TradeDesk"
-           asp-route-id="@selectedId"
-           asp-route-source="@key"
-           asp-route-strategyId="@Model.SelectedStrategyId"
-           asp-route-env="@Model.Env"
+           asp-all-route-data='Model.RouteWith(("source", key), ("ticker", null))'
            aria-current="@(active ? "page" : null)">@label<span class="count">@Model.CountFor(key)</span></a>
     }
 </nav>
@@ -348,12 +473,7 @@
 {
     <a class="desk-mobile-back"
        asp-page="/TradeDesk"
-       asp-route-id="@selectedId"
-       asp-route-source="@Model.Source"
-       asp-route-strategyId="@Model.SelectedStrategyId"
-       asp-route-env="@Model.Env"
-       asp-route-ticker="@(Model.Ticket ? Model.Ticker : null)"
-       asp-route-ticket="@(Model.Ticket ? null : "false")">
+       asp-all-route-data='Model.RouteWith(("ticker", Model.Ticket ? Model.Ticker : null))'>
         <partial name="_Icon" model='new IconModel("chevron-left", 16)' />
         @(Model.Ticket ? $"{selected.Ticker} evidence" : "All markets")
     </a>
@@ -368,11 +488,7 @@
            data-symbol-row data-symbol="@row.Ticker.ToUpperInvariant()"
            data-quote-row="@row.Ticker.ToUpperInvariant()"
            asp-page="/TradeDesk"
-           asp-route-id="@selectedId"
-           asp-route-source="@Model.Source"
-           asp-route-strategyId="@Model.SelectedStrategyId"
-           asp-route-ticker="@row.Ticker"
-           asp-route-env="@Model.Env">
+           asp-all-route-data='Model.RouteWith(("ticker", row.Ticker))'>
             <span class="desk-mobile-line">
                 <span class="desk-mobile-identity">
                     <strong>@row.Ticker</strong>
@@ -403,20 +519,34 @@
     @* Floating action. It opens the ticket; it never submits one. *@
     <a class="btn btn-primary desk-mobile-action"
        asp-page="/TradeDesk"
-       asp-route-id="@selectedId"
-       asp-route-source="@Model.Source"
-       asp-route-strategyId="@Model.SelectedStrategyId"
-       asp-route-ticker="@selected.Ticker"
-       asp-route-env="@Model.Env"
-       asp-route-ticket="true">
+       asp-all-route-data='Model.RouteWith(("ticker", selected.Ticker), ("ticket", "true"))'>
         @(selected.Row.Trade is null ? $"Review protected buy · {selected.Ticker}" : $"Open ticket · {selected.Ticker}")
     </a>
 }
 
+<nav class="desk-mobile-tabbar" aria-label="Application">
+    <a asp-page="/TradeDesk" asp-route-env="@Model.Env" aria-current="page">
+        <partial name="_Icon" model='new IconModel("area-chart", 19)' />Desk
+    </a>
+    <a asp-page="/RunningTrades" asp-route-env="@Model.Env">
+        <partial name="_Icon" model='new IconModel("briefcase", 19)' />Positions
+    </a>
+    <a asp-page="/Orders" asp-route-env="@Model.Env">
+        <partial name="_Icon" model='new IconModel("arrow-right", 19)' />Orders
+    </a>
+    <a asp-page="/Earnings">
+        <partial name="_Icon" model='new IconModel("calendar", 19)' />Earnings
+    </a>
+    <a asp-page="/News" asp-route-env="@Model.Env">
+        <partial name="_Icon" model='new IconModel("bell", 19)' />Alerts
+    </a>
+</nav>
 
-
+@* The live streams follow the exact symbols rendered here - every wishlist plus
+   held positions, one wishlist, or a screener's hits - not a wishlist id. *@
 <section class="desk-shell" data-desk-root data-layout="rail" data-mobile-level="@Model.MobileLevel"
-         data-wishlist-id="@selectedId" data-selected-ticker="@Model.Ticker">
+         data-stream-tickers="@String.Join(",", Model.AllRows.Select(row => row.Ticker.ToUpperInvariant()))"
+         data-selected-ticker="@Model.Ticker">
 
     @* --- Layout B: symbol ladder ------------------------------------------ *@
     <nav class="desk-ladder" aria-label="Symbol ladder" data-desk-ladder hidden>
@@ -427,13 +557,7 @@
             var isSelected = selected?.Ticker.Equals(row.Ticker, StringComparison.OrdinalIgnoreCase) == true;
             <a class="desk-ladder-row @(isSelected ? "is-selected" : null)"
                asp-page="/TradeDesk"
-               asp-route-id="@selectedId"
-               asp-route-source="@Model.Source"
-               asp-route-strategyId="@Model.SelectedStrategyId"
-               asp-route-ticker="@row.Ticker"
-               asp-route-env="@Model.Env"
-               asp-route-screenerScopeName="@Model.ScreenerScopeName"
-               asp-route-screenerQuery="@Model.ScreenerQuery"
+               asp-all-route-data='Model.RouteWith(("ticker", row.Ticker))'
                aria-current="@(isSelected ? "true" : null)">
                 <span class="ladder-line">
                     <strong>@row.Ticker</strong>
@@ -452,7 +576,9 @@
         @if (Model.Rows.Count == 0)
         {
             <p class="empty-state" data-desk-empty>
-                No symbols match this view. Change the view, clear the search, or manage the selected wishlist.
+                @(Model.IsScreenerScope
+                    ? "No symbols in this view. Choose a screener, or check the screener result above."
+                    : "No symbols match this view. Change the view, clear the search, or manage the selected wishlist.")
             </p>
         }
         else
@@ -469,19 +595,7 @@
                                     aria-sort="@Model.AriaSortFor(column.Key)">
                                     <a class="sort-header"
                                        asp-page="/TradeDesk"
-                                       asp-route-id="@selectedId"
-                                       asp-route-source="@Model.Source"
-                                       asp-route-strategyId="@Model.SelectedStrategyId"
-                                       asp-route-ticker="@Model.Ticker"
-                                       asp-route-search="@Model.Search"
-                                       asp-route-minPrice="@Model.MinPrice"
-                                       asp-route-maxPrice="@Model.MaxPrice"
-                                       asp-route-maxSpreadBps="@Model.MaxSpreadBps"
-                                       asp-route-env="@Model.Env"
-                                       asp-route-screenerScopeName="@Model.ScreenerScopeName"
-                                       asp-route-screenerQuery="@Model.ScreenerQuery"
-                                       asp-route-sort="@column.Key"
-                                       asp-route-dir="@Model.NextDirectionFor(column.Key)">@column.Label</a>
+                                       asp-all-route-data='Model.RouteWith(("sort", column.Key), ("dir", Model.NextDirectionFor(column.Key)))'>@column.Label</a>
                                 </th>
                             }
                             <th scope="col" class="action-column"><span class="visually-hidden">Select</span></th>
@@ -495,18 +609,28 @@
                             <tr data-symbol-row data-symbol="@row.Ticker.ToUpperInvariant()"
                                 data-quote-row="@row.Ticker.ToUpperInvariant()"
                                 aria-selected="@(isSelected ? "true" : null)">
+                                @* Which lists hold the symbol rides under the name rather than
+                                   in a column of its own: in the all-wishlists view it is how a
+                                   row says why it is on screen, without taking grid width. *@
                                 <td class="market-cell" data-column="ticker">
                                     <strong class="market-symbol">@row.Ticker</strong>
                                     <span class="cell-sub">@row.DisplayName</span>
+                                    <span class="cell-sub market-lists @(row.IsPositionOnly ? "is-position-only" : null)" title="@ListsText(row.Lists)">@ListsText(row.Lists)</span>
                                 </td>
-                                @* Session change needs a previous close, which the quote
-                                   payload does not carry. It renders as unknown rather
-                                   than borrowing the position's P/L, which would read as
-                                   a price move it is not. *@
+                                @* Change against the previous session close from Alpaca's
+                                   snapshot. Unknown stays unknown rather than borrowing the
+                                   position's P/L, which would read as a price move it is not.
+                                   The desk script recomputes it on every live quote. *@
                                 <td class="num" data-column="price">
                                     <strong data-quote-field="mid">@row.Quote.DisplayPrice</strong>
-                                    <span class="cell-sub value-signed flat"
-                                          title="Session change needs a previous close, which the quote feed does not carry.">—</span>
+                                    <span class="cell-sub @SignedClass(row.ChangePct)" data-change-field
+                                          data-prev-close="@PreviousCloseValue(row.PreviousClose)"
+                                          title="@ChangeTitle(row.PreviousClose)">@ChangeText(row.Change, row.ChangePct)</span>
+                                </td>
+                                <td class="num" data-column="change" hidden="@startsHidden.Contains("change")">
+                                    <span class="@SignedClass(row.ChangePct)" data-change-field data-change-mode="pct"
+                                          data-prev-close="@PreviousCloseValue(row.PreviousClose)"
+                                          title="@ChangeTitle(row.PreviousClose)">@SignedPercent(row.ChangePct)</span>
                                 </td>
                                 <td class="quote-cell" data-column="bidask">
                                     <span data-quote-field="bid">@row.Quote.DisplayBid</span> / <span data-quote-field="ask">@row.Quote.DisplayAsk</span>
@@ -524,10 +648,6 @@
                                 </td>
                                 <td class="predictor-cell" data-column="predictor">
                                     <strong>@ranked.Evidence.FinalSignal</strong>
-                                    @if (ranked.Evidence.Errors.Count > 0)
-                                    {
-                                        <span class="cell-sub">@ranked.Evidence.ErrorSummary</span>
-                                    }
                                     <span class="cell-sub">
                                         @{
                                             var probability = ranked.Evidence.Swing?.Probability;
@@ -538,15 +658,36 @@
                                 <td data-column="sync">
                                     <span class="@ranked.AgreementCssClass">@ranked.AgreementLabel</span>
                                 </td>
+                                @{
+                                    var rowPrep = Model.Preparation.For(row.Ticker);
+                                }
+                                <td class="prep-cell" data-column="prep" hidden="@startsHidden.Contains("prep")">
+                                    <span class="@rowPrep.CssClass" title="@rowPrep.Detail">@rowPrep.Label</span>
+                                    @if (rowPrep.LastWarmedAtUtc is { } warmedAt)
+                                    {
+                                        <span class="cell-sub">@warmedAt.UtcDateTime.ToString("dd/MM HH:mm") UTC</span>
+                                    }
+                                </td>
                                 <td class="num" data-column="pl">
                                     @if (row.Trade is null)
                                     {
-                                        <span class="unknown">No open trade</span>
+                                        <span class="unknown">No position</span>
+                                    }
+                                    else
+                                    {
+                                        <strong>@row.Trade.Quantity.ToString("0.####") sh @@ @row.Trade.EntryPrice.ToString("C2")</strong>
+                                        <span class="cell-sub">cost @Money(row.PositionCost) · value @Money(row.PositionValue)</span>
+                                    }
+                                </td>
+                                <td class="num" data-column="pnl">
+                                    @if (row.Trade is null)
+                                    {
+                                        <span class="unknown">—</span>
                                     }
                                     else
                                     {
                                         <strong class="@SignedClass(row.Trade.UnrealizedPl)">@SignedMoney(row.Trade.UnrealizedPl)</strong>
-                                        <span class="cell-sub">@row.Trade.Quantity.ToString("0.####") sh @@ @row.Trade.EntryPrice.ToString("C2")</span>
+                                        <span class="cell-sub @SignedClass(row.Trade.UnrealizedPlPct)">@SignedPercent(row.Trade.UnrealizedPlPct)</span>
                                     }
                                 </td>
                                 <td class="news-cell" data-column="news" hidden="@startsHidden.Contains("news")">
@@ -557,13 +698,7 @@
                                     <a class="btn btn-secondary btn-sm"
                                        data-desk-inspect
                                        asp-page="/TradeDesk"
-                                       asp-route-id="@selectedId"
-                                       asp-route-source="@Model.Source"
-                                       asp-route-strategyId="@Model.SelectedStrategyId"
-                                       asp-route-ticker="@row.Ticker"
-                                       asp-route-env="@Model.Env"
-                                       asp-route-screenerScopeName="@Model.ScreenerScopeName"
-                                       asp-route-screenerQuery="@Model.ScreenerQuery"
+                                       asp-all-route-data='Model.RouteWith(("ticker", row.Ticker))'
                                        aria-label="Inspect @row.Ticker"
                                        aria-current="@(isSelected ? "true" : null)">Inspect</a>
                                 </td>
@@ -597,7 +732,9 @@
                 </div>
                 <div class="desk-focus-price">
                     <strong data-selected-quote="mid">@row.Quote.DisplayPrice</strong>
-                    <span class="@SignedClass(row.Trade?.UnrealizedPlPct)">@(row.Trade is null ? "—" : SignedPercent(row.Trade.UnrealizedPlPct))</span>
+                    <span class="@SignedClass(row.ChangePct)" data-selected-change
+                          data-prev-close="@PreviousCloseValue(row.PreviousClose)"
+                          title="@ChangeTitle(row.PreviousClose)">@ChangeText(row.Change, row.ChangePct)</span>
                 </div>
                 <div class="cell-strip desk-focus-strip">
                     <div><span class="cell-label">Bid</span><span class="cell-value" data-selected-quote="bid">@row.Quote.DisplayBid</span></div>
@@ -672,7 +809,9 @@
                     </div>
                     <div class="desk-rail-price">
                         <strong data-selected-quote="mid">@row.Quote.DisplayPrice</strong>
-                        <span class="@SignedClass(row.Trade?.UnrealizedPlPct)">@(row.Trade is null ? "—" : SignedPercent(row.Trade.UnrealizedPlPct))</span>
+                        <span class="@SignedClass(row.ChangePct)" data-selected-change
+                              data-prev-close="@PreviousCloseValue(row.PreviousClose)"
+                              title="@ChangeTitle(row.PreviousClose)">@ChangeText(row.Change, row.ChangePct)</span>
                     </div>
                 </div>
                 <div class="cell-strip">
@@ -681,12 +820,44 @@
                     <div><span class="cell-label">Spread</span><span class="cell-value">@(row.SpreadBps is null ? "—" : row.SpreadBps.Value.ToString("0.0") + " bps")</span></div>
                     <div><span class="cell-label">Volume Z20</span><span class="cell-value">@(selected.Evidence.Swing?.VolumeZ20 is { } railVolumeZ ? railVolumeZ.ToString("0.00") : "—")</span></div>
                 </div>
+                @{
+                    var railPrep = Model.Preparation.For(row.Ticker);
+                }
+                <div class="desk-rail-membership">
+                    <span class="cell-label">Lists</span>
+                    <span>@ListsText(row.Lists)</span>
+                    <span class="cell-label">Warmup</span>
+                    <span class="desk-rail-prep">
+                        <span class="@railPrep.CssClass" title="@railPrep.Detail">@railPrep.Label</span>
+                        @if (Model.Preparation.Available && railPrep.NeedsPreparation)
+                        {
+                            <form method="post" asp-page-handler="Prepare" asp-all-route-data="Model.RouteWith()">
+                                <input type="hidden" name="prepareTicker" value="@row.Ticker" />
+                                <button class="btn btn-secondary btn-sm" type="submit">Prepare @row.Ticker</button>
+                            </form>
+                        }
+                    </span>
+                </div>
+                @if (row.Trade is { } held)
+                {
+                    <div class="cell-strip desk-rail-position" aria-label="Position in @row.Ticker">
+                        <div><span class="cell-label">Shares</span><span class="cell-value">@held.Quantity.ToString("0.####")</span></div>
+                        <div><span class="cell-label">Avg entry</span><span class="cell-value">@held.EntryPrice.ToString("C2")</span></div>
+                        <div><span class="cell-label">Invested</span><span class="cell-value">@Money(row.PositionCost)</span></div>
+                        <div><span class="cell-label">Value</span><span class="cell-value">@Money(row.PositionValue)</span></div>
+                        <div><span class="cell-label">Open P/L</span><span class="cell-value @SignedClass(held.UnrealizedPl)">@SignedMoney(held.UnrealizedPl) · @SignedPercent(held.UnrealizedPlPct)</span></div>
+                    </div>
+                }
+                @* The Orders screen is the desk's order subset: the journal for this
+                   symbol, with the same reviewed ticket beside it. *@
+                <a class="btn btn-secondary btn-sm desk-rail-orders" asp-page="/Orders"
+                   asp-route-ticker="@row.Ticker" asp-route-env="@Model.Env">Orders in @row.Ticker</a>
             </section>
 
             <partial name="_DeskEvidencePair" model="new DeskEvidenceModel(selected, true)" />
             <partial name="_DeskAgreementBand" model="selected" />
 
-            <a class="button" href="/OrderTicket?wishlistId=@Model.Id&amp;ticker=@row.Ticker">Review an operator order</a>
+            <section class="desk-rail-block"><h2 class="section-heading">Reviewed order</h2><partial name="_OrderWorkflow" /></section>
         }
 
         <section class="desk-rail-block desk-rail-news" aria-labelledby="DeskNewsHeading"
@@ -731,9 +902,9 @@
 </section>
 
 </div>
-
 @section Scripts {
     <script src="~/js/candidate-workflow.js" asp-append-version="true" defer></script>
     <script type="module" src="~/js/trading-flow-desk.js" asp-append-version="true"></script>
     <script src="~/js/desk-layout.js" asp-append-version="true" defer></script>
+    <script src="~/js/order-workflow.js" asp-append-version="true" defer></script>
 }

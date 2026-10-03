@@ -1,0 +1,63 @@
+/* ---------------------------------------------------------------------------
+   Orders screen - a subset of the desk
+   The journal takes the grid's place and the desk's rail sits beside it with
+   the symbol's quote, position, recent orders and the reviewed ticket.
+   Token-based only; the rail reuses the desk's .desk-rail rules.
+   --------------------------------------------------------------------------- */
+
+.orders-head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.orders-account { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.orders-account .metric-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.orders-shell {
+  display: grid;
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr) 384px;
+}
+.orders-shell > * { min-width: 0; }
+
+.orders-new-order {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 14px;
+}
+.orders-new-order label { font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
+.orders-new-order .input { flex: 0 1 220px; min-width: 0; }
+
+.orders-table .order-symbol { color: inherit; text-decoration: none; }
+.orders-table .order-symbol:hover,
+.orders-table .order-symbol:focus-visible { text-decoration: underline; }
+
+.orders-rail-list { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.orders-rail-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: var(--rule-row);
+}
+.orders-rail-list li:first-child { border-top: 0; }
+.orders-rail-desk { margin-top: 10px; }
+
+@media (max-width: 980px) {
+  .orders-shell { grid-template-columns: minmax(0, 1fr); }
+  /* With a symbol open, the ticket comes first on a narrow screen: the operator
+     chose to place an order, so it should not sit below the whole journal. */
+  .orders-shell:has(.orders-rail [data-selected-symbol]) .orders-rail { order: -1; border-top: 0; border-bottom: var(--rule-section); }
+}
+@media (max-width: 760px) {
+  .orders-account { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 768px) {
+  /* Thumb targets, as on the desk's phone treatment. */
+  .orders-new-order .input,
+  .orders-new-order .btn,
+  .orders-head-actions .btn,
+  .orders-rail .btn,
+  .desk-rail-orders { min-height: 44px; }
+  .orders-new-order .input { flex: 1 1 160px; font-size: 16px; }
+}

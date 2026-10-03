@@ -77,8 +77,10 @@
                 tr.querySelector('button').textContent=symbol;tr.querySelector('button').onclick=()=>{selected=symbol;newsForAll=false;render();{el('symbol').tabIndex=-1;el('symbol').focus({preventScroll:true});el('detail').scrollIntoView({behavior:'smooth',block:'start'});}};rowNodes.set(symbol,tr);
             }
             const cells=tr.children;tr.dataset.selected=String(symbol===selected);tr.querySelector('button').setAttribute('aria-pressed',String(symbol===selected));
-            const lists=row.membership.wishlists.map(x=>x.name).join(', ');cells[0].querySelector('small').textContent=lists||'Screener discovery';cells[0].querySelector('small').title=lists;
-            cells[1].querySelector('strong').textContent=money(row.quote?.midPrice);cells[1].querySelector('small').textContent=money(row.quote?.bidPrice)+' · '+money(row.quote?.askPrice);
+            const lists=row.membership.wishlists.map(x=>x.name).join(', ');cells[0].querySelector('small').textContent=lists||(row.membership.name==='Held position'?'Held position':'Screener discovery');cells[0].querySelector('small').title=lists;
+            cells[1].querySelector('strong').textContent=money(row.quote?.midPrice);const change = row.previousClose?.close > 0 && row.quote?.midPrice != null ? (row.quote.midPrice / row.previousClose.close - 1) * 100 : null;
+            cells[1].querySelector('small').textContent=money(row.quote?.bidPrice)+' · '+money(row.quote?.askPrice)+' · '+(change == null ? 'Change unavailable' : (change > 0 ? '+' : '')+number(change)+'%');
+            cells[1].title=row.previousClose ? 'Previous close '+money(row.previousClose.close)+' · '+row.previousClose.sessionDate : 'Previous close unavailable';
             cells[2].querySelector('span').textContent=quoteAge(row);cells[2].title=when(row.quote?.timestamp);
             cells[3].querySelector('strong').textContent=row.technical?'RSI '+number(row.technical.rsi):row.observation?.state==='loading'?'Loading daily history':'Daily history unavailable';
             cells[3].querySelector('small').textContent=row.technical?'EMA20 '+money(row.technical.ema20):row.observation?.detail||'Completed bars required';cells[3].title=when(row.technical?.timestamp);
@@ -117,13 +119,13 @@
         if(!row){text('symbol','Choose a stock');text('name','Select a row to inspect its news, technicals and holding.');return;}
         text('symbol',row.membership.symbol);text('name',row.membership.name||row.membership.wishlists.map(x=>x.name).join(' · ')||'Finviz discovery');
         text('mid',money(row.quote?.midPrice));text('bid',money(row.quote?.bidPrice));text('ask',money(row.quote?.askPrice));text('quote-detail',quoteAge(row)+' · '+when(row.quote?.timestamp));
-        reviewLink('buy',row.membership.wishlists.length>0,row,'buy');reviewLink('sell',connected&&row.holdingsKnown&&Date.now()-Date.parse(snapshot.account.readAtUtc)<30000&&row.holding?.quantity>0,row,'sell');
+        reviewLink('buy',row.membership.wishlists.length>0,row,'buy');reviewLink('sell',connected&&row.holdingsKnown&&Date.now()-Date.parse(snapshot.account.readAtUtc)<30000&&row.holding?.quantity>0&&Number.isInteger(row.holding.quantity),row,'sell');
         text('order-help',row.membership.wishlists.length?(isAdministrator?'Admin buy uses the explicit override review. Strategy entries remain available through candidate review.':'Review candidates to select an exact strategy-authorized entry. Wishlist membership alone cannot authorize a buy.'): 'Follow this stock in a wishlist before reviewing a buy. Screener membership does not authorize an order.');
         el('follow').hidden=row.membership.wishlists.length>0||!el('follow-list').options.length;
         const accountStale=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;
         text('quantity',accountStale?'Stale snapshot':row.holdingsKnown?row.holding?number(row.holding.quantity):'Not held':'Unknown');
         text('entry',money(row.holding?.averageEntry));text('cost',money(row.holding?.costBasis));text('value',money(row.holding?.marketValue));text('pl',money(row.holding?.unrealizedPl));tone(el('pl'),row.holding?.unrealizedPl);
-        text('account-detail',(accountStale?'STALE · last observed values; current holding unknown. ':'')+snapshot.account.detail+' · '+when(snapshot.account.readAtUtc));
+        text('account-detail',(accountStale?'STALE · last observed values; current holding unknown. ':'')+snapshot.account.detail+(row.holding?.quantity>0&&!Number.isInteger(row.holding.quantity)?' · This position contains fractional shares; reviewed exits require whole shares.':'')+' · '+when(snapshot.account.readAtUtc));
         text('rsi',number(row.technical?.rsi));text('ema',money(row.technical?.ema20)+' / '+money(row.technical?.ema50));text('ema200',money(row.technical?.ema200));text('atr',number(row.technical?.atr));text('rvol',number(row.technical?.relativeVolume));
         text('observation',observationLabel(row));text('observation-detail',(row.observation?.evaluation?.reason||row.observation?.detail||'Daily observation unavailable')+' · '+when(row.observation?.evaluation?.sourceBarTimestampUtc));text('monitoring',row.membership.wishlists.some(x=>x.observed)?'Wishlist alerts enabled · server observes completed daily bars':'Live quotes and news on this desk · background wishlist alerts off');
         text('technical-detail',row.technical?'Completed '+row.technical.timeframe+' bar · '+when(row.technical.timestamp)+' · '+(row.technical.dataFeed||'Feed unavailable'):row.observation?.detail||'Daily history unavailable. Missing indicators are not neutral signals.');

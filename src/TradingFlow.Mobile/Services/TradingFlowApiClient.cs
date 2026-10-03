@@ -341,7 +341,7 @@ public sealed class TradingFlowApiClient
     {
         var symbol = Uri.EscapeDataString(ticker.Trim().ToUpperInvariant());
         return httpClient.GetFromJsonAsync<MobileSymbolIntelligenceResponse>(
-            $"{BaseUrl}/api/v1/wishlists/{wishlistId}/symbols/{symbol}/intelligence",
+            wishlistId == Guid.Empty ? $"{BaseUrl}/api/v1/symbols/{symbol}/intelligence" : $"{BaseUrl}/api/v1/wishlists/{wishlistId}/symbols/{symbol}/intelligence",
             cancellationToken);
     }
 

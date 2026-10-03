@@ -2,16 +2,32 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Strategies;
+using TradingFlow.Domain.Wishlists;
+using TradingFlow.Web.Models;
+using TradingFlow.Web.Pages.Shared;
 using TradingFlow.Web.Services;
 using TradingFlow.Contracts.V1;
+using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Pages;
 
+/// <summary>
+/// The Orders screen: a subset of the desk. The order journal takes the place of
+/// the market grid, and the desk's rail - quote, position and the reviewed
+/// ticket - sits beside it, so another order can be placed, or one replaced,
+/// without leaving the journal.
+/// </summary>
 public sealed class OrdersModel(
     IOrderActivityQuery orders,
     IOrderWorkflowService workflow,
     IOrderIntentRepository intents,
-    TradingEnvironmentService environments) : PageModel
+    TradingEnvironmentService environments,
+    TradingFlow.Web.Services.Desk.DeskSources sources,
+    WishlistDeskService desk,
+    TradingFlow.Web.Services.Desk.IDeskAccountReader accountReader,
+    OperationalStatusService operationalStatus,
+    ConfigCatalogService catalog) : PageModel
 {
     public static IReadOnlyList<(string Key, string Label)> Filters { get; } =
     [
@@ -44,6 +60,48 @@ public sealed class OrdersModel(
     [BindProperty(SupportsGet = true)]
     public string? Env { get; set; }
 
+    /// <summary>The symbol the rail and ticket are open on, or null for none.</summary>
+    [BindProperty(SupportsGet = true)]
+    public string? Ticker { get; set; }
+
+    /// <summary>Side a replace opens the ticket on. Only a held position can open on sell.</summary>
+    [BindProperty(SupportsGet = true)]
+    public string? Side { get; set; }
+
+    /// <summary>Limit a replace carries into the ticket, from the order being replaced.</summary>
+    [BindProperty(SupportsGet = true)]
+    public decimal? LimitPrice { get; set; }
+
+    /// <summary>
+    /// Strategy the ticket's stop and target follow, as on the desk. Defaults to
+    /// the first strategy the environment may run, the desk's own default.
+    /// </summary>
+    [BindProperty(SupportsGet = true)]
+    public string? StrategyId { get; set; }
+
+    public IReadOnlyList<StrategyOption> Strategies { get; private set; } = [];
+
+    /// <summary>The selected symbol's quote, position and wishlist membership.</summary>
+    public WishlistDeskRow? SelectedRow { get; private set; }
+
+    /// <summary>The selected symbol's most recent orders, newest first.</summary>
+    public IReadOnlyList<OrderActivitySnapshot> SelectedOrders { get; private set; } = [];
+
+    /// <summary>Totals over every open position, as on the desk.</summary>
+    public TradingFlow.Web.Services.Desk.DeskAccount Account { get; private set; } = new(false, "Account not read", DateTimeOffset.UtcNow, []);
+    public DeskPortfolioSummary Portfolio { get; private set; } = DeskPortfolioSummary.Empty;
+
+    public OperationalStatusSnapshot OperationalStatus { get; private set; } = new(
+        "UNKNOWN", "unknown", "Status has not loaded.", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+        "disconnected", "No quote has been received.", "UNKNOWN", "not connected",
+        "attention", "Broker state has not loaded.", "blocked", "Admission state has not loaded.");
+
+    /// <summary>Symbols offered by the new-order box: every wishlist symbol and every journalled symbol.</summary>
+    public IReadOnlyList<string> SymbolChoices { get; private set; } = [];
+
+    /// <summary>Symbols with a working order, streamed for the journal's Last column.</summary>
+    public IReadOnlyList<string> StreamSymbols { get; private set; } = [];
+
     public TradingEnvironmentState EnvironmentState => environments.GetState(environments.Parse(Env));
 
     public string? StatusMessage { get; private set; }
@@ -67,6 +125,102 @@ public sealed class OrdersModel(
         RejectedCount = all.Count(item => item.State == OrderState.Rejected);
         ClosedCount = all.Count(item => IsClosed(item.State));
         Items = SortItems(all.Where(item => MatchesFilter(item.State, Filter))).ToArray();
+        StreamSymbols = all
+            .Where(item => IsWorking(item.State))
+            .Select(item => item.Symbol.Trim().ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        await LoadRailAsync(all, cancellationToken);
+    }
+
+    /// <summary>
+    /// Loads the rail the same way the desk does - quote, position and lists from
+    /// the desk service - for the one symbol in view, plus the account strip.
+    /// </summary>
+    private async Task LoadRailAsync(IReadOnlyList<OrderActivitySnapshot> all, CancellationToken cancellationToken)
+    {
+        var lists = await sources.FollowedListsAsync(cancellationToken);
+        var symbol = NormalizeSymbol(Ticker);
+        if (!String.IsNullOrWhiteSpace(Ticker) && symbol is null)
+        {
+            ErrorMessage ??= $"{Ticker.Trim()} is not a symbol the ticket can open on.";
+        }
+        Ticker = symbol;
+
+        Strategies = await catalog.GetStrategiesAsync(
+            environments.Parse(Env) == TradingEnvironment.Live
+                ? StrategySelectionMode.RunLive
+                : StrategySelectionMode.RunPaperExperiment,
+            cancellationToken);
+        StrategyId = Strategies.FirstOrDefault(option =>
+                option.Definition.StrategyId.Equals(StrategyId, StringComparison.OrdinalIgnoreCase))?.Definition.StrategyId
+            ?? Strategies.FirstOrDefault()?.Definition.StrategyId;
+
+        var feed = catalog.DefaultQuoteFeed();
+        var universe = symbol is null
+            ? DeskUniverse.Empty
+            : DeskUniverse.ForSymbols("Orders", [symbol], lists);
+        var snapshot = await desk.BuildAsync(
+            universe,
+            feed,
+            TimeSpan.FromMinutes(20),
+            TimeSpan.FromHours(4),
+            cancellationToken);
+        Account = await accountReader.ReadAsync(cancellationToken);
+        var summary = TradingFlow.Web.Services.Desk.DeskAccountSummary.Summarize(Account);
+        if (summary is not null) Portfolio = summary;
+        else Account = Account with { Available = false };
+        SelectedRow = snapshot.Rows.FirstOrDefault();
+        OperationalStatus = await operationalStatus.GetAsync(
+            feed,
+            snapshot.Rows.Select(row => row.Quote.Timestamp),
+            cancellationToken);
+
+        SymbolChoices = lists
+            .SelectMany(list => list.Items.Where(item => item.Active).Select(item => item.Ticker))
+            .Concat(all.Select(item => item.Symbol))
+            .Select(ticker => ticker.Trim().ToUpperInvariant())
+            .Where(ticker => ticker.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        if (SelectedRow is { } row)
+            SelectedOrders = all.Where(item => item.Symbol.Equals(row.Ticker, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(item => item.UpdatedAtUtc).Take(8).ToArray();
+    }
+
+    /// <summary>
+    /// The current view as route values with <paramref name="overrides"/> applied,
+    /// so selecting a symbol, sorting or filtering never drops the others.
+    /// </summary>
+    public Dictionary<string, string> RouteWith(params (string Key, string? Value)[] overrides)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["env"] = Env,
+            ["filter"] = Filter == "all" ? null : Filter,
+            ["sort"] = Sort,
+            ["dir"] = Dir,
+            ["ticker"] = Ticker,
+            ["strategyId"] = StrategyId
+        };
+        foreach (var (key, value) in overrides)
+        {
+            values[key] = value;
+        }
+
+        return values
+            .Where(pair => !String.IsNullOrWhiteSpace(pair.Value))
+            .ToDictionary(pair => pair.Key, pair => pair.Value!, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>One symbol from operator input, or null when it is not a valid equity symbol.</summary>
+    internal static string? NormalizeSymbol(string? input)
+    {
+        var parsed = DeskStreamTickers.Parse(input?.Trim());
+        return parsed.Count == 1 ? parsed.First() : null;
     }
 
     /// <summary>Current sort direction, defaulting to ascending.</summary>
@@ -95,9 +249,9 @@ public sealed class OrdersModel(
     /// <summary>Names the action that puts rows into the active filter.</summary>
     public string EmptyStateHint => Filter switch
     {
-        "working" => "Review a protected buy on the Trade Desk; it appears here from submission until it fills, cancels, or expires.",
+        "working" => "Open a ticket under New order, or review one on the desk; it appears here from submission until it fills, cancels, or expires.",
         "filled" or "rejected" or "closed" => "Switch to All to see every order the journal already holds.",
-        _ => "Review a protected buy on the Trade Desk. Every submitted order is journalled here through to its terminal state."
+        _ => "Open a ticket under New order, or review one on the desk. Every submitted order is journalled here through to its terminal state."
     };
 
     /// <summary>Whether the empty state should point back at the unfiltered list.</summary>

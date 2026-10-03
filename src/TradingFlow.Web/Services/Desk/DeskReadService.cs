@@ -8,7 +8,7 @@ namespace TradingFlow.Web.Services.Desk;
 
 public sealed record DeskArticle(string Headline, string? Url, string Provider, DateTimeOffset PublishedAtUtc, IReadOnlyList<string> Symbols);
 public sealed record DeskRow(DeskMembership Membership, AlpacaLatestQuote? Quote, string QuoteFreshness,
-    IndicatorSnapshot? Technical, DeskHolding? Holding, bool HoldingsKnown, IReadOnlyList<DeskArticle> News, DailyObservationResult Observation);
+    IndicatorSnapshot? Technical, DeskHolding? Holding, bool HoldingsKnown, IReadOnlyList<DeskArticle> News, DailyObservationResult Observation, AlpacaPreviousClose? PreviousClose = null);
 public sealed record DeskSnapshot(DeskSelection Selection, IReadOnlyList<DeskRow> Rows, DeskAccount Account,
     IReadOnlyList<DeskArticle> News, string NewsCoverage, string Session, DateTimeOffset ReadAtUtc, string Feed);
 
@@ -21,9 +21,10 @@ public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReade
         var symbols = selection.Members.Select(x => x.Symbol).ToArray();
         var quoteTask = quotes.GetLatestQuotesAsync(symbols, "sip", ct);
         var accountTask = account.ReadAsync(ct);
+        var closeTask = quotes.GetPreviousClosesAsync(symbols, "sip", clock.GetUtcNow(), ct);
         var sessionTask = operations.GetTradingSessionAsync(ct);
         var newsTask = ReadNewsAsync(symbols, ct);
-        await Task.WhenAll(quoteTask, accountTask, sessionTask, newsTask);
+        await Task.WhenAll(quoteTask, accountTask, sessionTask, newsTask, closeTask);
         var holdings = (await accountTask).Holdings.ToDictionary(x => x.Symbol, StringComparer.OrdinalIgnoreCase);
         var quoteMap = await quoteTask;
         var newsResult = await newsTask;
@@ -35,7 +36,7 @@ public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReade
             var technical = observation.Snapshot;
             rows.Add(new(member, quote, Freshness(quote?.Timestamp, clock.GetUtcNow()), technical,
                 holdings.GetValueOrDefault(member.Symbol), (await accountTask).Available,
-                newsResult.Items.Where(x => x.Symbols.Contains(member.Symbol)).Take(5).ToArray(), observation));
+                newsResult.Items.Where(x => x.Symbols.Contains(member.Symbol)).Take(5).ToArray(), observation, (await closeTask).GetValueOrDefault(member.Symbol)));
         }
         return new(selection, rows, await accountTask, newsResult.Items.Take(40).ToArray(), newsResult.Detail,
             (await sessionTask)?.Session.ToString() ?? "Unknown", clock.GetUtcNow(), "SIP");

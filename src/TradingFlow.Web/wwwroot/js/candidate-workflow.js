@@ -5,7 +5,7 @@
     const open = root.querySelector("[data-candidate-open]");
     const status = root.querySelector("[data-candidate-status]");
     const rows = root.querySelector("[data-candidate-rows]");
-    let runId, cursor = 0, stream, poll, generation = 0, pending, busy = false;
+    let runId, runMode, cursor = 0, stream, poll, generation = 0, pending, busy = false;
     const nodes = new Map();
     async function api(path, body) {
         const response = await window.tradingFlowFetch("/api/v1/" + path, body ? { method: "POST",
@@ -13,7 +13,7 @@
         if (!response.ok) { let error; try { error = await response.json(); } catch {} throw Object.assign(new Error(error?.message || "Request failed (" + response.status + ")"), { status: response.status }); }
         return response.json();
     }
-    function row(candidate) {
+    function row(candidate, profile) {
         let card = nodes.get(candidate.candidateId);
         if (!card) {
             card = document.createElement("article"); card.className = "candidate-row"; card.dataset.candidateId = candidate.candidateId;
@@ -28,7 +28,7 @@
         const order = card.querySelector("[data-order]");
 
         // Exact readiness label varies only on the server; state Triggered remains the entry prerequisite.
-        order.hidden = !["triggered", "Triggered"].includes(candidate.state);
+        order.hidden = !["paper", "paper_shadow", "paper_experiment"].includes(profile) || !["triggered", "Triggered"].includes(candidate.state);
         order.href = "/OrderTicket?candidateId=" + candidate.candidateId + "&runId=" + runId;
     }
     function stop() { stream?.close(); stream = undefined; clearInterval(poll); }
@@ -43,7 +43,8 @@
         if (generation !== expected || value.latestEventSequence < cursor) return;
         const wanted = new Set(value.candidates.map(item => item.candidateId));
         for (const [id, node] of nodes) if (!wanted.has(id)) { node.remove(); nodes.delete(id); }
-        value.candidates.forEach(row); cursor = value.latestEventSequence;
+        runMode = value.provenance.mode;
+        value.candidates.forEach(candidate => row(candidate, runMode)); cursor = value.latestEventSequence;
         status.textContent = value.candidates.length ? value.status + " · " + value.candidates.length + " candidates" : "This run has no candidates.";
     }
     function connect(expected) {
@@ -54,13 +55,13 @@
             if (generation !== expected) return;
             const value = JSON.parse(event.data);
             if (value.eventSequence <= cursor) return;
-            row(value.payload.candidate); cursor = value.eventSequence;
+            row(value.payload.candidate, runMode); cursor = value.eventSequence;
         });
         stream.addEventListener("resync", async () => { stream?.close(); try { await snapshot(expected); connect(expected); } catch (error) { status.textContent = error.message; } });
         stream.onerror = () => { if (generation === expected) status.textContent = "Connection interrupted; refreshing from durable state."; };
     }
     async function select(id) {
-        stop(); generation++; const expected = generation; cursor = 0; nodes.clear(); rows.replaceChildren();
+        stop(); generation++; const expected = generation; cursor = 0; runMode = undefined; nodes.clear(); rows.replaceChildren();
         runId = id; open.elements.run.value = id; status.textContent = "Loading candidate state…";
         try {
             await snapshot(expected); if (generation !== expected) return;

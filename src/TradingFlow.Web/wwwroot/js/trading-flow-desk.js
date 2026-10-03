@@ -1,7 +1,13 @@
 import { createNamedEventStream, formatAge, isSafeArticleUrl, normalizeTicker } from "./trading-flow-stream.js";
 
 const root = document.querySelector("[data-desk-root]");
-const wishlistId = root?.dataset.wishlistId;
+// The desk streams the exact symbols it rendered: every wishlist plus held
+// positions, one wishlist, or a screener's hits.
+const streamTickers = String(root?.dataset.streamTickers || "")
+    .split(",")
+    .map(normalizeTicker)
+    .filter(Boolean);
+const streamQuery = encodeURIComponent(streamTickers.join(","));
 const selectedTicker = normalizeTicker(root?.dataset.selectedTicker);
 const connectionNode = document.getElementById("DeskQuoteConnection");
 const freshnessNode = document.getElementById("DeskQuoteFreshness");
@@ -49,6 +55,29 @@ function patchField(container, selector, value) {
     container.querySelectorAll(selector).forEach(node => setText(node, value || "--"));
 }
 
+// Change against the previous session close, recomputed from each live mid. The
+// server renders the reference close on the node; without one the dash stays.
+// Direction is glyph, sign and colour together, as in the server rendering.
+function signed(value, digits) {
+    const sign = value > 0 ? "+" : value < 0 ? "\u2212" : "";
+    return `${sign}${Math.abs(value).toFixed(digits)}`;
+}
+
+function patchChange(node, mid) {
+    const previous = Number.parseFloat(node.dataset.prevClose || "");
+    const last = Number(mid);
+    if (!Number.isFinite(previous) || previous <= 0 || mid == null || !Number.isFinite(last)) {
+        return;
+    }
+    const change = last - previous;
+    const percent = change / previous * 100;
+    setText(node, node.dataset.changeMode === "pct"
+        ? `${signed(percent, 2)}%`
+        : `${signed(change, 2)} (${signed(percent, 2)}%)`);
+    node.classList.remove("up", "down", "flat");
+    node.classList.add("value-signed", percent > 0 ? "up" : percent < 0 ? "down" : "flat");
+}
+
 function applyQuotes(quotes) {
     for (const quote of Array.isArray(quotes) ? quotes : []) {
         const ticker = normalizeTicker(quote.ticker);
@@ -58,11 +87,13 @@ function applyQuotes(quotes) {
             patchField(row, '[data-quote-field="ask"]', quote.askText);
             patchField(row, '[data-quote-field="mid"]', quote.midText);
             patchField(row, "[data-quote-age]", formatAge(quote.timestamp));
+            row.querySelectorAll("[data-change-field]").forEach(node => patchChange(node, quote.midPrice));
         });
         if (ticker === selectedTicker) {
             patchField(document, '[data-selected-quote="bid"]', quote.bidText);
             patchField(document, '[data-selected-quote="ask"]', quote.askText);
             patchField(document, '[data-selected-quote="mid"]', quote.midText);
+            document.querySelectorAll("[data-selected-change]").forEach(node => patchChange(node, quote.midPrice));
         }
 
         const parsed = Date.parse(quote.timestamp || "");
@@ -283,13 +314,13 @@ function refreshFreshness() {
     }
 }
 
-if (wishlistId) {
-    createNamedEventStream(`/api/v1/wishlists/${wishlistId}/quotes/stream`, "quotes", {
+if (streamTickers.length > 0) {
+    createNamedEventStream(`/api/v1/desk/quotes/stream?tickers=${streamQuery}`, "quotes", {
         onMessage: applyQuotes,
         onState: setConnectionState,
         onDecodeError: error => console.warn("Quote update rejected.", error)
     });
-    createNamedEventStream(`/api/v1/wishlists/${wishlistId}/activity/stream`, "activity", {
+    createNamedEventStream(`/api/v1/desk/activity/stream?tickers=${streamQuery}`, "activity", {
         onMessage: applyActivity,
         onState: (state, detail) => {
             if (state !== "connected") {

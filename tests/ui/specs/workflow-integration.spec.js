@@ -51,6 +51,7 @@ test("lost override preview replays exact request and confirmation stays pending
  await page.getByRole("button",{name:"Confirm paper order"}).click();
  await expect(page.locator("[data-order-status]")).toContainText("confirmation_pending");
  await expect(page.getByRole("button",{name:"Check same command"})).toBeEnabled();
+ await expect(page.getByRole("button",{name:"Edit",exact:true})).toBeDisabled();
 });
 for(const width of [1440,412]) test("real decision replay audit at "+width,async({page},testInfo)=>{
  const fixture=JSON.parse(fs.readFileSync(path.resolve(process.cwd(),"../../src/TradingFlow.Tests/Fixtures/Contracts/decision_replay_news.json"),"utf8"));

@@ -62,9 +62,14 @@ public sealed class OperatorAccessTests
             using var raw = new HttpClient(new HttpClientHandler { CookieContainer = jar, AllowAutoRedirect = false }) { BaseAddress = address };
             using var mobile = new HttpClient(new ApiAntiforgeryHandler(new HttpClientHandler { CookieContainer = jar, AllowAutoRedirect = false })) { BaseAddress = address };
             using (var anonymous = await raw.GetAsync("/api/auth/me")) Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
-            foreach (var route in new[] { "orders/preview", "orders/confirm", "orders/cancel", "positions/close" })
+            foreach (var route in new[] { "orders/plan", "orders/preview", "orders/confirm", "orders/cancel", "positions/close" })
             {
                 using var response = await raw.PostAsJsonAsync("/api/v1/" + route, new { });
+                Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+            }
+            foreach (var route in new[] { "portfolio", "orders/journal" })
+            {
+                using var response = await raw.GetAsync("/api/v1/" + route);
                 Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
             }
             var login = new { userName = "test-operator", password = "Test-Operator-Password-1!", rememberMe = true };
@@ -74,7 +79,7 @@ public sealed class OperatorAccessTests
             raw.DefaultRequestHeaders.Remove("X-CSRF-TOKEN");
             using (var signedIn = await mobile.PostAsJsonAsync("/api/auth/login", login)) signedIn.EnsureSuccessStatusCode();
             using (var me = await mobile.GetAsync("/api/auth/me")) { me.EnsureSuccessStatusCode(); Assert.Contains("test-operator", await me.Content.ReadAsStringAsync()); }
-            foreach (var route in new[] { "orders/preview", "orders/confirm", "orders/cancel", "positions/close" })
+            foreach (var route in new[] { "orders/plan", "orders/preview", "orders/confirm", "orders/cancel", "positions/close" })
             {
                 using var response = await raw.PostAsJsonAsync("/api/v1/" + route, new { });
                 Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);

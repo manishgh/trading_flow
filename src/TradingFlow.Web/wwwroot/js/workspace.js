@@ -6,5 +6,5 @@
  const views=document.querySelectorAll('[data-desk-view]');
  function show(view){document.querySelectorAll('[data-desk-panel]').forEach(x=>x.hidden=x.dataset.deskPanel!==view);views.forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.deskView===view)));}
  views.forEach(x=>x.addEventListener('click',()=>show(x.dataset.deskView)));
- if(views.length){const params=new URLSearchParams(location.search);show(params.has('runId')?'candidates':Array.from(params.keys()).some(x=>['ticker','id','source','search','strategyid','screenerquery'].includes(x.toLowerCase()))?'market':'candidates');}
+ if(views.length){const params=new URLSearchParams(location.search);show(params.has('runId')?'candidates':params.get('view')==='market'?'market':Array.from(params.keys()).some(x=>['ticker','id','source','search','strategyid','screenerquery','scope'].includes(x.toLowerCase()))?'market':'candidates');}
 })();

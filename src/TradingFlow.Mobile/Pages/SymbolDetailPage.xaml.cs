@@ -35,7 +35,7 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
 
     private async Task LoadAsync()
     {
-        if (isLoading || wishlistId == Guid.Empty || String.IsNullOrWhiteSpace(ticker))
+        if (isLoading || String.IsNullOrWhiteSpace(ticker))
         {
             return;
         }
@@ -108,6 +108,12 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
             return;
         }
 
+        var context = await AppServices.Api.GetOrderContextAsync();
+        if (context?.OperatorOverrideAllowed != true || wishlistId == Guid.Empty)
+        {
+            await Shell.Current.GoToAsync(nameof(CandidatesPage) + "?wishlistId=" + wishlistId);
+            return;
+        }
         await Shell.Current.GoToAsync(
             $"{nameof(OrderTicketPage)}?wishlistId={wishlistId}&ticker={Uri.EscapeDataString(ticker)}&limitPrice={latestAskPrice.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
     }

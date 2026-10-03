@@ -51,7 +51,11 @@ test('disconnect marks account observations stale and disables sell',async({page
  paused=true;for(const res of connections)res.end();await expect(page.locator('#watch-quantity')).toHaveText('Stale snapshot');await expect(page.locator('#watch-account-detail')).toContainText('STALE');await expect(page.locator('#watch-sell')).toBeHidden();await expect(page.locator('#watch-rows tr[data-symbol=AAPL]')).toContainText('Stale holding');
 });
 test('catalog startup failure offers working retry',async({page})=>{
- await fixture(page);let first=true;await page.route('**/api/desk/sources',r=>{if(first){first=false;return r.fulfill({status:503,body:'Unavailable'});}return r.fulfill({json:sources});});await signIn(page);first=true;await page.goto('/Desk');await expect(page.locator('#watch-retry')).toBeVisible();await page.locator('#watch-retry').click();await expect(page.locator('#watch-rows tr')).toHaveCount(3);
+ await fixture(page);await signIn(page);await page.goto('/Orders');
+ let first=true;
+ await page.route('**/api/desk/sources',r=>{if(first){first=false;return r.fulfill({status:503,body:'Unavailable'});}return r.fulfill({json:sources});});
+ await page.goto('/Desk');await expect(page.locator('#watch-retry')).toBeVisible();
+ await page.locator('#watch-retry').click();await expect(page.locator('#watch-rows tr')).toHaveCount(3);
 });
 test('dark theme and keyboard source selection remain readable',async({page},testInfo)=>{
  await page.setViewportSize({width:1600,height:1000});await fixture(page);await signIn(page);await page.goto('/Desk');await page.locator('#ThemeSelect').selectOption('dark');await page.getByRole('button',{name:'AAPL',exact:true}).click();await expect(page.locator('#watch-quantity')).toHaveText('10');await page.screenshot({path:testInfo.outputPath('stock-desk-dark.png'),fullPage:true});
