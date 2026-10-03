@@ -22,6 +22,7 @@ public partial class NewsPage : ContentPage
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        FetchProvidersButton.IsVisible = AppServices.Api.CurrentUserName is not null;
         refreshTimer.Start();
         await LoadAsync();
     }
@@ -79,6 +80,7 @@ public partial class NewsPage : ContentPage
 
     private async void OnFetchClicked(object? sender, EventArgs e)
     {
+        if (AppServices.Api.CurrentUserName is null) { await LoadAsync(); return; }
         if (isLoading)
         {
             return;

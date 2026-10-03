@@ -6,13 +6,13 @@ namespace TradingFlow.Web;
 
 public static class OperatorAuthentication
 {
-    public static void AddOperatorAuthentication(this IServiceCollection services)
+    public static void AddOperatorAuthentication(this IServiceCollection services, bool uiTestMode = false, string? reviewMinimumPasswordLength = null)
     {
 services
     .AddIdentityCore<TradingFlowUser>(identity =>
     {
         identity.User.RequireUniqueEmail = false;
-        identity.Password.RequiredLength = 12;
+        identity.Password.RequiredLength = uiTestMode && Int32.TryParse(reviewMinimumPasswordLength, out var reviewMinimum) ? Math.Clamp(reviewMinimum, 10, 12) : 12;
         identity.Password.RequireDigit = true;
         identity.Password.RequireLowercase = true;
         identity.Password.RequireUppercase = true;

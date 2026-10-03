@@ -15,7 +15,6 @@ const protectedPages = [
   "/TradeDesk",
   "/RunningTrades",
   "/Orders",
-  "/News",
   "/Backtests",
   "/Operations",
   "/Paper",
@@ -39,6 +38,9 @@ const protectedApis = [
 // The deliberate exceptions, and the reason each one is open.
 const publicRoutes = [
   ["/Login", "an operator has to be able to reach the sign-in form"],
+  ["/Workspace", "a public hub for market news and earnings"],
+  ["/News", "stored market articles without private wishlist data"],
+  ["/api/v1/news/feed", "backs the public News screen"],
   ["/Earnings", "an advisory monitor that cannot route an order"],
   ["/api/earnings/today-next-business-day", "backs the anonymous Earnings screen"],
   ["/health", "a readiness probe cannot hold a session"],

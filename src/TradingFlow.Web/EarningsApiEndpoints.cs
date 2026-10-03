@@ -111,7 +111,7 @@ public static class EarningsApiEndpoints
                 monitor.RefreshAsync(forceCalendarRefresh: true, cancellationToken),
                 newsFeed.RefreshOnceAsync(cancellationToken));
             return Results.Ok(monitor.GetStatus());
-        });
+        }).RequireAuthorization();
     }
 
     private static EarningsCalendarResponse MapSnapshot(

@@ -86,6 +86,9 @@ builder.Services.AddRazorPages(razor =>
     razor.Conventions.AllowAnonymousToPage("/Login");
     razor.Conventions.AllowAnonymousToPage("/AccessDenied");
     razor.Conventions.AllowAnonymousToPage("/Earnings");
+    razor.Conventions.AllowAnonymousToPage("/News");
+    razor.Conventions.AllowAnonymousToPage("/Workspace");
+    razor.Conventions.AllowAnonymousToPage("/Index");
 });
 var repositoryRoot = ResolveRepositoryRoot(builder.Environment.ContentRootPath);
 var dataRoot = RuntimeDataRootResolver.Resolve(
@@ -368,7 +371,7 @@ builder.Services.AddSingleton<TradingFlowDatabaseInitializer>();
 // principal - so this registration is what makes those work rather than a new
 // policy. Accounts are provisioned by `users add` on the CLI; there is no
 // public registration route.
-builder.Services.AddOperatorAuthentication();
+builder.Services.AddOperatorAuthentication(uiTestMode, Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_PASSWORD_MIN_LENGTH"));
 
 builder.Services.AddSingleton<TradingFlow.Domain.Locking.ITickerLockService, TradingFlow.Data.Locking.SqliteTickerLockService>();
 builder.Services.AddSingleton<IDiscoveryRepository, SqliteDiscoveryRepository>();

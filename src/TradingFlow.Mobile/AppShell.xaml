@@ -14,7 +14,7 @@
     <TabBar>
         <ShellContent
             Title="Workspace"
-            ContentTemplate="{DataTemplate pages:PreparationPage}"
+            ContentTemplate="{DataTemplate pages:WorkspacePage}"
             Route="PreparationRoot" />
 
         <ShellContent

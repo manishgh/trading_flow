@@ -36,7 +36,7 @@
                         </Grid>
                     </Border>
 
-                    <Button Text="Refresh Providers"
+                    <Button x:Name="RefreshProvidersButton" IsVisible="False" Text="Refresh Providers"
                             Clicked="OnRefreshProviders"
                             SemanticProperties.Description="Refresh Finviz earnings, Alpaca bars, and analysis" />
 
