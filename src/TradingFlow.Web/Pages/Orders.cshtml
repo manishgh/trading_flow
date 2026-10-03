@@ -81,8 +81,7 @@
         <h1>Orders</h1>
         <p class="standfirst">
             Every order from intent through terminal state, with the desk's reviewed ticket beside it.
-            Replace is cancel plus a fresh reviewed ticket, so an amended order is re-checked against
-            quote, spread and session.
+            Cancel and new tickets are separate reviewed commands; opening a new ticket leaves the existing order active.
         </p>
     </div>
     <div class="orders-head-actions">
@@ -115,11 +114,11 @@
         <span class="metric-value" title="@status.AdmissionDetail">@status.AdmissionStatus</span>
     </div>
     <div data-orders-portfolio>
-        <span class="micro-label">Portfolio · @portfolio.Positions open</span>
-        <span class="metric-value">@Money(portfolio.MarketValue)</span>
+        <span class="micro-label">Portfolio · @(Model.Account.Available ? Model.Account.Holdings.Count + " open" : "unavailable")</span>
+        <span class="metric-value">@Money(Model.Account.Available ? portfolio.MarketValue : null)</span>
         <span class="metric-detail">
-            cost @Money(portfolio.CostBasis) ·
-            <span class="@SignedClass(portfolio.UnrealizedPl)">@SignedMoney(portfolio.UnrealizedPl) (@SignedPercent(portfolio.UnrealizedPlPct))</span>
+            cost @Money(Model.Account.Available ? portfolio.CostBasis : null) ·
+            <span class="@SignedClass(portfolio.UnrealizedPl)">@SignedMoney(Model.Account.Available ? portfolio.UnrealizedPl : null) (@SignedPercent(Model.Account.Available ? portfolio.UnrealizedPlPct : null))</span>
         </span>
     </div>
     <div>
@@ -270,7 +269,8 @@
                                        dropped back to the unsorted All tab. Plain name/value pairs, not
                                        asp-for: a tag helper would stamp one id onto every row. *@
                                     <form method="post" asp-page-handler="Cancel">
-                                        <input type="hidden" name="brokerOrderId" value="@item.BrokerOrderId" />
+                                        <input type="hidden" name="idempotencyKey" value="@Guid.NewGuid().ToString("N")" />
+                                        <input type="hidden" name="clientOrderId" value="@item.ClientOrderId" />
                                         <input type="hidden" name="Env" value="@Model.Env" />
                                         <input type="hidden" name="Filter" value="@Model.Filter" />
                                         <input type="hidden" name="Sort" value="@Model.Sort" />
@@ -279,12 +279,11 @@
                                         <button class="btn btn-danger btn-sm" type="submit"
                                                 data-confirm="Cancel the working @item.Symbol order? The broker may still fill it before the cancel is acknowledged.">Cancel</button>
                                     </form>
-                                    @* Replace is cancel plus a fresh reviewed ticket, so an amended
-                                       order is re-checked against quote, spread, and session. *@
+                                    @* A new ticket is a separate command; cancellation is explicit above. *@
                                     <a class="btn btn-secondary btn-sm"
                                        asp-page="/Orders"
-                                       asp-all-route-data='Model.RouteWith(("ticker", item.Symbol), ("side", item.Side.ToLowerInvariant()), ("limitPrice", item.LimitPrice?.ToString(System.Globalization.CultureInfo.InvariantCulture)))'
-                                       title="Replace opens a fresh reviewed ticket beside the journal; it does not amend this order in place.">Replace</a>
+                                       asp-all-route-data='Model.RouteWith(("ticker", item.Symbol), ("side", item.Side.ToLowerInvariant()), ("quantity", item.RequestedQuantity.ToString(System.Globalization.CultureInfo.InvariantCulture)), ("limitPrice", item.LimitPrice?.ToString(System.Globalization.CultureInfo.InvariantCulture)))'
+                                       title="Open a new reviewed ticket. This does not cancel or amend the existing order.">New ticket</a>
                                 }
                                 else
                                 {
@@ -320,7 +319,7 @@
         <section class="desk-rail-block">
             <p class="empty-state">
                 Choose a symbol in the journal, or type one under New order, to open a reviewed ticket.
-                Replace opens the ticket prefilled from that order.
+                A new ticket does not cancel or amend the existing order.
             </p>
         </section>
     }
@@ -359,31 +358,12 @@
             }
             else
             {
-                <p class="note">No open position in @row.Ticker.</p>
+                <p class="note">No tracked strategy position in @row.Ticker. Account positions are shown on the stock desk.</p>
             }
             <a class="btn btn-secondary btn-sm orders-rail-desk" asp-page="/TradeDesk"
                asp-route-ticker="@row.Ticker" asp-route-env="@Model.Env">Evidence on the desk</a>
         </section>
 
-        @* The strategy the ticket's stop and target follow. A plain GET, so the
-           choice survives reload like the rest of this screen's state. *@
-        <form method="get" class="desk-rail-block orders-rail-strategy">
-            <label for="OrdersStrategy">Strategy context</label>
-            <select class="input" id="OrdersStrategy" name="strategyId" data-auto-submit>
-                @foreach (var strategy in Model.Strategies)
-                {
-                    var lifecycle = strategy.Lifecycle == TradingFlow.Domain.Strategies.StrategyLifecycleState.Research
-                        ? "RESEARCH ONLY"
-                        : strategy.Lifecycle.ToString().ToUpperInvariant();
-                    <option value="@strategy.Definition.StrategyId" selected="@(Model.StrategyId == strategy.Definition.StrategyId)">@strategy.Definition.StrategyName · @lifecycle</option>
-                }
-            </select>
-            @foreach (var (key, value) in Model.RouteWith(("strategyId", null)))
-            {
-                <input type="hidden" name="@key" value="@value" />
-            }
-            <noscript><button class="btn btn-secondary btn-sm" type="submit">Apply</button></noscript>
-        </form>
 
         <section class="desk-rail-block orders-rail-history" aria-labelledby="OrdersSymbolHistory">
             <h2 id="OrdersSymbolHistory" class="section-heading">Orders in @row.Ticker</h2>
@@ -405,16 +385,7 @@
             }
         </section>
 
-        var ticketRoute = Model.RouteWith();
-        var ticketHorizon = "swing";
-        <partial name="_DeskOrderTicket" model="new DeskTicketModel(
-            row,
-            Model.Env,
-            ticketHorizon,
-            Model.TicketPlan,
-            row.Trade is not null,
-            Model.TicketPreview,
-            Model.TicketConfirmation) { ViewRoute = ticketRoute, DefaultSide = Model.TicketSide }" />
+        <section class="desk-rail-block"><h2 class="section-heading">Reviewed order</h2><partial name="_OrderWorkflow" /></section>
     }
 </aside>
 </div>
@@ -422,5 +393,18 @@
 @section Scripts {
     <script src="~/js/orders.js" asp-append-version="true"></script>
     <script type="module" src="~/js/orders-quotes.js" asp-append-version="true"></script>
-    <script src="~/js/desk-ticket.js" asp-append-version="true" defer></script>
+    <script src="~/js/order-workflow.js" asp-append-version="true" defer></script>
+}
+
+
+@if (Model.EnvironmentState.IsEnabled)
+{
+    <template data-order-cancel-template>
+        <form method="post" action="/Orders?handler=Cancel">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="Filter" value="@Model.Filter" />
+            <input type="hidden" name="Env" value="@Model.Env" />
+            <button type="submit" class="btn btn-danger btn-sm">Cancel</button>
+        </form>
+    </template>
 }

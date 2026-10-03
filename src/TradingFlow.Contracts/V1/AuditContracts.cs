@@ -21,7 +21,7 @@ public sealed record GateEvaluationResponse(
 
 public sealed record MarketEvidenceResponse(
     DateTimeOffset AsOfUtc,
-    DateTimeOffset LatestCompletedCandleAtUtc,
+    DateTimeOffset? LatestCompletedCandleAtUtc,
     string Timeframe,
     string Session,
     decimal? BidPrice,
@@ -36,8 +36,8 @@ public sealed record CatalystEvidenceResponse(
     Guid CatalystResultId,
     string Provider,
     string ProviderArticleId,
-    DateTimeOffset ProviderPublishedAtUtc,
-    DateTimeOffset FirstReceivedAtUtc,
+    DateTimeOffset? ProviderPublishedAtUtc,
+    DateTimeOffset? FirstReceivedAtUtc,
     string Category,
     string Direction,
     decimal CompositeScore,

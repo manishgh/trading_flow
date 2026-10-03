@@ -117,6 +117,7 @@ public sealed class ProductionCompositionTests
             typeof(AlpacaNewsStreamService),
             typeof(BrokerAccountValidationHostedService),
             typeof(DurableJobWorkerHostedService),
+            typeof(PreparationSchedulerHostedService),
             typeof(EarningsMonitorHostedService),
             typeof(TradingFlow.Web.Services.Wishlists.WishlistObserverService),
             typeof(DatabaseBackupHostedService),
@@ -137,7 +138,8 @@ public sealed class ProductionCompositionTests
         Assert.True(
             Array.IndexOf(hostedTypesInRegistrationOrder, typeof(DurableJobWorkerHostedService)) > 0,
             "Durable run workers must drain before execution shutdown closes the broker mutation boundary.");
-        Assert.Equal(typeof(DurableJobWorkerHostedService), hostedTypesInRegistrationOrder[^1]);
+        Assert.Equal(typeof(DurableJobWorkerHostedService), hostedTypesInRegistrationOrder[^2]);
+        Assert.Equal(typeof(PreparationSchedulerHostedService), hostedTypesInRegistrationOrder[^1]);
         Assert.DoesNotContain(actualTypes, type =>
             type.Name.Contains("CatalystExecution", StringComparison.Ordinal) ||
             type.Name.Contains("PortfolioAdvisor", StringComparison.Ordinal) ||
@@ -246,7 +248,7 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
-    public void WishlistObservation_ConsumesSharedStreamStateWithoutRestPolling()
+    public void WishlistObservation_ConsumesBoundedDailyEvidenceWithoutExecutionStream()
     {
         var root = TestRepository.FindRoot();
         var observerPath = Path.Combine(
@@ -258,10 +260,10 @@ public sealed class ProductionCompositionTests
             "WishlistObserverService.cs");
         var source = File.ReadAllText(observerPath);
 
-        Assert.Contains("IDiscoverySubscriptionSink", source, StringComparison.Ordinal);
-        Assert.Contains("IMarketStateSnapshotProvider", source, StringComparison.Ordinal);
-        Assert.Contains("ReplaceScopeAsync", source, StringComparison.Ordinal);
-        Assert.Contains("GetTickerStateAsync", source, StringComparison.Ordinal);
+        Assert.Contains("IDailyObservationService", source, StringComparison.Ordinal);
+        Assert.Contains("dailyObservations.GetAsync", source, StringComparison.Ordinal);
+        Assert.Contains("daily.State != \"ready\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReplaceScopeAsync", source, StringComparison.Ordinal);
         Assert.DoesNotContain("AlpacaMarketDataProvider", source, StringComparison.Ordinal);
         Assert.DoesNotContain("GetBarsAsync", source, StringComparison.Ordinal);
     }

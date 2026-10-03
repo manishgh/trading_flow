@@ -1,5 +1,8 @@
 # UI Desk Handoff: Desk, Orders Screen and Follow-up
 
+> Integration update (2026-10-03): the original local Web/API/Android source was preserved in an isolated branch and reconciled with this handoff. See [current integration verification](../verification/web-android-ui-integration.md) for resulting routes, durable order authority, test results and the pending ngrok/device checks. The earlier instructions below remain a historical handoff.
+
+
 Date: 2026-10-03. Audience: the next agent (local Claude Code, ChatGPT/Codex or a
 developer) picking up the web UI work in `C:\project\trading_flow`. Read this file,
 then `AGENTS.md`, then `docs/ui-desk-universe-plan.md` (the design and verification

@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.News;
 using TradingFlow.Domain.Wishlists;
@@ -18,23 +17,22 @@ public sealed class WishlistObserverServiceTests
     {
         var wishlist = ObservedWishlist("TEST");
         var repository = new FakeWishlistRepository(wishlist);
-        var subscriptions = new FakeSubscriptionSink();
-        var marketState = new FakeMarketStateProvider(
+        var marketState = new FakeDailyObservationService(
             new Dictionary<string, TickerMarketState> { ["TEST"] = ReadyState("TEST") });
 
-        var first = CreateObserver(repository, subscriptions, marketState);
+        var first = CreateObserver(repository, marketState);
         await first.ObserveOnceAsync(CancellationToken.None);
         await first.ObserveOnceAsync(CancellationToken.None);
 
         Assert.Single(repository.Signals);
         repository.Signals[0].Acknowledged = true;
 
-        var restarted = CreateObserver(repository, subscriptions, marketState);
+        var restarted = CreateObserver(repository, marketState);
         await restarted.ObserveOnceAsync(CancellationToken.None);
 
         Assert.Single(repository.Signals);
-        Assert.Equal(3, subscriptions.Replacements.Count);
-        Assert.All(subscriptions.Replacements, replacement => Assert.Contains("TEST", replacement));
+        Assert.Equal(3, marketState.Requested.Count);
+        Assert.All(marketState.Requested, symbol => Assert.Equal("TEST", symbol));
     }
 
     [Fact]
@@ -42,10 +40,9 @@ public sealed class WishlistObserverServiceTests
     {
         var wishlist = ObservedWishlist("TEST");
         var repository = new FakeWishlistRepository(wishlist);
-        var subscriptions = new FakeSubscriptionSink();
-        var marketState = new FakeMarketStateProvider(
+        var marketState = new FakeDailyObservationService(
             new Dictionary<string, TickerMarketState> { ["TEST"] = ReadyState("TEST", 0.03m) });
-        var observer = CreateObserver(repository, subscriptions, marketState);
+        var observer = CreateObserver(repository, marketState);
 
         await observer.ObserveOnceAsync(CancellationToken.None);
         marketState.States["TEST"] = ReadyState("TEST", 0.02m);
@@ -60,22 +57,21 @@ public sealed class WishlistObserverServiceTests
     {
         var wishlist = ObservedWishlist("BAD", "GOOD");
         var repository = new FakeWishlistRepository(wishlist);
-        var subscriptions = new FakeSubscriptionSink();
-        var marketState = new FakeMarketStateProvider(
+        var marketState = new FakeDailyObservationService(
             new Dictionary<string, TickerMarketState> { ["GOOD"] = ReadyState("GOOD") },
             new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "BAD" });
 
-        var observer = CreateObserver(repository, subscriptions, marketState);
+        var observer = CreateObserver(repository, marketState);
         await observer.ObserveOnceAsync(CancellationToken.None);
 
         var signal = Assert.Single(repository.Signals);
         Assert.Equal("GOOD", signal.Ticker);
-        Assert.Contains("BAD", Assert.Single(subscriptions.Replacements));
-        Assert.Contains("GOOD", Assert.Single(subscriptions.Replacements));
+        Assert.Contains("BAD", marketState.Requested);
+        Assert.Contains("GOOD", marketState.Requested);
     }
 
     [Fact]
-    public async Task ObserveOnce_NoObservedWishlistRemovesSubscriptionScope()
+    public async Task ObserveOnce_NoObservedWishlistDoesNotRequestDailyEvidence()
     {
         var repository = new FakeWishlistRepository(new Wishlist
         {
@@ -83,22 +79,34 @@ public sealed class WishlistObserverServiceTests
             Name = "Dormant",
             IsObserved = false
         });
-        var subscriptions = new FakeSubscriptionSink();
-        var observer = CreateObserver(
-            repository,
-            subscriptions,
-            new FakeMarketStateProvider(new Dictionary<string, TickerMarketState>()));
+        var marketState = new FakeDailyObservationService(new Dictionary<string, TickerMarketState>());
+        var observer = CreateObserver(repository, marketState);
 
         await observer.ObserveOnceAsync(CancellationToken.None);
 
-        Assert.Equal(1, subscriptions.RemoveCount);
-        Assert.Empty(subscriptions.Replacements);
+        Assert.Empty(marketState.Requested);
+    }
+
+    [Fact]
+    public async Task ObserveOnce_LoadingEvidenceIsNotScoredAndNextPassUsesReadyObservation()
+    {
+        var repository = new FakeWishlistRepository(ObservedWishlist("TEST"));
+        var daily = new FakeDailyObservationService(new Dictionary<string, TickerMarketState>());
+        var observer = CreateObserver(repository, daily);
+
+        await observer.ObserveOnceAsync(CancellationToken.None);
+        Assert.Empty(repository.Signals);
+        Assert.Equal(0, repository.SignalQueryCount);
+
+        daily.States["TEST"] = ReadyState("TEST");
+        await observer.ObserveOnceAsync(CancellationToken.None);
+        Assert.Single(repository.Signals);
+        Assert.Equal(2, daily.Requested.Count);
     }
 
     private static WishlistObserverService CreateObserver(
         FakeWishlistRepository repository,
-        FakeSubscriptionSink subscriptions,
-        IMarketStateSnapshotProvider marketState) =>
+        IDailyObservationService marketState) =>
         new(
             repository,
             new WishlistMarketMonitor(
@@ -106,7 +114,6 @@ public sealed class WishlistObserverServiceTests
                 new WishlistSwingWatchEvaluator(),
                 new FixedTimeProvider(Now)),
             new EmptyNewsRepository(),
-            subscriptions,
             marketState,
             new FixedTimeProvider(Now),
             NullLogger<WishlistObserverService>.Instance);
@@ -179,44 +186,27 @@ public sealed class WishlistObserverServiceTests
             MacdHistogram: macd,
             Ema10: ema10);
 
-    private sealed class FakeMarketStateProvider(
+    private sealed class FakeDailyObservationService(
         IReadOnlyDictionary<string, TickerMarketState> states,
-        IReadOnlySet<string>? failures = null) : IMarketStateSnapshotProvider
+        IReadOnlySet<string>? failures = null) : IDailyObservationService
     {
         public Dictionary<string, TickerMarketState> States { get; } =
             new(states, StringComparer.OrdinalIgnoreCase);
+        public List<string> Requested { get; } = [];
 
-        public Task<TickerMarketState?> GetTickerStateAsync(
-            string symbol,
-            IReadOnlyCollection<string> requiredTimeframes,
-            int minimumBarsPerTimeframe,
-            DateTimeOffset asOfUtc,
-            CancellationToken cancellationToken)
+        public Task<DailyObservationResult> GetAsync(string symbol, CancellationToken cancellationToken)
         {
+            Requested.Add(symbol);
             if (failures?.Contains(symbol) == true)
-            {
-                throw new InvalidOperationException($"Simulated pipeline failure for {symbol}.");
-            }
-
-            return Task.FromResult(States.GetValueOrDefault(symbol));
-        }
-    }
-
-    private sealed class FakeSubscriptionSink : IDiscoverySubscriptionSink
-    {
-        public List<IReadOnlySet<string>> Replacements { get; } = [];
-        public int RemoveCount { get; private set; }
-
-        public Task ReplaceScopeAsync(Guid scopeId, IReadOnlyCollection<string> symbols, CancellationToken cancellationToken)
-        {
-            Replacements.Add(symbols.ToHashSet(StringComparer.OrdinalIgnoreCase));
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveScopeAsync(Guid scopeId, CancellationToken cancellationToken)
-        {
-            RemoveCount++;
-            return Task.CompletedTask;
+                throw new InvalidOperationException($"Simulated daily provider failure for {symbol}.");
+            if (!States.TryGetValue(symbol, out var state))
+                return Task.FromResult(new DailyObservationResult("loading", "Queued."));
+            var snapshots = state.SnapshotsByTimeframe["1d"];
+            var bars = state.BarsByTimeframe["1d"];
+            var observation = new WishlistMarketSnapshot(symbol, snapshots[^1], snapshots[^2],
+                bars.Take(bars.Count - 1).TakeLast(20).Max(x => x.High));
+            return Task.FromResult(new DailyObservationResult("ready", "Verified fixture.",
+                Snapshot: snapshots[^1], Observation: observation));
         }
     }
 

@@ -7,11 +7,14 @@ public partial class App : Application
 	public App()
 	{
 		InitializeComponent();
-		AppServices.Api.NormalizeBackendUrlForDevice();
 	}
 
 	protected override Window CreateWindow(IActivationState? activationState)
 	{
-		return new Window(new AppShell());
+        var window=new Window(new AppShell());
+        window.Stopped+=(_,_)=>Services.PreparationNotifications.Stop();
+        window.Resumed+=(_,_)=>Services.PreparationNotifications.Start();
+        window.Destroying+=(_,_)=>Services.PreparationNotifications.Stop();
+        return window;
 	}
 }

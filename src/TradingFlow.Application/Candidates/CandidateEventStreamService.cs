@@ -20,11 +20,11 @@ public interface ICandidateEventStreamService
 }
 
 /// <summary>
-/// Replays immutable candidate snapshots from the durable application-event
-/// ledger. The service never reevaluates strategy rules and therefore cannot
+/// Replays durable candidate invalidations using the same current projection as polling.
+/// The immutable decision history remains available in the audit. The service never reevaluates strategy rules and therefore cannot
 /// diverge from the state returned by the polling projection.
 /// </summary>
-public sealed class CandidateEventStreamService(IApplicationEventRepository events) : ICandidateEventStreamService
+public sealed class CandidateEventStreamService(IApplicationEventRepository events, ICandidateQueryService queries) : ICandidateEventStreamService
 {
     public async Task<CandidateEventBatch> ReadAsync(
         Guid runId,
@@ -35,13 +35,14 @@ public sealed class CandidateEventStreamService(IApplicationEventRepository even
         ArgumentOutOfRangeException.ThrowIfNegative(afterSequence);
         var streamName = $"candidate-runs/{runId:N}";
         var bounds = await events.GetBoundsAsync(streamName, cancellationToken);
-        var requiresResync = afterSequence > 0 && bounds.Floor > 0 && afterSequence < bounds.Floor - 1;
+        var requiresResync = afterSequence > bounds.Latest || (afterSequence > 0 && bounds.Floor > 0 && afterSequence < bounds.Floor - 1);
         if (requiresResync)
         {
             return new CandidateEventBatch(bounds.Floor, bounds.Latest, true, []);
         }
 
         var records = await events.ListAsync(streamName, afterSequence, Math.Clamp(limit, 1, 100), cancellationToken);
+        var projection = records.Count == 0 ? null : await queries.GetRunAsync(runId, cancellationToken);
         var envelopes = new List<EventStreamEnvelope<CandidateChangedEvent>>(records.Count);
         foreach (var item in records)
         {
@@ -55,9 +56,10 @@ public sealed class CandidateEventStreamService(IApplicationEventRepository even
                 candidate = null;
             }
 
-            if (candidate is null)
+            var current = candidate is null ? null : projection?.Candidates.SingleOrDefault(item => item.CandidateId == candidate.CandidateId);
+            if (candidate is null || candidate.RunId != runId || current is null)
             {
-                continue;
+                return new CandidateEventBatch(bounds.Floor, bounds.Latest, true, []);
             }
 
             envelopes.Add(new EventStreamEnvelope<CandidateChangedEvent>(
@@ -68,9 +70,9 @@ public sealed class CandidateEventStreamService(IApplicationEventRepository even
                 item.OccurredAtUtc,
                 new CandidateChangedEvent(
                     runId,
-                    CandidateApplicationService.ProjectState(candidate, hasOpenPosition: false))));
+                    current)));
         }
 
-        return new CandidateEventBatch(bounds.Floor, bounds.Latest, false, envelopes);
+        return new CandidateEventBatch(bounds.Floor, Math.Max(bounds.Latest, records.LastOrDefault()?.EventSequence ?? 0), false, envelopes);
     }
 }

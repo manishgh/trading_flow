@@ -1,6 +1,6 @@
 # Remaining Implementation Checkpoints
 
-Updated: 2026-09-20. This is the standalone execution checklist for the remaining
+Updated: 2026-09-27. This is the standalone execution checklist for the remaining
 workflow checkpoints. It does not replace the production specification or reopen
 completed phases without a defect.
 
@@ -131,16 +131,25 @@ passed 1,543 tests. The isolated 10,000-event drill retained one preview event w
 See [the incremental verification record](verification/audit-streaming-checkpoint.md).
 Independent plan and code/design reviews have no unresolved critical or high finding.
 
+Checkpoint 3 completed on 2026-09-27. Immutable source previews, exact strategy
+identity checks, atomic/idempotent candidate starts, snapshot-bound run provenance
+and durable audit projections are verified. The focused component/regression slice
+passed 149 tests, including real SQLite and hosted production HTTP handlers with a
+frozen audit fixture. Independent requirements and final code/design reviews have
+no unresolved finding. See [the checkpoint verification record](verification/universe-candidate-workflow-checkpoint.md).
+Checkpoints 4 and 5 completed on 2026-09-27 (30 focused integration tests, independent reviews without unresolved findings). Web/Android integration is implemented; external release acceptance remains
+open. This checkpoint does not change strategy lifecycle or authorize any order.
+
 | Checkpoint | Scope and concrete output | Required acceptance evidence | Status |
 | --- | --- | --- | --- |
 | 1. Resource and audit integrity | Bounded audit writer with backpressure, full durable retention, lightweight result references, bounded rolling diagnostic logs. Stop treating speculative candidate simulation as confirmed portfolio fills. | Repeated and concurrent runs have isolated evidence; large replay does not retain events proportional to total history; writer failure/cancellation is explicit; artifact counts/checksums reconcile with accepted execution. Record measured memory/disk behavior and chosen limits. | Complete |
 | 2. Durable run execution | Move backtest, paper and optimization scheduling into application services with durable requests/snapshots, bounded workers, fenced leases, heartbeat and cancellation. Recovery policy must distinguish replayable backtests from paper runs with broker exposure. | Two workers claim once; expired owner cannot publish; cancellation survives restart; shutdown drains; restart reconciles paper orders before continuing; no duplicate result publication or broker submission. | Complete |
-| 3. Universe and candidate workflow | Persist immutable previews with source observations/expiry and exact strategy identities. Implement preview and candidate-start APIs; carry snapshot identity into runs. Complete candidate, gate, market, news and execution audit projections. | Expired/tampered source or strategy rejected; no future observation accepted; duplicate start idempotent; pending/rejected orders never imply an open position; one API fixture matches durable source records, including null/absent evidence. | Partial reads only |
-| 4. Order confirmation and access | Persist preview identity and confirmation outcome; revalidate candidate, quote, strategy, risk and expiry. Centralize application orchestration. Apply existing authentication, mutation policies, operator-override authorization and browser anti-forgery protection. | WebApplicationFactory covers valid/invalid input, anonymous/forbidden access, CSRF, Android cookie lifecycle, stale previews and concurrent confirmation; retry returns the same command outcome. | Pending |
-| 5. Resumable updates | Durable monotonically ordered event cursors, bounded SSE delivery, heartbeat, disconnect cleanup and polling fallback on the same application projection. | Reconnect after missed events recovers exact state; slow client cannot grow queues indefinitely; restart preserves ordering; expired cursor causes explicit resynchronization; no subscription leaks. | Pending |
-| 6. Web integration | Wire Backtest, Paper, Trade Desk and catalog to application APIs. Compact state/evidence views, cancellation, preserved form/focus/scroll, working news and audit links. Remove redundant PageModel orchestration after consumer migration. | Playwright at 1440x900 and 412x915: routes/actions/links, loading/error/empty states, dynamic rows, cancellation and reconnect; inspect screenshots; no full-page refresh for live updates. | Partial list updates |
-| 7. Android integration | Consume shared versioned contracts for catalog/desk/paper/automation/backtests. Deep-link alerts to the exact candidate and attached news; maintain compact cards and details. | Contract/view-model tests match Web states and reasons; Release Android build; emulator or connected-device navigation, authentication/reconnect and notification checks. Label physical-device-only evidence explicitly. | Pending integration proof |
-| 8. Final integration and closure | Deterministic discovery-to-decision-to-fill-to-exit-to-audit-to-API/UI replay; provider paper smoke after prior gates; reference-checked cleanup; update architecture, README, API/mobile docs and verification ledger. | Solution/full appropriate suite, browser and Android checks; cancellation/restart/ticker-isolation drills; paper smoke evidence; both reviewers report no unresolved critical/high findings. | Pending |
+| 3. Universe and candidate workflow | Persist immutable previews with source observations/expiry and exact strategy identities. Implement preview and candidate-start APIs; carry snapshot identity into runs. Complete candidate, gate, market, news and execution audit projections. | Expired/tampered source or strategy rejected; no future observation accepted; duplicate start idempotent; pending/rejected orders never imply an open position; one API fixture matches durable source records, including null/absent evidence. | Complete |
+| 4. Order confirmation and access | Persist preview identity and confirmation outcome; revalidate candidate, quote, strategy, risk and expiry. Centralize application orchestration. Apply existing authentication, mutation policies, operator-override authorization and browser anti-forgery protection. | WebApplicationFactory covers valid/invalid input, anonymous/forbidden access, CSRF, Android cookie lifecycle, stale previews and concurrent confirmation; retry returns the same command outcome. | Complete |
+| 5. Resumable updates | Durable monotonically ordered event cursors, bounded SSE delivery, heartbeat, disconnect cleanup and polling fallback on the same application projection. | Reconnect after missed events recovers exact state; slow client cannot grow queues indefinitely; restart preserves ordering; expired cursor causes explicit resynchronization; no subscription leaks. | Complete |
+| 6. Web integration | Wire Backtest, Paper, Trade Desk and catalog to application APIs. Compact state/evidence views, cancellation, preserved form/focus/scroll, working news and audit links. Remove redundant PageModel orchestration after consumer migration. | Playwright at 1440x900 and 412x915: routes/actions/links, loading/error/empty states, dynamic rows, cancellation and reconnect; inspect screenshots; no full-page refresh for live updates. | Implemented; browser verification complete |
+| 7. Android integration | Consume shared versioned contracts for catalog/desk/paper/automation/backtests. Deep-link alerts to the exact candidate and attached news; maintain compact cards and details. | Contract/view-model tests match Web states and reasons; Release Android build; emulator or connected-device navigation, authentication/reconnect and notification checks. Label physical-device-only evidence explicitly. | Implemented; emulator navigation/notifications verified; broader device mutation drills remain |
+| 8. Final integration and closure | Deterministic discovery-to-decision-to-fill-to-exit-to-audit-to-API/UI replay; provider paper smoke after prior gates; reference-checked cleanup; update architecture, README, API/mobile docs and verification ledger. | Solution/full appropriate suite, browser and Android checks; cancellation/restart/ticker-isolation drills; paper smoke evidence; both reviewers report no unresolved critical/high findings. | Implementation and offline closure complete; provider connectivity verified; paper execution acceptance pending |
 
 Checkpoints run in order. Checkpoint 4 and 5 may be developed independently after
 the checkpoint 3 contracts settle. Clients migrate only after their API acceptance
@@ -194,3 +203,16 @@ news lineage, and human catalyst labels remain evidence dependencies. Missing
 evidence stays visible and blocks promotion; deterministic tests cannot replace it.
 Physical accessibility checks require a device. None of these prevents finishing
 the application implementation or its automated verification.
+
+## Workflow closure — 2026-09-27
+
+Checkpoints 6–8 implementation is complete except the explicitly deferred Market Predictor API integration. Web and Android use shared run, candidate, catalog and order contracts; retry commands retain immutable identity; candidate audits carry actual market/rule/source/news/fill evidence. Historical paper artifacts survive removal of generated configs, and projection enrichment rejects newer decision versions. The unused inline desk ticket and its orphan model were removed after reference checks.
+
+Requirements and independent code reviews completed with no remaining actionable findings. Counterexample regressions cover the final review fixes. The verification record contains exact commands, counts, the deferred producer-fixture failure and screenshots inspected at desktop and phone widths.
+
+[Workflow integration closure](verification/workflow-integration-closure.md) is the current evidence ledger. The follow-up emulator navigation/notification and external provider connectivity results are recorded in [Android and external paper acceptance](verification/android-external-paper-acceptance.md). Real broker submission/fill/protection smoke remains unverified because the market is closed and no strategy has paper execution authorization; broader mobile mutation and physical-device drills remain explicit in that record. No strategy promotion, broker submission, GitHub synchronization or cleanup of trading state occurred.
+
+
+## Release follow-up — 28 September 2026
+
+See [the current release verification](verification/release-2026-09-28.md). Full backend: 1,729 passed, one known deferred ML contract-fixture failure. Final browser: 91 passed. Android navigation, visible Swing horizon, authentication fencing, and phone create/retry/queued-cancel/USB-reconnect checks are delivered. The natural nightly-to-first-morning read-only worker is running for September 28–29; its result remains pending. At 15:30 Berlin the real market was open and the paper account was active/unblocked with no exposure; actual execution is awaiting real administrator sign-in, not market opening. Firebase preparation is documented, but background push implementation and device activation remain pending. The detailed ledger names remaining physical-device drills without treating automated tests as device evidence.

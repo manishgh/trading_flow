@@ -2588,6 +2588,141 @@ namespace TradingFlow.Data.Context.Migrations
                     b.ToTable("AdvisoryPositions", (string)null);
                 });
 
+            modelBuilder.Entity("TradingFlow.Domain.Preparation.PreparationDefinitionRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AuthorizationStamp")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContentSha256")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("EffectiveTicks")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("OwnerId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SettingsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("WorkflowId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OwnerId");
+
+                    b.HasIndex("WorkflowId", "Revision")
+                        .IsUnique();
+
+                    b.ToTable("preparation_definitions", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Preparation.PreparationOccurrenceRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("DefinitionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResultJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ScheduledTicks")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SlotJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SlotKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("WorkflowId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DefinitionId");
+
+                    b.HasIndex("WorkflowId", "SlotKey")
+                        .IsUnique();
+
+                    b.ToTable("preparation_occurrences", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Preparation.PreparationReviewRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Json")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("OccurrenceId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OwnerId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestSha256")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("WishlistId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OccurrenceId");
+
+                    b.HasIndex("WishlistId")
+                        .IsUnique();
+
+                    b.HasIndex("OwnerId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.ToTable("preparation_reviews", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Preparation.PreparationScheduleCursor", b =>
+                {
+                    b.Property<Guid>("WorkflowId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ThroughTicks")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("WorkflowId");
+
+                    b.ToTable("preparation_schedule_cursors", (string)null);
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Wishlists.ScreenerPreset", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2994,6 +3129,30 @@ namespace TradingFlow.Data.Context.Migrations
                         .IsRequired();
 
                     b.Navigation("Portfolio");
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Preparation.PreparationOccurrenceRecord", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.Preparation.PreparationDefinitionRecord", null)
+                        .WithMany()
+                        .HasForeignKey("DefinitionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Preparation.PreparationReviewRecord", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.Preparation.PreparationOccurrenceRecord", null)
+                        .WithMany()
+                        .HasForeignKey("OccurrenceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TradingFlow.Domain.Wishlists.Wishlist", null)
+                        .WithMany()
+                        .HasForeignKey("WishlistId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Wishlists.WishlistItem", b =>

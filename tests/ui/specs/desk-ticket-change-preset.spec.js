@@ -14,7 +14,7 @@ import { signIn } from "./sign-in.js";
 const ticker = "PLANX";
 
 async function seedSymbol(page) {
-  await page.goto("/TradeDesk");
+  await page.goto("/TradeDesk?view=market");
   if (await page.locator(`.trade-desk-table [data-symbol="${ticker}"]`).count() > 0) return;
   await page.goto("/Wishlists");
   await page.locator("#CreateWishlistName").fill("Ticket Plan");
@@ -28,32 +28,34 @@ async function seedSymbol(page) {
 test.describe("ticket prices, change, phone picker and presets", () => {
   test.beforeEach(async ({ page }) => {
     await signIn(page);
+    // Exercise the Administrator UI branch; no broker command is sent.
+    await page.route("**/api/v1/orders/context", route => route.fulfill({contentType:"application/json",body:JSON.stringify({accountId:"fixture",operatorOverrideAllowed:true})}));
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
   test("the desk ticket shows no stand-in stop, target or limit and says why", async ({ page }) => {
     await seedSymbol(page);
     await page.goto(`/TradeDesk?ticker=${ticker}`);
-    const ticket = page.locator(".desk-ticket");
-    await expect(ticket.locator("#TicketStop")).toHaveValue("");
-    await expect(ticket.locator("#TicketTarget")).toHaveValue("");
-    await expect(ticket.locator("#TicketLimit")).toHaveValue("");
-    await expect(ticket.locator("[data-ticket-stop-note]")).not.toBeEmpty();
+    const ticket = page.locator("#OrderWorkflowForm");
+    await expect(ticket.locator('[name=stop]')).toHaveValue("");
+    await expect(ticket.locator('[name=target]')).toHaveValue("");
+    await expect(ticket.locator('[name=limit]')).toHaveValue("");
+    await expect(ticket.locator("[data-order-stop-note]")).not.toBeEmpty();
     // No account equity here, so 1R has no budget to size against.
-    await expect(ticket.getByRole("button", { name: "1R risk" })).toBeDisabled();
+    await expect(ticket.getByRole("button", { name: "Size to 1R" })).toBeDisabled();
   });
 
   test("the Orders ticket follows a chosen strategy and shows no stand-in prices", async ({ page }) => {
     await page.goto("/Orders?ticker=MSFT");
-    await expect(page.locator("#OrdersStrategy")).toHaveCount(1);
-    await expect(page.locator("#TicketStop")).toHaveValue("");
-    await expect(page.locator("#TicketTarget")).toHaveValue("");
-    await expect(page.locator("[data-ticket-stop-note]")).not.toBeEmpty();
+    await expect(page.locator('#OrderWorkflowForm [name=strategy]')).toHaveCount(1);
+    await expect(page.locator('[name=stop]')).toHaveValue("");
+    await expect(page.locator('[name=target]')).toHaveValue("");
+    await expect(page.locator("[data-order-stop-note]")).not.toBeEmpty();
   });
 
   test("change reads against the previous close and follows live quotes", async ({ page }) => {
     await seedSymbol(page);
-    await page.goto("/TradeDesk");
+    await page.goto("/TradeDesk?view=market");
     const change = page.locator(`.trade-desk-table [data-symbol="${ticker}"] [data-column="price"] [data-change-field]`);
     // Without Alpaca there is no previous close, and the cell says so.
     await expect(change).toHaveText("—");
@@ -72,7 +74,7 @@ test.describe("ticket prices, change, phone picker and presets", () => {
   test("the phone chooses wishlists and screeners at the list level only", async ({ page }) => {
     await seedSymbol(page);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/TradeDesk");
+    await page.goto("/TradeDesk?view=market");
     await expect(page.locator(".desk-universe-switch")).toBeVisible();
     await expect(page.locator("#WishlistSelect")).toBeVisible();
 

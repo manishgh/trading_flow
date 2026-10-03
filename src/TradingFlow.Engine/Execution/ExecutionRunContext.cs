@@ -12,7 +12,9 @@ public sealed record ExecutionRunContext(
     string Profile,
     string ConfigHash,
     string CodeVersion,
-    DateTimeOffset StartedAtUtc);
+    DateTimeOffset StartedAtUtc,
+    Guid UniverseSnapshotId = default,
+    Guid? DecisionRunId = null);
 
 public static class ExecutionRunContextFactory
 {

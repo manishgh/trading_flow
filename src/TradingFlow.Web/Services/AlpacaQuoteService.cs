@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using TradingFlow.Alpaca;
+using TradingFlow.Engine.Configuration;
 
 namespace TradingFlow.Web.Services;
 
@@ -411,5 +412,19 @@ public sealed class AlpacaQuoteService
             DateTimeOffset.TryParse(property.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var value)
             ? value
             : null;
+    }
+}
+
+public static class AlpacaQuoteServiceRegistration
+{
+    public static IServiceCollection AddAlpacaQuotes(this IServiceCollection services)
+    {
+        services.AddHttpClient(AlpacaQuoteService.HttpClientName, client =>
+        {
+            client.BaseAddress = AlpacaEndpointResolver.Resolve(ProductionProfile.Paper).MarketDataRest;
+            client.Timeout = TimeSpan.FromSeconds(15);
+        });
+        services.AddSingleton<AlpacaQuoteService>();
+        return services;
     }
 }

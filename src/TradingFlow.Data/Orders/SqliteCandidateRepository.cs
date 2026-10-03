@@ -126,6 +126,7 @@ public sealed class SqliteCandidateRepository(
             current = transition.NewState;
         }
 
+        await CandidateDecisionEvidence.PersistCatalystAsync(context, candidate, transitions[^1], semanticDecisionSha256, cancellationToken);
         candidate.State = current;
         candidate.Version = sequence;
         candidate.ExpiresAtUtc = expiresAtUtc;
@@ -143,6 +144,16 @@ public sealed class SqliteCandidateRepository(
         return candidate;
     }
 
+    public async Task<IReadOnlyList<CandidateTransitionRecord>> GetLatestDecisionsAsync(
+        Guid runId, CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.CandidateTransitions.AsNoTracking()
+            .Where(item => item.RunId == runId && item.Source == "strategy_decision_kernel" &&
+                !context.CandidateTransitions.Any(later => later.CandidateId == item.CandidateId &&
+                    later.Source == "strategy_decision_kernel" && later.Sequence > item.Sequence))
+            .ToArrayAsync(cancellationToken);
+    }
     public async Task<CandidateRecord?> GetAsync(
         Guid candidateId,
         CancellationToken cancellationToken = default)
@@ -193,7 +204,7 @@ public sealed class SqliteCandidateRepository(
             .ToArrayAsync(cancellationToken);
     }
 
-    private static void ValidateDiscovery(CandidateRecord candidate)
+    internal static void ValidateDiscovery(CandidateRecord candidate)
     {
         if (candidate.CandidateId == Guid.Empty || candidate.RunId == Guid.Empty ||
             String.IsNullOrWhiteSpace(candidate.Symbol) ||

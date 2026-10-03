@@ -1,11 +1,9 @@
 using Microsoft.Extensions.Hosting;
 using System.Collections.Concurrent;
 using System.Text.Json;
-using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.News;
 using TradingFlow.Domain.Wishlists;
-using TradingFlow.Engine.Pipeline;
 
 namespace TradingFlow.Web.Services.Wishlists;
 
@@ -16,15 +14,13 @@ namespace TradingFlow.Web.Services.Wishlists;
 /// </summary>
 public sealed class WishlistObserverService : BackgroundService
 {
-    private static readonly Guid ObservationScope =
-        Guid.Parse("d1a12e6e-20f8-42f8-8c1d-5166d80b3fc8");
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan NewsWindow = TimeSpan.FromHours(4);
     private readonly IWishlistRepository wishlists;
     private readonly WishlistMarketMonitor monitor;
     private readonly INewsFeedRepository newsRepository;
-    private readonly IDiscoverySubscriptionSink subscriptions;
-    private readonly IMarketStateSnapshotProvider marketState;
+
+    private readonly IDailyObservationService dailyObservations;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<WishlistObserverService> logger;
     private readonly ConcurrentDictionary<(Guid WishlistId, string Ticker), string> lastEvaluatedEvidence = [];
@@ -33,16 +29,14 @@ public sealed class WishlistObserverService : BackgroundService
         IWishlistRepository wishlists,
         WishlistMarketMonitor monitor,
         INewsFeedRepository newsRepository,
-        IDiscoverySubscriptionSink subscriptions,
-        IMarketStateSnapshotProvider marketState,
+        IDailyObservationService dailyObservations,
         TimeProvider timeProvider,
         ILogger<WishlistObserverService> logger)
     {
         this.wishlists = wishlists;
         this.monitor = monitor;
         this.newsRepository = newsRepository;
-        this.subscriptions = subscriptions;
-        this.marketState = marketState;
+        this.dailyObservations = dailyObservations;
         this.timeProvider = timeProvider;
         this.logger = logger;
     }
@@ -70,10 +64,7 @@ public sealed class WishlistObserverService : BackgroundService
                 await Task.Delay(PollInterval, stoppingToken);
             }
         }
-        finally
-        {
-            await subscriptions.RemoveScopeAsync(ObservationScope, CancellationToken.None);
-        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
     }
 
     public async Task ObserveOnceAsync(CancellationToken cancellationToken)
@@ -83,7 +74,6 @@ public sealed class WishlistObserverService : BackgroundService
             .ToArray();
         if (observed.Length == 0)
         {
-            await subscriptions.RemoveScopeAsync(ObservationScope, cancellationToken);
             return;
         }
 
@@ -96,30 +86,21 @@ public sealed class WishlistObserverService : BackgroundService
             .ToArray();
         if (tickers.Length == 0)
         {
-            await subscriptions.RemoveScopeAsync(ObservationScope, cancellationToken);
             return;
         }
-
-        await subscriptions.ReplaceScopeAsync(ObservationScope, tickers, cancellationToken);
-        var end = timeProvider.GetUtcNow();
         var preparedByTicker = new Dictionary<string, PreparedWishlistSnapshot>(StringComparer.OrdinalIgnoreCase);
         var failedTickerCount = 0;
         foreach (var ticker in tickers)
         {
             try
             {
-                var state = await marketState.GetTickerStateAsync(
-                    ticker,
-                    ["1d"],
-                    minimumBarsPerTimeframe: 260,
-                    asOfUtc: end,
-                    cancellationToken: cancellationToken);
-                if (state is null)
+                var daily = await dailyObservations.GetAsync(ticker, cancellationToken);
+                if (daily.State != "ready" || daily.Observation is null)
                 {
                     continue;
                 }
 
-                var prepared = await BuildSnapshotAsync(ticker, state, cancellationToken);
+                var prepared = await BuildSnapshotAsync(ticker, daily.Observation, cancellationToken);
                 if (prepared is not null)
                 {
                     preparedByTicker[ticker] = prepared;
@@ -203,31 +184,17 @@ public sealed class WishlistObserverService : BackgroundService
 
     private async Task<PreparedWishlistSnapshot?> BuildSnapshotAsync(
         string ticker,
-        TickerMarketState marketState,
+        WishlistMarketSnapshot daily,
         CancellationToken cancellationToken)
     {
-        var bars = marketState.BarsByTimeframe.GetValueOrDefault("1d") ?? [];
-        var snapshots = marketState.SnapshotsByTimeframe.GetValueOrDefault("1d") ?? [];
-        if (bars.Count == 0 || snapshots.Count < 2)
-        {
-            return null;
-        }
-
-        var current = snapshots[^1];
-        var previous = snapshots[^2];
+        var current = daily.Current;
         var catalyst = await GetLatestCatalystAsync(ticker, cancellationToken);
         if (catalyst is not null)
         {
             current = current with { Catalyst = catalyst };
         }
 
-        var recentHigh = bars
-            .Take(Math.Max(0, bars.Count - 1))
-            .TakeLast(20)
-            .Select(bar => (decimal?)bar.High)
-            .Max();
-
-        var snapshot = new WishlistMarketSnapshot(ticker, current, previous, recentHigh);
+        var snapshot = daily with { Current = current };
         return new PreparedWishlistSnapshot(snapshot, BuildEvidenceFingerprint(snapshot));
     }
 

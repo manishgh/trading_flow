@@ -22,6 +22,8 @@
 
   <ItemGroup>
     <None Update="Fixtures\Contracts\swing_prediction_response.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures\Contracts\decision_replay_*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures\Contracts\candidate_workflow_audit.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures\news_receipt_exchange.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures\news_collection_exchange.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

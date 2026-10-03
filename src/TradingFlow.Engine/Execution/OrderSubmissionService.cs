@@ -2386,7 +2386,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             !submission.RunContext.ConfigHash.All(Uri.IsHexDigit) ||
             submission.RunContext.CodeVersion.Length is not (40 or 64) ||
             !submission.RunContext.CodeVersion.All(Uri.IsHexDigit) ||
-            submission.RunContext.Profile is not ("paper" or "live"))
+            submission.RunContext.Profile is not ("paper" or "paper_experiment" or "paper_shadow" or "live"))
         {
             throw new InvalidOperationException("Execution run provenance is invalid.");
         }
@@ -2394,6 +2394,8 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
 
     private static ProductionRun ToRun(ExecutionRunContext context) => new()
     {
+        UniverseSnapshotId = context.UniverseSnapshotId,
+        DecisionRunId = context.DecisionRunId,
         RunId = context.RunId,
         SchemaVersion = 1,
         ConfigHash = context.ConfigHash,
@@ -2442,7 +2444,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             !submission.RunContext.ConfigHash.All(Uri.IsHexDigit) ||
             submission.RunContext.CodeVersion.Length is not (40 or 64) ||
             !submission.RunContext.CodeVersion.All(Uri.IsHexDigit) ||
-            submission.RunContext.Profile is not ("paper" or "live"))
+            submission.RunContext.Profile is not ("paper" or "paper_experiment" or "paper_shadow" or "live"))
         {
             throw new InvalidOperationException("Protective execution run provenance is invalid.");
         }

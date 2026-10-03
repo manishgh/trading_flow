@@ -1,0 +1,33 @@
+/* Task-oriented navigation shared by every page and viewport. */
+.topbar{flex-wrap:wrap;height:auto;min-height:58px;gap:12px;position:relative}
+.topbar .primary-nav{display:flex;flex:1 1 auto;overflow:visible;flex-wrap:wrap;min-width:0}
+.topbar-tail{margin-left:auto;flex-wrap:wrap}
+.section-nav{display:flex;flex-wrap:wrap;gap:4px;padding:6px 20px;border-bottom:1px solid var(--color-border,#ccc);background:var(--color-surface,#fff)}
+.section-nav a{padding:9px 13px;text-decoration:none;color:var(--color-text);border-bottom:2px solid transparent}
+.section-nav a[aria-current=page]{border-color:var(--color-accent,#d32f0c);font-weight:700}
+.view-switch{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0}
+.view-switch button,.prep-page button{background:var(--color-surface,#fff);color:var(--color-text);border:1px solid var(--color-border,#aaa);padding:9px 13px;min-height:40px;cursor:pointer}
+.view-switch button[aria-pressed=true]{background:var(--color-text,#222);color:var(--color-surface,#fff)}
+[data-prep-panel][hidden],[data-desk-panel][hidden]{display:none!important}
+.prep-page{max-width:1100px;margin:auto;padding:0 16px 32px;overflow-wrap:anywhere}
+.prep-page .page-head{padding-left:0;padding-right:0}
+.prep-page label{display:flex;gap:6px;flex-direction:column;margin:12px 0}
+.prep-toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0;align-items:center}
+.prep-toolbar select{flex:1 1 260px;min-width:0}
+.prep-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px}
+.prep-card,.prep-next{border:1px solid var(--color-border,#aaa);padding:16px;margin:12px 0}
+.prep-page input,.prep-page select{padding:8px;max-width:100%;min-width:0}
+.prep-page button{margin:3px}.prep-page button:disabled{opacity:.5;cursor:default}
+.prep-page input[type=checkbox]{width:20px;height:20px}.prep-page pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.prep-page details summary{cursor:pointer;min-height:28px}.prep-next button{font-weight:600}
+.desk-page>.view-switch{margin:12px}.desk-page .page-head{padding:16px 12px 0}
+@media(max-width:1000px){.topbar .primary-nav{order:3;flex-basis:100%;justify-content:flex-start}.topbar .primary-nav a{flex:1;text-align:center}.topbar-tail .theme-control,.topbar-clocks{display:none}}
+@media(max-width:768px){.topbar{flex-direction:row;padding:8px 12px;gap:6px}.topbar .primary-nav{display:flex;width:100%;gap:0}.topbar .primary-nav a{padding:12px 6px;font-size:13px}.topbar-tail{gap:5px}.section-nav{padding:4px 8px}.section-nav a{padding:10px 9px;font-size:13px}.prep-page{padding:0 4px 24px}.prep-toolbar>*{max-width:100%}.prep-page .page-head{display:block}.desk-page{padding-bottom:16px}}
+
+
+
+.research-configuration>summary,.advanced-run-parameters>summary,.paper-experiment-registration>summary{cursor:pointer;font-weight:600;padding:12px 0}.research-configuration{min-width:0}.lab-rail{display:block}
+
+.view-switch button{min-height:44px}
+
+#prep-setup p,#prep-draft-note,#prep-collection-status,#prep-source-status{margin:10px 0;line-height:1.6}#prep-retry{margin:12px 0}.prep-page button:disabled{cursor:not-allowed}#prep-setup h3{margin-bottom:8px}

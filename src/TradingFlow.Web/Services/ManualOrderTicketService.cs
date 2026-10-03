@@ -46,7 +46,8 @@ public sealed record ManualOrderTicketPreview(
     string TimeInForce,
     bool AllowExtendedHoursTrading,
     string Policy,
-    IReadOnlyList<string> Rejections);
+    IReadOnlyList<string> Rejections,
+    string RiskSnapshotSha256 = "");
 
 public sealed record ManualOrderTicketConfirmation(
     string OrderId,
@@ -114,6 +115,7 @@ public sealed class ManualOrderTicketService
     private readonly TradingEnvironmentService environments;
     private readonly TimeProvider timeProvider;
     private readonly IDataProtector protector;
+    private readonly IHttpContextAccessor operatorContext;
 
     public ManualOrderTicketService(
         IManualOrderMarketGateway market,
@@ -122,9 +124,11 @@ public sealed class ManualOrderTicketService
         IEntryAdmissionControl admission,
         TradingEnvironmentService environments,
         TimeProvider timeProvider,
-        IDataProtectionProvider dataProtection)
+        IDataProtectionProvider dataProtection,
+        IHttpContextAccessor operatorContext)
     {
         this.environments = environments;
+        this.operatorContext = operatorContext;
         this.market = market;
         this.manualEntry = manualEntry;
         this.entryOptions = entryOptions;
@@ -138,6 +142,7 @@ public sealed class ManualOrderTicketService
         CancellationToken cancellationToken)
     {
         var normalized = Normalize(draft);
+        RequireManualAuthorization(normalized);
         var now = timeProvider.GetUtcNow();
         var ticket = new TicketPayload(Guid.NewGuid(), now, normalized, null, null);
         return await ValidateAsync(ticket, issueToken: true, cancellationToken);
@@ -163,6 +168,8 @@ public sealed class ManualOrderTicketService
             throw new InvalidOperationException("Order review token is invalid or expired.", exception);
         }
 
+        RequireManualAuthorization(ticket.Draft);
+        if (ticket.StrategyReview || ticket.WorkflowBindingSha256 is not null) throw new InvalidOperationException("A strategy review must be confirmed through its bound workflow.");
         var preview = await ValidateAsync(ticket, issueToken: false, cancellationToken);
         if (!preview.CanSubmit)
         {
@@ -179,6 +186,32 @@ public sealed class ManualOrderTicketService
             result.LimitPrice);
     }
 
+    internal async Task<ManualOrderTicketPreview> PreviewWorkflowAsync(ManualOrderDraft draft, bool strategyReview, string bindingHash, CancellationToken cancellationToken)
+    {
+        var normalized = Normalize(draft);
+        if (!strategyReview) RequireManualAuthorization(normalized);
+        var ticket = new TicketPayload(Guid.NewGuid(), timeProvider.GetUtcNow(), normalized, null, null, strategyReview, bindingHash);
+        return await ValidateAsync(ticket, issueToken: true, cancellationToken);
+    }
+
+    internal async Task RevalidateWorkflowAsync(string token, bool strategyReview, string bindingHash, string expectedRisk, CancellationToken cancellationToken)
+    {
+        TicketPayload ticket;
+        try { ticket = JsonSerializer.Deserialize<TicketPayload>(protector.Unprotect(token))!; }
+        catch (Exception exception) { throw new InvalidOperationException("Order review token is invalid.", exception); }
+        if (ticket is null || ticket.StrategyReview != strategyReview || ticket.WorkflowBindingSha256 != bindingHash || ticket.ReviewedRiskSha256 != expectedRisk)
+            throw new InvalidOperationException("Order review binding, risk or execution policy does not match.");
+        if (!strategyReview) RequireManualAuthorization(ticket.Draft);
+        var review = await ValidateAsync(ticket, issueToken: false, cancellationToken);
+        if (!review.CanSubmit || review.RiskSnapshotSha256 != expectedRisk)
+            throw new InvalidOperationException("Order quote or risk changed; review again. " + String.Join("; ", review.Rejections));
+    }
+
+    private void RequireManualAuthorization(ManualOrderDraft draft)
+    {
+        if (draft.Side == "buy" && operatorContext.HttpContext?.User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator) != true)
+            throw new UnauthorizedAccessException("Administrator authorization is required for a manual entry.");
+    }
     private async Task<ManualOrderTicketPreview> ValidateAsync(
         TicketPayload ticket,
         bool issueToken,
@@ -196,7 +229,7 @@ public sealed class ManualOrderTicketService
         {
             rejections.AddRange(admissionState.Blocks.Select(block => $"{block.Code}: {block.Detail}"));
         }
-        if (ticket.Draft.Side == "buy" && manualEntry.Policy != ManualEntryPolicy.OperatorDirect)
+        if (ticket.Draft.Side == "buy" && !ticket.StrategyReview && manualEntry.Policy != ManualEntryPolicy.OperatorDirect)
         {
             rejections.Add("Manual buys are strategy-gated by server policy.");
         }
@@ -257,8 +290,10 @@ public sealed class ManualOrderTicketService
             rejections.Add(exception.Message);
         }
 
+        var riskHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        { broker, admissionState, entryOptions, environment = environments.Default, ticket.Draft })));
         var reviewedTicket = issueToken
-            ? ticket with { ReviewedBidPrice = latest?.BidPrice, ReviewedAskPrice = latest?.AskPrice }
+            ? ticket with { ReviewedBidPrice = latest?.BidPrice, ReviewedAskPrice = latest?.AskPrice, ReviewedRiskSha256 = riskHash }
             : ticket;
         var token = issueToken && rejections.Count == 0
             ? protector.Protect(JsonSerializer.Serialize(reviewedTicket))
@@ -288,7 +323,8 @@ public sealed class ManualOrderTicketService
             ticket.Draft.TimeInForce.ToUpperInvariant(),
             ticket.Draft.AllowExtendedHoursTrading,
             manualEntry.Policy == ManualEntryPolicy.OperatorDirect ? "operator_direct" : "strategy_gated",
-            rejections);
+            rejections,
+            riskHash);
     }
 
     private static ManualOrderDraft Normalize(ManualOrderDraft draft)
@@ -380,5 +416,8 @@ public sealed class ManualOrderTicketService
         DateTimeOffset CreatedAtUtc,
         ManualOrderDraft Draft,
         decimal? ReviewedBidPrice,
-        decimal? ReviewedAskPrice);
+        decimal? ReviewedAskPrice,
+        bool StrategyReview = false,
+        string? WorkflowBindingSha256 = null,
+        string? ReviewedRiskSha256 = null);
 }

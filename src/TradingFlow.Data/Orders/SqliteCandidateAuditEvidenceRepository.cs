@@ -1,3 +1,4 @@
+using TradingFlow.Domain.Orders;
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -27,16 +28,22 @@ public sealed class SqliteCandidateAuditEvidenceRepository(
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var catalyst = await context.CatalystResults.AsNoTracking()
             .SingleOrDefaultAsync(item => item.CatalystResultId == catalystId, cancellationToken);
-        if (catalyst is null)
+        if (catalyst is null || catalyst.RunId != candidate.RunId || catalyst.Symbol != candidate.Symbol || (catalyst.CandidateId is { } owner && owner != candidate.CandidateId))
         {
             return null;
         }
         var news = await context.NewsItems.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == catalyst.ProviderArticleId, cancellationToken);
+        // A later revision cannot become evidence for an earlier decision.
+        if (news is not null && (news.Timestamp > catalyst.EvaluatedAtUtc || news.IngestedAt > catalyst.EvaluatedAtUtc))
+            news = null;
         var raw = ReadObject(catalyst.RawComponentsJson);
-        var provider = news?.Provider ?? ReadString(raw, "provider") ?? "unknown";
-        var published = news?.Timestamp ?? ReadDate(raw, "providerPublishedAtUtc") ?? catalyst.EvaluatedAtUtc;
-        var received = news?.IngestedAt ?? ReadDate(raw, "firstReceivedAtUtc") ?? catalyst.EvaluatedAtUtc;
+        var provider = ReadString(raw, "provider") ?? news?.Provider ?? "unknown";
+        var published = ReadDate(raw, "providerPublishedAtUtc") ?? news?.Timestamp;
+        var received = ReadDate(raw, "firstReceivedAtUtc");
+        var canonical = ReadString(raw, "revisionId") is not null;
+        var headline = canonical ? ReadString(raw, "headline") : news?.Headline;
+        var url = canonical ? ReadString(raw, "url") : news?.Url;
         var evidence = JsonSerializer.Serialize(new
         {
             catalyst.CatalystResultId,
@@ -47,8 +54,8 @@ public sealed class SqliteCandidateAuditEvidenceRepository(
             catalyst.Category,
             catalyst.Direction,
             catalyst.CompositeScore,
-            news?.Headline,
-            news?.Url
+            Headline = headline,
+            Url = url
         });
         return new CandidateCatalystAuditEvidence(
             catalyst.CatalystResultId,
@@ -59,9 +66,9 @@ public sealed class SqliteCandidateAuditEvidenceRepository(
             catalyst.Category,
             catalyst.Direction,
             catalyst.CompositeScore,
-            news?.Headline,
-            news?.Url,
-            Sha256(evidence));
+            headline,
+            url,
+            Sha256(evidence + (ReadString(raw, "revisionId") is null ? "" : catalyst.RawComponentsJson)));
     }
 
     public async Task<CandidateExecutionAuditEvidence?> GetExecutionAsync(
@@ -70,7 +77,7 @@ public sealed class SqliteCandidateAuditEvidenceRepository(
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var intents = await context.OrderIntents.AsNoTracking()
-            .Where(item => item.CandidateId == candidate.CandidateId)
+            .Where(item => item.CandidateId == candidate.CandidateId && item.RunId == candidate.RunId && item.Kind == OrderIntentKind.StrategyEntry)
             .ToArrayAsync(cancellationToken);
         var intent = intents
             .OrderByDescending(item => item.CreatedAtUtc)
@@ -84,12 +91,7 @@ public sealed class SqliteCandidateAuditEvidenceRepository(
             .Where(item => item.ClientOrderId == intent.ClientOrderId)
             .OrderByDescending(item => item.EventId)
             .FirstOrDefaultAsync(cancellationToken);
-        var position = await context.PositionEvents.AsNoTracking()
-            .Where(item => item.RunId == candidate.RunId &&
-                           item.Symbol == candidate.Symbol &&
-                           item.StrategyId == candidate.SelectedStrategy)
-            .OrderByDescending(item => item.PositionEventId)
-            .FirstOrDefaultAsync(cancellationToken);
+        var openCandidates = await ReadOpenCandidatesAsync(context, candidate.RunId, cancellationToken);
         var rejection = latest is null ? null : ReadString(ReadObject(latest.PayloadJson), "rejectionCode");
         return new CandidateExecutionAuditEvidence(
             intent.IntentId,
@@ -101,7 +103,7 @@ public sealed class SqliteCandidateAuditEvidenceRepository(
             latest?.FillPrice,
             latest?.LocalTimestampUtc ?? intent.CreatedAtUtc,
             rejection,
-            position?.QuantityAfter > 0m);
+            openCandidates.Contains(candidate.CandidateId));
     }
 
     public async Task<IReadOnlySet<Guid>> GetOpenPositionCandidateIdsAsync(
@@ -109,25 +111,25 @@ public sealed class SqliteCandidateAuditEvidenceRepository(
         CancellationToken cancellationToken = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var candidates = await context.Candidates.AsNoTracking()
-            .Where(candidate => candidate.RunId == runId)
-            .Select(candidate => new { candidate.CandidateId, candidate.Symbol, candidate.SelectedStrategy })
-            .ToArrayAsync(cancellationToken);
-        var positions = await context.PositionEvents.AsNoTracking()
-            .Where(position => position.RunId == runId)
-            .OrderBy(position => position.PositionEventId)
-            .ToArrayAsync(cancellationToken);
-        var open = positions
-            .GroupBy(position => new { position.Symbol, position.StrategyId })
-            .Select(group => group.Last())
-            .Where(position => position.QuantityAfter > 0m)
-            .SelectMany(position => candidates
-                .Where(candidate => candidate.Symbol == position.Symbol && candidate.SelectedStrategy == position.StrategyId)
-                .Select(candidate => candidate.CandidateId))
-            .ToHashSet();
-        return open;
+        return await ReadOpenCandidatesAsync(context, runId, cancellationToken);
     }
 
+    private static async Task<IReadOnlySet<Guid>> ReadOpenCandidatesAsync(
+        TradingFlowDbContext context, Guid runId, CancellationToken cancellationToken)
+    {
+        // Account/symbol latest state is authoritative, including closes from another
+        // run. The generation's entry order identifies exactly which candidate owns it.
+        var ids = await (
+            from position in context.PositionEvents.AsNoTracking()
+            join intent in context.OrderIntents.AsNoTracking()
+                on position.PositionGenerationClientOrderId equals intent.ClientOrderId
+            where position.QuantityAfter != 0m && intent.RunId == runId && intent.CandidateId != null &&
+                  intent.Kind == OrderIntentKind.StrategyEntry && intent.AccountId == position.AccountId && intent.Symbol == position.Symbol &&
+                  !context.PositionEvents.Any(later => later.AccountId == position.AccountId && later.Symbol == position.Symbol &&
+                      later.PositionEventId > position.PositionEventId)
+            select intent.CandidateId!.Value).Distinct().ToArrayAsync(cancellationToken);
+        return ids.ToHashSet();
+    }
     private static JsonElement? ReadObject(string json)
     {
         try

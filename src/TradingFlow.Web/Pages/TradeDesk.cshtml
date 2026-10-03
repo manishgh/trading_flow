@@ -5,7 +5,7 @@
 @using TradingFlow.Finviz
 @model TradingFlow.Web.Pages.TradeDeskModel
 @{
-    ViewData["Title"] = "Desk";
+    ViewData["Title"] = "Candidates";
     ViewData["MainClass"] = "shell-flush desk-page";
     var selectedName = Model.Universe.Label;
     var portfolio = Model.Portfolio;
@@ -90,7 +90,13 @@
 @* The desk carries no visible page title - the design gives the screen to the
    grid and the chrome names it. The heading still exists for assistive tech, so
    the page has exactly one h1 like every other screen. *@
-<h1 class="visually-hidden">Desk — @selectedName</h1>
+<div class="page-head"><div><h1>Candidates</h1><p>Review a strategy run, or explore your source symbols.</p></div></div>
+<div class="view-switch" role="group" aria-label="Candidate view">
+    <button type="button" data-desk-view="candidates" aria-pressed="true">Strategy candidates</button>
+    <button type="button" data-desk-view="market" aria-pressed="false">Market explorer</button>
+</div>
+<div data-desk-panel="candidates"><partial name="_CandidateWorkflow" /></div>
+<div data-desk-panel="market" hidden>
 <div id="DeskConnectionAnnouncement" class="visually-hidden" role="status" aria-live="polite"></div>
 
 @if (!String.IsNullOrWhiteSpace(Model.StatusMessage))
@@ -136,11 +142,11 @@
     @* Account-wide, not scoped to the view: the operator's whole book should be
        one glance away whichever list or screener is on screen. *@
     <div data-desk-portfolio>
-        <span class="micro-label">Portfolio · @portfolio.Positions open</span>
-        <span class="metric-value">@Money(portfolio.MarketValue)</span>
+        <span class="micro-label">Portfolio · @(Model.Account.Available ? Model.Account.Holdings.Count + " open" : "unavailable")</span>
+        <span class="metric-value">@Money(Model.Account.Available ? portfolio.MarketValue : null)</span>
         <span class="metric-detail">
-            cost @Money(portfolio.CostBasis) ·
-            <span class="@SignedClass(portfolio.UnrealizedPl)">@SignedMoney(portfolio.UnrealizedPl) (@SignedPercent(portfolio.UnrealizedPlPct))</span>
+            cost @Money(Model.Account.Available ? portfolio.CostBasis : null) ·
+            <span class="@SignedClass(portfolio.UnrealizedPl)">@SignedMoney(Model.Account.Available ? portfolio.UnrealizedPl : null) (@SignedPercent(Model.Account.Available ? portfolio.UnrealizedPlPct : null))</span>
         </span>
     </div>
     <div>
@@ -338,7 +344,7 @@ else if (Model.IsScreenerScope)
    unknown and never blocks the desk.
    =========================================================================== *@
 <section class="desk-prep-band @(prep.Available ? null : "is-error")" aria-labelledby="DeskPrepHeading" data-desk-preparation>
-    <h2 id="DeskPrepHeading" class="desk-prep-title">Preparation</h2>
+    <h2 id="DeskPrepHeading" class="desk-prep-title">Market-data warmup</h2>
     <span class="desk-prep-session" title="@status.MarketSessionDetail">Session · @status.MarketSession</span>
     @if (prep.Available)
     {
@@ -366,7 +372,7 @@ else if (Model.IsScreenerScope)
     {
         <span class="desk-prep-counts">@prep.Error</span>
     }
-    <a class="btn btn-secondary btn-md" asp-page="/Warmup">Preparation details</a>
+    <a class="btn btn-secondary btn-md" asp-page="/Warmup">Warmup details</a>
 </section>
 
 @* ===========================================================================
@@ -820,7 +826,7 @@ else if (Model.IsScreenerScope)
                 <div class="desk-rail-membership">
                     <span class="cell-label">Lists</span>
                     <span>@ListsText(row.Lists)</span>
-                    <span class="cell-label">Preparation</span>
+                    <span class="cell-label">Warmup</span>
                     <span class="desk-rail-prep">
                         <span class="@railPrep.CssClass" title="@railPrep.Detail">@railPrep.Label</span>
                         @if (Model.Preparation.Available && railPrep.NeedsPreparation)
@@ -851,17 +857,7 @@ else if (Model.IsScreenerScope)
             <partial name="_DeskEvidencePair" model="new DeskEvidenceModel(selected, true)" />
             <partial name="_DeskAgreementBand" model="selected" />
 
-            var preview = Model.TicketPreview;
-            var hasPosition = row.Trade is not null;
-            var ticketRoute = Model.RouteWith(("ticker", selected.Ticker));
-            <partial name="_DeskOrderTicket" model="new DeskTicketModel(
-                row,
-                Model.Env,
-                Model.DeskHorizon,
-                Model.TicketPlan,
-                hasPosition,
-                preview,
-                Model.TicketConfirmation) { ViewRoute = ticketRoute }" />
+            <section class="desk-rail-block"><h2 class="section-heading">Reviewed order</h2><partial name="_OrderWorkflow" /></section>
         }
 
         <section class="desk-rail-block desk-rail-news" aria-labelledby="DeskNewsHeading"
@@ -905,8 +901,10 @@ else if (Model.IsScreenerScope)
     </aside>
 </section>
 
+</div>
 @section Scripts {
+    <script src="~/js/candidate-workflow.js" asp-append-version="true" defer></script>
     <script type="module" src="~/js/trading-flow-desk.js" asp-append-version="true"></script>
     <script src="~/js/desk-layout.js" asp-append-version="true" defer></script>
-    <script src="~/js/desk-ticket.js" asp-append-version="true" defer></script>
+    <script src="~/js/order-workflow.js" asp-append-version="true" defer></script>
 }

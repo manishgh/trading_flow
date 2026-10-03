@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -87,6 +88,26 @@ public sealed class AlpacaQuoteServiceTests
                     "\"prevDailyBar\":{\"t\":\"2026-09-28T04:00:00Z\",\"c\":100}}}")
             });
         }
+    }
+
+    [Fact]
+    public async Task ProductionRegistration_ResolvesAbsoluteProviderRequest()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(new AlpacaCredentialProvider(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> {
+                ["Alpaca:KeyId"] = "test-key", ["Alpaca:SecretKey"] = "test-secret"
+            }).Build()));
+        services.AddAlpacaQuotes();
+        services.AddHttpClient(AlpacaQuoteService.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new InvalidSymbolQuoteHandler());
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<IHttpClientFactory>();
+        Assert.Equal("https://data.alpaca.markets/", factory.CreateClient(AlpacaQuoteService.HttpClientName).BaseAddress!.AbsoluteUri);
+        var result = await provider.GetRequiredService<AlpacaQuoteService>()
+            .GetLatestQuotesAsync(["RGTI"], "sip", CancellationToken.None);
+        Assert.Equal(16.23m, result["RGTI"].BidPrice);
     }
 
     private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory

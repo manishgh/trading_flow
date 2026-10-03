@@ -52,9 +52,32 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
     public DbSet<ApplicationEventRecord> ApplicationEvents => Set<ApplicationEventRecord>();
     public DbSet<OrderPreviewRecord> OrderPreviews => Set<OrderPreviewRecord>();
 
+    public DbSet<TradingFlow.Domain.Preparation.PreparationDefinitionRecord> PreparationDefinitions => Set<TradingFlow.Domain.Preparation.PreparationDefinitionRecord>();
+    public DbSet<TradingFlow.Domain.Preparation.PreparationOccurrenceRecord> PreparationOccurrences => Set<TradingFlow.Domain.Preparation.PreparationOccurrenceRecord>();
+    public DbSet<TradingFlow.Domain.Preparation.PreparationReviewRecord> PreparationReviews => Set<TradingFlow.Domain.Preparation.PreparationReviewRecord>();
+
+    public DbSet<TradingFlow.Domain.Preparation.PreparationScheduleCursor> PreparationScheduleCursors => Set<TradingFlow.Domain.Preparation.PreparationScheduleCursor>();
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<TradingFlow.Domain.Preparation.PreparationScheduleCursor>(e=>{e.ToTable("preparation_schedule_cursors");e.HasKey(x=>x.WorkflowId);});
+        modelBuilder.Entity<TradingFlow.Domain.Preparation.PreparationDefinitionRecord>(e => {
+            e.ToTable("preparation_definitions"); e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.WorkflowId, x.Revision }).IsUnique();
+            e.HasIndex(x => x.OwnerId);
+        });
+        modelBuilder.Entity<TradingFlow.Domain.Preparation.PreparationOccurrenceRecord>(e => {
+            e.ToTable("preparation_occurrences"); e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.WorkflowId, x.SlotKey }).IsUnique();
+            e.HasOne<TradingFlow.Domain.Preparation.PreparationDefinitionRecord>().WithMany().HasForeignKey(x => x.DefinitionId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<TradingFlow.Domain.Preparation.PreparationReviewRecord>(e => {
+            e.ToTable("preparation_reviews"); e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.OwnerId, x.IdempotencyKey }).IsUnique();
+            e.HasIndex(x => x.WishlistId).IsUnique();
+            e.HasOne<TradingFlow.Domain.Preparation.PreparationOccurrenceRecord>().WithMany().HasForeignKey(x => x.OccurrenceId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Wishlist>().WithMany().HasForeignKey(x => x.WishlistId).OnDelete(DeleteBehavior.Restrict);
+        });
 
         modelBuilder.Entity<TradingFlowUser>(entity =>
         {

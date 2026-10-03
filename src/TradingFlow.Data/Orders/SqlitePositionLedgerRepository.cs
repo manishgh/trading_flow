@@ -81,6 +81,7 @@ public sealed class SqlitePositionLedgerRepository(
                 CodeVersion = request.Run.CodeVersion
             };
             context.PositionEvents.Add(record);
+            await CandidateProjectionEvents.AppendPositionAsync(context, record, previous, cancellationToken);
             await UpdatePositionBackedRiskAsync(
                 context,
                 request,

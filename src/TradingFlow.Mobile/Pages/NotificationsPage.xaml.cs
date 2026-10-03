@@ -64,6 +64,7 @@ public partial class NotificationsPage : ContentPage
             var orders = await ordersTask ?? Array.Empty<MobileOrderActivityResponse>();
 
             allRows = notifications.Select(ActivityRow.FromNotification)
+                .Concat(CandidateAlertHistory.Read().Where(item => item.Backend == AppServices.Api.BaseUrl).Select(ActivityRow.FromCandidate))
                 .Concat(signals.Select(ActivityRow.FromSignal))
                 .Concat(orders.Select(ActivityRow.FromOrder))
                 .OrderByDescending(item => item.Timestamp)
@@ -134,6 +135,13 @@ public partial class NotificationsPage : ContentPage
         OrdersButton.BackgroundColor = selectedFilter == "order" ? NeutralAccentColor : InactiveColor;
     }
 
+    private async void OnOpenCandidate(object? sender, EventArgs e)
+    {
+        if (sender is not Button { CommandParameter: ActivityRow { Candidate: { } link } }) return;
+        CandidateNavigation.Pending = link;
+        try { await CandidateNavigation.OpenPendingAsync(); }
+        catch (Exception exception) { StatusLabel.Text = exception.Message; }
+    }
     private async void OnOpenNews(object? sender, EventArgs e)
     {
         if (sender is Button { CommandParameter: ActivityRow row } && row.HasNewsLink)
@@ -150,8 +158,12 @@ public partial class NotificationsPage : ContentPage
         string Message,
         string Context,
         string? NewsUrl,
-        Color AccentColor)
+        Color AccentColor, CandidateLink? Candidate = null)
     {
+        public bool HasCandidate => Candidate is not null;
+        public static ActivityRow FromCandidate(CandidateAlert item) => new(
+            "signal", item.Timestamp, "CANDIDATE", item.Symbol, item.Message,
+            "Exact candidate and attached evidence", null, SignalColor, item.Link);
         public string DisplayTimestamp => Timestamp.LocalDateTime.ToString("dd/MM HH:mm");
         public bool HasContext => !String.IsNullOrWhiteSpace(Context);
         public bool HasNewsLink => Uri.TryCreate(NewsUrl, UriKind.Absolute, out var uri) &&

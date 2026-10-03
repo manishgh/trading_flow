@@ -15,14 +15,16 @@
   // Static screen registry. Labels match the primary navigation so what an
   // operator reads in the top bar is what they can type.
   var SCREENS = [
-    { label: "Desk", hint: "Watchlist, quotes and decisions", path: "/TradeDesk" },
+    { label: "Candidates", hint: "Watchlist, quotes and decisions", path: "/TradeDesk" },
     { label: "Positions", hint: "Running trades and open risk", path: "/RunningTrades" },
     { label: "Orders", hint: "Working and completed orders", path: "/Orders" },
     { label: "News", hint: "Catalyst feed", path: "/News" },
     { label: "Earnings", hint: "Reporting calendar and surprises", path: "/Earnings" },
     { label: "Research", hint: "Backtests and optimisation runs", path: "/Backtests" },
-    { label: "Operations", hint: "Paper trading lab", path: "/Paper" },
-    { label: "Wishlists", hint: "Symbol groups and universes", path: "/Wishlists" },
+    { label: "System health", hint: "Connections and entry restrictions", path: "/Operations" },
+    { label: "Daily review", hint: "Workspace preparation results", path: "/Preparation" },
+    { label: "Paper runs", hint: "Trading run setup and monitoring", path: "/Paper" },
+    { label: "Sources", hint: "Symbol groups and universes", path: "/Wishlists" },
     { label: "Warmup", hint: "Indicator warm-up service", path: "/Warmup" }
   ];
 

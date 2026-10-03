@@ -53,7 +53,7 @@ public sealed class LoginModel(SignInManager<TradingFlowUser> signInManager) : P
     private string ResolveReturnUrl() =>
         !String.IsNullOrWhiteSpace(ReturnUrl) && Url.IsLocalUrl(ReturnUrl)
             ? ReturnUrl
-            : Url.Page("/TradeDesk")!;
+            : Url.Page("/Desk")!;
 
     public sealed class LoginInput
     {

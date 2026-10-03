@@ -29,6 +29,7 @@ Generated run artifacts and local databases are not documentation.
 
 - [Local Authentication](local-authentication.md)
 - [Candle And News Pipeline Audit](candle-news-pipeline-audit.md)
+- [Configurable Swing Preparation Workflow (proposal)](swing-preparation-workflow.md)
 - [Warm-Up Policy](warmup-policy.md)
 - [Warm-Up Service](warmup-service.md)
 - [Earnings Calendar And Reaction Monitor](earnings-calendar.md)
@@ -56,3 +57,6 @@ Generated run artifacts and local databases are not documentation.
 - [Azure Kubernetes Service Deployment](azure-aks-deployment.md)
 - [Azure Production AKS Plan](azure-production-aks-plan.md)
 - [Azure Deployment Pointer](azure-deployment.md)
+
+- [Shared application workflows](application-workflows.md)
+- [Workflow integration verification](verification/workflow-integration-closure.md)

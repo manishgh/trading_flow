@@ -21,10 +21,10 @@ public sealed class TradeDeskModel : PageModel
     private readonly UniverseRankService ranking;
     private readonly ScreenerSyncService screener;
     private readonly ScreenerPresetService screenerPresets;
-    private readonly ManualOrderTicketService tickets;
     private readonly TradingEnvironmentService environments;
     private readonly DeskPreparationService preparation;
-    private readonly DeskTicketPlanService ticketPlans;
+    private readonly TradingFlow.Web.Services.Desk.IDeskAccountReader accountReader;
+    private readonly TradingFlow.Web.Services.Desk.DeskSources sources;
 
     public TradeDeskModel(
         IWishlistRepository repository,
@@ -35,12 +35,12 @@ public sealed class TradeDeskModel : PageModel
         UniverseRankService ranking,
         ScreenerSyncService screener,
         ScreenerPresetService screenerPresets,
-        ManualOrderTicketService tickets,
+        TradingFlow.Web.Services.Desk.DeskSources sources,
         TradingEnvironmentService environments,
         DeskPreparationService preparation,
-        DeskTicketPlanService ticketPlans)
+        TradingFlow.Web.Services.Desk.IDeskAccountReader accountReader)
     {
-        this.ticketPlans = ticketPlans;
+        this.accountReader = accountReader;
         this.environments = environments;
         this.preparation = preparation;
         this.repository = repository;
@@ -51,7 +51,7 @@ public sealed class TradeDeskModel : PageModel
         this.ranking = ranking;
         this.screener = screener;
         this.screenerPresets = screenerPresets;
-        this.tickets = tickets;
+        this.sources = sources;
     }
 
     /// <summary>Environment this screen is operating against, from the route segment.</summary>
@@ -115,6 +115,7 @@ public sealed class TradeDeskModel : PageModel
     public DeskUniverse Universe { get; private set; } = DeskUniverse.Empty;
 
     /// <summary>Totals over every open position, independent of the view.</summary>
+    public TradingFlow.Web.Services.Desk.DeskAccount Account { get; private set; } = new(false, "Account not read", DateTimeOffset.UtcNow, []);
     public DeskPortfolioSummary Portfolio { get; private set; } = DeskPortfolioSummary.Empty;
 
     /// <summary>Warmup-service preparation state for every symbol on the desk.</summary>
@@ -155,21 +156,6 @@ public sealed class TradeDeskModel : PageModel
     public IReadOnlyList<TradingFlow.Domain.Wishlists.ScreenerPreset> ScreenerPresets { get; private set; } = [];
     public UniverseRankConfig RankConfig { get; private set; } = UniverseRankConfig.Default;
 
-    /// <summary>
-    /// Live ticket preview for the selected symbol, populated by the preview post.
-    /// Null on a plain GET: the checklist states what the server checked, so it
-    /// cannot be rendered before the server has checked anything.
-    /// </summary>
-    public ManualOrderTicketPreview? TicketPreview { get; private set; }
-
-    public ManualOrderTicketConfirmation? TicketConfirmation { get; private set; }
-
-    /// <summary>
-    /// Opening limit, stop and target for the selected symbol, from the selected
-    /// strategy's own rules on live market state. Empty values carry a reason.
-    /// </summary>
-    public DeskTicketPlan TicketPlan { get; private set; } =
-        DeskTicketPlan.Unavailable(null, "No symbol selected.", null);
 
     public OperationalStatusSnapshot OperationalStatus { get; private set; } = new(
         "UNKNOWN", "unknown", "Status has not loaded.", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
@@ -328,56 +314,6 @@ public sealed class TradeDeskModel : PageModel
         return RedirectToPage("/TradeDesk", RouteWith());
     }
 
-    /// <summary>
-    /// Stage one of the inline ticket. The server checks quote, spread, session,
-    /// account, exposure and duplicates and returns what it found; the checklist
-    /// renders that response rather than recomputing it client-side.
-    /// </summary>
-    public async Task OnPostPreviewTicketAsync(
-        [FromForm] DeskTicketForm ticket,
-        CancellationToken cancellationToken)
-    {
-        await LoadAsync(cancellationToken);
-        if (!EnvironmentState.IsEnabled)
-        {
-            ErrorMessage = EnvironmentState.LockReason;
-            return;
-        }
-
-        try
-        {
-            TicketPreview = await tickets.PreviewAsync(ticket.ToDraft(), cancellationToken);
-        }
-        catch (InvalidOperationException exception)
-        {
-            ErrorMessage = exception.Message;
-        }
-    }
-
-    /// <summary>
-    /// Stage two. The token is what the server issued at preview; posting without
-    /// one, or with an expired one, fails closed at the service.
-    /// </summary>
-    public async Task OnPostConfirmTicketAsync(string? ticketToken, CancellationToken cancellationToken)
-    {
-        await LoadAsync(cancellationToken);
-        if (!EnvironmentState.IsEnabled)
-        {
-            ErrorMessage = EnvironmentState.LockReason;
-            return;
-        }
-
-        try
-        {
-            TicketConfirmation = await tickets.ConfirmAsync(ticketToken ?? String.Empty, cancellationToken);
-            StatusMessage = $"Paper order accepted for {TicketConfirmation.Ticker}.";
-        }
-        catch (InvalidOperationException exception)
-        {
-            ErrorMessage = exception.Message;
-        }
-    }
-
     private async Task LoadAsync(CancellationToken cancellationToken)
     {
         Strategies = await catalog.GetStrategiesAsync(
@@ -388,7 +324,7 @@ public sealed class TradeDeskModel : PageModel
         SelectedStrategyId = ResolveStrategyId();
         SelectedPaperConfigPath = ResolvePaperConfigPath();
         RankConfig = ResolveRankConfig();
-        Wishlists = await repository.ListAsync(cancellationToken);
+        Wishlists = await sources.FollowedListsAsync(cancellationToken);
         Scope = IsScreenerScope ? "screener" : "lists";
         SelectedWishlist = Id.HasValue
             ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == Id.Value)
@@ -427,7 +363,10 @@ public sealed class TradeDeskModel : PageModel
             snapshot.Rows.Select(row => row.Ticker).ToArray(),
             cancellationToken);
 
-        Portfolio = snapshot.Portfolio;
+        Account = await accountReader.ReadAsync(cancellationToken);
+        var summary = TradingFlow.Web.Services.Desk.DeskAccountSummary.Summarize(Account);
+        if (summary is not null) Portfolio = summary;
+        else Account = Account with { Available = false };
         RunningTrades = snapshot.RunningTrades;
         TotalPl = snapshot.TotalPl;
         RecentSignals = snapshot.RecentSignals;
@@ -491,19 +430,6 @@ public sealed class TradeDeskModel : PageModel
             OperationalStatus = await operationalStatusTask;
             SymbolIntelligence = await symbolIntelligenceTask;
 
-            var profile = catalog.GetPaperConfigs()
-                .FirstOrDefault(config => config.Path.Equals(SelectedPaperConfigPath, StringComparison.OrdinalIgnoreCase));
-            var strategy = Strategies.FirstOrDefault(option =>
-                option.Definition.StrategyId.Equals(SelectedStrategyId, StringComparison.OrdinalIgnoreCase))?.Definition;
-            TicketPlan = await ticketPlans.PlanAsync(
-                strategy,
-                SelectedRow.Ticker,
-                SelectedRow.Row.Quote.AskPrice,
-                SelectedRow.Row.Quote.MidPrice,
-                limitOverride: null,
-                profile?.Config.Engine.IndicatorWarmupBars ?? 0,
-                DeskTicketPlanService.RiskBudget(OperationalStatus.Equity, profile?.Config.Portfolio.AccountRiskBudgetPct),
-                cancellationToken);
         }
     }
 

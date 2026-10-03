@@ -3,9 +3,11 @@ using System.Text;
 using System.Text.Json;
 using TradingFlow.Application.Candidates;
 using TradingFlow.Contracts.V1;
+using TradingFlow.Data.Identity;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Execution;
 
 namespace TradingFlow.Web.Services;
 
@@ -17,403 +19,282 @@ public interface IOrderWorkflowService
     Task<OrderCommandResponse> CloseAsync(ClosePositionRequest request, CancellationToken cancellationToken = default);
 }
 
-/// <summary>
-/// Durable API-facing order workflow. The existing broker gateway still owns
-/// Alpaca-specific validation and submission, while this service owns immutable
-/// preview binding, candidate/strategy revalidation and idempotent confirmation.
-/// </summary>
+/// <summary>Durable review/command orchestration; broker admission remains in the shared engine.</summary>
 public sealed class OrderWorkflowService(
     ManualOrderTicketService tickets,
-    AlpacaManualOrderService broker,
+    IReviewedOrderBroker broker,
     ICandidateRepository candidates,
     IUniversePreviewRepository universes,
     IStrategyIdentityResolver strategies,
     IOrderPreviewRepository previews,
     IOrderIntentRepository intents,
     IOrderEventRepository orderEvents,
-    TradingFlow.Engine.Execution.BrokerAccountBindingOptions accountBinding,
+    BrokerAccountBindingOptions accountBinding,
+    IHttpContextAccessor operatorContext,
     TimeProvider timeProvider) : IOrderWorkflowService
 {
     private static readonly TimeSpan ConfirmationLease = TimeSpan.FromSeconds(20);
 
-    public async Task<OrderPreviewResponse> PreviewAsync(
-        PreviewOrderRequest request,
-        CancellationToken cancellationToken = default)
+    public async Task<OrderPreviewResponse> PreviewAsync(PreviewOrderRequest request, CancellationToken cancellationToken = default)
     {
         ValidateRequest(request);
-        await ValidateBindingsAsync(request, timeProvider.GetUtcNow(), cancellationToken);
-        var manual = await tickets.PreviewAsync(new ManualOrderDraft(
-            request.Symbol,
-            request.Side,
-            request.Quantity,
-            request.LimitPrice ?? 0m,
-            request.StopLossPrice,
-            request.TakeProfitPrice,
-            "swing",
-            request.AllowExtendedHoursTrading,
-            OrderType: request.OrderType,
-            TimeInForce: request.TimeInForce), cancellationToken);
-        if (!manual.CanSubmit || String.IsNullOrWhiteSpace(manual.TicketToken))
-        {
-            throw new InvalidOperationException(String.Join("; ", manual.Rejections));
-        }
-
-        var quoteIdentity = $"sip:{manual.Ticker}:{manual.QuoteTimestampUtc?.UtcTicks}:{manual.BidPrice}:{manual.AskPrice}";
-        var riskVersion = Sha256(JsonSerializer.Serialize(new
-        {
-            manual.Environment,
-            manual.Notional,
-            manual.StopLossPrice,
-            manual.TakeProfitPrice,
-            manual.Session
-        }));
-        var response = new OrderPreviewResponse(
-            ContractVersions.VersionOne,
-            manual.TicketId,
-            manual.TicketToken,
-            manual.CreatedAtUtc,
-            manual.ExpiresAtUtc,
-            request.AccountId,
-            request.CandidateId,
-            request.CandidateVersion,
-            request.UniverseSnapshotId,
-            request.Strategy,
-            manual.Ticker,
-            manual.Side,
-            manual.Quantity,
-            manual.OrderType,
-            manual.TimeInForce.ToLowerInvariant(),
-            request.LimitPrice,
-            request.StopLossPrice,
-            request.TakeProfitPrice,
-            manual.Notional,
-            Math.Abs((request.LimitPrice ?? manual.LimitPrice) - request.StopLossPrice) * request.Quantity,
-            quoteIdentity,
-            manual.QuoteTimestampUtc ?? throw new InvalidOperationException("Preview quote timestamp is required."),
-            riskVersion,
-            request.ExecutionPolicy,
-            request.IdempotencyKey,
-            []);
+        request = request with { Symbol = request.Symbol.Trim().ToUpperInvariant(), IdempotencyKey = request.IdempotencyKey.Trim(),
+            Strategy = request.Strategy with { ContentSha256 = request.Strategy.ContentSha256.ToLowerInvariant() } };
+        RequireAccount(request.AccountId);
+        RequirePolicy(request.ExecutionPolicy);
         var requestJson = JsonSerializer.Serialize(request);
-        var stored = await previews.SaveAsync(new OrderPreviewRecord
+        var existing = await previews.FindByKeyAsync(request.IdempotencyKey, cancellationToken);
+        if (existing is not null)
         {
-            PreviewId = response.PreviewId,
-            TokenSha256 = Sha256(response.PreviewToken),
-            RequestSha256 = Sha256(requestJson),
-            IdempotencyKey = request.IdempotencyKey,
-            CreatedAtUtc = response.CreatedAtUtc,
-            ExpiresAtUtc = response.ExpiresAtUtc,
-            Status = "previewed",
-            RequestJson = requestJson,
-            PreviewJson = JsonSerializer.Serialize(response),
-            Version = 0
+            RequireSameRequest(existing, requestJson);
+            return Read<OrderPreviewResponse>(existing.PreviewJson);
+        }
+        await ValidateBindingsAsync(request, cancellationToken);
+        var draft = new ManualOrderDraft(request.Symbol, request.Side, request.Quantity, request.LimitPrice!.Value,
+            request.StopLossPrice, request.TakeProfitPrice, "swing", request.AllowExtendedHoursTrading);
+        var manual = await tickets.PreviewWorkflowAsync(draft, request.ExecutionPolicy == "strategy_validated", Sha256(requestJson), cancellationToken);
+        if (!manual.CanSubmit || String.IsNullOrWhiteSpace(manual.TicketToken) || manual.QuoteTimestampUtc is null)
+            throw new InvalidOperationException(String.Join("; ", manual.Rejections));
+        var response = new OrderPreviewResponse(ContractVersions.VersionOne, manual.TicketId, manual.TicketToken,
+            manual.CreatedAtUtc, manual.ExpiresAtUtc, request.AccountId, request.CandidateId, request.CandidateVersion,
+            request.UniverseSnapshotId, request.Strategy, request.Symbol, "buy", request.Quantity, "limit", "day",
+            request.LimitPrice, request.StopLossPrice, request.TakeProfitPrice, manual.Notional,
+            (request.LimitPrice.Value - request.StopLossPrice) * request.Quantity,
+            Sha256(JsonSerializer.Serialize(new { feed = "sip", request.Symbol, manual.QuoteTimestampUtc, manual.BidPrice, manual.AskPrice })),
+            manual.QuoteTimestampUtc.Value, manual.RiskSnapshotSha256, request.ExecutionPolicy, request.IdempotencyKey, []);
+        var saved = await previews.SaveAsync(new OrderPreviewRecord
+        {
+            PreviewId = response.PreviewId, TokenSha256 = Sha256(response.PreviewToken), RequestSha256 = Sha256(requestJson),
+            IdempotencyKey = request.IdempotencyKey, CreatedAtUtc = response.CreatedAtUtc, ExpiresAtUtc = response.ExpiresAtUtc,
+            Status = "previewed", RequestJson = requestJson, PreviewJson = JsonSerializer.Serialize(response)
         }, cancellationToken);
-        return JsonSerializer.Deserialize<OrderPreviewResponse>(stored.PreviewJson)
-            ?? throw new InvalidOperationException("Persisted order preview could not be decoded.");
+        return Read<OrderPreviewResponse>(saved.PreviewJson);
     }
 
-    public async Task<OrderCommandResponse> ConfirmAsync(
-        ConfirmOrderRequest request,
-        CancellationToken cancellationToken = default)
+    public async Task<OrderCommandResponse> ConfirmAsync(ConfirmOrderRequest request, CancellationToken cancellationToken = default)
     {
-        if (!String.Equals(request.ContractVersion, ContractVersions.VersionOne, StringComparison.Ordinal) ||
-            String.IsNullOrWhiteSpace(request.PreviewToken) || String.IsNullOrWhiteSpace(request.IdempotencyKey))
-        {
-            throw new InvalidOperationException("Contract version, preview token and idempotency key are required.");
-        }
+        RequireCommand(request.ContractVersion, request.IdempotencyKey);
+        if (String.IsNullOrWhiteSpace(request.PreviewToken)) throw new InvalidOperationException("Preview token is required.");
         var tokenHash = Sha256(request.PreviewToken);
-        var claim = await previews.ClaimConfirmationAsync(
-            tokenHash,
-            request.IdempotencyKey,
-            timeProvider.GetUtcNow(),
-            ConfirmationLease,
-            cancellationToken);
+        var stored = await previews.GetByTokenHashAsync(tokenHash, cancellationToken)
+            ?? throw new InvalidOperationException("Order preview was not found.");
+        var bound = Read<PreviewOrderRequest>(stored.RequestJson);
+        RequireSameRequest(stored, JsonSerializer.Serialize(bound));
+        RequireAccount(bound.AccountId);
+        RequirePolicy(bound.ExecutionPolicy); // Reauthorize at confirmation, including retries.
+        var review = Read<OrderPreviewResponse>(stored.PreviewJson);
+        if (Sha256(review.PreviewToken) != stored.TokenSha256 || review.PreviewId != stored.PreviewId ||
+            review.ExpiresAtUtc != stored.ExpiresAtUtc || review.AccountId != bound.AccountId ||
+            review.ExecutionPolicy != bound.ExecutionPolicy || review.IdempotencyKey != bound.IdempotencyKey)
+            throw new InvalidOperationException("Order preview integrity failed.");
+        var claim = await previews.ClaimConfirmationAsync(tokenHash, request.IdempotencyKey.Trim(), timeProvider.GetUtcNow(), ConfirmationLease, cancellationToken);
         if (!claim.OwnsConfirmation)
-        {
-            return await ReadFinalOutcomeAsync(tokenHash, cancellationToken);
-        }
-
-        var previewRequest = JsonSerializer.Deserialize<PreviewOrderRequest>(claim.Preview.RequestJson)
-            ?? throw new InvalidOperationException("Persisted order preview request is invalid.");
-        if (!Sha256(claim.Preview.RequestJson).Equals(claim.Preview.RequestSha256, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Persisted order preview request failed integrity validation.");
-        }
+            return await ExistingOutcomeAsync(claim.Preview, bound.AccountId, bound.Symbol, "buy", bound.Quantity, cancellationToken);
+        var submitted = false;
         try
         {
-            await ValidateBindingsAsync(previewRequest, timeProvider.GetUtcNow(), cancellationToken);
-            var submitted = await tickets.ConfirmAsync(request.PreviewToken, cancellationToken);
-            var now = timeProvider.GetUtcNow();
-            var outcome = new OrderCommandResponse(
-                ContractVersions.VersionOne,
-                claim.Preview.PreviewId,
-                claim.Preview.PreviewId.ToString("N"),
-                submitted.OrderId,
-                "acknowledged",
-                previewRequest.AccountId,
-                submitted.Ticker,
-                submitted.Side,
-                submitted.Quantity,
-                null,
-                null,
-                claim.Preview.CreatedAtUtc,
-                now,
-                previewRequest.IdempotencyKey,
-                null,
-                null);
-            await previews.CompleteAsync(
-                claim.Preview.PreviewId,
-                claim.LeaseToken!.Value,
-                "confirmed",
-                JsonSerializer.Serialize(outcome),
-                now,
-                cancellationToken);
-            return outcome;
+            if (stored.ExpiresAtUtc <= timeProvider.GetUtcNow()) throw new InvalidOperationException("Order preview expired; review again.");
+            var binding = await ValidateBindingsAsync(bound, cancellationToken);
+            await tickets.RevalidateWorkflowAsync(request.PreviewToken, bound.ExecutionPolicy == "strategy_validated", stored.RequestSha256, review.RiskSnapshotVersion, cancellationToken);
+            // EntryGateChain then rechecks candidate version, strategy authorization,
+            // quote, account and portfolio risk before atomic reservation/consumption.
+            if (!await previews.TryBeginSubmissionAsync(stored.PreviewId, claim.LeaseToken!.Value, timeProvider.GetUtcNow(), cancellationToken))
+                return await ExistingOutcomeAsync(claim.Preview, bound.AccountId, bound.Symbol, "buy", bound.Quantity, cancellationToken);
+            submitted = true;
+            if (bound.ExecutionPolicy == "strategy_validated")
+                await broker.SubmitStrategyEntryAsync(bound, stored.PreviewId, binding.Candidate!, binding.Run!, cancellationToken);
+            else
+                await broker.SubmitLimitOrderAsync(bound.Symbol, "buy", bound.Quantity, bound.LimitPrice!.Value, bound.StopLossPrice,
+                    bound.TakeProfitPrice, "swing", cancellationToken, bound.AllowExtendedHoursTrading, stored.PreviewId);
+            return await ExistingOutcomeAsync(claim.Preview, bound.AccountId, bound.Symbol, "buy", bound.Quantity, cancellationToken);
         }
-        catch (InvalidOperationException exception)
+        catch (Exception exception) when (exception is InvalidOperationException or UnauthorizedAccessException)
         {
-            var now = timeProvider.GetUtcNow();
-            var rejected = new OrderCommandResponse(
-                ContractVersions.VersionOne,
-                claim.Preview.PreviewId,
-                claim.Preview.PreviewId.ToString("N"),
-                null,
-                "rejected",
-                previewRequest.AccountId,
-                previewRequest.Symbol,
-                previewRequest.Side,
-                previewRequest.Quantity,
-                null,
-                null,
-                claim.Preview.CreatedAtUtc,
-                now,
-                previewRequest.IdempotencyKey,
-                "preview_revalidation_failed",
-                exception.Message);
-            await previews.CompleteAsync(
-                claim.Preview.PreviewId,
-                claim.LeaseToken!.Value,
-                "rejected",
-                JsonSerializer.Serialize(rejected),
-                now,
-                cancellationToken);
-            return rejected;
+            if (submitted && exception is not EntryGateRejectedException)
+                return await ExistingOutcomeAsync(claim.Preview, bound.AccountId, bound.Symbol, "buy", bound.Quantity, cancellationToken);
+            return await FinishAsync(claim.Preview, Rejected(stored, bound.AccountId, bound.Symbol, "buy", bound.Quantity,
+                "preview_revalidation_failed", exception.Message), cancellationToken);
         }
+        // Cancellation/transport exceptions leave confirming intact for reconciliation.
     }
 
-    public async Task<OrderCommandResponse> CancelAsync(
-        CancelOrderRequest request,
-        CancellationToken cancellationToken = default)
+    public async Task<OrderCommandResponse> CancelAsync(CancelOrderRequest request, CancellationToken cancellationToken = default)
     {
-        var intent = await intents.GetByIntentIdAsync(request.OrderIntentId, cancellationToken)
-            ?? throw new InvalidOperationException("Order intent was not found.");
-        if (!intent.AccountId.Equals(request.AccountId, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Order intent belongs to a different broker account.");
-        }
-        var current = await orderEvents.GetCurrentAsync(intent.ClientOrderId, cancellationToken)
-            ?? throw new InvalidOperationException("Order state was not found.");
+        RequireCommand(request.ContractVersion, request.IdempotencyKey);
+        RequireAccount(request.AccountId);
+        if (request.OrderIntentId == Guid.Empty || String.IsNullOrWhiteSpace(request.Reason)) throw new InvalidOperationException("Order and cancellation reason are required.");
+        request = request with { IdempotencyKey = request.IdempotencyKey.Trim() };
+        var intent = await intents.GetByIntentIdAsync(request.OrderIntentId, cancellationToken) ?? throw new InvalidOperationException("Order intent was not found.");
+        if (intent.AccountId != request.AccountId) throw new InvalidOperationException("Order belongs to another account.");
+        var claim = await BeginCommandAsync(request.IdempotencyKey, JsonSerializer.Serialize(request), cancellationToken);
+        if (claim.Preview.OutcomeJson is not null) return Read<OrderCommandResponse>(claim.Preview.OutcomeJson);
+        var current = await orderEvents.GetCurrentAsync(intent.ClientOrderId, cancellationToken) ?? throw new InvalidOperationException("Order state is unavailable.");
+        if (OrderStateMachine.IsTerminal(current.State)) return await FinishAsync(claim.Preview, ToCommand(intent, current, request.IdempotencyKey), cancellationToken);
+        if (!claim.OwnsConfirmation) return Pending(claim.Preview, intent.AccountId, intent.Symbol, intent.Side, intent.RequestedQuantity);
+        if (claim.Preview.ExpiresAtUtc <= timeProvider.GetUtcNow())
+            return await FinishAsync(claim.Preview, Rejected(claim.Preview, intent.AccountId, intent.Symbol, intent.Side, intent.RequestedQuantity,
+                "command_expired", "Undispatched cancellation expired. Review and issue a new command."), cancellationToken);
         if (String.IsNullOrWhiteSpace(current.BrokerOrderId))
-        {
-            throw new InvalidOperationException("Order has no broker identity to cancel.");
-        }
+            return await FinishAsync(claim.Preview, Rejected(claim.Preview, intent.AccountId, intent.Symbol, intent.Side, intent.RequestedQuantity,
+                "broker_identity_missing", "Order has no broker identity to cancel."), cancellationToken);
+        if (!await previews.TryBeginSubmissionAsync(claim.Preview.PreviewId, claim.LeaseToken!.Value, timeProvider.GetUtcNow(), cancellationToken))
+            return Pending(claim.Preview, intent.AccountId, intent.Symbol, intent.Side, intent.RequestedQuantity);
         await broker.CancelOrderAsync(current.BrokerOrderId, cancellationToken);
-        var updated = await orderEvents.GetCurrentAsync(intent.ClientOrderId, cancellationToken) ?? current;
-        return ToCommand(intent, updated, request.IdempotencyKey);
+        current = await orderEvents.GetCurrentAsync(intent.ClientOrderId, cancellationToken) ?? current;
+        return await FinishAsync(claim.Preview, ToCommand(intent, current, request.IdempotencyKey), cancellationToken);
     }
 
-    public async Task<OrderCommandResponse> CloseAsync(
-        ClosePositionRequest request,
-        CancellationToken cancellationToken = default)
+    public async Task<OrderCommandResponse> CloseAsync(ClosePositionRequest request, CancellationToken cancellationToken = default)
     {
-        if (request.LimitPrice is not > 0m)
+        RequireCommand(request.ContractVersion, request.IdempotencyKey);
+        RequireAccount(request.AccountId);
+        if (String.IsNullOrWhiteSpace(request.Symbol) || String.IsNullOrWhiteSpace(request.Reason) || request.Quantity is <= 0m ||
+            request.OrderType is not ("market" or "limit" or "stop" or "stop_limit") || request.TimeInForce is not ("day" or "gtc" or "ioc" or "fok") ||
+            (request.OrderType is "limit" or "stop_limit" && request.LimitPrice is not > 0m) ||
+            (request.OrderType is "stop" or "stop_limit" && request.TriggerPrice is not > 0m) ||
+            (request.AllowExtendedHoursTrading && (request.OrderType != "limit" || request.TimeInForce != "day")))
+            throw new InvalidOperationException("Position symbol, reason, valid order prices, time in force and positive optional quantity are required.");
+        request = request with { Symbol = request.Symbol.Trim().ToUpperInvariant(), IdempotencyKey = request.IdempotencyKey.Trim() };
+        var claim = await BeginCommandAsync(request.IdempotencyKey, JsonSerializer.Serialize(request), cancellationToken);
+        if (!claim.OwnsConfirmation)
+            return await ExistingOutcomeAsync(claim.Preview, request.AccountId, request.Symbol, "sell", request.Quantity ?? 0m, cancellationToken);
+        var submitted = false;
+        try
         {
-            throw new InvalidOperationException("Swing position close requires an explicit limit price.");
+            if (claim.Preview.ExpiresAtUtc <= timeProvider.GetUtcNow())
+                return await FinishAsync(claim.Preview, Rejected(claim.Preview, request.AccountId, request.Symbol, "sell", request.Quantity ?? 0m,
+                    "command_expired", "Undispatched close expired. Review and issue a new command."), cancellationToken);
+            var context = await broker.GetBrokerContextAsync(request.Symbol, cancellationToken);
+            if (context.AccountId != request.AccountId) throw new InvalidOperationException("Connected broker account changed.");
+            var quantity = request.Quantity ?? context.OpenPositionQuantity;
+            if (quantity <= 0m || quantity > context.OpenPositionQuantity || quantity != Decimal.Truncate(quantity))
+                throw new InvalidOperationException("Close quantity must be whole shares within the open long position.");
+            if (!await previews.TryBeginSubmissionAsync(claim.Preview.PreviewId, claim.LeaseToken!.Value, timeProvider.GetUtcNow(), cancellationToken))
+                return await ExistingOutcomeAsync(claim.Preview, request.AccountId, request.Symbol, "sell", quantity, cancellationToken);
+            submitted = true;
+            await broker.SubmitLimitOrderAsync(request.Symbol, "sell", quantity, request.LimitPrice ?? 0m, null, null,
+                "swing", cancellationToken, request.AllowExtendedHoursTrading, claim.Preview.PreviewId,
+                request.OrderType, request.TriggerPrice, request.TimeInForce);
+            return await ExistingOutcomeAsync(claim.Preview, request.AccountId, request.Symbol, "sell", quantity, cancellationToken);
         }
-        var context = await broker.GetBrokerContextAsync(request.Symbol, cancellationToken);
-        var quantity = request.Quantity ?? context.OpenPositionQuantity;
-        if (quantity <= 0m || quantity > context.OpenPositionQuantity)
+        catch (InvalidOperationException exception) when (!submitted)
         {
-            throw new InvalidOperationException("Close quantity must be within the open broker position.");
+            return await FinishAsync(claim.Preview, Rejected(claim.Preview, request.AccountId, request.Symbol, "sell", request.Quantity ?? 0m,
+                "close_revalidation_failed", exception.Message), cancellationToken);
         }
-        var intentId = DeterministicGuid($"close\u001f{request.IdempotencyKey}");
-        var result = await broker.SubmitLimitOrderAsync(
-            request.Symbol,
-            "sell",
-            quantity,
-            request.LimitPrice.Value,
-            null,
-            null,
-            "swing",
-            cancellationToken,
-            request.AllowExtendedHoursTrading,
-            intentId,
-            "limit",
-            null,
-            "day");
+    }
+
+    private async Task<(CandidateRecord? Candidate, ProductionRun? Run)> ValidateBindingsAsync(PreviewOrderRequest request, CancellationToken cancellationToken)
+    {
         var now = timeProvider.GetUtcNow();
-        return new OrderCommandResponse(
-            ContractVersions.VersionOne,
-            intentId,
-            intentId.ToString("N"),
-            result.OrderId,
-            "acknowledged",
-            request.AccountId,
-            result.Ticker,
-            result.Side,
-            result.Quantity,
-            null,
-            null,
-            now,
-            now,
-            request.IdempotencyKey,
-            null,
-            null);
-    }
-
-    private async Task ValidateBindingsAsync(
-        PreviewOrderRequest request,
-        DateTimeOffset now,
-        CancellationToken cancellationToken)
-    {
-        var universe = await universes.GetAsync(request.UniverseSnapshotId, cancellationToken)
-            ?? throw new InvalidOperationException("Universe preview was not found.");
-        if (universe.ExpiresAtUtc <= now)
+        var record = await universes.GetAsync(request.UniverseSnapshotId, cancellationToken) ?? throw new InvalidOperationException("Universe preview is missing.");
+        var universe = UniverseDiscoveryService.ReadPreview(record, request.UniverseSnapshotId);
+        if (universe.ExpiresAtUtc <= now || universe.ResolvedAtUtc > now ||
+            !universe.Members.Any(member => member.Symbol == request.Symbol && member.Sources.Any(source => !source.IsDiagnostic && source.ExpiresAtUtc > now)))
+            throw new InvalidOperationException("Universe is expired or does not contain the symbol.");
+        if (request.ExecutionPolicy == "operator_override")
         {
-            throw new InvalidOperationException("Universe preview expired; create a new preview.");
+            if (request.CandidateId is not null || request.CandidateRunId is not null || request.CandidateVersion is not null)
+                throw new InvalidOperationException("Operator override cannot claim a strategy candidate.");
+            await strategies.RequireSwingStrategyAsync(request.Strategy, "backtest", cancellationToken);
+            return (null, null);
         }
-        if (accountBinding.EnforcementEnabled &&
-            !request.AccountId.Equals(accountBinding.ExpectedAccountId, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Order account does not match the configured broker account.");
-        }
-        var universePayload = JsonSerializer.Deserialize<UniversePreviewResponse>(universe.PreviewJson)
-            ?? throw new InvalidOperationException("Universe preview payload is invalid.");
-        if (!universePayload.Members.Any(member =>
-                member.Symbol.Equals(request.Symbol, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new InvalidOperationException("Order symbol is not a member of the bound universe preview.");
-        }
-        var mode = request.ExecutionPolicy.Equals("operator_override", StringComparison.OrdinalIgnoreCase)
-            ? "backtest"
-            : "paper_shadow";
+        if (request.CandidateId is not { } id || request.CandidateRunId is null || request.CandidateVersion is null)
+            throw new InvalidOperationException("Strategy entry requires candidate, version and run.");
+        var candidate = await candidates.GetAsync(id, cancellationToken) ?? throw new InvalidOperationException("Candidate is missing.");
+        var run = await intents.GetRunAsync(candidate.RunId, cancellationToken) ?? throw new InvalidOperationException("Candidate run is missing.");
+        var mode = run.Profile switch { "paper" or "paper_shadow" => "paper_shadow", "paper_experiment" => "paper_experiment", _ => throw new InvalidOperationException("An authorized paper candidate run is required.") };
         await strategies.RequireSwingStrategyAsync(request.Strategy, mode, cancellationToken);
-        if (request.CandidateId is not { } candidateId)
-        {
-            if (!request.ExecutionPolicy.Equals("operator_override", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException("Strategy-validated execution requires a candidate identity.");
-            }
-            return;
-        }
-
-        var candidate = await candidates.GetAsync(candidateId, cancellationToken)
-            ?? throw new InvalidOperationException("Candidate was not found.");
-        var candidateRun = await intents.GetRunAsync(candidate.RunId, cancellationToken)
-            ?? throw new InvalidOperationException("Candidate run was not found.");
-        if (candidate.Version != request.CandidateVersion ||
-            candidate.State != StrategyCandidateState.Triggered ||
-            candidate.ExpiresAtUtc <= now ||
-            !candidate.Symbol.Equals(request.Symbol, StringComparison.OrdinalIgnoreCase) ||
-            !candidate.StrategyContentSha256.Equals(request.Strategy.ContentSha256, StringComparison.OrdinalIgnoreCase) ||
-            !candidate.SelectedStrategy!.Equals(request.Strategy.StrategyId, StringComparison.Ordinal) ||
-            candidate.RunId != request.CandidateRunId ||
-            candidateRun.UniverseSnapshotId != request.UniverseSnapshotId)
-        {
-            throw new InvalidOperationException("Candidate identity, version, strategy or state changed after preview.");
-        }
+        if (candidate.Version != request.CandidateVersion || candidate.State != StrategyCandidateState.Triggered || candidate.ExpiresAtUtc <= now ||
+            candidate.Symbol != request.Symbol || candidate.SelectedStrategy != request.Strategy.StrategyId ||
+            candidate.StrategySemanticVersion != request.Strategy.SemanticVersion || candidate.StrategyContentSha256 != request.Strategy.ContentSha256 ||
+            candidate.RunId != request.CandidateRunId || run.UniverseSnapshotId != request.UniverseSnapshotId)
+            throw new InvalidOperationException("Candidate identity, strategy, version or readiness changed.");
+        return (candidate, run);
     }
 
-    private async Task<OrderCommandResponse> ReadFinalOutcomeAsync(
-        string tokenHash,
-        CancellationToken cancellationToken)
+    private async Task<OrderPreviewConfirmationClaim> BeginCommandAsync(string key, string json, CancellationToken cancellationToken)
     {
-        for (var attempt = 0; attempt < 50; attempt++)
+        var stored = await previews.FindByKeyAsync(key, cancellationToken);
+        if (stored is null)
         {
-            var current = await previews.GetByTokenHashAsync(tokenHash, cancellationToken)
-                ?? throw new InvalidOperationException("Order preview token was not found.");
-            if (current.Status is "confirmed" or "rejected")
-            {
-                OrderCommandResponse? outcome;
-                try
-                {
-                    outcome = JsonSerializer.Deserialize<OrderCommandResponse>(current.OutcomeJson ?? String.Empty);
-                }
-                catch (JsonException)
-                {
-                    outcome = null;
-                }
-                if (outcome is not null)
-                {
-                    return outcome;
-                }
-
-                var persistedRequest = JsonSerializer.Deserialize<PreviewOrderRequest>(current.RequestJson)
-                    ?? throw new InvalidOperationException("Order confirmation outcome could not be decoded.");
-                return new OrderCommandResponse(
-                    ContractVersions.VersionOne,
-                    current.PreviewId,
-                    current.PreviewId.ToString("N"),
-                    null,
-                    "rejected",
-                    persistedRequest.AccountId,
-                    persistedRequest.Symbol,
-                    persistedRequest.Side,
-                    persistedRequest.Quantity,
-                    null,
-                    null,
-                    current.CreatedAtUtc,
-                    timeProvider.GetUtcNow(),
-                    current.IdempotencyKey,
-                    "preview_expired",
-                    "The immutable order preview expired before confirmation.");
-            }
-            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+            var now = timeProvider.GetUtcNow();
+            stored = await previews.SaveAsync(new OrderPreviewRecord { PreviewId = Guid.NewGuid(), IdempotencyKey = key,
+                TokenSha256 = Sha256("command:" + key), RequestSha256 = Sha256(json), RequestJson = json, PreviewJson = "{}",
+                Status = "previewed", CreatedAtUtc = now, ExpiresAtUtc = now.AddMinutes(2) }, cancellationToken);
         }
-        throw new InvalidOperationException("Order confirmation is already in progress; retry with the same idempotency key.");
+        RequireSameRequest(stored, json);
+        return await previews.ClaimConfirmationAsync(stored.TokenSha256, key, timeProvider.GetUtcNow(), ConfirmationLease, cancellationToken);
     }
 
-    private static OrderCommandResponse ToCommand(
-        OrderIntentRecord intent,
-        OrderStateSnapshot state,
-        string idempotencyKey) => new(
-            ContractVersions.VersionOne,
-            intent.IntentId,
-            intent.ClientOrderId,
-            state.BrokerOrderId,
-            state.State.ToStorageValue(),
-            intent.AccountId,
-            intent.Symbol,
-            intent.Side,
-            intent.RequestedQuantity,
-            state.FilledQuantity,
-            state.FillPrice,
-            intent.CreatedAtUtc,
-            state.LocalTimestampUtc,
-            idempotencyKey,
-            null,
-            null);
+    private async Task<OrderCommandResponse> ExistingOutcomeAsync(OrderPreviewRecord preview, string account, string symbol, string side, decimal quantity, CancellationToken cancellationToken)
+    {
+        var latest = await previews.GetByTokenHashAsync(preview.TokenSha256, cancellationToken) ?? preview;
+        if (latest.OutcomeJson is not null) return Read<OrderCommandResponse>(latest.OutcomeJson);
+        var intent = await intents.GetByIntentIdAsync(preview.PreviewId, cancellationToken);
+        if (intent is null && side == "sell")
+            intent = (await intents.ListByRunAsync(preview.PreviewId, cancellationToken)).SingleOrDefault(item => item.Kind == OrderIntentKind.PositionExit);
+        if (intent is null) return Pending(latest, account, symbol, side, quantity);
+        if (intent.AccountId != account || intent.Symbol != symbol) throw new InvalidOperationException("Durable order identity differs from the command.");
+        var state = await orderEvents.GetCurrentAsync(intent.ClientOrderId, cancellationToken);
+        if (state is null || (String.IsNullOrWhiteSpace(state.BrokerOrderId) && !OrderStateMachine.IsTerminal(state.State)))
+            return Pending(latest, account, symbol, side, quantity) with { OrderIntentId = intent.IntentId, ClientOrderId = intent.ClientOrderId };
+        return await FinishAsync(latest, ToCommand(intent, state, preview.IdempotencyKey), cancellationToken);
+    }
 
+    private async Task<OrderCommandResponse> FinishAsync(OrderPreviewRecord preview, OrderCommandResponse outcome, CancellationToken cancellationToken)
+    {
+        var saved = await previews.CompleteAsync(preview.PreviewId,
+            preview.ConfirmationLeaseToken ?? throw new InvalidOperationException("Confirmation owner is unavailable."),
+            outcome.State == "rejected" ? "rejected" : "confirmed", JsonSerializer.Serialize(outcome), timeProvider.GetUtcNow(), cancellationToken);
+        return Read<OrderCommandResponse>(saved.OutcomeJson!);
+    }
+
+    private static OrderCommandResponse ToCommand(OrderIntentRecord intent, OrderStateSnapshot state, string key) => new(
+        ContractVersions.VersionOne, intent.IntentId, intent.ClientOrderId, state.BrokerOrderId, state.State.ToStorageValue(),
+        intent.AccountId, intent.Symbol, intent.Side, intent.RequestedQuantity, state.FilledQuantity, state.FillPrice,
+        intent.CreatedAtUtc, state.LocalTimestampUtc, key, null, null);
+    private static OrderCommandResponse Pending(OrderPreviewRecord preview, string account, string symbol, string side, decimal quantity) => new(
+        ContractVersions.VersionOne, preview.PreviewId, String.Empty, null, "confirmation_pending", account, symbol, side, quantity,
+        null, null, preview.CreatedAtUtc, preview.CreatedAtUtc, preview.IdempotencyKey, "reconciliation_required", "Confirmation is pending durable execution reconciliation; retry the same command.");
+    private OrderCommandResponse Rejected(OrderPreviewRecord preview, string account, string symbol, string side, decimal quantity, string code, string reason) =>
+        Pending(preview, account, symbol, side, quantity) with { State = "rejected", UpdatedAtUtc = timeProvider.GetUtcNow(), RejectionCode = code, RejectionReason = reason };
+    private void RequireAccount(string account)
+    {
+        if (!accountBinding.EnforcementEnabled || String.IsNullOrWhiteSpace(account) || account != accountBinding.ExpectedAccountId)
+            throw new InvalidOperationException("Order account must match the configured broker account.");
+    }
+    private void RequirePolicy(string policy)
+    {
+        if (policy is not ("operator_override" or "strategy_validated")) throw new InvalidOperationException("Execution policy is invalid.");
+        if (policy == "operator_override" && operatorContext.HttpContext?.User.IsInRole(TradingFlowRoles.Administrator) != true)
+            throw new UnauthorizedAccessException("Administrator authorization is required for operator override.");
+    }
+    private static void RequireCommand(string contract, string key)
+    {
+        if (contract != ContractVersions.VersionOne || String.IsNullOrWhiteSpace(key) || key.Trim().Length > 160)
+            throw new InvalidOperationException("Supported contract and idempotency key are required.");
+    }
     private static void ValidateRequest(PreviewOrderRequest request)
     {
-        if (!String.Equals(request.ContractVersion, ContractVersions.VersionOne, StringComparison.Ordinal) ||
-            request.UniverseSnapshotId == Guid.Empty || String.IsNullOrWhiteSpace(request.AccountId) ||
-            String.IsNullOrWhiteSpace(request.Symbol) || request.Quantity <= 0m ||
-            String.IsNullOrWhiteSpace(request.IdempotencyKey) || request.IdempotencyKey.Length > 160 ||
-            !request.Side.Equals("buy", StringComparison.OrdinalIgnoreCase) ||
-            !request.OrderType.Equals("limit", StringComparison.OrdinalIgnoreCase) ||
-            !request.TimeInForce.Equals("day", StringComparison.OrdinalIgnoreCase) ||
-            request.LimitPrice is not > 0m || request.StopLossPrice <= 0m ||
-            request.StopLossPrice >= request.LimitPrice ||
-            request.TakeProfitPrice is not > 0m || request.TakeProfitPrice <= request.LimitPrice)
-        {
-            throw new InvalidOperationException("Order preview requires a valid swing long limit/day entry, stop, target and idempotency key.");
-        }
+        RequireCommand(request.ContractVersion, request.IdempotencyKey);
+        if (request.Strategy is null || String.IsNullOrWhiteSpace(request.Strategy.StrategyId) || String.IsNullOrWhiteSpace(request.Strategy.SemanticVersion) ||
+            request.Strategy.ContentSha256 is not { Length: 64 } hash || !hash.All(Uri.IsHexDigit) ||
+            request.UniverseSnapshotId == Guid.Empty || String.IsNullOrWhiteSpace(request.Symbol) || request.Quantity <= 0m ||
+            request.Quantity != Decimal.Truncate(request.Quantity) || request.Quantity > Int32.MaxValue || request.Side != "buy" ||
+            request.OrderType != "limit" || request.TimeInForce != "day" || request.LimitPrice is not > 0m || request.StopLossPrice <= 0m ||
+            request.StopLossPrice >= request.LimitPrice || request.TakeProfitPrice is not > 0m || request.TakeProfitPrice <= request.LimitPrice)
+            throw new InvalidOperationException("Review requires an exact strategy and a protected swing long limit/day order.");
     }
-
-    private static string Sha256(string value) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
-
-    private static Guid DeterministicGuid(string value) =>
-        new(SHA256.HashData(Encoding.UTF8.GetBytes(value)).AsSpan(0, 16));
+    private static T Read<T>(string json) where T : class
+    {
+        try { return JsonSerializer.Deserialize<T>(json) ?? throw new InvalidOperationException("Persisted command is invalid."); }
+        catch (JsonException exception) { throw new InvalidOperationException("Persisted command is invalid.", exception); }
+    }
+    private static void RequireSameRequest(OrderPreviewRecord preview, string json)
+    {
+        if (Sha256(preview.RequestJson) != preview.RequestSha256 || Sha256(json) != preview.RequestSha256)
+            throw new IdempotencyKeyConflictException(preview.IdempotencyKey);
+    }
+    private static string Sha256(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 }

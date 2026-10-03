@@ -7,6 +7,7 @@ using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Pages.Shared;
 using TradingFlow.Web.Services;
+using TradingFlow.Contracts.V1;
 using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Pages;
@@ -19,14 +20,14 @@ namespace TradingFlow.Web.Pages;
 /// </summary>
 public sealed class OrdersModel(
     IOrderActivityQuery orders,
-    AlpacaManualOrderService manualOrders,
+    IOrderWorkflowService workflow,
+    IOrderIntentRepository intents,
     TradingEnvironmentService environments,
-    IWishlistRepository wishlists,
+    TradingFlow.Web.Services.Desk.DeskSources sources,
     WishlistDeskService desk,
-    ManualOrderTicketService tickets,
+    TradingFlow.Web.Services.Desk.IDeskAccountReader accountReader,
     OperationalStatusService operationalStatus,
-    ConfigCatalogService catalog,
-    DeskTicketPlanService ticketPlans) : PageModel
+    ConfigCatalogService catalog) : PageModel
 {
     public static IReadOnlyList<(string Key, string Label)> Filters { get; } =
     [
@@ -87,6 +88,7 @@ public sealed class OrdersModel(
     public IReadOnlyList<OrderActivitySnapshot> SelectedOrders { get; private set; } = [];
 
     /// <summary>Totals over every open position, as on the desk.</summary>
+    public TradingFlow.Web.Services.Desk.DeskAccount Account { get; private set; } = new(false, "Account not read", DateTimeOffset.UtcNow, []);
     public DeskPortfolioSummary Portfolio { get; private set; } = DeskPortfolioSummary.Empty;
 
     public OperationalStatusSnapshot OperationalStatus { get; private set; } = new(
@@ -99,16 +101,6 @@ public sealed class OrdersModel(
 
     /// <summary>Symbols with a working order, streamed for the journal's Last column.</summary>
     public IReadOnlyList<string> StreamSymbols { get; private set; } = [];
-
-    public ManualOrderTicketPreview? TicketPreview { get; private set; }
-    public ManualOrderTicketConfirmation? TicketConfirmation { get; private set; }
-
-    /// <summary>
-    /// Opening limit, stop and target for the rail ticket, from the selected
-    /// strategy's own rules on live market state. Empty values carry a reason.
-    /// </summary>
-    public DeskTicketPlan TicketPlan { get; private set; } =
-        DeskTicketPlan.Unavailable(null, "No symbol selected.", null);
 
     public TradingEnvironmentState EnvironmentState => environments.GetState(environments.Parse(Env));
 
@@ -148,7 +140,7 @@ public sealed class OrdersModel(
     /// </summary>
     private async Task LoadRailAsync(IReadOnlyList<OrderActivitySnapshot> all, CancellationToken cancellationToken)
     {
-        var lists = await wishlists.ListAsync(cancellationToken);
+        var lists = await sources.FollowedListsAsync(cancellationToken);
         var symbol = NormalizeSymbol(Ticker);
         if (!String.IsNullOrWhiteSpace(Ticker) && symbol is null)
         {
@@ -175,7 +167,10 @@ public sealed class OrdersModel(
             TimeSpan.FromMinutes(20),
             TimeSpan.FromHours(4),
             cancellationToken);
-        Portfolio = snapshot.Portfolio;
+        Account = await accountReader.ReadAsync(cancellationToken);
+        var summary = TradingFlow.Web.Services.Desk.DeskAccountSummary.Summarize(Account);
+        if (summary is not null) Portfolio = summary;
+        else Account = Account with { Available = false };
         SelectedRow = snapshot.Rows.FirstOrDefault();
         OperationalStatus = await operationalStatus.GetAsync(
             feed,
@@ -192,76 +187,8 @@ public sealed class OrdersModel(
             .ToArray();
 
         if (SelectedRow is { } row)
-        {
-            SelectedOrders = all
-                .Where(item => item.Symbol.Equals(row.Ticker, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(item => item.UpdatedAtUtc)
-                .Take(8)
-                .ToArray();
-            var profile = catalog.DefaultPaperConfig();
-            TicketPlan = await ticketPlans.PlanAsync(
-                Strategies.FirstOrDefault(option => option.Definition.StrategyId == StrategyId)?.Definition,
-                row.Ticker,
-                row.Quote.AskPrice,
-                row.Quote.MidPrice,
-                LimitPrice,
-                profile?.Config.Engine.IndicatorWarmupBars ?? 0,
-                DeskTicketPlanService.RiskBudget(OperationalStatus.Equity, profile?.Config.Portfolio.AccountRiskBudgetPct),
-                cancellationToken);
-        }
-    }
-
-    /// <summary>Side the rail ticket opens on: sell only for a replace of a sell.</summary>
-    public string TicketSide =>
-        String.Equals(Side, "sell", StringComparison.OrdinalIgnoreCase) ? "sell" : "buy";
-
-    /// <summary>
-    /// Stage one of the rail ticket - the same server review the desk uses. The
-    /// environment lock is checked here, not only in the view.
-    /// </summary>
-    public async Task OnPostPreviewTicketAsync(
-        [FromForm] DeskTicketForm ticket,
-        CancellationToken cancellationToken)
-    {
-        await OnGetAsync(cancellationToken);
-        if (!EnvironmentState.IsEnabled)
-        {
-            ErrorMessage = EnvironmentState.LockReason;
-            return;
-        }
-
-        try
-        {
-            TicketPreview = await tickets.PreviewAsync(ticket.ToDraft(), cancellationToken);
-        }
-        catch (InvalidOperationException exception)
-        {
-            ErrorMessage = exception.Message;
-        }
-    }
-
-    /// <summary>Stage two: confirms against the token the preview issued, or fails closed.</summary>
-    public async Task OnPostConfirmTicketAsync(string? ticketToken, CancellationToken cancellationToken)
-    {
-        if (!EnvironmentState.IsEnabled)
-        {
-            await OnGetAsync(cancellationToken);
-            ErrorMessage = EnvironmentState.LockReason;
-            return;
-        }
-
-        try
-        {
-            TicketConfirmation = await tickets.ConfirmAsync(ticketToken ?? String.Empty, cancellationToken);
-            StatusMessage = $"Paper order accepted for {TicketConfirmation.Ticker}. It appears in the journal below.";
-        }
-        catch (InvalidOperationException exception)
-        {
-            ErrorMessage = exception.Message;
-        }
-
-        // Reload after the confirm so the journal already carries the new order.
-        await OnGetAsync(cancellationToken);
+            SelectedOrders = all.Where(item => item.Symbol.Equals(row.Ticker, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(item => item.UpdatedAtUtc).Take(8).ToArray();
     }
 
     /// <summary>
@@ -369,7 +296,8 @@ public sealed class OrdersModel(
     /// does not stop a POST.
     /// </remarks>
     public async Task<IActionResult> OnPostCancelAsync(
-        string brokerOrderId,
+        string clientOrderId,
+        string idempotencyKey,
         CancellationToken cancellationToken)
     {
         if (!EnvironmentState.IsEnabled)
@@ -381,10 +309,12 @@ public sealed class OrdersModel(
 
         try
         {
-            var cancelled = await manualOrders.CancelOrderAsync(brokerOrderId, cancellationToken);
-            StatusMessage = cancelled
-                ? "Cancel request accepted. The order journal will show the terminal state once the broker confirms."
-                : "The broker did not accept the cancel request; the order may already be terminal.";
+            var intent = await intents.GetByClientOrderIdAsync(clientOrderId, cancellationToken)
+                ?? throw new InvalidOperationException("The journaled order was not found.");
+            var result = await workflow.CancelAsync(new CancelOrderRequest(
+                ContractVersions.VersionOne, intent.AccountId, intent.IntentId,
+                "Operator requested cancellation from the order journal.", idempotencyKey), cancellationToken);
+            StatusMessage = $"{result.State}: {result.RejectionReason ?? "Cancellation is recorded; the journal updates when the broker confirms."}";
         }
         catch (InvalidOperationException exception)
         {

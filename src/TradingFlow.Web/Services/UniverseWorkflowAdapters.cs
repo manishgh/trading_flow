@@ -48,6 +48,8 @@ public sealed class UniverseSourceResolver(
         {
             throw new InvalidOperationException("Wishlist source requires a wishlist ID.");
         }
+        if (await wishlists.IsPreparationRevisionAsync(id, cancellationToken))
+            throw new InvalidOperationException("Preparation revisions require their original validated handoff; they cannot be refreshed as ordinary wishlist sources.");
         var wishlist = await wishlists.GetByIdAsync(id, cancellationToken)
             ?? throw new InvalidOperationException($"Wishlist {id:D} was not found.");
         var observed = timeProvider.GetUtcNow().ToUniversalTime();

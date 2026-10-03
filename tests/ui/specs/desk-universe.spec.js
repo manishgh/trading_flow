@@ -27,7 +27,7 @@ async function seedList(page, name, tickers) {
 }
 
 async function seedTwoLists(page) {
-  await page.goto("/TradeDesk");
+  await page.goto("/TradeDesk?view=market");
   const seeded = await page.locator(`.trade-desk-table [data-symbol="${sharedTicker}"]`).count();
   if (seeded > 0) {
     return;
@@ -44,7 +44,7 @@ test.describe("desk universe", () => {
 
   test("the desk defaults to every wishlist, one row per symbol, naming its lists", async ({ page }) => {
     await seedTwoLists(page);
-    await page.goto("/TradeDesk");
+    await page.goto("/TradeDesk?view=market");
 
     await expect(page.locator("#WishlistSelect")).toHaveValue("");
     await expect(page.locator("#WishlistSelect option").first()).toContainText("All wishlists");
@@ -57,7 +57,7 @@ test.describe("desk universe", () => {
 
   test("choosing one wishlist narrows the rows to it", async ({ page }) => {
     await seedTwoLists(page);
-    await page.goto("/TradeDesk");
+    await page.goto("/TradeDesk?view=market");
     const two = await page.locator("#WishlistSelect option", { hasText: "Universe Two" }).first().getAttribute("value");
 
     await page.goto(`/TradeDesk?id=${two}`);
@@ -66,7 +66,7 @@ test.describe("desk universe", () => {
   });
 
   test("the screener scope offers saved screens and catalogued Finviz signals", async ({ page }) => {
-    await page.goto("/TradeDesk");
+    await page.goto("/TradeDesk?view=market");
     await page.getByRole("link", { name: "Screener", exact: true }).click();
     await expect(page).toHaveURL(/scope=screener/);
 
@@ -82,37 +82,38 @@ test.describe("desk universe", () => {
   });
 
   test("preparation sits on the desk and an unreachable service never blocks it", async ({ page }) => {
-    await page.goto("/TradeDesk");
+    await page.goto("/TradeDesk?view=market");
     const band = page.locator("[data-desk-preparation]");
-    await expect(band.getByRole("heading", { name: "Preparation" })).toBeVisible();
+    await expect(band.getByRole("heading", { name: "Market-data warmup" })).toBeVisible();
     await expect(band).toContainText("Session");
-    await expect(band.getByRole("link", { name: "Preparation details" })).toHaveAttribute("href", /\/Warmup/);
+    await expect(band.getByRole("link", { name: "Warmup details" })).toHaveAttribute("href", /\/Warmup/);
     await expect(page.locator(".trade-desk-table")).toBeVisible();
   });
 
   test("the portfolio cell totals every position, independent of the view", async ({ page }) => {
-    await page.goto("/TradeDesk");
+    await page.goto("/TradeDesk?view=market");
     const cell = page.locator("[data-desk-portfolio]");
-    await expect(cell).toContainText(/Portfolio · \d+ open/);
+    await expect(cell).toContainText(/Portfolio · (\d+ open|unavailable)/);
     await expect(cell).toContainText("cost");
   });
 
-  test("ticket posts keep the desk view they were opened from", async ({ page }) => {
+  test("shared tickets keep the desk view and provide an explicit discovery source", async ({ page }) => {
     await seedTwoLists(page);
+    await page.route("**/api/v1/orders/context", route => route.fulfill({contentType:"application/json",body:JSON.stringify({accountId:"fixture",operatorOverrideAllowed:true})}));
     await page.goto(`/TradeDesk?ticker=${sharedTicker}`);
-    const allAction = await page.locator('form.desk-ticket-form').getAttribute("action");
-    expect(allAction).toContain(`ticker=${sharedTicker}`);
-    expect(allAction).not.toContain("id=");
+    await expect(page.locator('#OrderWorkflowForm [name=symbol]')).toHaveValue(sharedTicker);
+    await expect(page.locator('#OrderWorkflowForm [name=wishlist] option')).not.toHaveCount(1);
+    await expect(page).toHaveURL(new RegExp(`ticker=${sharedTicker}`));
 
     const two = await page.locator("#WishlistSelect option", { hasText: "Universe Two" }).first().getAttribute("value");
     await page.goto(`/TradeDesk?id=${two}&ticker=${sharedTicker}`);
-    const oneAction = await page.locator('form.desk-ticket-form').getAttribute("action");
-    expect(oneAction).toContain(`id=${two}`);
+    await expect(page.locator('#OrderWorkflowForm [name=symbol]')).toHaveValue(sharedTicker);
+    await expect(page).toHaveURL(new RegExp(`id=${two}`));
   });
 
   test("live streams follow the rendered symbols and refuse an empty set", async ({ page }) => {
     await seedTwoLists(page);
-    await page.goto("/TradeDesk");
+    await page.goto("/TradeDesk?view=market");
     const tickers = await page.locator("[data-desk-root]").getAttribute("data-stream-tickers");
     expect(tickers.split(",")).toEqual(expect.arrayContaining([sharedTicker, firstOnly]));
 

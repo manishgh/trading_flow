@@ -1,3 +1,4 @@
+using TradingFlow.Contracts.V1;
 using System.Net.Http.Json;
 using System.Net;
 using System.Text;
@@ -17,10 +18,21 @@ public sealed class TradingFlowApiClient
     };
 
     private readonly CookieContainer cookies = new();
+    private long sessionVersion;
+    private readonly SemaphoreSlim authenticationGate = new(1, 1);
+    private bool changingAuthentication;
+    public long SessionVersion => Interlocked.Read(ref sessionVersion);
+    public string? CurrentUserName { get; private set; }
+    private void AdvanceSession(string? userName = null) {
+        Interlocked.Increment(ref sessionVersion);CurrentUserName=userName;
+        httpClient.CancelPendingRequests();streamClient.CancelPendingRequests();SessionChanged?.Invoke(this,EventArgs.Empty);
+    }
     private readonly HttpClient httpClient;
     // Server-sent-event streams are long-lived, so they need an unbounded timeout and
     // rely on the caller's CancellationToken to stop instead of the request timeout.
     private readonly HttpClient streamClient;
+
+    public TradingFlow.Contracts.Transport.TradingWorkflowClient Workflow => new(httpClient, () => BaseUrl);
 
     public TradingFlowApiClient()
     {
@@ -30,11 +42,11 @@ public sealed class TradingFlowApiClient
 
     private static HttpClient CreateHttpClient(TimeSpan timeout, CookieContainer cookies)
     {
-        var client = new HttpClient(new HttpClientHandler
+        var client = new HttpClient(new TradingFlow.Contracts.Transport.ApiAntiforgeryHandler(new HttpClientHandler
         {
             CookieContainer = cookies,
             UseCookies = true
-        })
+        }))
         {
             Timeout = timeout
         };
@@ -51,36 +63,71 @@ public sealed class TradingFlowApiClient
         bool rememberMe,
         CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsJsonAsync(
-            $"{BaseUrl}/api/auth/login",
-            new { userName, password, rememberMe },
-            cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await GetAuthenticationStateAsync(cancellationToken);
+        await authenticationGate.WaitAsync(cancellationToken);
+        changingAuthentication = true;
+        AdvanceSession();
+        var generation = SessionVersion;
+        MobileAuthenticationState? state = null;
+        try
+        {
+            using var response = await httpClient.PostAsJsonAsync(
+                $"{BaseUrl}/api/auth/login", new { userName, password, rememberMe }, cancellationToken);
+            await EnsureSuccessAsync(response, cancellationToken);
+            state = await httpClient.GetFromJsonAsync<MobileAuthenticationState>($"{BaseUrl}/api/auth/me", cancellationToken);
+            if (generation != SessionVersion) throw new OperationCanceledException("Session changed during sign-in.");
+            return state;
+        }
+        finally
+        {
+            changingAuthentication = false;
+            if (generation == SessionVersion) AdvanceSession(state?.UserName);
+            authenticationGate.Release();
+        }
     }
 
-    public async Task<MobileAuthenticationState?> GetAuthenticationStateAsync(
-        CancellationToken cancellationToken = default)
+    public async Task<MobileAuthenticationState?> GetAuthenticationStateAsync(CancellationToken cancellationToken = default)
     {
+        if (changingAuthentication) return null;
+        var generation = SessionVersion;
         using var response = await httpClient.GetAsync($"{BaseUrl}/api/auth/me", cancellationToken);
+        if (generation != SessionVersion) throw new OperationCanceledException("Session changed during authentication read.");
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
+            if (CurrentUserName is not null) AdvanceSession();
             return null;
         }
         await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<MobileAuthenticationState>(cancellationToken);
+        var state = await response.Content.ReadFromJsonAsync<MobileAuthenticationState>(cancellationToken);
+        if (generation != SessionVersion) throw new OperationCanceledException("Session changed during authentication read.");
+        CurrentUserName = state?.UserName;
+        return state;
     }
 
     public async Task LogoutAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PostAsync($"{BaseUrl}/api/auth/logout", null, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
+        await authenticationGate.WaitAsync(cancellationToken);
+        changingAuthentication = true;
+        AdvanceSession();
+        var generation = SessionVersion;
+        try
+        {
+            using var response = await httpClient.PostAsync($"{BaseUrl}/api/auth/logout", null, cancellationToken);
+            await EnsureSuccessAsync(response, cancellationToken);
+        }
+        finally
+        {
+            changingAuthentication = false;
+            if (generation == SessionVersion) AdvanceSession();
+            authenticationGate.Release();
+        }
     }
+
+    public event EventHandler? SessionChanged;
 
     public string BaseUrl
     {
         get => Preferences.Get("TradingFlowBackendUrl", NgrokDefaultUrl).TrimEnd('/');
-        set => Preferences.Set("TradingFlowBackendUrl", value.Trim().TrimEnd('/'));
+        set { httpClient.CancelPendingRequests(); streamClient.CancelPendingRequests(); Preferences.Set("TradingFlowBackendUrl", value.Trim().TrimEnd('/')); AdvanceSession(); }
     }
 
     public void UseNgrokDefault()
@@ -98,36 +145,18 @@ public sealed class TradingFlowApiClient
         BaseUrl = AndroidEmulatorDefaultUrl;
     }
 
-    public void NormalizeBackendUrlForDevice()
-    {
-        var current = BaseUrl;
-        if (IsLocalOrOldDefault(current))
-        {
-            BaseUrl = NgrokDefaultUrl;
-        }
-    }
-
-    private static bool IsLocalOrOldDefault(string current)
-    {
-        return current.Contains("10.0.2.2", StringComparison.OrdinalIgnoreCase) ||
-            current.Contains("10.0.0.2", StringComparison.OrdinalIgnoreCase) ||
-            current.Contains("localhost", StringComparison.OrdinalIgnoreCase) ||
-            current.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
-            current.Contains("192.168.178.238", StringComparison.OrdinalIgnoreCase) ||
-            (current.Contains(".ngrok-free.app", StringComparison.OrdinalIgnoreCase) &&
-                !current.Equals(NgrokDefaultUrl, StringComparison.OrdinalIgnoreCase));
-    }
-
     public Task<MobileCatalogResponse?> GetCatalogAsync(CancellationToken cancellationToken = default)
     {
         return httpClient.GetFromJsonAsync<MobileCatalogResponse>($"{BaseUrl}/api/v1/catalog", cancellationToken);
     }
 
-    public Task<IReadOnlyList<BacktestJobSnapshot>?> GetPaperJobsAsync(CancellationToken cancellationToken = default)
-    {
-        return httpClient.GetFromJsonAsync<IReadOnlyList<BacktestJobSnapshot>>($"{BaseUrl}/api/v1/paper/jobs", cancellationToken);
-    }
+    public async Task<IReadOnlyList<BacktestJobSnapshot>?> GetPaperJobsAsync(CancellationToken cancellationToken = default) =>
+        (await Workflow.JobsAsync("paper", cancellationToken)).Select(ToJobCard).ToArray();
 
+    private static BacktestJobSnapshot ToJobCard(RunJobResponse job) => new(
+        job.JobId, job.RunName, String.Empty, job.Status, job.CreatedAtUtc, job.StartedAtUtc, job.FinishedAtUtc,
+        job.Failure?.Message, job.CurrentStage, job.CompletedWorkItemCount, job.TotalWorkItemCount,
+        [job.Provenance is null ? "Historical job: universe provenance unavailable." : "Universe " + job.Provenance.UniverseSnapshotId], null);
     public Task<IReadOnlyList<MobileAutomationSessionSnapshot>?> GetAutomationSessionsAsync(CancellationToken cancellationToken = default)
     {
         return httpClient.GetFromJsonAsync<IReadOnlyList<MobileAutomationSessionSnapshot>>($"{BaseUrl}/api/v1/automation/sessions", cancellationToken);
@@ -138,24 +167,27 @@ public sealed class TradingFlowApiClient
         return httpClient.GetFromJsonAsync<MobileAutomationSessionSnapshot>($"{BaseUrl}/api/v1/automation/sessions/{sessionId}", cancellationToken);
     }
 
-    public Task<BacktestJobSnapshot?> GetPaperJobAsync(Guid jobId, CancellationToken cancellationToken = default)
-    {
-        return httpClient.GetFromJsonAsync<BacktestJobSnapshot>($"{BaseUrl}/api/v1/paper/jobs/{jobId}", cancellationToken);
-    }
+    public Task<BacktestJobSnapshot?> GetPaperJobAsync(Guid jobId, CancellationToken cancellationToken = default) =>
+        GetJobDetailAsync(jobId, cancellationToken);
 
-    public async Task<BacktestJobSnapshot?> StartPaperRunAsync(MobilePaperRunRequest request, CancellationToken cancellationToken = default)
+    private async Task<BacktestJobSnapshot?> GetJobDetailAsync(Guid id, CancellationToken token)
     {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/paper/runs", request, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<BacktestJobSnapshot>(cancellationToken);
+        var detail = await Workflow.DetailsAsync(id, token);
+        var card = ToJobCard(detail.Job);
+        return card with {
+            Events = detail.Events,
+            Summary = detail.Result is { } result
+                ? $"Return {result.TotalReturnPct?.ToString("0.##") ?? "unknown"}% · drawdown {result.MaxDrawdownPct?.ToString("0.##") ?? "unknown"}% · trades {result.AcceptedTradeCount?.ToString() ?? "unknown"}"
+                : null,
+            StrategyGroups = detail.Strategies.Select(item => new BacktestStrategyRunGroup(item.StrategyName, item.Status,
+                item.CompletedTickerCount, item.TotalTickerCount, item.CurrentTicker, item.RecentEvents)).ToArray()
+        };
     }
+    public async Task<BacktestJobSnapshot?> StartPaperRunAsync(StartPaperRunRequest request, CancellationToken cancellationToken = default) =>
+        ToJobCard(await Workflow.StartAsync(request, cancellationToken));
 
-    public async Task CancelPaperJobAsync(Guid jobId, CancellationToken cancellationToken = default)
-    {
-        using var response = await httpClient.PostAsync($"{BaseUrl}/api/v1/paper/jobs/{jobId}/cancel", null, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-    }
-
+    public async Task CancelPaperJobAsync(Guid jobId, CancellationToken cancellationToken = default) =>
+        await Workflow.CancelAsync(jobId, cancellationToken);
     public async Task CancelBrokerOrdersAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsync($"{BaseUrl}/api/v1/paper/jobs/{jobId}/cancel-broker-orders", null, cancellationToken);
@@ -175,24 +207,16 @@ public sealed class TradingFlowApiClient
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
-    public Task<IReadOnlyList<BacktestJobSnapshot>?> GetBacktestJobsAsync(CancellationToken cancellationToken = default)
-    {
-        return httpClient.GetFromJsonAsync<IReadOnlyList<BacktestJobSnapshot>>($"{BaseUrl}/api/v1/backtests/jobs", cancellationToken);
-    }
+    public async Task<IReadOnlyList<BacktestJobSnapshot>?> GetBacktestJobsAsync(CancellationToken cancellationToken = default) =>
+        (await Workflow.JobsAsync("backtest", cancellationToken)).Select(ToJobCard).ToArray();
 
-    public async Task<BacktestJobSnapshot?> StartBacktestRunAsync(MobileBacktestRunRequest request, CancellationToken cancellationToken = default)
-    {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/backtests/runs", request, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<BacktestJobSnapshot>(cancellationToken);
-    }
+    public async Task<BacktestJobSnapshot?> StartBacktestRunAsync(StartBacktestRequest request, CancellationToken cancellationToken = default) =>
+        ToJobCard(await Workflow.StartAsync(request, cancellationToken));
 
-    public async Task CancelBacktestJobAsync(Guid jobId, CancellationToken cancellationToken = default)
-    {
-        using var response = await httpClient.PostAsync($"{BaseUrl}/api/v1/backtests/jobs/{jobId}/cancel", null, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-    }
+    public Task<BacktestJobSnapshot?> GetBacktestJobAsync(Guid id, CancellationToken token = default) => GetJobDetailAsync(id, token);
 
+    public async Task CancelBacktestJobAsync(Guid jobId, CancellationToken cancellationToken = default) =>
+        await Workflow.CancelAsync(jobId, cancellationToken);
     public Task<IReadOnlyList<MobileNotificationItem>?> GetNotificationsAsync(CancellationToken cancellationToken = default)
     {
         return httpClient.GetFromJsonAsync<IReadOnlyList<MobileNotificationItem>>($"{BaseUrl}/api/v1/notifications", cancellationToken);
@@ -317,30 +341,12 @@ public sealed class TradingFlowApiClient
     {
         var symbol = Uri.EscapeDataString(ticker.Trim().ToUpperInvariant());
         return httpClient.GetFromJsonAsync<MobileSymbolIntelligenceResponse>(
-            $"{BaseUrl}/api/v1/wishlists/{wishlistId}/symbols/{symbol}/intelligence",
+            wishlistId == Guid.Empty ? $"{BaseUrl}/api/v1/symbols/{symbol}/intelligence" : $"{BaseUrl}/api/v1/wishlists/{wishlistId}/symbols/{symbol}/intelligence",
             cancellationToken);
     }
 
-    public async Task<MobileOrderTicketPreview?> PreviewManualOrderAsync(
-        MobileOrderPreviewRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/orders/preview", request, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<MobileOrderTicketPreview>(cancellationToken);
-    }
-
-    public async Task<MobileOrderTicketConfirmation?> ConfirmManualOrderAsync(
-        string ticketToken,
-        CancellationToken cancellationToken = default)
-    {
-        using var response = await httpClient.PostAsJsonAsync(
-            $"{BaseUrl}/api/v1/orders/confirm",
-            new MobileOrderConfirmRequest(ticketToken),
-            cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<MobileOrderTicketConfirmation>(cancellationToken);
-    }
+    public Task<TradingFlow.Contracts.V1.OrderEntryContextResponse?> GetOrderContextAsync(CancellationToken token = default) =>
+        httpClient.GetFromJsonAsync<TradingFlow.Contracts.V1.OrderEntryContextResponse>($"{BaseUrl}/api/v1/orders/context", token);
 
     public async Task AcknowledgeWishlistSignalAsync(Guid signalId, CancellationToken cancellationToken = default)
     {
@@ -564,62 +570,6 @@ public sealed class TradingFlowApiClient
 
 public sealed record MobileAuthenticationState(string UserName, bool IsAdministrator);
 
-public sealed record MobileCatalogResponse(
-    IReadOnlyList<MobileRunConfigOption> BacktestConfigs,
-    IReadOnlyList<MobileRunConfigOption> PaperConfigs,
-    IReadOnlyList<MobileStrategyOption> Strategies,
-    IReadOnlyList<MobileStrategyOption> PaperExperimentStrategies,
-    IReadOnlyList<MobileStrategyOption> PaperShadowStrategies);
-
-public sealed record MobileRunConfigOption(
-    string Path,
-    string FileName,
-    string RunName,
-    string Mode,
-    string Provider,
-    IReadOnlyList<string> Tickers,
-    IReadOnlyList<string> Intervals)
-{
-    public override string ToString()
-    {
-        var mode = string.IsNullOrWhiteSpace(Mode) ? "run" : Mode;
-        var provider = string.IsNullOrWhiteSpace(Provider) ? "provider" : Provider;
-        var intervals = Intervals.Count == 0 ? "auto" : string.Join(",", Intervals);
-        return $"{mode} / {provider} / {intervals}";
-    }
-}
-
-public sealed record MobileStrategyOption(
-    string Path,
-    string FileName,
-    string ArtifactStrategyId,
-    string SemanticVersion,
-    string ContentSha256,
-    string Lifecycle,
-    string StrategyId,
-    string StrategyName,
-    int Version,
-    string Direction,
-    string Timeframe,
-    string ExecutionTimeframe,
-    string SetupType,
-    bool UsesNews,
-    decimal? LastAuditedReturnPct = null,
-    decimal? LastAuditedMaxDrawdownPct = null,
-    int? LastAuditedTrades = null,
-    decimal? LastAuditedWinRatePct = null,
-    string? LastAuditedAverageHold = null,
-    string? LastAuditedResultPath = null)
-{
-    public override string ToString()
-    {
-        var audit = LastAuditedReturnPct is null
-            ? "not audited"
-            : $"{LastAuditedReturnPct:0.##}% / DD {LastAuditedMaxDrawdownPct:0.##}% / {LastAuditedAverageHold}";
-        return $"{StrategyName} {SemanticVersion} [{Lifecycle}] ({Timeframe}->{ExecutionTimeframe}) - {audit}";
-    }
-}
-
 public sealed record MobilePaperRunRequest(
     string BaseConfigPath,
     string StrategyPath,
@@ -666,9 +616,10 @@ public sealed record BacktestJobSnapshot(
         : $"{CurrentStage} - {CompletedTickerCount}/{TotalTickerCount}";
 
     public string LatestEvent => Events.LastOrDefault() ?? "No events yet.";
-    public string ResultSummary => Result is null
+    public string? Summary { get; init; }
+    public string ResultSummary => Summary ?? (Result is null
         ? ErrorMessage ?? LatestEvent
-        : $"P/L {Result.NetProfit:C2}, return {Result.TotalReturnPct:F2}%, daily {Result.AverageDailyReturnPct:F2}%, DD {Result.MaxDrawdownPct:F2}%, trades {Result.AcceptedTradeCount}/{Result.CandidateTradeCount}";
+        : $"P/L {Result.NetProfit:C2}, return {Result.TotalReturnPct:F2}%, daily {Result.AverageDailyReturnPct:F2}%, DD {Result.MaxDrawdownPct:F2}%, trades {Result.AcceptedTradeCount}/{Result.CandidateTradeCount}");
 }
 
 public sealed record BacktestResultSnapshot(
@@ -1335,55 +1286,3 @@ public sealed record WarmupTickerResult(
     IReadOnlyList<string> Timeframes,
     IReadOnlyList<string> ArtifactPaths,
     string? Error);
-
-public sealed record MobileAutomationStartRequest(
-    string ConfigPath,
-    string StrategyPath,
-    string Ticker,
-    string RunName,
-    string Source,
-    string? SourcePackage,
-    string? SourceTitle,
-    string? SourceMessage,
-    string EntryMode = "validate_strategy",
-    bool AllowExtendedHoursTrading = false,
-    string EntryOrderType = "limit");
-
-public sealed record MobileAutomationSessionSnapshot(
-    Guid SessionId,
-    string RunName,
-    string ConfigPath,
-    string StrategyPath,
-    string Ticker,
-    string Source,
-    string? SourcePackage,
-    string Status,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset? StartedAt,
-    DateTimeOffset? FinishedAt,
-    DateTimeOffset? EntrySubmittedAt,
-    DateTimeOffset? ExitSubmittedAt,
-    string? ErrorMessage,
-    string CurrentStage,
-    string? EntryOrderId,
-    decimal? EntryPrice,
-    decimal? StopLossPrice,
-    decimal? TakeProfitPrice,
-    int? ShareQuantity,
-    decimal? LastObservedPrice,
-    decimal? UnrealizedPl,
-    string? ExitReason,
-    IReadOnlyList<string> Events,
-    string? SourceTitle,
-    string? SourceMessage,
-    bool ExitSafetyOrdersSubmitted = false,
-    string? ExecutionConfigHash = null,
-    string? ExecutionCodeVersion = null)
-{
-    public string ProgressText => $"{Ticker} {Status} - {CurrentStage}";
-    public string LatestEvent => Events.LastOrDefault() ?? "No events yet.";
-    public string ShortSessionId => SessionId.ToString("N")[..8];
-    public string DisplayTitle => $"{Ticker} - {Source} #{ShortSessionId}";
-    public string StrategyFileName => Path.GetFileName(StrategyPath);
-    public string RunDetail => $"{RunName} | {Status} | {StrategyFileName}";
-}

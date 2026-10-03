@@ -6,6 +6,7 @@
 /// </summary>
 public interface IWishlistRepository
 {
+    Task<bool> IsPreparationRevisionAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult(false);
     Task<IReadOnlyList<Wishlist>> ListAsync(CancellationToken cancellationToken);
 
     Task<Wishlist?> GetByIdAsync(Guid id, CancellationToken cancellationToken);

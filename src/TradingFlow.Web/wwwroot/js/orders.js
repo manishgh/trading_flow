@@ -5,7 +5,7 @@
 
     const status = document.getElementById("OrdersConnection");
     const filter = summary.dataset.filter || "all";
-    const cancelTemplate = body.querySelector(".order-actions form")?.cloneNode(true) ?? null;
+    const cancelTemplate = body.querySelector(".order-actions form")?.cloneNode(true) ?? document.querySelector("[data-order-cancel-template]")?.content.firstElementChild?.cloneNode(true) ?? null;
     let loading = false;
 
     const workingStates = ["Intent", "Submitted", "Acked", "PartiallyFilled", "CancelPending"];
@@ -46,9 +46,10 @@
 
     /* The same page with the rail ticket opened on a symbol. Filter, sort and
        environment ride along; a replace adds the side and limit to prefill. */
-    function ticketUrl(symbol, side, limitPrice) {
+    function ticketUrl(symbol, side, limitPrice, quantity) {
         const url = new URL(window.location.href);
         url.searchParams.set("ticker", symbol);
+        if (quantity != null) url.searchParams.set("quantity", quantity);
         url.searchParams.delete("side");
         url.searchParams.delete("limitPrice");
         url.searchParams.delete("handler");
@@ -69,24 +70,27 @@
     }
 
     function updateActions(cell, item) {
-        cell.replaceChildren();
         if (!cancelTemplate || !isWorking(item.state) || item.state === "CancelPending" || !item.brokerOrderId) {
+            cell.replaceChildren();
             const label = isWorking(item.state) ? "Working - no inline action" : "Terminal - no action";
             append(cell, "span", label, "note orders-terminal");
             return;
         }
 
+        if (cell.querySelector('input[name="clientOrderId"]')?.value === item.clientOrderId) return;
+        cell.replaceChildren();
         const form = cancelTemplate.cloneNode(true);
-        addHidden(form, "brokerOrderId", item.brokerOrderId);
+        addHidden(form, "clientOrderId", item.clientOrderId);
+        addHidden(form, "idempotencyKey", crypto.randomUUID());
         const button = form.querySelector("button");
         if (button) {
             button.dataset.confirm = `Cancel the working ${item.symbol} order? The broker may still fill it before the cancel is acknowledged.`;
         }
         cell.append(form);
 
-        const replace = append(cell, "a", "Replace", "btn btn-secondary btn-sm");
-        replace.href = ticketUrl(item.symbol, item.side || "buy", item.limitPrice);
-        replace.title = "Replace opens a fresh reviewed ticket beside the journal; it does not amend this order in place.";
+        const replace = append(cell, "a", "New ticket", "btn btn-secondary btn-sm");
+        replace.href = ticketUrl(item.symbol, item.side || "buy", item.limitPrice, item.requestedQuantity);
+        replace.title = "A new ticket does not cancel the existing order; it opens a reviewed ticket beside the journal; it does not amend this order in place.";
     }
 
     function updateRow(row, item) {
@@ -259,7 +263,7 @@
         if (loading) return;
         loading = true;
         try {
-            const response = await fetch("/api/v1/orders?limit=500", { headers: { Accept: "application/json" } });
+            const response = await window.tradingFlowFetch("/api/v1/orders?limit=500", { headers: { Accept: "application/json" } });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const items = await response.json();
             updateSummary(items);

@@ -26,6 +26,8 @@ public partial class LoginPage : ContentPage
             if (state is not null)
             {
                 await Shell.Current.GoToAsync("..");
+                await Services.CandidateNavigation.OpenPendingAsync();
+                await Services.PreparationNotifications.OpenPendingAsync();
             }
         }
         catch (Exception exception)
