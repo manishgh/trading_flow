@@ -550,7 +550,7 @@ public static class TradingApiV1Endpoints
         {
             var feed = await newsFeed.GetRollingAsync(hours ?? 4, ticker, cancellationToken);
             return Results.Ok(feed);
-        });
+        }).AllowAnonymous();
 
         group.MapPost("/news/refresh", async (
             NewsFeedService newsFeed,

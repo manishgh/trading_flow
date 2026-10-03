@@ -36,14 +36,46 @@ npx playwright test
 
 - Offline .NET: **1,833 passed, zero failed**, including authentication/CSRF, durable order safety, immutable workflows, preparation persistence, deterministic replay, daily observations, previous-close selection and Finviz parsing.
 - Android Release: **succeeded with zero warnings and errors** after the final rejection-display correction (1m12s).
-- Browser: final 135-test run pending. Earlier complete run passed 134/135; navigation was corrected for Orders Ã¢â€ â€™ Positions. A separate startup test was stabilized by completing login navigation before injecting its single failure.
+- Browser: final complete baseline run passed 135/135; navigation was corrected for Orders Ã¢â€ â€™ Positions. A separate startup test was stabilized by completing login navigation before injecting its single failure.
 - JavaScript syntax checks passed for changed order, candidate and stock-desk scripts. Merge conflicts were resolved and staged. `git -c core.whitespace=cr-at-eol diff --check` passed.
 - Desktop and phone screenshots cover the stock desk and shared Orders ticket; assertions cover 320Ã¢â‚¬â€œ1440px route fit, accessible names/IDs, 44px phone actions, internal links, live patches without focus loss, actual authenticated read APIs and request-bound strategy prices. No browser check places a real broker order.
 
 ## Android/ngrok status and unrun checks
 
-A separate Debug package `com.manishgh.tradingflow.integration` / TradingFlowReview was installed on the attached phone, preserving the usual TradingFlow apps and their settings. Its initial backend was the old hard-coded ngrok URL; all screens returned 404 from that address. The user's preference is to use ngrok for this workflow. A tunnel to the isolated review backend on port 53019 is awaiting explicit approval after automatic approval review rejected public exposure of this specific test service. No new public tunnel has been created. Phone interaction paused while the device was in use.
+A separate Debug package `com.manishgh.tradingflow.integration` / TradingFlowReview preserves the usual TradingFlow applications. The old ngrok default returned 404. After explicit user approval, the isolated backend is now published at https://2b04-2001-1c00-820b-7600-a565-6712-f63f-b87a.ngrok-free.app and the mobile default points there. The earlier package with the corrected URL was installed, but native sign-in timed out after 45 seconds. Phone Chrome reached `/health` with HTTP 200; this does not establish that the native HTTP client works. The latest APK adds the public Workspace and has not been installed because USB disconnected. Android sign-in remains unverified.
 
 The review backend runs with UI-test mode and a disposable database below `.tmp/ui-tests/phone-data`; operational hosted services are disabled and no local broker credentials were copied. Device navigation after the corrected ngrok connection, notifications/reconnect, real Alpaca previous-close and strategy price evidence, bound broker positions, Finviz provider results and warmup service acceptance remain to be checked. The live Alpaca candle pipeline integration test was deliberately excluded from the offline suite. No market-order/paper-order provider acceptance is inferred from fixture tests.
 
 No GitHub push is part of this checkpoint. Any continuing ngrok/backend host and installed verification package should be tracked separately from the source merge.
+
+## Public Workspace and sign-in checkpoint
+
+The new Web `/Workspace` and Android Workspace hub expose News and Earnings before sign-in. Anonymous Web `/` opens Workspace; signed-in `/` opens Desk. Anonymous News does not load private wishlists or group filters. Stored-feed and calendar GETs are public; configuration-based news, provider-refresh POSTs, preparation, account and trading actions remain authenticated. Ordinary Earnings Refresh only performs a stored-calendar GET. Android provider-fetch controls are hidden until signed in.
+
+The user's supplied review account was provisioned in the disposable review database. API login and `/api/auth/me` passed through ngrok. A fresh Playwright browser also submitted the actual ngrok Web sign-in form successfully, landed on `/Desk`, and confirmed the expected account via `/api/auth/me`. The password was not written into source or this report. A UI-test-only minimum-length override accepts the requested review password; normal authentication remains at 12 characters with the existing strength and lockout rules. The override is bounded to 10-12 characters and requires UI-test mode.
+
+Component verification after these changes:
+
+```powershell
+dotnet test src/TradingFlow.Tests/TradingFlow.Tests.csproj --no-restore --filter 'FullyQualifiedName~OperatorPasswordPolicyTests|FullyQualifiedName~IdentityPersistenceTests|FullyQualifiedName~NewsFeedServiceTests|FullyQualifiedName~MobileXamlResourceTests' -m:1 --disable-build-servers --verbosity quiet
+dotnet build src/TradingFlow.Mobile/TradingFlow.Mobile.csproj --no-restore -f net10.0-android -c Debug -p:ApplicationId=com.manishgh.tradingflow.integration -p:ApplicationTitle=TradingFlowReview -p:AndroidPackageFormats=apk -m:1 --disable-build-servers --verbosity quiet
+# tests/ui, against the isolated review backend
+npx playwright test specs/public-workspace.spec.js specs/authorisation.spec.js specs/workspace-navigation.spec.js
+git -c core.whitespace=cr-at-eol diff --check
+```
+
+- Focused .NET: 11 passed, zero failed, including seven password-policy cases.
+- Affected browser checks: 14 passed, zero failed, covering public navigation at 320/412/1280 pixels, private group exclusion, provider POST authentication and stored-calendar Refresh.
+- Android Debug APK: zero warnings/errors after final mobile source edits. Web compilation and affected JavaScript syntax checks passed.
+- Public ngrok Workspace, News, Earnings and their stored read APIs returned HTTP 200. The web screenshot was visually inspected. Empty review data does not establish real provider content.
+- Independent requirements and code/design reviewers approved the actual public-access and isolated password-policy changes. Required fixes to provider POST authorization, anonymous refresh, private filters and public navigation were included.
+
+The user requested the services stay running: owned Web PID 84324 (exec session 33208), port 53019; ngrok PID 50900 (exec session 97969). Runtime mode is Production plus explicit isolated UI-test mode, no launch profile; disposable data root `.tmp/ui-tests/phone-data`, operational hosted services disabled. Provider credentials are unset for this process. The current ngrok address depends on the running tunnel; a future changed address must be saved in Android Settings as well as used by Web.
+
+On-device follow-up: reconnect USB, update only TradingFlowReview with the latest APK, confirm News/Earnings from Workspace while anonymous, use Settings Save & Test for the current ngrok URL, then verify native sign-in with the supplied account. Record the actual native request stage and response/exception if it still times out. Notifications/reconnect and external Alpaca, Finviz, warmup and broker checks remain unrun.
+
+## Editable Figma reference
+
+[Trading/Orders content reference](https://www.figma.com/design/8hzS5UnDBVN7y0zWwQ8qB0?node-id=2-63) contains fresh whole-share, fractional and stale holding fixtures and exact API/state annotations. It has 51 descendants, including 34 editable text layers, eight layout frames and nine component instances, with no raster UI images.
+
+[Public Workspace reference](https://www.figma.com/design/8hzS5UnDBVN7y0zWwQ8qB0?node-id=10-15) now includes News and Earnings above account actions, source-derived Open Sans typography, 16-unit padding, 12-unit spacing and 48-unit action minima. Its 21 descendants include 13 editable text layers and seven action instances, with no UI images. The final screenshot was visually checked for wrapping, overlap and clipping. These are editable content references; native toolbar geometry, dialogs and phone behavior still need device verification.

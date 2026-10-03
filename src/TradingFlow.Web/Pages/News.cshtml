@@ -25,6 +25,8 @@
                 }
             </select>
         </div>
+        @if (User.Identity?.IsAuthenticated == true)
+        {
         <div>
             <label for="GroupId">Group</label>
             <select id="GroupId" name="groupId">
@@ -35,6 +37,7 @@
                 }
             </select>
         </div>
+        }
         <div>
             <label for="Ticker">Ticker</label>
             <input id="Ticker" name="ticker" value="@Model.Ticker" placeholder="NVDA" autocomplete="off" />

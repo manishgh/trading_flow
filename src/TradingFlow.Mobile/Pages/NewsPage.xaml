@@ -44,7 +44,8 @@
                         <Button Text="Refresh"
                                 Clicked="OnRefreshClicked"
                                 SemanticProperties.Description="Refresh stored rolling news" />
-                        <Button Grid.Column="1"
+                        <Button x:Name="FetchProvidersButton" Grid.Column="1"
+                                IsVisible="False"
                                 Text="Fetch Providers"
                                 Clicked="OnFetchClicked"
                                 SemanticProperties.Description="Fetch current Finviz and Alpaca news" />
@@ -58,7 +59,7 @@
                            FontAttributes="Bold"
                            FontSize="16"
                            HorizontalTextAlignment="Center" />
-                    <Label Text="Fetch providers or change the ticker filter."
+                    <Label Text="Refresh the stored feed or change the ticker filter."
                            FontSize="13"
                            TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                            HorizontalTextAlignment="Center" />

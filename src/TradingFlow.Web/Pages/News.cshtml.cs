@@ -61,7 +61,10 @@ public sealed class NewsModel(
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {
         Hours = Math.Clamp(Hours, 1, 72);
-        Groups = await wishlists.ListAsync(cancellationToken);
+        Groups = User.Identity?.IsAuthenticated == true
+            ? await wishlists.ListAsync(cancellationToken)
+            : [];
+        if (User.Identity?.IsAuthenticated != true) GroupId = null;
 
         var feed = await news.GetRollingAsync(Hours, NormalizeTicker(Ticker), cancellationToken);
         FeedDescription = feed.Message ?? String.Empty;
@@ -93,7 +96,7 @@ public sealed class NewsModel(
 
     private async Task<HashSet<string>?> ResolveGroupTickersAsync(CancellationToken cancellationToken)
     {
-        if (GroupId is not { } id)
+        if (User.Identity?.IsAuthenticated != true || GroupId is not { } id)
         {
             return null;
         }

@@ -8,7 +8,7 @@ namespace TradingFlow.Mobile.Services;
 
 public sealed class TradingFlowApiClient
 {
-    public const string NgrokDefaultUrl = "https://875a-2001-1c00-820b-7600-d54-b611-ef7-128f.ngrok-free.app";
+    public const string NgrokDefaultUrl = "https://2b04-2001-1c00-820b-7600-a565-6712-f63f-b87a.ngrok-free.app";
     public const string PhysicalDeviceDefaultUrl = "http://192.168.178.238:53017";
     public const string AndroidEmulatorDefaultUrl = "http://10.0.2.2:53017";
 

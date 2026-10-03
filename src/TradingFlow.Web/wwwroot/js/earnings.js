@@ -570,7 +570,7 @@
 
     /* --- wiring ------------------------------------------------------------- */
 
-    refreshButton.addEventListener("click", () => loadCalendar(true));
+    refreshButton.addEventListener("click", () => loadCalendar(false));
 
     lanesRoot.addEventListener("click", event => {
         const button = event.target.closest("[data-lane]");

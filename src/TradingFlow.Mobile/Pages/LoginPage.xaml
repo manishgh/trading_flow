@@ -6,7 +6,7 @@
     <ScrollView>
         <VerticalStackLayout Padding="18" Spacing="14" MaximumWidthRequest="520">
             <Label Text="TradingFlow access" Style="{StaticResource Headline}" />
-            <Label Text="Sign in to use trading, research, wishlists, and operations. Earnings remains public."
+            <Label Text="Sign in to use trading, research, wishlists, and operations. News and Earnings are available without signing in."
                    Style="{StaticResource SubHeadline}" />
 
             <Border Style="{StaticResource CardBorder}" Padding="16">

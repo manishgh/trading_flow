@@ -42,6 +42,7 @@ public partial class EarningsPage : ContentPage
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        RefreshProvidersButton.IsVisible = AppServices.Api.CurrentUserName is not null;
         await LoadAsync();
         refreshTimer.Start();
     }
@@ -130,6 +131,7 @@ public partial class EarningsPage : ContentPage
 
     private async void OnRefreshProviders(object? sender, EventArgs e)
     {
+        if (AppServices.Api.CurrentUserName is null) { await LoadAsync(); return; }
         if (isLoading)
         {
             return;

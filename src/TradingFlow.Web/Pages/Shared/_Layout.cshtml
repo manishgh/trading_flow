@@ -20,7 +20,7 @@
         "System" => User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator)
             ? new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup"), ("Users", "/Users") }
             : new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup") },
-        _ => new[] { ("Stock desk", "/Desk"), ("Candidate review", "/TradeDesk"), ("Manage wishlists", "/Wishlists"), ("Earnings", "/Earnings") }
+        _ => new[] { ("Stock desk", "/Desk"), ("Candidate review", "/TradeDesk"), ("Manage wishlists", "/Wishlists"), ("Workspace", "/Workspace"), ("News", "/News"), ("Earnings", "/Earnings") }
     };
     string EnvironmentUrl(string slug) {
         var query = Context.Request.Query.ToDictionary(x => x.Key, x => (string?)x.Value.ToString(), StringComparer.OrdinalIgnoreCase);
@@ -50,7 +50,7 @@
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <div class="environment-rail" aria-hidden="true"></div>
     <header class="topbar">
-        <a class="brand" asp-page="@(signedIn ? "/Desk" : "/Earnings")"
+        <a class="brand" asp-page="@(signedIn ? "/Desk" : "/Workspace")"
            aria-label="TradingFlow">TRADINGFLOW</a>
 
         <nav class="primary-nav" aria-label="Primary navigation">
@@ -58,7 +58,11 @@
                 @foreach (var item in areas) {
                     <a asp-page="@item.Item2" class="@(area == item.Item1 ? "active" : null)" aria-current="@(area == item.Item1 ? "true" : null)">@item.Item1</a>
                 }
-            } else { <a asp-page="/Earnings">Earnings</a> }
+            } else {
+                <a asp-page="/Workspace" aria-current="@(IsCurrent("/Workspace") ? "page" : null)">Workspace</a>
+                <a asp-page="/News" aria-current="@(IsCurrent("/News") ? "page" : null)">News</a>
+                <a asp-page="/Earnings" aria-current="@(IsCurrent("/Earnings") ? "page" : null)">Earnings</a>
+            }
         </nav>
 
         <div class="topbar-tail">
