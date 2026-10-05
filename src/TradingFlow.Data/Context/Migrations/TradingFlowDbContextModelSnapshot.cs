@@ -2806,6 +2806,45 @@ namespace TradingFlow.Data.Context.Migrations
                     b.ToTable("Wishlists");
                 });
 
+            modelBuilder.Entity("TradingFlow.Domain.Wishlists.WishlistBulkCommand", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Affected")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AfterJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BeforeJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OperatorId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Undone")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OperatorId", "CreatedAtUtc");
+
+                    b.ToTable("WishlistBulkCommands");
+                });
+
             modelBuilder.Entity("TradingFlow.Domain.Wishlists.WishlistItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2825,6 +2864,13 @@ namespace TradingFlow.Data.Context.Migrations
                     b.Property<string>("Notes")
                         .HasMaxLength(1000)
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("TagsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(1200)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]");
 
                     b.Property<string>("Ticker")
                         .IsRequired()

@@ -14,7 +14,8 @@
     var selected = Model.SelectedRow;
     var screener = Model.ScreenerResult;
     var hasRangeFilter = Model.MinPrice is not null || Model.MaxPrice is not null ||
-        Model.MaxSpreadBps is not null;
+        Model.MaxSpreadBps is not null || Model.MinChange is not null || Model.MaxChange is not null ||
+        Model.MinVolumeZ20 is not null || Model.MaxVolumeZ20 is not null || !String.IsNullOrWhiteSpace(Model.Tracked);
 
     // The server renders every column and marks the ones that start hidden. The
     // chooser then reconciles the operator's stored preference over that baseline,
@@ -388,7 +389,7 @@ else if (Model.IsScreenerScope)
                aria-current="@(active ? "page" : null)">@label<span class="count">@Model.CountFor(key)</span></a>
         }
     </nav>
-    <span class="note">@selectedName · @Model.Rows.Count of @Model.UnfilteredCount symbols · ranked on @Model.DeskHorizon weights @Model.RankConfig.WeightsVersion</span>
+    <span class="note">@selectedName · @Model.MatchingCount of @Model.UnfilteredCount symbols · @Model.Rows.Count on this page · ranked on @Model.DeskHorizon weights @Model.RankConfig.WeightsVersion</span>
     <div class="desk-view-options">
         <div class="seg" role="group" aria-label="Layout" data-desk-layout-group>
             <button type="button" class="seg-opt" data-desk-layout="rail" aria-pressed="true">Grid + rail</button>
@@ -409,7 +410,7 @@ else if (Model.IsScreenerScope)
             }
         </div>
         <details class="desk-advanced" open="@hasRangeFilter">
-            <summary>Price and spread@(hasRangeFilter ? " · on" : "")</summary>
+            <summary>Market filters@(hasRangeFilter ? " · on" : "")</summary>
             <div class="desk-range-grid">
                 <div class="field">
                     <label for="MinPrice">Min price</label>
@@ -423,10 +424,28 @@ else if (Model.IsScreenerScope)
                     <label for="MaxSpreadBps">Max spread (bps)</label>
                     <input class="input" id="MaxSpreadBps" form="DeskFilterForm" name="maxSpreadBps" type="number" step="1" min="0" value="@Model.MaxSpreadBps" />
                 </div>
+                <div class="field"><label for="MinChange">Min change %</label><input class="input" id="MinChange" form="DeskFilterForm" name="minChange" type="number" step="0.01" value="@Model.MinChange" /></div>
+                <div class="field"><label for="MaxChange">Max change %</label><input class="input" id="MaxChange" form="DeskFilterForm" name="maxChange" type="number" step="0.01" value="@Model.MaxChange" /></div>
+                <div class="field"><label for="MinVolumeZ20">Min volume Z20</label><input class="input" id="MinVolumeZ20" form="DeskFilterForm" name="minVolumeZ20" type="number" step="0.1" value="@Model.MinVolumeZ20" /></div>
+                <div class="field"><label for="MaxVolumeZ20">Max volume Z20</label><input class="input" id="MaxVolumeZ20" form="DeskFilterForm" name="maxVolumeZ20" type="number" step="0.1" value="@Model.MaxVolumeZ20" /></div>
+                <div class="field"><label for="Tracked">Tracked position</label><select class="input" id="Tracked" form="DeskFilterForm" name="tracked"><option value="all" selected="@(String.IsNullOrEmpty(Model.Tracked) || Model.Tracked == "all")">All</option><option value="tracked" selected="@(Model.Tracked == "tracked")">Tracked</option><option value="untracked" selected="@(Model.Tracked == "untracked")">Untracked</option></select></div>
+                <div class="field"><label for="DeskPageSize">Rows per page</label><select class="input" id="DeskPageSize" form="DeskFilterForm" name="pageSize">@foreach(var size in new[]{25,50,100}){<option value="@size" selected="@(Model.PageSize == size)">@size</option>}</select></div>
+                <button class="btn btn-secondary" type="submit" form="DeskFilterForm">Apply filters</button>
             </div>
+            <p class="note">Unknown values do not pass numeric bounds. Volume Z20 is advisory and is not relative volume. Sector, market cap and strategy RVOL are unavailable as universe filters. Tracked positions are application trade records.</p>
         </details>
+        <div class="field"><label for="DeskPreset">My filter presets</label><select class="input" id="DeskPreset"><option value="">Choose preset</option></select></div>
+        <div class="field"><label for="DeskPresetName">Preset name</label><input class="input" id="DeskPresetName" maxlength="40" /></div>
+        <button class="btn btn-secondary" type="button" id="DeskPresetSave">Save filters</button>
+        <button class="btn btn-secondary" type="button" id="DeskPresetDelete">Delete preset</button>
+        <p class="note" role="status" id="DeskPresetStatus"></p>
     </div>
 </section>
+<nav class="pagination" aria-label="Market list pages">
+    @if(Model.PageNumber > 1){<a asp-page="/TradeDesk" asp-all-route-data='Model.RouteWith(("pageNumber", (Model.PageNumber-1).ToString()))'>Previous</a>}
+    <span>Page @Model.PageNumber of @Model.PageCount · at most 100 rows per page</span>
+    @if(Model.PageNumber < Model.PageCount){<a asp-page="/TradeDesk" asp-all-route-data='Model.RouteWith(("pageNumber", (Model.PageNumber+1).ToString()))'>Next</a>}
+</nav>
 
 @* ===========================================================================
    5 & 6. Shell
@@ -545,7 +564,8 @@ else if (Model.IsScreenerScope)
 @* The live streams follow the exact symbols rendered here - every wishlist plus
    held positions, one wishlist, or a screener's hits - not a wishlist id. *@
 <section class="desk-shell" data-desk-root data-layout="rail" data-mobile-level="@Model.MobileLevel"
-         data-stream-tickers="@String.Join(",", Model.AllRows.Select(row => row.Ticker.ToUpperInvariant()))"
+         data-stream-tickers="@String.Join(",", Model.Rows.Select(row => row.Ticker).Concat(Model.Ticker is null ? Array.Empty<string>() : new[]{Model.Ticker}).Distinct(StringComparer.OrdinalIgnoreCase))"
+         data-operator-id="@User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value" data-environment="@(String.Equals(Model.Env, "live", StringComparison.OrdinalIgnoreCase) ? "live" : "paper")"
          data-selected-ticker="@Model.Ticker">
 
     @* --- Layout B: symbol ladder ------------------------------------------ *@
@@ -572,7 +592,16 @@ else if (Model.IsScreenerScope)
     </nav>
 
     @* --- Layout A: market grid -------------------------------------------- *@
-    <div class="desk-main" data-desk-grid>
+    <div class="desk-main" data-desk-grid data-bulk-form>
+        <div class="actions" data-bulk-bar hidden><span><span data-bulk-count>0</span> selected on this page</span>
+            <button class="btn btn-secondary" type="button" data-group-action="add">Add to group</button>
+            @if(Model.SelectedWishlist is not null && !Model.IsScreenerScope){
+                <button class="btn btn-secondary" type="button" data-group-action="copy" data-source-id="@Model.SelectedWishlist.Id">Copy to group</button>
+                <button class="btn btn-secondary" type="button" data-group-action="move" data-source-id="@Model.SelectedWishlist.Id">Move to group</button>
+                <button class="btn btn-secondary" type="button" data-group-action="tag" data-source-id="@Model.SelectedWishlist.Id">Tag</button>
+            }
+            <button class="btn btn-secondary" type="button" data-bulk-clear>Clear selection</button>
+        </div>
         @if (Model.Rows.Count == 0)
         {
             <p class="empty-state" data-desk-empty>
@@ -587,6 +616,7 @@ else if (Model.IsScreenerScope)
                 <table class="grid-table trade-desk-table" data-density="comfortable">
                     <thead>
                         <tr>
+                            <th scope="col" class="select-column"><input type="checkbox" data-bulk-toggle-all aria-label="Select this page" /></th>
                             @foreach (var column in TradeDeskModel.Columns)
                             {
                                 <th scope="col" class="@column.CssClass @(column.Numeric ? "num" : null)"
@@ -612,6 +642,7 @@ else if (Model.IsScreenerScope)
                                 @* Which lists hold the symbol rides under the name rather than
                                    in a column of its own: in the all-wishlists view it is how a
                                    row says why it is on screen, without taking grid width. *@
+                                <td class="select-column"><input type="checkbox" value="@row.Ticker" data-bulk-item aria-label="Select @row.Ticker" /></td>
                                 <td class="market-cell" data-column="ticker">
                                     <strong class="market-symbol">@row.Ticker</strong>
                                     <span class="cell-sub">@row.DisplayName</span>
@@ -639,7 +670,7 @@ else if (Model.IsScreenerScope)
                                 <td class="num @(row.SpreadBps > 8m ? "is-wide" : null)" data-column="spread" data-spread-cell>
                                     @(row.SpreadBps is null ? "—" : row.SpreadBps.Value.ToString("0.0") + " bps")
                                 </td>
-                                <td class="num" data-column="rvol" hidden="@startsHidden.Contains("rvol")">
+                                <td class="num" data-column="z20" hidden="@startsHidden.Contains("z20")">
                                     @(ranked.Evidence.Swing?.VolumeZ20 is { } volumeZ ? volumeZ.ToString("0.00") + " z" : "—")
                                 </td>
                                 <td class="eligibility-cell" data-column="eligibility">
@@ -902,7 +933,10 @@ else if (Model.IsScreenerScope)
 </section>
 
 </div>
+<partial name="_GroupActions" />
 @section Scripts {
+    <script type="module" src="~/js/group-actions.js" asp-append-version="true"></script>
+    <script src="~/js/desk-presets.js" asp-append-version="true" defer></script>
     <script src="~/js/candidate-workflow.js" asp-append-version="true" defer></script>
     <script type="module" src="~/js/trading-flow-desk.js" asp-append-version="true"></script>
     <script src="~/js/desk-layout.js" asp-append-version="true" defer></script>

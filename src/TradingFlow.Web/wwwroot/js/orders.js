@@ -77,7 +77,12 @@
             return;
         }
 
-        if (cell.querySelector('input[name="clientOrderId"]')?.value === item.clientOrderId) return;
+        if (cell.querySelector('input[name="clientOrderId"]')?.value === item.clientOrderId) {
+            const existing = cell.querySelector('[data-replacement-order]');
+            if(!item.canReviewReplacement) existing?.remove();
+            if(item.canReviewReplacement && !existing) { const button = append(cell, 'button', 'Replace', 'btn btn-secondary btn-sm'); button.type = 'button'; button.dataset.replacementOrder = item.clientOrderId; }
+            return;
+        }
         cell.replaceChildren();
         const form = cancelTemplate.cloneNode(true);
         addHidden(form, "clientOrderId", item.clientOrderId);
@@ -87,6 +92,7 @@
             button.dataset.confirm = `Cancel the working ${item.symbol} order? The broker may still fill it before the cancel is acknowledged.`;
         }
         cell.append(form);
+        if(item.canReviewReplacement) { const button = append(cell, 'button', 'Replace', 'btn btn-secondary btn-sm'); button.type = 'button'; button.dataset.replacementOrder = item.clientOrderId; }
 
         const replace = append(cell, "a", "New ticket", "btn btn-secondary btn-sm");
         replace.href = ticketUrl(item.symbol, item.side || "buy", item.limitPrice, item.requestedQuantity);

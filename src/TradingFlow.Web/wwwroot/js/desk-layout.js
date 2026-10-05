@@ -8,11 +8,8 @@
     const root = document.querySelector("[data-desk-root]");
     if (!root) return;
 
-    const KEYS = {
-        layout: "tradingflow.desk.layout",
-        density: "tradingflow.desk.density",
-        columns: "tradingflow.desk.columns"
-    };
+    const prefix = `tradingflow.desk.${root.dataset.operatorId}.${root.dataset.environment}`;
+    const KEYS = { layout: `${prefix}.layout`, density: `${prefix}.density`, columns: `${prefix}.columns` };
 
     function read(key, fallback) {
         try {

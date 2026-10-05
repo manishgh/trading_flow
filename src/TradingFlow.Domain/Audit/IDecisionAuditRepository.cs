@@ -30,7 +30,21 @@ public interface IDecisionAuditRepository
         int skip,
         int take,
         CancellationToken cancellationToken);
+
+    Task<DecisionAuditPage> QueryAsync(string runName, DecisionAuditQuery query, CancellationToken cancellationToken);
+    Task<DecisionAuditSummary> SummarizeAsync(string runName, CancellationToken cancellationToken);
 }
+
+public sealed record DecisionAuditQuery(string? Decision = null, string? Ticker = null,
+    string? Reason = null, string Sort = "time", bool Descending = true,
+    int Skip = 0, int Take = 50, long? ThroughId = null);
+
+public sealed record DecisionAuditReasonCount(string Key, string Example, int Count);
+
+/// <summary>Bounded full-run aggregates, independent of the displayed page.</summary>
+public sealed record DecisionAuditSummary(int Total, int Accepted, int Rejected,
+    int Tickers, int Strategies, int ReasonCount, long LastId,
+    IReadOnlyList<DecisionAuditReasonCount> TopReasons);
 
 /// <summary>One page of decision records plus the total the filters matched.</summary>
 /// <param name="Records">The records on this page, newest first.</param>

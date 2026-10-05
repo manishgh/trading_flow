@@ -15,6 +15,9 @@ public sealed class WishlistItem
 
     public string? Notes { get; set; }
 
+    /// <summary>Explicit curation tags; never inferred from free-text notes.</summary>
+    public string TagsJson { get; set; } = "[]";
+
     public bool Active { get; set; } = true;
 
     public DateTimeOffset AddedAtUtc { get; set; }

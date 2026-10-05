@@ -556,13 +556,7 @@ public sealed class NewsFeedService : BackgroundService
             ExplainEvidence(category));
     }
 
-    private static string ClassifyEvidence(PersistedNewsItem item)
-    {
-        if (item.Provider.Equals("sec_edgar", StringComparison.OrdinalIgnoreCase)) return "SEC filing";
-        if (item.Provider.Equals("federal_reserve", StringComparison.OrdinalIgnoreCase)) return "Fed";
-        if (!item.Ticker.Equals("MARKET", StringComparison.OrdinalIgnoreCase)) return "Company";
-        return ContainsAny(item.Headline, MacroKeywords) ? "Macro" : "Market";
-    }
+    private static string ClassifyEvidence(PersistedNewsItem item) => TradingFlow.Domain.News.NewsEvidenceClassification.Classify(item);
 
     private static string ExplainEvidence(string category) => category switch
     {
@@ -583,11 +577,7 @@ public sealed class NewsFeedService : BackgroundService
         return keywords.Any(keyword => value.Contains(keyword, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static readonly string[] MacroKeywords =
-    [
-        "inflation", "cpi", "ppi", "jobs", "payroll", "unemployment", "gdp", "yield", "treasury",
-        "interest rate", "currency", "dollar", "oil", "energy", "tariff"
-    ];
+    private static readonly string[] MacroKeywords = TradingFlow.Domain.News.NewsEvidenceClassification.MacroKeywords;
 
     private static readonly string[] MarketEvidenceKeywords =
     [

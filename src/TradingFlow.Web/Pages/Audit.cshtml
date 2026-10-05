@@ -2,165 +2,15 @@
 @model TradingFlow.Web.Pages.AuditModel
 @{
     ViewData["Title"] = "Decision Tree Audit - " + Model.RunName;
+    string PageUrl(int number, string? sort = null) => Url.Page("/Audit", new {
+        runName = Model.RunName, decision = Model.Decision, ticker = Model.Ticker, reason = Model.Reason,
+        sort = sort ?? Model.Sort, descending = sort is null ? Model.Descending : sort == Model.Sort ? !Model.Descending : false,
+        pageNumber = number, pageSize = Model.PageSize, compareWith = Model.CompareWith, returnUrl = Model.BackUrl
+    })!;
+    string SortState(string key) => Model.Sort == key ? Model.Descending ? "descending" : "ascending" : "none";
 }
 @section Scripts {
-    <script>
-        (function () {
-            const snapshotUrl = `${window.location.pathname}?handler=Snapshot`;
-            const refreshedAtEl = document.getElementById('auditRefreshedAt');
-            const emptyEl = document.getElementById('auditEmpty');
-            const evaluationsEl = document.getElementById('auditEvaluations');
-            const acceptedEl = document.getElementById('auditAccepted');
-            const rejectedEl = document.getElementById('auditRejected');
-            const coverageEl = document.getElementById('auditCoverage');
-            const reasonCardsEl = document.getElementById('auditReasonCards');
-            const reasonPanelEl = document.getElementById('auditReasonPanel');
-            const recordsBodyEl = document.getElementById('auditRecordsBody');
-            const decisionFilterEl = document.getElementById('decisionFilter');
-            const reasonFilterEl = document.getElementById('reasonFilter');
-            const tickerFilterEl = document.getElementById('tickerFilter');
-
-            function escapeHtml(value) {
-                return String(value ?? '')
-                    .replaceAll('&', '&amp;')
-                    .replaceAll('<', '&lt;')
-                    .replaceAll('>', '&gt;')
-                    .replaceAll('"', '&quot;')
-                    .replaceAll("'", '&#039;');
-            }
-
-            function decisionClass(decision) {
-                const normalized = String(decision ?? '').toLowerCase();
-                if (normalized === 'accepted' || normalized === 'exitsubmitted') return 'accepted';
-                if (normalized === 'rejected' || normalized === 'exitrejected') return 'rejected';
-                return 'pending';
-            }
-
-            function renderReasonCards(reasons) {
-                if (!reasonPanelEl || !reasonCardsEl) return;
-                reasonPanelEl.hidden = reasons.length === 0;
-                reasonCardsEl.innerHTML = reasons.map(reason => `<button type="button" class="audit-reason-card" data-reason-card="${escapeHtml(reason.reasonKey)}">
-                    <div class="audit-reason-title">${escapeHtml(reason.displayReason)}</div>
-                    <div class="muted">${escapeHtml(reason.count)} rejected (${Number(reason.percentOfRejected ?? 0).toFixed(1)}%)</div>
-                    <code>${escapeHtml(reason.exampleReason)}</code>
-                </button>`).join('');
-                reasonCardsEl.querySelectorAll('[data-reason-card]').forEach(card => {
-                    card.addEventListener('click', () => {
-                        reasonFilterEl.value = card.getAttribute('data-reason-card') ?? '';
-                        applyFilters();
-                    });
-                });
-            }
-
-            function updateReasonFilter(reasons) {
-                if (!reasonFilterEl) return;
-                const selected = reasonFilterEl.value;
-                reasonFilterEl.innerHTML = '<option value="">All rejection reasons</option>' +
-                    reasons.map(reason => `<option value="${escapeHtml(reason.reasonKey)}">${escapeHtml(reason.displayReason)} (${escapeHtml(reason.count)})</option>`).join('');
-                if ([...reasonFilterEl.options].some(option => option.value === selected)) {
-                    reasonFilterEl.value = selected;
-                }
-            }
-
-            function renderRecords(records) {
-                if (!recordsBodyEl) return;
-                recordsBodyEl.innerHTML = records.map(record => {
-                    const chips = (record.chips ?? []).map(renderChip).join('');
-                    const rawReason = record.rawReason ? `<code>${escapeHtml(record.rawReason)}</code>` : '';
-                    const gates = (record.gateEvidence ?? []).length === 0 ? '' :
-                        `<table class="gate-evidence"><thead><tr><th>Gate</th><th>Measured</th><th>Required</th></tr></thead><tbody>` +
-                        record.gateEvidence.map(gate => `<tr><td>${escapeHtml(gate.label)}</td>`+
-                            `<td class="num">${escapeHtml(gate.actual)}</td>`+
-                            `<td class="num">${escapeHtml(gate.operator)} ${escapeHtml(gate.threshold)}</td></tr>`).join('') +
-                        `</tbody></table>`;
-                    return `<tr class="audit-table-row" data-decision="${escapeHtml(String(record.decision ?? '').toLowerCase())}" data-reason="${escapeHtml(record.reasonKey)}" data-ticker="${escapeHtml(record.ticker)}">
-                        <td class="audit-cell nowrap">${escapeHtml(record.localTime)}</td>
-                        <td class="audit-cell strong">${escapeHtml(record.ticker)}</td>
-                        <td class="audit-cell">${escapeHtml(record.strategy)}</td>
-                        <td class="audit-decision ${decisionClass(record.decision)}">${escapeHtml(record.decision)}</td>
-                        <td class="audit-cell">
-                            <div>${escapeHtml(record.reason)}</div>
-                            ${rawReason}
-                            ${gates}
-                            <div class="muted audit-note">${escapeHtml(record.explanation)}</div>
-                            <div>${chips}</div>
-                        </td>
-                        <td class="audit-cell wide">
-                            <details>
-                                <summary>View Signal Evaluation</summary>
-                                <pre class="audit-json">${escapeHtml(record.signalJson)}</pre>
-                            </details>
-                        </td>
-                    </tr>`;
-                }).join('');
-                applyFilters();
-            }
-
-            function renderChip(chip) {
-                const value = String(chip.value ?? '').toLowerCase();
-                if (value === 'true' || value === 'false') {
-                    const checked = value === 'true' ? 'checked' : '';
-                    return `<span class="audit-chip bool ${chip.passed ? '' : 'fail'}"><input type="checkbox" disabled ${checked} aria-label="${escapeHtml(chip.label)}" /><span>${escapeHtml(chip.label)}</span></span>`;
-                }
-
-                return `<span class="audit-chip ${chip.passed ? '' : 'fail'}">${escapeHtml(chip.label)}: ${escapeHtml(chip.value)}</span>`;
-            }
-
-            function applyFilters() {
-                const decision = decisionFilterEl?.value ?? '';
-                const reason = reasonFilterEl?.value ?? '';
-                const ticker = (tickerFilterEl?.value ?? '').trim().toUpperCase();
-                let visible = 0;
-                recordsBodyEl?.querySelectorAll('tr.audit-table-row').forEach(row => {
-                    const matchesDecision = !decision || row.dataset.decision === decision;
-                    const matchesReason = !reason || row.dataset.reason === reason;
-                    const matchesTicker = !ticker || String(row.dataset.ticker ?? '').toUpperCase().includes(ticker);
-                    const show = matchesDecision && matchesReason && matchesTicker;
-                    row.hidden = !show;
-                    if (show) visible++;
-                });
-                if (emptyEl) {
-                    emptyEl.hidden = visible !== 0;
-                }
-            }
-
-            async function refreshAudit() {
-                let data;
-                try {
-                    const response = await window.tradingFlowFetch(snapshotUrl, { cache: 'no-store' });
-                    if (!response.ok) return;
-                    data = await response.json();
-                } catch {
-                    return;
-                }
-
-                if (!data.success) return;
-                if (refreshedAtEl) refreshedAtEl.textContent = data.refreshedAt;
-                if (evaluationsEl) evaluationsEl.textContent = data.evaluations;
-                if (acceptedEl) acceptedEl.textContent = data.accepted;
-                if (rejectedEl) rejectedEl.textContent = data.rejected;
-                if (coverageEl) coverageEl.textContent = `${data.tickerCount} tickers / ${data.strategyCount} strategies`;
-                const reasons = data.reasons ?? [];
-                updateReasonFilter(reasons);
-                renderReasonCards(reasons);
-                renderRecords(data.records ?? []);
-            }
-
-            decisionFilterEl?.addEventListener('change', applyFilters);
-            reasonFilterEl?.addEventListener('change', applyFilters);
-            tickerFilterEl?.addEventListener('input', applyFilters);
-            document.getElementById('clearAuditFilters')?.addEventListener('click', () => {
-                if (decisionFilterEl) decisionFilterEl.value = '';
-                if (reasonFilterEl) reasonFilterEl.value = '';
-                if (tickerFilterEl) tickerFilterEl.value = '';
-                applyFilters();
-            });
-
-            window.tradingFlowAuditRefresh = window.setInterval(refreshAudit, 5000);
-            applyFilters();
-            refreshAudit();
-        })();
-    </script>
+    <script type="module" src="~/js/audit-page.js" asp-append-version="true"></script>
 }
 
 <div class="container audit-page audit-container">
@@ -170,7 +20,8 @@
             <p class="muted">Decision tree audit for strategy signal evaluations. Times shown in @Model.LocalTimeZoneLabel. Last refreshed: <span id="auditRefreshedAt">@Model.FormatLocal(DateTimeOffset.UtcNow)</span>.</p>
         </div>
         <div class="actions">
-                <a href="@Url.Page("/Audit", "Export", new { runName = Model.RunName })" class="button secondary">Export CSV</a>
+                <a href="@Url.Page("/Audit", "Export", new { runName = Model.RunName, decision = Model.Decision, ticker = Model.Ticker, reason = Model.Reason })" class="button secondary" data-audit-export="csv">Export CSV</a>
+                <a href="@Url.Page("/Audit", "Export", new { runName = Model.RunName, format = "json", decision = Model.Decision, ticker = Model.Ticker, reason = Model.Reason })" class="button secondary" data-audit-export="json">Export JSON</a>
                 <a href="@Model.BackUrl" class="button">Back</a>
             </div>
     </div>
@@ -183,7 +34,7 @@
         <div class="audit-summary-grid">
             <div class="audit-card">
                 <div class="muted">Evaluations</div>
-                <div id="auditEvaluations" class="audit-card-value">@Model.Records.Count</div>
+                <div id="auditEvaluations" class="audit-card-value">@Model.Summary.Total</div>
             </div>
             <div class="audit-card">
                 <div class="muted">Accepted</div>
@@ -202,6 +53,25 @@
             <div class="audit-panel audit-stack">
                 <h2>Compare runs</h2>
                 <form method="get" class="audit-compare-form">
+                    <label for="CompareRuns">Compare up to three additional runs</label>
+                    <input id="CompareRuns" name="compareRuns" value="@Model.CompareRuns" maxlength="363" placeholder="run-one, run-two, run-three" />
+                    <button type="submit">Compare summaries and realised equity</button>
+                </form>
+                @if(Model.MultiRuns.Count > 0){
+                    <div class="table-scroll"><table class="data-grid-table"><thead><tr><th>Run</th><th>Evaluated</th><th>Accepted</th><th>Rejected</th><th>Tickers</th></tr></thead><tbody>
+                    @foreach(var run in Model.MultiRuns){<tr><th scope="row">@run.Name</th><td>@(run.Found ? run.Summary.Total.ToString() : "unavailable")</td><td>@(run.Found ? run.Summary.Accepted.ToString() : "—")</td><td>@(run.Found ? run.Summary.Rejected.ToString() : "—")</td><td>@(run.Found ? run.Summary.Tickers.ToString() : "—")</td></tr>}
+                    </tbody></table></div>
+                    <h3>Realised equity overlay</h3>
+                    <p class="muted">Return % against each strategy's starting capital, aligned by UTC exit date. This omits unrealised and within-position drawdown. Completed published artifacts only; no curves inferred from audit counts. Reload to change the selected completed runs.</p>
+                    @if(Model.EquitySeries.Count > 0){
+                        <svg viewBox="0 0 320 200" class="audit-equity-chart" role="img" aria-label="Realised equity overlay; details listed below">
+                            @for(var i=0;i<Model.EquitySeries.Count;i++){<path d="@Model.CurvePath(Model.EquitySeries[i])" class="audit-equity-line series-@(i%4)" />}
+                        </svg>
+                        <ul>@for(var i=0;i<Model.EquitySeries.Count;i++){var curve=Model.EquitySeries[i];<li class="series-@(i%4)">@curve.RunName · @curve.Strategy · @curve.Points.First().Date to @curve.Points.Last().Date · final @curve.Points.Last().ReturnPercent.ToString("0.##")% · @curve.Points.Count points @(curve.Reduced ? "(reduced)" : "")</li>}</ul>
+                    }
+                    @foreach(var detail in Model.EquityDetails){<p class="note">@detail</p>}
+                }
+                <form method="get" class="audit-compare-form">
                     <label for="CompareWith">Compare against run</label>
                     <input id="CompareWith" name="compareWith" value="@Model.CompareWith"
                            placeholder="another run name" autocomplete="off" />
@@ -211,18 +81,16 @@
                         <a class="button secondary" href="@Url.Page("/Audit", new { runName = Model.RunName })">Clear</a>
                     }
                 </form>
-                @if (Model.Comparison.Count > 0)
-                {
-                    <table class="data-grid-table mt-md">
+                    <table id="auditComparison" class="data-grid-table mt-md" hidden="@(Model.Comparison.Count == 0)">
                         <thead>
                             <tr>
                                 <th scope="col">Metric</th>
                                 <th scope="col" class="num">@Model.RunName</th>
-                                <th scope="col" class="num">@Model.ComparisonRunName</th>
+                                <th id="auditComparisonName" scope="col" class="num">@Model.ComparisonRunName</th>
                                 <th scope="col" class="num">Delta</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="auditComparisonBody">
                         @foreach (var row in Model.Comparison)
                         {
                             <tr>
@@ -234,22 +102,16 @@
                         }
                         </tbody>
                     </table>
-                }
-                else if (!String.IsNullOrWhiteSpace(Model.CompareWith))
-                {
-                    <p class="muted">No decisions found for that run name.</p>
-                }
+                    <p id="auditComparisonEmpty" class="muted" hidden="@(Model.Comparison.Count > 0 || String.IsNullOrWhiteSpace(Model.CompareWith))">No decisions found for that run name.</p>
             </div>
 
-            @if (Model.Funnel.Count > 0)
-            {
-                <div class="audit-panel audit-stack">
-                    <h2>Decision funnel</h2>
+                <div id="auditOutcomePanel" class="audit-panel audit-stack" hidden="@(Model.Funnel.Count == 0)">
+                    <h2>Decision outcomes</h2>
                     <p class="muted">
-                        Candidates surviving each stage. The widest drop is the reason most
-                        entries never happened.
+                        Full-run outcomes grouped by rejection frequency. This breakdown
+                        does not describe the engine’s gate execution order.
                     </p>
-                    <ol class="audit-funnel">
+                    <ol id="auditFunnel" class="audit-funnel">
                         @foreach (var stage in Model.Funnel)
                         {
                             <li>
@@ -263,13 +125,12 @@
                                 </div>
                                 @if (stage.Removed > 0)
                                 {
-                                    <small class="muted">Removed @stage.Removed here</small>
+                                    <small class="muted">@stage.Removed decisions in this group</small>
                                 }
                             </li>
                         }
                     </ol>
                 </div>
-            }
 
             <div id="auditReasonPanel" class="audit-panel audit-stack" hidden="@(Model.TopRejectionReasons.Count == 0)">
                 <h2>Top Rejection Reasons</h2>
@@ -286,53 +147,64 @@
             </div>
 
         <div class="audit-panel audit-stack">
-            <div class="audit-filter-bar">
+            <form id="auditFilterForm" method="get" class="audit-filter-bar">
                 <div>
                     <label for="decisionFilter">Decision</label>
-                    <select id="decisionFilter">
+                    <select id="decisionFilter" name="decision">
                         <option value="">All decisions</option>
-                        <option value="accepted">Accepted</option>
-                        <option value="rejected">Rejected</option>
-                        <option value="skipped">Skipped</option>
-                        <option value="nosignal">No Signal</option>
-                        <option value="exitsubmitted">Exit Submitted</option>
-                        <option value="exitrejected">Exit Rejected</option>
+                        <option value="accepted" selected="@(Model.Decision?.ToLowerInvariant() == "accepted")">Accepted</option>
+                        <option value="rejected" selected="@(Model.Decision?.ToLowerInvariant() == "rejected")">Rejected</option>
+                        <option value="skipped" selected="@(Model.Decision?.ToLowerInvariant() == "skipped")">Skipped</option>
+                        <option value="nosignal" selected="@(Model.Decision?.ToLowerInvariant() == "nosignal")">No Signal</option>
+                        <option value="exitsubmitted" selected="@(Model.Decision?.ToLowerInvariant() == "exitsubmitted")">Exit Submitted</option>
+                        <option value="exitrejected" selected="@(Model.Decision?.ToLowerInvariant() == "exitrejected")">Exit Rejected</option>
                     </select>
                 </div>
                 <div>
                     <label for="reasonFilter">Rejection Reason</label>
-                    <select id="reasonFilter">
-                        <option value="">All rejection reasons</option>
-                        @foreach (var reason in Model.TopRejectionReasons)
-                        {
-                            <option value="@reason.ReasonKey">@reason.DisplayReason (@reason.Count)</option>
-                        }
-                    </select>
+                    <input id="reasonFilter" name="reason" value="@Model.Reason" list="auditReasonOptions" placeholder="Any recorded reason key" />
+                    <datalist id="auditReasonOptions">
+                    @foreach (var reason in Model.TopRejectionReasons) {
+                        <option value="@reason.ReasonKey" label="@reason.DisplayReason"></option>
+                    }
+                    </datalist>
                 </div>
                 <div>
                     <label for="tickerFilter">Ticker</label>
-                    <input id="tickerFilter" placeholder="e.g. CRDO" />
+                    <input id="tickerFilter" name="ticker" value="@Model.Ticker" placeholder="e.g. CRDO" />
                 </div>
-            </div>
+                <div><label for="auditPageSize">Rows per page</label><select id="auditPageSize" name="pageSize">
+                    @foreach (var size in new[] { 25, 50, 100, 200 }) { <option value="@size" selected="@(size == Model.PageSize)">@size</option> }
+                </select></div>
+                <input type="hidden" name="sort" value="@Model.Sort" />
+                <input type="hidden" name="descending" value="@Model.Descending.ToString().ToLowerInvariant()" />
+                <button type="submit" class="button">Apply filters</button>
+            </form>
             <button id="clearAuditFilters" type="button" class="button secondary">Clear Filters</button>
         </div>
 
+        <nav class="actions" aria-label="Audit pages">
+            <a id="auditPrevious" data-audit-nav class="button secondary" href="@PageUrl(Math.Max(1, Model.PageNumber - 1))" aria-disabled="@((Model.PageNumber <= 1).ToString().ToLowerInvariant())">Previous</a>
+            <span id="auditPageStatus" role="status">Page @Model.PageNumber of @Model.PageCount · @Model.TotalMatching matching decisions</span>
+            <a id="auditNext" data-audit-nav class="button secondary" href="@PageUrl(Model.PageNumber + 1)" aria-disabled="@((Model.PageNumber >= Model.PageCount).ToString().ToLowerInvariant())">Next</a>
+        </nav>
+        <p id="auditReadStatus" role="status"></p>
         <div class="audit-panel audit-table-panel">
             <table class="table audit-records-table">
                 <thead>
                     <tr>
-                        <th>Local Time</th>
-                        <th>Ticker</th>
-                        <th>Strategy</th>
-                        <th>Decision</th>
-                        <th>Reason</th>
+                        <th data-audit-sort="time" aria-sort="@SortState("time")"><a data-audit-nav href="@PageUrl(1, "time")">Local Time</a></th>
+                        <th data-audit-sort="ticker" aria-sort="@SortState("ticker")"><a data-audit-nav href="@PageUrl(1, "ticker")">Ticker</a></th>
+                        <th data-audit-sort="strategy" aria-sort="@SortState("strategy")"><a data-audit-nav href="@PageUrl(1, "strategy")">Strategy</a></th>
+                        <th data-audit-sort="decision" aria-sort="@SortState("decision")"><a data-audit-nav href="@PageUrl(1, "decision")">Decision</a></th>
+                        <th data-audit-sort="reason" aria-sort="@SortState("reason")"><a data-audit-nav href="@PageUrl(1, "reason")">Reason</a></th>
                         <th>Decision Tree Matrix</th>
                     </tr>
                 </thead>
                 <tbody id="auditRecordsBody">
                 @foreach (var view in Model.RecordViews)
                 {
-                    <tr class="audit-table-row" data-decision="@view.Decision.ToLowerInvariant()" data-reason="@view.ReasonKey" data-ticker="@view.Ticker">
+                    <tr class="audit-table-row" data-id="@view.Id" data-decision="@view.Decision.ToLowerInvariant()" data-reason="@view.ReasonKey" data-ticker="@view.Ticker">
                         <td class="audit-cell nowrap">@view.LocalTime</td>
                         <td class="audit-cell strong">@view.Ticker</td>
                         <td class="audit-cell">@view.StrategyName</td>

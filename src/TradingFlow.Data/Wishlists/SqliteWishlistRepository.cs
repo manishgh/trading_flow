@@ -4,7 +4,7 @@ using TradingFlow.Domain.Wishlists;
 
 namespace TradingFlow.Data.Wishlists;
 
-public sealed class SqliteWishlistRepository : IWishlistRepository
+public sealed partial class SqliteWishlistRepository : IWishlistRepository
 {
     private readonly IDbContextFactory<TradingFlowDbContext> dbFactory;
     private static async Task RequireMutableAsync(TradingFlowDbContext db, Guid id, CancellationToken token)

@@ -15,6 +15,14 @@ public static class EarningsApiEndpoints
         return endpoints;
     }
 
+    private static async Task<IResult> ApplyViewAsync(EarningsCalendarResponse response, EarningsViewQuery query,
+        System.Security.Claims.ClaimsPrincipal user, EarningsViewService views, CancellationToken token)
+    {
+        try { return Results.Ok(await views.FilterAsync(response, query, user, token)); }
+        catch (UnauthorizedAccessException) { return Results.Unauthorized(); }
+        catch (InvalidOperationException error) { return Results.BadRequest(error.Message); }
+    }
+
     private static void MapGroup(RouteGroupBuilder group)
     {
         group.MapGet("/today-next-business-day", async (
@@ -24,6 +32,9 @@ public static class EarningsApiEndpoints
             EarningsMonitor monitor,
             NewsFeedService newsFeed,
             TimeProvider clock,
+            [Microsoft.AspNetCore.Http.AsParameters] EarningsViewQuery viewQuery,
+            System.Security.Claims.ClaimsPrincipal user,
+            EarningsViewService views,
             CancellationToken cancellationToken) =>
         {
             if (!EarningsCalendarFilter.TryParse(session, marketCap, out var filter, out var filterError))
@@ -47,7 +58,7 @@ public static class EarningsApiEndpoints
                 snapshot.Items.Select(item => item.Event.Ticker).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 nowUtc,
                 cancellationToken);
-            return Results.Ok(MapSnapshot(
+            return await ApplyViewAsync(MapSnapshot(
                 snapshot,
                 monitor.GetStatus(),
                 operatorToday,
@@ -55,7 +66,7 @@ public static class EarningsApiEndpoints
                 news,
                 onlyShortHorizon: true,
                 filter,
-                dateScope));
+                dateScope), viewQuery, user, views, cancellationToken);
         }).AllowAnonymous();
 
         group.MapGet("/calendar", async (
@@ -66,13 +77,16 @@ public static class EarningsApiEndpoints
             EarningsMonitor monitor,
             NewsFeedService newsFeed,
             TimeProvider clock,
+            [Microsoft.AspNetCore.Http.AsParameters] EarningsViewQuery viewQuery,
+            System.Security.Claims.ClaimsPrincipal user,
+            EarningsViewService views,
             CancellationToken cancellationToken) =>
         {
             if (!DateOnly.TryParseExact(from, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var fromDate) ||
                 !DateOnly.TryParseExact(to, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var toDate) ||
-                toDate < fromDate)
+                toDate < fromDate || toDate.DayNumber - fromDate.DayNumber > 34)
             {
-                return Results.BadRequest("from and to must be valid yyyy-MM-dd dates with to >= from.");
+                return Results.BadRequest("Choose valid yyyy-MM-dd dates covering at most 35 days, with to >= from.");
             }
 
             if (!EarningsCalendarFilter.TryParse(session, marketCap, out var filter, out var filterError))
@@ -88,7 +102,7 @@ public static class EarningsApiEndpoints
                 snapshot.Items.Select(item => item.Event.Ticker).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 nowUtc,
                 cancellationToken);
-            return Results.Ok(MapSnapshot(
+            return await ApplyViewAsync(MapSnapshot(
                 snapshot,
                 monitor.GetStatus(),
                 operatorToday,
@@ -96,7 +110,7 @@ public static class EarningsApiEndpoints
                 news,
                 onlyShortHorizon: false,
                 filter,
-                "custom"));
+                "custom"), viewQuery, user, views, cancellationToken);
         }).AllowAnonymous();
 
         group.MapGet("/status", (EarningsMonitor monitor) => Results.Ok(monitor.GetStatus()))

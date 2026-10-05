@@ -81,9 +81,23 @@ public sealed class AuditModelTests
 
         public Task<IReadOnlyList<DecisionAuditRecord>> GetAuditsByRunNameAsync(string runName, CancellationToken cancellationToken)
         {
-            return Task.FromResult<IReadOnlyList<DecisionAuditRecord>>(
-                records.Where(record => record.RunName == runName).ToArray());
+            throw new InvalidOperationException("The audit UI must not load the complete run.");
         }
+
+        public Task<DecisionAuditSummary> SummarizeAsync(string runName, CancellationToken token)
+        {
+            var all = records.Where(x => x.RunName == runName).ToArray();
+            var reasons = all.Where(x => x.Decision == "Rejected" && !String.IsNullOrWhiteSpace(x.RejectionReason))
+                .GroupBy(x => TradingFlow.Web.Services.UiDisplayFormatter.NormalizeRejectionReasonKey(x.RejectionReason))
+                .Select(g => new DecisionAuditReasonCount(g.Key, g.First().RejectionReason!, g.Count())).ToArray();
+            return Task.FromResult(new DecisionAuditSummary(all.Length, all.Count(x => x.Decision == "Accepted"),
+                all.Count(x => x.Decision == "Rejected"), all.Select(x => x.Ticker).Distinct().Count(),
+                all.Select(x => x.StrategyName).Distinct().Count(), reasons.Length,
+                all.Length == 0 ? 0 : all.Max(x => x.Id), reasons.Take(20).ToArray()));
+        }
+
+        public Task<DecisionAuditPage> QueryAsync(string runName, DecisionAuditQuery query, CancellationToken token) =>
+            GetAuditPageAsync(runName, query.Decision, query.Ticker, query.Skip, query.Take, token);
 
         public Task<DecisionAuditPage> GetAuditPageAsync(
             string runName,

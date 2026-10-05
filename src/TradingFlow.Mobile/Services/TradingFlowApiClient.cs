@@ -8,7 +8,7 @@ namespace TradingFlow.Mobile.Services;
 
 public sealed class TradingFlowApiClient
 {
-    public const string NgrokDefaultUrl = "https://2b04-2001-1c00-820b-7600-a565-6712-f63f-b87a.ngrok-free.app";
+    public const string NgrokDefaultUrl = "https://d88a-2001-1c00-820b-7600-a565-6712-f63f-b87a.ngrok-free.app";
     public const string PhysicalDeviceDefaultUrl = "http://192.168.178.238:53017";
     public const string AndroidEmulatorDefaultUrl = "http://10.0.2.2:53017";
 
@@ -256,6 +256,27 @@ public sealed class TradingFlowApiClient
         using var response = await httpClient.PostAsync($"{BaseUrl}/api/v1/news/refresh", null, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
     }
+
+    public Task<MobileNewsFeedResponse?> GetFilteredNewsAsync(IReadOnlyDictionary<string, string> filters, CancellationToken token = default) =>
+        httpClient.GetFromJsonAsync<MobileNewsFeedResponse>($"{BaseUrl}/api/v1/news/feed?{MarketQuery(filters)}", token);
+
+    public Task<MobileEarningsCalendarResponse?> GetFilteredEarningsAsync(IReadOnlyDictionary<string, string> filters,
+        DateOnly? from = null, DateOnly? to = null, CancellationToken token = default)
+    {
+        var query = filters.ToDictionary(x => x.Key, x => x.Value);
+        var route = "today-next-business-day";
+        if (from.HasValue || to.HasValue) {
+            if (!from.HasValue || !to.HasValue || to < from || to.Value.DayNumber - from.Value.DayNumber > 34)
+                throw new InvalidOperationException("Choose ordered calendar dates covering at most 35 days.");
+            route = "calendar";
+            query["from"] = from.Value.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+            query["to"] = to.Value.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        }
+        return httpClient.GetFromJsonAsync<MobileEarningsCalendarResponse>($"{BaseUrl}/api/v1/earnings/{route}?{MarketQuery(query)}", token);
+    }
+
+    private static string MarketQuery(IReadOnlyDictionary<string, string> filters) => String.Join("&",
+        filters.Where(x => !String.IsNullOrWhiteSpace(x.Value)).Select(x => $"{Uri.EscapeDataString(x.Key)}={Uri.EscapeDataString(x.Value)}"));
 
     public Task<MobileEarningsCalendarResponse?> GetTodayAndNextBusinessDayEarningsAsync(
         string session = "all",
@@ -671,7 +692,10 @@ public sealed record MobileNewsFeedResponse(
     bool Enabled,
     string Provider,
     string? Message,
-    IReadOnlyList<MobileNewsItem> Items);
+    IReadOnlyList<MobileNewsItem> Items,
+    long? TotalMatching = null,
+    int Page = 1,
+    int PageSize = 50);
 
 public sealed record MobileNewsItem(
     string Ticker,
@@ -681,7 +705,8 @@ public sealed record MobileNewsItem(
     string? Provider,
     string? Source,
     string? Url,
-    string? Summary)
+    string? Summary,
+    string? Classification = null)
 {
     public string SentimentText => SentimentScore >= 0.15m
         ? $"Bullish {SentimentScore:F2}"
@@ -737,7 +762,9 @@ public sealed record MobileEarningsCalendarResponse(
     int MonitoringIntervalSeconds,
     DateTimeOffset? LastAnalysisUtc,
     MobileEarningsFilterStateResponse Filters,
-    IReadOnlyList<MobileEarningsCalendarItem> Items);
+    IReadOnlyList<MobileEarningsCalendarItem> Items,
+    int? TotalMatching = null,
+    bool Truncated = false);
 
 public sealed record MobileEarningsFilterStateResponse(
     string Session,

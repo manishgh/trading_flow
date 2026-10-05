@@ -241,8 +241,11 @@ else
                         <input type="hidden" name="WishlistId" value="@selected.Id" />
                         <div class="wishlist-bulk-bar" data-bulk-bar hidden>
                             <strong><span data-bulk-count>0</span> selected</strong>
-                            <button class="btn btn-danger btn-sm" type="submit"
-                                    data-confirm="Remove the selected symbols from this wishlist?">Remove selected</button>
+                            <button class="btn btn-danger btn-sm" type="button" data-group-action="remove" data-source-id="@selected.Id">Review removal</button>
+                            <button class="btn btn-secondary btn-sm" type="button" data-group-action="copy" data-source-id="@selected.Id">Copy to group</button>
+                            <button class="btn btn-secondary btn-sm" type="button" data-group-action="move" data-source-id="@selected.Id">Move to group</button>
+                            <button class="btn btn-secondary btn-sm" type="button" data-group-action="tag" data-source-id="@selected.Id">Tag</button>
+                            <button class="btn btn-secondary btn-sm" type="button" data-group-action="untag" data-source-id="@selected.Id">Remove tag</button>
                             <button class="btn btn-secondary btn-sm" type="button" data-bulk-clear>Clear</button>
                         </div>
                         <div class="table-scroll" role="region" aria-label="Wishlist symbol management" tabindex="0">
@@ -262,7 +265,6 @@ else
                                 <tbody>
                                     @foreach (var item in Model.ActiveItems)
                                     {
-                                        var formId = $"edit_{item.Id:N}";
                                         <tr>
                                             <td class="select-column">
                                                 <input type="checkbox" name="Tickers" value="@item.Ticker"
@@ -270,13 +272,13 @@ else
                                             </td>
                                             <td>
                                                 <strong>@item.Ticker</strong>
-                                                <input form="@formId" type="hidden" name="Ticker" value="@item.Ticker" />
+
                                             </td>
-                                            <td><input class="input" form="@formId" name="DisplayName" value="@item.DisplayName" aria-label="@item.Ticker display name" /></td>
-                                            <td><input class="input" form="@formId" name="Notes" value="@item.Notes" aria-label="@item.Ticker notes" /></td>
+                                            <td><input class="input" data-inline-name value="@item.DisplayName" aria-label="@item.Ticker display name" /></td>
+                                            <td><input class="input" data-inline-notes value="@item.Notes" aria-label="@item.Ticker notes" /><small class="muted">Tags: @String.Join(", ", System.Text.Json.JsonSerializer.Deserialize<string[]>(item.TagsJson) ?? [])</small></td>
                                             <td class="cell-sub">@item.AddedAtUtc.UtcDateTime.ToString("yyyy-MM-dd")</td>
                                             <td class="management-actions">
-                                                <button class="btn btn-secondary btn-sm" form="@formId" type="submit">Save</button>
+                                                <button class="btn btn-secondary btn-sm" data-inline-edit="@item.Ticker" type="button">Save</button>
                                             </td>
                                         </tr>
                                     }
@@ -285,13 +287,12 @@ else
                         </div>
                     </form>
 
-                    @* Row edit posts live outside the bulk form: HTML forbids nesting. *@
-                    @foreach (var item in Model.ActiveItems)
-                    {
-                        <form id="edit_@item.Id.ToString("N")" method="post" asp-page-handler="AddTicker" hidden>
-                            <input type="hidden" name="TargetWishlistId" value="@selected.Id" />
-                        </form>
-                    }
+                    <form id="editMembershipForm" method="post" asp-page-handler="AddTicker" hidden>
+                        <input type="hidden" name="TargetWishlistId" value="@selected.Id" />
+                        <input type="hidden" name="Ticker" />
+                        <input type="hidden" name="DisplayName" />
+                        <input type="hidden" name="Notes" />
+                    </form>
                 }
             </section>
         </div>
@@ -339,6 +340,8 @@ else
         </aside>
     </div>
 }
+
+<partial name="_GroupActions" />
 
 @section Scripts {
     <script type="module" src="~/js/wishlist-management.js" asp-append-version="true"></script>

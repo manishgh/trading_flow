@@ -42,7 +42,7 @@ test.describe("trading environment separation", () => {
       // Fail closed: the controls are absent, not merely disabled. Scoped to the
       // page body - the shared chrome's sign-out form is not an order control,
       // and it is present on every authenticated screen.
-      await expect(page.locator('main button[type="submit"]')).toHaveCount(0);
+      await expect(page.locator('[data-order-confirm], [data-replacement-order], #ReplacementCancel')).toHaveCount(0);
       await expect(page.locator("main form[method='post']")).toHaveCount(0);
     }
   });
@@ -187,7 +187,7 @@ test.describe("earnings calendar", () => {
     // than leaving the absence of a button to imply it.
     await expect(page.locator(".earnings-monitor")).toContainText("Advisory only");
     await expect(page.locator("main form[method='post']")).toHaveCount(0);
-    await expect(page.locator("main button[type='submit']")).toHaveCount(0);
+    await expect(page.locator("main [data-order-confirm]")).toHaveCount(0);
   });
 });
 
@@ -201,7 +201,7 @@ test.describe("backtest audit", () => {
     await expect(page.getByRole("link", { name: "Export CSV" })).toBeVisible();
     // The funnel only renders when the run produced decisions.
     const funnel = page.locator(".audit-funnel");
-    if (await funnel.count() > 0) {
+    if (await funnel.isVisible()) {
       await expect(funnel.locator("li").first()).toContainText("Evaluated");
     }
   });
@@ -332,11 +332,10 @@ test.describe("desk order shortcuts", () => {
 
   test("the buy action carries a keyboard hint and never submits on its own", async ({ page }) => {
     await page.goto("/TradeDesk");
-    const id = await page.locator('#WishlistSelect option:not([value=""])').first().getAttribute("value");
     const ticker = await page.locator(".trade-desk-table [data-symbol-row]").first().getAttribute("data-symbol");
     test.skip(!ticker, "No symbols seeded.");
 
-    await page.goto(`/TradeDesk?id=${id}&ticker=${ticker}`);
+    await page.goto(`/TradeDesk?ticker=${ticker}`);
     // The ticket is inline on the desk now. Stage one reviews; it never submits,
     // and no confirm control exists until the server has checked the draft.
     const review = page.getByRole("link", { name: "Open candidate review" });

@@ -7,6 +7,45 @@ namespace TradingFlow.Data.News;
 
 public sealed class SqliteNewsFeedRepository : INewsFeedRepository
 {
+    public async Task<NewsFeedPage> QueryAsync(NewsFeedQuery filter, CancellationToken token)
+    {
+        using var db = await dbFactory.CreateDbContextAsync(token);
+        var since = filter.SinceUtc.ToUniversalTime();
+        var query = db.NewsItems.AsNoTracking().Where(x => x.Timestamp >= since);
+        if (filter.ScopeTickers is { } tickers) query = query.Where(x => tickers.Contains(x.Ticker));
+        if (!String.IsNullOrWhiteSpace(filter.Ticker)) {
+            var ticker = filter.Ticker.Trim().ToUpperInvariant();
+            query = query.Where(x => x.Ticker == ticker || x.Ticker == "MARKET");
+        }
+        if (!String.IsNullOrWhiteSpace(filter.Provider)) {
+            var provider = filter.Provider.Trim().ToLowerInvariant(); query = query.Where(x => x.Provider.ToLower() == provider);
+        }
+        if (!String.IsNullOrWhiteSpace(filter.Source)) {
+            var source = filter.Source.Trim().ToLowerInvariant(); query = query.Where(x => x.Source != null && x.Source.ToLower() == source);
+        }
+        if (!String.IsNullOrWhiteSpace(filter.Search)) {
+            var term = filter.Search.Trim().ToLowerInvariant();
+            query = query.Where(x => x.Headline.ToLower().Contains(term) || (x.Summary != null && x.Summary.ToLower().Contains(term)) || x.Ticker.ToLower().Contains(term));
+        }
+        query = filter.Sentiment?.ToLowerInvariant() switch {
+            "positive" => query.Where(x => x.SentimentScore > 0.15m),
+            "negative" => query.Where(x => x.SentimentScore < -0.15m),
+            "neutral" => query.Where(x => x.SentimentScore >= -0.15m && x.SentimentScore <= 0.15m),
+            _ => query
+        };
+        if (filter.LinkedOnly) query = query.Where(x => x.Url != null && x.Url != "");
+        if (!String.IsNullOrWhiteSpace(filter.Classification)) {
+            var classification = filter.Classification.Trim().ToLowerInvariant();
+            var words = NewsEvidenceClassification.MacroKeywords;
+            query = query.Where(x => (x.Provider.ToLower() == "sec_edgar" ? "sec filing" :
+                x.Provider.ToLower() == "federal_reserve" ? "fed" : x.Ticker.ToUpper() != "MARKET" ? "company" :
+                words.Any(word => x.Headline.ToLower().Contains(word)) ? "macro" : "market") == classification);
+        }
+        var total = await query.CountAsync(token);
+        var rows = await query.OrderByDescending(x => x.Timestamp).ThenBy(x => x.Id)
+            .Skip(Math.Clamp(filter.Skip, 0, Int32.MaxValue - 200)).Take(Math.Clamp(filter.Take, 1, 200)).ToArrayAsync(token);
+        return new(rows, total);
+    }
     private readonly IDbContextFactory<TradingFlowDbContext> dbFactory;
 
     public SqliteNewsFeedRepository(IDbContextFactory<TradingFlowDbContext> dbFactory)

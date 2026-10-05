@@ -91,6 +91,7 @@
         <div class="tab-strip" id="earnings-date-scope" role="group" aria-label="Earnings date scope">
             <button type="button" data-scope-value="today" aria-current="page">Today</button>
             <button type="button" data-scope-value="nextBusinessDay">Next reporting day</button>
+            <button type="button" id="earnings-this-week">This week (New York)</button>
         </div>
     </div>
 
@@ -98,22 +99,19 @@
         <span class="micro-label">Custom dates</span>
         <div class="earnings-range">
             <label class="visually-hidden" for="earnings-from">From date</label>
-            <input class="input" style="width: auto;" id="earnings-from" type="date" aria-label="From date" />
+            <input class="input earnings-date" id="earnings-from" type="date" aria-label="From date" />
             <span aria-hidden="true">to</span>
             <label class="visually-hidden" for="earnings-to">To date</label>
-            <input class="input" style="width: auto;" id="earnings-to" type="date" aria-label="To date" />
+            <input class="input earnings-date" id="earnings-to" type="date" aria-label="To date" />
             <button type="button" class="btn btn-secondary btn-md" id="earnings-range-apply">Apply</button>
             <button type="button" class="btn btn-secondary btn-md" id="earnings-range-clear">Clear range</button>
-            <div id="earnings-spinner" style="display: none; align-items: center; gap: 6px; margin-left: 12px; color: var(--color-accent);">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite;">
+            <div id="earnings-spinner" class="earnings-spinner" hidden>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="earnings-loading-icon">
                     <line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
                 </svg>
-                <span style="font-size: 12px;">Loading...</span>
+                <span class="earnings-loading-label">Loading...</span>
             </div>
-            <style>
-                @@keyframes spin { 100% { transform: rotate(360deg); } }
-            </style>
-        </div>
+                    </div>
     </div>
 
     <div class="earnings-filter-row">
@@ -172,7 +170,8 @@
                     <option value="cap">Market cap</option>
                     <option value="surprise">EPS surprise</option>
                     <option value="move">Event move</option>
-                    <option value="rvol">Relative volume</option>
+                    <option value="rvol">Slot relative volume</option>
+                    <option value="revenue">Revenue surprise</option>
                 </select>
             </label>
             <span class="note earnings-count" id="earnings-count">—</span>
@@ -183,13 +182,33 @@
     </div>
 </section>
 
+<details class="panel">
+    <summary>More earnings filters and views</summary>
+    <form id="earnings-advanced" class="news-filter-bar">
+        <div><label for="earnings-view">View</label><select id="earnings-view" name="view"><option value="timeline">Timeline</option><option value="week">Calendar by New York date</option></select></div>
+        <div><label for="earnings-provider">Earnings provider</label><input id="earnings-provider" name="provider" /></div>
+        <div><label for="earnings-news-provider">News provider</label><input id="earnings-news-provider" name="newsProvider" /></div>
+        <div><label for="earnings-day">Reporting bucket (operator date)</label><select id="earnings-day" name="day"><option value="">All days</option><option value="today">Today</option><option value="nextBusinessDay">Next reporting day</option><option value="other">Other days</option></select></div>
+        <div><label for="earnings-breakout">Breakout evidence</label><select id="earnings-breakout" name="breakout"><option value="">All evidence states</option><option value="AwaitingEarningsRelease">Awaiting release</option><option value="BreakoutDataInsufficient">Insufficient data</option><option value="PossibleBreakout">Possible breakout</option><option value="BreakoutNotConfirmed">Not confirmed</option></select></div>
+        <div><label for="earnings-minEpsSurprise">Minimum EPS surprise %</label><input id="earnings-minEpsSurprise" name="minEpsSurprise" type="number" step="any" /></div>
+        <div><label for="earnings-maxEpsSurprise">Maximum EPS surprise %</label><input id="earnings-maxEpsSurprise" name="maxEpsSurprise" type="number" step="any" /></div>
+        <div><label for="earnings-minRevenueSurprise">Minimum revenue surprise %</label><input id="earnings-minRevenueSurprise" name="minRevenueSurprise" type="number" step="any" /></div>
+        <div><label for="earnings-maxRevenueSurprise">Maximum revenue surprise %</label><input id="earnings-maxRevenueSurprise" name="maxRevenueSurprise" type="number" step="any" /></div>
+        <div><label for="earnings-minRvol">Minimum slot RVOL</label><input id="earnings-minRvol" name="minRvol" type="number" step="any" /></div>
+        <div><label for="earnings-maxRvol">Maximum slot RVOL</label><input id="earnings-maxRvol" name="maxRvol" type="number" step="any" /></div>
+        <div><label for="earnings-minSentiment">Minimum news sentiment (−1 to 1)</label><input id="earnings-minSentiment" name="minSentiment" type="number" step="any" /></div>
+        <div><label for="earnings-maxSentiment">Maximum news sentiment (−1 to 1)</label><input id="earnings-maxSentiment" name="maxSentiment" type="number" step="any" /></div>
+        @if (User.Identity?.IsAuthenticated == true) {
+            <label class="checkbox-field"><input name="onlyGroups" type="checkbox" value="true" />Only my groups</label>
+            <div><label for="earnings-group">Group</label><select id="earnings-group" name="groupId"><option value="">Any group</option></select></div>
+        }
+        <button type="submit" class="button secondary">Apply filters and view</button>
+    </form>
+</details>
+
 @* ===========================================================================
    Body - timeline and evidence rail
    =========================================================================== *@
-<style>
-    .earnings-body { transition: opacity 0.1s ease; }
-    .earnings-body.is-loading { opacity: 0.3 !important; pointer-events: none; }
-</style>
 <div class="earnings-body">
     <section id="earnings-feed" class="earnings-timeline" aria-label="Chronological earnings calendar"></section>
 
@@ -213,6 +232,8 @@
 <template id="earnings-empty-template">
     <p class="empty-state">No earnings events or evidence are available for this period.</p>
 </template>
+
+<partial name="_GroupActions" />
 
 @section Scripts {
     <script src="~/js/earnings.js" asp-append-version="true"></script>

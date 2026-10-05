@@ -6,6 +6,10 @@
 /// </summary>
 public interface IWishlistRepository
 {
+    Task<WishlistBulkResult> ApplyBulkAsync(string operatorId, WishlistBulkRequest request, CancellationToken token)
+        => throw new NotSupportedException();
+    Task<WishlistBulkResult> UndoBulkAsync(string operatorId, Guid commandId, CancellationToken token)
+        => throw new NotSupportedException();
     Task<bool> IsPreparationRevisionAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult(false);
     Task<IReadOnlyList<Wishlist>> ListAsync(CancellationToken cancellationToken);
 

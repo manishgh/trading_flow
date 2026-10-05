@@ -14,7 +14,7 @@ import { signIn } from "./sign-in.js";
 const ticker = "PLANX";
 
 async function seedSymbol(page) {
-  await page.goto("/TradeDesk?view=market");
+  await page.goto(`/TradeDesk?view=market&search=${ticker}`);
   if (await page.locator(`.trade-desk-table [data-symbol="${ticker}"]`).count() > 0) return;
   await page.goto("/Wishlists");
   await page.locator("#CreateWishlistName").fill("Ticket Plan");
@@ -55,7 +55,7 @@ test.describe("ticket prices, change, phone picker and presets", () => {
 
   test("change reads against the previous close and follows live quotes", async ({ page }) => {
     await seedSymbol(page);
-    await page.goto("/TradeDesk?view=market");
+    await page.goto(`/TradeDesk?view=market&search=${ticker}`);
     const change = page.locator(`.trade-desk-table [data-symbol="${ticker}"] [data-column="price"] [data-change-field]`);
     // Without Alpaca there is no previous close, and the cell says so.
     await expect(change).toHaveText("—");

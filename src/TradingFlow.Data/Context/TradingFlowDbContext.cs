@@ -24,6 +24,7 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
     public DbSet<TradingFlow.Domain.News.PersistedNewsItem> NewsItems => Set<TradingFlow.Domain.News.PersistedNewsItem>();
     public DbSet<Wishlist> Wishlists => Set<Wishlist>();
     public DbSet<WishlistItem> WishlistItems => Set<WishlistItem>();
+    public DbSet<WishlistBulkCommand> WishlistBulkCommands => Set<WishlistBulkCommand>();
     public DbSet<WishlistSignal> WishlistSignals => Set<WishlistSignal>();
     public DbSet<ScreenerPreset> ScreenerPresets => Set<ScreenerPreset>();
     public DbSet<AdvisoryPortfolio> AdvisoryPortfolios => Set<AdvisoryPortfolio>();
@@ -296,12 +297,20 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
             entity.Property(e => e.Ticker).HasMaxLength(50).IsRequired();
             entity.Property(e => e.DisplayName).HasMaxLength(200);
             entity.Property(e => e.Notes).HasMaxLength(1000);
+            entity.Property(e => e.TagsJson).HasMaxLength(1200).HasDefaultValue("[]");
             entity.HasIndex(e => new { e.WishlistId, e.Ticker }).IsUnique();
             entity.HasIndex(e => e.Ticker);
             entity.HasOne(e => e.Wishlist)
                 .WithMany(e => e.Items)
                 .HasForeignKey(e => e.WishlistId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<WishlistBulkCommand>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.OperatorId).HasMaxLength(128).IsRequired();
+            entity.HasIndex(e => new { e.OperatorId, e.CreatedAtUtc });
         });
 
         modelBuilder.Entity<WishlistSignal>(entity =>

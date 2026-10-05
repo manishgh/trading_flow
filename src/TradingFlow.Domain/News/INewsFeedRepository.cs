@@ -4,6 +4,7 @@ namespace TradingFlow.Domain.News;
 
 public interface INewsFeedRepository
 {
+    Task<NewsFeedPage> QueryAsync(NewsFeedQuery query, CancellationToken token) => throw new NotSupportedException();
     Task UpsertAsync(IReadOnlyCollection<CatalystEvent> items, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<PersistedNewsItem>> GetRecentAsync(

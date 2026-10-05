@@ -69,7 +69,7 @@ public sealed class TradeDeskModel : PageModel
     /// Where the rows come from: <c>lists</c> (wishlists, the default) or
     /// <c>screener</c> (the symbols a screen returned).
     /// </summary>
-    [BindProperty(SupportsGet = true)] public string Scope { get; set; } = "lists";
+    [BindProperty(SupportsGet = true), Microsoft.AspNetCore.Mvc.ModelBinding.Validation.ValidateNever] public string Scope { get; set; } = "lists";
 
     /// <summary>Wishlist that screener symbols are added to. Defaults to the default wishlist.</summary>
     [BindProperty(SupportsGet = true)] public Guid? TargetId { get; set; }
@@ -79,16 +79,26 @@ public sealed class TradeDeskModel : PageModel
 
     /// <summary>Name to save the current custom screen under.</summary>
     [BindProperty] public string? PresetName { get; set; }
-    [BindProperty(SupportsGet = true)] public string Source { get; set; } = "all";
+    [BindProperty(SupportsGet = true), Microsoft.AspNetCore.Mvc.ModelBinding.Validation.ValidateNever] public string Source { get; set; } = "all";
     [BindProperty(SupportsGet = true)] public string? StrategyId { get; set; }
     [BindProperty(SupportsGet = true)] public string? Ticker { get; set; }
     [BindProperty(SupportsGet = true)] public string? Search { get; set; }
     [BindProperty(SupportsGet = true)] public decimal? MinPrice { get; set; }
     [BindProperty(SupportsGet = true)] public decimal? MaxPrice { get; set; }
     [BindProperty(SupportsGet = true)] public decimal? MaxSpreadBps { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MinChange { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MaxChange { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MinVolumeZ20 { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MaxVolumeZ20 { get; set; }
+    [BindProperty(SupportsGet = true)] public string? Tracked { get; set; }
+    [BindProperty(SupportsGet = true)] public int PageNumber { get; set; } = 1;
+    [BindProperty(SupportsGet = true)] public int PageSize { get; set; } = 50;
+    public int MatchingCount { get; private set; }
+    public int PageCount { get; private set; } = 1;
+    private DeskGridQuery GridQuery => new(Search, MinPrice, MaxPrice, MaxSpreadBps, MinChange, MaxChange, MinVolumeZ20, MaxVolumeZ20, Tracked);
     [BindProperty(SupportsGet = true)] public string? Sort { get; set; }
     [BindProperty(SupportsGet = true)] public string? Dir { get; set; }
-    [BindProperty(SupportsGet = true)] public string PredictionHorizon { get; set; } = "auto";
+    [BindProperty(SupportsGet = true), Microsoft.AspNetCore.Mvc.ModelBinding.Validation.ValidateNever] public string PredictionHorizon { get; set; } = "auto";
     public string ScreenerScopeName => "swing";
 
     /// <summary>Catalogued Finviz signal (<c>signal:code</c>), Finviz URL, saved screener name, or bare query string.</summary>
@@ -182,9 +192,21 @@ public sealed class TradeDeskModel : PageModel
     [TempData] public string? StatusMessage { get; set; }
     [TempData] public string? ErrorMessage { get; set; }
 
-    public async Task OnGetAsync(CancellationToken cancellationToken)
+    public async Task<IActionResult> OnGetAsync(CancellationToken cancellationToken)
     {
+        Tracked = Tracked?.Trim().ToLowerInvariant();
+        Scope = String.IsNullOrWhiteSpace(Scope) ? "lists" : Scope.Trim().ToLowerInvariant();
+        Source = String.IsNullOrWhiteSpace(Source) ? "all" : Source.Trim().ToLowerInvariant();
+        PredictionHorizon = String.IsNullOrWhiteSpace(PredictionHorizon) ? "auto" : PredictionHorizon.Trim();
+        if (Scope is not ("lists" or "screener") || !Filters.Any(x => x.Key == Source)) return BadRequest("Choose a supported desk universe and view.");
+        var typedFields = new[] { nameof(Id), nameof(TargetId), nameof(MinPrice), nameof(MaxPrice), nameof(MaxSpreadBps),
+            nameof(MinChange), nameof(MaxChange), nameof(MinVolumeZ20), nameof(MaxVolumeZ20), nameof(PageNumber), nameof(PageSize), nameof(Ticket) };
+        if (typedFields.Any(key => ModelState.TryGetValue(key, out var field) && field.Errors.Count > 0))
+            return BadRequest("Choose valid numeric desk filters, page values and group IDs.");
+        try { DeskGridFilter.Validate(GridQuery); }
+        catch (InvalidOperationException exception) { return BadRequest(exception.Message); }
         await LoadAsync(cancellationToken);
+        return Page();
     }
 
     public async Task<IActionResult> OnPostSetObservedAsync(Guid wishlistId, bool isObserved, CancellationToken cancellationToken)
@@ -407,7 +429,12 @@ public sealed class TradeDeskModel : PageModel
         Preparation = await preparationTask;
 
         AllRows = ranked.Rows;
-        Rows = SortRows(AllRows.Where(MatchesFilter).Where(MatchesQuery)).ToArray();
+        var window = DeskGridPage<RankedDeskRow>.Create(SortRows(AllRows.Where(MatchesFilter).Where(MatchesQuery)), PageNumber, PageSize);
+        Rows = window.Rows;
+        MatchingCount = window.TotalMatching;
+        PageNumber = window.Number;
+        PageSize = window.Size;
+        PageCount = window.PageCount;
         SelectedRow = String.IsNullOrWhiteSpace(Ticker)
             ? null
             : AllRows.FirstOrDefault(row => row.Ticker.Equals(Ticker, StringComparison.OrdinalIgnoreCase));
@@ -483,9 +510,17 @@ public sealed class TradeDeskModel : PageModel
             ["minPrice"] = MinPrice?.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["maxPrice"] = MaxPrice?.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["maxSpreadBps"] = MaxSpreadBps?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["minChange"] = MinChange?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxChange"] = MaxChange?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["minVolumeZ20"] = MinVolumeZ20?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxVolumeZ20"] = MaxVolumeZ20?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["tracked"] = Tracked,
+            ["pageNumber"] = PageNumber > 1 ? PageNumber.ToString() : null,
+            ["pageSize"] = PageSize != 50 ? PageSize.ToString() : null,
             ["sort"] = Sort,
             ["dir"] = Dir
         };
+        if (overrides.Any(x => x.Key is "sort" or "source" or "scope" or "id" or "screenerQuery")) values["pageNumber"] = null;
         foreach (var (key, value) in overrides)
         {
             values[key] = value;
@@ -545,7 +580,7 @@ public sealed class TradeDeskModel : PageModel
         new("change", "Chg %", "change-column", "Change against the previous session close, in percent.", true, false, true),
         new("bidask", "Bid / Ask", "quote-column", "Inside bid and ask with quoted sizes.", false, true),
         new("spread", "Spread", "spread-column", "Inside spread in basis points.", false, true, true),
-        new("rvol", "RVOL", "rvol-column", "Relative volume against the same time of day.", true, false, true),
+        new("z20", "Volume Z20", "rvol-column", "Daily volume Z-score against its 20-session baseline; advisory evidence.", true, false, true),
         new("eligibility", "Setup watch", "eligibility-column", "Non-authorizing technical observation and its reason.", false, true),
         new("predictor", "Predictor", "predictor-column", "Model signal, probability and horizon.", false, true),
         new("sync", "Sync", "sync-column", "Whether the verdict and the model agree.", false, true),
@@ -586,42 +621,9 @@ public sealed class TradeDeskModel : PageModel
             .Select(ticker => ticker.ToUpperInvariant());
     }
 
-    private bool MatchesQuery(RankedDeskRow ranked)
-    {
-        var row = ranked.Row;
-        if (!String.IsNullOrWhiteSpace(Search))
-        {
-            var term = Search.Trim();
-            var matches = row.Ticker.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-                row.DisplayName.Contains(term, StringComparison.OrdinalIgnoreCase);
-            if (!matches)
-            {
-                return false;
-            }
-        }
-
-        // A row with no quote cannot satisfy a price or spread bound. Excluding it is
-        // deliberate: a numeric filter should not silently pass unknown values.
-        var mid = row.Quote.MidPrice;
-        if (MinPrice is { } min && (mid is null || mid < min))
-        {
-            return false;
-        }
-        if (MaxPrice is { } max && (mid is null || mid > max))
-        {
-            return false;
-        }
-        if (MaxSpreadBps is { } maxSpread)
-        {
-            var spread = row.SpreadBps;
-            if (spread is null || spread > maxSpread)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private bool MatchesQuery(RankedDeskRow ranked) => DeskGridFilter.Matches(
+        new(ranked.Ticker, ranked.Row.DisplayName, ranked.Row.Quote.MidPrice, ranked.Row.SpreadBps,
+            ranked.Row.ChangePct, ranked.Evidence.Swing?.VolumeZ20, ranked.Row.HasTrade), GridQuery);
 
     private IEnumerable<RankedDeskRow> SortRows(IEnumerable<RankedDeskRow> rows)
     {
@@ -637,7 +639,7 @@ public sealed class TradeDeskModel : PageModel
             "change" => Order(rows, row => row.Row.ChangePct ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
             "bidask" => Order(rows, row => row.Row.Quote.BidPrice ?? Decimal.MinValue, descending),
             "spread" => Order(rows, row => row.Row.SpreadBps ?? Decimal.MaxValue, descending),
-            "rvol" => Order(rows, row => row.Evidence.Swing?.VolumeZ20 ?? Decimal.MinValue, descending),
+            "z20" => Order(rows, row => row.Evidence.Swing?.VolumeZ20 ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
             "eligibility" => Order(rows, row => row.Row.HasSignal ? 1m : 0m, descending),
             "pl" => Order(rows, row => row.Row.PositionValue ?? Decimal.MinValue, descending),
             "pnl" => Order(rows, row => row.Row.Trade?.UnrealizedPl ?? Decimal.MinValue, descending),
@@ -646,7 +648,7 @@ public sealed class TradeDeskModel : PageModel
             "ticker" => descending
                 ? rows.OrderByDescending(row => row.Ticker, StringComparer.OrdinalIgnoreCase)
                 : rows.OrderBy(row => row.Ticker, StringComparer.OrdinalIgnoreCase),
-            _ => rows.OrderBy(row => row.Rank)
+            _ => rows.OrderBy(row => row.Rank).ThenBy(row => row.Ticker, StringComparer.OrdinalIgnoreCase)
         };
     }
 

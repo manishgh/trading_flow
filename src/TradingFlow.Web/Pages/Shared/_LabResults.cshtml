@@ -155,7 +155,7 @@
                     chart.Append($"<circle cx=\"{(plotLeft + step * (percents.Count - 1)).ToString("0.0")}\" cy=\"{Y(percents[^1]).ToString("0.0")}\" r=\"3\" fill=\"{stroke}\" />");
                     seriesIndex++;
             }
-            <svg viewBox="0 0 640 210" width="100%" style="max-height:230px" role="img"
+            <svg viewBox="0 0 640 210" width="100%" class="lab-equity-chart" role="img"
                  aria-label="Realised equity by strategy, as a percentage of starting capital">@Html.Raw(chart.ToString())</svg>
             <div class="lab-legend">
                 @foreach (var entry in Model.Series.Select((series, index) => (series, index)))

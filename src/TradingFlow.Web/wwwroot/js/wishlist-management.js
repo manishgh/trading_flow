@@ -66,3 +66,14 @@ document.querySelectorAll("[data-confirm]").forEach(button => {
     });
     sync();
 })();
+
+// One shared form submits the selected row's edit; no per-row forms.
+document.addEventListener('click', event => {
+    const button = event.target.closest('[data-inline-edit]');
+    if (!button) return;
+    const row = button.closest('tr'), form = document.getElementById('editMembershipForm');
+    form.elements.Ticker.value = button.dataset.inlineEdit;
+    form.elements.DisplayName.value = row.querySelector('[data-inline-name]').value;
+    form.elements.Notes.value = row.querySelector('[data-inline-notes]').value;
+    form.requestSubmit();
+});

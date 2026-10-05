@@ -85,13 +85,15 @@ public sealed record MobileOrderActivityResponse(
     DateTimeOffset UpdatedAtUtc,
     decimal? FilledQuantity,
     decimal? FillPrice,
-    string EventSource);
+    string EventSource,
+    bool CanReviewReplacement = false);
 
 public sealed record MobileNewsFeedResponse(
     bool Enabled,
     string Provider,
     string? Message,
-    IReadOnlyList<MobileNewsItem> Items);
+    IReadOnlyList<MobileNewsItem> Items,
+    int? TotalMatching = null, int Page = 1, int PageSize = 50);
 
 public sealed record MobileNewsItem(
     string Ticker,
@@ -101,7 +103,7 @@ public sealed record MobileNewsItem(
     string? Provider,
     string? Source,
     string? Url,
-    string? Summary);
+    string? Summary, string? Classification = null);
 
 public sealed record MobileWishlistResponse(
     Guid Id,

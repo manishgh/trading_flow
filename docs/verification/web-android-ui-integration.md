@@ -1,5 +1,7 @@
 # Web, Android and API integration verification
 
+Current follow-up: [5 October completion checkpoint](ui-completion-2026-10-05.md) records the subsequent Web/API and native filter work, current test evidence and remaining acceptance. Earlier runtime IDs and tunnel URLs below are historical.
+
 Date: 2026-10-03. This records the local source integration and offline behavior; it does not authorize a strategy, place a broker order or claim external-provider acceptance.
 
 ## Preserved work and merge
