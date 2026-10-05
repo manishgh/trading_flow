@@ -52,6 +52,24 @@ public sealed class EarningsViewTests
         Assert.Equal("AAA", Assert.Single(result.Items).Ticker);
     }
 
+    [Fact]
+    public async Task NewRecordFiltersComposeWithoutTreatingMissingAmountsAsZero()
+    {
+        var service=new EarningsViewService(Mock.Of<IWishlistRepository>(),Mock.Of<IDeskAccountReader>());
+        var row=Response.Items[1] with {CompanyName="Alpha Devices",IsScheduleEstimate=true,EpsEstimate=-1,EpsActual=-.5m,
+            RevenueEstimateMillions=100,RevenueActualMillions=120,MarketCapMillions=500,EventReturnPercent=-3,ProviderOneDayPriceReactionPercent=-2};
+        var response=Response with {Items=[Response.Items[0],row]};
+        var query=new EarningsViewQuery {Search="devices",Schedule="estimated",Result="observed",MinEpsEstimate=-2,MaxEpsEstimate=0,
+            MinEpsActual=-1,MaxEpsActual=0,MinRevenueEstimate=90,MinRevenueActual=110,MinMarketCap=400,MaxMarketCap=600,
+            MinEventReturn=-4,MaxEventReturn=-2,MinPriceReaction=-3,MaxPriceReaction=-1};
+        Assert.Equal("AAA",Assert.Single((await service.FilterAsync(response,query,new(),default)).Items).Ticker);
+        var pending=await service.FilterAsync(response,new(){Result="pending"},new(),default);
+        Assert.Equal("UNKNOWN",Assert.Single(pending.Items).Ticker);
+        Assert.Empty((await service.FilterAsync(response,new(){MinEventReturn=0},new(),default)).Items);
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>service.FilterAsync(response,new(){MinEventReturn=2,MaxEventReturn=1},new(),default));
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>service.FilterAsync(response,new(){Schedule="observed"},new(),default));
+    }
+
     [Theory]
     [InlineData(3, 2)]
     [InlineData(-1, 2)]

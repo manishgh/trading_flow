@@ -955,25 +955,7 @@ else if (Model.IsScreenerScope)
             <div data-wishlist-news-list>
                 @foreach (var news in Model.RelatedNews)
                 {
-                    var hasSafeUrl = Uri.TryCreate(news.Url, UriKind.Absolute, out var articleUri) &&
-                        (articleUri.Scheme == Uri.UriSchemeHttp || articleUri.Scheme == Uri.UriSchemeHttps);
-                    var newsKey = hasSafeUrl ? news.Url : news.Headline + "|" + news.Timestamp.ToString("O");
-                    var sentimentClass = news.SentimentScore > 0.25m ? "is-positive" : news.SentimentScore < -0.25m ? "is-negative" : null;
-                    <article class="news-item @sentimentClass" data-news-item
-                             data-news-ticker="@news.Ticker.ToUpperInvariant()"
-                             data-news-url="@(hasSafeUrl ? news.Url : null)"
-                             data-news-key="@newsKey"
-                             data-news-timestamp="@news.Timestamp.ToString("O")">
-                        <div class="news-meta">
-                            <strong data-news-tickers>@news.Ticker</strong>
-                            <time data-news-time datetime="@news.Timestamp.ToString("O")">@news.Timestamp.ToString("HH:mm:ss") UTC</time>
-                        </div>
-                        <span class="news-headline" data-news-headline>@news.Headline</span>
-                        <div class="news-meta">
-                            <span data-news-source>@news.Provider</span>
-                            <span>sentiment @Signed(news.SentimentScore, "0.00")</span>
-                        </div>
-                    </article>
+                    <partial name="_NewsEvidence" model="TradingFlow.Web.Models.NewsPresentation.From(news)" />
                 }
             </div>
         </section>

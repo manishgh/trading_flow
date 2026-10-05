@@ -432,7 +432,7 @@
     function renderNews(items, visibleItems) {
         let scoped = items;
         if (newsScopeTicker) {
-            scoped = items.filter(item => String(item.tickers || "").toUpperCase().includes(newsScopeTicker));
+            scoped = items.filter(item => window.TradingFlowNews.symbols(item.tickers).includes(newsScopeTicker.toUpperCase()));
         } else if (visibleItems) {
             const visibleTickers = new Set(visibleItems.map(i => i.ticker.toUpperCase()));
             scoped = items.filter(item => {
@@ -451,26 +451,8 @@
         }
 
         for (const item of scoped) {
-            const article = document.createElement("article");
-            const score = Number(item.sentimentScore);
-            article.className = `news-item earnings-news-item ${score > 0.25 ? "is-positive" : score < -0.25 ? "is-negative" : ""}`.trim();
-
-            const meta = document.createElement("div");
-            meta.className = "news-meta";
-            meta.append(text("strong", item.tickers || "Market"));
-            meta.append(text("time", localDateTime(item.publishedAtUtc, true)));
-
-            const headline = safeLink(item.url, item.headline, "news-headline") || text("span", item.headline, "news-headline");
-            article.append(meta, headline);
-
-            // WhyItMatters is the reason this rail is worth the space. Always rendered.
-            if (item.whyItMatters) article.append(text("p", item.whyItMatters, "news-why"));
-
-            const footer = document.createElement("div");
-            footer.className = "news-meta";
-            footer.append(text("span", `${item.provider}${item.category ? ` · ${item.category}` : ""}`));
-            footer.append(text("span", `sentiment ${score >= 0 ? "+" : "−"}${number(Math.abs(score))} · ${item.sentimentLabel}`));
-            article.append(footer);
+            const article = window.TradingFlowNews.create(item);
+            article.classList.add('earnings-news-item');
             newsFeed.append(article);
         }
     }

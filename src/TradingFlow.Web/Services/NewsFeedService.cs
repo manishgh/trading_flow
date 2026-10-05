@@ -440,7 +440,7 @@ public sealed class NewsFeedService : BackgroundService
             item.Provider,
             item.Source,
             item.Url,
-            summary);
+            summary, ClassifyEvidence(new PersistedNewsItem {Ticker=item.Ticker,Provider=item.Provider ?? "",Headline=item.Headline}));
     }
 
     private static MobileNewsItem ToMobileNewsItem(PersistedNewsItem item)
@@ -455,7 +455,7 @@ public sealed class NewsFeedService : BackgroundService
             item.Provider,
             item.Source,
             item.Url,
-            summary);
+            summary, ClassifyEvidence(item));
     }
 
     private static MobileNewsItem ToAggregatedMobileNewsItem(IGrouping<string, PersistedNewsItem> group)
