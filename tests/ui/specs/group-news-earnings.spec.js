@@ -9,6 +9,44 @@ async function api(page, url, body) {
   }, { url, body });
 }
 
+test('selected symbol group action ignores grid selection and changes nothing before Apply', async ({ page }) => {
+  await signIn(page);
+  const nonce = `${Date.now()}`;
+  const source = await api(page, '/api/v1/wishlists', { name:`Rail source ${nonce}` });
+  const target = await api(page, '/api/v1/wishlists', { name:`Rail target ${nonce}` });
+  try {
+    await api(page, '/api/v1/wishlists/bulk', { commandId:crypto.randomUUID(), operation:'add', targetId:source.id, tickers:['RAILX','OTHERX'] });
+    await api(page, `/api/v1/wishlists/${target.id}/items`, { ticker:'KEEPX', displayName:'Existing symbol', notes:'Keep these notes' });
+    const read = () => page.evaluate(async id => (await window.tradingFlowFetch(`/api/v1/wishlists/${id}`)).json(), target.id);
+    const before = await read();
+    await page.goto(`/TradeDesk?view=market&id=${source.id}&ticker=RAILX`);
+    await page.locator('[data-bulk-item][value="OTHERX"]').check();
+    const action = page.locator('#symbol-detail').getByRole('button', {name:'Add RAILX to group',exact:true});
+    await action.click();
+    await expect(page.locator('#groupActionApply')).toBeEnabled();
+    await expect(page.locator('#groupActionSummary')).toContainText('add: RAILX');
+    await expect(page.locator('#groupActionSummary')).not.toContainText('OTHERX');
+    await page.locator('#groupActionTarget').selectOption(target.id);
+    await page.locator('#groupActionClose').click();
+    expect((await read()).items).toEqual(before.items);
+    await action.click();
+    await expect(page.locator('#groupActionApply')).toBeEnabled();
+    await page.locator('#groupActionTarget').selectOption(target.id);
+    const issued = page.waitForRequest(request => request.url().endsWith('/api/v1/wishlists/bulk') && request.method() === 'POST');
+    await page.locator('#groupActionApply').click();
+    expect((await issued).postDataJSON().tickers).toEqual(['RAILX']);
+    await expect(page.locator('#groupActionStatus')).toContainText('1 membership changes saved');
+    const changed = await read();
+    expect(changed.items.map(item => item.ticker).sort()).toEqual(['KEEPX','RAILX']);
+    expect(changed.items.find(item => item.ticker === 'KEEPX').notes).toBe('Keep these notes');
+    await page.locator('#groupActionUndo').click();
+    await expect(page.locator('#groupActionStatus')).toContainText('Change undone');
+    expect((await read()).items).toEqual(before.items);
+  } finally {
+    await page.evaluate(async ids => { for (const id of ids) await window.tradingFlowFetch(`/api/v1/wishlists/${id}`, {method:'DELETE'}); }, [source.id,target.id]);
+  }
+});
+
 test('25-symbol copy uses one reviewed command and can undo', async ({ page }) => {
   await signIn(page);
   const nonce = `${Date.now()}`;

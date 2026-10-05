@@ -1,5 +1,7 @@
 # TradingFlow Production Trading-Desk UI Plan
 
+Current delivery and remaining acceptance are tracked in the [5 October plan checklist](verification/trading-desk-plan-status-2026-10-05.md). Historical “implemented” headings below do not mean the entire original scope is complete.
+
 Status: proposed
 Audit date: 2026-08-01
 Audited surface: local working tree (uncommitted work included), running web instance on `http://127.0.0.1:53014`
