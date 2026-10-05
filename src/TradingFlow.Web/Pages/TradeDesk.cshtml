@@ -389,6 +389,11 @@ else if (Model.IsScreenerScope)
                aria-current="@(active ? "page" : null)">@label<span class="count">@Model.CountFor(key)</span></a>
         }
     </nav>
+    <nav class="tab-strip" aria-label="Evidence quick filters">
+        <a asp-page="/TradeDesk" asp-all-route-data='Model.RouteWith(("catalystOnly", "true"), ("pageNumber", null))'>Observed catalyst</a>
+        <a asp-page="/TradeDesk" asp-all-route-data='Model.RouteWith(("maxEarningsDays", "0"), ("pageNumber", null))'>Earnings today · stored</a>
+        <a asp-page="/TradeDesk" asp-all-route-data='Model.RouteWith(("catalystOnly", null), ("maxEarningsDays", null), ("pageNumber", null))'>Clear catalyst / earnings</a>
+    </nav>
     <span class="note">@selectedName · @Model.MatchingCount of @Model.UnfilteredCount symbols · @Model.Rows.Count on this page · ranked on @Model.DeskHorizon weights @Model.RankConfig.WeightsVersion</span>
     <div class="desk-view-options">
         <div class="seg" role="group" aria-label="Layout" data-desk-layout-group>
@@ -430,9 +435,26 @@ else if (Model.IsScreenerScope)
                 <div class="field"><label for="MaxVolumeZ20">Max volume Z20</label><input class="input" id="MaxVolumeZ20" form="DeskFilterForm" name="maxVolumeZ20" type="number" step="0.1" value="@Model.MaxVolumeZ20" /></div>
                 <div class="field"><label for="Tracked">Tracked position</label><select class="input" id="Tracked" form="DeskFilterForm" name="tracked"><option value="all" selected="@(String.IsNullOrEmpty(Model.Tracked) || Model.Tracked == "all")">All</option><option value="tracked" selected="@(Model.Tracked == "tracked")">Tracked</option><option value="untracked" selected="@(Model.Tracked == "untracked")">Untracked</option></select></div>
                 <div class="field"><label for="DeskPageSize">Rows per page</label><select class="input" id="DeskPageSize" form="DeskFilterForm" name="pageSize">@foreach(var size in new[]{25,50,100}){<option value="@size" selected="@(Model.PageSize == size)">@size</option>}</select></div>
+                <div class="field"><label for="Sector">Sector · Finviz</label><input class="input" id="Sector" name="sector" form="DeskFilterForm" type="text" maxlength="120" value="@Model.Sector" /></div>
+                <div class="field"><label for="MinMarketCap">Min cap · USD millions</label><input class="input" id="MinMarketCap" name="minMarketCap" form="DeskFilterForm" type="number" min="0" step="0.01" value="@Model.MinMarketCap" /></div>
+                <div class="field"><label for="MaxMarketCap">Max cap · USD millions</label><input class="input" id="MaxMarketCap" name="maxMarketCap" form="DeskFilterForm" type="number" min="0" step="0.01" value="@Model.MaxMarketCap" /></div>
+                <div class="field"><label for="MinVolume">Min completed daily volume</label><input class="input" id="MinVolume" name="minVolume" form="DeskFilterForm" type="number" min="0" step="1" value="@Model.MinVolume" /></div>
+                <div class="field"><label for="MinRvol">Min daily RVOL · SIP</label><input class="input" id="MinRvol" name="minRvol" form="DeskFilterForm" type="number" min="0" step="0.01" value="@Model.MinRvol" /></div>
+                <div class="field"><label for="MaxRvol">Max daily RVOL · SIP</label><input class="input" id="MaxRvol" name="maxRvol" form="DeskFilterForm" type="number" min="0" step="0.01" value="@Model.MaxRvol" /></div>
+                <div class="field"><label for="MinAtrPercent">Min daily ATR %</label><input class="input" id="MinAtrPercent" name="minAtrPercent" form="DeskFilterForm" type="number" min="0" step="0.01" value="@Model.MinAtrPercent" /></div>
+                <div class="field"><label for="MaxAtrPercent">Max daily ATR %</label><input class="input" id="MaxAtrPercent" name="maxAtrPercent" form="DeskFilterForm" type="number" min="0" step="0.01" value="@Model.MaxAtrPercent" /></div>
+                <div class="field"><label for="MinGap">Min completed daily gap %</label><input class="input" id="MinGap" name="minGap" form="DeskFilterForm" type="number" step="0.01" value="@Model.MinGap" /></div>
+                <div class="field"><label for="MaxGap">Max completed daily gap %</label><input class="input" id="MaxGap" name="maxGap" form="DeskFilterForm" type="number" step="0.01" value="@Model.MaxGap" /></div>
+                <div class="field"><label for="MinVwapDistance">Min session VWAP distance %</label><input class="input" id="MinVwapDistance" name="minVwapDistance" form="DeskFilterForm" type="number" step="0.01" value="@Model.MinVwapDistance" /></div>
+                <div class="field"><label for="MaxVwapDistance">Max session VWAP distance %</label><input class="input" id="MaxVwapDistance" name="maxVwapDistance" form="DeskFilterForm" type="number" step="0.01" value="@Model.MaxVwapDistance" /></div>
+                <div class="field"><label for="MinRsi">Min daily RSI14</label><input class="input" id="MinRsi" name="minRsi" form="DeskFilterForm" type="number" min="0" step="0.01" value="@Model.MinRsi" /></div>
+                <div class="field"><label for="MaxRsi">Max daily RSI14</label><input class="input" id="MaxRsi" name="maxRsi" form="DeskFilterForm" type="number" min="0" step="0.01" value="@Model.MaxRsi" /></div>
+                <div class="field"><label for="MaxEarningsDays">Earnings within NY days · stored</label><input class="input" id="MaxEarningsDays" name="maxEarningsDays" form="DeskFilterForm" type="number" min="0" step="1" value="@Model.MaxEarningsDays" /></div>
+                <div class="field"><label for="CatalystOnly">Observed catalyst only</label><select class="input" id="CatalystOnly" name="catalystOnly" form="DeskFilterForm"><option value="" selected="@(Model.CatalystOnly != true)">All / unknown included</option><option value="true" selected="@(Model.CatalystOnly == true)">Observed catalyst</option></select></div>
+                <div class="field"><label for="SignalState">Signal state</label><select class="input" id="SignalState" name="signalState" form="DeskFilterForm"><option value="all" selected="@(String.IsNullOrEmpty(Model.SignalState) || Model.SignalState == "all")">All</option><option value="signal" selected="@(Model.SignalState == "signal")">Signal</option><option value="none" selected="@(Model.SignalState == "none")">No signal</option></select></div>
                 <button class="btn btn-secondary" type="submit" form="DeskFilterForm">Apply filters</button>
             </div>
-            <p class="note">Unknown values do not pass numeric bounds. Volume Z20 is advisory and is not relative volume. Sector, market cap and strategy RVOL are unavailable as universe filters. Tracked positions are application trade records.</p>
+            <p class="note">Unknown values do not pass numeric bounds. Volume Z20 is advisory and is not relative volume. Daily volume, RVOL, ATR14, RSI14 and gap use completed SIP/all daily observations; session VWAP uses completed warm 1m state. Sector/cap come from available Finviz exports or stored earnings cap data. Missing calendar/catalyst coverage remains unknown; these display filters never authorize trading. Tracked positions are application trade records.</p>
         </details>
         <div class="field"><label for="DeskPreset">My filter presets</label><select class="input" id="DeskPreset"><option value="">Choose preset</option></select></div>
         <div class="field"><label for="DeskPresetName">Preset name</label><input class="input" id="DeskPresetName" maxlength="40" /></div>
@@ -599,6 +621,8 @@ else if (Model.IsScreenerScope)
                 <button class="btn btn-secondary" type="button" data-group-action="copy" data-source-id="@Model.SelectedWishlist.Id">Copy to group</button>
                 <button class="btn btn-secondary" type="button" data-group-action="move" data-source-id="@Model.SelectedWishlist.Id">Move to group</button>
                 <button class="btn btn-secondary" type="button" data-group-action="tag" data-source-id="@Model.SelectedWishlist.Id">Tag</button>
+                <button class="btn btn-secondary" type="button" data-group-action="untag" data-source-id="@Model.SelectedWishlist.Id">Remove tag</button>
+                <button class="btn btn-danger" type="button" data-group-action="remove" data-source-id="@Model.SelectedWishlist.Id">Review removal</button>
             }
             <button class="btn btn-secondary" type="button" data-bulk-clear>Clear selection</button>
         </div>
@@ -673,6 +697,17 @@ else if (Model.IsScreenerScope)
                                 <td class="num" data-column="z20" hidden="@startsHidden.Contains("z20")">
                                     @(ranked.Evidence.Swing?.VolumeZ20 is { } volumeZ ? volumeZ.ToString("0.00") + " z" : "—")
                                 </td>
+                                @{ var evidence = Model.EvidenceFor(row.Ticker); }
+                                <td class="num" data-column="sector" hidden="@startsHidden.Contains("sector")" title="@(evidence.Detail)">@(evidence.Sector ?? "—")</td>
+                                <td class="num" data-column="cap" hidden="@startsHidden.Contains("cap")" title="@(evidence.Detail)">@(Number(evidence.MarketCapMillions, "#,##0.##"))</td>
+                                <td class="num" data-column="volume" hidden="@startsHidden.Contains("volume")" title="@(evidence.Detail)">@(Number(evidence.Volume, "#,##0"))</td>
+                                <td class="num" data-column="rvol" hidden="@startsHidden.Contains("rvol")" title="@(evidence.Detail)">@(Number(evidence.DailyRvol, "0.00"))</td>
+                                <td class="num" data-column="atr" hidden="@startsHidden.Contains("atr")" title="@(evidence.Detail)">@(Number(evidence.AtrPercent, "0.00"))</td>
+                                <td class="num" data-column="gap" hidden="@startsHidden.Contains("gap")" title="@(evidence.Detail)">@(SignedPercent(evidence.GapPercent))</td>
+                                <td class="num" data-column="vwap" hidden="@startsHidden.Contains("vwap")" title="@(evidence.Detail)">@(SignedPercent(evidence.VwapDistancePercent))</td>
+                                <td class="num" data-column="rsi" hidden="@startsHidden.Contains("rsi")" title="@(evidence.Detail)">@(Number(evidence.Rsi, "0.00"))</td>
+                                <td class="num" data-column="catalyst" hidden="@startsHidden.Contains("catalyst")" title="@(evidence.Detail)">@(evidence.HasCatalyst == true ? "Observed" : "Unknown coverage")</td>
+                                <td class="num" data-column="earnings" hidden="@startsHidden.Contains("earnings")" title="@(evidence.EarningsDetail)">@(evidence.EarningsInDays is { } days ? days.ToString() + " NY days" : "Unknown coverage")</td>
                                 <td class="eligibility-cell" data-column="eligibility">
                                     <span class="tag @(row.HasSignal ? "tag-accent" : "tag-neutral")" data-signal-badge>@Verdict(row.HasSignal, row.HasQuote)</span>
                                     <span class="cell-sub" data-signal-status title="@row.EligibilityReason">@row.EligibilityReason</span>
@@ -883,6 +918,14 @@ else if (Model.IsScreenerScope)
                    symbol, with the same reviewed ticket beside it. *@
                 <a class="btn btn-secondary btn-sm desk-rail-orders" asp-page="/Orders"
                    asp-route-ticker="@row.Ticker" asp-route-env="@Model.Env">Orders in @row.Ticker</a>
+                @if (Model.EnvironmentState.Environment != TradingEnvironment.Live)
+                {
+                    <a class="btn btn-secondary btn-sm" data-order-shortcut="buy" asp-page="/Orders" asp-route-ticker="@row.Ticker" asp-route-env="@Model.Env" asp-route-side="buy">Review buy <kbd>B</kbd></a>
+                    @if (row.HasTrade)
+                    {
+                        <a class="btn btn-secondary btn-sm" data-order-shortcut="sell" asp-page="/Orders" asp-route-ticker="@row.Ticker" asp-route-env="@Model.Env" asp-route-side="sell">Review sell <kbd>S</kbd></a>
+                    }
+                }
                 @if (User.Identity?.IsAuthenticated == true)
                 {
                     <button class="btn btn-secondary btn-sm" type="button" data-group-action="add"
@@ -912,25 +955,7 @@ else if (Model.IsScreenerScope)
             <div data-wishlist-news-list>
                 @foreach (var news in Model.RelatedNews)
                 {
-                    var hasSafeUrl = Uri.TryCreate(news.Url, UriKind.Absolute, out var articleUri) &&
-                        (articleUri.Scheme == Uri.UriSchemeHttp || articleUri.Scheme == Uri.UriSchemeHttps);
-                    var newsKey = hasSafeUrl ? news.Url : news.Headline + "|" + news.Timestamp.ToString("O");
-                    var sentimentClass = news.SentimentScore > 0.25m ? "is-positive" : news.SentimentScore < -0.25m ? "is-negative" : null;
-                    <article class="news-item @sentimentClass" data-news-item
-                             data-news-ticker="@news.Ticker.ToUpperInvariant()"
-                             data-news-url="@(hasSafeUrl ? news.Url : null)"
-                             data-news-key="@newsKey"
-                             data-news-timestamp="@news.Timestamp.ToString("O")">
-                        <div class="news-meta">
-                            <strong data-news-tickers>@news.Ticker</strong>
-                            <time data-news-time datetime="@news.Timestamp.ToString("O")">@news.Timestamp.ToString("HH:mm:ss") UTC</time>
-                        </div>
-                        <span class="news-headline" data-news-headline>@news.Headline</span>
-                        <div class="news-meta">
-                            <span data-news-source>@news.Provider</span>
-                            <span>sentiment @Signed(news.SentimentScore, "0.00")</span>
-                        </div>
-                    </article>
+                    <partial name="_NewsEvidence" model="TradingFlow.Web.Models.NewsPresentation.From(news)" />
                 }
             </div>
         </section>

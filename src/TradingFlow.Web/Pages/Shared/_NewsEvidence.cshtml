@@ -1,0 +1,17 @@
+@model TradingFlow.Web.Models.NewsPresentation
+<article class="news-entry news-item @Model.SentimentClass" data-news-item data-news-ticker="@Model.Tickers"
+         data-news-key="@Model.Key" data-news-timestamp="@Model.Timestamp.ToString("O")" data-news-url="@Model.SafeUrl">
+    <div class="news-timeline-meta">
+        <strong data-news-tickers>@Model.Tickers</strong>
+        <time data-news-time datetime="@Model.Timestamp.ToString("O")">@Model.Timestamp.UtcDateTime.ToString("dd MMM HH:mm:ss") UTC</time>
+        <span data-news-sentiment>@Model.SentimentLabel @(Model.SentimentScore?.ToString("+0.00;-0.00;0.00",System.Globalization.CultureInfo.InvariantCulture))</span>
+    </div>
+    <strong class="news-headline" data-news-headline>@Model.Headline</strong>
+    <p data-news-summary hidden="@(String.IsNullOrWhiteSpace(Model.Summary))">@Model.Summary</p>
+    <p class="news-why" data-news-why hidden="@(String.IsNullOrWhiteSpace(Model.WhyItMatters))">@Model.WhyItMatters</p>
+    <div class="news-entry-footer">
+        <span class="muted" data-news-source>@Model.Provider @Model.Source · @Model.Classification</span>
+        @if(User.Identity?.IsAuthenticated == true) {<button type="button" class="button secondary" data-group-action="add" data-tickers="@Model.GroupableTickers" hidden="@(Model.GroupableTickers.Length == 0)">Add symbols to group</button>}
+        <a data-news-link href="@Model.SafeUrl" hidden="@(Model.SafeUrl is null)" target="_blank" rel="noopener noreferrer">Open article</a>
+    </div>
+</article>

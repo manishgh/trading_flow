@@ -16,6 +16,7 @@ const rowMap = buildRowMap();
 let latestQuoteTimestamp = null;
 let lastConnectionAnnouncement = "";
 let lastSignalId = null;
+let refreshNewsScope = () => {};
 
 function buildRowMap() {
     const map = new Map();
@@ -209,7 +210,7 @@ function patchWishlistNews(items) {
         const key = newsKey(item);
         let article = existing.get(key);
         if (!article) {
-            article = createNewsArticle(key);
+            article = createNewsArticle(item, key);
             container.appendChild(article);
         }
         patchNewsArticle(article, item);
@@ -232,54 +233,17 @@ function patchWishlistNews(items) {
     if (empty) {
         empty.hidden = count > 0;
     }
+    refreshNewsScope();
 }
 
-function createNewsArticle(key) {
-    const article = document.createElement("article");
-    article.dataset.newsItem = "";
+function createNewsArticle(item, key = newsKey(item)) {
+    const article = window.TradingFlowNews.create(item);
     article.dataset.newsKey = key;
-
-    const meta = document.createElement("div");
-    meta.className = "news-timeline-meta";
-    const tickers = document.createElement("strong");
-    tickers.dataset.newsTickers = "";
-    const time = document.createElement("time");
-    time.dataset.newsTime = "";
-    meta.append(tickers, time);
-
-    const headline = document.createElement("strong");
-    headline.dataset.newsHeadline = "";
-    const summary = document.createElement("p");
-    summary.dataset.newsSummary = "";
-    const source = document.createElement("span");
-    source.dataset.newsSource = "";
-    const link = document.createElement("a");
-    link.dataset.newsLink = "";
-    link.textContent = "Open article";
-    article.append(meta, headline, summary, source, link);
     return article;
 }
-
 function patchNewsArticle(article, item) {
+    window.TradingFlowNews.patch(article, item);
     article.dataset.newsKey = newsKey(item);
-    article.dataset.newsTimestamp = item.timestamp || "";
-    article.dataset.newsUrl = isSafeArticleUrl(item.url) ? item.url : "";
-    setText(article.querySelector("[data-news-tickers]"), item.ticker || "MARKET");
-    setText(article.querySelector("[data-news-time]"), item.timestampText || item.timestamp || "Timestamp unavailable");
-    setText(article.querySelector("[data-news-headline]"), item.headline || "Untitled article");
-    setText(article.querySelector("[data-news-summary]"), item.summary || "");
-    setText(article.querySelector("[data-news-source]"), [item.provider, item.source].filter(Boolean).join(" · "));
-
-    const link = article.querySelector("[data-news-link]");
-    const safe = isSafeArticleUrl(item.url);
-    link.hidden = !safe;
-    if (safe) {
-        link.href = item.url;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-    } else {
-        link.removeAttribute("href");
-    }
 }
 
 function newsKey(item) {
@@ -343,12 +307,14 @@ if (newsPanel) {
     const emptyLabel = newsPanel.querySelector("[data-wishlist-news-empty]");
     const selectedTicker = (newsPanel.dataset.selectedTickerScope || "").toUpperCase();
 
+    let currentScope = 'group';
     const applyScope = scope => {
+        currentScope = scope;
         const items = [...newsPanel.querySelectorAll("[data-news-item]")];
         let visible = 0;
         items.forEach(item => {
             const matches = scope === "group" ||
-                (item.dataset.newsTicker || "").toUpperCase() === selectedTicker;
+                window.TradingFlowNews.symbols(item.dataset.newsTicker).includes(selectedTicker);
             item.hidden = !matches;
             if (matches) visible += 1;
         });
@@ -366,6 +332,7 @@ if (newsPanel) {
         }
     };
 
+    refreshNewsScope = () => applyScope(currentScope);
     scopeButtons.forEach(button =>
         button.addEventListener("click", () => applyScope(button.dataset.newsScope)));
 }
@@ -376,7 +343,8 @@ window.TradingFlowDesk = { applyActivity, applyQuotes, setConnectionState };
 // Deliberately opens the reviewed ticket rather than submitting anything: a
 // keystroke must never place an order.
 document.addEventListener("keydown", event => {
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const modalOpen = document.querySelector('dialog[open]') || [...document.querySelectorAll('[aria-modal="true"]')].some(node => node.getClientRects().length > 0);
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || modalOpen) return;
 
     const target = event.target;
     const typing = target instanceof HTMLElement &&

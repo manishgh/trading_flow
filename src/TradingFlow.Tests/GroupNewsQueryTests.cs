@@ -10,6 +10,7 @@ using TradingFlow.Domain.Preparation;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Desk;
+using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Tests;
 
@@ -24,6 +25,56 @@ public sealed class GroupNewsQueryTests : IDisposable
         connection.Open(); options = new DbContextOptionsBuilder<TradingFlowDbContext>().UseSqlite(connection).Options;
         using var context = new TradingFlowDbContext(options); context.Database.EnsureCreated();
         groups = new(new Factory(options)); news = new(new Factory(options));
+    }
+
+    [Fact]
+    public async Task CreateEmptyGroup_RetainsExactOperatorCommandAndUndoDoesNotResurrect()
+    {
+        var command = new WishlistCreateRequest(Guid.NewGuid(), " Inline group ");
+        var created = await groups.CreateGroupAsync("operator", command, default);
+        Assert.Equal(command.CommandId, created.Id);
+        Assert.Empty((await groups.GetByIdAsync(created.Id, default))!.Items);
+        Assert.Equal(created, await groups.CreateGroupAsync("operator", command with { Name="Inline group" }, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.CreateGroupAsync("other", command, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.CreateGroupAsync("operator", command with { Name="Changed" }, default));
+        await groups.UndoBulkAsync("operator", command.CommandId, default);
+        Assert.Null(await groups.GetByIdAsync(created.Id, default));
+        Assert.True((await groups.CreateGroupAsync("operator", command, default)).Receipt.Undone);
+        Assert.Null(await groups.GetByIdAsync(created.Id, default));
+    }
+
+    [Fact]
+    public async Task CreationRejectsExistingNamesAndUndoNeverDeletesLaterMemberships()
+    {
+        var existing = await groups.SaveAsync(new() { Name="Existing", Description="Keep" }, default);
+        await groups.AddOrUpdateItemAsync(existing.Id, "AAA", null, "Keep notes", default);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.CreateGroupAsync("operator", new(Guid.NewGuid(), "existing"), default));
+        Assert.Equal("Keep notes", (await groups.GetByIdAsync(existing.Id, default))!.Items.Single().Notes);
+        var created = await groups.CreateGroupAsync("operator", new(Guid.NewGuid(), "Created"), default);
+        await groups.AddOrUpdateItemAsync(created.Id, "BBB", null, "Later membership", default);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.UndoBulkAsync("operator", created.Id, default));
+        Assert.Equal("Later membership", (await groups.GetByIdAsync(created.Id, default))!.Items.Single().Notes);
+    }
+
+    [Fact]
+    public async Task CreationUndoRejectsLaterGroupEditAndPreparationRevision()
+    {
+        var created = await groups.CreateGroupAsync("operator", new(Guid.NewGuid(), "Created"), default);
+        var group = (await groups.GetByIdAsync(created.Id, default))!;
+        group.Description = "Later edit";
+        await groups.SaveAsync(group, default);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.UndoBulkAsync("operator", created.Id, default));
+        Assert.Equal("Later edit", (await groups.GetByIdAsync(created.Id, default))!.Description);
+        var revision = await groups.CreateGroupAsync("operator", new(Guid.NewGuid(), "Revision"), default);
+        using var context = new TradingFlowDbContext(options);
+        var definition = new PreparationDefinitionRecord { Id = Guid.NewGuid(), WorkflowId = Guid.NewGuid(), OwnerId = "operator" };
+        var occurrence = new PreparationOccurrenceRecord { Id = Guid.NewGuid(), DefinitionId = definition.Id, WorkflowId = definition.WorkflowId, SlotKey = "slot" };
+        context.PreparationDefinitions.Add(definition); context.PreparationOccurrences.Add(occurrence);
+        context.PreparationReviews.Add(new() { Id = Guid.NewGuid(), OccurrenceId = occurrence.Id, WishlistId = revision.Id,
+            OwnerId = "operator", IdempotencyKey = "creation", RequestSha256 = "hash", Json = "{}" });
+        await context.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.UndoBulkAsync("operator", revision.Id, default));
+        Assert.NotNull(await groups.GetByIdAsync(revision.Id, default));
     }
 
     [Fact]
@@ -110,6 +161,30 @@ public sealed class GroupNewsQueryTests : IDisposable
         Assert.Equal(new[] { "0302", "0303" }, page.Records.Select(x => x.Id));
         Assert.Empty((await news.QueryAsync(filter with { ScopeTickers = [] }, default)).Records);
         Assert.Empty((await news.QueryAsync(filter with { Provider = "' OR 1=1 --" }, default)).Records);
+    }
+
+    [Fact]
+    public async Task DeskCatalystPresenceUsesObservedExactSymbolNewsAndNeverAllocatesColdPipelines()
+    {
+        var now=DateTimeOffset.UtcNow;
+        using var context=new TradingFlowDbContext(options);
+        context.NewsItems.AddRange(new PersistedNewsItem {Id="seen",Ticker="AAA",Timestamp=now.AddMinutes(-5),IngestedAt=now.AddMinutes(-4),Headline="Observed company update",Provider="wire"},
+            new PersistedNewsItem {Id="future",Ticker="BBB",Timestamp=now.AddMinutes(-5),IngestedAt=now.AddHours(1),Headline="Not observed yet",Provider="wire"},
+            new PersistedNewsItem {Id="prefix",Ticker="AA",Timestamp=now.AddMinutes(-5),IngestedAt=now.AddMinutes(-4),Headline="Different symbol",Provider="wire"});
+        await context.SaveChangesAsync();
+        var daily=new Mock<IDailyObservationService>();
+        daily.Setup(x=>x.GetAsync(It.IsAny<string>(),It.IsAny<CancellationToken>())).ReturnsAsync(new DailyObservationResult("loading","Loading"));
+        var calendar=new Mock<TradingFlow.Domain.Earnings.IEarningsRepository>();
+        calendar.Setup(x=>x.GetCalendarAsync(It.IsAny<DateOnly>(),It.IsAny<DateOnly>(),It.IsAny<IReadOnlyCollection<string>>(),It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        var stream=new TradingFlow.Engine.Pipeline.StreamingMarketStateProcessor(TradingFlow.Engine.Abstractions.NullCandleStore.Instance,
+            new TradingFlow.Engine.Abstractions.CandleStoreContext("test","test","sip"),TradingFlow.Engine.Pipeline.StreamingMarketStateOptions.Default,
+            TimeProvider.System,Microsoft.Extensions.Logging.Abstractions.NullLogger<TradingFlow.Engine.Pipeline.StreamingMarketStateProcessor>.Instance);
+        var service=new DeskUniverseEvidenceService(daily.Object,stream,calendar.Object,news,TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<DeskUniverseEvidenceService>.Instance);
+        RankedDeskRow Row(string symbol)=>new(new(new() {Ticker=symbol},new(symbol,null,null,null,null,null),null,null,null),1,0,[],0,default,default,null!,"",false);
+        var result=await service.ReadAsync([Row("AAA"),Row("BBB"),Row("AAAA")],null,default);
+        Assert.True(result["AAA"].HasCatalyst); Assert.Contains("Observed company update",result["AAA"].Detail);
+        Assert.Null(result["BBB"].HasCatalyst); Assert.Null(result["AAAA"].HasCatalyst); Assert.Empty(stream.GetTrackedSymbols());
     }
 
     [Theory]

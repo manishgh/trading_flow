@@ -19,11 +19,14 @@ namespace TradingFlow.Web.Pages
     {
         private readonly IDecisionAuditRepository _auditRepo;
         private readonly IAuditEquityReader? _equity;
+        private readonly IAuditWorkflowReader? _workflow;
+        public AuditWorkflowEvidence Workflow { get; private set; } = AuditWorkflowReader.Missing("Workflow reader unavailable.");
 
-        public AuditModel(IDecisionAuditRepository auditRepo, IAuditEquityReader? equity = null)
+        public AuditModel(IDecisionAuditRepository auditRepo, IAuditEquityReader? equity = null, IAuditWorkflowReader? workflow = null)
         {
             _auditRepo = auditRepo;
             _equity = equity;
+            _workflow = workflow;
         }
         [BindProperty(SupportsGet = true)] public string? CompareRuns { get; set; }
         public IReadOnlyList<AuditMultiRun> MultiRuns { get; private set; } = [];
@@ -100,6 +103,7 @@ namespace TradingFlow.Web.Pages
                 page = await _auditRepo.QueryAsync(RunName, Query(Summary.LastId), token);
             }
             Records = page.Records;
+            Workflow = _workflow is null ? AuditWorkflowReader.Missing("Workflow reader unavailable.") : await _workflow.ReadAsync(RunName, token);
             BuildViewState();
         }
 
@@ -135,6 +139,7 @@ namespace TradingFlow.Web.Pages
                 tickerCount = TickerCount,
                 strategyCount = StrategyCount,
                 funnel = Funnel,
+                workflow = Workflow,
                 comparison = Comparison, comparisonRunName = ComparisonRunName,
                 reasons = TopRejectionReasons.Select(reason => new
                 {

@@ -11,20 +11,17 @@ namespace TradingFlow.Web.Pages;
 public sealed class BacktestsModel : PageModel
 {
     private readonly ConfigCatalogService catalog;
-    private readonly RunConfigWriter configWriter;
     private readonly OptimizationJobService optJobs;
     private readonly BacktestJobService backtestJobs;
     private readonly IWishlistRepository wishlists;
 
     public BacktestsModel(
         ConfigCatalogService catalog,
-        RunConfigWriter configWriter,
         OptimizationJobService optJobs,
         BacktestJobService backtestJobs,
         IWishlistRepository wishlists)
     {
         this.catalog = catalog;
-        this.configWriter = configWriter;
         this.optJobs = optJobs;
         this.backtestJobs = backtestJobs;
         this.wishlists = wishlists;
@@ -220,23 +217,6 @@ public sealed class BacktestsModel : PageModel
     }
 
     private const string ElapsedFormat = @"hh\:mm\:ss";
-
-    public async Task<IActionResult> OnPostOptimizeAsync(CancellationToken cancellationToken)
-    {
-        var form = Request.Form;
-        var request = new OptimizationRunRequest(
-            form["SelectedStrategyPath"].ToString(),
-            form["SelectedConfigPath"].ToString(),
-            form["RunName"].ToString(),
-            form["Metric"].ToString(),
-            form["TargetRMultipleCsv"].ToString(),
-            form["StopAtrMultipleCsv"].ToString(),
-            form["MinVolumeSpikeCsv"].ToString());
-
-        var configPath = configWriter.WriteOptimizationConfig(request);
-        var job = await optJobs.StartAsync(request.RunName, configPath, cancellationToken);
-        return RedirectToPage("/OptimizationJob", new { id = job.JobId });
-    }
 
     public IActionResult OnPostRunBacktest() => BadRequest("reviewed_run_required: Use the reviewed run workflow.");
     public async Task<IActionResult> OnPostCancelBacktestAsync(Guid id, CancellationToken cancellationToken)

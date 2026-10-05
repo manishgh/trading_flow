@@ -210,7 +210,8 @@
                         @(lab.Metric == "net" ? SignedMoney(value) : Signed(value))
                     </span>
                     <span class="lab-bar">
-                        <span class="lab-bar-fill @(entry.rank == 1 ? "is-first" : null)" style="width:@width.ToString("0.0")%"></span>
+                        <progress class="lab-bar-fill tf-progress @(entry.rank == 1 ? "is-first" : null)" max="100"
+                                  value="@width.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)" aria-label="Relative metric magnitude for @entry.strategy.StrategyName"></progress>
                     </span>
                 </li>
             }
@@ -339,8 +340,8 @@
                                 <span>@rejection.Value</span>
                             </span>
                             <span class="lab-bar">
-                                <span class="lab-bar-fill is-neutral"
-                                      style="width:@((decimal)rejection.Value / Model.LargestRejection * 100m)%"></span>
+                                <progress class="lab-bar-fill tf-progress is-neutral" max="@Model.LargestRejection"
+                                          value="@rejection.Value" aria-label="@rejection.Key rejection count"></progress>
                             </span>
                         </li>
                     }

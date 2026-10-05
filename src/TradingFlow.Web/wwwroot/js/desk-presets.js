@@ -2,7 +2,7 @@
   const root = document.querySelector('[data-desk-root]'), form = document.getElementById('DeskFilterForm');
   if (!root || !form) return;
   const key = `tradingflow.desk.${root.dataset.operatorId}.${root.dataset.environment}.filters`;
-  const fields = ['search','minPrice','maxPrice','maxSpreadBps','minChange','maxChange','minVolumeZ20','maxVolumeZ20','tracked','source','sort','dir','pageSize'];
+  const fields = ['search','minPrice','maxPrice','maxSpreadBps','minChange','maxChange','minVolumeZ20','maxVolumeZ20','tracked','sector','minMarketCap','maxMarketCap','minVolume','minRvol','maxRvol','minAtrPercent','maxAtrPercent','minGap','maxGap','minVwapDistance','maxVwapDistance','minRsi','maxRsi','maxEarningsDays','catalystOnly','signalState','source','sort','dir','pageSize'];
   const pick = document.getElementById('DeskPreset'), status = document.getElementById('DeskPresetStatus');
   function read() { try { const value = JSON.parse(localStorage.getItem(key)); return Array.isArray(value) ? value.filter(x => typeof x.name === 'string' && x.name.length <= 40 && x.values && typeof x.values === 'object').slice(0,20) : []; } catch { return []; } }
   let presets = read();

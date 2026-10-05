@@ -2,7 +2,10 @@ namespace TradingFlow.Finviz;
 
 public sealed record FinvizScreenerRow(
     string Ticker,
-    decimal? RelativeVolume);
+    decimal? RelativeVolume,
+    string? Company = null,
+    string? Sector = null,
+    decimal? MarketCapMillions = null);
 
 /// <summary>
 /// One archived Finviz screener response with the provider rows and immutable

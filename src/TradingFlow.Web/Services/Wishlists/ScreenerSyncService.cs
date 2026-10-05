@@ -46,6 +46,8 @@ public sealed record ScreenerSyncResult(
     /// admission must calculate RVOL from Alpaca market evidence.
     /// </summary>
     public IReadOnlyList<ScreenerSymbolResult> SymbolDetails { get; init; } = [];
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<ScreenerSymbolResult> AllSymbolDetails { get; init; } = [];
 
     public DateTimeOffset? ProviderTimestampUtc { get; init; }
 
@@ -57,7 +59,10 @@ public sealed record ScreenerSyncResult(
 
 public sealed record ScreenerSymbolResult(
     string Symbol,
-    decimal? VendorReportedRvol);
+    decimal? VendorReportedRvol,
+    string? Company = null,
+    string? Sector = null,
+    decimal? MarketCapMillions = null);
 
 /// <summary>
 /// Point-in-time screener read used when resolving an immutable run universe.
@@ -149,11 +154,10 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
                 .Where(row => !String.IsNullOrWhiteSpace(row.Ticker))
                 .Select(row => new ScreenerSymbolResult(
                     row.Ticker.Trim().ToUpperInvariant(),
-                    row.RelativeVolume))
+                    row.RelativeVolume, row.Company, row.Sector, row.MarketCapMillions))
                 .GroupBy(row => row.Symbol, StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.Last())
                 .OrderBy(row => row.Symbol, StringComparer.Ordinal)
-                .Take(250)
                 .ToArray();
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -162,7 +166,7 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             return ScreenerSyncResult.Failed(scope, name, query, $"Finviz read failed: {exception.Message}");
         }
 
-        var symbols = symbolDetails.Select(row => row.Symbol).ToArray();
+        var symbols = symbolDetails.Take(250).Select(row => row.Symbol).ToArray();
 
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (wishlistId is { } id)
@@ -186,7 +190,8 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
         {
             AllSymbols = snapshot.Rows.Where(x => !String.IsNullOrWhiteSpace(x.Ticker)).Select(x => x.Ticker.Trim().ToUpperInvariant()).Distinct().Order(StringComparer.Ordinal).ToArray(),
             TotalCount = snapshot.Rows.Where(x => !String.IsNullOrWhiteSpace(x.Ticker)).Select(x => x.Ticker.Trim().ToUpperInvariant()).Distinct().Count(),
-            SymbolDetails = symbolDetails,
+            SymbolDetails = symbolDetails.Take(250).ToArray(),
+            AllSymbolDetails = symbolDetails,
             ProviderTimestampUtc = snapshot.ReceivedAtUtc,
             RawReference = $"finviz:{snapshot.NormalizedQuery}|{snapshot.RawReference}"
         };

@@ -49,9 +49,9 @@
         </div>
     </header>
 
-    <div class="lab-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"
-         aria-valuenow="@((int)progress)" aria-label="Run progress">
-        <div class="lab-progress-fill" data-lab-progress style="width:@progress.ToString("0.0")%"></div>
+    <div class="lab-progress">
+        <progress class="lab-progress-fill tf-progress" data-lab-progress max="100"
+                  value="@progress.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)" aria-label="Run progress"></progress>
     </div>
 
     <ol class="lab-phase-rail">
@@ -86,8 +86,8 @@
                         @group.Status@(String.IsNullOrWhiteSpace(group.CurrentTicker) ? null : $" · current {group.CurrentTicker}")
                     </p>
                     <div class="lab-progress lab-progress-sm">
-                        <div class="lab-progress-fill @(group.Status == "completed" ? "is-complete" : null)"
-                             style="width:@groupProgress.ToString("0.0")%"></div>
+                        <progress class="lab-progress-fill tf-progress @(group.Status == "completed" ? "is-complete" : null)" max="100"
+                                  value="@groupProgress.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)" aria-label="@group.StrategyName progress"></progress>
                     </div>
                     <ul class="lab-events">
                         @foreach (var recent in group.RecentEvents.Reverse().Take(4))

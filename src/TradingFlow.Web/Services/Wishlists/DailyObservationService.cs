@@ -14,7 +14,8 @@ public sealed record DailyObservationResult(
     IndicatorSnapshot? Snapshot = null,
     WishlistSwingWatchEvaluation? Evaluation = null,
     [property: JsonIgnore] WishlistMarketSnapshot? Observation = null,
-    DateTimeOffset? ObservedAtUtc = null);
+    DateTimeOffset? ObservedAtUtc = null,
+    decimal? CompletedSessionGapPercent = null);
 
 public interface IDailyObservationService
 {
@@ -23,7 +24,7 @@ public interface IDailyObservationService
 
 public sealed record DailyObservationOptions(
     int ConcurrentLoads = 4,
-    int CachedSymbols = 256,
+    int CachedSymbols = 1024,
     TimeSpan? LoadTimeout = null,
     TimeSpan? ReadyLifetime = null,
     TimeSpan? RetryLifetime = null);
@@ -200,12 +201,13 @@ public sealed class DailyObservationService : IDailyObservationService, IDisposa
                 TimeOnly.FromDateTime(TimeZoneInfo.ConvertTime(x.Value.CloseUtc, Exchange).DateTime))));
         var snapshots = new IndicatorEngine(profile).Compute(bars);
         var current = snapshots[^1];
+        decimal? gap = bars.Length >= 2 ? (bars[^1].Open / bars[^2].Close - 1m) * 100m : null;
         if (bars.Length < RequiredSessions)
             return (new("insufficient", $"{bars.Length}/{RequiredSessions} real completed daily sessions; observation is warming. No pre-listing history is synthesized.",
-                current, ObservedAtUtc: observedAt), nextClose);
+                current, ObservedAtUtc: observedAt, CompletedSessionGapPercent: gap), nextClose);
         var observation = new WishlistMarketSnapshot(symbol, current, snapshots[^2], bars.Take(bars.Length - 1).TakeLast(20).Max(x => x.High));
         return (new("ready", $"Completed SIP/all daily evidence through {completed[^1].Date:yyyy-MM-dd}; observational swing watch only.",
-            current, evaluator.Evaluate(observation), observation, observedAt), nextClose);
+            current, evaluator.Evaluate(observation), observation, observedAt, gap), nextClose);
     }
 
     private static Dictionary<DateOnly, PreparationSession> ValidateCalendar(PreparationCalendar calendar,

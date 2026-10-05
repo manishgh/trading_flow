@@ -105,6 +105,27 @@
                     <p id="auditComparisonEmpty" class="muted" hidden="@(Model.Comparison.Count > 0 || String.IsNullOrWhiteSpace(Model.CompareWith))">No decisions found for that run name.</p>
             </div>
 
+            <section class="audit-panel audit-stack" aria-labelledby="auditWorkflowHeading">
+                <h2 id="auditWorkflowHeading">Workflow evidence</h2>
+                <p class="muted" id="auditWorkflowDetail">@Model.Workflow.Detail</p>
+                <div class="table-scroll"><table class="data-grid-table">
+                    <thead><tr><th scope="col">Recorded stage</th><th scope="col">Count</th><th scope="col">Evidence / unit</th></tr></thead>
+                    <tbody id="auditWorkflowCounts">
+                        <tr><th scope="row">Signal evaluations</th><td>@Model.Summary.Total</td><td>Pinned full-run decision records; includes repeated evaluations</td></tr>
+                        @foreach (var count in Model.Workflow.Counts) { <tr><th scope="row">@count.Label</th><td>@(count.Count?.ToString() ?? "unavailable")</td><td>@count.Evidence</td></tr> }
+                    </tbody>
+                </table></div>
+                <h3>Ordered gate attempts</h3>
+                <p class="muted">Reached, passed and rejected counts come from persisted gate attempts, ordered by gate slot. Repeat attempts count separately. Gates with no trace remain unavailable.</p>
+                <div class="table-scroll"><table class="data-grid-table">
+                    <thead><tr><th scope="col">Order</th><th scope="col">Gate</th><th scope="col">Reached</th><th scope="col">Passed</th><th scope="col">Rejected</th></tr></thead>
+                    <tbody id="auditWorkflowGates">
+                        @if (Model.Workflow.Gates.Count == 0) { <tr><td colspan="5">Ordered gate traces unavailable</td></tr> }
+                        @foreach (var gate in Model.Workflow.Gates) { <tr><td>@gate.Order</td><th scope="row">@gate.Name</th><td>@gate.Reached</td><td>@gate.Passed</td><td>@gate.Rejected</td></tr> }
+                    </tbody>
+                </table></div>
+            </section>
+
                 <div id="auditOutcomePanel" class="audit-panel audit-stack" hidden="@(Model.Funnel.Count == 0)">
                     <h2>Decision outcomes</h2>
                     <p class="muted">
@@ -120,8 +141,9 @@
                                     <strong>@stage.Remaining<span class="muted"> / @stage.Total</span></strong>
                                 </div>
                                 <div class="audit-funnel-track">
-                                    <div class="audit-funnel-fill progress-fill"
-                                         style="--progress:@stage.RemainingPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                                    <progress class="audit-funnel-fill tf-progress" max="100"
+                                              value="@stage.RemainingPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+                                              aria-label="@stage.Label"></progress>
                                 </div>
                                 @if (stage.Removed > 0)
                                 {

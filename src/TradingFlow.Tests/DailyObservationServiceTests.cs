@@ -42,6 +42,8 @@ public sealed class DailyObservationServiceTests
         Assert.Equal(new WishlistSwingWatchEvaluator().Evaluate(result.Observation), result.Evaluation);
         Assert.NotNull(result.Snapshot!.RelativeVolume);
         Assert.Equal(Now, result.ObservedAtUtc);
+        var bars = fixture.Provider.LastBars;
+        Assert.Equal((bars[^1].Open / bars[^2].Close - 1m) * 100m, result.CompletedSessionGapPercent);
     }
 
     [Theory]

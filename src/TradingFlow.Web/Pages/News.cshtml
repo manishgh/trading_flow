@@ -122,32 +122,7 @@
                     <h3>@item.Ticker</h3>
                     previousSymbols = item.Ticker;
                 }
-                var hasSafeUrl = Uri.TryCreate(item.Url, UriKind.Absolute, out var articleUri) &&
-                    (articleUri.Scheme == Uri.UriSchemeHttp || articleUri.Scheme == Uri.UriSchemeHttps);
-                <article class="news-entry" data-news-item>
-                    <div class="news-timeline-meta">
-                        <strong>@item.Ticker</strong>
-                        <time datetime="@item.Timestamp.ToString("O")">@item.Timestamp.ToString("dd MMM HH:mm") UTC</time>
-                        <span class="@TradingFlow.Web.Pages.NewsModel.SentimentClass(item.SentimentScore)">
-                            @TradingFlow.Web.Pages.NewsModel.SentimentLabel(item.SentimentScore)
-                        </span>
-                    </div>
-                    <strong class="news-headline">@item.Headline</strong>
-                    @if (!String.IsNullOrWhiteSpace(item.Summary))
-                    {
-                        <p>@item.Summary</p>
-                    }
-                    <div class="news-entry-footer">
-                        <span class="muted">@item.Provider @item.Source · @item.Classification</span>
-                        @if (User.Identity?.IsAuthenticated == true) {
-                            <button type="button" class="button secondary" data-group-action="add" data-tickers="@item.Ticker">Add symbols to group</button>
-                        }
-                        @if (hasSafeUrl)
-                        {
-                            <a href="@item.Url" target="_blank" rel="noopener noreferrer">Open article</a>
-                        }
-                    </div>
-                </article>
+                <partial name="_NewsEvidence" model="TradingFlow.Web.Models.NewsPresentation.From(item)" />
             }
         </div>
     }

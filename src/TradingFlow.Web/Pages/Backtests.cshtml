@@ -45,14 +45,15 @@
     @* =======================================================================
        Left rail - configuration
        ======================================================================= *@
-    <form class="lab-rail" method="post" asp-page-handler="RunBacktest">
+    <form class="lab-rail" novalidate method="post" asp-page-handler="RunBacktest">
         <details class="research-configuration" open="@(Model.Phase == "configure")"><summary>@(Model.Phase == "configure" ? "Configure backtest" : "Configure another run")</summary>
         <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
 
-        <section class="lab-block">
-            <h2 class="section-heading">
+        <div data-run-validation hidden role="alert" tabindex="-1"></div>
+        <fieldset class="lab-block">
+            <legend class="section-heading">
                 <partial name="_Icon" model='new IconModel("layers", 15)' />Universe
-            </h2>
+            </legend>
             <div class="field">
                 <label for="WishlistId">Wishlist</label>
                 <select class="input" id="WishlistId" name="WishlistId">
@@ -79,10 +80,10 @@
                 Point-in-time membership is required for a promotable run. This wishlist is a current
                 list, so the run is marked research-only.
             </p>
-        </section>
+        </fieldset>
 
-        <section class="lab-block">
-            <h2 class="section-heading">Strategies</h2>
+        <fieldset class="lab-block">
+            <legend class="section-heading">Strategies</legend>
             <div class="lab-strategy-list">
                 @foreach (var strategy in Model.Strategies)
                 {
@@ -113,49 +114,62 @@
             <p class="note">
                 Select at least one strategy. A run with no strategy produces no evidence.
             </p>
-        </section>
+        </fieldset>
 
-        <section class="lab-block">
-            <details class="advanced-run-parameters"><summary>Run parameters and risk limits</summary>
+
+        <fieldset class="lab-block">
+            <legend class="section-heading">Test window</legend>
             <div class="lab-parameters">
                 <div class="field">
                     <label for="RunName">Run name</label>
-                    <input class="input" id="RunName" name="RunName" value="lab-run" />
+                    <input class="input" id="RunName" name="RunName" maxlength="100" aria-describedby="RunNameHelp" value="lab-run" />
+                    <p class="note" id="RunNameHelp">Use letters, digits, hyphens or underscores, or leave blank for a generated name.</p>
                 </div>
                 <div class="field">
-                    <label for="LookbackDays">Lookback days</label>
-                    <input class="input" id="LookbackDays" name="LookbackDays" type="number" min="5" max="1825" value="180" />
+                    <label for="TestWindowStartUtc">From UTC</label>
+                    <input class="input" id="TestWindowStartUtc" name="TestWindowStartUtc" type="datetime-local" step="60" aria-describedby="TestWindowHelp" />
                 </div>
                 <div class="field">
-                    <label for="StartingCapital">Starting capital</label>
-                    <input class="input" id="StartingCapital" name="StartingCapital" type="number" step="100" value="10000" />
+                    <label for="TestWindowEndUtc">To UTC</label>
+                    <input class="input" id="TestWindowEndUtc" name="TestWindowEndUtc" type="datetime-local" step="60" aria-describedby="TestWindowHelp" />
                 </div>
                 <div class="field">
-                    <label for="AccountRiskBudgetPct">Account risk %</label>
-                    <input class="input" id="AccountRiskBudgetPct" name="AccountRiskBudgetPct" type="number" step="0.1" value="1" />
+                    <label for="LookbackDays">Fallback lookback (days)</label>
+                    <input class="input" id="LookbackDays" name="LookbackDays" type="number" min="5" max="1825" step="1" value="180" aria-describedby="TestWindowHelp" />
+                </div>
+            </div>
+            <p class="note" id="TestWindowHelp">Enter both dates in UTC, regardless of your device timezone. Leave both blank to use the lookback ending now. The end must follow the start and cannot be in the future.</p>
+        </fieldset>
+        <fieldset class="lab-block">
+            <legend class="section-heading">Portfolio limits</legend>
+            <div class="lab-parameters">
+                <div class="field">
+                    <label for="StartingCapital">Starting capital (USD)</label>
+                    <input class="input" id="StartingCapital" name="StartingCapital" type="number" min="0.01" step="any" value="10000" />
                 </div>
                 <div class="field">
-                    <label for="MaxPositionNotionalPct">Max position notional %</label>
-                    <input class="input" id="MaxPositionNotionalPct" name="MaxPositionNotionalPct" type="number" step="1" value="25" />
+                    <label for="AccountRiskBudgetPct">Account risk (% of equity)</label>
+                    <input class="input" id="AccountRiskBudgetPct" name="AccountRiskBudgetPct" type="number" min="0.01" max="100" step="any" value="1" />
                 </div>
                 <div class="field">
-                    <label for="MaxConcurrentPositions">Max positions</label>
-                    <input class="input" id="MaxConcurrentPositions" name="MaxConcurrentPositions" type="number" min="1" value="4" />
+                    <label for="MaxPositionNotionalPct">Max position notional (% of equity)</label>
+                    <input class="input" id="MaxPositionNotionalPct" name="MaxPositionNotionalPct" type="number" min="0.01" max="100" step="any" value="25" />
+                </div>
+                <div class="field">
+                    <label for="MaxConcurrentPositions">Max concurrent positions (count)</label>
+                    <input class="input" id="MaxConcurrentPositions" name="MaxConcurrentPositions" type="number" min="1" max="1000" step="1" value="4" />
                 </div>
                 <div class="field">
                     <label for="CachePolicy">Market data</label>
-                    <select class="input" id="CachePolicy" name="CachePolicy">
+                    <select class="input" id="CachePolicy" name="CachePolicy" aria-describedby="CachePolicyHelp">
                         <option value="use_cache">Use cache</option>
                         <option value="refresh">Refresh</option>
                     </select>
+                    <p class="note" id="CachePolicyHelp">Use cached candles where available, or request a provider refresh. Neither option fills missing evidence with invented values.</p>
                 </div>
             </div>
-            <p class="note">
-                Completed-bar features, later-bar confirmation and next-bar execution are mandatory
-                and not configurable.
-            </p>
-        </details>
-        </section>
+            <p class="note">Risk and notional limits must be greater than zero and at most 100% of equity. Completed-bar features, later-bar confirmation and next-bar execution are mandatory.</p>
+        </fieldset>
 
         </details>
         <section class="lab-block lab-run">

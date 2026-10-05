@@ -11,6 +11,15 @@ namespace TradingFlow.Tests;
 
 public sealed class StreamingMarketStateProcessorTests
 {
+    [Fact]
+    public async Task ReadSnapshotOfUnknownSymbolNeverAllocatesOrOwnsPipeline()
+    {
+        var now=Utc(2026,8,27,15,0);
+        var processor=CreateProcessor(NullCandleStore.Instance,new FixedTimeProvider(now));
+        Activate(processor,1);
+        Assert.Null(await processor.GetTickerStateAsync("NEVER",["1m"],1,now,default));
+        Assert.DoesNotContain("NEVER",processor.GetTrackedSymbols());
+    }
     [Theory]
     [InlineData(0, 45)]
     [InlineData(2, 0)]

@@ -17,7 +17,6 @@
     const totalNode = root.querySelector("[data-lab-total]");
     const percentNode = root.querySelector("[data-lab-percent]");
     const progressNode = root.querySelector("[data-lab-progress]");
-    const progressBar = progressNode?.parentElement;
     const eventsNode = root.querySelector("[data-lab-events]");
 
     let reloaded = false;
@@ -46,8 +45,7 @@
             setText(completedNode, snapshot.completedTickerCount);
             setText(totalNode, snapshot.totalTickerCount);
             setText(percentNode, snapshot.progressPercent);
-            if (progressNode) progressNode.style.width = `${snapshot.progressPercent}%`;
-            progressBar?.setAttribute("aria-valuenow", String(Math.round(snapshot.progressPercent)));
+            if (progressNode) progressNode.value = Math.max(0, Math.min(100, Number(snapshot.progressPercent) || 0));
 
             if (eventsNode && Array.isArray(snapshot.events)) {
                 const latest = [...snapshot.events].reverse().slice(0, 12);

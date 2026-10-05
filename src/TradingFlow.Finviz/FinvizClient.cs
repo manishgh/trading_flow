@@ -91,6 +91,9 @@ public sealed partial class FinvizClient : IDisposable
             var header = parser.EndOfData ? Array.Empty<string>() : parser.ReadFields() ?? Array.Empty<string>();
             var tickerIndex = FindHeaderIndex(header, "ticker");
             var relativeVolumeIndex = FindHeaderIndex(header, "relvolume", "relativevolume", "relvol", "rvol");
+            var companyIndex = FindHeaderIndex(header, "company");
+            var sectorIndex = FindHeaderIndex(header, "sector");
+            var capIndex = FindHeaderIndex(header, "marketcap", "marketcapitalization");
 
             while (!parser.EndOfData)
             {
@@ -108,7 +111,8 @@ public sealed partial class FinvizClient : IDisposable
                         var relativeVolume = relativeVolumeIndex >= 0 && fields.Length > relativeVolumeIndex
                             ? ParseNullableDecimal(fields[relativeVolumeIndex])
                             : null;
-                        rows.Add(new FinvizScreenerRow(ticker, relativeVolume));
+                        string? Field(int index) => index >= 0 && index < fields.Length && !String.IsNullOrWhiteSpace(fields[index]) && fields[index].Trim() != "-" ? fields[index].Trim() : null;
+                        rows.Add(new FinvizScreenerRow(ticker, relativeVolume, Field(companyIndex), Field(sectorIndex), ParseMarketCapMillions(Field(capIndex))));
                     }
                 }
                 catch (MalformedLineException)
@@ -208,6 +212,20 @@ public sealed partial class FinvizClient : IDisposable
             out var parsed)
                 ? parsed
                 : null;
+    }
+
+    // Finviz export's bare Market Cap column is in USD millions. Suffixed display
+    // values are dollar magnitudes; normalize them to the same explicit unit.
+    private static decimal? ParseMarketCapMillions(string? value)
+    {
+        if (String.IsNullOrWhiteSpace(value)) return null;
+        var text = value.Trim();
+        if (Char.IsLetter(text[^1]) && Char.ToUpperInvariant(text[^1]) is not ('K' or 'M' or 'B' or 'T')) return null;
+        var factor = Char.ToUpperInvariant(text[^1]) switch { 'K' => .001m, 'M' => 1m, 'B' => 1000m, 'T' => 1000000m, _ => 1m };
+        if (Char.IsLetter(text[^1])) text = text[..^1];
+        var parsed = ParseNullableDecimal(text);
+        try { return parsed is >= 0 ? parsed * factor : null; }
+        catch (OverflowException) { return null; }
     }
 
     private static DateTimeOffset ParseFinvizTimestamp(string value)

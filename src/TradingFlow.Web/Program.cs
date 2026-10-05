@@ -263,6 +263,7 @@ builder.Services.AddSingleton<WishlistMarketMonitor>();
 builder.Services.AddSingleton<DailyObservationService>();
 builder.Services.AddSingleton<IDailyObservationService>(sp => sp.GetRequiredService<DailyObservationService>());
 builder.Services.AddSingleton<WishlistDeskService>();
+builder.Services.AddSingleton<DeskUniverseEvidenceService>();
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskSources>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.IDeskAccountReader, TradingFlow.Web.Services.Desk.DeskAccountReader>();
@@ -618,6 +619,7 @@ builder.Services.AddSingleton<TradingFlow.Application.Candidates.ICandidateWorkf
 builder.Services.AddSingleton<IOrderWorkflowService, OrderWorkflowService>();
 builder.Services.AddSingleton<OrderReplacementReviewService>();
 builder.Services.AddSingleton<IAuditEquityReader, AuditEquityReader>();
+builder.Services.AddSingleton<IAuditWorkflowReader, AuditWorkflowReader>();
 builder.Services.AddSingleton<TradingFlow.Data.Jobs.SqliteJobRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository>(services =>
     services.GetRequiredService<TradingFlow.Data.Jobs.SqliteJobRepository>());

@@ -2841,7 +2841,7 @@ html[data-environment="live"] .topbar {
   overflow: hidden;
 }
 .audit-funnel-fill { background: var(--accent); height: 100%; }
-.audit-funnel li:last-child .audit-funnel-fill { background: var(--good); }
+.audit-funnel li:last-child .audit-funnel-fill { --progress-color: var(--good); }
 
 .order-actions { white-space: nowrap; }
 .order-actions form { display: inline-block; margin-right: 6px; }
@@ -4236,7 +4236,7 @@ td.select-column {
 .lab-progress { height: 6px; margin: 0 20px; background: var(--color-neutral-300); }
 .lab-progress-sm { height: 4px; margin: 6px 0; }
 .lab-progress-fill { height: 100%; background: var(--color-accent); transition: width 180ms linear; }
-.lab-progress-fill.is-complete { background: var(--color-neutral-600); }
+.lab-progress-fill.is-complete { --progress-color: var(--color-neutral-600); }
 
 .lab-phase-rail {
   display: grid;
@@ -4325,9 +4325,9 @@ td.select-column {
 .lab-leaderboard-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lab-leaderboard-value { font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; }
 .lab-bar { grid-column: 2 / -1; display: block; height: 4px; background: var(--color-neutral-200); }
-.lab-bar-fill { display: block; height: 100%; background: var(--color-neutral-500); }
-.lab-bar-fill.is-first { background: var(--color-accent); }
-.lab-bar-fill.is-neutral { background: var(--color-neutral-600); }
+.lab-bar-fill { display: block; height: 100%; --progress-color: var(--color-neutral-500); }
+.lab-bar-fill.is-first { --progress-color: var(--color-accent); }
+.lab-bar-fill.is-neutral { --progress-color: var(--color-neutral-600); }
 
 /* Cell tint is the strategy's rank on that metric, best to worst - not the
    absolute value, so the table reads the same whatever each column measures. */
@@ -4423,3 +4423,10 @@ td.select-column {
 .series-3 { color: var(--danger, #d05b63); }
 #ReplacementDialog { max-width: min(40rem, calc(100vw - 2rem)); color: var(--ink); background: var(--panel); border: 1px solid var(--line); padding: var(--space-4); }
 #ReplacementIdentity, #groupActionSummary { overflow-wrap: anywhere; }
+
+/* Native progress values carry measurements without inline page styles. */
+progress.tf-progress { display: block; width: 100%; height: 100%; border: 0; appearance: none; background: transparent; color: var(--progress-color, var(--color-accent)); }
+progress.tf-progress::-webkit-progress-bar { background: transparent; }
+progress.tf-progress::-webkit-progress-value { background: var(--progress-color, var(--color-accent)); }
+progress.tf-progress::-moz-progress-bar { background: var(--progress-color, var(--color-accent)); }
+progress.tf-progress.is-complete { --progress-color: var(--color-neutral-600); }

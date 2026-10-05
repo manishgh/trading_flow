@@ -34,7 +34,8 @@ else
                 <td>@job.CurrentStage<br /><span class="muted">@job.CompletedTickerCount / @job.TotalTickerCount work items</span></td>
                 <td>
                     <div class="progress-track">
-                        <div class="progress-bar progress-fill" style="--progress:@progressPct.ToString("0.##", CultureInfo.InvariantCulture)%"></div>
+                        <progress class="progress-bar tf-progress" max="100" value="@progressPct.ToString("0.##", CultureInfo.InvariantCulture)"
+                                  aria-label="@job.RunName progress"></progress>
                     </div>
                     <span class="muted">@progressPct.ToString("0.0")%</span>
                 </td>

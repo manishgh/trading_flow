@@ -67,7 +67,7 @@ for(const width of [1440,412]) test("real decision replay audit at "+width,async
  await page.screenshot({path:testInfo.outputPath("replay-audit-"+width+".png"),fullPage:true});
 });
 
-test("backtest retry preserves the exact window and immutable universe",async({page})=>{
+for(const exactWindow of [false,true]) test("backtest retry preserves the "+(exactWindow?'custom UTC':'lookback')+" window and immutable universe",async({page})=>{
  await signIn(page);await page.goto("/Backtests");
  const strategy=page.locator('input[name="StrategyPaths"]').first();await strategy.check();
  const selectedPath=await strategy.inputValue();
@@ -78,6 +78,10 @@ test("backtest retry preserves the exact window and immutable universe",async({p
   requests.push(route.request().postDataJSON());
   return requests.length===1?route.abort("failed"):json(route,{jobId:runId,runName:"fixture",status:"queued"});
  });
+ if(exactWindow){
+  await page.getByLabel('From UTC',{exact:true}).fill('2026-01-15T09:30');
+  await page.getByLabel('To UTC',{exact:true}).fill('2026-06-15T16:00');
+ }
  await page.getByRole("button",{name:"Run backtest",exact:true}).click();
  await expect.poll(()=>requests.length).toBe(1);
  await expect(page.locator("[data-run-workflow-status]")).toContainText("Retry keeps the same command");
@@ -86,5 +90,45 @@ test("backtest retry preserves the exact window and immutable universe",async({p
  expect(requests[1]).toEqual(requests[0]);expect(captures).toBe(1);
  expect(requests[0].universeSnapshotId).toBe(universeId);
  expect(requests[0].strategies).toEqual([identity]);
- expect(Date.parse(requests[0].testWindowEndUtc)-Date.parse(requests[0].testWindowStartUtc)).toBe(180*86400000);
+ if(exactWindow){expect(requests[0].testWindowStartUtc).toBe('2026-01-15T09:30:00.000Z');expect(requests[0].testWindowEndUtc).toBe('2026-06-15T16:00:00.000Z');}
+ else expect(Date.parse(requests[0].testWindowEndUtc)-Date.parse(requests[0].testWindowStartUtc)).toBe(180*86400000);
+});
+
+test.describe('research validation in a non-UTC device timezone',()=>{
+ test.use({timezoneId:'America/New_York',viewport:{width:390,height:844}});
+ test('errors preserve values and prevent a universe capture, then UTC dates submit unchanged',async({page})=>{
+  await signIn(page);await page.goto('/Backtests');
+  const strategy=page.locator('input[name="StrategyPaths"]').first();await strategy.check();const selectedPath=await strategy.inputValue();
+  let captures=0,request;
+  await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
+  await page.route('**/api/v1/universes/preview',route=>{captures++;return json(route,{universeSnapshotId:universeId});});
+  await page.route('**/api/v1/backtests/runs',route=>{request=route.request().postDataJSON();return json(route,{jobId:runId,runName:'validated',status:'queued'});});
+  await page.getByLabel('From UTC',{exact:true}).fill('2026-06-16T09:30');await page.getByLabel('To UTC',{exact:true}).fill('2026-06-15T16:00');
+  await page.getByLabel('Account risk (% of equity)',{exact:true}).fill('101');
+  await page.getByLabel('Run name',{exact:true}).fill('My research run');
+  await page.getByRole('button',{name:'Run backtest',exact:true}).click();
+  const summary=page.locator('[data-run-validation]');await expect(summary).toBeVisible();await expect(summary).toBeFocused();
+  await expect(summary).toContainText('To UTC must be later');await expect(summary).toContainText('at most 100%');
+  await expect(summary).toContainText('letters, digits');await expect(page.locator('#RunName')).toHaveAttribute('aria-invalid','true');
+  await expect(page.locator('#AccountRiskBudgetPct')).toHaveAttribute('aria-invalid','true');await expect(page.locator('#AccountRiskBudgetPct')).toHaveValue('101');expect(captures).toBe(0);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBeTruthy();
+  await page.getByLabel('From UTC',{exact:true}).fill('2099-06-16T09:30');await page.getByLabel('To UTC',{exact:true}).fill('2099-06-15T16:00');
+  await page.getByRole('button',{name:'Run backtest',exact:true}).click();await expect(summary).toContainText('cannot be in the future');
+  const describedIds=(await page.locator('#TestWindowEndUtc').getAttribute('aria-describedby')).split(' ');
+  expect(new Set(describedIds).size).toBe(describedIds.length);for(const id of describedIds)await expect(page.locator('[id="'+id+'"]').first()).toBeAttached();
+  await page.getByLabel('From UTC',{exact:true}).fill('2026-01-15T09:30');await page.getByLabel('Account risk (% of equity)',{exact:true}).fill('1');
+  await page.getByLabel('To UTC',{exact:true}).fill('2026-06-15T16:00');
+  await page.getByLabel('Run name',{exact:true}).fill(' reviewed-research ');
+  await page.getByRole('button',{name:'Run backtest',exact:true}).click();await expect(page.getByRole('link',{name:'Open run',exact:true})).toBeVisible();
+  expect(request.runName).toBe('reviewed-research');expect(request.testWindowStartUtc).toBe('2026-01-15T09:30:00.000Z');expect(request.testWindowEndUtc).toBe('2026-06-15T16:00:00.000Z');expect(captures).toBe(1);
+ });
+});
+
+test('retired optimization form cannot create a YAML artifact',async({page})=>{
+ await signIn(page);await page.goto('/Backtests');
+ const root=path.resolve(process.cwd(),'../../configs/optimization/ui-runs');
+ const files=()=>fs.existsSync(root)?fs.readdirSync(root).sort():[];const before=files();
+ const token=await page.locator('input[name="__RequestVerificationToken"]').first().inputValue();
+ const response=await page.request.post('/Backtests?handler=Optimize',{form:{__RequestVerificationToken:token,RunName:'retired-form-check',TargetRMultipleCsv:'1\nunsafe: true'}});
+ expect(response.status()).not.toBe(500);expect(response.headers().location||'').not.toContain('/OptimizationJob');expect(files()).toEqual(before);
 });

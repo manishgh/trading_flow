@@ -82,8 +82,9 @@ export function renderAuditOutcomes(container, stages) {
   container.replaceChildren(...stages.map(stage => {
     const row = node('li'), head = node('div', undefined, 'audit-funnel-head');
     head.append(node('span', stage.label), node('strong', `${stage.remaining} / ${stage.total}`));
-    const track = node('div', undefined, 'audit-funnel-track'), fill = node('div', undefined, 'audit-funnel-fill progress-fill');
-    fill.style.setProperty('--progress', `${stage.remainingPercent}%`); track.append(fill);
+    const track = node('div', undefined, 'audit-funnel-track'), fill = node('progress', undefined, 'audit-funnel-fill tf-progress');
+    fill.max = 100; fill.value = Math.max(0, Math.min(100, Number(stage.remainingPercent) || 0));
+    fill.setAttribute('aria-label', stage.label); track.append(fill);
     row.append(head, track);
     if (stage.removed > 0) row.append(node('small', `${stage.removed} decisions in this group`, 'muted'));
     return row;
@@ -97,5 +98,21 @@ export function renderAuditComparison(container, rows) {
     row.append(node('td', metric.label), node('td', metric.current, 'num'), node('td', metric.other, 'num'),
       node('td', metric.deltaText, `num ${metric.deltaClass}`));
     return row;
+  }));
+}
+
+export function renderAuditWorkflow(counts, gates, workflow, evaluations) {
+  if (!counts || !gates || !workflow) return;
+  const items = [{ label: 'Signal evaluations', count: evaluations, evidence: 'Pinned full-run decision records; includes repeated evaluations' }, ...workflow.counts];
+  counts.replaceChildren(...items.map(item => {
+    const row = node('tr'), heading = node('th', item.label); heading.scope = 'row';
+    row.append(heading, node('td', item.count ?? 'unavailable'), node('td', item.evidence)); return row;
+  }));
+  if (!workflow.gates.length) {
+    const row = node('tr'), cell = node('td', 'Ordered gate traces unavailable'); cell.colSpan = 5; row.append(cell); gates.replaceChildren(row); return;
+  }
+  gates.replaceChildren(...workflow.gates.map(gate => {
+    const row = node('tr'), heading = node('th', gate.name); heading.scope = 'row';
+    row.append(node('td', gate.order), heading, node('td', gate.reached), node('td', gate.passed), node('td', gate.rejected)); return row;
   }));
 }

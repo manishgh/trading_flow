@@ -186,6 +186,23 @@
     <summary>More earnings filters and views</summary>
     <form id="earnings-advanced" class="news-filter-bar">
         <div><label for="earnings-view">View</label><select id="earnings-view" name="view"><option value="timeline">Timeline</option><option value="week">Calendar by New York date</option></select></div>
+        <div><label for="earnings-search">Ticker or company</label><input id="earnings-search" name="search" maxlength="200" /></div>
+        <div><label for="earnings-schedule">Schedule certainty</label><select id="earnings-schedule" name="schedule"><option value="">All schedules</option><option value="estimated">Estimated schedule</option><option value="reported">Provider-reported schedule</option></select></div>
+        <div><label for="earnings-result">Observed result data</label><select id="earnings-result" name="result"><option value="">All results</option><option value="observed">Actuals or first-seen result</option><option value="pending">No observed result</option></select></div>
+        <div><label for="earnings-minMarketCap">Minimum cap · USD millions</label><input id="earnings-minMarketCap" name="minMarketCap" type="number" step="any" min="0" /></div>
+        <div><label for="earnings-maxMarketCap">Maximum cap · USD millions</label><input id="earnings-maxMarketCap" name="maxMarketCap" type="number" step="any" min="0" /></div>
+        <div><label for="earnings-minEventReturn">Minimum event return %</label><input id="earnings-minEventReturn" name="minEventReturn" type="number" step="any" /></div>
+        <div><label for="earnings-maxEventReturn">Maximum event return %</label><input id="earnings-maxEventReturn" name="maxEventReturn" type="number" step="any" /></div>
+        <div><label for="earnings-minPriceReaction">Minimum provider one-day reaction %</label><input id="earnings-minPriceReaction" name="minPriceReaction" type="number" step="any" /></div>
+        <div><label for="earnings-maxPriceReaction">Maximum provider one-day reaction %</label><input id="earnings-maxPriceReaction" name="maxPriceReaction" type="number" step="any" /></div>
+        <div><label for="earnings-minEpsEstimate">Minimum EPS estimate · USD/share</label><input id="earnings-minEpsEstimate" name="minEpsEstimate" type="number" step="any" /></div>
+        <div><label for="earnings-maxEpsEstimate">Maximum EPS estimate · USD/share</label><input id="earnings-maxEpsEstimate" name="maxEpsEstimate" type="number" step="any" /></div>
+        <div><label for="earnings-minEpsActual">Minimum EPS actual · USD/share</label><input id="earnings-minEpsActual" name="minEpsActual" type="number" step="any" /></div>
+        <div><label for="earnings-maxEpsActual">Maximum EPS actual · USD/share</label><input id="earnings-maxEpsActual" name="maxEpsActual" type="number" step="any" /></div>
+        <div><label for="earnings-minRevenueEstimate">Minimum revenue estimate · USD millions</label><input id="earnings-minRevenueEstimate" name="minRevenueEstimate" type="number" step="any" min="0" /></div>
+        <div><label for="earnings-maxRevenueEstimate">Maximum revenue estimate · USD millions</label><input id="earnings-maxRevenueEstimate" name="maxRevenueEstimate" type="number" step="any" min="0" /></div>
+        <div><label for="earnings-minRevenueActual">Minimum revenue actual · USD millions</label><input id="earnings-minRevenueActual" name="minRevenueActual" type="number" step="any" min="0" /></div>
+        <div><label for="earnings-maxRevenueActual">Maximum revenue actual · USD millions</label><input id="earnings-maxRevenueActual" name="maxRevenueActual" type="number" step="any" min="0" /></div>
         <div><label for="earnings-provider">Earnings provider</label><input id="earnings-provider" name="provider" /></div>
         <div><label for="earnings-news-provider">News provider</label><input id="earnings-news-provider" name="newsProvider" /></div>
         <div><label for="earnings-day">Reporting bucket (operator date)</label><select id="earnings-day" name="day"><option value="">All days</option><option value="today">Today</option><option value="nextBusinessDay">Next reporting day</option><option value="other">Other days</option></select></div>
@@ -237,4 +254,5 @@
 
 @section Scripts {
     <script src="~/js/earnings.js" asp-append-version="true"></script>
+    <script type="module" src="~/js/group-actions.js" asp-append-version="true"></script>
 }

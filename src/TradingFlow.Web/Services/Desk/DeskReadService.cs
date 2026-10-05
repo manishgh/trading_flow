@@ -6,7 +6,8 @@ using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Services.Desk;
 
-public sealed record DeskArticle(string Headline, string? Url, string Provider, DateTimeOffset PublishedAtUtc, IReadOnlyList<string> Symbols);
+public sealed record DeskArticle(string Headline, string? Url, string Provider, DateTimeOffset PublishedAtUtc, IReadOnlyList<string> Symbols,
+    string? Source = null, string? Summary = null, decimal? SentimentScore = null, string? Classification = null);
 public sealed record DeskRow(DeskMembership Membership, AlpacaLatestQuote? Quote, string QuoteFreshness,
     IndicatorSnapshot? Technical, DeskHolding? Holding, bool HoldingsKnown, IReadOnlyList<DeskArticle> News, DailyObservationResult Observation, AlpacaPreviousClose? PreviousClose = null);
 public sealed record DeskSnapshot(DeskSelection Selection, IReadOnlyList<DeskRow> Rows, DeskAccount Account,
@@ -61,6 +62,6 @@ public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReade
     public static IReadOnlyList<DeskArticle> AggregateNews(IEnumerable<PersistedNewsItem> items) => items
         .GroupBy(x => String.IsNullOrWhiteSpace(x.Url) ? x.Provider + ":" + x.Headline : x.Url, StringComparer.OrdinalIgnoreCase)
         .Select(group => { var latest = group.MaxBy(x => x.Timestamp)!; return new DeskArticle(latest.Headline, latest.Url,
-            latest.Source ?? latest.Provider, latest.Timestamp, group.Select(x => x.Ticker).Distinct().Order().ToArray()); })
+            latest.Provider, latest.Timestamp, group.Select(x => x.Ticker).Distinct().Order().ToArray(), latest.Source, latest.Summary, latest.SentimentScore, NewsEvidenceClassification.Classify(latest)); })
         .OrderByDescending(x => x.PublishedAtUtc).ToArray();
 }

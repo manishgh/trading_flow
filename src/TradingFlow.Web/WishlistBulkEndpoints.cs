@@ -14,6 +14,11 @@ public static class WishlistBulkEndpoints
                     groups.Add(new { wishlist.Id, wishlist.Name });
             return Results.Ok(groups);
         });
+        group.MapPost("/wishlists/create", async (WishlistCreateRequest request, ClaimsPrincipal user,
+            IWishlistRepository repository, CancellationToken token) => {
+            try { return Results.Ok(await repository.CreateGroupAsync(OperatorId(user), request, token)); }
+            catch (InvalidOperationException error) { return Results.Conflict(new { error = error.Message }); }
+        });
         group.MapPost("/wishlists/bulk", async (WishlistBulkRequest request, ClaimsPrincipal user,
             IWishlistRepository repository, CancellationToken token) => {
             try { return Results.Ok(await repository.ApplyBulkAsync(OperatorId(user), request, token)); }

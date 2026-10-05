@@ -7,6 +7,14 @@
             <p id="groupActionSummary"></p>
             <label id="groupActionTargetLabel" for="groupActionTarget">Destination group</label>
             <select id="groupActionTarget"></select>
+            <fieldset id="groupActionCreatePanel" hidden>
+                <legend>Create a destination group</legend>
+                <label for="groupActionCreateName">New group name</label>
+                <input id="groupActionCreateName" maxlength="120" autocomplete="off" />
+                <button id="groupActionCreate" type="button">Create empty group</button>
+                <button id="groupActionCreateUndo" type="button" hidden>Undo empty group creation</button>
+                <p class="muted">Creation does not add symbols. Review and apply membership separately.</p>
+            </fieldset>
             <label id="groupActionSourceLabel" for="groupActionSource">Source group</label>
             <select id="groupActionSource"></select>
             <label id="groupActionTagLabel" for="groupActionTag">Tag</label>
