@@ -1,5 +1,7 @@
 # Desk Universe, Screeners, Portfolio, Preparation And Orders
 
+See the [current plan checklist](verification/trading-desk-plan-status-2026-10-05.md) for delivered scope and outstanding Web/native/provider acceptance. The older status below is historical.
+
 Status: web screen 1 (desk), screen 2 (orders) and the follow-up round implemented 2026-09-29
 Applies to: `src/TradingFlow.Web` desk (`/TradeDesk`) and orders screen (`/Orders`)
 

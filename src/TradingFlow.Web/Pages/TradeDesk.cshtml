@@ -883,6 +883,11 @@ else if (Model.IsScreenerScope)
                    symbol, with the same reviewed ticket beside it. *@
                 <a class="btn btn-secondary btn-sm desk-rail-orders" asp-page="/Orders"
                    asp-route-ticker="@row.Ticker" asp-route-env="@Model.Env">Orders in @row.Ticker</a>
+                @if (User.Identity?.IsAuthenticated == true)
+                {
+                    <button class="btn btn-secondary btn-sm" type="button" data-group-action="add"
+                            data-tickers="@row.Ticker">Add @row.Ticker to group</button>
+                }
             </section>
 
             <partial name="_DeskEvidencePair" model="new DeskEvidenceModel(selected, true)" />
