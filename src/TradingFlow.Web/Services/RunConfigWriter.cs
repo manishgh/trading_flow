@@ -971,45 +971,6 @@ public sealed class RunConfigWriter
             .ToArray();
     }
 
-    public string WriteOptimizationConfig(OptimizationRunRequest request)
-    {
-        var runName = SanitizeRunName(request.RunName);
-        var outputPath = Path.Combine(paths.RepositoryRoot, "configs", "optimization", "ui-runs", $"{runName}.yaml");
-        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-
-        var yaml = new StringBuilder();
-        yaml.AppendLine($"run_name: {runName}");
-        yaml.AppendLine($"base_strategy: {NormalizePath(request.BaseStrategyPath)}");
-        yaml.AppendLine($"backtest_config: {NormalizePath(request.BacktestConfigPath)}");
-        yaml.AppendLine($"metric: {request.Metric}");
-        yaml.AppendLine("top_n_results: 10");
-        yaml.AppendLine("parameters:");
-
-        var targetRs = request.TargetRMultipleCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (targetRs.Length > 0)
-        {
-            yaml.AppendLine("  exit_rules.target_r_multiple:");
-            foreach (var r in targetRs) yaml.AppendLine($"    - {r}");
-        }
-
-        var stopAtrs = request.StopAtrMultipleCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (stopAtrs.Length > 0)
-        {
-            yaml.AppendLine("  exit_rules.stop_atr_multiple:");
-            foreach (var a in stopAtrs) yaml.AppendLine($"    - {a}");
-        }
-
-        var minVols = request.MinVolumeSpikeCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (minVols.Length > 0)
-        {
-            yaml.AppendLine("  entry_rules.min_volume_spike:");
-            foreach (var v in minVols) yaml.AppendLine($"    - {v}");
-        }
-
-        artifactWriter.WriteText(outputPath, yaml.ToString());
-        return outputPath;
-    }
-
     private static string SanitizeRunName(string runName)
     {
         var cleaned = new string(runName

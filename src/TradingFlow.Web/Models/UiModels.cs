@@ -166,15 +166,6 @@ public sealed record PaperEnvironmentSnapshot(
     bool AlpacaSecretKeyPresent,
     IReadOnlyDictionary<string, object?>? AlpacaReadOnlyCheck);
 
-public sealed record OptimizationRunRequest(
-    string BaseStrategyPath,
-    string BacktestConfigPath,
-    string RunName,
-    string Metric,
-    string TargetRMultipleCsv,
-    string StopAtrMultipleCsv,
-    string MinVolumeSpikeCsv);
-
 public sealed record OptimizationJobSnapshot(
     Guid JobId,
     string RunName,

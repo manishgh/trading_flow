@@ -1,0 +1,7 @@
+# Web research form acceptance
+
+Backtests now uses labelled universe, strategy, test-window and portfolio fieldsets. Exact from/to inputs are explicitly UTC; leaving both empty preserves the existing lookback workflow. USD, percentage-of-equity and whole-position-count units and limits are visible. Accessible summary and field messages retain submitted values, focus the summary and reject invalid dates, names and risk settings before capturing a universe. Server checks remain authoritative. An unchanged-form retry retains its exact dates, immutable universe and command key.
+
+The orphan Optimize Razor POST, raw CSV-to-YAML writer and unused request model were removed after checking all references. Existing durable optimization services and job views remain. There is no replacement YAML editor or destructive overwrite path on this form.
+
+Requirements and independent reviews completed. Independent findings about early run-name validation and unique IDs for multiple errors on one field were corrected. Focused workflow/configuration/optimizer .NET checks: 18 passed with Web compilation. The affected browser slice passed eight tests; after final review fixes three research cases passed, plus a direct antiforgery-authenticated retired Optimize POST that created no YAML and did not redirect to an optimization job. Exact dates also passed in America/New_York browser timezone. Final release checks are recorded separately. No Android, provider credentials, operational state, broker orders or cloud resources changed.
