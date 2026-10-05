@@ -81,7 +81,7 @@
         <h1>Orders</h1>
         <p class="standfirst">
             Every order from intent through terminal state, with the desk's reviewed ticket beside it.
-            Cancel and new tickets are separate reviewed commands; opening a new ticket leaves the existing order active.
+            Replace waits for canceled with zero fills, then opens a fresh review. New ticket leaves the existing order active.
         </p>
     </div>
     <div class="orders-head-actions">
@@ -279,6 +279,9 @@
                                         <button class="btn btn-danger btn-sm" type="submit"
                                                 data-confirm="Cancel the working @item.Symbol order? The broker may still fill it before the cancel is acknowledged.">Cancel</button>
                                     </form>
+                                    @if(Model.ReplacementClientIds.Contains(item.ClientOrderId)){
+                                        <button class="btn btn-secondary btn-sm" type="button" data-replacement-order="@item.ClientOrderId">Replace</button>
+                                    }
                                     @* A new ticket is a separate command; cancellation is explicit above. *@
                                     <a class="btn btn-secondary btn-sm"
                                        asp-page="/Orders"
@@ -391,6 +394,7 @@
 </div>
 
 @section Scripts {
+    <script src="~/js/order-replacement.js" asp-append-version="true" defer></script>
     <script src="~/js/orders.js" asp-append-version="true"></script>
     <script type="module" src="~/js/orders-quotes.js" asp-append-version="true"></script>
     <script src="~/js/order-workflow.js" asp-append-version="true" defer></script>
@@ -399,6 +403,18 @@
 
 @if (Model.EnvironmentState.IsEnabled)
 {
+    <button id="ReplacementResume" class="btn btn-secondary" type="button" hidden>Resume replacement review</button>
+    <dialog id="ReplacementDialog" aria-labelledby="ReplacementTitle" data-operator-id="@User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value">
+        <h2 id="ReplacementTitle">Cancel before replacement review</h2>
+        <p id="ReplacementIdentity"></p>
+        <p>Cancellation may race with fills. Wait for broker acknowledgment and zero cumulative fills. Review the new candidate or current position, quantity and prices separately.</p>
+        <p id="ReplacementStatus" role="status"></p>
+        <div class="actions"><button class="btn btn-danger" type="button" id="ReplacementCancel">Request cancellation</button>
+        <button class="btn btn-secondary" type="button" id="ReplacementRefresh">Check acknowledgment</button>
+        <a id="ReplacementReview" class="btn btn-primary" hidden>Open fresh reviewed ticket</a>
+        <button class="btn btn-secondary" type="button" id="ReplacementRelease" hidden>End this replacement review</button>
+        <button class="btn btn-secondary" type="button" id="ReplacementClose">Close</button></div>
+    </dialog>
     <template data-order-cancel-template>
         <form method="post" action="/Orders?handler=Cancel">
             @Html.AntiForgeryToken()

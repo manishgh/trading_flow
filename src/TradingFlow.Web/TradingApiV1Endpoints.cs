@@ -77,6 +77,7 @@ public static class TradingApiV1Endpoints
             Results.Ok(new OrderEntryContextResponse(binding.EnforcementEnabled ? binding.ExpectedAccountId : null,
                 context.User.IsInRole(TradingFlowRoles.Administrator))));
         group.MapCandidateWorkflowEndpoints();
+        group.MapWishlistBulkEndpoints();
         group.MapRunWorkflowEndpoints();
         group.MapPreparationEndpoints();
 
@@ -454,6 +455,7 @@ public static class TradingApiV1Endpoints
             string? state,
             int? limit,
             TradingFlow.Domain.Persistence.IOrderActivityQuery orders,
+            TradingFlow.Domain.Persistence.IOrderIntentRepository intents,
             CancellationToken cancellationToken) =>
         {
             TradingFlow.Domain.Orders.OrderState? selectedState = null;
@@ -468,7 +470,14 @@ public static class TradingApiV1Endpoints
             }
 
             var snapshots = await orders.ListRecentAsync(selectedState, limit ?? 200, cancellationToken);
-            return Results.Ok(snapshots.Select(snapshot => new MobileOrderActivityResponse(
+            var result = new List<MobileOrderActivityResponse>();
+            foreach (var snapshot in snapshots) {
+                var canReplace = false;
+                if (TradingFlow.Web.Pages.OrdersModel.CanCancel(snapshot) && snapshot.FilledQuantity is 0m) {
+                    var intent = await intents.GetByClientOrderIdAsync(snapshot.ClientOrderId, cancellationToken);
+                    canReplace = intent?.Kind is TradingFlow.Domain.Orders.OrderIntentKind.StrategyEntry or TradingFlow.Domain.Orders.OrderIntentKind.OperatorEntry or TradingFlow.Domain.Orders.OrderIntentKind.PositionExit;
+                }
+                result.Add(new MobileOrderActivityResponse(
                 snapshot.RunId,
                 snapshot.ClientOrderId,
                 snapshot.BrokerOrderId,
@@ -485,7 +494,9 @@ public static class TradingApiV1Endpoints
                 snapshot.UpdatedAtUtc,
                 snapshot.FilledQuantity,
                 snapshot.FillPrice,
-                snapshot.EventSource)));
+                snapshot.EventSource, canReplace));
+            }
+            return Results.Ok(result);
         });
 
         group.MapGet("/backtests/jobs", (BacktestJobService backtestJobs) =>
@@ -543,13 +554,14 @@ public static class TradingApiV1Endpoints
         });
 
         group.MapGet("/news/feed", async (
-            string? ticker,
-            int? hours,
-            NewsFeedService newsFeed,
+            [Microsoft.AspNetCore.Http.AsParameters] NewsHubQuery query,
+            System.Security.Claims.ClaimsPrincipal user,
+            NewsQueryService newsFeed,
             CancellationToken cancellationToken) =>
         {
-            var feed = await newsFeed.GetRollingAsync(hours ?? 4, ticker, cancellationToken);
-            return Results.Ok(feed);
+            try { return Results.Ok(await newsFeed.QueryAsync(query, user, cancellationToken)); }
+            catch (UnauthorizedAccessException) { return Results.Unauthorized(); }
+            catch (InvalidOperationException error) { return Results.BadRequest(new { error = error.Message }); }
         }).AllowAnonymous();
 
         group.MapPost("/news/refresh", async (

@@ -106,6 +106,7 @@ public sealed class OrdersModel(
 
     public string? StatusMessage { get; private set; }
     public string? ErrorMessage { get; private set; }
+    public HashSet<string> ReplacementClientIds { get; } = new(StringComparer.Ordinal);
 
     /// <summary>True once a cancel round-trip has produced an outcome to announce.</summary>
     public bool HasBanner => !String.IsNullOrWhiteSpace(StatusMessage) || !String.IsNullOrWhiteSpace(ErrorMessage);
@@ -125,6 +126,13 @@ public sealed class OrdersModel(
         RejectedCount = all.Count(item => item.State == OrderState.Rejected);
         ClosedCount = all.Count(item => IsClosed(item.State));
         Items = SortItems(all.Where(item => MatchesFilter(item.State, Filter))).ToArray();
+        ReplacementClientIds.Clear();
+        foreach (var item in Items.Where(x => CanCancel(x) && x.FilledQuantity is 0m))
+        {
+            var intent = await intents.GetByClientOrderIdAsync(item.ClientOrderId, cancellationToken);
+            if (intent?.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry or OrderIntentKind.PositionExit)
+                ReplacementClientIds.Add(item.ClientOrderId);
+        }
         StreamSymbols = all
             .Where(item => IsWorking(item.State))
             .Select(item => item.Symbol.Trim().ToUpperInvariant())

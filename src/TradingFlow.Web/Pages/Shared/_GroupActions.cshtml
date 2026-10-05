@@ -1,0 +1,23 @@
+@if (User.Identity?.IsAuthenticated == true)
+{
+    <button id="groupActionResume" type="button" class="button secondary" hidden>Resume pending group change</button>
+    <dialog id="groupActionDialog" aria-labelledby="groupActionTitle" data-operator-id="@User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value">
+        <form method="dialog" class="stack">
+            <h2 id="groupActionTitle">Review group change</h2>
+            <p id="groupActionSummary"></p>
+            <label id="groupActionTargetLabel" for="groupActionTarget">Destination group</label>
+            <select id="groupActionTarget"></select>
+            <label id="groupActionSourceLabel" for="groupActionSource">Source group</label>
+            <select id="groupActionSource"></select>
+            <label id="groupActionTagLabel" for="groupActionTag">Tag</label>
+            <input id="groupActionTag" maxlength="40" pattern="[A-Za-z0-9_-]+" />
+            <p id="groupActionStatus" role="status"></p>
+            <div class="actions">
+                <button id="groupActionApply" type="button">Apply reviewed change</button>
+                <button id="groupActionUndo" type="button" hidden>Undo this change</button>
+                <button id="groupActionClose" type="submit">Close</button>
+            </div>
+        </form>
+    </dialog>
+    <script type="module" src="~/js/group-actions.js" asp-append-version="true"></script>
+}

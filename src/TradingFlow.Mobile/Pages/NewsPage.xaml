@@ -15,7 +15,7 @@
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                         <VerticalStackLayout Spacing="2">
                             <Label Text="News" Style="{StaticResource Headline}" />
-                            <Label Text="Finviz Elite and Alpaca rolling four-hour feed."
+                            <Label Text="Stored Finviz and Alpaca news | Public market research"
                                    Style="{StaticResource SubHeadline}" />
                         </VerticalStackLayout>
                         <controls:EnvironmentBadgeView Grid.Column="1" />
@@ -39,6 +39,15 @@
                            Keyboard="Text"
                            TextChanged="OnTickerChanged"
                            SemanticProperties.Description="Filter rolling news by ticker symbol" />
+
+                    <Button Text="Show / hide filters" Clicked="OnToggleFilters" />
+                    <Label x:Name="ProviderStatusLabel" IsVisible="False" FontSize="13" LineBreakMode="WordWrap" />
+                    <VerticalStackLayout x:Name="FilterHost" IsVisible="False" />
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                        <Button x:Name="PreviousButton" Text="Previous" Clicked="OnPreviousPage" IsEnabled="False" />
+                        <Label x:Name="PageLabel" Grid.Column="1" Text="Page 1" VerticalTextAlignment="Center" HorizontalTextAlignment="Center" />
+                        <Button x:Name="NextButton" Grid.Column="2" Text="Next" Clicked="OnNextPage" IsEnabled="False" />
+                    </Grid>
 
                     <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                         <Button Text="Refresh"
@@ -90,6 +99,7 @@
                                    FontSize="15"
                                    LineBreakMode="WordWrap"
                                    MaxLines="3" />
+                            <Label Text="{Binding Classification}" FontSize="12" />
                             <Label Text="{Binding DisplaySummary}"
                                    IsVisible="{Binding HasSummary}"
                                    FontSize="13"

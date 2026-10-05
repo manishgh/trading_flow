@@ -15,7 +15,7 @@
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                         <VerticalStackLayout Spacing="2">
                             <Label Text="Earnings" Style="{StaticResource Headline}" />
-                            <Label Text="Today and next reporting day | Device local time"
+                            <Label Text="Reporting calendar | New York dates, device local event times"
                                    Style="{StaticResource SubHeadline}" />
                         </VerticalStackLayout>
                         <controls:EnvironmentBadgeView Grid.Column="1" />
@@ -54,6 +54,19 @@
                                     ItemDisplayBinding="{Binding Label}" />
                         </VerticalStackLayout>
                     </Grid>
+                    <Button Text="Show / hide advanced filters" Clicked="OnToggleFilters" />
+                    <Label x:Name="ProviderStatusLabel" IsVisible="False" FontSize="13" LineBreakMode="WordWrap" />
+                    <VerticalStackLayout x:Name="FilterHost" IsVisible="False" Spacing="6">
+                        <HorizontalStackLayout Spacing="8">
+                            <Switch x:Name="CalendarSwitch" Toggled="OnCalendarChanged" />
+                            <Label Text="Use date range (maximum 35 days)" VerticalTextAlignment="Center" />
+                        </HorizontalStackLayout>
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                            <DatePicker x:Name="FromDate" DateSelected="OnDateChanged" Format="yyyy-MM-dd" />
+                            <DatePicker x:Name="ToDate" Grid.Column="1" DateSelected="OnDateChanged" Format="yyyy-MM-dd" />
+                        </Grid>
+                        <Button Text="This week in New York" Clicked="OnThisWeek" />
+                    </VerticalStackLayout>
                 </VerticalStackLayout>
             </CollectionView.Header>
 

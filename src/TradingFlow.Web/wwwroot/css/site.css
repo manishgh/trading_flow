@@ -1435,6 +1435,7 @@ pre {
   padding: 10px 8px;
 }
 .trade-desk-table .market-column { width: 132px; }
+.trade-desk-table .select-column { width: 44px; min-width: 44px; text-align: center; }
 .trade-desk-table .quote-column { width: 154px; }
 .trade-desk-table .position-column { width: 118px; }
 .trade-desk-table .action-column { width: 84px; }
@@ -4385,3 +4386,40 @@ td.select-column {
 @media (max-width: 768px) {
   .wishlist-preset-form { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+                @keyframes spin { 100% { transform: rotate(360deg); } }
+
+
+    .earnings-body { transition: opacity 0.1s ease; }
+    .earnings-body.is-loading { opacity: 0.3 !important; pointer-events: none; }
+
+
+.candidate-workflow { margin:12px; min-width:0; }
+.candidate-controls { display:flex; flex-wrap:wrap; gap:12px; align-items:end; margin:12px 0; }
+.candidate-controls label { display:flex; flex-direction:column; flex:1 1 170px; min-width:0; }
+.candidate-controls input,.candidate-controls select { width:100%; min-width:0; }
+.candidate-rows { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:8px; }
+.candidate-row { border:1px solid var(--border,#ccc); padding:10px; min-width:0; overflow-wrap:anywhere; }
+.candidate-row a { margin-right:12px; }
+
+.earnings-date { width: auto; }
+.earnings-spinner { display:flex; align-items:center; gap:6px; margin-left:12px; color:var(--accent); }
+.earnings-loading-icon { animation:spin 1s linear infinite; }
+.earnings-loading-label { font-size:12px; }
+.order-review-summary { white-space:pre-wrap; overflow-wrap:anywhere; }
+.lab-equity-chart { max-height:230px; }
+
+.earnings-week { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); gap: var(--space-3); }
+.earnings-week .earnings-day { min-width: 0; }
+#groupActionDialog { max-width: min(40rem, calc(100vw - 2rem)); color: var(--ink); background: var(--panel); border: 1px solid var(--line); padding: var(--space-4); }
+
+.earnings-body.is-rendering { opacity: .3; }
+.audit-equity-chart { width: 100%; height: auto; max-height: 24rem; }
+.audit-equity-line { fill: none; stroke: currentColor; stroke-width: 2; }
+.series-0 { color: var(--accent); }
+.series-1 { color: var(--success, #2fa66a); }
+.series-2 { color: var(--warning, #db9a23); }
+.series-3 { color: var(--danger, #d05b63); }
+#ReplacementDialog { max-width: min(40rem, calc(100vw - 2rem)); color: var(--ink); background: var(--panel); border: 1px solid var(--line); padding: var(--space-4); }
+#ReplacementIdentity, #groupActionSummary { overflow-wrap: anywhere; }

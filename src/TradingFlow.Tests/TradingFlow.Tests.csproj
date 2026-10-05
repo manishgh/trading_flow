@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Compile Include="..\TradingFlow.Mobile\Services\LatestMarketRead.cs" Link="Mobile\LatestMarketRead.cs" />
   </ItemGroup>
 
   <ItemGroup>

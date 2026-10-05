@@ -251,6 +251,8 @@ builder.Services.AddHttpClient<OfficialMarketNewsProvider>(client =>
     client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "TradingFlow/1.0");
 });
 builder.Services.AddSingleton<NewsFeedService>();
+builder.Services.AddScoped<NewsQueryService>();
+builder.Services.AddScoped<EarningsViewService>();
 builder.Services.AddSingleton<WarmupServiceClient>();
 builder.Services.AddSingleton<DeskPreparationService>();
 builder.Services.AddSingleton<DeskTicketPlanService>();
@@ -614,6 +616,8 @@ builder.Services.AddSingleton<TradingFlow.Application.Candidates.IStrategyIdenti
 builder.Services.AddSingleton<TradingFlow.Application.Candidates.IUniverseDiscoveryService, TradingFlow.Application.Candidates.UniverseDiscoveryService>();
 builder.Services.AddSingleton<TradingFlow.Application.Candidates.ICandidateWorkflow, TradingFlow.Application.Candidates.CandidateWorkflowService>();
 builder.Services.AddSingleton<IOrderWorkflowService, OrderWorkflowService>();
+builder.Services.AddSingleton<OrderReplacementReviewService>();
+builder.Services.AddSingleton<IAuditEquityReader, AuditEquityReader>();
 builder.Services.AddSingleton<TradingFlow.Data.Jobs.SqliteJobRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository>(services =>
     services.GetRequiredService<TradingFlow.Data.Jobs.SqliteJobRepository>());

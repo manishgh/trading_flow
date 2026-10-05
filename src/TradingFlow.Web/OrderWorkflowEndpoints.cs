@@ -38,6 +38,10 @@ public static class OrderWorkflowEndpoints
             ExecuteAsync(() => workflow.ConfirmAsync(request, cancellationToken)));
         group.MapPost("/orders/cancel", (CancelOrderRequest request, IOrderWorkflowService workflow, CancellationToken cancellationToken) =>
             ExecuteAsync(() => workflow.CancelAsync(request, cancellationToken)));
+        group.MapPost("/orders/replacement/cancel", (ReplacementCancelRequest request, OrderReplacementReviewService replacement, CancellationToken token) =>
+            ExecuteAsync(() => replacement.CancelAsync(request, token)));
+        group.MapGet("/orders/replacement/review", (string clientOrderId, OrderReplacementReviewService replacement, CancellationToken token) =>
+            ExecuteAsync(() => replacement.ReviewAsync(clientOrderId, token)));
         group.MapPost("/positions/close", (ClosePositionRequest request, IOrderWorkflowService workflow, CancellationToken cancellationToken) =>
             ExecuteAsync(() => workflow.CloseAsync(request, cancellationToken)));
         return group;

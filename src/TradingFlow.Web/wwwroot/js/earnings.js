@@ -41,7 +41,63 @@
     let activeLane = null;
     let newsScopeTicker = null;
     let latestPayload = null;
-    let loading = false;
+    let loading = false, pendingLoad = false;
+    const advanced = document.getElementById('earnings-advanced');
+    const initial = new URLSearchParams(location.search);
+    for (const key of ['session','marketCap']) if (initial.has(key)) serverFilters[key] = initial.get(key);
+    if (initial.has('scope')) serverFilters.dateScope = initial.get('scope');
+    for (const key of ['assessment','sort']) if (initial.has(key)) clientFilters[key] = initial.get(key);
+    for (const key of ['onlyHeld','hasNews']) clientFilters[key] = initial.get(key) === 'true';
+    if (initial.has('minSurprise')) clientFilters.minSurprise = Number(initial.get('minSurprise'));
+    fromInput.value = initial.get('from') || ''; toInput.value = initial.get('to') || '';
+    if (minSurpriseInput) minSurpriseInput.value = initial.get('minSurprise') || '';
+    if (sortInput) sortInput.value = clientFilters.sort;
+    for (const input of advanced.elements) if (input.name && initial.has(input.name)) {
+        if (input.type === 'checkbox') input.checked = initial.get(input.name) === 'true'; else input.value = initial.get(input.name);
+    }
+    onlyHeldToggle?.setAttribute('aria-pressed', String(clientFilters.onlyHeld));
+    hasNewsToggle?.setAttribute('aria-pressed', String(clientFilters.hasNews));
+    markStrip(assessmentFilters, 'data-assessment-value', clientFilters.assessment);
+
+    function queryState() {
+        const query = new URLSearchParams({ session: serverFilters.session, marketCap: serverFilters.marketCap, scope: serverFilters.dateScope });
+        for (const [key,value] of Object.entries(clientFilters)) if (value !== null) query.set(key, String(value));
+        for (const [key,value] of new FormData(advanced)) if (value !== '') query.set(key, value);
+        if (fromInput.value) query.set('from', fromInput.value);
+        if (toInput.value) query.set('to', toInput.value);
+        const visibleQuery = new URLSearchParams(query);
+        for (const [key,value] of Object.entries({session:'all',marketCap:'all',scope:'today',assessment:'all',onlyHeld:'false',hasNews:'false',sort:'time',view:'timeline'}))
+            if (visibleQuery.get(key) === value) visibleQuery.delete(key);
+        const url = new URL(location.href); url.search = visibleQuery.toString(); history.replaceState(null, '', url);
+        return query;
+    }
+    function exchangeDate(value) {
+        const parts = new Intl.DateTimeFormat('en-US', { timeZone:'America/New_York', year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(new Date(value));
+        const part = name => parts.find(x => x.type === name).value;
+        return `${part('year')}-${part('month')}-${part('day')}`;
+    }
+    function renderCalendar(items) {
+        feed.replaceChildren(); feed.classList.add('earnings-week');
+        const start = fromInput.value || exchangeDate(latestPayload.generatedAtUtc);
+        const finish = toInput.value || start;
+        const grouped = new Map();
+        for (const item of items) {
+            const key = exchangeDate(item.scheduledAtUtc);
+            if (!grouped.has(key)) grouped.set(key, []);
+            grouped.get(key).push(item);
+        }
+        // Include boundary dates after timezone conversion, even when the API used an operator date window.
+        const keys = new Set(grouped.keys());
+        for (let day = new Date(`${start}T12:00:00Z`), end = new Date(`${finish}T12:00:00Z`); day <= end; day.setUTCDate(day.getUTCDate()+1)) keys.add(day.toISOString().slice(0,10));
+        for (const date of [...keys].sort()) {
+            const section = text('section', undefined, 'earnings-day');
+            section.append(text('h2', `${date} · New York`, 'section-heading'));
+            const matches = grouped.get(date) || [];
+            if (!matches.length) section.append(text('p', 'No matching events', 'muted'));
+            for (const item of matches) section.append(eventCard(item));
+            feed.append(section);
+        }
+    }
 
     /* --- formatting ------------------------------------------------------- */
 
@@ -176,6 +232,16 @@
         return text("span", label, `tag ${className}`);
     }
 
+    const eventCache = new Map();
+    function eventCard(item) {
+        const signature = JSON.stringify(item), old = eventCache.get(item.id);
+        if (old?.signature === signature) return old.card;
+        const card = renderEvent(item);
+        if (old) [...card.querySelectorAll('details')].forEach((detail,index) => { detail.open = old.card.querySelectorAll('details')[index]?.open || false; });
+        eventCache.set(item.id, { signature, card });
+        return card;
+    }
+
     function renderEvent(item) {
         const card = document.createElement("article");
         card.className = `earnings-event ${ruleClass(item)}`;
@@ -298,6 +364,14 @@
         const inspect = text("a", "Inspect on desk", "btn btn-secondary btn-md");
         inspect.href = `/TradeDesk?ticker=${encodeURIComponent(item.ticker)}`;
         actions.append(inspect);
+        if (document.getElementById('groupActionDialog')) {
+            const add = text('button', 'Add to group', 'btn btn-secondary btn-sm');
+            add.type = 'button'; add.dataset.groupAction = 'add'; add.dataset.tickers = item.ticker;
+            actions.append(add);
+            const order = text('a', 'Review trade setup', 'btn btn-secondary btn-sm');
+            order.href = `/TradeDesk?ticker=${encodeURIComponent(item.ticker)}&ticket=true`;
+            actions.append(order);
+        }
 
         const evidence = text("button", "Show evidence", "btn btn-secondary btn-md");
         evidence.type = "button";
@@ -307,7 +381,7 @@
         });
         actions.append(evidence);
 
-        // No order control. This surface is advisory and cannot route.
+        // The review link navigates to a separate authenticated ticket; this calendar cannot route.
         return actions;
     }
 
@@ -324,7 +398,7 @@
     }
 
     function renderTimeline(items, payload, totalForGroup) {
-        feed.replaceChildren();
+        feed.replaceChildren(); feed.classList.remove('earnings-week');
         if (!items.length) {
             feed.append(emptyTemplate.content.cloneNode(true));
             return;
@@ -348,7 +422,7 @@
                 `${groupItems.length} of ${totalForGroup.get(key) ?? groupItems.length} events · ${reported} reported`,
                 "earnings-day-summary"));
             section.append(header);
-            for (const item of groupItems) section.append(renderEvent(item));
+            for (const item of groupItems) section.append(eventCard(item));
             feed.append(section);
         }
     }
@@ -404,42 +478,8 @@
     /* --- filtering --------------------------------------------------------- */
 
     function applyClientFilters(items) {
-        let result = items.filter(item => {
-            if (activeLane && !laneTests[activeLane](item)) return false;
-            if (clientFilters.assessment !== "all") {
-                const outcome = String(item.epsOutcome || "").toLowerCase();
-                const matches = clientFilters.assessment === "pending"
-                    ? outcome === "" || outcome === "pending" || outcome === "awaiting"
-                    : outcome.includes(clientFilters.assessment);
-                if (!matches) return false;
-            }
-            if (clientFilters.onlyHeld && !isHeldLane(item)) return false;
-            if (clientFilters.hasNews && !item.newsHeadline) return false;
-            if (clientFilters.minSurprise !== null) {
-                const surprise = item.epsSurprisePercent;
-                if (surprise === null || surprise === undefined) return false;
-                if (Math.abs(Number(surprise)) < clientFilters.minSurprise) return false;
-            }
-            return true;
-        });
+        let result = items.filter(item => !activeLane || laneTests[activeLane](item));
 
-        // Descending for magnitude-style sorts; ascending for the schedule, which
-        // reads as a timeline.
-        const numeric = key => item => {
-            const value = item[key];
-            return value === null || value === undefined ? Number.NEGATIVE_INFINITY : Number(value);
-        };
-        const bySurprise = item => {
-            const value = item.epsSurprisePercent;
-            return value === null || value === undefined ? Number.NEGATIVE_INFINITY : Math.abs(Number(value));
-        };
-        switch (clientFilters.sort) {
-            case "cap": result = [...result].sort((a, b) => numeric("marketCapMillions")(b) - numeric("marketCapMillions")(a)); break;
-            case "surprise": result = [...result].sort((a, b) => bySurprise(b) - bySurprise(a)); break;
-            case "move": result = [...result].sort((a, b) => numeric("eventReturnPercent")(b) - numeric("eventReturnPercent")(a)); break;
-            case "rvol": result = [...result].sort((a, b) => numeric("slotRelativeVolume")(b) - numeric("slotRelativeVolume")(a)); break;
-            default: result = [...result].sort((a, b) => new Date(a.scheduledAtUtc) - new Date(b.scheduledAtUtc));
-        }
         return result;
     }
 
@@ -450,10 +490,11 @@
 
         // Client-side fade transition
         const bodyContainer = document.querySelector(".earnings-body");
-        if (bodyContainer) bodyContainer.style.opacity = "0.3";
+        if (bodyContainer) bodyContainer.classList.add("is-rendering");
         const spinner = document.getElementById("earnings-spinner");
-        if (spinner) spinner.style.display = "flex";
+        if (spinner) spinner.hidden = false;
 
+        const focused = feed.contains(document.activeElement) ? document.activeElement : null;
         setTimeout(() => {
             const totals = new Map();
             for (const item of all) {
@@ -462,12 +503,16 @@
             }
 
             renderLanes(all);
-            renderTimeline(filtered, latestPayload, totals);
+            if (advanced.elements.view.value === 'week') renderCalendar(filtered);
+            else renderTimeline(filtered, latestPayload, totals);
+            if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll:true });
+            const visible = new Set(filtered.map(item => item.id));
+            for (const id of eventCache.keys()) if (!visible.has(id)) eventCache.delete(id);
             renderNews(latestPayload.news || [], filtered);
-            countLabel.textContent = `${filtered.length} of ${all.length} events`;
+            countLabel.textContent = `${filtered.length} of ${latestPayload.totalMatching ?? all.length} matching events${latestPayload.truncated ? " · first 2000 shown" : ""}`;
             
-            if (bodyContainer) bodyContainer.style.opacity = "1";
-            if (spinner && !loading) spinner.style.display = "none";
+            if (bodyContainer) bodyContainer.classList.remove("is-rendering");
+            if (spinner && !loading) spinner.hidden = true;
         }, 150);
     }
 
@@ -504,12 +549,12 @@
     }
 
     async function loadCalendar(forceRefresh = false) {
-        if (loading) return;
+        if (loading) { pendingLoad = true; return; }
         loading = true;
         const bodyContainer = document.querySelector(".earnings-body");
         if (bodyContainer) bodyContainer.classList.add("is-loading");
         const spinner = document.getElementById("earnings-spinner");
-        if (spinner) spinner.style.display = "flex";
+        if (spinner) spinner.hidden = false;
         refreshButton.disabled = true;
         status.classList.remove("accent-note");
         try {
@@ -518,18 +563,10 @@
                 if (!refreshResponse.ok) throw new Error(await readError(refreshResponse, `Refresh failed (${refreshResponse.status}).`));
             }
 
-            const query = new URLSearchParams({
-                session: serverFilters.session,
-                marketCap: serverFilters.marketCap,
-                scope: serverFilters.dateScope
-            });
-            const from = fromInput?.value;
-            const to = toInput?.value;
-            const useRange = Boolean(from && to && from <= to);
-            if (useRange) {
-                query.set("from", from);
-                query.set("to", to);
-            }
+            const query = queryState();
+            const from = fromInput?.value, to = toInput?.value;
+            if ((from || to) && (!from || !to || from > to || (new Date(to) - new Date(from)) / 86400000 > 34)) throw new Error('Choose both dates, in order, covering at most 35 days.');
+            const useRange = Boolean(from && to);
             const endpoint = useRange ? "calendar" : "today-next-business-day";
             const response = await window.tradingFlowFetch(`/api/earnings/${endpoint}?${query}`, {
                 headers: { Accept: "application/json" },
@@ -538,8 +575,6 @@
             if (!response.ok) throw new Error(await readError(response, `Calendar request failed (${response.status}).`));
 
             latestPayload = await response.json();
-            serverFilters.session = latestPayload.filters?.session || serverFilters.session;
-            serverFilters.marketCap = latestPayload.filters?.marketCap || serverFilters.marketCap;
             updateCounts(sessionFilters, latestPayload.filters?.sessions);
             markStrip(sessionFilters, "data-filter-value", serverFilters.session);
             updateCounts(capFilters, latestPayload.filters?.marketCaps);
@@ -564,7 +599,8 @@
             if (bodyContainer) bodyContainer.classList.remove("is-loading");
             refreshButton.disabled = false;
             const spinner = document.getElementById("earnings-spinner");
-            if (spinner) spinner.style.display = "none";
+            if (spinner) spinner.hidden = true;
+            if (pendingLoad) { pendingLoad = false; queueMicrotask(() => loadCalendar(false)); }
         }
     }
 
@@ -601,7 +637,7 @@
         if (!button) return;
         clientFilters.assessment = button.dataset.assessmentValue;
         markStrip(assessmentFilters, "data-assessment-value", clientFilters.assessment);
-        render();
+        loadCalendar(false);
     });
 
     dateScope.addEventListener("click", event => {
@@ -618,7 +654,7 @@
         button?.addEventListener("click", () => {
             clientFilters[key] = !clientFilters[key];
             button.setAttribute("aria-pressed", String(clientFilters[key]));
-            render();
+            loadCalendar(false);
         });
     }
     bindToggle(onlyHeldToggle, "onlyHeld");
@@ -627,11 +663,11 @@
     minSurpriseInput?.addEventListener("change", () => {
         const value = Number(minSurpriseInput.value);
         clientFilters.minSurprise = minSurpriseInput.value === "" || Number.isNaN(value) ? null : value;
-        render();
+        loadCalendar(false);
     });
     sortInput?.addEventListener("change", () => {
         clientFilters.sort = sortInput.value;
-        render();
+        loadCalendar(false);
     });
     const rangeApply = document.getElementById("earnings-range-apply");
     rangeApply?.addEventListener("click", () => {
@@ -667,6 +703,23 @@
         }
     }
 
+    advanced.addEventListener('submit', event => { event.preventDefault(); loadCalendar(false); });
+    document.getElementById('earnings-this-week').addEventListener('click', () => {
+        const now = new Date(`${exchangeDate(Date.now())}T12:00:00Z`);
+        now.setUTCDate(now.getUTCDate() - (now.getUTCDay()+6)%7);
+        fromInput.value = now.toISOString().slice(0,10); now.setUTCDate(now.getUTCDate()+6);
+        toInput.value = now.toISOString().slice(0,10);
+        markStrip(dateScope, 'data-scope-value', ''); loadCalendar(false);
+    });
+    const groupPicker = document.getElementById('earnings-group');
+    if (groupPicker) window.tradingFlowFetch('/api/v1/wishlists/mutable', { cache:'no-store' }).then(async response => {
+        if (!response.ok) return;
+        for (const group of await response.json()) {
+            const option = text('option', group.name); option.value = group.id; groupPicker.append(option);
+        }
+        groupPicker.value = initial.get('groupId') || '';
+        if (initial.has('groupId')) loadCalendar(false);
+    });
     loadCalendar();
     window.setInterval(tick, 1000);
     window.setInterval(() => loadCalendar(false), 10000);

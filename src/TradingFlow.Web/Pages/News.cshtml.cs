@@ -14,7 +14,7 @@ namespace TradingFlow.Web.Pages;
 /// existed in the data long before this screen; they simply had no UI.
 /// </remarks>
 public sealed class NewsModel(
-    NewsFeedService news,
+    NewsQueryService news,
     IWishlistRepository wishlists) : PageModel
 {
     /// <summary>Sentiment bands. Thresholds match the labels the feed already emits.</summary>
@@ -41,6 +41,13 @@ public sealed class NewsModel(
     [BindProperty(SupportsGet = true)] public string? Provider { get; set; }
     [BindProperty(SupportsGet = true)] public string Sentiment { get; set; } = "all";
     [BindProperty(SupportsGet = true)] public Guid? GroupId { get; set; }
+    [BindProperty(SupportsGet = true)] public string? Source { get; set; }
+    [BindProperty(SupportsGet = true)] public string? Classification { get; set; }
+    [BindProperty(SupportsGet = true)] public string? Scope { get; set; }
+    [BindProperty(SupportsGet = true)] public string View { get; set; } = "timeline";
+    [BindProperty(SupportsGet = true)] public int PageNumber { get; set; } = 1;
+    [BindProperty(SupportsGet = true)] public int PageSize { get; set; } = 50;
+    public int PageCount => Math.Max(1, (int)Math.Ceiling(TotalBeforeFilters / (double)PageSize));
     [BindProperty(SupportsGet = true)] public bool LinkedOnly { get; set; }
 
     /// <summary>
@@ -58,7 +65,7 @@ public sealed class NewsModel(
     /// <summary>False when the feed itself is unavailable, as opposed to merely empty.</summary>
     public bool FeedEnabled { get; private set; } = true;
 
-    public async Task OnGetAsync(CancellationToken cancellationToken)
+    public async Task<IActionResult> OnGetAsync(CancellationToken cancellationToken)
     {
         Hours = Math.Clamp(Hours, 1, 72);
         Groups = User.Identity?.IsAuthenticated == true
@@ -66,88 +73,24 @@ public sealed class NewsModel(
             : [];
         if (User.Identity?.IsAuthenticated != true) GroupId = null;
 
-        var feed = await news.GetRollingAsync(Hours, NormalizeTicker(Ticker), cancellationToken);
+        if (User.Identity?.IsAuthenticated != true) Scope = null;
+        PageSize = Math.Clamp(PageSize, 10, 200);
+        PageNumber = Math.Clamp(PageNumber, 1, Int32.MaxValue / PageSize);
+        if (View is not ("timeline" or "ticker")) return BadRequest("Choose timeline or ticker view.");
+        MobileNewsFeedResponse feed;
+        try { feed = await news.QueryAsync(new NewsHubQuery { Hours = Hours, Ticker = Ticker,
+            GroupId = GroupId, Scope = Scope, Provider = Provider, Source = Source,
+            Classification = Classification, Sentiment = Sentiment, Search = Search,
+            LinkedOnly = LinkedOnly, Page = PageNumber, PageSize = PageSize }, User, cancellationToken); }
+        catch (InvalidOperationException error) { return BadRequest(error.Message); }
         FeedDescription = feed.Message ?? String.Empty;
         FeedEnabled = feed.Enabled;
-        var all = feed.Items;
-        TotalBeforeFilters = all.Count;
-
-        // Provider options come from what actually arrived, so the list never offers
-        // a filter that would return nothing.
-        Providers = all
-            .Select(item => item.Provider)
-            .Where(provider => !String.IsNullOrWhiteSpace(provider))
-            .Select(provider => provider!.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(provider => provider, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        var groupTickers = await ResolveGroupTickersAsync(cancellationToken);
-
-        Items = all
-            .Where(MatchesProvider)
-            .Where(MatchesSentiment)
-            .Where(MatchesSearch)
-            .Where(item => !LinkedOnly || !String.IsNullOrWhiteSpace(item.Url))
-            .Where(item => groupTickers is null || MentionsAny(item, groupTickers))
-            .OrderByDescending(item => item.Timestamp)
-            .ToArray();
+        PageNumber = feed.Page;
+        TotalBeforeFilters = feed.TotalMatching ?? feed.Items.Count;
+        Providers = feed.Items.Select(x => x.Provider ?? "").Distinct().ToArray();
+        Items = View == "ticker" ? feed.Items.OrderBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase).ThenByDescending(x => x.Timestamp).ToArray() : feed.Items;
+        return Page();
     }
-
-    private async Task<HashSet<string>?> ResolveGroupTickersAsync(CancellationToken cancellationToken)
-    {
-        if (User.Identity?.IsAuthenticated != true || GroupId is not { } id)
-        {
-            return null;
-        }
-
-        var group = await wishlists.GetByIdAsync(id, cancellationToken);
-        if (group is null)
-        {
-            return null;
-        }
-
-        return group.Items
-            .Select(item => item.Ticker.Trim().ToUpperInvariant())
-            .Where(ticker => ticker.Length > 0)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static bool MentionsAny(MobileNewsItem item, HashSet<string> tickers)
-    {
-        // A story can be tagged with several symbols; the feed joins them with commas.
-        return item.Ticker
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(tickers.Contains);
-    }
-
-    private bool MatchesProvider(MobileNewsItem item) =>
-        String.IsNullOrWhiteSpace(Provider) ||
-        String.Equals(item.Provider?.Trim(), Provider.Trim(), StringComparison.OrdinalIgnoreCase);
-
-    private bool MatchesSentiment(MobileNewsItem item) => Sentiment?.ToLowerInvariant() switch
-    {
-        "positive" => item.SentimentScore > 0.15m,
-        "negative" => item.SentimentScore < -0.15m,
-        "neutral" => item.SentimentScore is >= -0.15m and <= 0.15m,
-        _ => true
-    };
-
-    private bool MatchesSearch(MobileNewsItem item)
-    {
-        if (String.IsNullOrWhiteSpace(Search))
-        {
-            return true;
-        }
-
-        var term = Search.Trim();
-        return item.Headline.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-            (item.Summary?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
-            item.Ticker.Contains(term, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string? NormalizeTicker(string? value) =>
-        String.IsNullOrWhiteSpace(value) ? null : value.Trim().ToUpperInvariant();
 
     /// <summary>Label for a sentiment score, so colour is never the only signal.</summary>
     public static string SentimentLabel(decimal score) =>

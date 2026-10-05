@@ -11,16 +11,57 @@ using System.Threading;
 using System.Threading.Tasks;
 using TradingFlow.Domain.Audit;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Exports;
 
 namespace TradingFlow.Web.Pages
 {
     public class AuditModel : PageModel
     {
         private readonly IDecisionAuditRepository _auditRepo;
+        private readonly IAuditEquityReader? _equity;
 
-        public AuditModel(IDecisionAuditRepository auditRepo)
+        public AuditModel(IDecisionAuditRepository auditRepo, IAuditEquityReader? equity = null)
         {
             _auditRepo = auditRepo;
+            _equity = equity;
+        }
+        [BindProperty(SupportsGet = true)] public string? CompareRuns { get; set; }
+        public IReadOnlyList<AuditMultiRun> MultiRuns { get; private set; } = [];
+        public IReadOnlyList<AuditEquitySeries> EquitySeries { get; private set; } = [];
+        public IReadOnlyList<string> EquityDetails { get; private set; } = [];
+        public sealed record AuditMultiRun(string Name, DecisionAuditSummary Summary, bool Found);
+        public static string[] ComparisonNames(string runName,string? compareRuns) {
+            var names=new[]{runName}.Concat((compareRuns ?? "").Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)).Distinct(StringComparer.Ordinal).ToArray();
+            if(names.Length > 4 || names.Any(x=>x.Length is < 1 or > 120 || x.Any(c=>!(Char.IsAsciiLetterOrDigit(c)||c is '-' or '_' or '.' or ' '))))
+                throw new InvalidOperationException("Compare at most four run names, using letters, digits, spaces, periods, hyphens or underscores.");
+            return names;
+        }
+        private async Task BuildEquityAsync(CancellationToken token) {
+            if(String.IsNullOrWhiteSpace(CompareRuns)) return;
+            var summaries=new List<AuditMultiRun>(); var series=new List<AuditEquitySeries>(); var details=new List<string>();
+            foreach(var name in ComparisonNames(RunName,CompareRuns)) {
+                var summary=name==RunName ? Summary : await _auditRepo.SummarizeAsync(name,token);
+                summaries.Add(new(name,summary,summary.Total > 0));
+                if(summary.Total == 0) { details.Add($"{name}: no persisted audit decisions found; no curve inferred."); continue; }
+                var result=_equity is null ? new AuditEquityResult([],"Published equity reader is unavailable.") : await _equity.ReadAsync(name,token);
+                series.AddRange(result.Series); details.Add($"{name}: {result.Detail}");
+            }
+            MultiRuns=summaries; EquitySeries=series; EquityDetails=details;
+        }
+        public string CurvePath(AuditEquitySeries series) {
+            var all=EquitySeries.SelectMany(x=>x.Points).ToArray();
+            if(all.Length==0) return "";
+            var first=all.Min(x=>x.Date.DayNumber); var last=all.Max(x=>x.Date.DayNumber);
+            var min=Math.Min(0,all.Min(x=>x.ReturnPercent)); var max=Math.Max(1,all.Max(x=>x.ReturnPercent));
+            var path=new StringBuilder(); decimal? previous=null;
+            foreach(var point in series.Points) {
+                var x=10+300m*(point.Date.DayNumber-first)/Math.Max(1,last-first);
+                var y=190-180m*(point.ReturnPercent-min)/(max-min);
+                if(previous is null) path.Append($"M{x.ToString("0.##",CultureInfo.InvariantCulture)},{y.ToString("0.##",CultureInfo.InvariantCulture)}");
+                else path.Append($" H{x.ToString("0.##",CultureInfo.InvariantCulture)} V{y.ToString("0.##",CultureInfo.InvariantCulture)}");
+                previous=y;
+            }
+            return path.ToString();
         }
 
         public string RunName { get; set; } = string.Empty;
@@ -33,32 +74,68 @@ namespace TradingFlow.Web.Pages
         public int TickerCount { get; private set; }
         public int StrategyCount { get; private set; }
         public string LocalTimeZoneLabel => UiDisplayFormatter.LocalTradingTimeZoneLabel;
+        [BindProperty(SupportsGet = true)] public string? Decision { get; set; }
+        [BindProperty(SupportsGet = true)] public string? Ticker { get; set; }
+        [BindProperty(SupportsGet = true)] public string? Reason { get; set; }
+        [BindProperty(SupportsGet = true)] public string Sort { get; set; } = "time";
+        [BindProperty(SupportsGet = true)] public bool Descending { get; set; } = true;
+        [BindProperty(SupportsGet = true)] public int PageNumber { get; set; } = 1;
+        [BindProperty(SupportsGet = true)] public int PageSize { get; set; } = 50;
+        public int TotalMatching { get; private set; }
+        public int PageCount => Math.Max(1, (int)Math.Ceiling(TotalMatching / (double)PageSize));
+        public DecisionAuditSummary Summary { get; private set; } = new(0,0,0,0,0,0,0,[]);
+        private DecisionAuditQuery Query(long? through = null) => new(Decision, Ticker, Reason, Sort,
+            Descending, (PageNumber - 1) * PageSize, PageSize, through);
+
+        private async Task LoadPageAsync(CancellationToken token)
+        {
+            PageSize = Math.Clamp(PageSize, 10, 200);
+            PageNumber = Math.Clamp(PageNumber, 1, Int32.MaxValue / PageSize);
+            Sort = Sort is "time" or "ticker" or "strategy" or "decision" or "reason" ? Sort : "time";
+            Summary = await _auditRepo.SummarizeAsync(RunName, token);
+            var page = await _auditRepo.QueryAsync(RunName, Query(Summary.LastId), token);
+            TotalMatching = page.TotalMatching;
+            if (PageNumber > PageCount) {
+                PageNumber = PageCount;
+                page = await _auditRepo.QueryAsync(RunName, Query(Summary.LastId), token);
+            }
+            Records = page.Records;
+            BuildViewState();
+        }
+
 
         public async Task<IActionResult> OnGetAsync(string runName, string? returnUrl)
         {
             RunName = runName;
+            if(!String.IsNullOrWhiteSpace(CompareRuns)) {
+                try { ComparisonNames(RunName,CompareRuns); }
+                catch(InvalidOperationException ex) { return BadRequest(ex.Message); }
+            }
             BackUrl = IsSafeLocalUrl(returnUrl) ? returnUrl! : "/Paper";
-            Records = await _auditRepo.GetAuditsByRunNameAsync(runName, default);
-            BuildViewState();
-            await BuildComparisonAsync(default);
+            await LoadPageAsync(HttpContext?.RequestAborted ?? default);
+            await BuildComparisonAsync(HttpContext?.RequestAborted ?? default);
+            await BuildEquityAsync(HttpContext?.RequestAborted ?? default);
             return Page();
         }
 
         public async Task<IActionResult> OnGetSnapshotAsync(string runName)
         {
             RunName = runName;
-            Records = await _auditRepo.GetAuditsByRunNameAsync(runName, default);
-            BuildViewState();
+            await LoadPageAsync(HttpContext?.RequestAborted ?? default);
+            await BuildComparisonAsync(HttpContext?.RequestAborted ?? default);
 
             return new JsonResult(new
             {
                 success = true,
                 refreshedAt = UiDisplayFormatter.FormatLocal(DateTimeOffset.UtcNow),
-                evaluations = Records.Count,
+                evaluations = Summary.Total, sort = Sort, descending = Descending,
+                totalMatching = TotalMatching, pageNumber = PageNumber, pageCount = PageCount, pageSize = PageSize,
                 accepted = AcceptedCount,
                 rejected = RejectedCount,
                 tickerCount = TickerCount,
                 strategyCount = StrategyCount,
+                funnel = Funnel,
+                comparison = Comparison, comparisonRunName = ComparisonRunName,
                 reasons = TopRejectionReasons.Select(reason => new
                 {
                     reasonKey = reason.ReasonKey,
@@ -87,62 +164,55 @@ namespace TradingFlow.Web.Pages
 
         private void BuildViewState()
         {
-            AcceptedCount = Records.Count(x => x.Decision.Equals("Accepted", StringComparison.OrdinalIgnoreCase));
-            RejectedCount = Records.Count(x => x.Decision.Equals("Rejected", StringComparison.OrdinalIgnoreCase));
-            TickerCount = Records.Select(x => x.Ticker).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-            StrategyCount = Records.Select(x => x.StrategyName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-            TopRejectionReasons = Records
-                .Where(x => !String.IsNullOrWhiteSpace(x.RejectionReason))
-                .GroupBy(x => UiDisplayFormatter.NormalizeRejectionReasonKey(x.RejectionReason), StringComparer.OrdinalIgnoreCase)
-                .Select(group => new AuditReasonSummary(
-                    group.Key,
-                    UiDisplayFormatter.FormatRejectionReason(group.Key),
-                    group.First().RejectionReason!,
-                    group.Count(),
-                    RejectedCount == 0 ? 0 : Decimal.Round(group.Count() * 100m / RejectedCount, 1)))
-                .OrderByDescending(x => x.Count)
-                .ThenBy(x => x.DisplayReason, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            AcceptedCount = Summary.Accepted;
+            RejectedCount = Summary.Rejected;
+            TickerCount = Summary.Tickers;
+            StrategyCount = Summary.Strategies;
+            TopRejectionReasons = Summary.TopReasons.Select(reason => new AuditReasonSummary(
+                reason.Key, UiDisplayFormatter.FormatRejectionReason(reason.Key), reason.Example,
+                reason.Count, RejectedCount == 0 ? 0 : Decimal.Round(reason.Count * 100m / RejectedCount, 1))).ToArray();
             RecordViews = Records.Select(ToView).ToArray();
             Funnel = BuildFunnel();
         }
 
-        /// <summary>
-        /// Stages from evaluated candidates down to accepted entries.
-        /// </summary>
-        /// <remarks>
-        /// Answers "why did nothing trade" in one view. Each rejection reason is a
-        /// stage that removed candidates; the survivor count after a stage is what
-        /// reached the next one. Stages are ordered by how many they eliminated, so
-        /// the dominant blocker is first.
-        /// </remarks>
+        /// <summary>Outcome breakdown, grouped by rejection frequency; not engine gate order.</summary>
         public IReadOnlyList<AuditFunnelStage> Funnel { get; private set; } = Array.Empty<AuditFunnelStage>();
 
         private IReadOnlyList<AuditFunnelStage> BuildFunnel()
         {
-            if (Records.Count == 0)
+            if (Summary.Total == 0)
             {
                 return Array.Empty<AuditFunnelStage>();
             }
 
             var stages = new List<AuditFunnelStage>
             {
-                new("Evaluated", Records.Count, Records.Count, 0, null)
+                new("Evaluated", Summary.Total, Summary.Total, 0, null)
             };
 
-            var remaining = Records.Count;
+            var remaining = Summary.Total;
             foreach (var reason in TopRejectionReasons)
             {
                 remaining -= reason.Count;
                 stages.Add(new AuditFunnelStage(
                     reason.DisplayReason,
                     Math.Max(remaining, 0),
-                    Records.Count,
+                    Summary.Total,
                     reason.Count,
                     reason.ReasonKey));
             }
 
-            stages.Add(new AuditFunnelStage("Accepted", AcceptedCount, Records.Count, 0, null));
+            var otherRejected = RejectedCount - TopRejectionReasons.Sum(x => x.Count);
+            if (otherRejected > 0) {
+                remaining -= otherRejected;
+                stages.Add(new("Other rejections / unspecified reason", remaining, Summary.Total, otherRejected, null));
+            }
+            var otherDecisions = Summary.Total - RejectedCount - AcceptedCount;
+            if (otherDecisions > 0) {
+                remaining -= otherDecisions;
+                stages.Add(new("Other decisions (no signal, skipped or exits)", remaining, Summary.Total, otherDecisions, null));
+            }
+            stages.Add(new AuditFunnelStage("Accepted", AcceptedCount, Summary.Total, 0, null));
             return stages;
         }
 
@@ -153,31 +223,11 @@ namespace TradingFlow.Web.Pages
         /// Read-only: it re-reads the same repository the page renders from and never
         /// mutates run state.
         /// </remarks>
-        public async Task<IActionResult> OnGetExportAsync(string runName, CancellationToken cancellationToken)
+        public async Task<IActionResult> OnGetExportAsync(string runName, CancellationToken cancellationToken, string format = "csv")
         {
-            RunName = runName;
-            Records = await _auditRepo.GetAuditsByRunNameAsync(runName, cancellationToken);
-            BuildViewState();
-
-            var builder = new StringBuilder();
-            builder.AppendLine("LocalTime,Ticker,Strategy,Decision,ReasonKey,Reason,Explanation");
-            foreach (var record in RecordViews)
-            {
-                builder.Append(Csv(record.LocalTime)).Append(',')
-                    .Append(Csv(record.Ticker)).Append(',')
-                    .Append(Csv(record.StrategyName)).Append(',')
-                    .Append(Csv(record.Decision)).Append(',')
-                    .Append(Csv(record.ReasonKey)).Append(',')
-                    .Append(Csv(record.RawReason)).Append(',')
-                    .Append(Csv(record.Explanation)).AppendLine();
-            }
-
-            var safeName = String.Concat((runName ?? "run").Where(character =>
-                Char.IsLetterOrDigit(character) || character is '-' or '_'));
-            return File(
-                Encoding.UTF8.GetBytes(builder.ToString()),
-                "text/csv",
-                $"audit-{(safeName.Length == 0 ? "run" : safeName)}.csv");
+            var snapshot = await _auditRepo.SummarizeAsync(runName, cancellationToken);
+            var query = new DecisionAuditQuery(Decision, Ticker, Reason, "id", false, Take: 500, ThroughId: snapshot.LastId);
+            return new AuditExportResult(_auditRepo, runName, query, format == "json", ToView);
         }
 
         /// <summary>Quotes a CSV field, doubling any embedded quote.</summary>
@@ -215,8 +265,8 @@ namespace TradingFlow.Web.Pages
                 return;
             }
 
-            var other = await _auditRepo.GetAuditsByRunNameAsync(CompareWith.Trim(), cancellationToken);
-            if (other.Count == 0)
+            var other = await _auditRepo.SummarizeAsync(CompareWith.Trim(), cancellationToken);
+            if (other.Total == 0)
             {
                 return;
             }
@@ -224,33 +274,24 @@ namespace TradingFlow.Web.Pages
             ComparisonRunName = CompareWith.Trim();
             Comparison =
             [
-                Row("Evaluated", Records.Count, other.Count),
-                Row("Accepted", AcceptedCount, CountDecision(other, "Accepted")),
-                Row("Rejected", RejectedCount, CountDecision(other, "Rejected")),
+                Row("Evaluated", Summary.Total, other.Total),
+                Row("Accepted", AcceptedCount, other.Accepted),
+                Row("Rejected", RejectedCount, other.Rejected),
                 Row("Acceptance rate %",
-                    Percent(AcceptedCount, Records.Count),
-                    Percent(CountDecision(other, "Accepted"), other.Count)),
-                Row("Tickers", TickerCount, Distinct(other, record => record.Ticker)),
-                Row("Strategies", StrategyCount, Distinct(other, record => record.StrategyName)),
+                    Percent(AcceptedCount, Summary.Total),
+                    Percent(other.Accepted, other.Total)),
+                Row("Tickers", TickerCount, other.Tickers),
+                Row("Strategies", StrategyCount, other.Strategies),
                 Row("Distinct rejection reasons",
-                    TopRejectionReasons.Count,
-                    other.Where(record => !String.IsNullOrWhiteSpace(record.RejectionReason))
-                        .Select(record => UiDisplayFormatter.NormalizeRejectionReasonKey(record.RejectionReason))
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .Count())
+                    Summary.ReasonCount, other.ReasonCount)
             ];
 
             static AuditRunComparisonRow Row(string label, decimal current, decimal other) =>
                 new(label, current, other);
 
-            static int CountDecision(IReadOnlyList<DecisionAuditRecord> source, string decision) =>
-                source.Count(record => record.Decision.Equals(decision, StringComparison.OrdinalIgnoreCase));
-
             static decimal Percent(int part, int whole) =>
                 whole == 0 ? 0m : Decimal.Round(part * 100m / whole, 1);
 
-            static int Distinct(IReadOnlyList<DecisionAuditRecord> source, Func<DecisionAuditRecord, string> select) =>
-                source.Select(select).Distinct(StringComparer.OrdinalIgnoreCase).Count();
         }
 
         private static bool IsSafeLocalUrl(string? url)

@@ -15,7 +15,8 @@ public sealed record EarningsCalendarResponse(
     string NewsWindowLabel,
     EarningsFilterStateResponse Filters,
     IReadOnlyList<EarningsNewsEvidenceResponse> News,
-    IReadOnlyList<EarningsCalendarItemResponse> Items);
+    IReadOnlyList<EarningsCalendarItemResponse> Items,
+    int TotalMatching = 0, bool Truncated = false);
 
 public sealed record EarningsFilterStateResponse(
     string Session,

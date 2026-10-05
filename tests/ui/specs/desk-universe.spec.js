@@ -27,7 +27,7 @@ async function seedList(page, name, tickers) {
 }
 
 async function seedTwoLists(page) {
-  await page.goto("/TradeDesk?view=market");
+  await page.goto("/TradeDesk?view=market&search=UNI");
   const seeded = await page.locator(`.trade-desk-table [data-symbol="${sharedTicker}"]`).count();
   if (seeded > 0) {
     return;
@@ -44,7 +44,7 @@ test.describe("desk universe", () => {
 
   test("the desk defaults to every wishlist, one row per symbol, naming its lists", async ({ page }) => {
     await seedTwoLists(page);
-    await page.goto("/TradeDesk?view=market");
+    await page.goto("/TradeDesk?view=market&search=UNI");
 
     await expect(page.locator("#WishlistSelect")).toHaveValue("");
     await expect(page.locator("#WishlistSelect option").first()).toContainText("All wishlists");
@@ -113,9 +113,11 @@ test.describe("desk universe", () => {
 
   test("live streams follow the rendered symbols and refuse an empty set", async ({ page }) => {
     await seedTwoLists(page);
-    await page.goto("/TradeDesk?view=market");
+    await page.goto("/TradeDesk?view=market&search=UNI");
     const tickers = await page.locator("[data-desk-root]").getAttribute("data-stream-tickers");
     expect(tickers.split(",")).toEqual(expect.arrayContaining([sharedTicker, firstOnly]));
+    const rendered = await page.locator('.trade-desk-table [data-symbol-row]').evaluateAll(rows => rows.map(row => row.dataset.symbol));
+    expect(tickers.split(',').sort()).toEqual([...new Set(rendered)].sort());
 
     const refused = await page.request.get("/api/v1/desk/quotes/stream?tickers=%3Cscript%3E", { failOnStatusCode: false });
     expect(refused.status()).toBe(400);

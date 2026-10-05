@@ -2,6 +2,10 @@
 @model TradingFlow.Web.Pages.NewsModel
 @{
     ViewData["Title"] = "News";
+    string PageUrl(int number) => Url.Page("/News", new { hours = Model.Hours, ticker = Model.Ticker,
+        provider = Model.Provider, source = Model.Source, classification = Model.Classification,
+        sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly,
+        groupId = Model.GroupId, scope = Model.Scope, view = Model.View, pageNumber = number, pageSize = Model.PageSize })!;
 }
 
 <header class="page-header compact-page-header">
@@ -44,13 +48,7 @@
         </div>
         <div>
             <label for="Provider">Source</label>
-            <select id="Provider" name="provider">
-                <option value="">All sources</option>
-                @foreach (var provider in Model.Providers)
-                {
-                    <option value="@provider" selected="@(String.Equals(Model.Provider, provider, StringComparison.OrdinalIgnoreCase))">@provider</option>
-                }
-            </select>
+            <input id="Provider" name="provider" value="@Model.Provider" placeholder="Any provider" />
         </div>
         <div>
             <label for="Sentiment">Tone</label>
@@ -69,6 +67,24 @@
             <input type="checkbox" name="linkedOnly" value="true" checked="@Model.LinkedOnly" />
             Only stories with an article link
         </label>
+        <div><label for="NewsSource">Source</label><input id="NewsSource" name="source" value="@Model.Source" placeholder="Any source" /></div>
+        <div><label for="NewsClassification">Evidence classification</label><select id="NewsClassification" name="classification">
+            <option value="">All classifications</option>
+            @foreach (var category in new[] { "Company", "SEC filing", "Fed", "Macro", "Market" }) {
+                <option value="@category" selected="@(String.Equals(Model.Classification, category, StringComparison.OrdinalIgnoreCase))">@category</option>
+            }
+        </select><small class="muted">Derived from provider, symbol and headline; strategy catalyst qualification is unavailable here.</small></div>
+        <div><label for="NewsView">View</label><select id="NewsView" name="view">
+            <option value="timeline" selected="@(Model.View != "ticker")">Chronological</option>
+            <option value="ticker" selected="@(Model.View == "ticker")">Grouped by symbols</option>
+        </select></div>
+        @if (User.Identity?.IsAuthenticated == true) {
+            <div><label for="NewsScope">Scope preset</label><select id="NewsScope" name="scope">
+                <option value="">All market evidence</option>
+                <option value="groups" selected="@(Model.Scope == "groups")">My groups</option>
+                <option value="positions" selected="@(Model.Scope == "positions")">My positions</option>
+            </select></div>
+        }
         <div class="news-filter-actions">
             <button type="submit">Apply</button>
             <a class="button secondary" asp-page="/News">Clear</a>
@@ -82,10 +98,14 @@
             <h2 id="news-results-heading">Timeline</h2>
             <p>@Model.FeedDescription</p>
         </div>
-        <span class="count-label">@Model.Items.Count of @Model.TotalBeforeFilters</span>
+        <span class="count-label">@Model.Items.Count articles on this page · @Model.TotalBeforeFilters matching records</span>
     </div>
 
-    @if (Model.Items.Count == 0)
+    @if (!Model.FeedEnabled)
+    {
+        <div class="empty-state"><strong>News scope unavailable.</strong><span>@Model.FeedDescription</span></div>
+    }
+    else if (Model.Items.Count == 0)
     {
         <div class="empty-state">
             <strong>No stories match these filters.</strong>
@@ -95,8 +115,13 @@
     else
     {
         <div class="news-timeline">
+            @{ string? previousSymbols = null; }
             @foreach (var item in Model.Items)
             {
+                if (Model.View == "ticker" && previousSymbols != item.Ticker) {
+                    <h3>@item.Ticker</h3>
+                    previousSymbols = item.Ticker;
+                }
                 var hasSafeUrl = Uri.TryCreate(item.Url, UriKind.Absolute, out var articleUri) &&
                     (articleUri.Scheme == Uri.UriSchemeHttp || articleUri.Scheme == Uri.UriSchemeHttps);
                 <article class="news-entry" data-news-item>
@@ -113,7 +138,10 @@
                         <p>@item.Summary</p>
                     }
                     <div class="news-entry-footer">
-                        <span class="muted">@item.Provider @item.Source</span>
+                        <span class="muted">@item.Provider @item.Source · @item.Classification</span>
+                        @if (User.Identity?.IsAuthenticated == true) {
+                            <button type="button" class="button secondary" data-group-action="add" data-tickers="@item.Ticker">Add symbols to group</button>
+                        }
                         @if (hasSafeUrl)
                         {
                             <a href="@item.Url" target="_blank" rel="noopener noreferrer">Open article</a>
@@ -124,3 +152,10 @@
         </div>
     }
 </section>
+
+<nav class="actions" aria-label="News pages">
+    @if (Model.PageNumber > 1) { <a class="button secondary" href="@PageUrl(Model.PageNumber - 1)">Previous</a> }
+    <span>Page @Model.PageNumber of @Model.PageCount</span>
+    @if (Model.PageNumber < Model.PageCount) { <a class="button secondary" href="@PageUrl(Model.PageNumber + 1)">Next</a> }
+</nav>
+<partial name="_GroupActions" />
