@@ -599,6 +599,8 @@ else if (Model.IsScreenerScope)
                 <button class="btn btn-secondary" type="button" data-group-action="copy" data-source-id="@Model.SelectedWishlist.Id">Copy to group</button>
                 <button class="btn btn-secondary" type="button" data-group-action="move" data-source-id="@Model.SelectedWishlist.Id">Move to group</button>
                 <button class="btn btn-secondary" type="button" data-group-action="tag" data-source-id="@Model.SelectedWishlist.Id">Tag</button>
+                <button class="btn btn-secondary" type="button" data-group-action="untag" data-source-id="@Model.SelectedWishlist.Id">Remove tag</button>
+                <button class="btn btn-danger" type="button" data-group-action="remove" data-source-id="@Model.SelectedWishlist.Id">Review removal</button>
             }
             <button class="btn btn-secondary" type="button" data-bulk-clear>Clear selection</button>
         </div>

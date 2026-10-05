@@ -120,8 +120,9 @@
                                     <strong>@stage.Remaining<span class="muted"> / @stage.Total</span></strong>
                                 </div>
                                 <div class="audit-funnel-track">
-                                    <div class="audit-funnel-fill progress-fill"
-                                         style="--progress:@stage.RemainingPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                                    <progress class="audit-funnel-fill tf-progress" max="100"
+                                              value="@stage.RemainingPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+                                              aria-label="@stage.Label"></progress>
                                 </div>
                                 @if (stage.Removed > 0)
                                 {

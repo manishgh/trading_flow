@@ -27,6 +27,56 @@ public sealed class GroupNewsQueryTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateEmptyGroup_RetainsExactOperatorCommandAndUndoDoesNotResurrect()
+    {
+        var command = new WishlistCreateRequest(Guid.NewGuid(), " Inline group ");
+        var created = await groups.CreateGroupAsync("operator", command, default);
+        Assert.Equal(command.CommandId, created.Id);
+        Assert.Empty((await groups.GetByIdAsync(created.Id, default))!.Items);
+        Assert.Equal(created, await groups.CreateGroupAsync("operator", command with { Name="Inline group" }, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.CreateGroupAsync("other", command, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.CreateGroupAsync("operator", command with { Name="Changed" }, default));
+        await groups.UndoBulkAsync("operator", command.CommandId, default);
+        Assert.Null(await groups.GetByIdAsync(created.Id, default));
+        Assert.True((await groups.CreateGroupAsync("operator", command, default)).Receipt.Undone);
+        Assert.Null(await groups.GetByIdAsync(created.Id, default));
+    }
+
+    [Fact]
+    public async Task CreationRejectsExistingNamesAndUndoNeverDeletesLaterMemberships()
+    {
+        var existing = await groups.SaveAsync(new() { Name="Existing", Description="Keep" }, default);
+        await groups.AddOrUpdateItemAsync(existing.Id, "AAA", null, "Keep notes", default);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.CreateGroupAsync("operator", new(Guid.NewGuid(), "existing"), default));
+        Assert.Equal("Keep notes", (await groups.GetByIdAsync(existing.Id, default))!.Items.Single().Notes);
+        var created = await groups.CreateGroupAsync("operator", new(Guid.NewGuid(), "Created"), default);
+        await groups.AddOrUpdateItemAsync(created.Id, "BBB", null, "Later membership", default);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.UndoBulkAsync("operator", created.Id, default));
+        Assert.Equal("Later membership", (await groups.GetByIdAsync(created.Id, default))!.Items.Single().Notes);
+    }
+
+    [Fact]
+    public async Task CreationUndoRejectsLaterGroupEditAndPreparationRevision()
+    {
+        var created = await groups.CreateGroupAsync("operator", new(Guid.NewGuid(), "Created"), default);
+        var group = (await groups.GetByIdAsync(created.Id, default))!;
+        group.Description = "Later edit";
+        await groups.SaveAsync(group, default);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.UndoBulkAsync("operator", created.Id, default));
+        Assert.Equal("Later edit", (await groups.GetByIdAsync(created.Id, default))!.Description);
+        var revision = await groups.CreateGroupAsync("operator", new(Guid.NewGuid(), "Revision"), default);
+        using var context = new TradingFlowDbContext(options);
+        var definition = new PreparationDefinitionRecord { Id = Guid.NewGuid(), WorkflowId = Guid.NewGuid(), OwnerId = "operator" };
+        var occurrence = new PreparationOccurrenceRecord { Id = Guid.NewGuid(), DefinitionId = definition.Id, WorkflowId = definition.WorkflowId, SlotKey = "slot" };
+        context.PreparationDefinitions.Add(definition); context.PreparationOccurrences.Add(occurrence);
+        context.PreparationReviews.Add(new() { Id = Guid.NewGuid(), OccurrenceId = occurrence.Id, WishlistId = revision.Id,
+            OwnerId = "operator", IdempotencyKey = "creation", RequestSha256 = "hash", Json = "{}" });
+        await context.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => groups.UndoBulkAsync("operator", revision.Id, default));
+        Assert.NotNull(await groups.GetByIdAsync(revision.Id, default));
+    }
+
+    [Fact]
     public async Task TwentyFiveSymbolCopy_PreservesExistingMetadata_RetriesAndUndoesExactly()
     {
         var source = await groups.SaveAsync(new() { Name = "Source" }, default);

@@ -40,6 +40,12 @@ test('bounded refresh retains open details and focused reason controls', async (
   await expect(page.locator('#auditRecordsBody > tr')).toHaveCount(50);
   await expect(page.locator('#auditEvaluations')).toHaveText('100003');
   await expect(page.locator('#auditOutcomePanel')).toBeVisible();
+  const progress = page.locator('#auditOutcomePanel progress').first();
+  await expect(progress).toHaveAttribute('value','100');
+  data.funnel[0].remainingPercent = 25;
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted:true })));
+  await expect(progress).toHaveJSProperty('value',25);
+  expect(await progress.evaluate(node => getComputedStyle(node).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
   await expect(page.locator('#auditRecordsBody script')).toHaveCount(0);
   const summary = page.locator('#auditRecordsBody summary').first();
   await summary.click();

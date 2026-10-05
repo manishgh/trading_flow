@@ -9,6 +9,65 @@ async function api(page, url, body) {
   }, { url, body });
 }
 
+test('inline destination creation is separate from membership and both changes can be undone', async ({ page, request }) => {
+  expect((await request.post('/api/v1/wishlists/create', {data:{commandId:crypto.randomUUID(),name:'Anonymous'}})).status()).toBe(401);
+  await signIn(page);
+  const source = await api(page, '/api/v1/wishlists', {name:`Inline source ${Date.now()}`});
+  let createdId;
+  try {
+    await api(page, '/api/v1/wishlists/bulk', {commandId:crypto.randomUUID(),operation:'add',targetId:source.id,tickers:['AAA','BBB']});
+    await page.goto(`/TradeDesk?id=${source.id}&view=market`);
+    await page.locator('[data-bulk-item][value="AAA"]').check();
+    await page.getByRole('button',{name:'Copy to group',exact:true}).click();
+    await expect(page.locator('#groupActionApply')).toBeEnabled();
+    await page.locator('#groupActionCreateName').fill(`Inline target ${Date.now()}`);
+    await page.locator('#groupActionCreate').click();
+    await expect(page.locator('#groupActionStatus')).toContainText('No symbols added');
+    createdId = await page.locator('#groupActionTarget').inputValue();
+    const read = () => page.evaluate(async id => (await window.tradingFlowFetch(`/api/v1/wishlists/${id}`)).json(), createdId);
+    expect((await read()).items).toHaveLength(0);
+    await expect(page.locator('#groupActionSource')).toHaveValue(source.id);
+    await page.locator('#groupActionApply').click();
+    await expect(page.locator('#groupActionStatus')).toContainText('1 membership changes saved');
+    expect((await read()).items.map(item => item.ticker)).toEqual(['AAA']);
+    await page.locator('#groupActionCreateUndo').click();
+    await expect(page.locator('#groupActionStatus')).toContainText('changed');
+    expect((await read()).items).toHaveLength(1);
+    await page.locator('#groupActionUndo').click();
+    await expect(page.locator('#groupActionStatus')).toContainText('Change undone');
+    await page.locator('#groupActionCreateUndo').click();
+    await expect(page.locator('#groupActionStatus')).toContainText('Empty group creation undone');
+  } finally {
+    await page.evaluate(async ids => {for (const id of ids.filter(Boolean)) await window.tradingFlowFetch(`/api/v1/wishlists/${id}`,{method:'DELETE'});}, [source.id,createdId]);
+  }
+});
+
+test('uncertain empty creation retains its identity over reload without applying membership', async ({ page }) => {
+  await signIn(page);
+  await page.goto('/Wishlists');
+  await page.evaluate(() => {
+    const button=document.createElement('button'); button.textContent='Create fixture destination';
+    button.dataset.groupAction='add'; button.dataset.tickers='AAA'; document.querySelector('main').append(button);
+  });
+  let first, retry;
+  await page.route('**/api/v1/wishlists/create', async route => {
+    const body=route.request().postDataJSON();
+    if (!first) {first=body; await route.abort();}
+    else {retry=body; await route.fulfill({json:{id:body.commandId,name:body.name,receipt:{commandId:body.commandId,affected:1,undone:false}}});}
+  });
+  await page.getByRole('button',{name:'Create fixture destination'}).click();
+  await expect(page.locator('#groupActionStatus')).not.toHaveText('Loading groups…');
+  await page.locator('#groupActionCreateName').fill('Uncertain destination');
+  await page.locator('#groupActionCreate').click();
+  await expect(page.locator('#groupActionCreate')).toHaveText('Retry exact empty group creation');
+  await page.locator('#groupActionClose').click(); await page.reload();
+  await page.locator('#groupActionResume').click();
+  await expect(page.locator('#groupActionApply')).toBeDisabled();
+  await page.locator('#groupActionCreate').click();
+  await expect(page.locator('#groupActionStatus')).toContainText('No symbols added');
+  expect(retry).toEqual(first);
+});
+
 test('selected symbol group action ignores grid selection and changes nothing before Apply', async ({ page }) => {
   await signIn(page);
   const nonce = `${Date.now()}`;

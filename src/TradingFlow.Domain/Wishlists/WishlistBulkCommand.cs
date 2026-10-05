@@ -3,6 +3,8 @@ namespace TradingFlow.Domain.Wishlists;
 public sealed record WishlistBulkRequest(Guid CommandId, string Operation, Guid? SourceId,
     Guid? TargetId, IReadOnlyList<string> Tickers, string? Tag = null);
 public sealed record WishlistBulkResult(Guid CommandId, int Affected, bool Undone);
+public sealed record WishlistCreateRequest(Guid CommandId, string Name);
+public sealed record WishlistCreateResult(Guid Id, string Name, WishlistBulkResult Receipt);
 
 /// <summary>Durable receipt and exact before/after state for one operator's reversible curation command.</summary>
 public sealed class WishlistBulkCommand

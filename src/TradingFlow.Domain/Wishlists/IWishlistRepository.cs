@@ -6,6 +6,8 @@
 /// </summary>
 public interface IWishlistRepository
 {
+    Task<WishlistCreateResult> CreateGroupAsync(string operatorId, WishlistCreateRequest request, CancellationToken token)
+        => throw new NotSupportedException();
     Task<WishlistBulkResult> ApplyBulkAsync(string operatorId, WishlistBulkRequest request, CancellationToken token)
         => throw new NotSupportedException();
     Task<WishlistBulkResult> UndoBulkAsync(string operatorId, Guid commandId, CancellationToken token)

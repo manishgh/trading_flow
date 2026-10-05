@@ -82,8 +82,9 @@ export function renderAuditOutcomes(container, stages) {
   container.replaceChildren(...stages.map(stage => {
     const row = node('li'), head = node('div', undefined, 'audit-funnel-head');
     head.append(node('span', stage.label), node('strong', `${stage.remaining} / ${stage.total}`));
-    const track = node('div', undefined, 'audit-funnel-track'), fill = node('div', undefined, 'audit-funnel-fill progress-fill');
-    fill.style.setProperty('--progress', `${stage.remainingPercent}%`); track.append(fill);
+    const track = node('div', undefined, 'audit-funnel-track'), fill = node('progress', undefined, 'audit-funnel-fill tf-progress');
+    fill.max = 100; fill.value = Math.max(0, Math.min(100, Number(stage.remainingPercent) || 0));
+    fill.setAttribute('aria-label', stage.label); track.append(fill);
     row.append(head, track);
     if (stage.removed > 0) row.append(node('small', `${stage.removed} decisions in this group`, 'muted'));
     return row;

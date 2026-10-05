@@ -87,6 +87,19 @@ public sealed partial class SqliteWishlistRepository
         var receipt = await db.WishlistBulkCommands.FindAsync([commandId], token);
         if (receipt is null || receipt.OperatorId != operatorId) throw new InvalidOperationException("The group command was not found.");
         if (receipt.Undone) return new(commandId, receipt.Affected, true);
+        using var requestDocument = JsonDocument.Parse(receipt.RequestJson);
+        if (requestDocument.RootElement.TryGetProperty("Kind", out var kind) && kind.GetString() == "create_group") {
+            var expected = JsonSerializer.Deserialize<GroupState>(receipt.AfterJson)!;
+            await RequireMutableAsync(db, expected.Id, token);
+            var group = await db.Wishlists.FindAsync([expected.Id], token);
+            if (group is null || GroupState.From(group) != expected || await db.WishlistItems.AnyAsync(x => x.WishlistId == expected.Id, token))
+                throw new InvalidOperationException("The created group changed or contains memberships. Undo those changes first; this action will not delete them.");
+            db.Wishlists.Remove(group);
+            receipt.Undone = true;
+            await db.SaveChangesAsync(token);
+            await transaction.CommitAsync(token);
+            return new(commandId, receipt.Affected, true);
+        }
         var before = JsonSerializer.Deserialize<State[]>(receipt.BeforeJson)!;
         var after = JsonSerializer.Deserialize<State[]>(receipt.AfterJson)!;
         foreach (var group in after.Select(x => x.WishlistId).Distinct()) {
