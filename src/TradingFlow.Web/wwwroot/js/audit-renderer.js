@@ -100,3 +100,19 @@ export function renderAuditComparison(container, rows) {
     return row;
   }));
 }
+
+export function renderAuditWorkflow(counts, gates, workflow, evaluations) {
+  if (!counts || !gates || !workflow) return;
+  const items = [{ label: 'Signal evaluations', count: evaluations, evidence: 'Pinned full-run decision records; includes repeated evaluations' }, ...workflow.counts];
+  counts.replaceChildren(...items.map(item => {
+    const row = node('tr'), heading = node('th', item.label); heading.scope = 'row';
+    row.append(heading, node('td', item.count ?? 'unavailable'), node('td', item.evidence)); return row;
+  }));
+  if (!workflow.gates.length) {
+    const row = node('tr'), cell = node('td', 'Ordered gate traces unavailable'); cell.colSpan = 5; row.append(cell); gates.replaceChildren(row); return;
+  }
+  gates.replaceChildren(...workflow.gates.map(gate => {
+    const row = node('tr'), heading = node('th', gate.name); heading.scope = 'row';
+    row.append(node('td', gate.order), heading, node('td', gate.reached), node('td', gate.passed), node('td', gate.rejected)); return row;
+  }));
+}

@@ -82,3 +82,23 @@ test('restored pages restart refresh after pagehide', async ({ page }) => {
   });
   await expect.poll(() => reads).toBeGreaterThan(before);
 });
+
+test('workflow evidence separates evaluations, filled orders and unavailable gate traces', async ({ page }) => {
+  await page.setViewportSize({width:390,height:844});
+  const data=snapshot();
+  data.workflow={detail:'Read-only exact run journal. Accepted signals are not fills.',counts:[
+    {label:'Discovered candidates',count:null,evidence:'No lineage'},
+    {label:'Entry intents',count:4,evidence:'Includes rejected and unfilled'},
+    {label:'Filled entry orders',count:2,evidence:'Distinct authoritative ledger orders'},
+    {label:'Currently partial entry orders',count:1,evidence:'Recorded cumulative quantity'}
+  ],gates:[{order:4,name:'Risk <script>fixture</script>',reached:3,passed:2,rejected:1}]};
+  await page.route('**/Audit/*handler=Snapshot*',route=>route.fulfill({json:data}));await page.goto('/Audit/large');
+  const counts=page.locator('#auditWorkflowCounts');await expect(counts).toContainText('100003');
+  await expect(counts.getByRole('row').filter({hasText:'Discovered candidates'})).toContainText('unavailable');
+  await expect(counts.getByRole('row').filter({hasText:'Filled entry orders'})).toContainText('2');
+  await expect(page.locator('#auditWorkflowGates')).toContainText('Risk <script>fixture</script>');
+  await expect(page.locator('#auditWorkflowGates script')).toHaveCount(0);
+  data.workflow.gates=[];await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));
+  await expect(page.locator('#auditWorkflowGates')).toContainText('Ordered gate traces unavailable');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBeTruthy();
+});

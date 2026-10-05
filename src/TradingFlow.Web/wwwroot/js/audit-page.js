@@ -1,4 +1,4 @@
-import { renderAuditRecords, renderAuditReasons, renderAuditOutcomes, renderAuditComparison } from './audit-renderer.js';
+import { renderAuditRecords, renderAuditReasons, renderAuditOutcomes, renderAuditComparison, renderAuditWorkflow } from './audit-renderer.js';
 
 const form = document.getElementById('auditFilterForm');
 let controller, revision = 0;
@@ -41,6 +41,10 @@ async function refresh() {
     renderAuditReasons(document.getElementById('auditReasonCards'), data.reasons);
     renderAuditOutcomes(document.getElementById('auditFunnel'), data.funnel);
     renderAuditComparison(document.getElementById('auditComparisonBody'), data.comparison);
+    if (data.workflow) {
+      set('auditWorkflowDetail', data.workflow.detail);
+      renderAuditWorkflow(document.getElementById('auditWorkflowCounts'), document.getElementById('auditWorkflowGates'), data.workflow, data.evaluations);
+    }
     document.getElementById('auditOutcomePanel').hidden = data.funnel.length === 0;
     document.getElementById('auditComparison').hidden = data.comparison.length === 0;
     set('auditComparisonName', data.comparisonRunName);

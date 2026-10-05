@@ -619,6 +619,7 @@ builder.Services.AddSingleton<TradingFlow.Application.Candidates.ICandidateWorkf
 builder.Services.AddSingleton<IOrderWorkflowService, OrderWorkflowService>();
 builder.Services.AddSingleton<OrderReplacementReviewService>();
 builder.Services.AddSingleton<IAuditEquityReader, AuditEquityReader>();
+builder.Services.AddSingleton<IAuditWorkflowReader, AuditWorkflowReader>();
 builder.Services.AddSingleton<TradingFlow.Data.Jobs.SqliteJobRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository>(services =>
     services.GetRequiredService<TradingFlow.Data.Jobs.SqliteJobRepository>());

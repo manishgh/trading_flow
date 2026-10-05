@@ -32,10 +32,20 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
 
     public static async Task<AuditEquityResult> ReadPublishedAsync(string runName, string root, string resultPath, CancellationToken token)
     {
+        var published = await ReadResultAsync(runName, root, resultPath, token);
+        if (published is null) return new([],"The result has no published manifest; no curve is inferred from a truncated UI snapshot.");
+        var result = published.Value.Result;
+        if(result.RunName != runName || !result.EconomicResultsComplete)
+            return new([],"Run identity or complete economic results are unavailable.");
+        return BuildSeries(runName, result);
+    }
+
+    internal static async Task<(BacktestResult Result, BacktestArtifactManifest Manifest)?> ReadResultAsync(string runName, string root, string resultPath, CancellationToken token)
+    {
         var resultFile = Confine(root,resultPath);
         var directory = Path.GetDirectoryName(resultFile)!;
         var manifestPath = Path.ChangeExtension(resultFile,".manifest.json");
-        if(!File.Exists(manifestPath)) return new([],"The result has no published manifest; no curve is inferred from a truncated UI snapshot.");
+        if(!File.Exists(manifestPath)) return null;
         Confine(root,manifestPath);
         var manifest = await ReadBoundedAsync<BacktestArtifactManifest>(manifestPath,1_000_000,token);
         if(manifest.SchemaVersion != 1 || !manifest.PublicationComplete || manifest.RunName != runName)
@@ -46,8 +56,12 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
             Path.IsPathRooted(reference.Path) || Confine(directory,Path.Combine(directory,reference.Path)) != resultFile)
             throw new InvalidDataException("Result reference exceeds bounds or differs from job.");
         var result = await ReadBoundedAsync<BacktestResult>(resultFile,10_000_000,token,reference.Sha256);
-        if(result.RunName != runName || !result.EconomicResultsComplete)
-            return new([],"Run identity or complete economic results are unavailable.");
+        if(result.RunName != runName) throw new InvalidDataException("Published result identity differs.");
+        return (result, manifest);
+    }
+
+    private static AuditEquityResult BuildSeries(string runName, BacktestResult result)
+    {
         if(result.StrategyResults.Count > 8) return new([],"This run exceeds eight strategy curves; inspect its original results.");
         var series = new List<AuditEquitySeries>();
         foreach(var strategy in result.StrategyResults) {
@@ -62,7 +76,7 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
         return new(series,series.Count == 0 ? "No complete retained trade curve is available. Zero trades and summary-only artifacts do not imply flat equity."
             : "Realised equity by UTC exit date. It omits unrealised and within-position drawdown. Curves over 1,000 points are reduced for display.");
     }
-    private static string Confine(string root,string path) {
+    internal static string Confine(string root,string path) {
         root=Path.GetFullPath(root); path=Path.GetFullPath(path);
         var relative=Path.GetRelativePath(root,path);
         if(Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".."+Path.DirectorySeparatorChar)) throw new InvalidDataException("Result escapes its configured directory.");
