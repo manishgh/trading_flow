@@ -63,7 +63,7 @@ Observe provider failures, queue age, lease renewal, recovery, stream lag, pendi
 
 Keep local review on the active ngrok HTTPS address for now, as requested. The old `2b04-…` address expired and tunnel restarts may allocate a new one. Native Settings must match the active tunnel. Azure later gets a stable DNS endpoint.
 
-Android was paused while the phone was needed and resumed on the latest instruction. ADB showed no device at resume; the phone subsequently reconnected. Its foreground was Gmail, so current-source installation and phone checks await TradingFlowReview being left open and idle. Build success and connectivity do not establish accessibility or reconnect acceptance.
+The latest user scope explicitly excludes Android-specific work. APK installation, native parity, accessibility, reconnect and notification delivery remain separate follow-up work. No phone was operated for this Web/API completion pass. Build success and prior connectivity do not establish those acceptance checks.
 
 Firebase needs project setup and package-specific app registrations: production `com.manishgh.tradingflow`, review `com.manishgh.tradingflow.integration`. Use matching `google-services.json` files. Authenticated device registration, durable outbox, FCM HTTP v1, token rotation/revocation and foreground/background/cold-launch behavior still require implementation and delivery tests. Connected polling is not background push. Keep push disabled until configuration exists; see `firebase-background-push.md`.
 
