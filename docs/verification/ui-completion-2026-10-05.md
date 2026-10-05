@@ -1,5 +1,7 @@
 # Web/API and Android completion checkpoint
 
+Later native exit changes and current runtime details are recorded in the [native exit checkpoint](native-exit-review-2026-10-05.md). The APK hash and Web process IDs below identify this earlier market-filter checkpoint.
+
 Date: 5 October 2026. This records a bounded implementation checkpoint, not completion of every item in the Astra/desk plan. Work stays in the isolated integration checkout; the original checkout, local secrets, broker journal and candle cache are preserved.
 
 ## Implemented
