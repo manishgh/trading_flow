@@ -17,6 +17,25 @@ public sealed class FinvizClientTests : IDisposable
         new FileSystemRawArchiveWriter(new RawArchiveOptions(archiveRoot));
 
     [Fact]
+    public async Task OverviewExportRetainsCompanySectorAndExplicitCapMillionsWithoutInventingRvol()
+    {
+        using var client = new FinvizClient(new HttpClient(new CsvHandler("""
+No.,Ticker,Company,Sector,Market Cap
+1,AAA,"Alpha, Inc",Technology,4858256.69
+2,BBB,Beta,Healthcare,3.9B
+3,CCC,Gamma,-,-
+4,DDD,Delta,Energy,850K
+5,EEE,Epsilon,Technology,10Z
+""")), new FinvizOptions(new Uri("https://finviz.com"), "test"), CreateArchiveWriter());
+        var rows = await client.GetScreenerRowsAsync("v=111", default);
+        Assert.Equal("Alpha, Inc", rows[0].Company); Assert.Equal("Technology", rows[0].Sector);
+        Assert.Equal(4858256.69m, rows[0].MarketCapMillions); Assert.Null(rows[0].RelativeVolume);
+        Assert.Equal(3900m, rows[1].MarketCapMillions); Assert.Null(rows[2].Sector); Assert.Null(rows[2].MarketCapMillions);
+        Assert.Equal(.85m, rows[3].MarketCapMillions);
+        Assert.Null(rows[4].MarketCapMillions);
+    }
+
+    [Fact]
     public async Task GetScreenerRowsAsync_ParsesTickerAndRelativeVolume()
     {
         using var client = new FinvizClient(

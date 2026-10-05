@@ -263,6 +263,7 @@ builder.Services.AddSingleton<WishlistMarketMonitor>();
 builder.Services.AddSingleton<DailyObservationService>();
 builder.Services.AddSingleton<IDailyObservationService>(sp => sp.GetRequiredService<DailyObservationService>());
 builder.Services.AddSingleton<WishlistDeskService>();
+builder.Services.AddSingleton<DeskUniverseEvidenceService>();
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskSources>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.IDeskAccountReader, TradingFlow.Web.Services.Desk.DeskAccountReader>();

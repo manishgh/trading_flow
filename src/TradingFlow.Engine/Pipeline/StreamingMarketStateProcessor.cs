@@ -429,7 +429,8 @@ public sealed class StreamingMarketStateProcessor
             return null;
         }
 
-        var pipeline = GetPipeline(symbol);
+        // A snapshot read must not allocate a pipeline or become its owner.
+        if (!pipelines.TryGetValue(NormalizeSymbol(symbol), out var pipeline)) return null;
         var state = await EnqueueAsync(
             pipeline,
             () => Task.FromResult(

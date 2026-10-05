@@ -376,7 +376,8 @@ window.TradingFlowDesk = { applyActivity, applyQuotes, setConnectionState };
 // Deliberately opens the reviewed ticket rather than submitting anything: a
 // keystroke must never place an order.
 document.addEventListener("keydown", event => {
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const modalOpen = document.querySelector('dialog[open]') || [...document.querySelectorAll('[aria-modal="true"]')].some(node => node.getClientRects().length > 0);
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || modalOpen) return;
 
     const target = event.target;
     const typing = target instanceof HTMLElement &&

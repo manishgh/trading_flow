@@ -13,6 +13,9 @@ namespace TradingFlow.Web.Pages;
 
 public sealed class TradeDeskModel : PageModel
 {
+    private readonly DeskUniverseEvidenceService universeEvidence;
+    public IReadOnlyDictionary<string, DeskUniverseEvidence> MarketEvidence { get; private set; } = new Dictionary<string, DeskUniverseEvidence>();
+    public DeskUniverseEvidence EvidenceFor(string ticker) => MarketEvidence.GetValueOrDefault(ticker) ?? new();
     private readonly IWishlistRepository repository;
     private readonly ConfigCatalogService catalog;
     private readonly WishlistDeskService deskService;
@@ -28,6 +31,7 @@ public sealed class TradeDeskModel : PageModel
 
     public TradeDeskModel(
         IWishlistRepository repository,
+        DeskUniverseEvidenceService universeEvidence,
         ConfigCatalogService catalog,
         WishlistDeskService deskService,
         OperationalStatusService operationalStatus,
@@ -40,6 +44,7 @@ public sealed class TradeDeskModel : PageModel
         DeskPreparationService preparation,
         TradingFlow.Web.Services.Desk.IDeskAccountReader accountReader)
     {
+        this.universeEvidence = universeEvidence;
         this.accountReader = accountReader;
         this.environments = environments;
         this.preparation = preparation;
@@ -95,7 +100,24 @@ public sealed class TradeDeskModel : PageModel
     [BindProperty(SupportsGet = true)] public int PageSize { get; set; } = 50;
     public int MatchingCount { get; private set; }
     public int PageCount { get; private set; } = 1;
-    private DeskGridQuery GridQuery => new(Search, MinPrice, MaxPrice, MaxSpreadBps, MinChange, MaxChange, MinVolumeZ20, MaxVolumeZ20, Tracked);
+    [BindProperty(SupportsGet = true)] public string? Sector { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MinMarketCap { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MaxMarketCap { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MinVolume { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MinRvol { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MaxRvol { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MinAtrPercent { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MaxAtrPercent { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MinGap { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MaxGap { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MinVwapDistance { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MaxVwapDistance { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MinRsi { get; set; }
+    [BindProperty(SupportsGet = true)] public decimal? MaxRsi { get; set; }
+    [BindProperty(SupportsGet = true)] public int? MaxEarningsDays { get; set; }
+    [BindProperty(SupportsGet = true)] public bool? CatalystOnly { get; set; }
+    [BindProperty(SupportsGet = true)] public string? SignalState { get; set; }
+    private DeskGridQuery GridQuery => new(Search, MinPrice, MaxPrice, MaxSpreadBps, MinChange, MaxChange, MinVolumeZ20, MaxVolumeZ20, Tracked, Sector, MinMarketCap, MaxMarketCap, MinVolume, MinRvol, MaxRvol, MinAtrPercent, MaxAtrPercent, MinGap, MaxGap, MinVwapDistance, MaxVwapDistance, MinRsi, MaxRsi, MaxEarningsDays, CatalystOnly, SignalState);
     [BindProperty(SupportsGet = true)] public string? Sort { get; set; }
     [BindProperty(SupportsGet = true)] public string? Dir { get; set; }
     [BindProperty(SupportsGet = true), Microsoft.AspNetCore.Mvc.ModelBinding.Validation.ValidateNever] public string PredictionHorizon { get; set; } = "auto";
@@ -195,12 +217,13 @@ public sealed class TradeDeskModel : PageModel
     public async Task<IActionResult> OnGetAsync(CancellationToken cancellationToken)
     {
         Tracked = Tracked?.Trim().ToLowerInvariant();
+        SignalState = SignalState?.Trim().ToLowerInvariant();
         Scope = String.IsNullOrWhiteSpace(Scope) ? "lists" : Scope.Trim().ToLowerInvariant();
         Source = String.IsNullOrWhiteSpace(Source) ? "all" : Source.Trim().ToLowerInvariant();
         PredictionHorizon = String.IsNullOrWhiteSpace(PredictionHorizon) ? "auto" : PredictionHorizon.Trim();
         if (Scope is not ("lists" or "screener") || !Filters.Any(x => x.Key == Source)) return BadRequest("Choose a supported desk universe and view.");
         var typedFields = new[] { nameof(Id), nameof(TargetId), nameof(MinPrice), nameof(MaxPrice), nameof(MaxSpreadBps),
-            nameof(MinChange), nameof(MaxChange), nameof(MinVolumeZ20), nameof(MaxVolumeZ20), nameof(PageNumber), nameof(PageSize), nameof(Ticket) };
+            nameof(MinChange), nameof(MaxChange), nameof(MinVolumeZ20), nameof(MaxVolumeZ20), nameof(PageNumber), nameof(PageSize), nameof(Ticket), nameof(MinMarketCap), nameof(MaxMarketCap), nameof(MinVolume), nameof(MinRvol), nameof(MaxRvol), nameof(MinAtrPercent), nameof(MaxAtrPercent), nameof(MinGap), nameof(MaxGap), nameof(MinVwapDistance), nameof(MaxVwapDistance), nameof(MinRsi), nameof(MaxRsi), nameof(MaxEarningsDays), nameof(CatalystOnly) };
         if (typedFields.Any(key => ModelState.TryGetValue(key, out var field) && field.Errors.Count > 0))
             return BadRequest("Choose valid numeric desk filters, page values and group IDs.");
         try { DeskGridFilter.Validate(GridQuery); }
@@ -364,7 +387,7 @@ public sealed class TradeDeskModel : PageModel
             // wishlist so the band can say how many hits are new to that list.
             ScreenerResult = await ResolveScreenerResultAsync(cancellationToken);
             Universe = ScreenerResult is { Succeeded: true } hits
-                ? DeskUniverse.ForScreener(hits.Name, hits.Symbols, Wishlists)
+                ? DeskUniverse.ForScreener(hits.Name, hits.AllSymbols.Count > 0 ? hits.AllSymbols : hits.Symbols, Wishlists)
                 : DeskUniverse.Empty with { Kind = DeskUniverseKind.Screener, Label = ScreenerDisplayName };
         }
         else
@@ -429,6 +452,7 @@ public sealed class TradeDeskModel : PageModel
         Preparation = await preparationTask;
 
         AllRows = ranked.Rows;
+        MarketEvidence = await universeEvidence.ReadAsync(AllRows, ScreenerResult, cancellationToken);
         var window = DeskGridPage<RankedDeskRow>.Create(SortRows(AllRows.Where(MatchesFilter).Where(MatchesQuery)), PageNumber, PageSize);
         Rows = window.Rows;
         MatchingCount = window.TotalMatching;
@@ -515,6 +539,23 @@ public sealed class TradeDeskModel : PageModel
             ["minVolumeZ20"] = MinVolumeZ20?.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["maxVolumeZ20"] = MaxVolumeZ20?.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["tracked"] = Tracked,
+            ["sector"] = Sector,
+            ["minMarketCap"] = MinMarketCap?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxMarketCap"] = MaxMarketCap?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["minVolume"] = MinVolume?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["minRvol"] = MinRvol?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxRvol"] = MaxRvol?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["minAtrPercent"] = MinAtrPercent?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxAtrPercent"] = MaxAtrPercent?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["minGap"] = MinGap?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxGap"] = MaxGap?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["minVwapDistance"] = MinVwapDistance?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxVwapDistance"] = MaxVwapDistance?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["minRsi"] = MinRsi?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxRsi"] = MaxRsi?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["maxEarningsDays"] = MaxEarningsDays?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["catalystOnly"] = CatalystOnly == true ? "true" : null,
+            ["signalState"] = SignalState,
             ["pageNumber"] = PageNumber > 1 ? PageNumber.ToString() : null,
             ["pageSize"] = PageSize != 50 ? PageSize.ToString() : null,
             ["sort"] = Sort,
@@ -581,6 +622,16 @@ public sealed class TradeDeskModel : PageModel
         new("bidask", "Bid / Ask", "quote-column", "Inside bid and ask with quoted sizes.", false, true),
         new("spread", "Spread", "spread-column", "Inside spread in basis points.", false, true, true),
         new("z20", "Volume Z20", "rvol-column", "Daily volume Z-score against its 20-session baseline; advisory evidence.", true, false, true),
+        new("sector", "Sector", "evidence-column", "Sector from archived Finviz discovery export; unknown outside available rows.", true, false),
+        new("cap", "Cap · $M", "evidence-column", "Market cap in USD millions from Finviz or the stored earnings provider.", true, false, true),
+        new("volume", "Daily volume", "evidence-column", "Latest completed daily SIP/all session volume, not accumulating current-session volume.", true, false, true),
+        new("rvol", "Daily RVOL", "evidence-column", "Alpaca daily relative volume with cohort and sample counts; separate from slot RVOL and Finviz vendor RVOL.", true, false, true),
+        new("atr", "ATR %", "evidence-column", "ATR14 as a percentage of the same completed daily close.", true, false, true),
+        new("gap", "Daily gap %", "evidence-column", "Latest completed daily open against the prior completed daily close.", true, false, true),
+        new("vwap", "VWAP dist %", "evidence-column", "Completed warm 1m SIP/all close distance from its same-bar session VWAP.", true, false, true),
+        new("rsi", "RSI14", "evidence-column", "Latest completed daily RSI14; unknown when insufficient.", true, false, true),
+        new("catalyst", "Catalyst", "evidence-column", "Observed indicator catalyst; unknown does not mean absence.", true, false),
+        new("earnings", "Earnings in", "evidence-column", "Days in New York to a stored future earnings schedule, within 35 days; missing calendar coverage stays unknown.", true, false, true),
         new("eligibility", "Setup watch", "eligibility-column", "Non-authorizing technical observation and its reason.", false, true),
         new("predictor", "Predictor", "predictor-column", "Model signal, probability and horizon.", false, true),
         new("sync", "Sync", "sync-column", "Whether the verdict and the model agree.", false, true),
@@ -623,7 +674,7 @@ public sealed class TradeDeskModel : PageModel
 
     private bool MatchesQuery(RankedDeskRow ranked) => DeskGridFilter.Matches(
         new(ranked.Ticker, ranked.Row.DisplayName, ranked.Row.Quote.MidPrice, ranked.Row.SpreadBps,
-            ranked.Row.ChangePct, ranked.Evidence.Swing?.VolumeZ20, ranked.Row.HasTrade), GridQuery);
+            ranked.Row.ChangePct, ranked.Evidence.Swing?.VolumeZ20, ranked.Row.HasTrade, EvidenceFor(ranked.Ticker), ranked.Row.HasSignal), GridQuery);
 
     private IEnumerable<RankedDeskRow> SortRows(IEnumerable<RankedDeskRow> rows)
     {
@@ -639,6 +690,16 @@ public sealed class TradeDeskModel : PageModel
             "change" => Order(rows, row => row.Row.ChangePct ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
             "bidask" => Order(rows, row => row.Row.Quote.BidPrice ?? Decimal.MinValue, descending),
             "spread" => Order(rows, row => row.Row.SpreadBps ?? Decimal.MaxValue, descending),
+            "cap" => Order(rows, row => EvidenceFor(row.Ticker).MarketCapMillions ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
+            "volume" => Order(rows, row => EvidenceFor(row.Ticker).Volume ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
+            "rvol" => Order(rows, row => EvidenceFor(row.Ticker).DailyRvol ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
+            "atr" => Order(rows, row => EvidenceFor(row.Ticker).AtrPercent ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
+            "gap" => Order(rows, row => EvidenceFor(row.Ticker).GapPercent ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
+            "vwap" => Order(rows, row => EvidenceFor(row.Ticker).VwapDistancePercent ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
+            "rsi" => Order(rows, row => EvidenceFor(row.Ticker).Rsi ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
+            "earnings" => Order(rows, row => EvidenceFor(row.Ticker).EarningsInDays ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
+            "sector" => Order(rows, row => EvidenceFor(row.Ticker).Sector ?? (descending ? "" : "\uffff"), descending),
+            "catalyst" => Order(rows, row => EvidenceFor(row.Ticker).HasCatalyst == true ? 1m : (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
             "z20" => Order(rows, row => row.Evidence.Swing?.VolumeZ20 ?? (descending ? Decimal.MinValue : Decimal.MaxValue), descending),
             "eligibility" => Order(rows, row => row.Row.HasSignal ? 1m : 0m, descending),
             "pl" => Order(rows, row => row.Row.PositionValue ?? Decimal.MinValue, descending),

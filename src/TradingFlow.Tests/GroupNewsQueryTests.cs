@@ -10,6 +10,7 @@ using TradingFlow.Domain.Preparation;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Desk;
+using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Tests;
 
@@ -160,6 +161,30 @@ public sealed class GroupNewsQueryTests : IDisposable
         Assert.Equal(new[] { "0302", "0303" }, page.Records.Select(x => x.Id));
         Assert.Empty((await news.QueryAsync(filter with { ScopeTickers = [] }, default)).Records);
         Assert.Empty((await news.QueryAsync(filter with { Provider = "' OR 1=1 --" }, default)).Records);
+    }
+
+    [Fact]
+    public async Task DeskCatalystPresenceUsesObservedExactSymbolNewsAndNeverAllocatesColdPipelines()
+    {
+        var now=DateTimeOffset.UtcNow;
+        using var context=new TradingFlowDbContext(options);
+        context.NewsItems.AddRange(new PersistedNewsItem {Id="seen",Ticker="AAA",Timestamp=now.AddMinutes(-5),IngestedAt=now.AddMinutes(-4),Headline="Observed company update",Provider="wire"},
+            new PersistedNewsItem {Id="future",Ticker="BBB",Timestamp=now.AddMinutes(-5),IngestedAt=now.AddHours(1),Headline="Not observed yet",Provider="wire"},
+            new PersistedNewsItem {Id="prefix",Ticker="AA",Timestamp=now.AddMinutes(-5),IngestedAt=now.AddMinutes(-4),Headline="Different symbol",Provider="wire"});
+        await context.SaveChangesAsync();
+        var daily=new Mock<IDailyObservationService>();
+        daily.Setup(x=>x.GetAsync(It.IsAny<string>(),It.IsAny<CancellationToken>())).ReturnsAsync(new DailyObservationResult("loading","Loading"));
+        var calendar=new Mock<TradingFlow.Domain.Earnings.IEarningsRepository>();
+        calendar.Setup(x=>x.GetCalendarAsync(It.IsAny<DateOnly>(),It.IsAny<DateOnly>(),It.IsAny<IReadOnlyCollection<string>>(),It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        var stream=new TradingFlow.Engine.Pipeline.StreamingMarketStateProcessor(TradingFlow.Engine.Abstractions.NullCandleStore.Instance,
+            new TradingFlow.Engine.Abstractions.CandleStoreContext("test","test","sip"),TradingFlow.Engine.Pipeline.StreamingMarketStateOptions.Default,
+            TimeProvider.System,Microsoft.Extensions.Logging.Abstractions.NullLogger<TradingFlow.Engine.Pipeline.StreamingMarketStateProcessor>.Instance);
+        var service=new DeskUniverseEvidenceService(daily.Object,stream,calendar.Object,news,TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<DeskUniverseEvidenceService>.Instance);
+        RankedDeskRow Row(string symbol)=>new(new(new() {Ticker=symbol},new(symbol,null,null,null,null,null),null,null,null),1,0,[],0,default,default,null!,"",false);
+        var result=await service.ReadAsync([Row("AAA"),Row("BBB"),Row("AAAA")],null,default);
+        Assert.True(result["AAA"].HasCatalyst); Assert.Contains("Observed company update",result["AAA"].Detail);
+        Assert.Null(result["BBB"].HasCatalyst); Assert.Null(result["AAAA"].HasCatalyst); Assert.Empty(stream.GetTrackedSymbols());
     }
 
     [Theory]
