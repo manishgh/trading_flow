@@ -1,5 +1,7 @@
 # Desk Universe, Screeners, Portfolio, Preparation And Orders
 
+News scope update, 6 October 2026: the News dropdown selects individual wishlists or Finviz screens, all wishlist stocks, all returned Finviz all-stocks membership, or their union. An exact ticker narrows the chosen set. Provider/publisher filters remain separate; current source selection filters stored news and does not establish historical membership. See [verification](verification/news-stock-sources-2026-10-06.md).
+
 See the [current plan checklist](verification/trading-desk-plan-status-2026-10-05.md) for delivered scope and outstanding Web/native/provider acceptance. The older status below is historical.
 
 Status: web screen 1 (desk), screen 2 (orders) and the follow-up round implemented 2026-09-29

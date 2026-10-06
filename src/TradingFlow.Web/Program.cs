@@ -252,6 +252,7 @@ builder.Services.AddHttpClient<OfficialMarketNewsProvider>(client =>
 });
 builder.Services.AddSingleton<NewsFeedService>();
 builder.Services.AddScoped<NewsQueryService>();
+builder.Services.AddSingleton<NewsStockSourceService>();
 builder.Services.AddScoped<EarningsViewService>();
 builder.Services.AddSingleton<WarmupServiceClient>();
 builder.Services.AddSingleton<DeskPreparationService>();

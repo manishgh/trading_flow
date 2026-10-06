@@ -23,6 +23,7 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
     IWishlistRepository wishlists, ScreenerPresetService presets, IScreenerSnapshotSource screener,
     IMemoryCache cache, IDeskAccountReader? account = null)
 {
+    private readonly SemaphoreSlim screenReadGate = new(1, 1);
     public const int DisplayLimit = 50;
     public static readonly IReadOnlyList<DeskSource> BuiltIns = [
         new("swing:trend", "Established trends", "TradingFlow swing screens", "Above the 50- and 200-day averages; price above $10; average volume above 500K.",
@@ -81,15 +82,38 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
             return Window(source, members, members.Count, null, null, page, search);
         }
         // Snapshot membership changes at most once a minute; quotes remain independent.
-        var screen = await cache.GetOrCreateAsync("desk-screen:" + source.Query, async entry => {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1);
-            return await screener.PreviewAsync(source.Query, ScreenerScope.Swing, null, ct);
-        });
+        var screen = await ReadScreenAsync(source.Query, ct);
         var bySymbol = all.ToDictionary(x => x.Symbol, StringComparer.OrdinalIgnoreCase);
         var membersForScreen = (screen!.AllSymbols.Count > 0 ? screen.AllSymbols : screen.Symbols)
             .Select(x => bySymbol.GetValueOrDefault(x) ?? new DeskMembership(x, null, [])).ToArray();
         return Window(source, membersForScreen, screen.TotalCount, screen.SyncedAtUtc,
             screen.Error is null ? null : "Finviz is unavailable. Check the provider connection or saved filters, then retry.", page, search);
+    }
+
+    /// <summary>One bounded provider observation shared by desk and news, including full returned membership.</summary>
+    public async Task<ScreenerSyncResult> ReadScreenAsync(string query, CancellationToken ct)
+    {
+        var key = "desk-screen:" + query;
+        if (cache.TryGetValue<ScreenerSyncResult>(key, out var cached) && cached is not null) return cached;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        var entered = false;
+        try
+        {
+            await screenReadGate.WaitAsync(deadline.Token);
+            entered = true;
+            if (cache.TryGetValue<ScreenerSyncResult>(key, out cached) && cached is not null) return cached;
+            var result = await screener.PreviewAsync(query, ScreenerScope.Swing, null, deadline.Token);
+            cache.Set(key, result, result.Succeeded ? TimeSpan.FromMinutes(1) : TimeSpan.FromSeconds(5));
+            return result;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            var failed = ScreenerSyncResult.Failed(ScreenerScope.Swing, "Finviz", query, "Finviz observation timed out. Retry the selected source.");
+            if (entered) cache.Set(key, failed, TimeSpan.FromSeconds(5));
+            return failed;
+        }
+        finally { if (entered) screenReadGate.Release(); }
     }
 
     public async Task FollowAsync(string source, string symbol, Guid wishlistId, CancellationToken ct)

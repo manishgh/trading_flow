@@ -5,7 +5,7 @@
     string PageUrl(int number) => Url.Page("/News", new { hours = Model.Hours, ticker = Model.Ticker,
         provider = Model.Provider, source = Model.Source, classification = Model.Classification,
         sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly,
-        groupId = Model.GroupId, scope = Model.Scope, view = Model.View, pageNumber = number, pageSize = Model.PageSize })!;
+        stockSource = Model.StockSource, view = Model.View, pageNumber = number, pageSize = Model.PageSize })!;
 }
 
 <header class="page-header compact-page-header">
@@ -32,14 +32,18 @@
         @if (User.Identity?.IsAuthenticated == true)
         {
         <div>
-            <label for="GroupId">Group</label>
-            <select id="GroupId" name="groupId">
-                <option value="">All symbols</option>
-                @foreach (var group in Model.Groups)
+            <label for="GroupId">Stock source</label>
+            <select id="GroupId" name="stockSource">
+                @foreach (var group in Model.StockSources.GroupBy(x => x.Group))
                 {
-                    <option value="@group.Id" selected="@(Model.GroupId == group.Id)">@group.Name</option>
+                    <optgroup label="@group.Key">
+                    @foreach (var choice in group) {
+                        <option value="@choice.Key" selected="@(Model.StockSource == choice.Key)">@choice.Name</option>
+                    }
+                    </optgroup>
                 }
             </select>
+            <small class="muted">Choose a stock universe; Ticker narrows it to one stock. Finviz selection filters stored news.</small>
         </div>
         }
         <div>
@@ -47,7 +51,7 @@
             <input id="Ticker" name="ticker" value="@Model.Ticker" placeholder="NVDA" autocomplete="off" />
         </div>
         <div>
-            <label for="Provider">Source</label>
+            <label for="Provider">News provider</label>
             <input id="Provider" name="provider" value="@Model.Provider" placeholder="Any provider" />
         </div>
         <div>
@@ -67,7 +71,7 @@
             <input type="checkbox" name="linkedOnly" value="true" checked="@Model.LinkedOnly" />
             Only stories with an article link
         </label>
-        <div><label for="NewsSource">Source</label><input id="NewsSource" name="source" value="@Model.Source" placeholder="Any source" /></div>
+        <div><label for="NewsSource">Publisher / source</label><input id="NewsSource" name="source" value="@Model.Source" placeholder="Any publisher" /></div>
         <div><label for="NewsClassification">Evidence classification</label><select id="NewsClassification" name="classification">
             <option value="">All classifications</option>
             @foreach (var category in new[] { "Company", "SEC filing", "Fed", "Macro", "Market" }) {
@@ -78,13 +82,6 @@
             <option value="timeline" selected="@(Model.View != "ticker")">Chronological</option>
             <option value="ticker" selected="@(Model.View == "ticker")">Grouped by symbols</option>
         </select></div>
-        @if (User.Identity?.IsAuthenticated == true) {
-            <div><label for="NewsScope">Scope preset</label><select id="NewsScope" name="scope">
-                <option value="">All market evidence</option>
-                <option value="groups" selected="@(Model.Scope == "groups")">My groups</option>
-                <option value="positions" selected="@(Model.Scope == "positions")">My positions</option>
-            </select></div>
-        }
         <div class="news-filter-actions">
             <button type="submit">Apply</button>
             <a class="button secondary" asp-page="/News">Clear</a>

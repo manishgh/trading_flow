@@ -1,5 +1,7 @@
 # Trading desk plan status
 
+Latest News update (6 October 2026): [Stock-source dropdown](news-stock-sources-2026-10-06.md) adds individual and aggregate wishlist/Finviz choices, combined stocks and exact ticker intersection. Its focused checks and restarted runtime supersede the earlier News checkpoint's source/runtime details; full-suite counts below remain historical evidence for their original commit.
+
 Updated 5 October 2026 for the user's scope: **finish everything except Android-specific work**. The listed Web/API trading-desk requirements are delivered, with documented substitutions for fixed-height virtualization, the simplified survivor funnel and per-bar equity. Final checks and runtime details are recorded in the Web closure receipt. This supersedes historical broad completion headings and earlier open-item lists; it does not claim a broker execution or Azure release.
 
 | Item | Web/API delivered | Separate follow-up or limit |
