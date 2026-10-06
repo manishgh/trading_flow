@@ -5,7 +5,11 @@
     string PageUrl(int number) => Url.Page("/News", new { hours = Model.Hours, ticker = Model.Ticker,
         provider = Model.Provider, source = Model.Source, classification = Model.Classification,
         sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly,
-        stockSource = Model.StockSource, view = Model.View, pageNumber = number, pageSize = Model.PageSize })!;
+        stockSource = Model.StockSource, view = Model.View, pageNumber = number, pageSize = Model.PageSize, stocksPage = Model.StocksPage })!;
+    string StocksUrl(int number) => Url.Page("/News", new { hours = Model.Hours, ticker = Model.Ticker,
+        provider = Model.Provider, source = Model.Source, classification = Model.Classification,
+        sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly,
+        stockSource = Model.StockSource, view = Model.View, pageNumber = Model.PageNumber, pageSize = Model.PageSize, stocksPage = number })!;
 }
 
 <header class="page-header compact-page-header">
@@ -34,7 +38,10 @@
         <div>
             <label for="GroupId">Stock source</label>
             <select id="GroupId" name="stockSource">
-                @foreach (var group in Model.StockSources.GroupBy(x => x.Group))
+                @foreach (var choice in Model.StockSources.Where(x => x.Group == "")) {
+                    <option value="@choice.Key" selected="@(Model.StockSource == choice.Key)">@choice.Name</option>
+                }
+                @foreach (var group in Model.StockSources.Where(x => x.Group != "").GroupBy(x => x.Group))
                 {
                     <optgroup label="@group.Key">
                     @foreach (var choice in group) {
@@ -88,6 +95,30 @@
         </div>
     </form>
 </section>
+
+@if (Model.StockList is { } stocks) {
+    <section class="panel" aria-labelledby="source-stock-heading">
+        <h2 id="source-stock-heading">Stocks in this source</h2>
+        <p>@stocks.Total stocks · wishlist names show overlap with the selected Finviz list. This is membership, not a trading signal.</p>
+        <ul class="source-stock-list">
+            @foreach (var stock in stocks.Items) {
+                <li><strong>@stock.Symbol</strong>
+                    @if (stock.Wishlists.Count > 0) { <span> · @String.Join(", ", stock.Wishlists)</span> }
+                    @if (stock.InFinviz == true) { <span> · Finviz</span> }
+                    @if (stock.InFinviz == false) { <span> · Not in the selected Finviz result</span> }
+                </li>
+            }
+        </ul>
+        @if (stocks.Items.Count == 0) { <p>No stocks match the selected source and ticker.</p> }
+        @if (stocks.PageCount > 1) {
+            <nav class="actions" aria-label="Source stock pages">
+                @if (stocks.Page > 1) { <a class="button secondary" href="@StocksUrl(stocks.Page - 1)">Previous stocks</a> }
+                <span>Stock page @stocks.Page of @stocks.PageCount</span>
+                @if (stocks.Page < stocks.PageCount) { <a class="button secondary" href="@StocksUrl(stocks.Page + 1)">Next stocks</a> }
+            </nav>
+        }
+    </section>
+}
 
 <section class="panel" aria-labelledby="news-results-heading">
     <div class="section-heading compact-heading">

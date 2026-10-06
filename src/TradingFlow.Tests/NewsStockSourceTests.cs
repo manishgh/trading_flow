@@ -27,6 +27,7 @@ public sealed class NewsStockSourceTests
         Assert.Contains(choices, x => x.Key == "saved:" + f.SavedId);
         Assert.Contains(choices, x => x.Key.StartsWith("signal:"));
         Assert.DoesNotContain(choices, x => x.Name == "Historical preparation");
+        Assert.Equal(new[] { "My wishlists", "Finviz lists" }, choices.Where(x=>x.Group!="").Select(x=>x.Group).Distinct());
         f.Provider.VerifyNoOtherCalls();
         f.Account.VerifyNoOtherCalls();
     }
@@ -186,6 +187,27 @@ public sealed class NewsStockSourceTests
         Assert.IsType<Microsoft.AspNetCore.Mvc.RazorPages.PageResult>(await model.OnGetAsync(default));
     }
 
+    [Fact]
+    public async Task StockListUsesTheSameObservationShowsWishlistOverlapAndPagesFullMembership()
+    {
+        await using var f = await Fixture.CreateAsync();
+        await f.Query.QueryAsync(new() { StockSource = "wishlists-finviz" }, Operator, default);
+        var selection = Assert.IsType<NewsStockSelection>(f.Query.StockSelection);
+        var duplicate = Assert.Single(selection.Members, x=>x.Symbol=="DUP");
+        Assert.Equal(new[] { "Core", "Growth" }, duplicate.Wishlists);
+        Assert.True(duplicate.InFinviz);
+        Assert.False(Assert.Single(selection.Members,x=>x.Symbol=="AAPL").InFinviz);
+        var first = NewsStockSourceService.Page(selection,null,1);
+        var last = NewsStockSourceService.Page(selection,null,999);
+        Assert.Equal(100,first.Items.Count);
+        Assert.Equal(553,first.Total);
+        Assert.Equal(6,last.Page);Assert.Equal(53,last.Items.Count);
+        Assert.Equal("F549",Assert.Single(NewsStockSourceService.Page(selection," f549 ",1).Items).Symbol);
+        f.Provider.Verify(x=>x.PreviewAsync("ind_stocksonly",ScreenerScope.Swing,null,It.IsAny<CancellationToken>()),Times.Once);
+        await f.Query.QueryAsync(new(), new(new ClaimsIdentity()), default);
+        Assert.Null(f.Query.StockSelection);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly CandidateWorkflowTestDatabase db = new();
@@ -218,7 +240,7 @@ public sealed class NewsStockSourceTests
             var presets = new ScreenerPresetService(f.db, TimeProvider.System);
             f.SavedId = (await presets.SaveAsync("Saved filter", ScreenerScope.Swing, "ta_sma50_pa", default)).Id;
             f.Provider.Setup(x => x.PreviewAsync(It.IsAny<string>(), ScreenerScope.Swing, null, It.IsAny<CancellationToken>())).Returns(() => Task.FromResult(f.Result));
-            f.Desk = new(f.db, lists, presets, f.Provider.Object, f.cache, f.Account.Object);
+            f.Desk = new(f.db, lists, presets, f.Provider.Object, f.cache);
             f.Sources = new(f.Desk);
             f.Query = new(new SqliteNewsFeedRepository(f.db), lists, f.Account.Object, TimeProvider.System, f.Sources);
             return f;

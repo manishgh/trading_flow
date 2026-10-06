@@ -2,7 +2,7 @@ import {expect,test} from '@playwright/test';
 import {signIn} from './sign-in.js';
 import http from 'node:http';
 const id='11111111-1111-1111-1111-111111111111';
-const sources=[{key:'all',name:'All followed stocks',group:'Following',description:'Across your wishlists'},{key:'wishlist:'+id,name:'Core',group:'Wishlists',description:'Observed'},{key:'swing:trend',name:'Established trends',group:'TradingFlow swing screens',description:'Discovery only'},{key:'saved:one',name:'My Elite momentum',group:'Saved Elite screens',description:'Locally imported'}];
+const sources=[{key:'all',name:'All wishlist stocks',group:'',description:'Across your wishlists'},{key:'wishlist:'+id,name:'Core',group:'My wishlists',description:'Observed'},{key:'swing:trend',name:'Established trends',group:'Finviz lists',description:'Discovery only'},{key:'saved:one',name:'My Elite momentum',group:'Finviz lists',description:'Locally imported'}];
 function row(symbol,{held=false,stale=false,followed=true}={}){return {membership:{symbol,name:symbol==='AAPL'?'Apple Inc.':symbol,wishlists:followed?[{id,name:'Core',observed:true}]:[]},quote:{midPrice:200,bidPrice:199.95,askPrice:200.05,timestamp:new Date(Date.now()-(stale?3600000:2000)).toISOString()},quoteFreshness:stale?'stale':'current',technical:{rsi:58.2,ema20:198,ema50:190,ema200:180,atr:4.2,relativeVolume:1.3,timeframe:'1d',timestamp:'2026-09-25T20:00:00Z',dataFeed:'sip'},observation:{state:'ready',detail:'260 completed daily sessions',evaluation:{shouldAlert:false,reason:'Participation below watch threshold',sourceBarTimestampUtc:'2026-09-25T20:00:00Z'}},holding:held?{symbol,quantity:10,averageEntry:180,costBasis:1800,marketValue:2000,unrealizedPl:200}:null,holdingsKnown:true,news:[{headline:symbol+' company update',url:'https://example.org/news/'+symbol,provider:'Fixture news',symbols:[symbol],publishedAtUtc:new Date().toISOString()}]};}
 function snapshot(source){const rows=source==='all'?[row('AAPL',{held:true}),row('MSFT',{stale:true}),row('NVDA')]:[row('TSLA',{followed:false})];return {selection:{source:sources.find(x=>x.key===source)||sources[0],totalCount:rows.length,screenedAtUtc:source==='all'?null:new Date().toISOString(),error:null},rows,account:{available:true,detail:'Alpaca paper account · broker unrealized P&L',readAtUtc:new Date().toISOString()},news:rows.flatMap(x=>x.news),newsCoverage:'Matched stored news · historical coverage may be incomplete.',session:'Regular',readAtUtc:new Date().toISOString(),feed:'SIP'};}
 let fixtureServer,fixtureUrl,paused=false;const connections=new Set();
@@ -18,7 +18,7 @@ for(const width of [412,1280,1600])test('stock desk is readable and focused at '
  await page.setViewportSize({width,height:1000});await fixture(page);await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
  await expect(page.locator('#watch-rows tr')).toHaveCount(3);await expect(page.getByRole('heading',{level:1})).toHaveText('Desk');
  await expect(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link')).toHaveText(['Desk','Orders','Research','System']);
- expect(await page.locator('#watch-source optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toContain('Saved Elite screens');
+ expect(await page.locator('#watch-source optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My wishlists','Finviz lists']);
  await expect(page.locator('#watch-rows tr[data-symbol=MSFT]')).toContainText('Stale');
  await page.locator('#watch-rows button').filter({hasText:'AAPL'}).click();await expect(page.locator('#watch-symbol')).toHaveText('AAPL');
  await expect(page.locator('#watch-observation')).toHaveText('Not ready');await expect(page.locator('#watch-observation-detail')).toContainText('Participation below watch threshold');await expect(page.locator('#watch-monitoring')).toContainText('Wishlist alerts enabled');
@@ -37,9 +37,9 @@ test('source switch discards old rows and screener-only stocks require following
  await page.locator('#watch-search').clear();await expect(page.locator('#watch-rows tr')).toHaveCount(1);
 });
 test('real source API accepts sanitized Elite filters and rejects missing CSRF',async({page})=>{
- await signIn(page);await page.goto('/Desk');await expect(page.locator('#watch-source')).toContainText('All followed stocks');await expect(page.locator('#watch-connection')).toContainText(/current quotes|no stocks in this view/);
+ await signIn(page);await page.goto('/Desk');await expect(page.locator('#watch-source')).toContainText('All wishlist stocks');await expect(page.locator('#watch-connection')).toContainText(/current quotes|no stocks in this view/);
  const result=await page.evaluate(async()=>{const csrf=await fetch('/api/auth/csrf').then(r=>r.json());const name='UI saved '+crypto.randomUUID();const payload={name,url:'https://elite.finviz.com/screener.ashx?f=ta_sma50_pa&auth=not-a-real-secret'};const rejected=await fetch('/api/desk/screens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const saved=await fetch('/api/desk/screens',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrf.requestToken},body:JSON.stringify(payload)});const entry=await saved.json();const sources=await fetch('/api/desk/sources').then(r=>r.json());return {rejected:rejected.status,saved:saved.status,screen:sources.find(x=>x.key===entry.key)};});
- expect(result.rejected).toBe(400);expect(result.saved).toBe(200);expect(result.screen.query).toBe('ta_sma50_pa');expect(result.screen.group).toBe('Saved Elite screens');
+ expect(result.rejected).toBe(400);expect(result.saved).toBe(200);expect(result.screen.query).toBe('ta_sma50_pa');expect(result.screen.group).toBe('Finviz lists');
 });
 test('preparation opens within desk and retains its real controls',async({page})=>{
  await fixture(page);await signIn(page);await page.goto('/Desk');await page.locator('#watch-preparation>summary').click();
@@ -59,7 +59,7 @@ test('catalog startup failure offers working retry',async({page})=>{
 });
 test('dark theme and keyboard source selection remain readable',async({page},testInfo)=>{
  await page.setViewportSize({width:1600,height:1000});await fixture(page);await signIn(page);await page.goto('/Desk');await page.locator('#ThemeSelect').selectOption('dark');await page.getByRole('button',{name:'AAPL',exact:true}).click();await expect(page.locator('#watch-quantity')).toHaveText('10');await page.screenshot({path:testInfo.outputPath('stock-desk-dark.png'),fullPage:true});
- await page.locator('#watch-source').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');await expect(page.locator('#watch-title')).not.toHaveText('All followed stocks');
+ await page.locator('#watch-source').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');await expect(page.locator('#watch-title')).not.toHaveText('All wishlist stocks');
 });
 
 test('open stream without updates expires holdings and sell availability',async({page})=>{

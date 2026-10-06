@@ -1,5 +1,7 @@
 # Trading desk plan status
 
+Latest dataset correction (6 October 2026): [Dataset isolation and run cleanup](data-isolation-and-run-cleanup-2026-10-06.md) supersedes the earlier runtime/data-preservation statements. The actual operator Web now uses the canonical Long/Volatile database; test data and obsolete database files were removed under the user's explicit cleanup instruction. Backtests retain results and remove owned temporary inputs. The user tab was verified with two source groups and 30 wishlist stocks. Runtime collection/run starts/broker mutations remain paused.
+
 Latest News update (6 October 2026): [Stock-source dropdown](news-stock-sources-2026-10-06.md) adds individual and aggregate wishlist/Finviz choices, combined stocks and exact ticker intersection. Its focused checks and restarted runtime supersede the earlier News checkpoint's source/runtime details; full-suite counts below remain historical evidence for their original commit.
 
 Updated 5 October 2026 for the user's scope: **finish everything except Android-specific work**. The listed Web/API trading-desk requirements are delivered, with documented substitutions for fixed-height virtualization, the simplified survivor funnel and per-bar equity. Final checks and runtime details are recorded in the Web closure receipt. This supersedes historical broad completion headings and earlier open-item lists; it does not claim a broker execution or Azure release.
@@ -24,6 +26,6 @@ Updated 5 October 2026 for the user's scope: **finish everything except Android-
 - Final full offline/browser counts, current commits/local merge and actual runtime checks are in [Web closure](web-plan-closure-2026-10-05.md).
 - The separate local market-predictor producer still supplies a v1 fixture while TradingFlow's committed published fixture is v4. The final suite keeps this assertion; neither checkout nor fixture is changed to hide the mismatch. A fully green cross-application release needs matching versioned producer evidence.
 - Current Android acceptance and Firebase delivery remain excluded by the user. No APK or phone changes were made in this pass.
-- No broker order, strategy promotion, GitHub push or Azure provisioning occurred. The original dirty checkout, secrets, operational database and candle cache remain preserved.
+- No broker order, strategy promotion, GitHub push or Azure provisioning occurred. Original dirty source and secrets remain preserved. The later explicit dataset reset and cache/test-database cleanup are recorded in the dataset correction above; the earlier preservation statement is historical.
 
 The [Azure deployment plan](../integration/azure-deployment-plan-2026-10-05.md) is drafted. It proposes one runtime owner, managed-disk SQLite, supported ingress, protected keys/secrets, consistent backups and recovery. Region/budget/DNS/retention/RPO/RTO decisions and container/Linux checks remain deployment planning gates, not unimplemented desk screens. Existing multi-owner/shared-storage templates require changes before deployment.

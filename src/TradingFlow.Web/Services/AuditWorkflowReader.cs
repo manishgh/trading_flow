@@ -37,7 +37,7 @@ public sealed class AuditWorkflowReader(IDbContextFactory<TradingFlowDbContext> 
                 return Missing("This backtest has no retained completed publication; no fills or candidate counts inferred.");
             try
             {
-                AuditEquityReader.Confine(paths.ConfigsRoot, job.ConfigPath);
+                AuditEquityReader.ConfineConfig(paths, job.ConfigPath);
                 var root = yaml.ReadBacktestRun(job.ConfigPath).ResultsRoot;
                 var published = await AuditEquityReader.ReadResultAsync(runName, root, job.ResultReference, token);
                 return published is null ? Missing("Published result manifest unavailable.") : FromPublished(published.Value.Result, published.Value.Manifest);

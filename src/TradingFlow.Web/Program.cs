@@ -58,6 +58,8 @@ var uiTestMode = String.Equals(
     Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_MODE"),
     "true",
     StringComparison.OrdinalIgnoreCase);
+var runtimePaused = String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_DISABLE_RUNTIME"), "true", StringComparison.OrdinalIgnoreCase);
+var runtimeEnabled = !uiTestMode && !runtimePaused;
 var finvizApiKey = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ??
     (OperatingSystem.IsWindows()
         ? Environment.GetEnvironmentVariable("FINVIZ_API_KEY", EnvironmentVariableTarget.User)
@@ -596,7 +598,7 @@ builder.Services.AddSingleton<IOrderSubmissionService, OrderSubmissionService>()
 builder.Services.AddSingleton<IOrderCommandService>(serviceProvider =>
     serviceProvider.GetRequiredService<IOrderSubmissionService>());
 builder.Services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOptions(
-    Enabled: !uiTestMode,
+    Enabled: runtimeEnabled,
     EnableEarningsMonitor: !String.IsNullOrWhiteSpace(finvizApiKey)));
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.ICandidateAuditEvidenceRepository, TradingFlow.Data.Orders.SqliteCandidateAuditEvidenceRepository>();
@@ -723,7 +725,7 @@ if (uiTestMode)
     }
 }
 
-if (!uiTestMode)
+if (runtimeEnabled)
 {
     // Resolve before any resumable job starts so entry submission is fail-closed until
     // the account stream and initial REST cross-check have both completed.
@@ -746,6 +748,19 @@ app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseApiMutationSecurity();
+app.Use(async (context, next) => {
+    if (runtimePaused && (HttpMethods.IsPost(context.Request.Method) || HttpMethods.IsPut(context.Request.Method) || HttpMethods.IsPatch(context.Request.Method) || HttpMethods.IsDelete(context.Request.Method)) &&
+        (context.Request.Path.StartsWithSegments("/api/v1/orders") || context.Request.Path.StartsWithSegments("/api/v1/positions") ||
+         context.Request.Path.StartsWithSegments("/api/v1/paper") || context.Request.Path.StartsWithSegments("/api/v1/paper-runs") ||
+         context.Request.Path.StartsWithSegments("/api/v1/automation") || context.Request.Path.StartsWithSegments("/api/v1/runs") ||
+         context.Request.Path.StartsWithSegments("/Orders") || context.Request.Path.StartsWithSegments("/RunningTrades") ||
+         context.Request.Path.StartsWithSegments("/Paper") || context.Request.Path.StartsWithSegments("/PaperJob"))) {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await context.Response.WriteAsJsonAsync(new { error = "Runtime is paused; run starts and broker actions are disabled." });
+        return;
+    }
+    await next(context);
+});
 app.MapRazorPages();
 app.MapTradingFlowAuthApi();
 app.MapTradingFlowApiV1();

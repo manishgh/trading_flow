@@ -60,7 +60,7 @@ These rules apply to every Codex/agent session in this repository.
 1. Keep canonical strategy artifacts separate from experimental backtest variants. Directory location is organization, never lifecycle authority.
 2. Do not mutate a canonical strategy directly for experiments. Copy it into a backtest/research strategy file, add new dimensions there, run and audit it, then either register the exact immutable artifact or discard it.
 3. Promotion requires an authorized lifecycle decision bound to strategy ID, semantic version, and canonical content hash. A filename, folder move, positive run, or paper execution cannot promote a strategy.
-4. Delete discarded backtest strategy changes and generated experimental configs. Keep only useful audit summaries/results needed for comparison.
+4. Delete discarded unpublished backtest strategy changes and generated experimental configs. Preserve all published backtest results and their immutable parameters, including unsuccessful runs.
 5. Preserve research memory in code and tests when technical primitives change. If a technical indicator, evaluator rule, or signal field is added/removed, add or update focused unit tests and keep a short audit note/result so future agents know why it exists.
 6. Stop TradingFlow runtime processes before code changes. Kill only project processes such as `TradingFlow.Web`, `TradingFlow.WarmupService`, workers, or CLI runs that may lock build outputs or mutate runtime files. Restart and verify services after the change when the user expects the app to remain available.
 7. Never assume silently. If behavior depends on unknown user intent, market regime, data source, or wishlist purpose, inspect local context first; if still unclear and risk is material, ask before changing behavior.
@@ -273,6 +273,8 @@ Desk view semantics built on discovery and deterministic admission:
 
 ## Data Policy
 
+User instructions confirmed 6 October 2026: never put browser-test or backtest-run stocks/lists/screens into the operator dataset. Tests must own unique temporary storage, stop their owned host, and delete generated test databases, WAL, cache and run files after success or failure. Do not run mutation tests against an operator/review URL. Real backtests retain published results, manifests, trade/audit outputs and immutable parameters; their owned temporary input/cache/spool data is removed after success, failure or cancellation. Do not delete read-only user CSV sources or another active run's inputs. Checked-in deterministic test fixtures and strategy configurations are source, not generated runtime datasets. Do not silently select a verification database for the user. The approved current reset keeps `long`, `volatile`, genuine Finviz presets and necessary sign-in/schema infrastructure; old run/job/audit/market/test records were cleared without recovery copies, while remaining published result files follow the latest retention instruction. Do not apply that reset again without a user request.
+
 Preserve:
 
 - `tradingflow.db`
@@ -287,11 +289,15 @@ Safe cleanup targets:
 
 - `.tmp` build/test/web/ngrok artifacts
 - `tmp` if empty
-- stale generated run artifacts under `configs/backtest/temp` or `configs/backtest/ui-runs` if they reappear
-- `configs/optimization/ui-runs`
+- abandoned unpublished generated artifacts under `configs/backtest/temp` or `configs/backtest/ui-runs` if they reappear
+- abandoned unpublished artifacts under `configs/optimization/ui-runs`
 - `data/runtime/logs`
 - `data/web/logs`
-- old generated `results` folders if present and not curated
+- owned temporary input/cache/spool directories after their run stops
+
+All published backtest results and their immutable parameters are excluded from
+safe cleanup targets, including uncurated or unsuccessful runs. Discard only
+unpublished abandoned artifacts and generated disposable test outputs.
 
 Do not delete normalized candle data or paper/live DB state without a fresh explicit instruction.
 

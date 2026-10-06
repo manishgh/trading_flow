@@ -48,6 +48,26 @@ public sealed class AuditEquityReaderTests : IDisposable
         await using(var output=new FileStream(path,FileMode.Open,FileAccess.Write)) output.SetLength(10_000_001);
         await Assert.ThrowsAsync<InvalidDataException>(()=>AuditEquityReader.ReadPublishedAsync("run",root,path,default));
     }
+    [Fact] public async Task GeneratedConfigOutsideRepositoryReadsPublishedResultsButOtherDataFilesCannot() {
+        var paths = new ProjectPaths(Path.Combine(root,"repository"),Path.Combine(root,"operator-data"),Path.Combine(root,"cache"));
+        Directory.CreateDirectory(paths.ConfigsRoot);
+        Directory.CreateDirectory(paths.GeneratedBacktestConfigsRoot);
+        var config = Path.Combine(paths.GeneratedBacktestConfigsRoot,"run.yaml");
+        var original = await File.ReadAllTextAsync(Path.Combine(TestRepository.FindRoot(),"configs/backtest/swing-backtest-profile.yaml"));
+        var yaml = System.Text.RegularExpressions.Regex.Replace(original,@"(?m)^\s+results_root:.*$","  results_root: "+root.Replace('\\','/'));
+        await File.WriteAllTextAsync(config,yaml);
+        var admitted = AuditEquityReader.ConfineConfig(paths,config);
+        Assert.Equal(Path.GetFullPath(config),admitted);
+        var resultPath = await WriteAsync(2);
+        var resultRoot = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(admitted).ResultsRoot;
+        Assert.Single((await AuditEquityReader.ReadPublishedAsync("run",resultRoot,resultPath,default)).Series);
+        var unrelated = Path.Combine(paths.DataRoot,"unrelated.yaml");
+        await File.WriteAllTextAsync(unrelated,yaml);
+        Assert.Throws<InvalidDataException>(()=>AuditEquityReader.ConfineConfig(paths,unrelated));
+        Assert.StartsWith(paths.DataRoot,paths.GeneratedBacktestConfigsRoot);
+        Assert.StartsWith(paths.DataRoot,paths.GeneratedPaperConfigsRoot);
+    }
+
     private async Task<string> WriteAsync(int days) {
         var start=new DateTimeOffset(2020,1,1,12,0,0,TimeSpan.Zero);
         var trades=Enumerable.Range(0,days).Select(i=>new BacktestTrade("AAA","Strategy","long",start.AddDays(i).AddHours(-1),start.AddDays(i),1,10,11,9,12,"target",1,0,1)).ToArray();
