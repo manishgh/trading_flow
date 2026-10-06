@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 
@@ -15,7 +14,7 @@ namespace TradingFlow.Web.Pages;
 /// </remarks>
 public sealed class NewsModel(
     NewsQueryService news,
-    IWishlistRepository wishlists) : PageModel
+    NewsStockSourceService stockSources) : PageModel
 {
     /// <summary>Sentiment bands. Thresholds match the labels the feed already emits.</summary>
     public static IReadOnlyList<(string Key, string Label)> SentimentBands { get; } =
@@ -44,6 +43,7 @@ public sealed class NewsModel(
     [BindProperty(SupportsGet = true)] public string? Source { get; set; }
     [BindProperty(SupportsGet = true)] public string? Classification { get; set; }
     [BindProperty(SupportsGet = true)] public string? Scope { get; set; }
+    [BindProperty(SupportsGet = true)] public string? StockSource { get; set; }
     [BindProperty(SupportsGet = true)] public string View { get; set; } = "timeline";
     [BindProperty(SupportsGet = true)] public int PageNumber { get; set; } = 1;
     [BindProperty(SupportsGet = true)] public int PageSize { get; set; } = 50;
@@ -58,7 +58,7 @@ public sealed class NewsModel(
 
     public IReadOnlyList<MobileNewsItem> Items { get; private set; } = [];
     public IReadOnlyList<string> Providers { get; private set; } = [];
-    public IReadOnlyList<Wishlist> Groups { get; private set; } = [];
+    public IReadOnlyList<TradingFlow.Web.Services.Desk.DeskSource> StockSources { get; private set; } = [];
     public int TotalBeforeFilters { get; private set; }
     public string FeedDescription { get; private set; } = String.Empty;
 
@@ -67,22 +67,26 @@ public sealed class NewsModel(
 
     public async Task<IActionResult> OnGetAsync(CancellationToken cancellationToken)
     {
+        // Reject failed conversions of bound query values without treating unrelated
+        // page-model validation (for example, unset result fields) as an invalid request.
+        var typedFilters = new[] { nameof(GroupId), nameof(Hours), nameof(PageNumber), nameof(PageSize), nameof(LinkedOnly), nameof(Cleared) };
+        if (ModelState.Any(x => typedFilters.Contains(x.Key, StringComparer.OrdinalIgnoreCase) && x.Value?.Errors.Count > 0))
+            return BadRequest("Choose valid news filters and stock-source identifiers.");
         Hours = Math.Clamp(Hours, 1, 72);
-        Groups = User.Identity?.IsAuthenticated == true
-            ? await wishlists.ListAsync(cancellationToken)
-            : [];
-        if (User.Identity?.IsAuthenticated != true) GroupId = null;
-
-        if (User.Identity?.IsAuthenticated != true) Scope = null;
         PageSize = Math.Clamp(PageSize, 10, 200);
         PageNumber = Math.Clamp(PageNumber, 1, Int32.MaxValue / PageSize);
         if (View is not ("timeline" or "ticker")) return BadRequest("Choose timeline or ticker view.");
         MobileNewsFeedResponse feed;
         try { feed = await news.QueryAsync(new NewsHubQuery { Hours = Hours, Ticker = Ticker,
-            GroupId = GroupId, Scope = Scope, Provider = Provider, Source = Source,
+            GroupId = GroupId, Scope = Scope, StockSource = StockSource, Provider = Provider, Source = Source,
             Classification = Classification, Sentiment = Sentiment, Search = Search,
             LinkedOnly = LinkedOnly, Page = PageNumber, PageSize = PageSize }, User, cancellationToken); }
         catch (InvalidOperationException error) { return BadRequest(error.Message); }
+        catch (UnauthorizedAccessException) { return Unauthorized(); }
+        StockSource = NewsQueryService.StockSourceKey(new() { GroupId = GroupId, Scope = Scope, StockSource = StockSource });
+        if (User.Identity?.IsAuthenticated == true) StockSources = await stockSources.CatalogAsync(cancellationToken);
+        GroupId = null;
+        Scope = null;
         FeedDescription = feed.Message ?? String.Empty;
         FeedEnabled = feed.Enabled;
         PageNumber = feed.Page;

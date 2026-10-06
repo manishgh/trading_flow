@@ -17,9 +17,9 @@ for (const width of [320, 412, 1280]) {
   });
 }
 
-test('anonymous News ignores private group filters', async ({ page, request }) => {
+test('anonymous News refuses private group filters without broadening scope', async ({ page, request }) => {
   const group = '11111111-1111-1111-1111-111111111111';
-  await page.goto('/News?groupId=' + group);
+  expect((await page.goto('/News?groupId=' + group)).status()).toBe(401);
   await expect(page).toHaveURL(/\/News\?/);
   await expect(page.locator('#GroupId')).toHaveCount(0);
   const feed = await request.get('/api/v1/news/feed?hours=4');
