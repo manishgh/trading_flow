@@ -20,7 +20,7 @@
         catalog = await api('sources');
         el('source').replaceChildren();el('follow-list').replaceChildren();
         for (const group of [...new Set(catalog.map(x=>x.group))]) {
-            const optgroup=document.createElement('optgroup');optgroup.label=group;
+            const optgroup=group ? document.createElement('optgroup') : document.createDocumentFragment();if(group)optgroup.label=group;
             for (const item of catalog.filter(x=>x.group===group)) {
                 optgroup.append(new Option(item.name,item.key));
                 if(item.key.startsWith('wishlist:')) el('follow-list').add(new Option(item.name,item.key.slice(9)));

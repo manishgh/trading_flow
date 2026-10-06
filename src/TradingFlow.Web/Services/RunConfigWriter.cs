@@ -100,9 +100,9 @@ public sealed class RunConfigWriter
         }
 
         yaml.AppendLine($"  derive_from: {baseConfig.DerivedTimeframes.Source}");
-        yaml.AppendLine($"  raw_root: {NormalizePath(Path.Combine(paths.RepositoryRoot, "data", "backtest", "raw"))}");
-        yaml.AppendLine($"  normalized_root: {NormalizePath(Path.Combine(paths.RepositoryRoot, "data", "backtest", "normalized"))}");
-        yaml.AppendLine($"  results_root: {NormalizePath(Path.Combine(paths.RepositoryRoot, "data", "backtest", "results"))}");
+        yaml.AppendLine($"  raw_root: {NormalizePath(Path.Combine(paths.DataRoot, "backtest", "raw"))}");
+        yaml.AppendLine($"  normalized_root: {NormalizePath(Path.Combine(paths.DataRoot, "backtest", "normalized"))}");
+        yaml.AppendLine($"  results_root: {NormalizePath(Path.Combine(paths.DataRoot, "backtest", "results"))}");
         yaml.AppendLine($"  cache_policy: {request.CachePolicy}");
         yaml.AppendLine();
         AppendProviders(yaml, baseConfig);
@@ -340,7 +340,7 @@ public sealed class RunConfigWriter
             string.IsNullOrWhiteSpace(runName)
                 ? $"temp-run-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}"
                 : runName);
-        var outputPath = Path.Combine(paths.BacktestConfigsRoot, "temp", $"{tempName}.yaml");
+        var outputPath = Path.Combine(paths.GeneratedPaperConfigsRoot, $"{tempName}.yaml");
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var snapshotPath = WriteStrategySnapshot(
             Path.Combine(Path.GetDirectoryName(outputPath)!, "strategies", tempName),
@@ -703,7 +703,7 @@ public sealed class RunConfigWriter
     public void DeleteTempConfig(string configPath)
     {
         var fullPath = Path.GetFullPath(configPath);
-        var tempRoot = Path.GetFullPath(Path.Combine(paths.BacktestConfigsRoot, "temp"));
+        var tempRoot = Path.GetFullPath(paths.GeneratedPaperConfigsRoot);
         var relativePath = Path.GetRelativePath(tempRoot, fullPath);
         var isSafeToDelete = !Path.IsPathRooted(relativePath)
             && !relativePath.Equals("..", StringComparison.Ordinal)

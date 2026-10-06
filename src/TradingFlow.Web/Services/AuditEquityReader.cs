@@ -22,7 +22,7 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
         if (job is null || job.Status != "completed" || String.IsNullOrWhiteSpace(job.ResultReference))
             return new([],"The completed result artifact is unavailable.");
         try {
-            Confine(paths.ConfigsRoot, job.ConfigPath);
+            ConfineConfig(paths, job.ConfigPath);
             var root = yaml.ReadBacktestRun(job.ConfigPath).ResultsRoot;
             return await ReadPublishedAsync(runName, root, job.ResultReference, token);
         } catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException or ArgumentException or UnauthorizedAccessException) {
@@ -76,6 +76,17 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
         return new(series,series.Count == 0 ? "No complete retained trade curve is available. Zero trades and summary-only artifacts do not imply flat equity."
             : "Realised equity by UTC exit date. It omits unrealised and within-position drawdown. Curves over 1,000 points are reduced for display.");
     }
+    internal static string ConfineConfig(ProjectPaths paths, string path) {
+        var file = Path.GetFullPath(path);
+        foreach (var root in new[] { paths.ConfigsRoot, paths.GeneratedBacktestConfigsRoot }) {
+            var relative = Path.GetRelativePath(Path.GetFullPath(root), file);
+            if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".."+Path.DirectorySeparatorChar)) continue;
+            Confine(root == paths.ConfigsRoot ? paths.RepositoryRoot : paths.DataRoot, root);
+            return Confine(root, file);
+        }
+        throw new InvalidDataException("Backtest config is outside the canonical or generated config roots.");
+    }
+
     internal static string Confine(string root,string path) {
         root=Path.GetFullPath(root); path=Path.GetFullPath(path);
         var relative=Path.GetRelativePath(root,path);

@@ -21,16 +21,16 @@ public sealed record DeskSelection(DeskSource Source, IReadOnlyList<DeskMembersh
 /// <summary>Resolves observational membership without creating universes, candidates or orders.</summary>
 public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactory,
     IWishlistRepository wishlists, ScreenerPresetService presets, IScreenerSnapshotSource screener,
-    IMemoryCache cache, IDeskAccountReader? account = null)
+    IMemoryCache cache)
 {
     private readonly SemaphoreSlim screenReadGate = new(1, 1);
     public const int DisplayLimit = 50;
     public static readonly IReadOnlyList<DeskSource> BuiltIns = [
-        new("swing:trend", "Established trends", "TradingFlow swing screens", "Above the 50- and 200-day averages; price above $10; average volume above 500K.",
+        new("swing:trend", "Established trends", "Finviz lists", "Above the 50- and 200-day averages; price above $10; average volume above 500K.",
             "ind_stocksonly,sh_avgvol_o500,sh_price_o10,ta_sma50_pa,ta_sma200_pa"),
-        new("swing:highs", "New annual highs", "TradingFlow swing screens", "New 52-week highs in liquid stocks. Discovery only.",
+        new("swing:highs", "New annual highs", "Finviz lists", "New 52-week highs in liquid stocks. Discovery only.",
             "ind_stocksonly,sh_avgvol_o500,sh_price_o10,ta_highlow52w_nh"),
-        new("swing:pullback", "Trend pullbacks", "TradingFlow swing screens", "Below the 20-day average, above the 50- and 200-day averages. Discovery only.",
+        new("swing:pullback", "Trend pullbacks", "Finviz lists", "Below the 20-day average, above the 50- and 200-day averages. Discovery only.",
             "ind_stocksonly,sh_avgvol_o500,sh_price_o10,ta_sma20_pb,ta_sma50_pa,ta_sma200_pa")
     ];
 
@@ -45,11 +45,11 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
     {
         var lists = await FollowedListsAsync(ct);
         var saved = await presets.ListAsync(ScreenerScope.Swing, ct);
-        return new[] { new DeskSource("all", "All followed stocks", "Following", "All active stocks across your wishlists, without duplicates.") }
-            .Concat(lists.Select(x => new DeskSource("wishlist:" + x.Id, x.Name, "Wishlists", x.IsObserved ? "Background daily wishlist alerts enabled" : "Market monitoring; background wishlist alerts off")))
+        return new[] { new DeskSource("all", "All wishlist stocks", "", "All active stocks across your wishlists, without duplicates.") }
+            .Concat(lists.Select(x => new DeskSource("wishlist:" + x.Id, x.Name, "My wishlists", x.IsObserved ? "Background daily wishlist alerts enabled" : "Market monitoring; background wishlist alerts off")))
             .Concat(BuiltIns)
-            .Concat(TradingFlow.Finviz.FinvizSignalCatalog.All.Select(x => new DeskSource("signal:" + x.Code, x.Label, "Finviz · " + x.Group, "Finviz discovery only; normal strategy admission is still required.", x.Query)))
-            .Concat(saved.Select(x => new DeskSource("saved:" + x.Id, x.Name, "Saved Elite screens", "Locally saved/imported filters; not automatically synced with Finviz.", x.FilterQuery)))
+            .Concat(TradingFlow.Finviz.FinvizSignalCatalog.All.Select(x => new DeskSource("signal:" + x.Code, x.Label, "Finviz lists", "Finviz discovery only; normal strategy admission is still required.", x.Query)))
+            .Concat(saved.Select(x => new DeskSource("saved:" + x.Id, x.Name, "Finviz lists", "Locally saved/imported filters; not automatically synced with Finviz.", x.FilterQuery)))
             .ToArray();
     }
 
@@ -71,14 +71,6 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
         if (source.Query is null)
         {
             var members = key == "all" ? all : Merge(lists.Where(x => "wishlist:" + x.Id == key));
-            if (key == "all" && account is not null)
-            {
-                var holdings = await account.ReadAsync(ct);
-                if (holdings.Available)
-                    members = members.Concat(holdings.Holdings.Where(x => x.Quantity != 0m)
-                        .Select(x => new DeskMembership(x.Symbol, "Held position", [])))
-                        .DistinctBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase).OrderBy(x => x.Symbol).ToArray();
-            }
             return Window(source, members, members.Count, null, null, page, search);
         }
         // Snapshot membership changes at most once a minute; quotes remain independent.

@@ -75,7 +75,7 @@ public sealed partial class BacktestRunner
     {
         IMarketDataProvider provider = run.Provider.ToLowerInvariant() switch
         {
-            "csv" => new CsvMarketDataProvider(run.NormalizedRoot),
+            "csv" => new CsvMarketDataProvider(_csvSourceRoot ?? run.NormalizedRoot),
             "alpaca" => new TradingFlow.Alpaca.AlpacaMarketDataProvider(
                 new HttpClient(),
                 ResolveAlpacaOptions(run)),

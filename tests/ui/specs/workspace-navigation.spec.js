@@ -2,7 +2,7 @@ import {expect,test} from '@playwright/test';
 import {signIn} from './sign-in.js';
 for(const width of [412,1280,1440]) test('workspace navigation stays available at '+width,async({page},testInfo)=>{
  await page.setViewportSize({width,height:915});await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
- await expect(page.locator('#watch-source')).toContainText('All followed stocks');await page.screenshot({path:testInfo.outputPath('workspace-'+width+'.png'),fullPage:true});
+ await expect(page.locator('#watch-source')).toContainText('All wishlist stocks');await page.screenshot({path:testInfo.outputPath('workspace-'+width+'.png'),fullPage:true});
  const nav=page.getByRole('navigation',{name:'Primary navigation'});
  await expect(nav.getByRole('link')).toHaveText(['Desk','Orders','Research','System']);
  for(const name of ['Desk','Orders','Research','System']){

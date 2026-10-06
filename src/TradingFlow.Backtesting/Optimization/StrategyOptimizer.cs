@@ -20,10 +20,23 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         string? durableAttemptRoot = null,
         DateTimeOffset? evaluationCutoffUtc = null)
     {
+        var config = yamlReader.ReadOptimizationConfig(optimizationConfigPath);
+        var run = yamlReader.ReadBacktestRun(config.BacktestConfigPath);
+        var resultOwner = durableAttemptRoot ?? Path.Combine(run.ResultsRoot, "optimization", config.RunName);
+        var workspace = runner.CreateWorkspace(run, Path.Combine(resultOwner, "optimization.json"));
+        var scoped = new StrategyOptimizer(yamlReader, workspace.Runner, _artifactWriter);
+        return await workspace.ExecuteAsync(() => scoped.OptimizeCoreAsync(optimizationConfigPath, cancellationToken,
+            progress, optimizationProgress, durableAttemptRoot, evaluationCutoffUtc, workspace.Run));
+    }
+
+    private async Task<OptimizationResult> OptimizeCoreAsync(string optimizationConfigPath, CancellationToken cancellationToken,
+        IProgress<BacktestProgress>? progress, IProgress<OptimizationProgress>? optimizationProgress,
+        string? durableAttemptRoot, DateTimeOffset? evaluationCutoffUtc, BacktestRunConfig scopedRun)
+    {
         var startedAt = DateTimeOffset.UtcNow;
         var config = yamlReader.ReadOptimizationConfig(optimizationConfigPath);
         var baseStrategy = yamlReader.ReadStrategy(config.BaseStrategyPath);
-        var backtestConfig = yamlReader.ReadBacktestRun(config.BacktestConfigPath);
+        var backtestConfig = scopedRun;
         if (evaluationCutoffUtc is not null &&
             backtestConfig.TimeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase))
         {

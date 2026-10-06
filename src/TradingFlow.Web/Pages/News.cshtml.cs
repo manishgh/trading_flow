@@ -47,6 +47,8 @@ public sealed class NewsModel(
     [BindProperty(SupportsGet = true)] public string View { get; set; } = "timeline";
     [BindProperty(SupportsGet = true)] public int PageNumber { get; set; } = 1;
     [BindProperty(SupportsGet = true)] public int PageSize { get; set; } = 50;
+    [BindProperty(SupportsGet = true)] public int StocksPage { get; set; } = 1;
+    public NewsStockPage? StockList { get; private set; }
     public int PageCount => Math.Max(1, (int)Math.Ceiling(TotalBeforeFilters / (double)PageSize));
     [BindProperty(SupportsGet = true)] public bool LinkedOnly { get; set; }
 
@@ -69,7 +71,7 @@ public sealed class NewsModel(
     {
         // Reject failed conversions of bound query values without treating unrelated
         // page-model validation (for example, unset result fields) as an invalid request.
-        var typedFilters = new[] { nameof(GroupId), nameof(Hours), nameof(PageNumber), nameof(PageSize), nameof(LinkedOnly), nameof(Cleared) };
+        var typedFilters = new[] { nameof(GroupId), nameof(Hours), nameof(PageNumber), nameof(PageSize), nameof(StocksPage), nameof(LinkedOnly), nameof(Cleared) };
         if (ModelState.Any(x => typedFilters.Contains(x.Key, StringComparer.OrdinalIgnoreCase) && x.Value?.Errors.Count > 0))
             return BadRequest("Choose valid news filters and stock-source identifiers.");
         Hours = Math.Clamp(Hours, 1, 72);
@@ -85,6 +87,8 @@ public sealed class NewsModel(
         catch (UnauthorizedAccessException) { return Unauthorized(); }
         StockSource = NewsQueryService.StockSourceKey(new() { GroupId = GroupId, Scope = Scope, StockSource = StockSource });
         if (User.Identity?.IsAuthenticated == true) StockSources = await stockSources.CatalogAsync(cancellationToken);
+        if (feed.Enabled && User.Identity?.IsAuthenticated == true && news.StockSelection is { } selection)
+            StockList = NewsStockSourceService.Page(selection, Ticker, StocksPage);
         GroupId = null;
         Scope = null;
         FeedDescription = feed.Message ?? String.Empty;

@@ -1,5 +1,8 @@
 ﻿using System.Text.Json;
 using TradingFlow.Backtesting.Artifacts;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using TradingFlow.Data.Candles;
 using TradingFlow.Data.Csv;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
@@ -32,13 +35,14 @@ public sealed partial class BacktestRunner(
     SimpleYamlReader yamlReader,
     StrategyArtifactCatalog strategyArtifacts,
     IArtifactWriter? artifactWriter = null,
-    ICandleStore? candleStore = null,
-    IRawArchiveWriter? rawArchiveWriter = null)
+    ILogger<BacktestRunner>? logger = null)
 {
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
-    private readonly IRawArchiveWriter? _rawArchiveWriter = rawArchiveWriter;
+    private readonly ILogger<BacktestRunner> _logger = logger ?? NullLogger<BacktestRunner>.Instance;
+    private IRawArchiveWriter? _rawArchiveWriter;
+    private string? _csvSourceRoot;
     private readonly StrategySessionClock _sessionClock = new();
-    private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
+    private CandlePipelineEngine _candlePipeline = new(NullCandleStore.Instance);
     private readonly BacktestValidator _validator = new();
 
     public async Task<BacktestResult> RunAsync(
@@ -87,6 +91,29 @@ public sealed partial class BacktestRunner(
         string resultPath,
         CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress = null)
+    {
+        var workspace = CreateWorkspace(run, resultPath);
+        return await workspace.ExecuteAsync(() => workspace.Runner.RunCoreAsync(workspace.Run, strategies, startedAt,
+            resultPath, cancellationToken, progress));
+    }
+
+    internal BacktestRunWorkspace CreateWorkspace(BacktestRunConfig run, string resultPath)
+    {
+        var owner = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
+        var inputs = Path.Combine(owner, ".run-inputs-" + Guid.NewGuid().ToString("N"));
+        if (Directory.Exists(inputs)) throw new IOException("Run input workspace already exists.");
+        Directory.CreateDirectory(inputs);
+        var scoped = new BacktestRunner(yamlReader, strategyArtifacts, _artifactWriter, _logger) {
+            _csvSourceRoot = _csvSourceRoot ?? run.NormalizedRoot,
+            _rawArchiveWriter = new FileSystemRawArchiveWriter(new RawArchiveOptions(Path.Combine(inputs, "archives"))),
+            _candlePipeline = new CandlePipelineEngine(new LocalFileCandleStore(Path.Combine(inputs, "candles")))
+        };
+        return new(scoped, run with { RawRoot = Path.Combine(inputs, "raw"), NormalizedRoot = Path.Combine(inputs, "normalized") },
+            inputs, owner, _logger);
+    }
+
+    private async Task<BacktestResult> RunCoreAsync(BacktestRunConfig run, StrategyDefinition[] strategies,
+        DateTimeOffset startedAt, string resultPath, CancellationToken cancellationToken, IProgress<BacktestProgress>? progress)
     {
         strategies = ApplyRunSessionPolicy(run, strategies);
         var (resolvedRun, membership, promotionEvidence) =

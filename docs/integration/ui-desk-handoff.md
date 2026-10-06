@@ -1,5 +1,7 @@
 # UI Desk Handoff: Desk, Orders Screen and Follow-up
 
+> Dataset correction (2026-10-06): [Dataset isolation and run cleanup](../verification/data-isolation-and-run-cleanup-2026-10-06.md) records the approved reset, canonical operator database, actual user-tab verification, two source groups, plain stock membership list, disposable test storage and retained backtest results. This supersedes earlier runtime/dataset details. Runtime collection and trading actions are paused.
+
 > News update (2026-10-06): [Stock-source dropdown verification](../verification/news-stock-sources-2026-10-06.md) records individual/all wishlist and Finviz scopes, combined membership, exact ticker intersection, privacy and shared observation caching. The [current desk checklist](../verification/trading-desk-plan-status-2026-10-05.md) supersedes the historical open-item lists below.
 
 > Integration update (2026-10-03): the original local Web/API/Android source was preserved in an isolated branch and reconciled with this handoff. See [current integration verification](../verification/web-android-ui-integration.md) for resulting routes, durable order authority, test results and the pending ngrok/device checks. The earlier instructions below remain a historical handoff.

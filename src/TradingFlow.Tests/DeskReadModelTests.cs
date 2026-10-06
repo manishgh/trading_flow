@@ -21,7 +21,7 @@ public sealed class DeskReadModelTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task DefaultDesk_AddsOnlyAvailableHeldSymbols_AndKeepsNarrowedWishlist(bool available)
+    public async Task DefaultDesk_UsesOnlyWishlistMembers_AndKeepsNarrowedWishlist(bool available)
     {
         await using var db = new CandidateWorkflowTestDatabase(); await db.InitializeAsync();
         var repository = new SqliteWishlistRepository(db);
@@ -30,9 +30,10 @@ public sealed class DeskReadModelTests
         reader.Setup(x => x.ReadAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new DeskAccount(available, "fixture", Now,
             [new("AAPL", 2, 100, 200, 220, 20), new("HELD", 1, 10, 10, 11, 1), new("ZERO", 0, null, null, null, null)]));
         using var cache = new MemoryCache(new MemoryCacheOptions());
-        var sources = new DeskSources(db, repository, new ScreenerPresetService(db, TimeProvider.System), Mock.Of<IScreenerSnapshotSource>(), cache, reader.Object);
+        var sources = new DeskSources(db, repository, new ScreenerPresetService(db, TimeProvider.System), Mock.Of<IScreenerSnapshotSource>(), cache);
         var all = await sources.ResolveAsync("all", default);
-        Assert.Equal(available ? new[] { "AAPL", "HELD" } : new[] { "AAPL" }, all.Members.Select(x => x.Symbol));
+        Assert.Equal(new[] { "AAPL" }, all.Members.Select(x => x.Symbol));
+        reader.VerifyNoOtherCalls();
         Assert.Single(all.Members.Single(x => x.Symbol == "AAPL").Wishlists);
         Assert.Equal("AAPL", Assert.Single((await sources.ResolveAsync("wishlist:" + list.Id, default)).Members).Symbol);
         Assert.Equal(TradingFlow.Finviz.FinvizSignalCatalog.All.Count, (await sources.CatalogAsync(default)).Count(x => x.Key.StartsWith("signal:")));
@@ -67,7 +68,8 @@ public sealed class DeskReadModelTests
         await presets.SaveAsync("My saved screen",ScreenerScope.Swing,"ta_sma50_pa",default);
         var sources=new DeskSources(db,repository,presets,screener.Object,cache);
         var catalog=await sources.CatalogAsync(default);
-        Assert.Contains(catalog,x=>x.Group=="Saved Elite screens");Assert.Contains(catalog,x=>x.Group=="TradingFlow swing screens");
+        Assert.Equal(new[] { "My wishlists", "Finviz lists" }, catalog.Where(x=>x.Group!="").Select(x=>x.Group).Distinct());
+        Assert.DoesNotContain(await repository.ListAsync(default), x=>x.Id==historical.Id);
         Assert.DoesNotContain(catalog,x=>x.Key.Contains(historical.Id.ToString()));
         Assert.Equal("AAPL",Assert.Single((await sources.ResolveAsync("all",default)).Members).Symbol);
         var screen=await sources.ResolveAsync("swing:trend",default);
@@ -76,7 +78,8 @@ public sealed class DeskReadModelTests
         Assert.Equal(first.Id,Assert.Single(screen.Members.Single(x=>x.Symbol=="AAPL").Wishlists).Id);
         await sources.ResolveAsync("swing:trend",default);
         screener.Verify(x=>x.PreviewAsync(It.IsAny<string>(),ScreenerScope.Swing,null,It.IsAny<CancellationToken>()),Times.Once);
-        Assert.Equal(2,(await repository.ListAsync(default)).Count);
+        Assert.Single(await repository.ListAsync(default));
+        await using(var unchanged=db.CreateDbContext()) Assert.Equal(2,unchanged.Wishlists.Count());
         Assert.False((await repository.GetByIdAsync(first.Id,default))!.IsObserved);
         await Assert.ThrowsAsync<ArgumentException>(()=>sources.ResolveAsync("wishlist:"+historical.Id,default));
         await repository.AddOrUpdateItemAsync(first.Id,"MSFT",null,null,default);

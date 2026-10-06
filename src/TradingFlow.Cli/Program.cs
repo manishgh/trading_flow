@@ -801,8 +801,7 @@ if (args.Length > 0 && args[0].Equals("optimize", StringComparison.OrdinalIgnore
     var reader = new SimpleYamlReader();
     var runner = new BacktestRunner(
         reader,
-        CreateStrategyArtifactCatalog(reader),
-        rawArchiveWriter: CreateRawArchiveWriter());
+        CreateStrategyArtifactCatalog(reader));
     var optimizer = new StrategyOptimizer(reader, runner);
 
     var progress = new Progress<BacktestProgress>(update =>
@@ -1036,8 +1035,7 @@ else
 {
     var runner = new BacktestRunner(
         readerInstance,
-        CreateStrategyArtifactCatalog(readerInstance),
-        rawArchiveWriter: CreateRawArchiveWriter());
+        CreateStrategyArtifactCatalog(readerInstance));
     var result = await runner.RunAsync(configPath, CancellationToken.None);
     Console.WriteLine(JsonSerializer.Serialize(new
     {

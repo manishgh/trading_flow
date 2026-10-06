@@ -1,9 +1,21 @@
 # Backtesting Research Retention
 
+## Run-owned temporary inputs
+
+The operator's 6 October 2026 instruction keeps backtest results and removes
+run-owned temporary data after success, failure or cancellation. Published
+manifests, metrics, trade/audit outputs and immutable parameters remain available.
+The runner and optimizer use a unique `.run-inputs-*` directory for writable
+candle/archive inputs and remove it in `finally`. They do not delete read-only CSV
+source datasets or another run's input directory. Tests use disposable storage
+and must never add lists or screens to the operator source. See the
+[implementation and verification receipt](verification/data-isolation-and-run-cleanup-2026-10-06.md).
+
 ## Intent
 
-Research evidence is immutable and separate from mutable paper/runtime state. Keep
-only artifacts needed to reproduce a swing result or explain a promotion decision.
+Research evidence is immutable and separate from mutable paper/runtime state.
+Preserve published backtest results and immutable parameters, including failed or
+uncurated results. Remove owned temporary inputs and abandoned unpublished artifacts.
 
 ## Curated Research Package
 
@@ -18,10 +30,11 @@ Each retained run under `data/research/backtests/<run-id>/` may contain:
 - resolved run and strategy snapshots
 - concise notes and promotion decision
 
-Do not retain provider payload copies, temporary worker logs, abandoned generated
-configs, or failed exploratory output once its reusable lesson is encoded in tests or
-the research status. Candle caches remain separate and are not deleted as part of
-strategy cleanup.
+Do not retain run-owned temporary provider payload copies, worker logs or abandoned
+unpublished generated configs. Published exploratory results and their immutable
+parameters survive even when the run failed. Disposable test outputs are removed
+after tests. Read-only source candle datasets and operational caches remain separate
+and are not deletion targets of a backtest's workspace cleanup.
 
 ## Strategy Lifecycle
 
@@ -45,8 +58,9 @@ atomic writers.
 - `summary`: manifest, portfolio metrics, diagnostics aggregates, and strategy identity.
 - `full`: summary plus trade, candidate, gate, and execution-event detail.
 
-UI and routine worker runs default to `summary`. Promotion, defect reproduction, and
-explicit audit runs use `full`. A run cannot silently change retention after start.
+The shared Web run workflow sends and requires `full` so its published result
+includes trade and workflow evidence. `summary` remains a separately declared
+retention mode where supported. A run cannot silently change retention after start.
 
 ## Observability
 

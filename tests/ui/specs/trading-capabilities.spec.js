@@ -1,11 +1,28 @@
 import { expect, test } from "@playwright/test";
 import { signIn } from "./sign-in.js";
 
+const ownedLists=new WeakMap();
+test.beforeEach(async({page},testInfo)=>{
+  await signIn(page);
+  const id=await page.evaluate(async name=>{
+    const created=await window.tradingFlowFetch('/api/v1/wishlists',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,isDefault:true})});
+    if(!created.ok)throw Error('Owned fixture creation failed');const list=await created.json();
+    const added=await window.tradingFlowFetch('/api/v1/wishlists/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({commandId:crypto.randomUUID(),operation:'add',targetId:list.id,tickers:Array.from({length:25},(_,i)=>'T'+i.toString().padStart(2,'0'))})});
+    if(!added.ok)throw Error('Owned fixture membership failed');return list.id;
+  },'Capability fixture '+testInfo.testId);
+  ownedLists.set(page,id);
+});
+test.afterEach(async({page})=>{
+  const id=ownedLists.get(page);if(!id)return;
+  await page.goto('/Wishlists?env=paper');
+  await page.evaluate(async id=>{const r=await window.tradingFlowFetch('/api/v1/wishlists/'+id,{method:'DELETE'});if(!r.ok)throw Error('Owned fixture cleanup failed');},id);
+});
+
 /**
  * Covers the capability work: environment separation, desk filtering and sorting,
  * bulk group membership, the news hub, earnings filters, and the audit funnel.
  *
- * Read-only. Nothing here submits an order or mutates paper state.
+ * Owns its fixture list in disposable test storage. Nothing submits an order or mutates paper state.
  */
 
 async function firstWishlistId(page) {

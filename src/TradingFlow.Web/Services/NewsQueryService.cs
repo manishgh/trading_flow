@@ -27,6 +27,8 @@ public sealed class NewsHubQuery
 public sealed class NewsQueryService(INewsFeedRepository news, IWishlistRepository groups,
     IDeskAccountReader account, TimeProvider clock, NewsStockSourceService? stockSources = null)
 {
+    // Scoped to one request: the Razor membership list uses the same observation as its news filter.
+    public NewsStockSelection? StockSelection { get; private set; }
     public static string StockSourceKey(NewsHubQuery query)
     {
         var key = query.StockSource?.Trim().ToLowerInvariant();
@@ -40,6 +42,7 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
     }
     public async Task<MobileNewsFeedResponse> QueryAsync(NewsHubQuery query, ClaimsPrincipal user, CancellationToken token)
     {
+        StockSelection = null;
         query.Scope = query.Scope?.Trim().ToLowerInvariant();
         query.Sentiment = query.Sentiment?.Trim().ToLowerInvariant();
         query.Classification = query.Classification?.Trim().ToLowerInvariant();
@@ -64,6 +67,7 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
             if (stockSources is null) throw new InvalidOperationException("Stock sources are unavailable.");
             var selection = await stockSources.ResolveAsync(stockSource, token);
             if (!selection.Available) return new(false, "stored", selection.Description, []);
+            StockSelection = selection;
             symbols = selection.Symbols;
             stockDescription = selection.Description;
         } else if (stockSource == "all") { }

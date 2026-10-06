@@ -29,6 +29,7 @@ public sealed partial class SqliteWishlistRepository : IWishlistRepository
         return await db.Wishlists
             .AsNoTracking()
             .Include(wishlist => wishlist.Items)
+            .Where(wishlist => !db.PreparationReviews.Any(review => review.WishlistId == wishlist.Id))
             .OrderByDescending(wishlist => wishlist.IsDefault)
             .ThenBy(wishlist => wishlist.Name)
             .ToArrayAsync(cancellationToken);
