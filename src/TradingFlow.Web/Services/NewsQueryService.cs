@@ -106,7 +106,7 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
                     item.Headline, item.SentimentScore, item.Provider, item.Source, item.Url, item.Summary,
                     NewsEvidenceClassification.Classify(item));
             }).ToArray();
-        return new(true, "stored", $"{stockDescription} Stored {hours}h market feed. Matching records are counted before duplicate articles on each page are combined.".Trim(),
+        return new(true, "stored", $"{stockDescription} Rolling {hours}h news feed. Matching records are counted before duplicate articles on each page are combined.".Trim(),
             items, page.TotalMatching, number, size);
     }
 }

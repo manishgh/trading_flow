@@ -96,30 +96,9 @@
     </form>
 </section>
 
-@if (Model.StockList is { } stocks) {
-    <section class="panel" aria-labelledby="source-stock-heading">
-        <h2 id="source-stock-heading">Stocks in this source</h2>
-        <p>@stocks.Total stocks · wishlist names show overlap with the selected Finviz list. This is membership, not a trading signal.</p>
-        <ul class="source-stock-list">
-            @foreach (var stock in stocks.Items) {
-                <li><strong>@stock.Symbol</strong>
-                    @if (stock.Wishlists.Count > 0) { <span> · @String.Join(", ", stock.Wishlists)</span> }
-                    @if (stock.InFinviz == true) { <span> · Finviz</span> }
-                    @if (stock.InFinviz == false) { <span> · Not in the selected Finviz result</span> }
-                </li>
-            }
-        </ul>
-        @if (stocks.Items.Count == 0) { <p>No stocks match the selected source and ticker.</p> }
-        @if (stocks.PageCount > 1) {
-            <nav class="actions" aria-label="Source stock pages">
-                @if (stocks.Page > 1) { <a class="button secondary" href="@StocksUrl(stocks.Page - 1)">Previous stocks</a> }
-                <span>Stock page @stocks.Page of @stocks.PageCount</span>
-                @if (stocks.Page < stocks.PageCount) { <a class="button secondary" href="@StocksUrl(stocks.Page + 1)">Next stocks</a> }
-            </nav>
-        }
-    </section>
-}
-
+<p id="news-live-status" class="muted" role="status">Updates every 30 seconds · rolling news window</p>
+<div id="news-live-body" class="news-body @(Model.StockList is not null ? "has-stocks" : "")">
+<div class="news-feed-column">
 <section class="panel" aria-labelledby="news-results-heading">
     <div class="section-heading compact-heading">
         <div>
@@ -161,4 +140,32 @@
     <span>Page @Model.PageNumber of @Model.PageCount</span>
     @if (Model.PageNumber < Model.PageCount) { <a class="button secondary" href="@PageUrl(Model.PageNumber + 1)">Next</a> }
 </nav>
+</div>
+@if (Model.StockList is { } stocks) {
+    <aside class="panel news-stock-sidebar" aria-labelledby="source-stock-heading">
+        <h2 id="source-stock-heading">Stocks in this source</h2>
+        <p>@stocks.Total stocks · wishlist names show overlap with the selected Finviz list. This is membership, not a trading signal.</p>
+        <ul class="source-stock-list">
+            @foreach (var stock in stocks.Items) {
+                <li><strong>@stock.Symbol</strong>
+                    @if (stock.Wishlists.Count > 0) { <span> · @String.Join(", ", stock.Wishlists)</span> }
+                    @if (stock.InFinviz == true) { <span> · Finviz</span> }
+                    @if (stock.InFinviz == false) { <span> · Not in the selected Finviz result</span> }
+                </li>
+            }
+        </ul>
+        @if (stocks.Items.Count == 0) { <p>No stocks match the selected source and ticker.</p> }
+        @if (stocks.PageCount > 1) {
+            <nav class="actions" aria-label="Source stock pages">
+                @if (stocks.Page > 1) { <a class="button secondary" href="@StocksUrl(stocks.Page - 1)">Previous stocks</a> }
+                <span>Stock page @stocks.Page of @stocks.PageCount</span>
+                @if (stocks.Page < stocks.PageCount) { <a class="button secondary" href="@StocksUrl(stocks.Page + 1)">Next stocks</a> }
+            </nav>
+        }
+    </aside>
+}
+
+</div>
 <partial name="_GroupActions" />
+
+@section Scripts { <script src="~/js/news-live.js" asp-append-version="true" defer></script> }

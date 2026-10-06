@@ -273,6 +273,14 @@ Desk view semantics built on discovery and deterministic admission:
 
 ## Data Policy
 
+After an operator-data cleanup or host restart, verify market-feed collection and
+execution separately. A pause of trading/jobs must not silently disable News or
+Earnings. Before reporting live pages working, inspect fresh real provider records,
+publication/analysis timestamps and the running browser views, as well as unchanged
+source lists and the intended broker/run mutation guards. Fixture tests alone do
+not prove operational feeds work. Use the explicit market-feed opt-in when trading
+runtime is paused; UI tests must keep that opt-in disabled.
+
 User instructions confirmed 6 October 2026: never put browser-test or backtest-run stocks/lists/screens into the operator dataset. Tests must own unique temporary storage, stop their owned host, and delete generated test databases, WAL, cache and run files after success or failure. Do not run mutation tests against an operator/review URL. Real backtests retain published results, manifests, trade/audit outputs and immutable parameters; their owned temporary input/cache/spool data is removed after success, failure or cancellation. Do not delete read-only user CSV sources or another active run's inputs. Checked-in deterministic test fixtures and strategy configurations are source, not generated runtime datasets. Do not silently select a verification database for the user. The approved current reset keeps `long`, `volatile`, genuine Finviz presets and necessary sign-in/schema infrastructure; old run/job/audit/market/test records were cleared without recovery copies, while remaining published result files follow the latest retention instruction. Do not apply that reset again without a user request.
 
 Preserve:

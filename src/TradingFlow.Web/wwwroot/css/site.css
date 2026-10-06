@@ -2803,6 +2803,14 @@ html[data-environment="live"] .topbar {
 }
 .news-filter-actions { display: flex; gap: 8px; }
 .news-timeline { display: grid; gap: 12px; }
+.news-body { display: grid; gap: var(--space-3); align-items: start; }
+.news-body.has-stocks { grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem); }
+.news-feed-column, .news-stock-sidebar { min-width: 0; }
+.source-stock-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.source-stock-list li { padding: 6px 0; border-bottom: var(--rule-row); overflow-wrap: anywhere; }
+.source-stock-list span { color: var(--muted); font-size: .875rem; }
+.news-stock-sidebar p { font-size: .875rem; }
+@media (max-width: 979px) { .news-body.has-stocks { grid-template-columns: minmax(0, 1fr); } }
 .news-entry {
   background: var(--panel-subtle);
   border: 1px solid var(--line);

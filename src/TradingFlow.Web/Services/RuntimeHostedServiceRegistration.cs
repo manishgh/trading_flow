@@ -5,7 +5,8 @@ namespace TradingFlow.Web.Services;
 
 public sealed record RuntimeHostedServiceOptions(
     bool Enabled,
-    bool EnableEarningsMonitor);
+    bool EnableEarningsMonitor,
+    bool EnableMarketFeeds = false);
 
 /// <summary>
 /// Owns the complete background-service composition for the web host. Keeping the
@@ -22,7 +23,7 @@ public static class RuntimeHostedServiceRegistration
         services.AddSingleton<OrderDispatchRecoveryHostedService>();
         services.AddSingleton<IOrderDispatchRecoveryHealth>(serviceProvider =>
             serviceProvider.GetRequiredService<OrderDispatchRecoveryHostedService>());
-        if (!options.Enabled)
+        if (!options.Enabled && !options.EnableMarketFeeds)
         {
             return services;
         }
@@ -30,8 +31,8 @@ public static class RuntimeHostedServiceRegistration
         // Hosted services stop in reverse registration order. Register shutdown
         // first so all producers and journal writers stop before the final broker
         // drain and SQLite checkpoint execute.
-        services.AddHostedService<ExecutionShutdownHostedService>();
-        services.AddHostedService<BrokerAccountValidationHostedService>();
+        if (options.Enabled) services.AddHostedService<ExecutionShutdownHostedService>();
+        if (options.Enabled) services.AddHostedService<BrokerAccountValidationHostedService>();
         services.AddHostedService(serviceProvider =>
             serviceProvider.GetRequiredService<NewsFeedService>());
         services.AddHostedService<AlpacaNewsStreamService>();
@@ -39,6 +40,9 @@ public static class RuntimeHostedServiceRegistration
         {
             services.AddHostedService<EarningsMonitorHostedService>();
         }
+
+        // Read-only provider feeds may run while jobs and broker mutations stay paused.
+        if (!options.Enabled) return services;
 
         services.AddHostedService(serviceProvider =>
             serviceProvider.GetRequiredService<WishlistObserverService>());

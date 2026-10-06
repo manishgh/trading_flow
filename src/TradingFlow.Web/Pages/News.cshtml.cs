@@ -84,6 +84,10 @@ public sealed class NewsModel(
             Classification = Classification, Sentiment = Sentiment, Search = Search,
             LinkedOnly = LinkedOnly, Page = PageNumber, PageSize = PageSize }, User, cancellationToken); }
         catch (InvalidOperationException error) { return BadRequest(error.Message); }
+        catch (UnauthorizedAccessException) when (User.Identity?.IsAuthenticated != true)
+        {
+            return RedirectToPage("/Login", new { ReturnUrl = $"{Request.PathBase}{Request.Path}{Request.QueryString}" });
+        }
         catch (UnauthorizedAccessException) { return Unauthorized(); }
         StockSource = NewsQueryService.StockSourceKey(new() { GroupId = GroupId, Scope = Scope, StockSource = StockSource });
         if (User.Identity?.IsAuthenticated == true) StockSources = await stockSources.CatalogAsync(cancellationToken);
