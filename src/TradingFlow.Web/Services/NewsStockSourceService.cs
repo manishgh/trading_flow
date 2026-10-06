@@ -33,7 +33,7 @@ public sealed class NewsStockSourceService(DeskSources desk)
         var symbols = DeskSources.Merge(key.StartsWith("wishlist:", StringComparison.Ordinal)
             ? lists.Where(x => "wishlist:" + x.Id == key) : lists).Select(x => x.Symbol).ToArray();
         if (key == "wishlists" || key.StartsWith("wishlist:", StringComparison.Ordinal))
-            return Selection(symbols, $"{source.Name}: {symbols.Length} active wishlist stocks. Filtering stored news only.");
+            return Selection(symbols, $"{source.Name}: {symbols.Length} active wishlist stocks. News filtered by these stocks.");
         var screen = await desk.ReadScreenAsync(source.Query ?? "ind_stocksonly", token);
         if (!screen.Succeeded) return new([], "Finviz stock source unavailable. Check the provider configuration or connection and retry; the selected scope has not been replaced.", false);
         var returned = (screen.AllSymbols.Count > 0 ? screen.AllSymbols : screen.Symbols)
@@ -41,7 +41,7 @@ public sealed class NewsStockSourceService(DeskSources desk)
         if (screen.TotalCount > returned.Length)
             return new([], "Finviz membership is incomplete. Retry the selected source; partial returned stocks are not presented as the full scope.", false);
         var merged = key == "wishlists-finviz" ? symbols.Concat(returned).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : returned;
-        return Selection(merged, $"{source.Name}: {merged.Length} stocks; Finviz returned {returned.Length} at {screen.SyncedAtUtc:yyyy-MM-dd HH:mm:ss} UTC. Filtering stored news only; current membership is not historical membership.", returned.ToHashSet(StringComparer.OrdinalIgnoreCase));
+        return Selection(merged, $"{source.Name}: {merged.Length} stocks; Finviz returned {returned.Length} at {screen.SyncedAtUtc:yyyy-MM-dd HH:mm:ss} UTC. News filtered by current membership, not historical membership.", returned.ToHashSet(StringComparer.OrdinalIgnoreCase));
     }
 
     public static NewsStockPage Page(NewsStockSelection selection, string? ticker, int page)

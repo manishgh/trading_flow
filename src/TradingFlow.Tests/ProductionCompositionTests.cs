@@ -164,6 +164,16 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
+    public void RuntimeComposition_FeedOnlyStartsNoExecutionOrJobServices()
+    {
+        var services = new ServiceCollection();
+        services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOptions(
+            Enabled: false, EnableEarningsMonitor: true, EnableMarketFeeds: true));
+        Assert.Equal(new[] { typeof(NewsFeedService), typeof(AlpacaNewsStreamService), typeof(EarningsMonitorHostedService) },
+            services.Where(x => x.ServiceType == typeof(IHostedService)).Select(ResolveHostedServiceType).ToArray());
+    }
+
+    [Fact]
     public void RuntimeComposition_TestModeStartsNoBackgroundServices()
     {
         var services = new ServiceCollection();

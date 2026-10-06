@@ -1,6 +1,8 @@
 # UI Desk Handoff: Desk, Orders Screen and Follow-up
 
-> Dataset correction (2026-10-06): [Dataset isolation and run cleanup](../verification/data-isolation-and-run-cleanup-2026-10-06.md) records the approved reset, canonical operator database, actual user-tab verification, two source groups, plain stock membership list, disposable test storage and retained backtest results. This supersedes earlier runtime/dataset details. Runtime collection and trading actions are paused.
+> Live-feed correction (2026-10-06): [Live News/Earnings and sidebar verification](../verification/live-feeds-and-news-sidebar-2026-10-06.md) restores market collection separately from paused trading/jobs and records real provider/page checks. It supersedes the blanket feed pause in the preceding cleanup receipt.
+
+> Dataset correction (2026-10-06): [Dataset isolation and run cleanup](../verification/data-isolation-and-run-cleanup-2026-10-06.md) records the approved reset, canonical operator database, actual user-tab verification, two source groups, plain stock membership list, disposable test storage and retained backtest results. This supersedes earlier runtime/dataset details. Trading/jobs remain paused; market feeds are enabled as recorded in the live-feed correction above.
 
 > News update (2026-10-06): [Stock-source dropdown verification](../verification/news-stock-sources-2026-10-06.md) records individual/all wishlist and Finviz scopes, combined membership, exact ticker intersection, privacy and shared observation caching. The [current desk checklist](../verification/trading-desk-plan-status-2026-10-05.md) supersedes the historical open-item lists below.
 

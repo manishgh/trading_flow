@@ -3,6 +3,7 @@ using TradingFlow.Alpaca;
 using TradingFlow.Data.News;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.News;
+using TradingFlow.Domain.Wishlists;
 using TradingFlow.Domain.Earnings;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Abstractions;
@@ -40,6 +41,8 @@ public sealed class NewsFeedService : BackgroundService
     private readonly OfficialMarketNewsProvider officialNews;
     private readonly TimeProvider clock;
     private readonly ILogger<NewsFeedService> logger;
+    private readonly IWishlistRepository? wishlists;
+    private int alpacaSweepOffset;
     private readonly SemaphoreSlim refreshGate = new(1, 1);
 
     public NewsFeedService(
@@ -53,7 +56,8 @@ public sealed class NewsFeedService : BackgroundService
         IEarningsRepository earningsRepository,
         OfficialMarketNewsProvider officialNews,
         TimeProvider clock,
-        ILogger<NewsFeedService> logger)
+        ILogger<NewsFeedService> logger,
+        IWishlistRepository? wishlists = null)
     {
         this.yamlReader = yamlReader;
         this.runtimeFactory = runtimeFactory;
@@ -66,6 +70,7 @@ public sealed class NewsFeedService : BackgroundService
         this.officialNews = officialNews;
         this.clock = clock;
         this.logger = logger;
+        this.wishlists = wishlists;
     }
 
     public async Task<MobileNewsFeedResponse> GetRollingAsync(
@@ -146,16 +151,16 @@ public sealed class NewsFeedService : BackgroundService
             var retentionStartUtc = nowUtc.Subtract(RetentionWindow);
             var earningsTickers = await GetCurrentEarningsTickersAsync(nowUtc, cancellationToken);
             var events = new List<CatalystEvent>();
-            events.AddRange(await LoadFinvizNewsAsync(cancellationToken));
+            events.AddRange(await LoadProviderAsync("finviz", () => LoadFinvizNewsAsync(cancellationToken), cancellationToken));
             // The Alpaca websocket delivers live items only and cannot replay what it missed, so a
             // disconnect silently loses every article published while it was down. This rolling REST
             // sweep is the gap-fill, and the dedupe below drops whatever the socket already delivered.
-            events.AddRange(await LoadAlpacaNewsAsync(
+            events.AddRange(await LoadProviderAsync("alpaca", () => LoadAlpacaNewsAsync(
                 earningsTickers,
                 nowUtc.Subtract(AlpacaGapFillWindow),
                 nowUtc,
-                cancellationToken));
-            events.AddRange(await officialNews.GetEventsAsync(earningsTickers, evidenceWindow.StartUtc, cancellationToken));
+                cancellationToken), cancellationToken));
+            events.AddRange(await LoadProviderAsync("official", () => officialNews.GetEventsAsync(earningsTickers, evidenceWindow.StartUtc, cancellationToken), cancellationToken));
             events = events
                 .Where(item => item.Timestamp >= retentionStartUtc)
                 .ToList();
@@ -171,6 +176,8 @@ public sealed class NewsFeedService : BackgroundService
                 .OrderByDescending(item => item.Timestamp)
                 .Take(500)
                 .ToArray();
+            // Publish provider headlines immediately; article enrichment must not hold up the live feed.
+            await repository.UpsertAsync(unseenEvents, cancellationToken);
             var enrichedEvents = await EnrichNewsAsync(unseenEvents, cancellationToken);
             await repository.UpsertAsync(enrichedEvents, cancellationToken);
             await repository.PruneOlderThanAsync(retentionStartUtc, cancellationToken);
@@ -274,16 +281,10 @@ public sealed class NewsFeedService : BackgroundService
             return Array.Empty<CatalystEvent>();
         }
 
-        // Earnings tickers lead: they are the reason this sweep exists, and the cap below would
-        // otherwise drop them whenever the paper configs already fill it.
-        var tickers = earningsTickers
-            .Concat(catalog.GetPaperConfigs().SelectMany(config => config.Config.Tickers))
-            .Select(ticker => ticker.Trim().ToUpperInvariant())
-            .Where(ticker => ticker.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(200)
-            .ToArray();
-        if (tickers.Length == 0)
+        var lists = wishlists is null ? [] : await wishlists.ListAsync(cancellationToken);
+        var (tickers, nextOffset) = SelectNewsTargets(lists.SelectMany(x => x.Items).Where(x => x.Active).Select(x => x.Ticker), earningsTickers, alpacaSweepOffset);
+        alpacaSweepOffset = nextOffset;
+        if (tickers.Count == 0)
         {
             return Array.Empty<CatalystEvent>();
         }
@@ -300,12 +301,40 @@ public sealed class NewsFeedService : BackgroundService
             sentimentAnalyzer: new VaderSentimentAnalyzer(),
             maxArticlesPerTicker: 25);
 
-        var tasks = tickers.Select(ticker => provider.GetCatalystsAsync(ticker, windowStart, windowEnd, cancellationToken));
+        using var throttle = new SemaphoreSlim(8);
+        var tasks = tickers.Select(async ticker => {
+            await throttle.WaitAsync(cancellationToken);
+            try { return await LoadProviderAsync("alpaca:" + ticker,
+                () => provider.GetCatalystsAsync(ticker, windowStart, windowEnd, cancellationToken), cancellationToken); }
+            finally { throttle.Release(); }
+        });
         return (await Task.WhenAll(tasks))
             .SelectMany(x => x)
             .GroupBy(NewsDedupeKey, StringComparer.OrdinalIgnoreCase)
             .Select(x => x.First())
             .ToArray();
+    }
+
+    internal static (IReadOnlyList<string> Symbols, int NextOffset) SelectNewsTargets(
+        IEnumerable<string> wishlistSymbols, IEnumerable<string> earningsSymbols, int offset)
+    {
+        var all = wishlistSymbols.Concat(earningsSymbols).Select(x => x.Trim().ToUpperInvariant())
+            .Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (all.Length == 0) return ([], 0);
+        var start = offset % all.Length;
+        var batch = all.Skip(start).Concat(all.Take(start)).Take(200).ToArray();
+        return (batch, (start + batch.Length) % all.Length);
+    }
+
+    internal async Task<IReadOnlyList<CatalystEvent>> LoadProviderAsync(string provider,
+        Func<Task<IReadOnlyList<CatalystEvent>>> load, CancellationToken cancellationToken)
+    {
+        try { return await load(); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception error) {
+            logger.LogWarning(error, "News collection failed for {Provider}; other provider feeds continue.", provider);
+            return [];
+        }
     }
 
     private async Task<IReadOnlyList<CatalystEvent>> EnrichNewsAsync(

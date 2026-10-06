@@ -33,6 +33,7 @@ export default defineConfig({
           ASPNETCORE_ENVIRONMENT: "Development",
           TRADINGFLOW_UI_TEST_MODE: "true",
           TRADINGFLOW_DISABLE_RUNTIME: "false",
+          TRADINGFLOW_ENABLE_MARKET_FEEDS: "false",
           TRADINGFLOW_DATA_ROOT: dataRoot,
           FINVIZ_API_KEY: " ", ALPACA_KEY_ID: " ", ALPACA_SECRET_KEY: " "
         },

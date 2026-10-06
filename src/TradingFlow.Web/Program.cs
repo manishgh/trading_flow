@@ -599,7 +599,8 @@ builder.Services.AddSingleton<IOrderCommandService>(serviceProvider =>
     serviceProvider.GetRequiredService<IOrderSubmissionService>());
 builder.Services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOptions(
     Enabled: runtimeEnabled,
-    EnableEarningsMonitor: !String.IsNullOrWhiteSpace(finvizApiKey)));
+    EnableEarningsMonitor: !String.IsNullOrWhiteSpace(finvizApiKey),
+    EnableMarketFeeds: !uiTestMode && String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_ENABLE_MARKET_FEEDS"), "true", StringComparison.OrdinalIgnoreCase)));
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.ICandidateAuditEvidenceRepository, TradingFlow.Data.Orders.SqliteCandidateAuditEvidenceRepository>();
 builder.Services.AddSingleton<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>();
