@@ -73,6 +73,8 @@ public sealed partial class BacktestRunner
 
     private IMarketDataProvider CreateProvider(BacktestRunConfig run)
     {
+        // Research replay may supply a frozen, provenance-bound source. The decision engine is unchanged.
+        if (marketDataProviderFactory is not null) return marketDataProviderFactory(run);
         IMarketDataProvider provider = run.Provider.ToLowerInvariant() switch
         {
             "csv" => new CsvMarketDataProvider(_csvSourceRoot ?? run.NormalizedRoot),

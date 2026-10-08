@@ -777,6 +777,8 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  vcp_minimum_volume_reference_bars: {strategy.EntryRules.VcpMinimumVolumeReferenceBars}");
         yaml.AppendLine($"  vcp_breakout_buffer_pct: {strategy.EntryRules.VcpBreakoutBufferPct.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  portfolio_rank_mode: {strategy.EntryRules.PortfolioRankMode}");
+        yaml.AppendLine($"  sma200_rising_lookback_bars: {strategy.EntryRules.Sma200RisingLookbackBars}");
+        AppendOptionalDecimal(yaml, "  min_breakout_volume_vs_50_day_average", strategy.EntryRules.MinBreakoutVolumeVs50DayAverage);
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
@@ -809,6 +811,13 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  require_sma150_above_sma200: {strategy.EntryRules.RequireSma150AboveSma200.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  require_price_above_sma50_daily: {strategy.EntryRules.RequirePriceAboveSma50Daily.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  require_price_above_sma200_daily: {strategy.EntryRules.RequirePriceAboveSma200Daily.ToString().ToLowerInvariant()}");
+        AppendOptionalDecimal(yaml, "  min_price_vs_52_week_low_pct", strategy.EntryRules.MinPriceVs52WeekLowPct);
+        AppendOptionalDecimal(yaml, "  max_price_vs_52_week_high_pct", strategy.EntryRules.MaxPriceVs52WeekHighPct);
+        AppendOptionalInt(yaml, "  min_contractions", strategy.EntryRules.MinContractions);
+        AppendOptionalInt(yaml, "  max_contractions", strategy.EntryRules.MaxContractions);
+        yaml.AppendLine($"  require_volatility_halving_left_to_right: {strategy.EntryRules.RequireVolatilityHalvingLeftToRight.ToString().ToLowerInvariant()}");
+        yaml.AppendLine($"  require_volume_dry_up_pre_breakout: {strategy.EntryRules.RequireVolumeDryUpPreBreakout.ToString().ToLowerInvariant()}");
+        AppendOptionalDecimal(yaml, "  min_breakout_volume_ratio", strategy.EntryRules.MinBreakoutVolumeRatio);
         yaml.AppendLine($"  anchored_vwap_mode: {strategy.EntryRules.AnchoredVwapMode}");
         yaml.AppendLine($"  anchored_vwap_lookback_bars: {strategy.EntryRules.AnchoredVwapLookbackBars}");
         yaml.AppendLine($"  require_price_above_anchored_vwap: {strategy.EntryRules.RequirePriceAboveAnchoredVwap.ToString().ToLowerInvariant()}");
@@ -851,6 +860,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  max_hold_hours: {strategy.ExitRules.MaxHoldHours.ToString(CultureInfo.InvariantCulture)}");
         AppendOptionalInt(yaml, "  max_hold_bars", strategy.ExitRules.MaxHoldBars);
         AppendOptionalDecimal(yaml, "  exit_on_rsi2_above", strategy.ExitRules.ExitOnRsi2Above);
+        yaml.AppendLine($"  exit_on_close_above_sma5: {strategy.ExitRules.ExitOnCloseAboveSma5.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  enable_atr_trailing_stop: {strategy.ExitRules.EnableAtrTrailingStop.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  trailing_stop_atr_multiple: {strategy.ExitRules.TrailingStopAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  trailing_activation_r: {strategy.ExitRules.TrailingActivationR.ToString(CultureInfo.InvariantCulture)}");

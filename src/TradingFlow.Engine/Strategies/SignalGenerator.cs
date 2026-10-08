@@ -75,6 +75,11 @@ public sealed partial class SignalGenerator
         var isSma150AboveSma200 = snapshot.Sma150 is not null &&
             snapshot.Sma200 is not null &&
             snapshot.Sma150.Value > snapshot.Sma200.Value;
+        var slopeLookback = strategy.EntryRules.Sma200RisingLookbackBars;
+        var isSma200Rising = slopeLookback > 0 && index >= slopeLookback && snapshot.Sma200 is { } currentSma200 &&
+            snapshots[index - slopeLookback].Sma200 is { } priorSma200 && currentSma200 > priorSma200;
+        decimal? breakoutVolume50 = index < 50 ? null : bars.Skip(index - 50).Take(50).Average(x => x.Volume);
+        breakoutVolume50 = breakoutVolume50 > 0 ? bar.Volume / breakoutVolume50 : null;
         var isPriceAboveEma5 = snapshot.Ema5 is not null && snapshot.CurrentPrice > snapshot.Ema5.Value;
         var anchoredVwap = ComputePrimaryAnchoredVwap(strategy, bars, index);
         var isAboveAnchoredVwap = anchoredVwap is not null && snapshot.CurrentPrice > anchoredVwap.Value;
@@ -254,7 +259,9 @@ public sealed partial class SignalGenerator
             IsCatalystDrift: isCatalystDrift,
             IsConnorsRsi2Oversold: connorsRsi2Context?.IsSignal ?? false,
             CurrentRsi2: snapshot.Rsi2,
-            SetupStructuralStopPrice: vcpContext.StructuralStopPrice);
+            SetupStructuralStopPrice: vcpContext.StructuralStopPrice,
+            IsSma200Rising: isSma200Rising,
+            BreakoutVolumeVs50DayAverage: breakoutVolume50);
     }
 
     private static bool HasRequiredEntryIndicators(

@@ -373,6 +373,11 @@ public sealed class BasicStrategyEvaluator
             return "sma50_not_above_sma150";
         }
 
+        if (rules.Sma200RisingLookbackBars > 0 && !signal.IsSma200Rising) return "sma200_not_rising";
+        if (rules.MinBreakoutVolumeVs50DayAverage is { } requiredVolume &&
+            (signal.BreakoutVolumeVs50DayAverage is null || signal.BreakoutVolumeVs50DayAverage < requiredVolume))
+            return "breakout_volume_below_prior_50_day_average_threshold";
+
         if (rules.RequireSma150AboveSma200 && !signal.IsSma150AboveSma200)
         {
             return "sma150_not_above_sma200";

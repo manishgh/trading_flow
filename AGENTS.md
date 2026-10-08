@@ -1,4 +1,4 @@
-ï»¿# TradingFlow Agent Context
+# TradingFlow Agent Context
 
 This file is the compact handoff context for Codex/VS CLI sessions working in `C:\project\trading_flow`.
 
@@ -219,7 +219,7 @@ Paper configs:
 Strategy classification:
 
 - `configs/strategy-catalog.json` is the authority.
-- Bootstrap is two research artifacts, thirteen archived artifacts, and no paper
+- Bootstrap is two research artifacts, fifteen archived artifacts, and no paper
   execution or live authorization.
 - Research/archive is artifact disposition. Paper experiment, paper shadow, and
   validated are exact-identity authorization grants.
@@ -243,7 +243,7 @@ universe:
 ```
 
 Backtest and paper universes come from database wishlists or the Finviz
-screener â€” never from hand-maintained ticker-list configs. Generated run
+screener — never from hand-maintained ticker-list configs. Generated run
 files remain audit artifacts only.
 
 ## Candidate Discovery and Admission
@@ -264,12 +264,12 @@ The desk selects one or more discovery sources, not an already-approved trade.
 
 Desk view semantics built on discovery and deterministic admission:
 
-- All â€” the full discovered universe with source and freshness.
-- Warming â€” insufficient completed market evidence for the selected strategy.
-- Signals â€” qualified and triggered on completed point-in-time evidence.
-- In trade â€” open positions.
-- Rejected/expired â€” exact admission, trigger, expiry, risk, or execution reason.
-- Screener â€” raw Finviz discovery membership; never a trading admission.
+- All — the full discovered universe with source and freshness.
+- Warming — insufficient completed market evidence for the selected strategy.
+- Signals — qualified and triggered on completed point-in-time evidence.
+- In trade — open positions.
+- Rejected/expired — exact admission, trigger, expiry, risk, or execution reason.
+- Screener — raw Finviz discovery membership; never a trading admission.
 
 ## Data Policy
 

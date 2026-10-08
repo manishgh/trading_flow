@@ -90,7 +90,7 @@ public sealed class RegimeGateService
             return false;
         }
 
-        var on = RegimeCalendarBuilder.IsRegimeOnAsOf(daily, regime.SmaPeriod, asOf);
+        var on = RegimeCalendarBuilder.IsRegimeOnAt(daily, regime.SmaPeriod, now);
         lock (gate)
         {
             liveCache[regime.BenchmarkSymbol] = (asOf, on);
@@ -115,6 +115,7 @@ public sealed class RegimeGateService
                 bars.Add(bar);
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception)
         {
             // A missing timeframe/benchmark surfaces as empty so the caller can try the next timeframe.

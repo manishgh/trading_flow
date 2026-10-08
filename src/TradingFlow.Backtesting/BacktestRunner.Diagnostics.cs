@@ -573,7 +573,7 @@ public sealed partial class BacktestRunner
                 }
 
                 // Layer-2 regime gate: no new entries on days the market regime is off.
-                if (regimeCalendar is not null && !regimeCalendar.IsOn(entryDay))
+                if (regimeCalendar is not null && !regimeCalendar.IsOn(candidate.EntryTimestamp))
                 {
                     admissionAudit.Reject(candidate, "market_regime_off_on_entry_day");
                     continue;

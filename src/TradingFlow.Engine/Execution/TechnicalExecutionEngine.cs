@@ -147,6 +147,9 @@ public sealed class TechnicalExecutionEngine
             return "technical_exit_macd_histogram_negative";
         }
 
+        if (strategy.ExitRules.ExitOnCloseAboveSma5 && snapshot.Sma5 is { } sma5 && snapshot.CurrentPrice > sma5)
+            return "technical_exit_above_sma5";
+
         if (strategy.ExitRules.ExitOnRsi2Above is { } maxRsi2 &&
             snapshot.Rsi2 is { } rsi2 &&
             rsi2 > maxRsi2)

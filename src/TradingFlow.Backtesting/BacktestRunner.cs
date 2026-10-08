@@ -35,7 +35,8 @@ public sealed partial class BacktestRunner(
     SimpleYamlReader yamlReader,
     StrategyArtifactCatalog strategyArtifacts,
     IArtifactWriter? artifactWriter = null,
-    ILogger<BacktestRunner>? logger = null)
+    ILogger<BacktestRunner>? logger = null,
+    Func<BacktestRunConfig, IMarketDataProvider>? marketDataProviderFactory = null)
 {
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
     private readonly ILogger<BacktestRunner> _logger = logger ?? NullLogger<BacktestRunner>.Instance;
@@ -103,7 +104,7 @@ public sealed partial class BacktestRunner(
         var inputs = Path.Combine(owner, ".run-inputs-" + Guid.NewGuid().ToString("N"));
         if (Directory.Exists(inputs)) throw new IOException("Run input workspace already exists.");
         Directory.CreateDirectory(inputs);
-        var scoped = new BacktestRunner(yamlReader, strategyArtifacts, _artifactWriter, _logger) {
+        var scoped = new BacktestRunner(yamlReader, strategyArtifacts, _artifactWriter, _logger, marketDataProviderFactory) {
             _csvSourceRoot = _csvSourceRoot ?? run.NormalizedRoot,
             _rawArchiveWriter = new FileSystemRawArchiveWriter(new RawArchiveOptions(Path.Combine(inputs, "archives"))),
             _candlePipeline = new CandlePipelineEngine(new LocalFileCandleStore(Path.Combine(inputs, "candles")))
@@ -245,7 +246,7 @@ public sealed partial class BacktestRunner(
         strategies = ApplyRunSessionPolicy(run, strategies);
         ValidateRun(run, strategies);
 
-        var provider = CreateProvider(run);
+        var provider = CompletedBacktestDataProvider.Wrap(CreateProvider(run));
         var (dataStart, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
 
         var completedTickerCount = 0;
@@ -966,7 +967,8 @@ public sealed partial class BacktestRunner(
             var signalTimeframe = ParseTimeframe(strategy.Timeframe);
             var availableWarmupBars = strategyBars.Count(
                 bar => bar.Timestamp.Add(signalTimeframe) <= windowStart);
-            if (availableWarmupBars < run.Engine.IndicatorWarmupBars)
+            if (availableWarmupBars < run.Engine.IndicatorWarmupBars &&
+                (!run.Engine.AllowLateWarmup || strategyBars.Count <= run.Engine.IndicatorWarmupBars))
             {
                 return StrategyTickerBacktestBatch.Failed(
                     ticker,
@@ -1124,7 +1126,7 @@ public sealed partial class BacktestRunner(
             $"{run.RunName}:{runtimeStrategy.Identity.StrategyId}:{snapshots[0].Ticker}",
             evaluationStart);
 
-        for (var i = startIndex; i < snapshots.Count - 1; i++)
+        for (var i = startIndex; i < snapshots.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = snapshots[i];
@@ -1140,7 +1142,8 @@ public sealed partial class BacktestRunner(
             }
 
             diagnostics.EvaluatedBarCount++;
-            var discoveryExpiry = snapshots[i + 1].Timestamp.Add(ParseTimeframe(strategy.Timeframe));
+            var discoveryExpiry = BacktestDecisionTiming.ResolveExpiry(
+                signalAvailableTimestamp, strategy.Timeframe, strategy.Session, candidateSessionSchedules);
             if (discoveryExpiry > evaluationEnd)
             {
                 discoveryExpiry = evaluationEnd;
@@ -1177,16 +1180,10 @@ public sealed partial class BacktestRunner(
             foreach (var decisionTime in decisionTimes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var nextEntryIndex = FindNextValidExecutionBarIndex(
-                    executionBars,
-                    FindFirstBarIndexAtOrAfter(executionBars, decisionTime),
-                    strategy);
-                var eligibilityDay = nextEntryIndex < executionBars.Count
-                    ? DateOnly.FromDateTime(executionBars[nextEntryIndex].Timestamp.UtcDateTime)
-                    : DateOnly.FromDateTime(decisionTime.UtcDateTime);
+                var eligibilityDay = DateOnly.FromDateTime(decisionTime.UtcDateTime);
                 var universeEligible = universeMembership is null ||
                     universeMembership.IsMember(snapshot.Ticker, eligibilityDay);
-                var regimeEligible = regimeCalendar is null || regimeCalendar.IsOn(eligibilityDay);
+                var regimeEligible = regimeCalendar is null || regimeCalendar.IsOn(decisionTime);
                 var universeEvidence = new StrategyEligibilityEvidence(
                     universeEligible,
                     universeMembership is null ? "static_run_universe" : "historical_universe_membership",

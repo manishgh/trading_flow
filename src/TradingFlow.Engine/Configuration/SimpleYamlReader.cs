@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Optimization;
@@ -162,7 +162,9 @@ public sealed class SimpleYamlReader
                 VcpMaximumVolumeRatioToPreviousContraction: OptionalDecimal(map, "entry_rules.vcp_maximum_volume_ratio_to_previous_contraction") ?? 1m,
                 VcpMinimumVolumeReferenceBars: OptionalInt(map, "entry_rules.vcp_minimum_volume_reference_bars", 1),
                 VcpBreakoutBufferPct: OptionalDecimal(map, "entry_rules.vcp_breakout_buffer_pct") ?? 0m,
-                PortfolioRankMode: OptionalString(map, "entry_rules.portfolio_rank_mode", "none")),
+                PortfolioRankMode: OptionalString(map, "entry_rules.portfolio_rank_mode", "none"),
+                Sma200RisingLookbackBars: OptionalInt(map, "entry_rules.sma200_rising_lookback_bars", 0),
+                MinBreakoutVolumeVs50DayAverage: OptionalDecimal(map, "entry_rules.min_breakout_volume_vs_50_day_average")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -201,7 +203,8 @@ public sealed class SimpleYamlReader
                 OptionalDecimal(map, "exit_rules.stop_tick_buffer") ?? 0.01m,
                 OptionalBool(map, "exit_rules.require_confirmed_ema20_exit", false),
                 OptionalNullableInt(map, "exit_rules.max_hold_bars"),
-                OptionalDecimal(map, "exit_rules.exit_on_rsi2_above")),
+                OptionalDecimal(map, "exit_rules.exit_on_rsi2_above"),
+                OptionalBool(map, "exit_rules.exit_on_close_above_sma5", false)),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
                 RequireDecimal(map, "execution.slippage_bps"),
@@ -221,6 +224,10 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "session.is_continuous_market", false),
                 OptionalBool(map, "session.use_extended_hours", false)),
             ReadRegimeRules(map));
+        if (strategy.EntryRules.Sma200RisingLookbackBars < 0 || strategy.EntryRules.MinBreakoutVolumeVs50DayAverage is <= 0)
+            throw new InvalidOperationException("SMA200 rise lookback must be nonnegative; breakout volume threshold must be positive.");
+        if (strategy.EntryRules.MinBreakoutVolumeVs50DayAverage is not null && !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The prior-50-day breakout-volume rule requires completed daily bars.");
         map.ThrowIfUnknownKeys(path);
         return strategy;
     }
@@ -276,7 +283,8 @@ public sealed class SimpleYamlReader
                 RequireBool(runMap, "engine.fail_fast"),
                 OptionalInt(runMap, "engine.max_retained_replay_bars", 1_000_000),
                 OptionalInt(runMap, "engine.max_strategy_work_items", 10_000),
-                OptionalInt(runMap, "engine.max_retained_candidates", 1_000_000)),
+                OptionalInt(runMap, "engine.max_retained_candidates", 1_000_000),
+                OptionalBool(runMap, "engine.allow_late_warmup", false)),
             new TimeWindowConfig(
                 RequireString(runMap, "time_window.type"),
                 RequireInt(runMap, "time_window.lookback_days"),

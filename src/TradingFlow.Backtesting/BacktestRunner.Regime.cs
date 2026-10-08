@@ -3,6 +3,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Regime;
+using TradingFlow.Engine.Indicators;
 
 namespace TradingFlow.Backtesting;
 
@@ -13,6 +14,7 @@ namespace TradingFlow.Backtesting;
 public sealed partial class BacktestRunner
 {
     private readonly RegimeGateService _regimeGate = new();
+    private IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? candidateSessionSchedules;
 
     private async Task<IReadOnlyDictionary<string, RegimeCalendar>> BuildRegimeCalendarsAsync(
         BacktestRunConfig run,
@@ -23,15 +25,22 @@ public sealed partial class BacktestRunner
     {
         var calendars = new Dictionary<string, RegimeCalendar>(StringComparer.OrdinalIgnoreCase);
         var active = strategies.Where(strategy => strategy.Regime is { IsActive: true }).ToArray();
-        if (active.Length == 0)
-        {
-            return calendars;
-        }
 
         IMarketDataProvider? provider = null;
         var barsByBenchmark = new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
         try
         {
+            if (run.Provider.Equals("alpaca", StringComparison.OrdinalIgnoreCase))
+            {
+                provider = CreateProvider(run);
+                if (provider is not IMarketSessionScheduleProvider scheduleProvider)
+                    throw new InvalidOperationException("Authoritative exchange calendar unavailable for Alpaca backtest.");
+                candidateSessionSchedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(
+                    DateOnly.FromDateTime(dataStart.UtcDateTime).AddDays(-1),
+                    DateOnly.FromDateTime(windowEnd.UtcDateTime).AddDays(10), cancellationToken);
+                if (candidateSessionSchedules.Count == 0)
+                    throw new InvalidOperationException("Authoritative exchange calendar is empty; backtest setup expiry cannot be established.");
+            }
             foreach (var strategy in active)
             {
                 var regime = strategy.Regime!;
@@ -50,6 +59,8 @@ public sealed partial class BacktestRunner
                     barsByBenchmark[regime.BenchmarkSymbol] = bars;
                 }
 
+                if (bars.Count < regime.SmaPeriod + 1)
+                    throw new InvalidOperationException($"Benchmark {regime.BenchmarkSymbol} history is unavailable or insufficient for SMA{regime.SmaPeriod}; active market filter cannot be evaluated.");
                 calendars[strategy.StrategyId] = RegimeCalendarBuilder.Build(bars, regime.SmaPeriod);
             }
         }
