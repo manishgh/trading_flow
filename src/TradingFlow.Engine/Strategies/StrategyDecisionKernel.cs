@@ -378,8 +378,9 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
             throw new InvalidOperationException("Candidate identity, symbol, and setup key are required.");
         }
 
-        if (!request.Strategy.StrategyId.Equals(request.StrategyIdentity.StrategyId, StringComparison.Ordinal) ||
-            !request.Candidate.Identity.StrategyContentSha256.Equals(request.StrategyIdentity.ContentSha256, StringComparison.Ordinal))
+        // The canonical document binds the source definition (including a research alias)
+        // to the catalog identity. String equality of those IDs is not an identity proof.
+        if (!request.Candidate.Identity.StrategyContentSha256.Equals(request.StrategyIdentity.ContentSha256, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Candidate, strategy definition, and immutable identity do not match.");
         }
@@ -395,9 +396,8 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 "Strategy definition, admission profile, and immutable content hash do not match.");
         }
 
-        if (!request.AdmissionProfile.ExecutionTimingPolicy.Equals(
-                "completed-bar-next-executable-bar-v1",
-                StringComparison.Ordinal))
+        if (request.AdmissionProfile.ExecutionTimingPolicy is not
+            ("completed-bar-next-executable-bar-v1" or "completed-bar-asof-regime-scheduled-expiry-v2"))
         {
             throw new InvalidOperationException(
                 $"Unsupported execution timing policy '{request.AdmissionProfile.ExecutionTimingPolicy}'.");

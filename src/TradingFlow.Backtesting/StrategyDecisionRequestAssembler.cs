@@ -144,8 +144,7 @@ public static class StrategyDecisionRequestAssembler
         StrategyArtifactCatalog strategyArtifacts)
     {
         var exact = strategyArtifacts.GetSnapshot().ExecutableArtifacts
-            .Where(artifact => artifact.Identity.StrategyId.Equals(strategy.StrategyId, StringComparison.Ordinal))
-            .FirstOrDefault(artifact => artifact.ResolvedStrategy == strategy);
+            .SingleOrDefault(artifact => artifact.ResolvedStrategy == strategy);
         var admissionProfile = exact?.AdmissionProfile ?? StrategyAdmissionProfiles.DeterministicV1;
         var semanticVersion = exact?.Identity.SemanticVersion ?? "0.0.0-backtest";
         var identity = exact?.Identity ?? new StrategyArtifactIdentity(

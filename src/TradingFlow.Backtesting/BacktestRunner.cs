@@ -42,6 +42,8 @@ public sealed partial class BacktestRunner(
     private readonly ILogger<BacktestRunner> _logger = logger ?? NullLogger<BacktestRunner>.Instance;
     private IRawArchiveWriter? _rawArchiveWriter;
     private string? _csvSourceRoot;
+    private IReadOnlyDictionary<string, AuthorizedRuntimeStrategy> _validatedRuntimeStrategies =
+        new Dictionary<string, AuthorizedRuntimeStrategy>(StringComparer.Ordinal);
     private readonly StrategySessionClock _sessionClock = new();
     private CandlePipelineEngine _candlePipeline = new(NullCandleStore.Instance);
     private readonly BacktestValidator _validator = new();
@@ -76,13 +78,10 @@ public sealed partial class BacktestRunner(
         }
         progress?.Report(BacktestProgress.StageOnly("loading_strategies", $"Loading {run.Strategies.Count} strategy config(s)."));
         var artifactValidator = new StrategyRunArtifactValidator(yamlReader, strategyArtifacts);
-        var strategies = ApplyRunSessionPolicy(
-            run,
-            run.Strategies
-                .Select(path => artifactValidator.ReadAndValidate(path, StrategySelectionMode.Backtest))
-                .ToArray());
-
-        return await RunAsync(run, strategies, startedAt, resultPath, cancellationToken, progress);
+        var runtimeStrategies = run.Strategies
+            .Select(path => artifactValidator.ReadAndValidateRuntimeArtifact(path, StrategySelectionMode.Backtest))
+            .ToArray();
+        return await RunValidatedAsync(run, runtimeStrategies, startedAt, resultPath, cancellationToken, progress);
     }
 
     public async Task<BacktestResult> RunAsync(
@@ -96,6 +95,37 @@ public sealed partial class BacktestRunner(
         var workspace = CreateWorkspace(run, resultPath);
         return await workspace.ExecuteAsync(() => workspace.Runner.RunCoreAsync(workspace.Run, strategies, startedAt,
             resultPath, cancellationToken, progress));
+    }
+
+    internal async Task<BacktestResult> RunValidatedAsync(
+        BacktestRunConfig run, AuthorizedRuntimeStrategy[] runtimeStrategies,
+        DateTimeOffset startedAt, string resultPath, CancellationToken cancellationToken,
+        IProgress<BacktestProgress>? progress = null)
+    {
+        var validated = runtimeStrategies.ToDictionary(
+            artifact => artifact.Definition.StrategyId, StringComparer.Ordinal);
+        var workspace = CreateWorkspace(run, resultPath);
+        workspace.Runner._validatedRuntimeStrategies = validated;
+        var definitions = runtimeStrategies.Select(artifact => artifact.Definition).ToArray();
+        return await workspace.ExecuteAsync(() => workspace.Runner.RunCoreAsync(
+            workspace.Run, definitions, startedAt, resultPath, cancellationToken, progress));
+    }
+
+    internal AuthorizedRuntimeStrategy ResolveRuntimeStrategy(StrategyDefinition strategy)
+    {
+        if (!_validatedRuntimeStrategies.TryGetValue(strategy.StrategyId, out var artifact))
+        {
+            if (_validatedRuntimeStrategies.Count > 0)
+                throw new InvalidDataException("Backtest strategy has no validated artifact identity.");
+            return StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(strategy, strategyArtifacts);
+        }
+        var actualHash = TradingFlow.Domain.Research.EvidenceCanonicalJson.ComputeSha256(
+            new CanonicalStrategyDocument(
+                artifact.Identity.StrategyId, artifact.Identity.SemanticVersion, strategy, artifact.AdmissionProfile));
+        if (artifact.SelectionMode != StrategySelectionMode.Backtest ||
+            !actualHash.Equals(artifact.Identity.ContentSha256, StringComparison.Ordinal))
+            throw new InvalidDataException("Backtest execution definition differs from its validated artifact identity.");
+        return artifact with { Definition = strategy };
     }
 
     internal BacktestRunWorkspace CreateWorkspace(BacktestRunConfig run, string resultPath)
@@ -1115,9 +1145,7 @@ public sealed partial class BacktestRunner(
         var candidates = new List<BacktestCandidateTrade>();
         var diagnostics = new StrategyCandidateDiagnostics(strategy.StrategyId, strategy.StrategyName);
         var startIndex = Math.Max(run.Engine.IndicatorWarmupBars, 1);
-        var runtimeStrategy = StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(
-            strategy,
-            strategyArtifacts);
+        var runtimeStrategy = ResolveRuntimeStrategy(strategy);
         var candidateDecisions = new StrategyCandidateDecisionOrchestrator(
             new StrategyDecisionKernel(),
             candidateJournal);

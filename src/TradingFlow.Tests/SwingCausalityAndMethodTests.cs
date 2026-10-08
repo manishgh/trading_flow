@@ -170,6 +170,59 @@ public sealed class SwingCausalityAndMethodTests
         Assert.EndsWith(".ndjson",path);
     }
 
+    [Theory]
+    [InlineData("minervini-technical-template-vcp.bt-v9.yaml", "swing.minervini-vcp", "9.0.0")]
+    [InlineData("swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml", "swing.connors-rsi2", "5.0.0")]
+    public void CanonicalRuntimeIdentity_SurvivesResearchYamlAlias(string file, string id, string version)
+    {
+        var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
+        var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader);
+        var path=Path.Combine(root,"configs","backtest","strategies",file);
+        var validated=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(
+            path,TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
+        var runtime=StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(validated.Definition,catalog);
+        Assert.NotEqual(id,validated.Definition.StrategyId);
+        Assert.Equal(id,runtime.Identity.StrategyId);Assert.Equal(version,runtime.Identity.SemanticVersion);
+        Assert.Equal(validated.Identity,runtime.Identity);Assert.Equal(validated.AdmissionProfile,runtime.AdmissionProfile);
+    }
+
+    [Fact]
+    public async Task ValidatedSnapshotIdentity_IsWrittenToPublishedAudit_AndOwnedInputsDeleted()
+    {
+        var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
+        var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader);
+        var profile=reader.ReadBacktestRun(Path.Combine(root,"configs","backtest","swing-backtest-profile.yaml"));
+        var artifact=catalog.RequireSourcePath(Path.Combine(root,"configs","backtest","strategies","swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml"));
+        const string version="5.0.0-test-snapshot";
+        var hash=TradingFlow.Domain.Research.EvidenceCanonicalJson.ComputeSha256(new TradingFlow.Domain.Strategies.CanonicalStrategyDocument(
+            artifact.Identity.StrategyId,version,artifact.ResolvedStrategy,artifact.AdmissionProfile));
+        var runtime=new TradingFlow.Domain.Strategies.AuthorizedRuntimeStrategy(
+            new(artifact.Identity.StrategyId,version,hash),TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest,
+            artifact.ResolvedStrategy,artifact.AdmissionProfile);
+        var bars=Enumerable.Range(0,300).Select(i=>Bar("2025-01-01T05:00:00Z",100+i/10m) with {
+            Timestamp=DateTimeOffset.Parse("2025-01-01T05:00:00Z").AddDays(i)}).ToArray();
+        var scratch=Path.Combine(Path.GetTempPath(),"tf-id-"+Guid.NewGuid().ToString("N")[..8]);Directory.CreateDirectory(scratch);
+        try {
+            var run=profile with {Provider="csv",Tickers=["SPY"],Intervals=["1d"],ResultsRoot=scratch,
+                News=profile.News with {Enabled=false},Universe=profile.Universe! with {Mode="resolved_snapshot"},
+                DerivedTimeframes=new TradingFlow.Domain.Backtesting.DerivedTimeframeConfig("1d"),
+                TimeWindow=profile.TimeWindow with {Type="fixed",Start=bars[270].Timestamp,End=bars[^1].Timestamp.AddDays(1),WarmupLookbackDays=400}};
+            var runner=new BacktestRunner(reader,catalog,marketDataProviderFactory:_=>new FrozenProvider(bars));
+            await runner.RunValidatedAsync(run,[runtime],DateTimeOffset.UtcNow,Path.Combine(scratch,"result.json"),CancellationToken.None);
+            var audits=String.Join("\n",Directory.EnumerateFiles(scratch,"*.ndjson",SearchOption.AllDirectories).Select(File.ReadAllText));
+            Assert.Contains(version,audits);Assert.Contains(hash,audits);Assert.Contains("method-alignment-v2",audits);
+            Assert.DoesNotContain("0.0.0-backtest",audits);Assert.Empty(Directory.EnumerateDirectories(scratch,".run-inputs-*"));
+            // Mutating a validated definition must fail rather than relabel it as diagnostic.
+            var changed=runtime with {Definition=runtime.Definition with {StrategyName="changed after validation"}};
+            var failed=await runner.RunValidatedAsync(run,[changed],DateTimeOffset.UtcNow,Path.Combine(scratch,"changed.json"),CancellationToken.None);
+            Assert.False(failed.EconomicResultsComplete);
+            Assert.Empty(Directory.EnumerateDirectories(scratch,".run-inputs-*"));
+            await Assert.ThrowsAsync<ArgumentException>(()=>runner.RunValidatedAsync(run,[runtime,runtime],DateTimeOffset.UtcNow,
+                Path.Combine(scratch,"duplicate.json"),CancellationToken.None));
+            Assert.Empty(Directory.EnumerateDirectories(scratch,".run-inputs-*"));
+        } finally {Directory.Delete(scratch,true);}
+    }
+
     private sealed class FrozenProvider(OhlcvBar[] bars):TradingFlow.Engine.Abstractions.IMarketDataProvider
     {
         public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> symbols,IReadOnlyCollection<string> frames,
