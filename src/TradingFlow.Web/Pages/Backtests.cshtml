@@ -99,7 +99,7 @@
                             @if (strategy.Audit is { } audit)
                             {
                                 <span class="lab-strategy-audit">
-                                    Audit @Signed(audit.ReturnPct) / DD @audit.MaxDrawdownPct.ToString("0.00")% /
+                                    Audit @Signed(audit.ReturnPct) / realized DD @audit.MaxDrawdownPct.ToString("0.00")% /
                                     @audit.Trades trades / win @audit.WinRatePct.ToString("0.0")%
                                 </span>
                             }
@@ -214,7 +214,7 @@
                                     <th scope="col">Best strategy</th>
                                     <th scope="col">Universe</th>
                                     <th scope="col" class="num">Return</th>
-                                    <th scope="col" class="num">Max DD</th>
+                                    <th scope="col" class="num">Realized DD</th>
                                     <th scope="col" class="num">Trades</th>
                                     <th scope="col">Decision</th>
                                 </tr>

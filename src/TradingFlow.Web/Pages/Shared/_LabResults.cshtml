@@ -78,7 +78,7 @@
             <strong class="lab-winner-name">@winner.StrategyName</strong>
             <span class="lab-winner-detail">
                 @Signed(winner.TotalReturnPct) return · @Signed(winner.AverageDailyReturnPct, "%", "0.0000") daily ·
-                DD @winner.MaxDrawdownPct.ToString("0.00")% · ranked on total return
+                Realized DD @winner.MaxDrawdownPct.ToString("0.00")% · ranked on total return
             </span>
         }
         else
@@ -175,7 +175,7 @@
                per-bar curve, so within-bar drawdown is understated. *@
             <p class="note">
                 Realised equity, replayed from completed trades at their exit timestamps. The curve is a
-                step function and within-bar drawdown is understated.
+                step function; open-position and intraday drawdown are omitted.
             </p>
         }
     </div>
@@ -230,7 +230,7 @@
                     <th scope="col" class="num">Return</th>
                     <th scope="col" class="num">Daily avg</th>
                     <th scope="col" class="num">Net</th>
-                    <th scope="col" class="num">Max DD</th>
+                    <th scope="col" class="num">Realized DD</th>
                     <th scope="col" class="num">Trades</th>
                     <th scope="col" class="num">Win rate</th>
                     <th scope="col" class="num">Avg hold</th>

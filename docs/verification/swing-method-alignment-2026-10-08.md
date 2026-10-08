@@ -1,5 +1,11 @@
 # Swing method alignment and causal repairs — 8 October 2026
 
+> Correction from deep review: four holding-cap exits used an earlier same-slice
+> open after observing that slice's completed OHLC. Prior economic conclusions
+> are superseded. Original artifacts are retained; see
+> [the corrected deep assessment](swing-deep-analysis-2026-10-08.md).
+
+
 This checkpoint implements the user's requested fixes and method review before a
 five-stock-at-a-time backtest of the current Volatile group. It does not grant
 paper/live authorization or claim historical membership/as-was-data certification.
