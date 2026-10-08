@@ -95,7 +95,7 @@ admission, SMA5 arithmetic/equality, volume-baseline exclusion of current/future
 bars, serialization hashes, risk/kernel/execution and cleanup consumers. Earlier
 failing catalog assertions were updated to the intentional new versions; the
 serialization omission was repaired rather than ignoring its failed hash test.
-Final counts and the independent quant review will be recorded with the results.
+Final counts and the independent quant review are recorded below with the results.
 
 Task outputs are under outputs/swing-study-2026-10-08. Frozen-study, coverage and
 artifact/config receipts are retained as parameters/audit evidence. Temporary
@@ -170,3 +170,8 @@ failed-launch spools are removed after this audit. A later fresh download may ha
 revisions and must use a new study identity; source hashes alone cannot recreate
 the deleted inputs. Operational wishlist row hashes match before/after. Existing
 Web/ngrok processes remain running and localhost News returns200.
+
+The study did not write the operational database. Existing News/Earnings collectors
+continued normal writes; the unchanged-source assertion concerns wishlist rows.
+Post-cleanup all82 manifest entries match, including the superseded original run.
+Requirements review found no remaining scope, cleanup or reporting blocker.
