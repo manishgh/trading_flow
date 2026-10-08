@@ -137,7 +137,7 @@ public sealed partial class SignalGenerator
         return (reclaimedSma10 && reclaimedSma20, pullbackDepthPct, recentHigh, pullbackLow);
     }
 
-    // Archetype C (doctrine §6C): the L4 trigger is today's first close back above the prior day's high,
+    // Archetype C (doctrine §6C): the L4 trigger is today's close back above the prior day's high,
     // and the L3 setup is an oversold "stretch" (consecutive down closes, RSI(2) oversold, or a close
     // below the lower Bollinger band) within the lookback ending at the prior bar. StretchLow is the
     // lowest low across the stretch (and the reclaim bar) and feeds the swing-low stop.

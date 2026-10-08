@@ -40,6 +40,17 @@ snapshot was captured after the prediction's decision time. Using it would give 
 prediction information unavailable at that time. We need a snapshot observed before
 that decision; collecting data for future decisions can continue."
 
+## User reporting and research convention (8 October 2026)
+
+- Present performance monthly and separately by strategy identity/version and batch.
+  Never display accumulated-period or pooled-strategy/batch returns. Retain original
+  immutable audit totals internally for reconciliation; do not rewrite published artifacts.
+- Use New York source-session dates and month-opening equity for monthly percentages.
+  Label partial months and realised versus marked-to-market valuation explicitly.
+- The user explicitly requested technical research beyond mean reversion, snapback
+  and rubber-band names. Expanded families are authorised as diagnostic experiments;
+  existing promotion, no-look-ahead, risk and data-isolation requirements still apply.
+
 ## Non-Negotiable Design Rules
 
 - Do not sync GitHub unless explicitly asked.

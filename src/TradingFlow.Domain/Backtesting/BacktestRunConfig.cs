@@ -145,7 +145,8 @@ public sealed record EngineConfig(
     int MaxRetainedReplayBars = 1_000_000,
     int MaxStrategyWorkItems = 10_000,
     int MaxRetainedCandidates = 1_000_000,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool AllowLateWarmup = false);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool AllowLateWarmup = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? PrecommittedLiquidationSourceUtc = null);
 
 public sealed record DerivedTimeframeConfig(string Source);
 

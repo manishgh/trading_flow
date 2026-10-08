@@ -398,7 +398,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
 
         if (request.AdmissionProfile.ExecutionTimingPolicy is not
             ("completed-bar-next-executable-bar-v1" or "completed-bar-asof-regime-scheduled-expiry-v2" or
-             "completed-bar-next-slice-market-exits-v3"))
+             "completed-bar-next-slice-market-exits-v3" or "completed-bar-precommitted-terminal-open-v4"))
         {
             throw new InvalidOperationException(
                 $"Unsupported execution timing policy '{request.AdmissionProfile.ExecutionTimingPolicy}'.");

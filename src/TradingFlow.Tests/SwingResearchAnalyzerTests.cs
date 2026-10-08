@@ -81,13 +81,16 @@ public sealed class SwingResearchAnalyzerTests
         Assert.Equal("missed", msftOpportunity.Classification);
     }
 
-    [Fact]
-    public void CompletedReceiptTimesIncludeEntrySlice_ExcludeNextOpenExitSlice_AndRequireConvention()
+    [Theory]
+    [InlineData("technical_exit_above_sma5")]
+    [InlineData("scheduled_study_exit")]
+    [InlineData("confirmed_vwap_failure")]
+    public void CompletedReceiptTimesIncludeEntrySlice_ExcludeNextOpenExitSlice_AndRequireConvention(string exitReason)
     {
         var bars=BuildDailyBars("APP",100m,105m,110m).ToArray();
         bars[0]=bars[0] with {Low=80m};bars[1]=bars[1] with {Low=99m};bars[2]=bars[2] with {Low=1m,High=1000m};
         var trade=new BacktestTrade("APP","Swing","long",bars[0].Timestamp.AddDays(1),bars[2].Timestamp.AddDays(1),
-            10,100m,110m,75m,150m,"technical_exit_above_sma5",100m,2m,98m);
+            10,100m,110m,75m,150m,exitReason,100m,2m,98m);
         var result=CreateResult("Swing",10000m,10098m,[trade]);
         var source=new Dictionary<string,IReadOnlyList<OhlcvBar>>{{"APP",bars}};
         var analyzer=new SwingResearchAnalyzer();

@@ -1146,6 +1146,18 @@ public sealed partial class BacktestRunner(
         var diagnostics = new StrategyCandidateDiagnostics(strategy.StrategyId, strategy.StrategyName);
         var startIndex = Math.Max(run.Engine.IndicatorWarmupBars, 1);
         var runtimeStrategy = ResolveRuntimeStrategy(strategy);
+        var terminal = run.Engine.PrecommittedLiquidationSourceUtc;
+        var terminalProfile = runtimeStrategy.AdmissionProfile.ExecutionTimingPolicy == "completed-bar-precommitted-terminal-open-v4";
+        if (terminal.HasValue != terminalProfile)
+            throw new InvalidOperationException("Terminal-open policy and immutable timing profile must agree.");
+        if (terminal is { } requested)
+        {
+            if (run.TimeWindow.Type != "fixed") throw new InvalidOperationException("Terminal-open research needs a frozen fixed window.");
+            BacktestDecisionTiming.ValidateTerminalOpen(requested, evaluationStart, evaluationEnd,
+                strategy.Execution.Timeframe, strategy.Session, candidateSessionSchedules);
+            if (!executionBars.Any(bar => bar.Timestamp == requested))
+                throw new InvalidOperationException("Prerecorded terminal source slice is missing; complete economics are unavailable.");
+        }
         var candidateDecisions = new StrategyCandidateDecisionOrchestrator(
             new StrategyDecisionKernel(),
             candidateJournal);
@@ -1275,6 +1287,12 @@ public sealed partial class BacktestRunner(
                     break;
                 }
 
+                if (terminal is { } cutoff && executionBars[plannedEntryIndex].Timestamp >= cutoff)
+                {
+                    lastReason = "precommitted_terminal_entry_cutoff";
+                    break;
+                }
+
                 var candidate = CreateCandidate(
                     persistedDecision.Candidate.CandidateId.ToString("D"),
                     run,
@@ -1293,7 +1311,10 @@ public sealed partial class BacktestRunner(
                 }
 
                 retainedCandidateBudget.Reserve();
-                candidates.Add(candidate.Value.Candidate);
+                var finalized = candidate.Value.Candidate;
+                if (terminal is { } boundary && finalized.ExitTimestamp == boundary && !IsPriceTriggeredExitReason(finalized.ExitReason))
+                    finalized = finalized with { ExitReason = "scheduled_study_exit", ExitPrice = executionBars[candidate.Value.ExitIndex].Open };
+                candidates.Add(finalized);
                 candidateCreated = true;
                 break;
             }

@@ -100,7 +100,7 @@ public sealed class SwingResearchAnalyzer
             throw new ArgumentException("Exact entry and exit source daily slices are required; nearest-price substitution is not valid.");
         // Next-open technical/time exits have no exposure to the exit slice's later high/low.
         var exitsAtOpen = trade.ExitReason.StartsWith("technical_exit", StringComparison.Ordinal) ||
-            trade.ExitReason is "max_hold_bars" or "max_hold";
+            trade.ExitReason is "max_hold_bars" or "max_hold" or "scheduled_study_exit" or "confirmed_vwap_failure" or "confirmed_vwap_reclaim";
         var endExclusive = exitsAtOpen ? exitIndex : exitIndex + 1;
         var tradeBars = bars.Skip(entryIndex).Take(Math.Max(0, endExclusive - entryIndex)).ToArray();
         var isShort = trade.Direction.Equals("short", StringComparison.OrdinalIgnoreCase);

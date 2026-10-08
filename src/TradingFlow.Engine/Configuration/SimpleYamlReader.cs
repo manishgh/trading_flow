@@ -284,7 +284,8 @@ public sealed class SimpleYamlReader
                 OptionalInt(runMap, "engine.max_retained_replay_bars", 1_000_000),
                 OptionalInt(runMap, "engine.max_strategy_work_items", 10_000),
                 OptionalInt(runMap, "engine.max_retained_candidates", 1_000_000),
-                OptionalBool(runMap, "engine.allow_late_warmup", false)),
+                OptionalBool(runMap, "engine.allow_late_warmup", false),
+                OptionalDateTimeOffset(runMap, "engine.precommitted_liquidation_source_utc")),
             new TimeWindowConfig(
                 RequireString(runMap, "time_window.type"),
                 RequireInt(runMap, "time_window.lookback_days"),

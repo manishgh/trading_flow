@@ -184,6 +184,20 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         }
 
         var bar = timelineBar.Bar;
+        var terminalOpen = trackers.Any(tracker => tracker.Plan.Candidate.ExitReason == "scheduled_study_exit" &&
+            tracker.Plan.Candidate.ExitTimestamp.ToUniversalTime() <= timelineBar.StartUtc);
+        if (terminalOpen)
+        {
+            if (!_lastBarsBySymbol.TryGetValue(symbol, out var previous) || previous.AvailableAtUtc > timelineBar.StartUtc || previous.Bar.Volume <= 0)
+            {
+                foreach (var tracker in trackers) Fail(tracker, "terminal_open_prior_liquidity_unavailable");
+                _active.RemoveAll(item=>item.IsTerminal);
+                return;
+            }
+            // Opening-point execution proxy: final HL/C/volume are unavailable to this scheduled action.
+            // Capacity uses the prior completed slice, not hindsight final-session volume.
+            bar = bar with { High = bar.Open, Low = bar.Open, Close = bar.Open, Volume = previous.Bar.Volume };
+        }
         _lastBarsBySymbol[symbol] = timelineBar;
         var commands = BuildCommands(timelineBar.StartUtc, trackers);
         var hasWorkingOrder = _state.WorkingOrders.Values.Any(order =>

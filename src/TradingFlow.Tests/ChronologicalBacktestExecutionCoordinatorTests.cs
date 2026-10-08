@@ -610,6 +610,25 @@ public sealed class ChronologicalBacktestExecutionCoordinatorTests
         PreventOverlappingTickerPositions: false,
         MaxBarParticipationPct: maxParticipationPct);
 
+    [Theory]
+    [InlineData("long")]
+    [InlineData("short")]
+    public void ScheduledTerminalOpenIgnoresItsLaterExtremaAndVolume(string direction)
+    {
+        BacktestTrade Execute(decimal high,decimal low,decimal close,decimal volume)
+        {
+            var coordinator=new ChronologicalBacktestExecutionCoordinator(new PortfolioConfig(10000,1,25,4,1,1,1,true),
+                [Bar(0,10,1000),RangeBar(5,11,high,low,close,volume)]);
+            var candidate=Candidate("terminal",0,5) with {Direction=direction,ExitReason="scheduled_study_exit",ExitPrice=11,
+                StopLossPrice=direction=="long"?9:11,TakeProfitPrice=direction=="long"?12:8};
+            Assert.True(coordinator.TrySchedule(new ChronologicalExecutionPlan(candidate,Strategy() with {Direction=direction},10),out _));
+            coordinator.Complete();Assert.Empty(coordinator.Failures);return Assert.Single(coordinator.CompletedTrades);
+        }
+        var plain=Execute(11,11,11,1000);var changed=Execute(1000,.01m,999,0);
+        Assert.Equal(plain.ExitPrice,changed.ExitPrice);Assert.Equal(plain.NetProfit,changed.NetProfit);Assert.Equal(plain.ShareQuantity,changed.ShareQuantity);
+        Assert.Equal(11,changed.ExitPrice);
+    }
+
     private static BacktestCandidateTrade Candidate(
         string identity,
         int entryMinute,

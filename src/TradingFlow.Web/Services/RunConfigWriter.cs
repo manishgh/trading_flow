@@ -716,7 +716,7 @@ public sealed class RunConfigWriter
         }
     }
 
-    internal static string SerializeStrategyYaml(TradingFlow.Domain.Strategies.StrategyDefinition strategy)
+    public static string SerializeStrategyYaml(TradingFlow.Domain.Strategies.StrategyDefinition strategy)
     {
         var yaml = new StringBuilder();
         yaml.AppendLine($"strategy_id: {strategy.StrategyId}");
