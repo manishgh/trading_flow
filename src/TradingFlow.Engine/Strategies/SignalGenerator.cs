@@ -228,6 +228,7 @@ public sealed partial class SignalGenerator
             IsEpisodicPivotGap: isEpisodicPivotGap,
             GapUpPct: gapUpPct,
             IsVcpBreakout: vcpContext.IsBreakout,
+            VcpStructureRejectionReason: vcpContext.DiagnosticRejectionReason,
             PriceVs52WeekLowPct: price52WeekContext.PriceVsLowPct,
             PriceVs52WeekHighPct: price52WeekContext.PriceVsHighPct,
             VolatilityContractions: vcpContext.Contractions,

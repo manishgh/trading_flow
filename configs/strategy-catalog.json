@@ -22,6 +22,17 @@
       "derivedIndicatorProfileVersion": "2.0.0",
       "riskPolicy": "account-risk-budget-v1",
       "executionTimingPolicy": "completed-bar-asof-regime-scheduled-expiry-v2"
+    },
+    {
+      "profileId": "causal-market-exits-v3",
+      "profileVersion": "3.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.1.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-next-slice-market-exits-v3"
     }
   ],
   "strategies": [
@@ -149,17 +160,33 @@
       "sourcePath": "configs/backtest/strategies/minervini-technical-template-vcp.bt-v9.yaml",
       "strategyId": "swing.minervini-vcp",
       "semanticVersion": "9.0.0",
-      "lifecycle": "research",
+      "lifecycle": "archived",
       "admissionProfileId": "method-alignment-v2",
-      "reason": "Published technical template/VCP interpretation with explicit volume baseline and disclosed risk/exits; diagnostic research only."
+      "reason": "Preserved prior study; completed-bar timeout/terminal-exit timing superseded by causal-market-exits-v3."
     },
     {
       "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml",
       "strategyId": "swing.connors-rsi2",
       "semanticVersion": "5.0.0",
-      "lifecycle": "research",
+      "lifecycle": "archived",
       "admissionProfileId": "method-alignment-v2",
-      "reason": "Published RSI2/SMA5 variant plus explicitly retained protective and regime overlays; diagnostic research only."
+      "reason": "Preserved prior study; completed-bar timeout/terminal-exit timing superseded by causal-market-exits-v3."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/minervini-technical-template-vcp.bt-v10.yaml",
+      "strategyId": "swing.minervini-vcp",
+      "semanticVersion": "10.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "causal-market-exits-v3",
+      "reason": "Same economic rules; causal completed-bar market exit scheduling and improved research diagnostics."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml",
+      "strategyId": "swing.connors-rsi2",
+      "semanticVersion": "6.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "causal-market-exits-v3",
+      "reason": "Same economic rules; causal completed-bar market exit scheduling and improved research diagnostics."
     }
   ]
 }

@@ -119,7 +119,7 @@ public sealed partial class BacktestRunner
         var exitStartIndex = FindNextValidExecutionBarIndex(bars, entryIndex + 1, strategy);
         if (exitStartIndex >= bars.Count)
         {
-            return null;
+            throw new InvalidOperationException("Entry slice exists without a later causal liquidation slice; economics are incomplete.");
         }
 
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"LONG signal generated at {signal.CurrentPrice}", candidateId);
@@ -224,7 +224,7 @@ public sealed partial class BacktestRunner
             if (exitPrice.HasValue && exitReason is not null)
             {
                 // In backtest, for technical exit, we exit on next bar open
-                if (exitReason.StartsWith("technical_exit"))
+                if (!IsPriceTriggeredExitReason(exitReason))
                 {
                     var nextExitIndex = FindNextValidExecutionBarIndex(
                         bars,
@@ -253,20 +253,7 @@ public sealed partial class BacktestRunner
             }
         }
 
-        var finalIndex = FindPreviousValidExecutionBarIndex(
-            bars,
-            bars.Count - 1,
-            strategy);
-        if (finalIndex < entryIndex)
-        {
-            return null;
-        }
-
-        var finalBar = bars[finalIndex];
-        var finalRelativeVolume = snapshots[finalIndex].RelativeVolume ?? relativeVolume;
-        var finalExitPrice = ApplyLongExitSlippage(finalBar.Close, finalRelativeVolume, strategy, approximateTradeAmount);
-        auditor.LogEvent(signal.Ticker, strategy.StrategyName, finalBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via end_of_data at {finalExitPrice}", candidateId);
-        return (BuildCandidate(candidateId, strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, finalBar.Timestamp, finalExitPrice, "end_of_data", stopDistance, bars[entryIndex - 1].Volume), finalIndex);
+        throw new InvalidOperationException("No later executable slice for causal liquidation; end-of-data cannot be a retroactive closed trade.");
     }
 
     private (BacktestCandidateTrade Candidate, int ExitIndex)? CreateShortCandidate(
@@ -308,7 +295,7 @@ public sealed partial class BacktestRunner
         var exitStartIndex = FindNextValidExecutionBarIndex(bars, entryIndex + 1, strategy);
         if (exitStartIndex >= bars.Count)
         {
-            return null;
+            throw new InvalidOperationException("Entry slice exists without a later causal liquidation slice; economics are incomplete.");
         }
 
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"SHORT signal generated at {signal.CurrentPrice}", candidateId);
@@ -395,7 +382,7 @@ public sealed partial class BacktestRunner
 
             if (exitPrice.HasValue && exitReason is not null)
             {
-                if (exitReason.StartsWith("technical_exit", StringComparison.Ordinal))
+                if (!IsPriceTriggeredExitReason(exitReason))
                 {
                     var nextExitIndex = FindNextValidExecutionBarIndex(
                         bars,
@@ -466,20 +453,7 @@ public sealed partial class BacktestRunner
             }
         }
 
-        var finalIndex = FindPreviousValidExecutionBarIndex(
-            bars,
-            bars.Count - 1,
-            strategy);
-        if (finalIndex < entryIndex)
-        {
-            return null;
-        }
-
-        var finalBar = bars[finalIndex];
-        var finalRelativeVolume = snapshots[finalIndex].RelativeVolume ?? relativeVolume;
-        var finalExitPrice = ApplyShortExitSlippage(finalBar.Close, finalRelativeVolume, strategy, approximateTradeAmount);
-        auditor.LogEvent(signal.Ticker, strategy.StrategyName, finalBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via end_of_data at {finalExitPrice}", candidateId);
-        return (BuildCandidate(candidateId, strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, finalBar.Timestamp, finalExitPrice, "end_of_data", stopDistance, bars[entryIndex - 1].Volume), finalIndex);
+        throw new InvalidOperationException("No later executable slice for causal short liquidation; end-of-data cannot be a retroactive closed trade.");
     }
 
     private static (decimal? ExitPrice, string? ExitReason) EvaluateShortBarForExit(

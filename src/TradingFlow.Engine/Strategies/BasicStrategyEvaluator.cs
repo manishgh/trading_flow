@@ -395,6 +395,10 @@ public sealed class BasicStrategyEvaluator
             return $"price_too_far_below_52_week_high (Actual: {signal.PriceVs52WeekHighPct?.ToString("F2") ?? "n/a"}, RequiredMin: {maxDistanceFromHigh:F2})";
         }
 
+        if (rules.SetupType.Equals("volatility_contraction_pattern", StringComparison.OrdinalIgnoreCase) &&
+            signal.VcpStructureRejectionReason is { } structureReason)
+            return $"vcp_structure_rejected ({structureReason})";
+
         if (rules.MinContractions is { } minContractions &&
             (signal.VolatilityContractions is null || signal.VolatilityContractions.Value < minContractions))
         {

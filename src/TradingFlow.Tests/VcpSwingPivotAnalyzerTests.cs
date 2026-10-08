@@ -98,6 +98,7 @@ public sealed class VcpSwingPivotAnalyzerTests
 
         Assert.False(result.HasValidStructure);
         Assert.Equal("valid_vcp_pivot_structure_not_found", result.RejectionReason);
+        Assert.Equal("contraction_volume_dry_up_or_progression_failed", result.DiagnosticRejectionReason);
     }
 
     [Fact]

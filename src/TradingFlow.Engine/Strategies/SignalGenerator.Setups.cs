@@ -17,14 +17,15 @@ public sealed partial class SignalGenerator
         bool IsVolatilityHalving,
         bool IsVolumeDryUp,
         decimal? BreakoutVolumeRatio,
-        decimal? StructuralStopPrice) GetVcpContext(
+        decimal? StructuralStopPrice,
+        string? DiagnosticRejectionReason) GetVcpContext(
             StrategyDefinition strategy,
             IReadOnlyList<OhlcvBar> bars,
             int index)
     {
         if (!UsesLongSetup(strategy, "volatility_contraction_pattern"))
         {
-            return (false, null, false, false, null, null);
+            return (false, null, false, false, null, null, null);
         }
 
         var rules = strategy.EntryRules;
@@ -52,7 +53,8 @@ public sealed partial class SignalGenerator
             isVolatilityHalving,
             hasVolumeDryUp,
             analysis.BreakoutVolumeRatio,
-            analysis.Contractions.LastOrDefault()?.Low.Price);
+            analysis.Contractions.LastOrDefault()?.Low.Price,
+            analysis.DiagnosticRejectionReason);
     }
 
     private static (decimal? PriceVsLowPct, decimal? PriceVsHighPct) Get52WeekPriceContext(

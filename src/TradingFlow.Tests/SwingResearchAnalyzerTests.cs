@@ -1,4 +1,4 @@
-﻿using TradingFlow.Backtesting.Research;
+using TradingFlow.Backtesting.Research;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 
@@ -31,7 +31,7 @@ public sealed class SwingResearchAnalyzerTests
             result,
             "Swing",
             new Dictionary<string, IReadOnlyList<OhlcvBar>> { ["APP"] = bars },
-            new SwingResearchOptions(MinimumOpportunityMovePct: 10m));
+            new SwingResearchOptions(MinimumOpportunityMovePct: 10m, TradeTimestampBasis: SwingTradeTimestampBasis.SourceSliceStart));
 
         Assert.Equal(2, report.WeeklyEquity.Count);
         Assert.Equal(10160m, report.WeeklyEquity[0].WeekEndEquity);
@@ -70,7 +70,7 @@ public sealed class SwingResearchAnalyzerTests
                 ["APP"] = appBars,
                 ["MSFT"] = msftBars
             },
-            new SwingResearchOptions(MinimumOpportunityMovePct: 10m));
+            new SwingResearchOptions(MinimumOpportunityMovePct: 10m, TradeTimestampBasis: SwingTradeTimestampBasis.SourceSliceStart));
 
         var appOpportunity = report.Tickers.Single(x => x.Ticker == "APP").LongOpportunities.Single();
         var msftOpportunity = report.Tickers.Single(x => x.Ticker == "MSFT").LongOpportunities.Single();
@@ -79,6 +79,25 @@ public sealed class SwingResearchAnalyzerTests
         Assert.Equal("captured", appOpportunity.Classification);
         Assert.False(msftOpportunity.WasCaptured);
         Assert.Equal("missed", msftOpportunity.Classification);
+    }
+
+    [Fact]
+    public void CompletedReceiptTimesIncludeEntrySlice_ExcludeNextOpenExitSlice_AndRequireConvention()
+    {
+        var bars=BuildDailyBars("APP",100m,105m,110m).ToArray();
+        bars[0]=bars[0] with {Low=80m};bars[1]=bars[1] with {Low=99m};bars[2]=bars[2] with {Low=1m,High=1000m};
+        var trade=new BacktestTrade("APP","Swing","long",bars[0].Timestamp.AddDays(1),bars[2].Timestamp.AddDays(1),
+            10,100m,110m,75m,150m,"technical_exit_above_sma5",100m,2m,98m);
+        var result=CreateResult("Swing",10000m,10098m,[trade]);
+        var source=new Dictionary<string,IReadOnlyList<OhlcvBar>>{{"APP",bars}};
+        var analyzer=new SwingResearchAnalyzer();
+        Assert.Throws<ArgumentException>(()=>analyzer.Analyze(result,"Swing",source));
+        var report=analyzer.Analyze(result,"Swing",source,new SwingResearchOptions(TradeTimestampBasis:SwingTradeTimestampBasis.CompletedSliceEnd));
+        var diagnostic=Assert.Single(Assert.Single(report.Tickers).Trades);
+        Assert.Equal(-20m,diagnostic.MaxAdverseMovePct);
+        Assert.True(diagnostic.MaxFavorableMovePct<20m);
+        Assert.Equal(bars[0].Timestamp,diagnostic.EntryTimestamp);
+        Assert.Equal("source_slice_start",report.TimestampScope);
     }
 
     private static IReadOnlyList<OhlcvBar> BuildDailyBars(string ticker, params decimal[] closes)

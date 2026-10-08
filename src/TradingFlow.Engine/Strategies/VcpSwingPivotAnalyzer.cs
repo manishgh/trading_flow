@@ -37,7 +37,7 @@ public sealed class VcpSwingPivotAnalyzer
             structureEndExclusive,
             options.PivotStrengthBars);
 
-        var structure = FindMostRecentValidStructure(bars, pivots, windowStart, options);
+        var structure = FindMostRecentValidStructure(bars, pivots, windowStart, options, out var failures);
         if (structure is null)
         {
             return new VcpSwingPivotAnalysis(
@@ -47,7 +47,7 @@ public sealed class VcpSwingPivotAnalyzer
                 null,
                 pivots,
                 Array.Empty<VcpContractionAnalysis>(),
-                null);
+                null) { DiagnosticRejectionReason = String.Join(";", failures.Distinct()) };
         }
 
         var breakoutLevel = structure.Pivots[^1].Price *
@@ -72,10 +72,13 @@ public sealed class VcpSwingPivotAnalyzer
         IReadOnlyList<OhlcvBar> bars,
         IReadOnlyList<VcpSwingPivot> pivots,
         int windowStart,
-        VcpSwingPivotOptions options)
+        VcpSwingPivotOptions options,
+        out List<string> failures)
     {
+        failures = [];
         if (pivots.Count < (options.MinimumContractions * 2) + 1)
         {
+            failures.Add("insufficient_confirmed_pivots");
             return null;
         }
 
@@ -87,6 +90,7 @@ public sealed class VcpSwingPivotAnalyzer
 
         if (end < 0)
         {
+            failures.Add("confirmed_resistance_pivot_unavailable");
             return null;
         }
 
@@ -111,15 +115,14 @@ public sealed class VcpSwingPivotAnalyzer
             }
 
             var contractions = BuildContractions(bars, candidate, windowStart, options);
-            if (contractions is not null &&
-                HasShrinkingDepths(contractions, options) &&
-                HasRisingLows(candidate, options) &&
-                HasRequiredVolumeDryUp(contractions, options))
-            {
-                return new VcpStructure(candidate, contractions);
-            }
+            if (contractions is null) { failures.Add("contraction_or_volume_reference_unavailable"); continue; }
+            if (!HasShrinkingDepths(contractions, options)) { failures.Add("contraction_depth_not_shrinking"); continue; }
+            if (!HasRisingLows(candidate, options)) { failures.Add("contraction_lows_not_rising"); continue; }
+            if (!HasRequiredVolumeDryUp(contractions, options)) { failures.Add("contraction_volume_dry_up_or_progression_failed"); continue; }
+            return new VcpStructure(candidate, contractions);
         }
 
+        if (failures.Count == 0) failures.Add("latest_pivot_has_insufficient_prior_contractions");
         return null;
     }
 
@@ -471,7 +474,10 @@ public sealed record VcpSwingPivotAnalysis(
     VcpSwingPivot? FinalPivot,
     IReadOnlyList<VcpSwingPivot> Pivots,
     IReadOnlyList<VcpContractionAnalysis> Contractions,
-    decimal? BreakoutVolumeRatio);
+    decimal? BreakoutVolumeRatio)
+{
+    public string? DiagnosticRejectionReason { get; init; }
+}
 
 public sealed record VcpSwingPivot(
     VcpPivotType Type,

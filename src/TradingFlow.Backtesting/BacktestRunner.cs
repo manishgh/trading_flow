@@ -565,7 +565,7 @@ public sealed partial class BacktestRunner(
                 bestStrategy.AcceptedTradeCount,
                 bestStrategy.RejectedTradeCount);
         var validation = _validator.Validate(run, allBars, preparedMarket.BenchmarkBars, strategyResults);
-        var missedMoves = BuildMissedMoveAudits(strategies, candidates, allBars);
+        var missedMoves = BuildMissedMoveAudits(strategies, unifiedCompletedTradesForAudit, allBars);
         var publishedEconomics = BuildPublishedEconomicSummary(
             run.Portfolio.StartingCapital,
             bestStrategy,

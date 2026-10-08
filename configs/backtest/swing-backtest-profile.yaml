@@ -105,5 +105,5 @@ universe:
   mode: unresolved_wishlist
 
 strategies:
-  - strategies/minervini-technical-template-vcp.bt-v9.yaml
+  - strategies/minervini-technical-template-vcp.bt-v10.yaml
 

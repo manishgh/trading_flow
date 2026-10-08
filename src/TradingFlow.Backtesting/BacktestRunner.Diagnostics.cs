@@ -15,9 +15,9 @@ namespace TradingFlow.Backtesting;
 // partial file for readability; behavior is identical to the inline version.
 public sealed partial class BacktestRunner
 {
-    private static IReadOnlyList<MissedMoveAudit> BuildMissedMoveAudits(
+    internal static IReadOnlyList<MissedMoveAudit> BuildMissedMoveAudits(
         IReadOnlyCollection<StrategyDefinition> strategies,
-        IReadOnlyList<BacktestCandidateTrade> candidates,
+        IReadOnlyList<BacktestTrade> completedTrades,
         IReadOnlyCollection<OhlcvBar> allBars)
     {
         const decimal majorMoveThresholdPct = 8m;
@@ -76,11 +76,11 @@ public sealed partial class BacktestRunner
                 }
 
                 var peakTimestamp = bars[peakIndex].Timestamp;
-                var entries = candidates
+                var entries = completedTrades
                     .Where(candidate =>
                         candidate.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase) &&
-                        candidate.EntryTimestamp >= startBar.Timestamp &&
-                        candidate.EntryTimestamp <= peakTimestamp)
+                        candidate.EntryTimestamp >= startBar.Timestamp.Add(TimeframeParser.Parse(timeframe)) &&
+                        candidate.EntryTimestamp <= peakTimestamp.Add(TimeframeParser.Parse(timeframe)))
                     .Select(candidate => candidate.StrategyName)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
@@ -423,7 +423,7 @@ public sealed partial class BacktestRunner
 
         if (realizedRewardRiskRatio < 1m && winRatePct < 50m)
         {
-            suggestions.Add("Average loss is larger than average win with sub-50% win rate. Consider higher target_r_multiple, tighter entry quality, or smaller stop_atr_multiple.");
+            suggestions.Add("Average loss exceeds average win with sub-50% win rate. Attribute actual exit causes and costs before testing a separately frozen variant.");
         }
 
         if (exitReasonCounts.TryGetValue("stop_loss", out var stopLossCount) &&
@@ -440,7 +440,7 @@ public sealed partial class BacktestRunner
 
         if (result.TotalReturnPct > 0 && result.MaxDrawdownPct <= 2m)
         {
-            suggestions.Add("Positive return with controlled drawdown. Candidate for broader ticker/window validation before promotion.");
+            suggestions.Add("Positive realized net return. Drawdown here uses closed trades only; measure marked-to-market equity and broader sample stability before drawing risk conclusions.");
         }
 
         if (suggestions.Count == 0)

@@ -219,7 +219,7 @@ Paper configs:
 Strategy classification:
 
 - `configs/strategy-catalog.json` is the authority.
-- Bootstrap is two research artifacts, fifteen archived artifacts, and no paper
+- Bootstrap is two research artifacts, seventeen archived artifacts, and no paper
   execution or live authorization.
 - Research/archive is artifact disposition. Paper experiment, paper shadow, and
   validated are exact-identity authorization grants.

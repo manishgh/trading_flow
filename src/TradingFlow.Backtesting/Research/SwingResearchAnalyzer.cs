@@ -19,6 +19,10 @@ public sealed class SwingResearchAnalyzer
         ArgumentNullException.ThrowIfNull(dailyBarsByTicker);
 
         options ??= new SwingResearchOptions();
+        if (options.TradeTimestampBasis == SwingTradeTimestampBasis.Unspecified)
+            throw new ArgumentException("Declare source-slice-start or completed-slice-end trade timestamps before OHLC analysis.");
+        if (dailyBarsByTicker.Values.SelectMany(bars => bars).Any(bar => bar.Timeframe != "1d"))
+            throw new ArgumentException("Swing OHLC analysis requires native daily slices; intraday executions need their own source boundaries.");
         var strategy = result.StrategyResults.FirstOrDefault(x =>
             x.StrategyName.Equals(strategyName, StringComparison.OrdinalIgnoreCase));
 
@@ -27,7 +31,9 @@ public sealed class SwingResearchAnalyzer
             throw new ArgumentException($"Strategy '{strategyName}' was not found in result '{result.RunName}'.", nameof(strategyName));
         }
 
-        var trades = strategy.CompletedTrades.OrderBy(x => x.EntryTimestamp).ToArray();
+        var trades = strategy.CompletedTrades.Select(trade => options.TradeTimestampBasis == SwingTradeTimestampBasis.CompletedSliceEnd
+            ? trade with { EntryTimestamp = trade.EntryTimestamp.AddDays(-1), ExitTimestamp = trade.ExitTimestamp.AddDays(-1) }
+            : trade).OrderBy(trade => trade.EntryTimestamp).ToArray();
         var normalizedBars = dailyBarsByTicker
             .ToDictionary(
                 x => x.Key.ToUpperInvariant(),
@@ -88,21 +94,15 @@ public sealed class SwingResearchAnalyzer
         IReadOnlyList<OhlcvBar> bars,
         IReadOnlyList<IndicatorSnapshot> snapshots)
     {
-        var entryIndex = FindIndexAtOrAfter(bars, trade.EntryTimestamp);
-        var exitIndex = FindIndexAtOrBefore(bars, trade.ExitTimestamp);
-        if (entryIndex < 0)
-        {
-            entryIndex = FindNearestIndex(bars, trade.EntryTimestamp);
-        }
-
-        if (exitIndex < 0)
-        {
-            exitIndex = FindNearestIndex(bars, trade.ExitTimestamp);
-        }
-
-        var tradeBars = entryIndex >= 0 && exitIndex >= entryIndex
-            ? bars.Skip(entryIndex).Take(exitIndex - entryIndex + 1).ToArray()
-            : Array.Empty<OhlcvBar>();
+        var entryIndex = bars.ToList().FindIndex(bar => bar.Timestamp == trade.EntryTimestamp);
+        var exitIndex = bars.ToList().FindIndex(bar => bar.Timestamp == trade.ExitTimestamp);
+        if (entryIndex < 0 || exitIndex < entryIndex)
+            throw new ArgumentException("Exact entry and exit source daily slices are required; nearest-price substitution is not valid.");
+        // Next-open technical/time exits have no exposure to the exit slice's later high/low.
+        var exitsAtOpen = trade.ExitReason.StartsWith("technical_exit", StringComparison.Ordinal) ||
+            trade.ExitReason is "max_hold_bars" or "max_hold";
+        var endExclusive = exitsAtOpen ? exitIndex : exitIndex + 1;
+        var tradeBars = bars.Skip(entryIndex).Take(Math.Max(0, endExclusive - entryIndex)).ToArray();
         var isShort = trade.Direction.Equals("short", StringComparison.OrdinalIgnoreCase);
         var maxFavorable = 0m;
         var maxAdverse = 0m;

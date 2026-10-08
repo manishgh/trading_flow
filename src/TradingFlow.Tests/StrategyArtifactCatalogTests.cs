@@ -13,7 +13,7 @@ public sealed class StrategyArtifactCatalogTests
         var snapshot = catalog.GetSnapshot();
 
         Assert.Equal(2, snapshot.ExecutableArtifacts.Count);
-        Assert.Equal(15, snapshot.ArchivedArtifacts.Count);
+        Assert.Equal(17, snapshot.ArchivedArtifacts.Count);
         Assert.All(
             snapshot.ExecutableArtifacts,
             artifact =>
@@ -33,10 +33,10 @@ public sealed class StrategyArtifactCatalogTests
 
         Assert.Contains(artifacts, item =>
             item.Identity.StrategyId == "swing.minervini-vcp" &&
-            item.Identity.SemanticVersion == "9.0.0");
+            item.Identity.SemanticVersion == "10.0.0");
         Assert.Contains(artifacts, item =>
             item.Identity.StrategyId == "swing.connors-rsi2" &&
-            item.Identity.SemanticVersion == "5.0.0");
+            item.Identity.SemanticVersion == "6.0.0");
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.catalyst-drift");
     }

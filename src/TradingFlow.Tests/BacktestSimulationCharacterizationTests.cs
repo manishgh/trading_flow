@@ -69,20 +69,14 @@ public sealed class BacktestSimulationCharacterizationTests
         };
         var snapshots = bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray();
         var sink = new CollectingExecutionSink();
-        var result = InvokeCreateCandidate(
-            strategy,
-            signal,
-            BuildOrderPlan(strategy, "long", 98m, 2m),
-            bars,
-            snapshots,
-            sink);
-
-        Assert.Null(result);
+        var error = Assert.Throws<TargetInvocationException>(() => InvokeCreateCandidate(
+            strategy, signal, BuildOrderPlan(strategy, "long", 98m, 2m), bars, snapshots, sink));
+        Assert.IsType<InvalidOperationException>(error.InnerException);
         Assert.DoesNotContain(sink.Events, item => item.State == ExecutionState.OrderFilled);
     }
 
     [Fact]
-    public void ShortCandidateEndOfData_EmitsMatchingFillAndCloseLifecycle()
+    public void ShortCandidateEndOfData_CannotFabricateAClosedTrade()
     {
         var baseStrategy = AtrStopStrategy();
         var strategy = baseStrategy with
@@ -99,20 +93,31 @@ public sealed class BacktestSimulationCharacterizationTests
         };
         var snapshots = bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray();
         var sink = new CollectingExecutionSink();
-        var result = InvokeCreateCandidate(
-            strategy,
-            signal,
-            BuildOrderPlan(strategy, "short", 102m, 2m),
-            bars,
-            snapshots,
-            sink);
-
-        Assert.NotNull(result);
-        Assert.Single(sink.Events, item => item.State == ExecutionState.OrderFilled);
-        var closed = Assert.Single(sink.Events, item => item.State == ExecutionState.PositionClosed);
-        Assert.Contains("end_of_data", closed.Message, StringComparison.Ordinal);
+        var error=Assert.Throws<TargetInvocationException>(()=>InvokeCreateCandidate(
+            strategy,signal,BuildOrderPlan(strategy,"short",102m,2m),bars,snapshots,sink));
+        Assert.IsType<InvalidOperationException>(error.InnerException);
+        Assert.DoesNotContain(sink.Events,item=>item.State==ExecutionState.PositionClosed);
         Assert.All(sink.Events, item => Assert.Equal("candidate-lifecycle", item.ReferenceId));
         Assert.Equal(sink.Events.OrderBy(item => item.Timestamp), sink.Events);
+    }
+
+    [Theory]
+    [InlineData("long")]
+    [InlineData("short")]
+    public void CompletedBarTimeoutUsesLaterOpen_ForBothDirections(string direction)
+    {
+        var original=AtrStopStrategy();var strategy=original with {Direction=direction,
+            EntryRules=original.EntryRules with {EnableShort=direction=="short"},
+            ExitRules=original.ExitRules with {MaxHoldBars=1}};
+        var bars=new[]{Bar("2026-06-01T13:30:00Z",100,101,99,100),Bar("2026-06-01T13:35:00Z",100,101,99,100),
+            Bar("2026-06-01T13:40:00Z",100,101,99,100),Bar("2026-06-01T13:45:00Z",100.5m,101,99,100)};
+        var snapshots=bars.Select(bar=>Snapshot(bar.Timestamp.ToString("O"))).ToArray();
+        var sink=new CollectingExecutionSink();
+        var result=InvokeCreateCandidate(strategy,LongSignal(),BuildOrderPlan(strategy,direction,direction=="long"?98m:102m,2m),bars,snapshots,sink);
+        Assert.NotNull(result);
+        var closed=Assert.Single(sink.Events,item=>item.State==ExecutionState.PositionClosed);
+        Assert.Contains("max_hold_bars",closed.Message);Assert.Equal(bars[3].Timestamp,closed.Timestamp);
+        Assert.DoesNotContain(sink.Events,item=>item.State==ExecutionState.PositionClosed&&item.Timestamp==bars[2].Timestamp);
     }
 
     private static object? InvokeCreateCandidate(
