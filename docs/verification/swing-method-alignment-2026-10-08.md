@@ -1,4 +1,4 @@
-# Swing method alignment and causal repairs — 8 October 2026
+# Swing method alignment and causal repairs â€” 8 October 2026
 
 This checkpoint implements the user's requested fixes and method review before a
 five-stock-at-a-time backtest of the current Volatile group. It does not grant
@@ -35,7 +35,7 @@ execution grant:
 
 - Minervini technical VCP v9: daily price above SMA50/150/200, SMA50>SMA150>SMA200,
   net SMA200 increase versus20bars earlier, price at least30% above the252-session
-  low and within25% of its high; confirmed2–4 shrinking contractions, explicitly
+  low and within25% of its high; confirmed2â€“4 shrinking contractions, explicitly
   defined contraction/dry-up ratios, and breakout volume at least1.5times the
   previous50session arithmetic average, excluding the breakout. Structural stop
   below the final contraction; existing10R/ATR-trail/EMA20/90-bar exit overlays and
@@ -114,3 +114,59 @@ Source injection is propagated to the run-owned workspace; default operational
 adapters are unchanged. All28captured file hashes are frozen before outcomes.
 Actual runtime request/count/range/hash receipts will be retained. This avoids
 claiming a second changing REST fetch is an identical frozen-input replay.
+
+
+Independent quant review caught fallback versions in the first published audit.
+That result is preserved and superseded for identity reporting. Validated sidecar
+identity/profile now propagate through the owned workspace; canonical hashing
+binds the full source definition including its alias. Missing identities, changed
+definitions and unknown policies fail explicitly. Duplicate IDs fail before input
+creation. Code review approved the fix. 55 focused tests passed; the new persisted
+audit/mutation/cleanup regression passed with 29 affected tests. Identity-v2 reruns
+change the run name only, retaining the original prices and economic parameters.
+
+
+## Published results and independent verification
+
+Window: 7 April through 6 October 2026. Independent $10,000 per strategy and
+batch, 1% risk, 25% notional cap, four slots, 10bps slippage, existing fees.
+
+| Batch | Eligible symbols | Connors net return | Trades | Realized drawdown | VCP trades |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1 | ASTS, BKSY, CRCL, CRDO | +1.6912% | 6 | 0.5656% | 0 |
+| 2 | DASH, DIOD, MIAX, MRVL | +0.7553% | 7 | 0.9664% | 0 |
+| 3 | MVST, MXL, NBIS, NVTS, OUST | +3.1237% | 11 | 0.4660% | 0 |
+| 4 | PATH, PGY, POET, RDW, RGTI | +0.9513% | 8 | 0.4320% | 0 |
+| 5 | RKLB, SMCI, SOXL, STM | -0.4400% | 4 | 0.8787% | 0 |
+
+All 44 work items succeeded. VCP had zero candidates/trades in every batch; this
+provides no performance evidence for that method. Connors had 36 completed trades.
+Unified within-batch results equal Connors here because VCP generated no trades.
+Do not sum or compound independent batch returns as one whole-universe portfolio.
+Drawdown uses realized closed-trade equity, not intratrade mark-to-market equity.
+
+BXDC (100 total bars), FPS (168) and SIVE (no returned bars) were excluded only
+from execution coverage. CRCL qualified June19; MIAX August28, after full260-bar
+warmup. The source roster and original five-stock boundaries remain unchanged.
+
+Final affected shared kernel/risk/persistence/session/runner tests:85passed,0failed.
+Earlier148/55/29 checks overlap; these are component checks, not a release suite.
+The independent quant reviewer checked44 work items,64 referenced audit hashes,
+all frozen source/request hashes,5284 decisions and all36 trades. Canonical
+identity, completed-input timing, warmup, cutoff, scheduled expiry and ledger
+economics pass. No independent second simulation was performed.
+
+The review certifies computational timing on these captured inputs only. Current
+roster selection and present-day adjusted REST prices cannot certify historical
+membership or original revision timing. Native daily fill timestamps are slice
+receipt times; execution is a disclosed next-bar approximation. No promotion or
+paper/live activation follows.
+
+Original identity-invalid batch1 remains published and marked superseded. Exact
+identity-v2 configs, strategy sidecars, summaries, manifests, trade/candidate audits,
+source hashes, coverage, reviewer receipt and replay-driver source are retained in
+outputs/swing-study-2026-10-08. Temporary captured bars/calendars and unpublished
+failed-launch spools are removed after this audit. A later fresh download may have
+revisions and must use a new study identity; source hashes alone cannot recreate
+the deleted inputs. Operational wishlist row hashes match before/after. Existing
+Web/ngrok processes remain running and localhost News returns200.
