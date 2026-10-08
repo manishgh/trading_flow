@@ -52,20 +52,15 @@ public sealed class OptimizationJobModel : PageModel
                 : new
                 {
                     metric = job.Result.Metric,
-                    topRuns = job.Result.TopRuns.Select(run =>
+                    topRuns = job.Result.TopRuns.OrderBy(run => run.BacktestResult.RunName, StringComparer.Ordinal).Select(run =>
                     {
                         var totalTrades = run.WinningTradeCount + run.LosingTradeCount;
                         var winRate = totalTrades == 0 ? 0 : Math.Round((decimal)run.WinningTradeCount / totalTrades * 100, 1);
                         return new
                         {
-                            run.Rank,
+                            RunName = run.BacktestResult.RunName,
                             run.ParameterValues,
-                            run.MetricValue,
-                            run.TotalReturnPct,
-                            run.AverageDailyReturnPct,
-                            run.NetProfit,
-                            run.MaxDrawdownPct,
-                            StrategyName = run.BacktestResult.Winner?.StrategyName,
+                            StrategyName = String.Join(", ", run.BacktestResult.StrategyResults.Select(strategy => strategy.StrategyName).Order(StringComparer.Ordinal)),
                             TotalTrades = totalTrades,
                             WinRate = winRate
                         };

@@ -629,6 +629,22 @@ public sealed class ChronologicalBacktestExecutionCoordinatorTests
         Assert.Equal(11,changed.ExitPrice);
     }
 
+    [Fact]
+    public void FilledTargetCannotLeaveSiblingStopToConsumeALaterPosition()
+    {
+        var simulator=new RecordingExecutionSimulator();var evidence=new CollectingExecutionSink();
+        var coordinator=new ChronologicalBacktestExecutionCoordinator(Portfolio(maxParticipationPct:100),
+            [Bar(0,10,1000),RangeBar(5,10,12.5m,9.5m,12),RangeBar(10,10,10.5m,8.5m,10),
+             RangeBar(15,10,10.5m,8.5m,10),Bar(20,10,1000)],simulator,evidence);
+        Assert.True(coordinator.TrySchedule(new ChronologicalExecutionPlan(Candidate("first",0,5),Strategy(),10),out _));
+        coordinator.AdvanceThrough(Start.AddMinutes(10));Assert.Single(coordinator.CompletedTrades);
+        var next=Candidate("second",10,20) with {StopLossPrice=7,TakeProfitPrice=20,StopDistance=3,ExitReason="time_exit",ExitPrice=10};
+        Assert.True(coordinator.TrySchedule(new ChronologicalExecutionPlan(next,Strategy(),10),out _));coordinator.Complete();
+        Assert.Empty(coordinator.Failures);Assert.Equal(2,coordinator.CompletedTrades.Count);
+        Assert.Equal("time_exit",coordinator.CompletedTrades[1].ExitReason);
+        Assert.Contains(evidence.Events,item=>item.Timestamp==Start.AddMinutes(10)&&item.Message.Contains("stop-first-")&&item.Message.Contains("oco_sibling_filled"));
+    }
+
     private static BacktestCandidateTrade Candidate(
         string identity,
         int entryMinute,

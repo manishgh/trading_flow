@@ -42,6 +42,7 @@ public sealed partial class BacktestRunner(
     private readonly ILogger<BacktestRunner> _logger = logger ?? NullLogger<BacktestRunner>.Instance;
     private IRawArchiveWriter? _rawArchiveWriter;
     private string? _csvSourceRoot;
+    private string? _transientArtifactRoot;
     private IReadOnlyDictionary<string, AuthorizedRuntimeStrategy> _validatedRuntimeStrategies =
         new Dictionary<string, AuthorizedRuntimeStrategy>(StringComparer.Ordinal);
     private readonly StrategySessionClock _sessionClock = new();
@@ -136,6 +137,7 @@ public sealed partial class BacktestRunner(
         Directory.CreateDirectory(inputs);
         var scoped = new BacktestRunner(yamlReader, strategyArtifacts, _artifactWriter, _logger, marketDataProviderFactory) {
             _csvSourceRoot = _csvSourceRoot ?? run.NormalizedRoot,
+            _transientArtifactRoot = inputs,
             _rawArchiveWriter = new FileSystemRawArchiveWriter(new RawArchiveOptions(Path.Combine(inputs, "archives"))),
             _candlePipeline = new CandlePipelineEngine(new LocalFileCandleStore(Path.Combine(inputs, "candles")))
         };
@@ -355,6 +357,29 @@ public sealed partial class BacktestRunner(
         UniverseMembership? universeMembership = null,
         UniversePromotionEvidence? universePromotionEvidence = null)
     {
+        if (_transientArtifactRoot is null)
+        {
+            var workspace = CreateWorkspace(run, resultPath);
+            workspace.Runner._validatedRuntimeStrategies = _validatedRuntimeStrategies;
+            return await workspace.ExecuteAsync(() => workspace.Runner.RunPreparedCoreAsync(
+                workspace.Run, strategies, startedAt, resultPath, preparedMarket, cancellationToken,
+                progress, universeMembership, universePromotionEvidence));
+        }
+        return await RunPreparedCoreAsync(run, strategies, startedAt, resultPath, preparedMarket,
+            cancellationToken, progress, universeMembership, universePromotionEvidence);
+    }
+
+    private async Task<BacktestResult> RunPreparedCoreAsync(
+        BacktestRunConfig run,
+        StrategyDefinition[] strategies,
+        DateTimeOffset startedAt,
+        string resultPath,
+        PreparedBacktestMarket preparedMarket,
+        CancellationToken cancellationToken,
+        IProgress<BacktestProgress>? progress = null,
+        UniverseMembership? universeMembership = null,
+        UniversePromotionEvidence? universePromotionEvidence = null)
+    {
         strategies = ApplyRunSessionPolicy(run, strategies);
         ValidateRun(run, strategies);
         var preparedMarketBarCount = preparedMarket.MarketState.TickerStates.Values.Sum(state =>
@@ -366,10 +391,8 @@ public sealed partial class BacktestRunner(
             preparedMarketBarCount,
             benchmarkAliasesPreparedMarket ? 0 : preparedMarket.BenchmarkBars.Count,
             run.Engine.MaxRetainedReplayBars);
-        using var candidateHypothesisJournal = new ExecutionEventJournal(Path.Combine(
-            Path.GetDirectoryName(Path.GetFullPath(resultPath))!, ".execution-journal", $"candidate-{Guid.NewGuid():N}.ndjson"));
-        using var portfolioExecutionJournal = new ExecutionEventJournal(Path.Combine(
-            Path.GetDirectoryName(Path.GetFullPath(resultPath))!, ".execution-journal", $"portfolio-{Guid.NewGuid():N}.ndjson"));
+        using var candidateHypothesisJournal = new ExecutionEventJournal(CreateExecutionJournalPath("candidate"));
+        using var portfolioExecutionJournal = new ExecutionEventJournal(CreateExecutionJournalPath("portfolio"));
         var executionAuditor = new ExecutionAuditor(
             capacity: 1,
             sink: candidateHypothesisJournal,
@@ -444,7 +467,7 @@ public sealed partial class BacktestRunner(
 
                 using var workItemCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
                 workItemCancellation.CancelAfter(strategyWorkItemTimeout);
-                var candidateJournalPath = CreateCandidateAuditJournalPath(run, workItem.Strategy, workItem.Ticker);
+                var candidateJournalPath = CreateCandidateAuditJournalPath(workItem.Strategy, workItem.Ticker);
                 try
                 {
                     strategyTickerBatches.Add(await ProcessPreparedStrategyTickerAsync(
@@ -1147,7 +1170,7 @@ public sealed partial class BacktestRunner(
         var startIndex = Math.Max(run.Engine.IndicatorWarmupBars, 1);
         var runtimeStrategy = ResolveRuntimeStrategy(strategy);
         var terminal = run.Engine.PrecommittedLiquidationSourceUtc;
-        var terminalProfile = runtimeStrategy.AdmissionProfile.ExecutionTimingPolicy == "completed-bar-precommitted-terminal-open-v4";
+        var terminalProfile = runtimeStrategy.AdmissionProfile.ExecutionTimingPolicy is "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5";
         if (terminal.HasValue != terminalProfile)
             throw new InvalidOperationException("Terminal-open policy and immutable timing profile must agree.");
         if (terminal is { } requested)
@@ -1339,18 +1362,19 @@ public sealed partial class BacktestRunner(
         return Path.Combine(run.ResultsRoot, safeOwner, "portfolio", $"{run.RunName}.json");
     }
 
-    private static string CreateCandidateAuditJournalPath(
-        BacktestRunConfig run,
+    private string TransientArtifactRoot => _transientArtifactRoot
+        ?? throw new InvalidOperationException("Audit spools require an owned run workspace.");
+
+    internal string CreateExecutionJournalPath(string kind) =>
+        Path.Combine(TransientArtifactRoot,
+            ".execution-journal", $"{kind}-{Guid.NewGuid():N}.ndjson");
+
+    internal string CreateCandidateAuditJournalPath(
         StrategyDefinition strategy,
         string ticker)
     {
-        var owner = Environment.GetEnvironmentVariable("TRADINGFLOW_RESULT_OWNER");
-        var safeOwner = String.IsNullOrWhiteSpace(owner) ? "shared" : SanitizePathSegment(owner);
-        var directory = Path.Combine(
-            run.ResultsRoot,
-            ".candidate-journal",
-            safeOwner,
-            SanitizePathSegment(run.RunName));
+        // The workspace GUID already isolates owners/runs. Extra hierarchy risks Windows SQLite path limits.
+        var directory = Path.Combine(TransientArtifactRoot, ".candidate-journal");
         var strategyKey = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(strategy.StrategyId)))[..12].ToLowerInvariant();
         return Path.Combine(directory, $"s-{strategyKey}-{SanitizePathSegment(ticker)}-{Guid.NewGuid():N}.ndjson");

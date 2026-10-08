@@ -166,14 +166,16 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 : "exit_not_filled_before_end_of_data");
         }
 
-        _active.RemoveAll(item => item.IsTerminal);
+        _active.RemoveAll(item => item.IsTerminal && !HasWorkingOrders(item));
     }
+
+    private bool HasWorkingOrders(ExecutionTracker tracker) => _state.WorkingOrders.Keys.Any(tracker.OwnsOrder);
 
     private void AdvanceBar(TimelineBar timelineBar)
     {
         var symbol = NormalizeSymbol(timelineBar.Bar.Ticker);
         var trackers = _active
-            .Where(tracker => !tracker.IsTerminal)
+            .Where(tracker => !tracker.IsTerminal || HasWorkingOrders(tracker))
             .Where(tracker => NormalizeSymbol(tracker.Plan.Candidate.Ticker).Equals(
                 symbol,
                 StringComparison.OrdinalIgnoreCase))
@@ -184,7 +186,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         }
 
         var bar = timelineBar.Bar;
-        var terminalOpen = trackers.Any(tracker => tracker.Plan.Candidate.ExitReason == "scheduled_study_exit" &&
+        var terminalOpen = trackers.Any(tracker => !tracker.IsTerminal && tracker.Plan.Candidate.ExitReason == "scheduled_study_exit" &&
             tracker.Plan.Candidate.ExitTimestamp.ToUniversalTime() <= timelineBar.StartUtc);
         if (terminalOpen)
         {
@@ -255,7 +257,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             AppendExecutionEvidence(step.Events);
             ApplyEvents(step.Events, bar);
             FinalizeTerminalTrackers();
-        _active.RemoveAll(item => item.IsTerminal);
+        _active.RemoveAll(item => item.IsTerminal && !HasWorkingOrders(item));
     }
 
     private void AppendExecutionEvidence(IReadOnlyCollection<SimulatedExecutionEvent> events)
@@ -287,6 +289,17 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                      .OrderBy(item => item.Plan.Candidate.EntryTimestamp)
                      .ThenBy(item => item.Identity, StringComparer.Ordinal))
         {
+            if (tracker.IsTerminal)
+            {
+                // A flattened trade retains ownership until every remaining order is cancelled.
+                // Cancellation precedes any new entry on the next source slice and consumes no liquidity.
+                foreach (var order in _state.WorkingOrders.Where(order => tracker.OwnsOrder(order.Key)))
+                    commands.Add(new SimulatedOrderCommand(ExecutionCommandKind.Cancel,
+                        $"retire-{order.Key}-{_nextCommandSequence}",order.Value.Command.Symbol,order.Value.Command.Side,
+                        order.Value.Command.OrderType,0,timestamp,_nextCommandSequence++,true,TargetClientOrderId:order.Key));
+                continue;
+            }
+
             if (!tracker.EntrySubmitted && tracker.Plan.Candidate.EntryTimestamp.ToUniversalTime() <= timestamp)
             {
                 tracker.EntrySubmitted = true;
@@ -372,7 +385,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 _nextCommandSequence++,
                 IsRiskReducing: true,
                 SimulatedTimeInForce.Day,
-                FixedFeeGroupId: $"exit-fee-{tracker.Identity}"));
+                FixedFeeGroupId: $"exit-fee-{tracker.Identity}", OcoGroupId: tracker.Identity));
         }
 
         return commands;
@@ -461,7 +474,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             LimitPrice: limitPrice,
             StopPrice: stopPrice,
             TargetClientOrderId: commandKind == ExecutionCommandKind.Replace ? currentOrderId : null,
-            FixedFeeGroupId: $"exit-fee-{tracker.Identity}"));
+            FixedFeeGroupId: $"exit-fee-{tracker.Identity}", OcoGroupId: tracker.Identity));
         tracker.SetProtectiveOrderId(kind, nextOrderId);
         if (kind == ProtectiveOrderKind.Stop && stopPrice != tracker.Plan.Candidate.StopLossPrice)
         {

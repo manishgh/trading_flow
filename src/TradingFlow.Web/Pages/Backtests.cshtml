@@ -99,7 +99,7 @@
                             @if (strategy.Audit is { } audit)
                             {
                                 <span class="lab-strategy-audit">
-                                    Audit @Signed(audit.ReturnPct) / realized DD @audit.MaxDrawdownPct.ToString("0.00")% /
+                                    Monthly audit requires a dated report /
                                     @audit.Trades trades / win @audit.WinRatePct.ToString("0.0")%
                                 </span>
                             }
@@ -211,10 +211,10 @@
                             <thead>
                                 <tr>
                                     <th scope="col">Run</th>
-                                    <th scope="col">Best strategy</th>
+                                    <th scope="col">Strategy</th>
                                     <th scope="col">Universe</th>
-                                    <th scope="col" class="num">Return</th>
-                                    <th scope="col" class="num">Realized DD</th>
+                                    <th scope="col">Monthly evidence</th>
+                                    <th scope="col">Evidence scope</th>
                                     <th scope="col" class="num">Trades</th>
                                     <th scope="col">Decision</th>
                                 </tr>
@@ -224,10 +224,10 @@
                                 {
                                     <tr>
                                         <td class="mono">@snapshot.RunId</td>
-                                        <td>@snapshot.BestStrategyName</td>
+                                        <td>@snapshot.StrategyName</td>
                                         <td>@snapshot.UniverseSource</td>
-                                        <td class="num @SignedClass(snapshot.TotalReturnPct)">@Signed(snapshot.TotalReturnPct)</td>
-                                        <td class="num">@snapshot.MaxDrawdownPct.ToString("0.00")%</td>
+                                        <td>Open the dated monthly strategy report</td>
+                                        <td>Legacy snapshot; monthly valuation required</td>
                                         <td class="num">@snapshot.AcceptedTradeCount</td>
                                         <td>
                                             <span class="tag @(snapshot.Decision == "PROMOTED" ? "tag-promoted" : "tag-research")">@snapshot.Decision</span>

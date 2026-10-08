@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Engine.Configuration;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
@@ -41,8 +42,7 @@ public sealed class BacktestsModel : PageModel
     /// </summary>
     [BindProperty(SupportsGet = true)] public string? Drill { get; set; }
 
-    /// <summary>Metric the leaderboard is ranked on.</summary>
-    [BindProperty(SupportsGet = true)] public string Metric { get; set; } = "return";
+    [BindProperty(SupportsGet = true)] public string? Month { get; set; }
 
     public BacktestJobSnapshot? SelectedJob { get; private set; }
 
@@ -67,9 +67,7 @@ public sealed class BacktestsModel : PageModel
 
             return results.FirstOrDefault(item =>
                     item.StrategyId.Equals(Drill, StringComparison.OrdinalIgnoreCase))
-                ?? results.FirstOrDefault(item =>
-                    item.StrategyId.Equals(SelectedJob!.Result!.Winner?.StrategyId, StringComparison.OrdinalIgnoreCase))
-                ?? results[0];
+                ?? results.OrderBy(item=>item.StrategyName,StringComparer.Ordinal).First();
         }
     }
 
@@ -87,74 +85,52 @@ public sealed class BacktestsModel : PageModel
     public StrategyDiagnosticReport? DrilledDiagnostic => SelectedJob?.Result?.Diagnostics
         .FirstOrDefault(item => item.StrategyId.Equals(DrilledStrategy?.StrategyId, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Metrics the leaderboard can be ranked on.</summary>
-    public static IReadOnlyList<(string Key, string Label)> Metrics { get; } =
-    [
-        ("return", "Total return %"),
-        ("daily", "Avg daily return %"),
-        ("net", "Net profit"),
-        ("drawdown", "Max drawdown %"),
-        ("winrate", "Win rate %")
-    ];
-
-    /// <summary>
-    /// Strategies ordered on the chosen metric. Drawdown sorts ascending because
-    /// less is better; everything else descending.
-    /// </summary>
-    public IReadOnlyList<StrategyBacktestResult> Leaderboard
+    private IReadOnlyList<MonthlyBacktestRow>? monthlyRows;
+    public string MonthlyUnavailable { get; private set; } = "Monthly evidence unavailable.";
+    public IReadOnlyList<MonthlyBacktestRow> MonthlyRows
     {
         get
         {
-            var results = SelectedJob?.Result?.StrategyResults ?? [];
-            return Metric switch
+            if(monthlyRows is not null)return monthlyRows;
+            try
             {
-                "daily" => results.OrderByDescending(item => item.AverageDailyReturnPct).ToArray(),
-                "net" => results.OrderByDescending(item => item.NetProfit).ToArray(),
-                "drawdown" => results.OrderBy(item => item.MaxDrawdownPct).ToArray(),
-                "winrate" => results.OrderByDescending(WinRatePct).ToArray(),
-                _ => results.OrderByDescending(item => item.TotalReturnPct).ToArray()
-            };
+                var job=SelectedJob ?? throw new InvalidOperationException("No completed run selected.");
+                var result=job.Result ?? throw new InvalidOperationException("Completed result unavailable.");
+                if(!result.EconomicResultsComplete)throw new InvalidOperationException("Incomplete cohort; monthly returns unavailable.");
+                var config=catalog.GetConfig(job.ConfigPath).Config;
+                if(config.TimeWindow.Start is not { } start||config.TimeWindow.End is not { } end)
+                    throw new InvalidOperationException("A frozen start and end are needed for monthly display.");
+                var reader=new SimpleYamlReader();var values=new List<MonthlyBacktestRow>();
+                foreach(var strategy in result.StrategyResults)
+                {
+                    var path=config.Strategies.FirstOrDefault(path=>reader.ReadStrategy(path).StrategyId==strategy.StrategyId);
+                    if(path is null||!System.IO.File.Exists(path+".artifact.json"))
+                        throw new InvalidOperationException("Immutable strategy timing metadata is missing.");
+                    var manifest=System.Text.Json.JsonSerializer.Deserialize<StrategyRunArtifactManifest>(System.IO.File.ReadAllText(path+".artifact.json"),
+                        new System.Text.Json.JsonSerializerOptions{PropertyNameCaseInsensitive=true,Converters={new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.SnakeCaseLower)}});
+                    if(manifest is null || manifest.SchemaVersion != 1 || manifest.SelectionMode != StrategySelectionMode.Backtest ||
+                        manifest.Identity is null || manifest.AdmissionProfile is null)
+                        throw new InvalidOperationException("Immutable backtest strategy metadata is malformed or unsupported.");
+                    var definition=reader.ReadStrategy(path);
+                    if(TradingFlow.Domain.Research.EvidenceCanonicalJson.ComputeSha256(new CanonicalStrategyDocument(manifest.Identity.StrategyId,manifest.Identity.SemanticVersion,definition,manifest.AdmissionProfile))!=manifest.Identity.ContentSha256)
+                        throw new InvalidOperationException("Strategy snapshot hash differs from immutable metadata.");
+                    var runtime=new AuthorizedRuntimeStrategy(manifest.Identity,StrategySelectionMode.Backtest,definition,manifest.AdmissionProfile);
+                    values.AddRange(MonthlyBacktestPresentation.FromCompletedTrades(strategy,runtime,job.RunName,start,end));
+                }
+                monthlyRows=values;return values;
+            }
+            catch(Exception error) when(error is IOException or InvalidOperationException or ArgumentException or System.Text.Json.JsonException)
+            {MonthlyUnavailable=error.Message;return monthlyRows=[];}
         }
     }
-
-    public static decimal WinRatePct(StrategyBacktestResult strategy)
+    public string? SelectedMonth => MonthlyRows.Any(row=>row.Month.Month==Month)?Month:
+        MonthlyRows.Where(row=>!row.Month.PartialPeriod).Select(row=>row.Month.Month).Order(StringComparer.Ordinal).LastOrDefault()
+        ?? MonthlyRows.Select(row=>row.Month.Month).Order(StringComparer.Ordinal).LastOrDefault();
+    public IReadOnlyList<BacktestTrade> TradesForSelectedMonth(StrategyBacktestResult strategy)
     {
-        var decided = strategy.WinningTradeCount + strategy.LosingTradeCount;
-        return decided <= 0 ? 0m : (decimal)strategy.WinningTradeCount / decided * 100m;
-    }
-
-    /// <summary>The value the leaderboard bar and figure show for one strategy.</summary>
-    public decimal MetricValue(StrategyBacktestResult strategy) => Metric switch
-    {
-        "daily" => strategy.AverageDailyReturnPct,
-        "net" => strategy.NetProfit,
-        "drawdown" => strategy.MaxDrawdownPct,
-        "winrate" => WinRatePct(strategy),
-        _ => strategy.TotalReturnPct
-    };
-
-    /// <summary>
-    /// Rank of <paramref name="strategy"/> on one matrix metric, 1 being best.
-    /// Cell tint encodes rank rather than absolute value so the table stays
-    /// readable whatever the scale.
-    /// </summary>
-    public int RankOn(string metric, StrategyBacktestResult strategy)
-    {
-        var results = SelectedJob?.Result?.StrategyResults ?? [];
-        Func<StrategyBacktestResult, decimal> selector = metric switch
-        {
-            "daily" => item => item.AverageDailyReturnPct,
-            "net" => item => item.NetProfit,
-            "drawdown" => item => -item.MaxDrawdownPct,
-            "trades" => item => item.AcceptedTradeCount,
-            "winrate" => WinRatePct,
-            "hold" => item => (decimal)(BacktestDerivedMetrics.AverageHold(item)?.TotalMinutes ?? 0),
-            "profitfactor" => item => BacktestDerivedMetrics.ProfitFactor(item) ?? 0m,
-            _ => item => item.TotalReturnPct
-        };
-        var ordered = results.OrderByDescending(selector).ToArray();
-        var index = Array.FindIndex(ordered, item => item.StrategyId == strategy.StrategyId);
-        return index < 0 ? results.Count : index + 1;
+        var row=MonthlyRows.FirstOrDefault(row=>row.AliasId==strategy.StrategyId&&row.Month.Month==SelectedMonth);
+        return row is null?[]:strategy.CompletedTrades.Where(trade=>
+            MonthlyBacktestPresentation.SourceSessionDate(trade.ExitTimestamp).ToString("yyyy-MM",System.Globalization.CultureInfo.InvariantCulture)==row.Month.Month).ToArray();
     }
 
     public IReadOnlyList<RunConfigSummary> Configs { get; private set; } = [];
@@ -257,19 +233,19 @@ public sealed class BacktestsModel : PageModel
         if (!Directory.Exists(root)) return [];
 
         return Directory.EnumerateFiles(root, "leaderboard.csv", SearchOption.AllDirectories)
-            .Select(path =>
+            .SelectMany(path =>
             {
                 var directory = Path.GetDirectoryName(path)!;
                 var runId = Path.GetFileName(directory);
-                var best = System.IO.File.ReadLines(path)
+                var strategies = System.IO.File.ReadLines(path)
                     .Skip(1)
                     .Select(ParseLeaderboardLine)
                     .Where(x => x is not null)
                     .Cast<ResearchStrategyRow>()
-                    .OrderByDescending(x => x.TotalReturnPct)
-                    .FirstOrDefault();
-                
-                if (best is null) return null;
+                    .OrderBy(x => x.StrategyName, StringComparer.Ordinal)
+                    .ToArray();
+
+                if (strategies.Length == 0) return Array.Empty<ResearchSnapshot>();
 
                 var universeSource = "unknown";
                 var runConfigPath = Path.Combine(directory, "run_config.yaml");
@@ -302,11 +278,11 @@ public sealed class BacktestsModel : PageModel
                     }
                     else if (manifestContent.Contains("\"promoted_strategies\"", StringComparison.OrdinalIgnoreCase))
                     {
-                        decision = "PROMOTED";
+                        decision = "Legacy label; exact-identity authorization required";
                     }
                 }
 
-                return new ResearchSnapshot(runId, directory, best.StrategyName, best.TotalReturnPct, best.MaxDrawdownPct, best.AcceptedTradeCount, universeSource, decision);
+                return strategies.Select(strategy => new ResearchSnapshot(runId, directory, strategy.StrategyName, strategy.AcceptedTradeCount, universeSource, decision)).ToArray();
             })
             .Where(x => x is not null)
             .Cast<ResearchSnapshot>()
@@ -362,9 +338,7 @@ public sealed class BacktestsModel : PageModel
     public sealed record ResearchSnapshot(
         string RunId,
         string Directory,
-        string BestStrategyName,
-        decimal TotalReturnPct,
-        decimal MaxDrawdownPct,
+        string StrategyName,
         int AcceptedTradeCount,
         string UniverseSource,
         string Decision);

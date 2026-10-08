@@ -157,17 +157,35 @@ public sealed class SwingCausalityAndMethodTests
     }
 
     [Fact]
-    public void AuditJournalNames_KeepLongResearchIdsOutOfSqliteFilename()
+    public async Task AuditJournalNames_KeepProductionLengthSqlitePathsShort_AndOwned()
     {
-        var root=TestRepository.FindRoot();var run=new SimpleYamlReader().ReadBacktestRun(Path.Combine(root,"configs","backtest","swing-backtest-profile.yaml")) with {
-            ResultsRoot=Path.Combine(Path.GetTempPath(),"TradingFlowPathLength")};
-        var method=typeof(BacktestRunner).GetMethod("CreateCandidateAuditJournalPath",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static)!;
-        var strategy=Read("swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml");
-        var path=(string)method.Invoke(null,[run,strategy,"CRCL"] )!;
-        Assert.DoesNotContain(strategy.StrategyId,Path.GetFileName(path));
-        Assert.True(Path.GetFileName(path).Length<70);
-        Assert.Contains("CRCL",Path.GetFileName(path));
-        Assert.EndsWith(".ndjson",path);
+        var root = TestRepository.FindRoot();
+        var reader = new SimpleYamlReader();
+        var run = reader.ReadBacktestRun(Path.Combine(root, "configs/backtest/swing-backtest-profile.yaml"));
+        var runner = new BacktestRunner(reader, new StrategyArtifactCatalog(root, Path.Combine(root, "configs/strategy-catalog.json"), reader));
+        var scratch = Path.Combine(Path.GetTempPath(), "TradingFlowPathLength-" + Guid.NewGuid().ToString("N"));
+        var productionOwnerLength = Path.GetFullPath(Path.Combine(root, "../../outputs/technical-cycle-20261008/results/tech-cycle-v5/portfolio")).Length;
+        var owner = Path.Combine(scratch, new string('p', Math.Max(1, productionOwnerLength - scratch.Length - 1)));
+        Directory.CreateDirectory(owner);
+        try
+        {
+            var workspace = runner.CreateWorkspace(run, Path.Combine(owner, "result.json"));
+            var strategy = Read("swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml");
+            var path = workspace.Runner.CreateCandidateAuditJournalPath(strategy, "CRDO");
+            Assert.DoesNotContain(strategy.StrategyId, Path.GetFileName(path));
+            Assert.True(Path.GetFileName(path).Length < 70);
+            Assert.True((BacktestCandidateJournal.StatePath(path) + "-journal").Length < 260);
+            Assert.Contains("CRDO", Path.GetFileName(path));
+            Assert.EndsWith(".ndjson", path);
+            await workspace.ExecuteAsync(() =>
+            {
+                using var journal = new BacktestCandidateJournal(path);
+                Assert.True(File.Exists(BacktestCandidateJournal.StatePath(path)));
+                return Task.FromResult(1);
+            });
+            Assert.False(Directory.Exists(workspace.InputRoot));
+        }
+        finally { Directory.Delete(scratch, true); }
     }
 
     [Theory]
