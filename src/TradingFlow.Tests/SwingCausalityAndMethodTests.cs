@@ -156,6 +156,20 @@ public sealed class SwingCausalityAndMethodTests
         } finally {Directory.Delete(scratch,true);}
     }
 
+    [Fact]
+    public void AuditJournalNames_KeepLongResearchIdsOutOfSqliteFilename()
+    {
+        var root=TestRepository.FindRoot();var run=new SimpleYamlReader().ReadBacktestRun(Path.Combine(root,"configs","backtest","swing-backtest-profile.yaml")) with {
+            ResultsRoot=Path.Combine(Path.GetTempPath(),"TradingFlowPathLength")};
+        var method=typeof(BacktestRunner).GetMethod("CreateCandidateAuditJournalPath",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static)!;
+        var strategy=Read("swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml");
+        var path=(string)method.Invoke(null,[run,strategy,"CRCL"] )!;
+        Assert.DoesNotContain(strategy.StrategyId,Path.GetFileName(path));
+        Assert.True(Path.GetFileName(path).Length<70);
+        Assert.Contains("CRCL",Path.GetFileName(path));
+        Assert.EndsWith(".ndjson",path);
+    }
+
     private sealed class FrozenProvider(OhlcvBar[] bars):TradingFlow.Engine.Abstractions.IMarketDataProvider
     {
         public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> symbols,IReadOnlyCollection<string> frames,

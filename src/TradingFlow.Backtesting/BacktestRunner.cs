@@ -1302,9 +1302,9 @@ public sealed partial class BacktestRunner(
             ".candidate-journal",
             safeOwner,
             SanitizePathSegment(run.RunName));
-        return Path.Combine(
-            directory,
-            $"{SanitizePathSegment(strategy.StrategyId)}-{SanitizePathSegment(ticker)}-{Guid.NewGuid():N}.ndjson");
+        var strategyKey = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(strategy.StrategyId)))[..12].ToLowerInvariant();
+        return Path.Combine(directory, $"s-{strategyKey}-{SanitizePathSegment(ticker)}-{Guid.NewGuid():N}.ndjson");
     }
 
     private async Task<BacktestArtifactWriteResult> WriteResultAsync(
