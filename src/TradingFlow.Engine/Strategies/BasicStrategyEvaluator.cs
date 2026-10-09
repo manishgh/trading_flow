@@ -61,6 +61,18 @@ public sealed class BasicStrategyEvaluator
             return $"rsi_outside_range (Actual: {signal.CurrentRsi:F2}, Required: {strategy.EntryRules.MinEntryRsi:F2}-{strategy.EntryRules.MaxEntryRsi:F2})";
         }
 
+        if (strategy.EntryRules.TechnicalFactor is { } factor)
+        {
+            factor.Validate();
+            var evidence = signal.TechnicalFactor;
+            if (evidence?.Metric != factor.Metric || evidence.Value is not { } value)
+                return $"technical_factor_unavailable ({evidence?.UnavailableReason ?? factor.Metric})";
+            if (factor.MinValue is { } min && value <= min || factor.MaxValue is { } max && value >= max)
+                return FormattableString.Invariant($"technical_factor_threshold_failed ({factor.Metric}: {value})");
+            if (factor.MaxContextValue is { } context &&
+                (evidence.ContextValue is null || evidence.ContextValue > context))
+                return FormattableString.Invariant($"technical_factor_context_failed ({factor.Metric}: {evidence.ContextValue})");
+        }
         var researchRuleRejection = GetResearchRuleRejection(strategy, signal);
         if (researchRuleRejection is not null)
         {

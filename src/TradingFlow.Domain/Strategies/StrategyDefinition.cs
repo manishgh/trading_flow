@@ -183,7 +183,8 @@ public sealed record EntryRules(
     decimal VcpBreakoutBufferPct = 0m,
     string PortfolioRankMode = "none",
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int Sma200RisingLookbackBars = 0,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinBreakoutVolumeVs50DayAverage = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinBreakoutVolumeVs50DayAverage = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] TechnicalFactorRules? TechnicalFactor = null);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,

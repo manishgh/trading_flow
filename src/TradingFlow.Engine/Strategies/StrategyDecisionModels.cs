@@ -79,7 +79,9 @@ public sealed record StrategyDecisionRequest(
     ImmutableDictionary<string, ImmutableArray<OhlcvBar>> BarsByTimeframe,
     ImmutableDictionary<string, ImmutableArray<IndicatorSnapshot>> SnapshotsByTimeframe,
     ImmutableArray<StrategyCatalystSnapshot> Catalysts,
-    DateTimeOffset AsOfUtc);
+    DateTimeOffset AsOfUtc,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<OhlcvBar>? ReferenceBars = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<DateOnly>? ReferenceSessionDates = null);
 
 public sealed record StrategyDecisionRule(
     string Stage,

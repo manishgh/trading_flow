@@ -16,7 +16,11 @@ public sealed partial class SignalGenerator
         StrategyDefinition strategy,
         IReadOnlyList<OhlcvBar> bars,
         IReadOnlyList<IndicatorSnapshot> snapshots,
-        int index)
+        int index,
+        IReadOnlyList<OhlcvBar>? referenceBars = null,
+        DateTimeOffset? asOfUtc = null,
+        IReadOnlyList<DateOnly>? expectedReferenceSessions = null,
+        TechnicalFactorEvidence? validatedFactor = null)
     {
         var snapshot = snapshots[index];
         var previous = snapshots[index - 1];
@@ -262,7 +266,10 @@ public sealed partial class SignalGenerator
             CurrentRsi2: snapshot.Rsi2,
             SetupStructuralStopPrice: vcpContext.StructuralStopPrice,
             IsSma200Rising: isSma200Rising,
-            BreakoutVolumeVs50DayAverage: breakoutVolume50);
+            BreakoutVolumeVs50DayAverage: breakoutVolume50,
+            TechnicalFactor: strategy.EntryRules.TechnicalFactor is { } factor
+                ? validatedFactor ?? TechnicalFactorCalculator.Analyze(factor, bars, snapshots, index, referenceBars,
+                    asOfUtc ?? bar.Timestamp.AddDays(1), expectedReferenceSessions) : null);
     }
 
     private static bool HasRequiredEntryIndicators(

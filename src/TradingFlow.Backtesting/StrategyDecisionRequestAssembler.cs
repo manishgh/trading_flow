@@ -34,7 +34,9 @@ public static class StrategyDecisionRequestAssembler
         DateTimeOffset discoveryWindowStartUtc,
         DateTimeOffset discoveryWindowEndUtc,
         int requiredWarmupBars,
-        Guid runId)
+        Guid runId,
+        IReadOnlyList<OhlcvBar>? referenceBars = null,
+        IReadOnlyList<DateOnly>? expectedReferenceSessions = null)
     {
         ArgumentNullException.ThrowIfNull(runtimeStrategy);
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
@@ -43,6 +45,7 @@ public static class StrategyDecisionRequestAssembler
         {
             throw new ArgumentException("Candidate identity requires its owning run ID.", nameof(runId));
         }
+        requiredWarmupBars = Math.Max(requiredWarmupBars, runtimeStrategy.Definition.EntryRules.TechnicalFactor?.RequiredCompletedBars ?? 0);
         if (requiredWarmupBars < 2)
         {
             throw new ArgumentOutOfRangeException(nameof(requiredWarmupBars));
@@ -136,8 +139,22 @@ public static class StrategyDecisionRequestAssembler
             catalysts.Select(ToCatalystSnapshot)
                 .OfType<StrategyCatalystSnapshot>()
                 .ToImmutableArray(),
-            asOfUtc);
+            asOfUtc,
+            runtimeStrategy.Definition.EntryRules.TechnicalFactor?.Metric == TechnicalFactorRules.RelativeRoc
+                ? CompletedReferenceBars(referenceBars ?? Array.Empty<OhlcvBar>(), asOfUtc) : null,
+            runtimeStrategy.Definition.EntryRules.TechnicalFactor?.Metric == TechnicalFactorRules.RelativeRoc
+                ? expectedReferenceSessions?.ToImmutableArray() : null);
     }
+
+    private static ImmutableArray<OhlcvBar> CompletedReferenceBars(IReadOnlyList<OhlcvBar> source, DateTimeOffset asOfUtc) =>
+        source.Where(bar => bar.Timestamp.AddDays(1) <= asOfUtc && (bar.KnownAtUtc is null || bar.KnownAtUtc <= asOfUtc))
+            .GroupBy(bar => bar.Timestamp).OrderBy(group => group.Key).Select(group =>
+            {
+                var latestKnown = group.Max(bar => bar.KnownAtUtc ?? bar.Timestamp.AddDays(1));
+                var versions = group.Where(bar => (bar.KnownAtUtc ?? bar.Timestamp.AddDays(1)) == latestKnown).Distinct().ToArray();
+                if (versions.Length != 1) throw new InvalidDataException("Benchmark revision order is ambiguous.");
+                return versions[0];
+            }).ToImmutableArray();
 
     public static AuthorizedRuntimeStrategy CreateBacktestRuntimeStrategy(
         StrategyDefinition strategy,

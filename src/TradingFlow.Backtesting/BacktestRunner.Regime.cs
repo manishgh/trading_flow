@@ -15,6 +15,8 @@ public sealed partial class BacktestRunner
 {
     private readonly RegimeGateService _regimeGate = new();
     private IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? candidateSessionSchedules;
+    private IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> factorReferenceBars =
+        new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
 
     private async Task<IReadOnlyDictionary<string, RegimeCalendar>> BuildRegimeCalendarsAsync(
         BacktestRunConfig run,
@@ -72,6 +74,13 @@ public sealed partial class BacktestRunner
             }
         }
 
+        // Reuse the regime's native benchmark observations; the assembler truncates them per decision.
+        var needed = strategies.Select(strategy => strategy.EntryRules.TechnicalFactor)
+            .Where(factor => factor?.Metric == TechnicalFactorRules.RelativeRoc).ToArray();
+        foreach (var factor in needed)
+            if (!barsByBenchmark.ContainsKey(factor!.BenchmarkSymbol))
+                throw new InvalidOperationException("Relative strength requires an active matching benchmark regime.");
+        factorReferenceBars = barsByBenchmark;
         return calendars;
     }
 }

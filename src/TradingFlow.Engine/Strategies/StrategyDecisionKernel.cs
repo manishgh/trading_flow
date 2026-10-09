@@ -27,7 +27,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
     public StrategyDecisionResult Evaluate(StrategyDecisionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ValidateRequest(request);
+        var validatedFactor = ValidateRequest(request);
 
         var rules = new List<StrategyDecisionRule>();
         var transitions = new List<StrategyCandidateTransition>();
@@ -197,7 +197,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
             request.Strategy,
             setupBars,
             pointInTimeSnapshots[request.Strategy.Timeframe],
-            setupSnapshots.Length - 1);
+            setupSnapshots.Length - 1, request.ReferenceBars?.ToArray(), request.AsOfUtc, request.ReferenceSessionDates?.ToArray(), validatedFactor);
         if (signal is null)
         {
             AddRule(rules, "qualification", "setup_signal_not_available", false, "signal_generator", new
@@ -368,7 +368,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         return Finish(StrategyCandidateState.Triggered, direction, signal, orderPlan);
     }
 
-    private static void ValidateRequest(StrategyDecisionRequest request)
+    private static TechnicalFactorEvidence? ValidateRequest(StrategyDecisionRequest request)
     {
         RequireUtc(request.AsOfUtc, nameof(request.AsOfUtc));
         if (request.Candidate.CandidateId == Guid.Empty ||
@@ -433,10 +433,44 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 request.Candidate.MarketState);
         }
 
+        if (request.Strategy.EntryRules.TechnicalFactor is { } factor)
+        {
+            factor.Validate();
+            if (request.AdmissionProfile.Indicators.DerivedIndicatorProfileVersion != "2.2.0" ||
+                request.Strategy.Timeframe != "1d" || request.Strategy.Session.IsContinuousMarket ||
+                request.Strategy.Session.ExchangeTimezone != "America/New_York" ||
+                !request.Strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Technical factors require the versioned 2.2.0 long native-daily profile.");
+        }
+        if (request.ReferenceBars is { } reference)
+        {
+            var referenceFactor = request.Strategy.EntryRules.TechnicalFactor;
+            if (referenceFactor?.Metric != TechnicalFactorRules.RelativeRoc)
+                throw new InvalidOperationException("Undeclared benchmark reference evidence.");
+            DateTimeOffset? previous = null;
+            foreach (var bar in reference)
+            {
+                if (bar.Ticker != referenceFactor.BenchmarkSymbol || bar.Timeframe != "1d" ||
+                    previous is { } prior && bar.Timestamp <= prior || bar.Timestamp.AddDays(1) > request.AsOfUtc ||
+                    bar.KnownAtUtc is { } known && known > request.AsOfUtc ||
+                    bar.DataFeed != request.Candidate.MarketState.Feed || bar.AdjustmentPolicy != request.Candidate.MarketState.AdjustmentPolicy)
+                    throw new InvalidOperationException("Benchmark evidence is duplicated, future-known or has mismatched provenance.");
+                previous = bar.Timestamp;
+            }
+        }
         foreach (var catalyst in request.Catalysts)
         {
             ValidateCatalyst(catalyst, request.Candidate.Identity.Symbol);
         }
+        if (request.Strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } requiredFactor &&
+            request.Candidate.MarketState.IsWarm && request.Candidate.Universe.IsEligible)
+        {
+            var setup = request.BarsByTimeframe[request.Strategy.Timeframe];
+            return TechnicalFactorCalculator.Analyze(requiredFactor, setup,
+                request.SnapshotsByTimeframe[request.Strategy.Timeframe], setup.Length - 1,
+                request.ReferenceBars?.ToArray(), request.AsOfUtc, request.ReferenceSessionDates?.ToArray());
+        }
+        return null;
     }
 
     private static void ValidateDiscovery(StrategyCandidateSnapshot candidate)

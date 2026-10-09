@@ -1018,17 +1018,18 @@ public sealed partial class BacktestRunner(
             }
 
             var signalTimeframe = ParseTimeframe(strategy.Timeframe);
+            var requiredWarmupBars = Math.Max(run.Engine.IndicatorWarmupBars, strategy.EntryRules.TechnicalFactor?.RequiredCompletedBars ?? 0);
             var availableWarmupBars = strategyBars.Count(
                 bar => bar.Timestamp.Add(signalTimeframe) <= windowStart);
-            if (availableWarmupBars < run.Engine.IndicatorWarmupBars &&
-                (!run.Engine.AllowLateWarmup || strategyBars.Count <= run.Engine.IndicatorWarmupBars))
+            if (availableWarmupBars < requiredWarmupBars &&
+                (!run.Engine.AllowLateWarmup || strategyBars.Count <= requiredWarmupBars))
             {
                 return StrategyTickerBacktestBatch.Failed(
                     ticker,
                     strategy,
                     $"insufficient_indicator_warmup: {ticker} {strategy.Timeframe} has " +
                     $"{availableWarmupBars} completed pre-evaluation bars; " +
-                    $"{run.Engine.IndicatorWarmupBars} required. Increase time_window.warmup_lookback_days.");
+                    $"{requiredWarmupBars} required. Increase time_window.warmup_lookback_days.");
             }
 
             candidateJournal = new BacktestCandidateJournal(candidateJournalPath);
@@ -1167,7 +1168,7 @@ public sealed partial class BacktestRunner(
     {
         var candidates = new List<BacktestCandidateTrade>();
         var diagnostics = new StrategyCandidateDiagnostics(strategy.StrategyId, strategy.StrategyName);
-        var startIndex = Math.Max(run.Engine.IndicatorWarmupBars, 1);
+        var startIndex = Math.Max(Math.Max(run.Engine.IndicatorWarmupBars, strategy.EntryRules.TechnicalFactor?.RequiredCompletedBars ?? 0), 1);
         var runtimeStrategy = ResolveRuntimeStrategy(strategy);
         var terminal = run.Engine.PrecommittedLiquidationSourceUtc;
         var terminalProfile = runtimeStrategy.AdmissionProfile.ExecutionTimingPolicy is "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5";
@@ -1275,7 +1276,13 @@ public sealed partial class BacktestRunner(
                     signalAvailableTimestamp,
                     discoveryExpiry,
                     run.Engine.IndicatorWarmupBars,
-                    simulationRun.RunId);
+                    simulationRun.RunId,
+                    strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } factor &&
+                        factorReferenceBars.TryGetValue(factor.BenchmarkSymbol, out var reference) ? reference : null,
+                    strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } expectedFactor
+                        ? TechnicalFactorCalculator.ExpectedCompletedSessions(candidateSessionSchedules
+                            ?? throw new InvalidDataException("Relative strength requires an authoritative calendar."),
+                            decisionTime, expectedFactor.LookbackBars + 1) : null);
                 var persistedDecision = await candidateDecisions.EvaluateAsync(
                     simulationRun,
                     request,

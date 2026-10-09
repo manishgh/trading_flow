@@ -164,7 +164,8 @@ public sealed class SimpleYamlReader
                 VcpBreakoutBufferPct: OptionalDecimal(map, "entry_rules.vcp_breakout_buffer_pct") ?? 0m,
                 PortfolioRankMode: OptionalString(map, "entry_rules.portfolio_rank_mode", "none"),
                 Sma200RisingLookbackBars: OptionalInt(map, "entry_rules.sma200_rising_lookback_bars", 0),
-                MinBreakoutVolumeVs50DayAverage: OptionalDecimal(map, "entry_rules.min_breakout_volume_vs_50_day_average")),
+                MinBreakoutVolumeVs50DayAverage: OptionalDecimal(map, "entry_rules.min_breakout_volume_vs_50_day_average"),
+                TechnicalFactor: ReadTechnicalFactor(map)),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -629,6 +630,22 @@ public sealed class SimpleYamlReader
         }
     }
 
+    private static TechnicalFactorRules? ReadTechnicalFactor(IReadOnlyDictionary<string, List<string>> map)
+    {
+        if (!map.Keys.Any(key => key.StartsWith("entry_rules.technical_factor.", StringComparison.Ordinal)) &&
+            !map.ContainsKey("entry_rules.technical_factor")) return null;
+        if (!RequireString(map, "direction").Equals("long", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Technical factors currently require a long strategy.");
+        var rules = new TechnicalFactorRules(RequireString(map, "entry_rules.technical_factor.metric"),
+            OptionalInt(map, "entry_rules.technical_factor.lookback_bars", 20),
+            OptionalDecimal(map, "entry_rules.technical_factor.min_value"),
+            OptionalDecimal(map, "entry_rules.technical_factor.max_value"),
+            OptionalDecimal(map, "entry_rules.technical_factor.max_context_value"),
+            OptionalString(map, "entry_rules.technical_factor.benchmark_symbol", "SPY"));
+        rules.Validate();
+        return rules;
+    }
+
     private static string RequireString(IReadOnlyDictionary<string, List<string>> map, string key)
     {
         if (!TryGetScalar(map, key, out var value) || String.IsNullOrWhiteSpace(value))
@@ -856,6 +873,7 @@ public sealed class SimpleYamlReader
         private static readonly HashSet<string> KnownSectionKeys = new(StringComparer.OrdinalIgnoreCase)
         {
             "entry_rules",
+            "entry_rules.technical_factor",
             "risk_guards",
             "risk_guards.per_ticker_daily",
             "confluence",

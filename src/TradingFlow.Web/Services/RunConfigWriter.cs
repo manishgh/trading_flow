@@ -727,6 +727,17 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"direction: {strategy.Direction}");
         yaml.AppendLine("entry_rules:");
         yaml.AppendLine($"  setup_type: {strategy.EntryRules.SetupType}");
+        if (strategy.EntryRules.TechnicalFactor is { } factor)
+        {
+            factor.Validate();
+            yaml.AppendLine("  technical_factor:");
+            yaml.AppendLine($"    metric: {factor.Metric}");
+            yaml.AppendLine($"    lookback_bars: {factor.LookbackBars}");
+            AppendOptionalDecimal(yaml, "    min_value", factor.MinValue);
+            AppendOptionalDecimal(yaml, "    max_value", factor.MaxValue);
+            AppendOptionalDecimal(yaml, "    max_context_value", factor.MaxContextValue);
+            yaml.AppendLine($"    benchmark_symbol: {factor.BenchmarkSymbol}");
+        }
         yaml.AppendLine($"  enable_short: {strategy.EntryRules.EnableShort.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  min_volume_spike: {strategy.EntryRules.MinVolumeSpike.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  min_volume_spike_source: {strategy.EntryRules.MinVolumeSpikeSource.ToConfigValue()}");
