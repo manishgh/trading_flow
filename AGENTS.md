@@ -97,6 +97,17 @@ User instruction, 21 October 2026:
 - Automatic cleanup is limited to proven run-owned temporary/generated copies, intermediate files and isolated synthetic fixtures. Verify ownership and resolved paths first. Shared downloaded history, original provider archives, news stores, operational databases and source lists are never run-owned merely because a backtest or test read them.
 - Keep each published backtest/research outcome, including unsuccessful outcomes, its monthly/trade records and immutable settings/strategy identity needed to explain it. For economic backtest/research runs, retain disposable inputs and intermediate copies after completion, failure or cancellation until an independent quant reviewer has audited the simulated trades/accounting or failed attempt and explicitly approved cleanup of that exact run. Record the approval with the result and owned-workspace identity before deletion. This approval is permission to clean intermediates, not permission to trade or promote a strategy. Preserve original/shared core data and published evidence.
 
+## Delete Temporary Files After Every Session
+
+User instruction, 31 October 2026. At the end of every session, delete the temporary files that session created and can prove it owns, unless they hold context someone still needs.
+
+- Temporary: the session's own build and test scratch folders, pytest and mypy caches, one-off scripts and their output, logs of servers the session started, downloaded installers, debug dumps, and unpublished generated run configs it abandoned.
+- Context: design notes, decisions, handoff notes, result summaries, published run results and their settings, evidence manifests, and the inputs and worker logs of economic runs. Those run files stay until the saved quant cleanup approval in `docs/backtesting-research-retention.md`, removed with `backtest-cleanup-reviewed-inputs`; an audit alone is not permission.
+- Before deleting, commit related code, stop only processes this session started, and check each resolved path. If another session or process uses a file, keep it. If a file holds context among temporary material, move what matters into `docs/` or a commit first; `outputs/` is not in git. If unsure, keep it and list it for the user.
+- Core Data Deletion Requires Specific Approval still applies. Market data, news, provider payloads and receipts, databases and source lists are never temporary, even when a one-off script downloaded them.
+- Write session scratch under the ignored `.tmp/` folder or the agent's own scratch directory, not beside source code or in a new folder for each test run.
+- End the handoff by stating what was deleted, the space freed, and what was kept and why. If the agent may not delete a file itself, give the user tested Windows commands.
+
 ## User Design Approval Required
 
 - Before adding anything to the implementation, present the concrete design to the user and
@@ -309,7 +320,7 @@ Paper configs:
 Strategy classification:
 
 - `configs/strategy-catalog.json` is the authority.
-- Bootstrap is two research artifacts, seventeen archived artifacts, and no paper
+- The catalog holds 23 research artifacts and 17 archived artifacts, with no paper
   execution or live authorization.
 - Research/archive is artifact disposition. Paper experiment, paper shadow, and
   validated are exact-identity authorization grants.
@@ -332,9 +343,10 @@ universe:
   merge: union           # preserve source provenance; admission happens later
 ```
 
-Backtest and paper universes come from database wishlists or the Finviz
-screener � never from hand-maintained ticker-list configs. Generated run
-files remain audit artifacts only.
+Paper universes come from database wishlists or the Finviz screener. Backtest universes
+may also come from a frozen rule-based screen (see `docs/operating-boundaries.md`). None
+comes from hand-maintained ticker-list configs. Generated run files remain audit artifacts
+only.
 
 ## Candidate Discovery and Admission
 

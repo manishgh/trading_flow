@@ -2,7 +2,7 @@
 
 **Status:** Binding system boundary
 
-**Updated:** 2026-10-25
+**Updated:** 2026-10-31
 
 TradingFlow is an API-first US-equities research, backtesting, and paper-trading
 system. These boundaries prevent research assumptions from leaking into execution
@@ -74,26 +74,39 @@ own indicator stabilization depth and never substitutes for daily warm-up.
 
 ## Universe Boundary
 
-Research and operation use different universe contracts:
+Any rule-based stock list may be researched. The rule, its inputs and its dates are
+frozen before any result is read.
 
+- Backtest lists may come from database wishlists, Finviz screens, or price, volume
+  and liquidity screens applied to every listed stock on each date. Paper lists still
+  come from wishlists and Finviz discovery followed by normal admission.
+- A rule may use only information available before the date it selects for. Price and
+  dollar-volume screens use as-traded prices, never prices later adjusted for splits or
+  dividends. Indicators may use only the split adjustments known by that date.
+- Today's wishlists and Finviz screens are not proof of historical membership. Results
+  from them are diagnostics: the list already reflects which stocks survived and moved.
 - Promotable historical research requires provider-backed point-in-time membership,
   delistings, symbol changes, issuer identity, share-class deduplication, sectors,
-  and terminal outcomes.
-- Today's wishlists and Finviz screens are operational candidate sources, not proof
-  of historical membership.
-- Backtest and paper universes come from database wishlists. Generated run files are
-  immutable audit artifacts, not hand-maintained ticker universes.
+  and terminal outcomes. A stock that delists while held closes with a recorded final
+  outcome; it never drops out of the results.
 - One listed share class per issuer is retained by deterministic score and identity
   ordering.
-- Missing point-in-time universe evidence fails strategy promotion closed.
+- Generated run files are immutable audit artifacts, not hand-maintained ticker
+  universes.
+- Missing point-in-time universe evidence fails strategy promotion closed. It does not
+  block diagnostic research.
 
 ## Research Boundary
 
-Non-ML alpha research is intentionally limited to two tracks:
+On 31 October 2026 the user replaced the earlier two-track limit. Any strategy type
+may be researched when it comes from a published method or the user asks for it, swing
+or same-day, long or short. Each experiment records its source and lists every
+difference from that source. New experiments, components and execution paths still need
+the design approval required by `AGENTS.md`. Research permission does not authorize
+paper or live trading: same-day strategies stay backtest-only until a paper driver is
+designed and approved, and live trading still requires the promotion gates.
 
-1. Swing cross-sectional momentum.
-2. Isolated paired tests of stock trend, VCP, validated classified catalysts, or
-   completed sub-daily entry confirmation against that frozen baseline.
+The next two paragraphs remain the recorded terms of those earlier approved baselines.
 
 On 25 October 2026 the user separately approved one research-only regular-session
 five-minute previous-session breakout baseline, registered as
@@ -116,16 +129,17 @@ retention, holdout, execution-calibration or promotion requirements.
 
 On 27 October 2026 the user also approved the fifteen-minute opening-range breakout research baseline described in `docs/design-review/2026-10-19/12-opening-range-breakout-2026-10-27.md`: completed opening range, relative opening volume and opening direction, stop-market entry, opposite-range protective stop, 3R initial target and shared continuation protection. The limit is two filled parent entries per stock per session, with no overlap and a completed return inside the range before a second breakout. It remains an OHLC diagnostic through the existing shared saved-plan workflow, without paper/live authorization.
 
-Except for these separately approved baselines, no additional broad strategy family
-is admitted until these baselines are measured.
 Generic sentiment, present-day universes projected backward, and parameter searches
-remain diagnostic and cannot promote.
+remain diagnostic and cannot promote. A result can promote only when the number of
+variants tried is known from the trial registry. Saved-plan backtests are not registered
+there yet, so they stay diagnostic until that is built.
 
 Every experiment freezes its exact observed data coverage and chronological
 development, validation, embargo, and untouched holdout boundaries in the trial
 registry before outcomes are read. No partition may begin before the manifest's
 actual complete point-in-time coverage or before 2016. Holdout is one-use; a viewed
-or failed holdout cannot be relabeled or retuned.
+or failed holdout cannot be relabeled or retuned. A period viewed for one strategy counts
+as viewed for later strategies on overlapping stocks and dates.
 
 ## Information-Time Boundary
 

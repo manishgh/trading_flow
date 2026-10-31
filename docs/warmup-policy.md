@@ -1,6 +1,6 @@
 # Warm-Up Policy
 
-TradingFlow supports swing strategies only. Warm-up reconstructs indicator state
+Paper and live trading support swing strategies only. Warm-up reconstructs indicator state
 before evaluation; warm-up bars are never eligible for signals or fills.
 
 ## Daily Swing State

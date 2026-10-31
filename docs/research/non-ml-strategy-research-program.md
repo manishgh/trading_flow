@@ -2,7 +2,7 @@
 
 **Status:** binding research protocol
 
-**Scope:** US-listed equities, swing horizon only
+**Scope:** US-listed equities. This protocol sets the rules and pass thresholds for swing research. Same-day research allowed by `docs/operating-boundaries.md` has no pass thresholds yet, so it stays diagnostic and cannot promote.
 
 **Decision authority:** immutable evidence plus explicit human promotion
 
@@ -15,8 +15,7 @@ Measure one economically defensible baseline before testing additions:
    catalyst overlays, each tested one at a time against the frozen baseline.
 
 Sub-daily bars may confirm or time a swing entry. They are execution evidence, not a
-separate strategy track. Generic indicator stacking and same-session trading are out
-of scope.
+separate track within this protocol. Generic indicator stacking is out of scope.
 
 ## Research Invariants
 
@@ -79,6 +78,9 @@ A promotable result must have:
 Missing evidence is a failure, not a pass.
 
 ## Experiment Sequence
+
+This is the sequence for the momentum baseline. It does not limit other published
+strategy types allowed by `docs/operating-boundaries.md`.
 
 1. Freeze universe, partitions, costs, portfolio rules, and baseline parameters.
 2. Run and publish the momentum baseline.

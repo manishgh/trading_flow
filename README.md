@@ -31,9 +31,9 @@ TradingFlow currently operates within these hard boundaries:
 - **Universes:** promotable research requires point-in-time membership and delisting
   evidence. Current wishlists or Finviz exports may drive today's operation but may
   not be projected backward.
-- **Research:** cross-sectional swing momentum and point-in-time swing catalyst
-  research are the only active alpha tracks. ML belongs to the separate Market
-  Predictor project. Intraday strategy research and execution are out of scope.
+- **Research:** any published or user-requested strategy type may be researched under
+  `docs/operating-boundaries.md`. ML belongs to the separate Market Predictor project.
+  Same-day strategies run in backtests only; paper and live trading are swing-only.
 - **Timing:** completed-bar features, later-bar confirmation, next-bar execution,
   pre-fill stops, point-in-time news, and one-use chronological holdouts are
   mandatory.
@@ -301,8 +301,8 @@ folder is not promotion evidence. Experimental variants live under
 paper-shadow run.
 
 The exact bootstrap classification is in
-`configs/strategy-catalog.json`: two research artifacts, thirteen archived
-artifacts, and no paper-experiment, paper-shadow, or validated authorization.
+`configs/strategy-catalog.json`: 23 research artifacts, 17 archived artifacts, and no
+paper-experiment, paper-shadow, or validated authorization.
 Folder location is not authority.
 
 Strategy content identity is `(strategy_id, semantic_version, content_sha256)`.

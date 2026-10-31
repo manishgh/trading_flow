@@ -2,7 +2,7 @@
 
 **Decision:** `RETAIN_RESEARCH`
 
-**Trading horizon:** swing only
+**Trading horizon:** paper and live are swing only; same-day research strategies run in backtests only
 
 ## Verified Foundation
 
@@ -21,14 +21,14 @@
 
 ## Current Catalog
 
-`configs/strategy-catalog.json` contains two research artifacts and thirteen archived
-swing artifacts. None is authorized for a new paper-shadow or live run. Archived
+`configs/strategy-catalog.json` contains 23 research artifacts and 17 archived artifacts. None is authorized for a new paper-shadow or live run. Archived
 artifacts remain parseable evidence but are hidden from normal operation.
 
 ## Removed Scope
 
-All same-session strategy families, research analyzers, profiles, YAML artifacts,
-Web/API/mobile exposure, and historical day-trading plans have been removed.
+The September 2026 same-session strategy families, research analyzers, profiles, YAML
+artifacts, Web/API/mobile exposure, and historical day-trading plans were removed. Newer
+same-day baselines were added for backtests only under `docs/operating-boundaries.md`.
 Sub-daily market plumbing remains only for declared swing confirmation and execution.
 
 ## Evidence Still Required

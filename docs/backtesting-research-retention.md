@@ -92,8 +92,7 @@ Canonical and backtest strategy files remain research artifacts until an explici
 authorization binds strategy ID, semantic version, content hash, dataset evidence,
 and a human decision. Folder location and a run-local winner label are not promotion.
 
-The current catalog has two research swing artifacts and thirteen archived swing
-artifacts. The integrated decision is `RETAIN_RESEARCH`; none is authorized for a new
+The current catalog has 23 research artifacts and 17 archived artifacts. The integrated decision is `RETAIN_RESEARCH`; none is authorized for a new
 paper-shadow or live run.
 
 ## Runtime State
