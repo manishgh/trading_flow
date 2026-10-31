@@ -20,6 +20,7 @@ public sealed partial class IntradayBacktestIntegrationTests
     /// <summary>The ordinary prepared runner retains all ORB versions, fractional source evidence, actual-fill 3R and monthly identity.</summary>
     [Theory]
     [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
     [InlineData(true, true, true)]
     public async Task PreparedRunner_PublishesVerifiedIntradayArtifactsAndMonthlyResults(bool openingRange, bool outwardRounding, bool completedBreakout)
     {
@@ -33,7 +34,9 @@ public sealed partial class IntradayBacktestIntegrationTests
             var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", openingRange
                 ? completedBreakout ? "opening-range-breakout.bt-v3.yaml" : outwardRounding ? "opening-range-breakout.bt-v2.yaml" : "opening-range-breakout.bt-v1.yaml"
                 : "previous-day-breakout.bt-v1.yaml");
-            var runtime = new StrategyRunArtifactValidator(reader, artifacts).ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
+            var runtime = openingRange && !completedBreakout
+                ? StrategyRunArtifactValidator.CreateDiagnosticRuntimeStrategy(reader.ReadStrategy(strategyPath)) // Only the archived 1.1.0 uses the stop-market path.
+                : new StrategyRunArtifactValidator(reader, artifacts).ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
             var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "swing-backtest-profile.yaml"));
             var start = DateTimeOffset.Parse("2026-10-01T13:30:00Z");
             var end = DateTimeOffset.Parse("2026-10-01T20:00:00Z");
@@ -82,6 +85,8 @@ public sealed partial class IntradayBacktestIntegrationTests
             Assert.All(provider.RequestedTimeframes, timeframe => Assert.Equal("5m", timeframe));
             await BacktestArtifactIntegrity.VerifyManifestAsync(result.ArtifactManifestPath!);
             if (openingRange) await AssertOpeningRangeArtifactsAsync(result, state, start, outwardRounding, completedBreakout);
+            // Monthly publication requires a selectable catalog identity, which the archived stop-market version no longer has.
+            if (openingRange && !completedBreakout) return;
             var saved = JsonSerializer.Deserialize<BacktestResult>(await File.ReadAllTextAsync(result.ResultPath),
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
             var identity = new StrategyReference(runtime.Identity.StrategyId, runtime.Identity.SemanticVersion, runtime.Identity.ContentSha256);

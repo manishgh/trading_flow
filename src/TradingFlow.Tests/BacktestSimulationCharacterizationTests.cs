@@ -167,6 +167,22 @@ public sealed class BacktestSimulationCharacterizationTests
     }
 
     [Theory]
+    [InlineData("long", 97.95, 98)]
+    [InlineData("short", 102.05, 102)]
+    public void OpeningGap_IsJudgedOnTheMarketOpenNotTheSlippedFill(string direction, double open, double stop)
+    {
+        var original = GapStrategy(direction, ExecutionRules.KeepAndExitNextOpen);
+        var strategy = original with { Execution = original.Execution with { SlippageBps = 10m } };
+        var bars = GapBars((decimal)open, 100m);
+
+        var candidate = Assert.IsType<(BacktestCandidateTrade Candidate, int ExitIndex)>(InvokeCreateCandidate(strategy, LongSignal(),
+            BuildOrderPlan(strategy, direction, (decimal)stop, 2m), bars, bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray(),
+            new CollectingExecutionSink())).Candidate;
+
+        Assert.Equal("gap_fill_through_structural_stop", candidate.ExitReason);
+    }
+
+    [Theory]
     [InlineData("long", 95, 98)]
     [InlineData("short", 105, 102)]
     public void OpeningGapBeyondStop_KeepsOriginalDeletionWithoutPolicy(string direction, double open, double stop)

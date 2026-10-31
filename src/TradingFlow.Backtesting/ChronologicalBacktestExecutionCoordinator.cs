@@ -66,7 +66,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             tracker.Plan.Strategy.StrategyId,
             tracker.Plan.Candidate.EntryTimestamp,
             tracker.Plan.RequestedQuantity,
-            tracker.Plan.RequestedQuantity * tracker.Plan.Candidate.EntryPrice))
+            tracker.Plan.RequestedQuantity * (tracker.Plan.Candidate.PlanningReferencePrice ?? tracker.Plan.Candidate.EntryPrice)))
         .ToArray();
 
     public void AdvanceThrough(DateTimeOffset timestamp)

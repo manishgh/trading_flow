@@ -1060,6 +1060,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine("execution:");
         yaml.AppendLine($"  timeframe: {strategy.Execution.Timeframe}");
         yaml.AppendLine($"  slippage_bps: {strategy.Execution.SlippageBps.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.Execution.OpeningGapPolicy is { } openingGapPolicy) yaml.AppendLine($"  opening_gap_policy: {openingGapPolicy}");
         var confirmation = strategy.Execution.EffectiveConfirmation;
         yaml.AppendLine("  confirmation:");
         yaml.AppendLine($"    enabled: {confirmation.Enabled.ToString().ToLowerInvariant()}");

@@ -84,7 +84,7 @@ public sealed class OpeningRangeWorkflowIntegrationTests
                 artifact => artifact.Identity == identity);
     }
 
-    /// <summary>The corrected recipe is separately registered; adding a policy must never change the published control's canonical hash.</summary>
+    /// <summary>Replaced versions stay parseable evidence, and the rounded recipe differs from its control only by its submitted-price policy.</summary>
     [Fact]
     public void OpeningRangeCatalog_ArchivesReplacedVersionsAndKeepsTheirOnlyDifference()
     {

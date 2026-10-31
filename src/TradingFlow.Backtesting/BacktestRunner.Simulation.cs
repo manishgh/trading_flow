@@ -130,7 +130,7 @@ public sealed partial class BacktestRunner
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"LONG signal generated at {signal.CurrentPrice}", candidateId);
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, entryTimestamp, TradingFlow.Engine.Execution.ExecutionState.OrderFilled, $"Simulated fill at {entryPrice} (Stop: {initialStopLossPrice}, TP: {takeProfitPrice})", candidateId);
 
-        if (strategy.Execution.KeepsOpeningGaps() && entryPrice <= initialStopLossPrice)
+        if (strategy.Execution.KeepsOpeningGaps() && entryBar.Open <= initialStopLossPrice)
         {
             var gapExitBar = bars[exitStartIndex];
             var gapExitPrice = ApplyLongExitSlippage(gapExitBar.Open, snapshots[exitStartIndex].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
@@ -335,7 +335,7 @@ public sealed partial class BacktestRunner
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"SHORT signal generated at {signal.CurrentPrice}", candidateId);
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, entryTimestamp, TradingFlow.Engine.Execution.ExecutionState.OrderFilled, $"Simulated short fill at {entryPrice} (Stop: {initialStopLossPrice}, TP: {takeProfitPrice})", candidateId);
 
-        if (strategy.Execution.KeepsOpeningGaps() && entryPrice >= initialStopLossPrice)
+        if (strategy.Execution.KeepsOpeningGaps() && entryBar.Open >= initialStopLossPrice)
         {
             var gapExitBar = bars[exitStartIndex];
             var gapExitPrice = ApplyShortExitSlippage(gapExitBar.Open, snapshots[exitStartIndex].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);

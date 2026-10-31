@@ -25,6 +25,23 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
+    public void OpeningGapPolicy_SurvivesGeneratedRunFiles()
+    {
+        var reader = new SimpleYamlReader();
+        var original = reader.ReadStrategy(Path.Combine(FindRepositoryRoot(), "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        var path = Path.Combine(Path.GetTempPath(), $"opening-gap-roundtrip-{Guid.NewGuid():N}.yaml");
+        try
+        {
+            File.WriteAllText(path, RunConfigWriter.SerializeStrategyYaml(original));
+            Assert.Equal(original.Execution, reader.ReadStrategy(path).Execution);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void OpeningGapPolicy_IsOptInAndRejectsUnknownValues()
     {
         var root = FindRepositoryRoot();

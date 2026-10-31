@@ -239,7 +239,8 @@ public sealed class SimpleYamlReader
         if (strategy.EntryRules.MinBreakoutVolumeVs50DayAverage is not null && !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The prior-50-day breakout-volume rule requires completed daily bars.");
         if (strategy.Execution.OpeningGapPolicy is { } gapPolicy && (gapPolicy != ExecutionRules.KeepAndExitNextOpen ||
-            !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)))
+            !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) ||
+            !strategy.Execution.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException($"Opening gap policy '{gapPolicy}' requires '{ExecutionRules.KeepAndExitNextOpen}' on a daily strategy.");
         strategy.ExitRules.ContinuationProtection?.Validate(strategy.ExitRules);
         strategy.EntryRules.PreviousSessionBreakout?.Validate(strategy);
