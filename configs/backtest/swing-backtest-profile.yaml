@@ -6,6 +6,7 @@ engine:
   worker_count: 0
   bounded_capacity: 2000
   indicator_warmup_bars: 260
+  allow_late_warmup: true
   ticker_timeout_seconds: 1800
   max_retained_replay_bars: 1000000
   max_strategy_work_items: 10000

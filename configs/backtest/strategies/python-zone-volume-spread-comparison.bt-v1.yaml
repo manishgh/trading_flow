@@ -1,0 +1,61 @@
+# Approved separate volume/spread comparison; existing RTH 15m pivot-count zones approximate touches.
+# Candle diagnostic: both-side RVOL, synthetic full spread 10bps, planned ticket-fee RR >=1.5.
+strategy_id: technical.zone-volume-spread-comparison
+strategy_name: Python zone volume spread comparison
+source: user_python_zone_volume_spread_comparison_2026_10_29
+version: 1
+timeframe: 15m
+direction: long_short
+entry_rules:
+  setup_type: intraday_zone
+  intraday_zone:
+    policy_id: python-zone-volume-spread-v1
+    max_filled_parent_trades_per_session: 2
+    pivot_strength: 3
+    prior_session_count: 5
+    merge_atr_multiple: 0.35
+    flip_atr_multiple: 0.2
+    python_volume_spread_comparison:
+      minimum_pivot_count: 2
+      minimum_zone_count: 2
+      long_touch_dollar_tolerance: 0.15
+      minimum_relative_volume: 1.2
+      stop_atr_multiple: 0.15
+      entry_cutoff_minutes_before_close: 10
+      synthetic_spread_bps: 10
+      maximum_spread_bps: 20
+      minimum_reward_risk: 1.5
+  enable_short: true
+  short_setup_type: intraday_zone
+  min_volume_spike: 0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0
+  max_entry_rsi: 100
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_below_vwap_for_short: false
+  require_macd_bearish_for_short: false
+  require_positive_news: false
+confluence:
+  enabled: false
+  timeframe: 5m
+  ema_period: 20
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1
+  target_r_multiple: 0
+  max_hold_hours: 6.5
+  enable_atr_trailing_stop: false
+  initial_stop_mode: zone_atr
+  profit_target_mode: next_zone
+  allow_same_bar_stop_target: true
+execution:
+  timeframe: 5m
+  slippage_bps: 10
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 5
+  friday_close_buffer_minutes: 5
