@@ -30,6 +30,19 @@
 
 <div asp-validation-summary="All" class="paper-validation" role="alert"></div>
 
+<section class="panel" data-trading-limits data-mode="paper">
+    <h2>Account trading limits</h2>
+    <form data-trading-limits-form>
+        <label for="DailyNewStockLimit">New stocks per New York trading day</label>
+        <input class="input" id="DailyNewStockLimit" name="maxNewStocksPerDay" type="number" min="1" step="1" required />
+        <label for="AccountOpenPositionLimit">Open stock positions at once</label>
+        <input class="input" id="AccountOpenPositionLimit" name="maxOpenPositions" type="number" min="1" step="1" required />
+        <button class="btn btn-secondary" type="submit">Save trading limits</button>
+    </form>
+    <p class="note" data-trading-limits-rule></p>
+    <p role="status" data-trading-limits-status>Loading account limits…</p>
+</section>
+
 <form method="post" data-run-workflow>
 <div class="grid two">
     <!-- LEFT COLUMN: Environment & Strategy -->
@@ -379,6 +392,7 @@
 </details>
 </div>
 @section Scripts {
+    <script src="~/js/trading-limits.js" asp-append-version="true" defer></script>
     <script src="~/js/run-workflow.js" asp-append-version="true" defer></script>
     <script>
         let currentStrategyUsesNews = @Model.SelectedStrategyUsesNews.ToString().ToLowerInvariant();

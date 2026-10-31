@@ -3,19 +3,23 @@
 @{
     ViewData["Title"] = "News";
     string PageUrl(int number) => Url.Page("/News", new { hours = Model.Hours, ticker = Model.Ticker,
-        provider = Model.Provider, source = Model.Source, classification = Model.Classification,
-        sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly,
+        provider = Model.Provider, source = Model.Source, classification = Model.Classification, category = Model.Category, sector = Model.Sector,
+        sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly, stockLinkedOnly = Model.StockLinkedOnly,
         stockSource = Model.StockSource, view = Model.View, pageNumber = number, pageSize = Model.PageSize, stocksPage = Model.StocksPage })!;
     string StocksUrl(int number) => Url.Page("/News", new { hours = Model.Hours, ticker = Model.Ticker,
-        provider = Model.Provider, source = Model.Source, classification = Model.Classification,
-        sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly,
+        provider = Model.Provider, source = Model.Source, classification = Model.Classification, category = Model.Category, sector = Model.Sector,
+        sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly, stockLinkedOnly = Model.StockLinkedOnly,
         stockSource = Model.StockSource, view = Model.View, pageNumber = Model.PageNumber, pageSize = Model.PageSize, stocksPage = number })!;
+    string CategoryUrl(string category) => Url.Page("/News", new { hours = Model.Hours, ticker = Model.Ticker,
+        provider = Model.Provider, source = Model.Source, classification = Model.Classification, category, sector = Model.Sector,
+        sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly, stockLinkedOnly = Model.StockLinkedOnly,
+        stockSource = Model.StockSource, view = Model.View, pageNumber = 1, pageSize = Model.PageSize, stocksPage = Model.StocksPage })!;
 }
 
 <header class="page-header compact-page-header">
     <div>
         <h1>News</h1>
-        <p>Catalyst timeline across every tracked symbol, filtered by window, scope, source, and tone.</p>
+        <p>Market news timeline across companies, sectors, finance, policy, and global events.</p>
     </div>
     <div class="actions">
         <a class="button secondary" asp-page="/TradeDesk">Open Desk</a>
@@ -23,16 +27,18 @@
 </header>
 
 <section class="panel">
+    <nav class="tab-strip news-category-nav" aria-label="News categories">
+        @foreach (var category in TradingFlow.Domain.News.NewsDisplayTaxonomy.Categories)
+        {
+            <a href="@CategoryUrl(category.Key)" aria-current="@(Model.Category == category.Key ? "page" : null)">@category.Label</a>
+        }
+    </nav>
+    <p class="muted news-topic-note">Browse by topic. Sector labels describe the story; stock impact is not confirmed.</p>
     <form method="get" class="news-filter-bar">
-        <div>
-            <label for="Hours">Window</label>
-            <select id="Hours" name="hours">
-                @foreach (var (hours, label) in TradingFlow.Web.Pages.NewsModel.Windows)
-                {
-                    <option value="@hours" selected="@(Model.Hours == hours)">@label</option>
-                }
-            </select>
-        </div>
+        <input type="hidden" name="category" value="@Model.Category" />
+        <input type="hidden" name="pageNumber" value="1" />
+        <input type="hidden" name="pageSize" value="@Model.PageSize" />
+        <input type="hidden" name="stocksPage" value="@Model.StocksPage" />
         @if (User.Identity?.IsAuthenticated == true)
         {
         <div>
@@ -50,49 +56,80 @@
                     </optgroup>
                 }
             </select>
-            <small class="muted">Choose a stock universe; Ticker narrows it to one stock. Finviz selection filters stored news.</small>
+            <small class="muted">Choose a stock list. Broader topics can also include general market stories.</small>
         </div>
         }
+        <div>
+            <label for="NewsSector">Sector topic</label>
+            <select id="NewsSector" name="sector">
+                <option value="">All sector topics</option>
+                @foreach (var sector in TradingFlow.Domain.News.NewsDisplayTaxonomy.Sectors)
+                {
+                    <option value="@sector.Key" selected="@(Model.Sector == sector.Key)">@sector.Label</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="Hours">Window</label>
+            <select id="Hours" name="hours">
+                @foreach (var (hours, label) in TradingFlow.Web.Pages.NewsModel.Windows)
+                {
+                    <option value="@hours" selected="@(Model.Hours == hours)">@label</option>
+                }
+            </select>
+        </div>
         <div>
             <label for="Ticker">Ticker</label>
             <input id="Ticker" name="ticker" value="@Model.Ticker" placeholder="NVDA" autocomplete="off" />
         </div>
         <div>
-            <label for="Provider">News provider</label>
-            <input id="Provider" name="provider" value="@Model.Provider" placeholder="Any provider" />
-        </div>
-        <div>
-            <label for="Sentiment">Tone</label>
-            <select id="Sentiment" name="sentiment">
-                @foreach (var (key, label) in TradingFlow.Web.Pages.NewsModel.SentimentBands)
-                {
-                    <option value="@key" selected="@(String.Equals(Model.Sentiment, key, StringComparison.OrdinalIgnoreCase))">@label</option>
-                }
-            </select>
-        </div>
-        <div>
             <label for="Search">Search</label>
             <input id="Search" name="search" type="search" value="@Model.Search" placeholder="Keyword" autocomplete="off" />
         </div>
-        <label class="checkbox-field">
-            <input type="checkbox" name="linkedOnly" value="true" checked="@Model.LinkedOnly" />
-            Only stories with an article link
-        </label>
-        <div><label for="NewsSource">Publisher / source</label><input id="NewsSource" name="source" value="@Model.Source" placeholder="Any publisher" /></div>
-        <div><label for="NewsClassification">Evidence classification</label><select id="NewsClassification" name="classification">
-            <option value="">All classifications</option>
-            @foreach (var category in new[] { "Company", "SEC filing", "Fed", "Macro", "Market" }) {
-                <option value="@category" selected="@(String.Equals(Model.Classification, category, StringComparison.OrdinalIgnoreCase))">@category</option>
-            }
-        </select><small class="muted">Derived from provider, symbol and headline; strategy catalyst qualification is unavailable here.</small></div>
-        <div><label for="NewsView">View</label><select id="NewsView" name="view">
-            <option value="timeline" selected="@(Model.View != "ticker")">Chronological</option>
-            <option value="ticker" selected="@(Model.View == "ticker")">Grouped by symbols</option>
-        </select></div>
         <div class="news-filter-actions">
             <button type="submit">Apply</button>
             <a class="button secondary" asp-page="/News">Clear</a>
         </div>
+        <details class="news-more-filters" open="@Model.HasAdvancedFilters">
+            <summary>
+                More filters
+                @if (Model.HasAdvancedFilters) { <span>(@Model.AdvancedFilterCount active)</span> }
+            </summary>
+            <div class="news-advanced-grid">
+                <div>
+                    <label for="Provider">News provider</label>
+                    <input id="Provider" name="provider" value="@Model.Provider" placeholder="Any provider" />
+                </div>
+                <div>
+                    <label for="Sentiment">Tone</label>
+                    <select id="Sentiment" name="sentiment">
+                        @foreach (var (key, label) in TradingFlow.Web.Pages.NewsModel.SentimentBands)
+                        {
+                            <option value="@key" selected="@(String.Equals(Model.Sentiment, key, StringComparison.OrdinalIgnoreCase))">@label</option>
+                        }
+                    </select>
+                </div>
+                <div><label for="NewsSource">Publisher / source</label><input id="NewsSource" name="source" value="@Model.Source" placeholder="Any publisher" /></div>
+                <div><label for="NewsClassification">Evidence classification</label><select id="NewsClassification" name="classification">
+                    <option value="">All classifications</option>
+                    @foreach (var category in new[] { "Company", "SEC filing", "Fed", "Macro", "Market" }) {
+                        <option value="@category" selected="@(String.Equals(Model.Classification, category, StringComparison.OrdinalIgnoreCase))">@category</option>
+                    }
+                </select><small class="muted">Provider and headline classification.</small></div>
+                <div><label for="NewsView">View</label><select id="NewsView" name="view">
+                    <option value="timeline" selected="@(Model.View != "ticker")">Chronological</option>
+                    <option value="ticker" selected="@(Model.View == "ticker")">Grouped by symbols</option>
+                </select></div>
+                <label class="checkbox-field">
+                    <input type="checkbox" name="linkedOnly" value="true" checked="@Model.LinkedOnly" />
+                    Only stories with an article link
+                </label>
+                <label class="checkbox-field">
+                    <input type="checkbox" name="stockLinkedOnly" value="true" checked="@Model.StockLinkedOnly" />
+                    Only directly linked stocks
+                </label>
+            </div>
+        </details>
     </form>
 </section>
 
@@ -102,8 +139,12 @@
 <section class="panel" aria-labelledby="news-results-heading">
     <div class="section-heading compact-heading">
         <div>
-            <h2 id="news-results-heading">Timeline</h2>
+            <h2 id="news-results-heading">@Model.CategoryLabel · @Model.SectorLabel</h2>
             <p>@Model.FeedDescription</p>
+            @if (!String.IsNullOrWhiteSpace(Model.Ticker) || Model.StockLinkedOnly)
+            {
+                <p class="muted">Ticker and directly linked stock filters remain active across categories. These filters restrict results to provider symbols and exclude general market stories.</p>
+            }
         </div>
         <span class="count-label">@Model.Items.Count articles on this page · @Model.TotalBeforeFilters matching records</span>
     </div>
@@ -115,7 +156,7 @@
     else if (Model.Items.Count == 0)
     {
         <div class="empty-state">
-            <strong>No stories match these filters.</strong>
+            <strong>No stories match @Model.CategoryLabel / @Model.SectorLabel with these filters.</strong>
             <span>Widen the window or clear a filter.</span>
         </div>
     }
@@ -168,4 +209,19 @@
 </div>
 <partial name="_GroupActions" />
 
-@section Scripts { <script src="~/js/news-live.js" asp-append-version="true" defer></script> }
+@if (User.Identity?.IsAuthenticated == true)
+{
+    <details class="panel" data-company-assessment-panel>
+        <summary>Review archived company news assessments</summary>
+        <p>Separate from the live feed. These samples show how archived text was assessed today; they do not start a backtest.</p>
+        <button type="button" class="button secondary" data-load-company-assessments>Load assessment samples</button>
+        <p data-company-assessment-status role="status"></p>
+        <div data-company-assessment-summary></div>
+        <div data-company-assessment-samples></div>
+    </details>
+}
+
+@section Scripts {
+    <script src="~/js/news-live.js" asp-append-version="true" defer></script>
+    <script src="~/js/company-news-assessments.js" asp-append-version="true" defer></script>
+}

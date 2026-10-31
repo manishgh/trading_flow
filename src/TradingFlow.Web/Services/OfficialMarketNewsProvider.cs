@@ -29,10 +29,11 @@ public sealed partial class OfficialMarketNewsProvider
     private IReadOnlyDictionary<string, string> tickerByCik = new Dictionary<string, string>();
     private DateTimeOffset tickerMapExpiresAtUtc;
 
-    public OfficialMarketNewsProvider(HttpClient httpClient, ILogger<OfficialMarketNewsProvider> logger)
+    public OfficialMarketNewsProvider(HttpClient httpClient, ILogger<OfficialMarketNewsProvider> logger, TimeProvider? clock = null)
     {
         this.httpClient = httpClient;
         this.logger = logger;
+        newsClock = clock ?? TimeProvider.System;
     }
 
     public bool IsSecConfigured => !String.IsNullOrWhiteSpace(
@@ -46,6 +47,7 @@ public sealed partial class OfficialMarketNewsProvider
     {
         var events = new List<CatalystEvent>();
         events.AddRange(await GetFederalReserveEventsAsync(windowStartUtc, cancellationToken));
+        events.AddRange(await GetSupplementalEventsAsync(windowStartUtc, cancellationToken));
 
         var secUserAgent = Environment.GetEnvironmentVariable("SEC_USER_AGENT")
             ?? Environment.GetEnvironmentVariable("SEC_USER_AGENT", EnvironmentVariableTarget.User);

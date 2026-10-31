@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.WarmupService.Models;
+using System.Collections.Concurrent;
 
 namespace TradingFlow.WarmupService.Services;
 
@@ -17,33 +18,33 @@ public sealed class WarmupCoordinator(
 {
     private readonly WarmupOptions options = options.Value;
 
+    /// <summary>Runs frozen accepted inputs and preserves a completed run when a worker resumes after publication.</summary>
     public async Task<WarmupRunRecord> RunAsync(WarmupJobRequest job, CancellationToken cancellationToken)
     {
+        var prior = (await runStore.ReadAsync(cancellationToken)).FirstOrDefault(run => run.RunId == job.RunId);
+        if (prior is not null) return prior;
         var started = DateTimeOffset.UtcNow;
-        var intents = await ResolveIntentsAsync(job, cancellationToken);
+        var intents = job.FrozenIntents ?? await requestStore.ResolveIntentsAsync(job, cancellationToken);
+        WarmupWorkLimits.Validate(job with { FrozenIntents = intents }, options);
         logger.LogInformation("Warmup run {RunId} started for {TickerCount} ticker(s). Reason={Reason}", job.RunId, intents.Count, job.Reason);
 
-        var results = new List<WarmupTickerResult>();
-        using var throttler = new SemaphoreSlim(Math.Max(1, options.MaxParallelTickers));
-        var tasks = intents.Select(async intent =>
+        if (options.MaxParallelTickers <= 0) throw new InvalidOperationException("Warmup parallel ticker count must be positive.");
+        var completed = new ConcurrentBag<WarmupTickerResult>();
+        long receivedBars = 0;
+        // Bounds the actual collected rows even if a provider returns duplicate or unexpected extra records.
+        void RecordBar()
         {
-            await throttler.WaitAsync(cancellationToken);
-            try
-            {
-                return await WarmTickerAsync(job.RunId, intent, cancellationToken);
-            }
-            finally
-            {
-                throttler.Release();
-            }
-        }).ToArray();
-
-        foreach (var task in tasks)
-        {
-            results.Add(await task);
+            if (Interlocked.Increment(ref receivedBars) > options.MaximumBarsPerJob)
+                throw new InvalidOperationException("Warmup returned more bars than the configured per-job work budget.");
         }
+        await Parallel.ForEachAsync(intents, new ParallelOptions { MaxDegreeOfParallelism = options.MaxParallelTickers,
+            CancellationToken = cancellationToken }, async (intent, token) =>
+        {
+            completed.Add(await WarmTickerAsync(job.RunId, intent, job.QueuedAtUtc, RecordBar, token));
+        });
+        var results = completed.OrderBy(result => result.Ticker, StringComparer.OrdinalIgnoreCase).ToArray();
 
-        await requestStore.MarkResultsAsync(results, cancellationToken);
+        await requestStore.MarkResultsAsync(results, intents, cancellationToken);
         var run = new WarmupRunRecord(
             job.RunId,
             job.Reason,
@@ -53,7 +54,7 @@ public sealed class WarmupCoordinator(
             intents.Count,
             results.Count(x => x.Succeeded),
             results.Count(x => !x.Succeeded),
-            results.OrderBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase).ToArray());
+            results);
         await runStore.AddAsync(run, cancellationToken);
         logger.LogInformation(
             "Warmup run {RunId} finished. Status={Status}, Succeeded={Succeeded}, Failed={Failed}",
@@ -64,45 +65,24 @@ public sealed class WarmupCoordinator(
         return run;
     }
 
-    private async Task<IReadOnlyList<WarmupTickerIntent>> ResolveIntentsAsync(
-        WarmupJobRequest job,
-        CancellationToken cancellationToken)
-    {
-        var all = (await requestStore.ReadAsync(cancellationToken))
-            .Where(x => x.Active)
-            .ToArray();
-        if (job.Tickers is null || job.Tickers.Count == 0)
-        {
-            return all;
-        }
-
-        var requested = job.Tickers.Select(WarmupText.NormalizeTicker).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var existing = all.Where(x => requested.Contains(x.Ticker)).ToList();
-        var missing = requested
-            .Except(existing.Select(x => x.Ticker), StringComparer.OrdinalIgnoreCase)
-            .Select(ticker => new WarmupTickerIntent(
-                ticker,
-                job.Reason,
-                "run-now",
-                DateTimeOffset.UtcNow,
-                Math.Max(1, options.DefaultWarmupDays),
-                Math.Max(0, options.DefaultNewsLookbackDays),
-                options.DefaultTimeframes.Select(x => x.ToLowerInvariant()).ToArray(),
-                options.IncludeNewsByDefault,
-                Active: true));
-        existing.AddRange(missing);
-        return existing.OrderBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase).ToArray();
-    }
-
+    /// <summary>Fills the cache and records local/archive delivery independently using the accepted data cutoff.</summary>
     private async Task<WarmupTickerResult> WarmTickerAsync(
         string runId,
         WarmupTickerIntent intent,
+        DateTimeOffset end,
+        Action recordBar,
         CancellationToken cancellationToken)
     {
-        var end = DateTimeOffset.UtcNow;
-        var start = end.AddDays(-Math.Max(1, intent.WarmupDays));
+        var start = end.AddDays(-intent.WarmupDays);
         try
         {
+            var prior = await runStore.ReadTickerCaptureAsync(runId, intent.Ticker, cancellationToken);
+            if (prior is not null)
+            {
+                if (prior.StartUtc != start || prior.EndUtc != end || !prior.Timeframes.SequenceEqual(intent.Timeframes, StringComparer.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Recovered warmup capture differs from its accepted dates or intervals.");
+                return await PublishCaptureAsync(runId, prior, cancellationToken);
+            }
             logger.LogInformation(
                 "Warming {Ticker}: days={WarmupDays}, timeframes={Timeframes}, includeNews={IncludeNews}",
                 intent.Ticker,
@@ -113,6 +93,7 @@ public sealed class WarmupCoordinator(
             var bars = new List<TradingFlow.Domain.Market.OhlcvBar>();
             await foreach (var bar in marketDataProvider.GetBarsAsync([intent.Ticker], intent.Timeframes, start, end, cancellationToken))
             {
+                recordBar();
                 bars.Add(bar);
             }
 
@@ -133,12 +114,10 @@ public sealed class WarmupCoordinator(
                     cancellationToken);
             }
 
-            var artifacts = await artifactWriter.WriteAsync(
+            var artifacts = await artifactWriter.WriteAsync(runId,
                 new WarmupTickerPayload(intent, bars, catalysts, start, end),
                 cancellationToken);
-            await archiveSink.PublishAsync(runId, intent.Ticker, artifacts.Paths, cancellationToken);
-
-            return new WarmupTickerResult(
+            var capture = new WarmupTickerResult(
                 intent.Ticker,
                 Succeeded: true,
                 bars.Count,
@@ -147,7 +126,10 @@ public sealed class WarmupCoordinator(
                 end,
                 intent.Timeframes,
                 artifacts.Paths.Select(Path.GetFullPath).ToArray(),
-                Error: null);
+                Error: null,
+                CacheCompleted: true);
+            await runStore.SaveTickerCaptureAsync(runId, capture, cancellationToken);
+            return await PublishCaptureAsync(runId, capture, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -163,5 +145,35 @@ public sealed class WarmupCoordinator(
                 Array.Empty<string>(),
                 exception.Message);
         }
+    }
+
+    /// <summary>Publishes the saved capture and updates delivery facts without changing its original counts or inputs.</summary>
+    private async Task<WarmupTickerResult> PublishCaptureAsync(string runId, WarmupTickerResult capture, CancellationToken token)
+    {
+        WarmupArchivePublication archive;
+        try { archive = await archiveSink.PublishAsync(runId, capture.Ticker, capture.ArtifactPaths, token); }
+        catch (Exception error) when (error is not OperationCanceledException)
+        { archive = new("local_failed", null, [], error.Message); }
+        return capture with { ArchiveStatus = archive.Status, ArchiveManifestPath = archive.ManifestPath, ArchiveError = archive.Error };
+    }
+
+    /// <summary>Retries archive delivery from the original captured files without redownloading or replacing the run's data.</summary>
+    public async Task<WarmupRunRecord?> RetryArchivesAsync(string runId, CancellationToken token)
+    {
+        var run = (await runStore.ReadAsync(token)).FirstOrDefault(item => item.RunId == runId);
+        if (run is null) return null;
+        var updated = new List<WarmupTickerResult>();
+        foreach (var ticker in run.Tickers)
+        {
+            if (ticker.CacheCompleted && ticker.ArchiveStatus is "remote_pending" or "local_failed")
+            {
+                var publication = await archiveSink.PublishAsync(runId, ticker.Ticker, ticker.ArtifactPaths, token);
+                updated.Add(ticker with { ArchiveStatus = publication.Status, ArchiveManifestPath = publication.ManifestPath, ArchiveError = publication.Error });
+            }
+            else updated.Add(ticker);
+        }
+        var result = run with { Tickers = updated };
+        await runStore.AddAsync(result, token);
+        return result;
     }
 }

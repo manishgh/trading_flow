@@ -8,11 +8,13 @@
     const source = summary.dataset.source || "all";
     let loading = false;
 
-    const money = value => Number(value || 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
-    const signedMoney = value => `${Number(value || 0) > 0 ? "+" : Number(value || 0) < 0 ? "-" : ""}${money(Math.abs(Number(value || 0)))}`;
-    const signedPercent = value => `${Number(value || 0) > 0 ? "+" : Number(value || 0) < 0 ? "-" : ""}${Math.abs(Number(value || 0)).toFixed(2)}%`;
-    const tradeKey = trade => `${trade.closeKind}:${trade.jobId || trade.sessionId || "none"}:${trade.ticker}`;
-    const sourceLabel = value => ({ wishlist: "Wishlist", stockpulse: "Stock Pulse", manual: "Manual" })[value] || value;
+    // Nullable broker values are unknown, not zero-valued prices or flat P/L.
+    const money = value => value == null ? 'Unavailable' : Number(value).toLocaleString(undefined, { style: "currency", currency: "USD" });
+    const signedMoney = value => value == null ? 'Unavailable' : `${Number(value) > 0 ? "+" : Number(value) < 0 ? "-" : ""}${money(Math.abs(Number(value)))}`;
+    const signedPercent = value => value == null ? 'Unavailable' : `${Number(value) > 0 ? "+" : Number(value) < 0 ? "-" : ""}${Math.abs(Number(value)).toFixed(2)}%`;
+    // A broker holding has one row even if its local ownership labels change.
+    const tradeKey = trade => `account:${trade.ticker}`;
+    const sourceLabel = value => ({ wishlist: "Wishlist", stockpulse: "Stock Pulse", manual: "Manual", account: "Account holding", multiple: "Multiple runs" })[value] || value;
     const columns = [
         ["symbol", "Ticker", ""], [null, "Source", ""], [null, "Qty", "num"],
         ["entry", "Entry", "num"], [null, "Last", "num"], ["pl", "P/L", "num"],
@@ -28,9 +30,11 @@
         return element;
     }
 
+    // An absent P/L read must not acquire a positive/negative/flat value label.
     function signedClass(element, value) {
         element.classList.remove("value-good", "value-bad", "value-flat", "up", "down", "flat");
         element.classList.add("value-signed", value > 0 ? "up" : value < 0 ? "down" : "flat");
+        element.classList.toggle("unknown", value == null);
     }
 
     function connection(state, message) {
@@ -61,49 +65,79 @@
     dialog?.querySelector("[data-exit-cancel]")?.addEventListener("click", () => dialog.close());
     body.querySelector("[data-trades-banner]")?.focus();
 
+    // Refresh broker quantities/prices and supplemental labels without substituting local values.
     function updateRow(row, trade) {
+        const quantity = row.querySelector('[data-trade-quantity]');
+        if (quantity) quantity.textContent = Number(trade.quantity).toLocaleString(undefined, { maximumFractionDigits: 4 });
+        const entry = row.querySelector('[data-trade-entry]');
+        if (entry) entry.textContent = money(trade.entryPrice);
         const current = row.querySelector("[data-trade-current]");
         if (current) current.textContent = money(trade.currentPrice);
         const pl = row.querySelector("[data-trade-pl]");
         if (pl) {
             pl.textContent = signedMoney(trade.unrealizedPl);
-            signedClass(pl, Number(trade.unrealizedPl || 0));
+            signedClass(pl, trade.unrealizedPl);
         }
         const plPct = row.querySelector("[data-trade-pl-pct]");
         if (plPct) {
             plPct.textContent = signedPercent(trade.unrealizedPlPct);
-            signedClass(plPct, Number(trade.unrealizedPl || 0));
+            signedClass(plPct, trade.unrealizedPl);
         }
         const protection = row.querySelector("[data-trade-protection]");
         if (protection) {
             protection.textContent = trade.protectionSummary || "Not reported";
             protection.title = trade.protectionSummary || "Not reported";
         }
+        const strategy = row.querySelector('[data-trade-strategy]');
+        if (strategy) strategy.textContent = trade.strategyName || 'Not linked to a strategy';
+        const reference = row.querySelector('[data-trade-reference]');
+        if (reference) reference.textContent = trade.reference || 'Not linked to a local run';
+        const actions = row.querySelector('[data-trade-actions]');
+        if (actions && dialog) {
+            if (trade.canReviewExit && !actions.querySelector('[data-review-exit]')) {
+                actions.replaceChildren();
+                const button = append(actions, 'button', 'Review exit', 'btn btn-danger btn-sm');
+                button.type = 'button';button.dataset.reviewExit = '';
+            } else if (!trade.canReviewExit && !actions.querySelector('a')) {
+                actions.replaceChildren();
+                const link = append(actions, 'a', 'Review in Orders', 'btn btn-secondary btn-sm');
+                link.href = '/Orders';
+            }
+        }
         const review = row.querySelector("[data-review-exit]");
         if (review) {
+            review.disabled = false;
+            review.dataset.ticker = trade.ticker;
+            review.dataset.closeKind = trade.closeKind;
+            review.dataset.jobId = trade.jobId || '';
+            review.dataset.sessionId = trade.sessionId || '';
             review.dataset.currentPrice = trade.currentPrice;
             review.dataset.protection = trade.protectionSummary || "Not reported";
             review.dataset.quantity = trade.quantity;
         }
+        const source = row.querySelector('[data-trade-source]');
+        if (source) source.textContent = sourceLabel(trade.source);
     }
 
+    // Create one row for a broker holding, including unowned holdings and missing market fields.
     function createRow(trade) {
         const row = document.createElement("tr");
         row.dataset.tradeKey = tradeKey(trade);
         const symbol = append(row, "td");
         append(symbol, "strong", trade.ticker);
         append(symbol, "span", trade.status || "Open", "cell-sub");
-        append(append(row, "td"), "span", sourceLabel(trade.source), "tag tag-neutral");
-        append(row, "td", Number(trade.quantity || 0).toLocaleString(undefined, { maximumFractionDigits: 4 }), "num");
-        append(row, "td", money(trade.entryPrice), "num");
+        append(append(row, "td"), "span", sourceLabel(trade.source), "tag tag-neutral").dataset.tradeSource = '';
+        append(row, "td", Number(trade.quantity).toLocaleString(undefined, { maximumFractionDigits: 4 }), "num").dataset.tradeQuantity = '';
+        append(row, "td", money(trade.entryPrice), "num").dataset.tradeEntry = '';
         append(row, "td", "", "num").dataset.tradeCurrent = "";
         append(row, "td", "", "num position-pl").dataset.tradePl = "";
         append(row, "td", "", "num").dataset.tradePlPct = "";
-        append(row, "td", trade.strategyName || "-");
+        append(row, "td", trade.strategyName || "Not linked to a strategy").dataset.tradeStrategy = '';
         append(row, "td", "").dataset.tradeProtection = "";
-        append(row, "td", trade.reference || "-", "cell-sub");
+        append(row, "td", trade.reference || "Not linked to a local run", "cell-sub").dataset.tradeReference = '';
         const actions = append(row, "td", "", "num");
-        if (dialog) {
+        actions.dataset.tradeActions = '';
+        if (dialog && trade.canReviewExit) {
             const review = append(actions, "button", "Review exit", "btn btn-danger btn-sm");
             review.type = "button";
             review.dataset.reviewExit = "";
@@ -117,23 +151,27 @@
         return row;
     }
 
+    // Sort only displayed rows; unavailable numeric values sort after observed values.
     function sortTrades(trades) {
         const params = new URLSearchParams(window.location.search);
         const key = params.get("sort");
         const direction = params.get("dir") === "desc" ? -1 : 1;
         if (!key) return trades;
-        const value = trade => key === "symbol" ? trade.ticker : key === "entry" ? Number(trade.entryPrice || 0) :
-            key === "pl" ? Number(trade.unrealizedPl || 0) : Number(trade.unrealizedPlPct || 0);
+        const value = trade => key === "symbol" ? trade.ticker : key === "entry" ? trade.entryPrice :
+            key === "pl" ? trade.unrealizedPl : trade.unrealizedPlPct;
         return trades.slice().sort((left, right) => {
             const a = value(left);
             const b = value(right);
+            if (a == null || b == null) return a == null && b == null ? left.ticker.localeCompare(right.ticker) : a == null ? 1 : -1;
             const compared = typeof a === "string" ? a.localeCompare(b) : a - b;
             return compared !== 0 ? compared * direction : left.ticker.localeCompare(right.ticker);
         });
     }
 
+    // Remove both empty-account and unavailable-account messages when broker data becomes available.
     function removeEmptyState() {
         body.querySelector("[data-trades-empty]")?.remove();
+        body.querySelector("[data-trades-unavailable]")?.remove();
         body.querySelector(".positions-empty-action")?.remove();
     }
 
@@ -167,15 +205,17 @@
         return tableBody;
     }
 
+    // A successful empty result is distinct from a failed account read.
     function renderEmptyState() {
+        body.querySelector('[data-trades-unavailable]')?.remove();
         body.querySelector(".table-scroll")?.remove();
         if (body.querySelector("[data-trades-empty]")) return;
         const empty = document.createElement("p");
         empty.className = "empty-state";
         empty.dataset.tradesEmpty = "";
         empty.textContent = source === "all"
-            ? "No position is open. Start a run from Paper Lab or review a protected buy on the Trade Desk."
-            : "No position is open for this source. Switch the source filter to All or start a matching run.";
+            ? "The broker reported no open holdings in the bound paper account."
+            : "No account holdings match this source. Switch the source filter to All.";
         body.insertBefore(empty, body.querySelector(".positions-footnote"));
     }
 
@@ -209,16 +249,38 @@
         window.scrollTo(windowScroll[0], windowScroll[1]);
     }
 
+    // All figures come from full-account totals, regardless of the active source filter.
     function updateSummary(snapshot) {
+        const banner = document.querySelector('[data-trades-banner][data-account-read-error="true"]');
+        if (snapshot.available) banner?.remove();
         const total = summary.querySelector("[data-total-pl]");
         if (total) {
             total.textContent = signedMoney(snapshot.totalUnrealizedPl);
-            signedClass(total, Number(snapshot.totalUnrealizedPl || 0));
+            signedClass(total, snapshot.totalUnrealizedPl);
         }
         const count = summary.querySelector("[data-trade-count]");
-        if (count) count.textContent = snapshot.count;
+        if (count) count.textContent = snapshot.slotsUsed == null ? 'Unknown' : snapshot.slotsUsed;
+        const exposure = summary.querySelector('[data-gross-exposure]');
+        if (exposure) exposure.textContent = money(snapshot.grossExposure);
+        const slots = summary.querySelector('[data-slots-used]');
+        if (slots) slots.textContent = snapshot.slotsUsed == null ? 'Unknown' : snapshot.slotsUsed + ' of ' + (snapshot.maxConcurrentPositions ?? 'unknown');
+        const unprotected = summary.querySelector('[data-unprotected-count]');
+        if (unprotected) unprotected.textContent = snapshot.unprotectedCount ?? 'Unknown';
+        const unknown = summary.querySelector('[data-unknown-protection]');
+        if (unknown) { unknown.textContent = (snapshot.unknownProtectionCount ?? 'Unknown') + ' unknown';unknown.hidden = !(snapshot.unknownProtectionCount > 0); }
+        const detail = document.querySelector('[data-account-detail]');
+        if (detail) detail.textContent = snapshot.detail + ' · ' + snapshot.readAtUtc + '. Source filters change the rows, not account totals.';
     }
 
+    // A failed account read cannot be presented as an empty portfolio or keep enabled stale exit buttons.
+    function renderUnavailable(snapshot) {
+        body.querySelector('.table-scroll')?.remove();
+        removeEmptyState();
+        const message = append(body, 'p', snapshot.detail + ' This does not mean the account has no positions.', 'empty-state');
+        message.dataset.tradesUnavailable = '';
+    }
+
+    // Refresh a coherent broker snapshot and its read status, withholding empty-account claims after failures.
     async function poll() {
         if (loading) return;
         loading = true;
@@ -229,9 +291,15 @@
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const snapshot = await response.json();
             updateSummary(snapshot);
-            reconcile(snapshot.trades);
-            connection("live", `Position list checked at ${new Date().toLocaleTimeString()}.`);
+            if (snapshot.available) {
+                reconcile(snapshot.trades);
+                connection("live", `Account holdings read at ${new Date(snapshot.readAtUtc).toLocaleTimeString()}.`);
+            } else {
+                renderUnavailable(snapshot);
+                connection('stale', snapshot.detail);
+            }
         } catch (error) {
+            body.querySelectorAll('[data-review-exit]').forEach(button => button.disabled = true);
             connection("stale", `Position updates disconnected: ${error.message}. Displayed values may be stale.`);
         } finally {
             loading = false;

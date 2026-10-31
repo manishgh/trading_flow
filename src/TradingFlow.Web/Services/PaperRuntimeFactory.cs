@@ -17,18 +17,27 @@ public sealed class PaperRuntimeFactory
 {
     private readonly AlpacaCredentialProvider alpacaCredentials;
     private readonly ProjectPaths paths;
-    private readonly ILogger<TradingFlow.Alpaca.AlpacaNewsProvider> alpacaNewsLogger;
+    private readonly ConfiguredDataProviders dataProviders;
     private readonly IRawArchiveWriter rawArchiveWriter;
 
+    /// <summary>Retains the host's archive owner and delegates raw adapter construction to the common factory.</summary>
     public PaperRuntimeFactory(
         AlpacaCredentialProvider alpacaCredentials,
         ProjectPaths paths,
         ILogger<TradingFlow.Alpaca.AlpacaNewsProvider>? alpacaNewsLogger = null,
-        IRawArchiveWriter? rawArchiveWriter = null)
+        IRawArchiveWriter? rawArchiveWriter = null,
+        ConfiguredDataProviders? dataProviders = null)
     {
         this.alpacaCredentials = alpacaCredentials;
         this.paths = paths;
-        this.alpacaNewsLogger = alpacaNewsLogger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TradingFlow.Alpaca.AlpacaNewsProvider>.Instance;
+        this.dataProviders = dataProviders ?? new ConfiguredDataProviders(
+            () => TradingFlow.Alpaca.AlpacaOptions.Create(ProductionProfile.Paper) with {
+                KeyId = alpacaCredentials.KeyId, SecretKey = alpacaCredentials.SecretKey
+            },
+            () => TradingFlow.Finviz.FinvizOptions.CreateDefault() with {
+                AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? String.Empty
+            },
+            () => Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL"), newsLogger: alpacaNewsLogger);
         this.rawArchiveWriter = rawArchiveWriter ?? new FileSystemRawArchiveWriter(
             new RawArchiveOptions(Path.Combine(paths.DataRoot, "raw")));
     }
@@ -46,63 +55,11 @@ public sealed class PaperRuntimeFactory
         };
     }
 
-    public IMarketDataProvider CreateProvider(BacktestRunConfig run)
-    {
-        return run.Provider.ToLowerInvariant() switch
-        {
-            "csv" => new TradingFlow.Data.Csv.CsvMarketDataProvider(run.NormalizedRoot),
-            "alpaca" => new TradingFlow.Alpaca.AlpacaMarketDataProvider(
-                new HttpClient(),
-                TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
-                {
-                    KeyId = alpacaCredentials.KeyId,
-                    SecretKey = alpacaCredentials.SecretKey,
-                    MarketDataFeed = run.Providers.Alpaca.DataFeed
-                }),
-            "finviz" => new TradingFlow.Finviz.FinvizMarketDataProvider(
-                new TradingFlow.Finviz.FinvizClient(
-                    new HttpClient(),
-                    TradingFlow.Finviz.FinvizOptions.CreateDefault() with
-                    {
-                        AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? string.Empty
-                    },
-                    rawArchiveWriter)),
-            _ => throw new NotSupportedException($"Unsupported market data provider: {run.Provider}")
-        };
-    }
+    /// <summary>Uses the shared raw market adapter with this host's explicit credentials and archive owner.</summary>
+    public IMarketDataProvider CreateProvider(BacktestRunConfig run) => dataProviders.CreateMarket(run, rawArchiveWriter);
 
-    public ICatalystProvider? CreateNewsProvider(BacktestRunConfig run)
-    {
-        if (!run.News.Enabled)
-        {
-            return null;
-        }
-
-        return run.News.ProviderName.ToLowerInvariant() switch
-        {
-            "alpaca" => new TradingFlow.Alpaca.AlpacaNewsProvider(
-                new HttpClient(),
-                TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
-                {
-                    KeyId = alpacaCredentials.KeyId,
-                    SecretKey = alpacaCredentials.SecretKey,
-                    MarketDataFeed = run.Providers.Alpaca.DataFeed
-                },
-                rawArchiveWriter,
-                alpacaNewsLogger,
-                CreateSentimentAnalyzer()),
-            "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(
-                new TradingFlow.Finviz.FinvizClient(
-                    new HttpClient(),
-                    TradingFlow.Finviz.FinvizOptions.CreateDefault() with
-                    {
-                        AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? string.Empty
-                    },
-                    rawArchiveWriter)),
-            "none" => null,
-            _ => throw new NotSupportedException($"Unsupported news provider: {run.News.ProviderName}")
-        };
-    }
+    /// <summary>Uses the same provider, budget and sentiment deadline as research and CLI execution.</summary>
+    public ICatalystProvider? CreateNewsProvider(BacktestRunConfig run) => dataProviders.CreateNews(run, rawArchiveWriter);
 
     public IBrokerClient? CreateBrokerClient(BacktestRunConfig run)
     {
@@ -122,14 +79,7 @@ public sealed class PaperRuntimeFactory
         };
     }
 
-    private static ISentimentAnalyzer CreateSentimentAnalyzer()
-    {
-        var endpoint = Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL");
-        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
-        {
-            return new TradingFlow.Alpaca.FinbertHttpSentimentAnalyzer(new HttpClient(), uri);
-        }
-
-        return new TradingFlow.Alpaca.VaderSentimentAnalyzer();
-    }
+    /// <summary>Uses the profile's inference deadline when a sidecar is configured; the fallback retains its actual analyzer identity.</summary>
+    internal static ISentimentAnalyzer CreateSentimentAnalyzer(int timeoutSeconds, string? endpoint) =>
+        ConfiguredDataProviders.CreateSentimentAnalyzer(timeoutSeconds, endpoint);
 }

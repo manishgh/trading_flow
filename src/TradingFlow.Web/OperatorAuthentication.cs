@@ -6,7 +6,9 @@ namespace TradingFlow.Web;
 
 public static class OperatorAuthentication
 {
-    public static void AddOperatorAuthentication(this IServiceCollection services, bool uiTestMode = false, string? reviewMinimumPasswordLength = null)
+    /// <summary>Registers operator sessions with secure production cookies; local development keeps its existing HTTP test surface.</summary>
+    public static void AddOperatorAuthentication(this IServiceCollection services, bool uiTestMode = false, string? reviewMinimumPasswordLength = null,
+        bool secureTransportRequired = false)
     {
 services
     .AddIdentityCore<TradingFlowUser>(identity =>
@@ -37,7 +39,7 @@ services.ConfigureApplicationCookie(cookie =>
     cookie.AccessDeniedPath = "/AccessDenied";
     cookie.Cookie.HttpOnly = true;
     cookie.Cookie.SameSite = SameSiteMode.Lax;
-    cookie.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+    cookie.Cookie.SecurePolicy = secureTransportRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
     cookie.ExpireTimeSpan = TimeSpan.FromHours(12);
     cookie.SlidingExpiration = true;
     cookie.Events.OnRedirectToLogin = context =>

@@ -44,7 +44,10 @@ public sealed record BacktestRunRequest(
     DateTimeOffset? TestWindowEndUtc = null,
     Guid? UniverseSnapshotId = null,
     DateTimeOffset? UniverseResolvedAtUtc = null,
-    string UniverseSource = "wishlist");
+    string UniverseSource = "wishlist",
+    EngineConfig? EvidenceBoundEngine = null,
+    string? ExecutionReplayPolicyId = null,
+    BacktestRunConfig? ResolvedProfile = null);
 
 public sealed record StrategyParameterOverride(
     string StrategyPath,
@@ -150,7 +153,11 @@ public sealed record BacktestJobSnapshot(
     BacktestResult? Result,
     IReadOnlyList<BacktestStrategyRunGroup>? StrategyGroups = null,
     DateTimeOffset? CancellationRequestedAt = null,
-    string? ArtifactDirectory = null);
+    string? ArtifactDirectory = null,
+    IReadOnlyList<TradingFlow.Contracts.V1.MonthlyRunResult>? MonthlyResults = null,
+    string? MonthlyUnavailableReason = null,
+    TradingFlow.Contracts.V1.BacktestCohortExecution? Cohort = null,
+    PreparedMarketDataSummary? PreparedMarketData = null);
 
 public sealed record BacktestStrategyRunGroup(
     string StrategyName,

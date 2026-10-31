@@ -8,9 +8,11 @@ namespace TradingFlow.Mobile.Services;
 
 public sealed class TradingFlowApiClient
 {
-    public const string NgrokDefaultUrl = "https://d88a-2001-1c00-820b-7600-a565-6712-f63f-b87a.ngrok-free.app";
-    public const string PhysicalDeviceDefaultUrl = "http://192.168.178.238:53017";
-    public const string AndroidEmulatorDefaultUrl = "http://10.0.2.2:53017";
+#if DEBUG
+    private const bool AllowDevelopmentLoopback = true;
+#else
+    private const bool AllowDevelopmentLoopback = false;
+#endif
 
     private static readonly JsonSerializerOptions StreamJsonOptions = new()
     {
@@ -40,13 +42,16 @@ public sealed class TradingFlowApiClient
         streamClient = CreateHttpClient(Timeout.InfiniteTimeSpan, cookies);
     }
 
+    /// <summary>Checks every request origin and disables redirects before transport can send cookies or credentials.</summary>
     private static HttpClient CreateHttpClient(TimeSpan timeout, CookieContainer cookies)
     {
-        var client = new HttpClient(new TradingFlow.Contracts.Transport.ApiAntiforgeryHandler(new HttpClientHandler
+        var transport = new TradingFlow.Contracts.Transport.BackendOriginHandler(new HttpClientHandler
         {
             CookieContainer = cookies,
-            UseCookies = true
-        }))
+            UseCookies = true,
+            AllowAutoRedirect = false
+        }, AllowDevelopmentLoopback);
+        var client = new HttpClient(new TradingFlow.Contracts.Transport.ApiAntiforgeryHandler(transport))
         {
             Timeout = timeout
         };
@@ -57,12 +62,14 @@ public sealed class TradingFlowApiClient
         return client;
     }
 
+    /// <summary>Requires an approved origin before changing the session or posting the operator's credentials.</summary>
     public async Task<MobileAuthenticationState?> LoginAsync(
         string userName,
         string password,
         bool rememberMe,
         CancellationToken cancellationToken = default)
     {
+        TradingFlow.Contracts.Transport.BackendOrigin.Normalize(BaseUrl, AllowDevelopmentLoopback);
         await authenticationGate.WaitAsync(cancellationToken);
         changingAuthentication = true;
         AdvanceSession();
@@ -124,25 +131,17 @@ public sealed class TradingFlowApiClient
 
     public event EventHandler? SessionChanged;
 
+    /// <summary>Retains the saved origin across upgrades; new values must pass the shared transport policy.</summary>
     public string BaseUrl
     {
-        get => Preferences.Get("TradingFlowBackendUrl", NgrokDefaultUrl).TrimEnd('/');
-        set { httpClient.CancelPendingRequests(); streamClient.CancelPendingRequests(); Preferences.Set("TradingFlowBackendUrl", value.Trim().TrimEnd('/')); AdvanceSession(); }
-    }
-
-    public void UseNgrokDefault()
-    {
-        BaseUrl = NgrokDefaultUrl;
-    }
-
-    public void UsePhysicalDeviceDefault()
-    {
-        BaseUrl = PhysicalDeviceDefaultUrl;
-    }
-
-    public void UseAndroidEmulatorDefault()
-    {
-        BaseUrl = AndroidEmulatorDefaultUrl;
+        get => Preferences.Get("TradingFlowBackendUrl", String.Empty).TrimEnd('/');
+        set
+        {
+            var origin = TradingFlow.Contracts.Transport.BackendOrigin.Normalize(value, AllowDevelopmentLoopback);
+            httpClient.CancelPendingRequests(); streamClient.CancelPendingRequests();
+            Preferences.Set("TradingFlowBackendUrl", origin);
+            AdvanceSession();
+        }
     }
 
     public Task<MobileCatalogResponse?> GetCatalogAsync(CancellationToken cancellationToken = default)
@@ -153,10 +152,12 @@ public sealed class TradingFlowApiClient
     public async Task<IReadOnlyList<BacktestJobSnapshot>?> GetPaperJobsAsync(CancellationToken cancellationToken = default) =>
         (await Workflow.JobsAsync("paper", cancellationToken)).Select(ToJobCard).ToArray();
 
+    /// <summary>Keeps each job associated with its cohort, exact strategy, candles and frozen decision-context evidence.</summary>
     private static BacktestJobSnapshot ToJobCard(RunJobResponse job) => new(
         job.JobId, job.RunName, String.Empty, job.Status, job.CreatedAtUtc, job.StartedAtUtc, job.FinishedAtUtc,
         job.Failure?.Message, job.CurrentStage, job.CompletedWorkItemCount, job.TotalWorkItemCount,
-        [job.Provenance is null ? "Historical job: universe provenance unavailable." : "Universe " + job.Provenance.UniverseSnapshotId], null);
+        [job.Provenance is null ? "Historical job: universe provenance unavailable." : "Universe " + job.Provenance.UniverseSnapshotId], null)
+        { Cohort = job.Cohort, PreparedMarketData = job.PreparedMarketData, EvidenceSummary = job.EvidenceSummary };
     public Task<IReadOnlyList<MobileAutomationSessionSnapshot>?> GetAutomationSessionsAsync(CancellationToken cancellationToken = default)
     {
         return httpClient.GetFromJsonAsync<IReadOnlyList<MobileAutomationSessionSnapshot>>($"{BaseUrl}/api/v1/automation/sessions", cancellationToken);
@@ -170,6 +171,7 @@ public sealed class TradingFlowApiClient
     public Task<BacktestJobSnapshot?> GetPaperJobAsync(Guid jobId, CancellationToken cancellationToken = default) =>
         GetJobDetailAsync(jobId, cancellationToken);
 
+    /// <summary>Consumes shared monthly records, committed candles and frozen zone evidence without reconstructing strategy rules.</summary>
     private async Task<BacktestJobSnapshot?> GetJobDetailAsync(Guid id, CancellationToken token)
     {
         var detail = await Workflow.DetailsAsync(id, token);
@@ -177,8 +179,15 @@ public sealed class TradingFlowApiClient
         return card with {
             Events = detail.Events,
             Summary = detail.Result is { } result
-                ? $"Return {result.TotalReturnPct?.ToString("0.##") ?? "unknown"}% · drawdown {result.MaxDrawdownPct?.ToString("0.##") ?? "unknown"}% · trades {result.AcceptedTradeCount?.ToString() ?? "unknown"}"
+                ? $"Accepted candidates {result.AcceptedTradeCount?.ToString() ?? "unknown"}/{result.CandidateTradeCount?.ToString() ?? "unknown"}. Results are shown by strategy, group and month."
                 : null,
+            MonthlyResults = detail.MonthlyResults ?? [],
+            MonthlyUnavailableReason = detail.MonthlyUnavailableReason,
+            PortfolioState = detail.PortfolioState,
+            ZoneDecisions = detail.ZoneDecisions ?? [],
+            HistoryEligibility = detail.HistoryEligibility ?? [],
+            PreparedMarketData = detail.PreparedMarketData ?? detail.Job.PreparedMarketData,
+            EvidenceSummary = detail.EvidenceSummary ?? detail.Job.EvidenceSummary,
             StrategyGroups = detail.Strategies.Select(item => new BacktestStrategyRunGroup(item.StrategyName, item.Status,
                 item.CompletedTickerCount, item.TotalTickerCount, item.CurrentTicker, item.RecentEvents)).ToArray()
         };
@@ -257,6 +266,10 @@ public sealed class TradingFlowApiClient
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
+    /// <summary>Reads verified archived assessments without starting provider collection, inference or a portfolio.</summary>
+    public Task<CompanyNewsAssessmentPreview?> GetCompanyNewsAssessmentSamplesAsync(CancellationToken token = default) =>
+        httpClient.GetFromJsonAsync<CompanyNewsAssessmentPreview>($"{BaseUrl}/api/v1/news/company-assessments", token);
+
     public Task<MobileNewsFeedResponse?> GetFilteredNewsAsync(IReadOnlyDictionary<string, string> filters, CancellationToken token = default) =>
         httpClient.GetFromJsonAsync<MobileNewsFeedResponse>($"{BaseUrl}/api/v1/news/feed?{MarketQuery(filters)}", token);
 
@@ -303,16 +316,6 @@ public sealed class TradingFlowApiClient
     public async Task<MobileWishlistResponse?> SaveWishlistAsync(MobileWishlistSaveRequest request, CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsJsonAsync($"{BaseUrl}/api/v1/wishlists", request, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<MobileWishlistResponse>(cancellationToken);
-    }
-
-    public async Task<MobileWishlistResponse?> SetWishlistObservedAsync(Guid wishlistId, bool isObserved, CancellationToken cancellationToken = default)
-    {
-        using var response = await httpClient.PostAsJsonAsync(
-            $"{BaseUrl}/api/v1/wishlists/{wishlistId}/observe",
-            new MobileWishlistObserveRequest(isObserved),
-            cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<MobileWishlistResponse>(cancellationToken);
     }
@@ -382,9 +385,10 @@ public sealed class TradingFlowApiClient
             cancellationToken);
     }
 
-    public Task<MobileRunningTradesResponse?> GetRunningTradesAsync(string source = "all", CancellationToken cancellationToken = default)
+    /// <summary>Reads actual account holdings and full-account totals, including holdings without active local jobs.</summary>
+    public Task<AccountPositionsResponse?> GetRunningTradesAsync(string source = "all", CancellationToken cancellationToken = default)
     {
-        return httpClient.GetFromJsonAsync<MobileRunningTradesResponse>(
+        return httpClient.GetFromJsonAsync<AccountPositionsResponse>(
             $"{BaseUrl}/api/v1/running-trades?source={Uri.EscapeDataString(source)}",
             cancellationToken);
     }
@@ -632,15 +636,27 @@ public sealed record BacktestJobSnapshot(
     BacktestResultSnapshot? Result,
     IReadOnlyList<BacktestStrategyRunGroup>? StrategyGroups = null)
 {
+    /// <summary>Names the worker's preparation phase and retains its reported work counts.</summary>
     public string ProgressText => TotalTickerCount <= 0
-        ? CurrentStage
-        : $"{CurrentStage} - {CompletedTickerCount}/{TotalTickerCount}";
+        ? StageLabel
+        : $"{StageLabel} - {CompletedTickerCount}/{TotalTickerCount}";
+
+    /// <summary>Names candle preparation without changing the server's job state.</summary>
+    private string StageLabel => CurrentStage == "preparing_candles" ? "Preparing candles" : CurrentStage.Replace('_', ' ');
 
     public string LatestEvent => Events.LastOrDefault() ?? "No events yet.";
     public string? Summary { get; init; }
+    public BacktestCohortExecution? Cohort { get; init; }
+    public PreparedMarketDataSummaryResponse? PreparedMarketData { get; init; }
+    public DecisionContextEvidenceSummary? EvidenceSummary { get; init; }
+    public IReadOnlyList<MonthlyRunResult> MonthlyResults { get; init; } = [];
+    public string? MonthlyUnavailableReason { get; init; }
+    public RunPortfolioStateResponse? PortfolioState { get; init; }
+    public IReadOnlyList<RunZoneDecisionDetail> ZoneDecisions { get; init; } = [];
+    public IReadOnlyList<RunHistoryEligibility> HistoryEligibility { get; init; } = [];
     public string ResultSummary => Summary ?? (Result is null
         ? ErrorMessage ?? LatestEvent
-        : $"P/L {Result.NetProfit:C2}, return {Result.TotalReturnPct:F2}%, daily {Result.AverageDailyReturnPct:F2}%, DD {Result.MaxDrawdownPct:F2}%, trades {Result.AcceptedTradeCount}/{Result.CandidateTradeCount}");
+        : $"Trades {Result.AcceptedTradeCount}/{Result.CandidateTradeCount}. See monthly results for each strategy and group.");
 }
 
 public sealed record BacktestResultSnapshot(
@@ -874,7 +890,7 @@ public sealed record MobileWishlistResponse(
 
     public int ActiveItemCount => Items.Count(item => item.Active);
 
-    public string DetailText => $"{ActiveItemCount} active ticker(s) | {(IncludeExtendedHours ? "extended hours" : "regular hours")} | {(IsObserved ? "observing" : "paused")}";
+    public string DetailText => $"{ActiveItemCount} active ticker(s) | {(IncludeExtendedHours ? "extended hours" : "regular hours")}";
 }
 
 public sealed record MobileWishlistItemResponse(
@@ -953,7 +969,7 @@ public sealed record MobileWishlistDeskRowResponse(
     MobileNewsItem? LatestNews,
     MobileRunningTrade? Trade)
 {
-    public string StatusText => HasTrade ? "In trade" : HasSignal ? "Observed setup" : "Watching";
+    public string StatusText => HasTrade ? "In trade" : HasSignal ? "Historical alert" : "Select a strategy";
 
     public string DetailText => HasTrade && Trade is not null
         ? Trade.PlText
@@ -1103,7 +1119,6 @@ public sealed record MobileWishlistSaveRequest(
     bool? IncludeExtendedHours,
     bool? IsObserved);
 
-public sealed record MobileWishlistObserveRequest(bool IsObserved);
 
 public sealed record MobilePaperPositionResponse(
     string Ticker,
@@ -1120,16 +1135,6 @@ public sealed record MobilePaperPositionResponse(
     public string PnlText => $"{(UnrealizedPl >= 0 ? "+" : String.Empty)}{UnrealizedPl:C2}";
 
     public bool IsProfit => UnrealizedPl >= 0;
-}
-
-public sealed record MobileRunningTradesResponse(
-    IReadOnlyList<MobileRunningTrade> Trades,
-    decimal TotalUnrealizedPl,
-    int Count)
-{
-    public string TotalText => $"Total P/L {(TotalUnrealizedPl >= 0 ? "+" : String.Empty)}{TotalUnrealizedPl:C2}";
-
-    public bool IsTotalProfit => TotalUnrealizedPl >= 0;
 }
 
 public sealed record MobileOrderActivityResponse(
@@ -1255,11 +1260,13 @@ public sealed record WarmupWatchRequest(
     int? NewsLookbackDays,
     IReadOnlyCollection<string>? Timeframes,
     bool? IncludeNews,
-    bool RunNow);
+    bool RunNow,
+    string? IdempotencyKey = null);
 
 public sealed record WarmupRunNowRequest(
     IReadOnlyCollection<string>? Tickers,
-    string? Reason);
+    string? Reason,
+    string? IdempotencyKey = null);
 
 public sealed record WarmupAccepted(
     int Accepted,
@@ -1299,7 +1306,8 @@ public sealed record WarmupRunRecord(
     int FailedTickerCount,
     IReadOnlyList<WarmupTickerResult> Tickers)
 {
-    public string SummaryText => $"{Status}: {SucceededTickerCount}/{RequestedTickerCount} succeeded, {FailedTickerCount} failed";
+    public string SummaryText => $"Cache {Status}: {SucceededTickerCount}/{RequestedTickerCount} completed, {FailedTickerCount} failed. " +
+        String.Join("; ", Tickers.Select(ticker => $"{ticker.Ticker}: archive {ticker.ArchiveStatus.Replace('_', ' ')} {ticker.ArchiveError}"));
     public string StartedText => StartedAtUtc.LocalDateTime.ToString("MMM d HH:mm");
 }
 
@@ -1312,4 +1320,8 @@ public sealed record WarmupTickerResult(
     DateTimeOffset EndUtc,
     IReadOnlyList<string> Timeframes,
     IReadOnlyList<string> ArtifactPaths,
-    string? Error);
+    string? Error,
+    bool CacheCompleted = false,
+    string ArchiveStatus = "not_attempted",
+    string? ArchiveManifestPath = null,
+    string? ArchiveError = null);

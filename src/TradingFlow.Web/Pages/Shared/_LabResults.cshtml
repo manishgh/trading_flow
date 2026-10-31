@@ -46,9 +46,19 @@
 
 }
 
+<partial name="_PreparedMarketData" model="Model.Job" />
+
 <section class="lab-panel">
     <h2 class="section-heading">Monthly strategy returns</h2>
-    <p class="note">Each strategy has a separate capital pool. This view uses realised closed-trade equity: trade net profit and fees are assigned to the exit source-session month. Open-position changes are omitted. Research price-backed reports label marked-to-market returns separately.</p>
+    @if (Model.Job.Cohort is { } cohort)
+    {
+        <p class="note">Saved plan @cohort.PlanId · @cohort.CohortName · Starting capital USD @cohort.StartingCapital.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)</p>
+    }
+    else
+    {
+        <p class="note">Starting capital USD @result.StartingCapital.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)</p>
+    }
+    <p class="note">Each strategy and stock group has separate capital. Monthly percentages use that month's opening equity. The valuation method is shown for each result; realised closed-trade equity omits changes in open positions. Missing execution or valuation evidence is shown explicitly.</p>
     @if (lab.MonthlyRows.Count == 0)
     {
         <p class="empty-state">@lab.MonthlyUnavailable</p>
@@ -60,28 +70,86 @@
             <input type="hidden" name="wishlistId" value="@lab.WishlistId" />
             <input type="hidden" name="drill" value="@lab.Drill" />
             <label for="resultMonth">Source-session month</label>
-            <select class="input" id="resultMonth" name="month" data-auto-submit>
-            @foreach(var month in lab.MonthlyRows.Select(row=>row.Month.Month).Distinct().OrderDescending())
+            <select class="input" id="resultMonth" name="month">
+            @foreach(var month in lab.MonthlyRows.Select(row=>row.Month).Distinct().OrderDescending())
             {<option value="@month" selected="@(month==lab.SelectedMonth)">@month</option>}
             </select>
+            <button class="btn btn-secondary" type="submit">Show month</button>
         </form>
         <div class="table-scroll"><table class="grid-table">
-            <thead><tr><th>Strategy / version</th><th>Period</th><th class="num">Monthly realised return</th><th class="num">Monthly realised DD</th><th class="num">Closed trades</th></tr></thead>
+            <thead><tr><th>Strategy / version / group</th><th>Month / valuation</th><th class="num">Opening / closing equity</th><th class="num">Monthly return</th><th class="num">Monthly drawdown</th><th class="num">Monthly realized net / unrealized at month end</th><th class="num">Monthly fees / exposure at month end</th><th class="num">Closed / open / fills</th></tr></thead>
             <tbody>
-            @foreach(var row in lab.MonthlyRows.Where(row=>row.Month.Month==lab.SelectedMonth).OrderBy(row=>row.Name))
+            @foreach(var row in lab.MonthlyRows.Where(row=>row.Month==lab.SelectedMonth).OrderBy(row=>row.StrategyName ?? row.Strategy.StrategyId))
             {
-                <tr aria-selected="@(row.AliasId==drilled.StrategyId?"true":null)">
-                    <td><a asp-page="/Backtests" asp-route-jobId="@Model.Job.JobId" asp-route-wishlistId="@lab.WishlistId" asp-route-drill="@row.AliasId" asp-route-month="@lab.SelectedMonth">@row.Name · @row.Month.Version</a><span class="note">@row.Month.ContentSha256[..12]</span></td>
-                    <td>@row.Month.PeriodStart – @row.Month.PeriodEnd @(row.Month.PartialPeriod?"(partial)":"")</td>
-                    <td class="num">@(row.Month.ReturnPct is { } value?Signed(value):"unavailable")</td>
-                    <td class="num">@row.Month.CloseDrawdownPct.ToString("0.00")%</td>
-                    <td class="num">@row.ClosedTrades</td>
+                <tr aria-selected="@((row.StrategyAlias ?? row.Strategy.StrategyId)==drilled.StrategyId?"true":null)">
+                    <td><a asp-page="/Backtests" asp-route-jobId="@Model.Job.JobId" asp-route-wishlistId="@lab.WishlistId" asp-route-drill="@(row.StrategyAlias ?? row.Strategy.StrategyId)" asp-route-month="@lab.SelectedMonth">@(row.StrategyName ?? row.Strategy.StrategyId) · @row.Strategy.SemanticVersion</a><span class="note">@row.CohortName · @row.Strategy.ContentSha256</span></td>
+                    <td>@row.Month @(row.PartialMonth?"(partial month)":"")<span class="note" title="@row.ValuationBasis">@(row.ValuationBasis.StartsWith("marked_to_market_", StringComparison.Ordinal) ? "Daily close equity, including open positions" : row.ValuationBasis == "realized_closed_trade_equity" ? "Realized closed-trade equity" : "Valuation unavailable")</span></td>
+                    <td class="num">@(row.OpeningEquity?.ToString("N2") ?? "unavailable") / @(row.ClosingEquity?.ToString("N2") ?? "unavailable")</td>
+                    <td class="num">@(row.ReturnPct is { } value?Signed(value):"unavailable")<span class="note">@row.UnavailableReason</span></td>
+                    <td class="num">@(row.MaxDrawdownPct is { } drawdown ? drawdown.ToString("0.00") + "%" : "unavailable")</td>
+                    <td class="num">@(row.RealizedNetProfit?.ToString("N2") ?? "unavailable") / @(row.UnrealizedProfit?.ToString("N2") ?? "unavailable")</td>
+                    <td class="num">@(row.Fees?.ToString("N2") ?? "unavailable") / @(row.GrossExposurePct?.ToString("0.00") ?? "unavailable")%</td>
+                    <td class="num">@(row.ClosedTrades?.ToString() ?? "unavailable") / @(row.OpenPositions?.ToString() ?? "unavailable") / @(row.FillCount?.ToString() ?? "unavailable")</td>
                 </tr>
             }
             </tbody>
         </table></div>
     }
 </section>
+
+@if (Model.PortfolioState is { } portfolio)
+{
+    <partial name="_BacktestPortfolioState" model="portfolio" />
+}
+@if (Model.Page.ZoneEvaluations is { } trace)
+{
+    <section class="lab-panel">
+        <h2 class="section-heading">Every evaluated zone candle</h2>
+        <p class="note">@trace.TotalCount retained rows. Showing offset @trace.Offset, up to @trace.Limit rows. Rejected bars include the engine's original predicates and clocks. Planned costs and targets are estimates.</p>
+        @if (trace.UnavailableReason is { } unavailable) { <p class="note">@unavailable</p> }
+        @foreach (var row in trace.Rows)
+        {
+            <details><summary>@row.Ticker / @(row.ResolutionReason ?? "pattern admitted") / @(row.CandidateId ?? "no candidate")</summary>
+            @foreach (var line in TradingFlow.Contracts.Presentation.ZoneEvaluationPresentation.Lines(row)) { <p class="note">@line</p> }
+            </details>
+        }
+        @if (trace.Offset > 0) { <a asp-page="/Backtests" asp-route-jobId="@Model.Job.JobId" asp-route-drill="@Model.Drilled.StrategyId" asp-route-zoneOffset="@Math.Max(0, trace.Offset - trace.Limit)">Previous candles</a> }
+        @if (trace.NextOffset is { } next) { <a asp-page="/Backtests" asp-route-jobId="@Model.Job.JobId" asp-route-drill="@Model.Drilled.StrategyId" asp-route-zoneOffset="@next">Next candles</a> }
+    </section>
+}
+@if (Model.ZoneDecisions.Count > 0)
+{
+    <section class="lab-panel">
+        <h2 class="section-heading">Zone entry and execution evidence</h2>
+        <p class="note">Latest @Model.ZoneDecisions.Count hypotheses. Complete decision and execution journals retain all events; each row names its execution policy. Planned prices do not establish fills.</p>
+        @foreach (var decision in Model.ZoneDecisions)
+        {
+            <details>
+                <summary>@decision.Ticker / @decision.Pattern / @decision.Status</summary>
+                @foreach (var line in TradingFlow.Contracts.Presentation.IntradayZoneDecisionPresentation.Lines(decision))
+                {
+                    <p class="note">@line</p>
+                }
+            </details>
+        }
+    </section>
+}
+@if (Model.HistoryEligibility.Count > 0)
+{
+    <section class="lab-panel">
+        <h2 class="section-heading">Price history available for each stock — @drilled.StrategyName</h2>
+        @foreach (var history in Model.HistoryEligibility)
+        {
+            var historyLabel = history.Status switch
+            {
+                "history_eligible" => "Enough history for this strategy",
+                "still_warming_at_study_end" => "Not enough history by test end",
+                _ => history.Status.Replace('_', ' ')
+            };
+            <p>@history.Ticker · @historyLabel · completed bars at start @history.AvailableAtStart; at cutoff @history.AvailableAtCutoff / @history.RequiredBars required · first eligible decision UTC @(history.FirstEligibleDecisionUtc?.ToString("u") ?? "not reached")</p>
+        }
+    </section>
+}
 
 @* --- 4. Promotion gates and analyzer ------------------------------------- *@
 <section class="lab-gates-row">
@@ -116,7 +184,7 @@
                 <dd>@diagnostic.EvaluatedBarCount.ToString("#,##0")</dd>
                 <dt>Candidates</dt>
                 <dd>@diagnostic.CandidateTradeCount.ToString("#,##0")</dd>
-                <dt>Accepted</dt>
+                <dt>Admitted orders</dt>
                 <dd>@diagnostic.AcceptedTradeCount.ToString("#,##0")</dd>
             </dl>
 
@@ -161,7 +229,7 @@
     <h2 class="section-heading">Trades — @drilled.StrategyName</h2>
     @if (monthTrades.Count == 0)
     {
-        <p class="empty-state">No verified completed trades for this strategy in the selected month.</p>
+        <p class="empty-state">No completed-position details are available in this view for the selected month. Monthly totals are shown above.</p>
     }
     else
     {
@@ -208,8 +276,8 @@
             </table>
         </div>
         <p class="note">
-            Most recent 10 of @monthTrades.Count closed trades in @lab.SelectedMonth · one entry and one full
-            exit per trade.
+            Showing up to 10 of @monthTrades.Count retained completed-position summaries in @lab.SelectedMonth.
+            A completed position may include multiple entry or exit fills.
         </p>
     }
 </section>

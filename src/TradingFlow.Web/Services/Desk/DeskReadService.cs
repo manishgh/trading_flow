@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Caching.Memory;
 using TradingFlow.Data.News;
+using TradingFlow.Contracts.V1;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.News;
 using TradingFlow.Web.Services.Wishlists;
@@ -9,7 +10,8 @@ namespace TradingFlow.Web.Services.Desk;
 public sealed record DeskArticle(string Headline, string? Url, string Provider, DateTimeOffset PublishedAtUtc, IReadOnlyList<string> Symbols,
     string? Source = null, string? Summary = null, decimal? SentimentScore = null, string? Classification = null);
 public sealed record DeskRow(DeskMembership Membership, AlpacaLatestQuote? Quote, string QuoteFreshness,
-    IndicatorSnapshot? Technical, DeskHolding? Holding, bool HoldingsKnown, IReadOnlyList<DeskArticle> News, DailyObservationResult Observation, AlpacaPreviousClose? PreviousClose = null);
+    IndicatorSnapshot? Technical, DeskHolding? Holding, bool HoldingsKnown, IReadOnlyList<DeskArticle> News, DailyObservationResult Observation, AlpacaPreviousClose? PreviousClose = null,
+    StockStrategyAssessment? StrategyAssessment = null);
 public sealed record DeskSnapshot(DeskSelection Selection, IReadOnlyList<DeskRow> Rows, DeskAccount Account,
     IReadOnlyList<DeskArticle> News, string NewsCoverage, string Session, DateTimeOffset ReadAtUtc, string Feed);
 
@@ -17,6 +19,7 @@ public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReade
     IDailyObservationService daily, SqliteNewsFeedRepository news, OperationalStatusService operations,
     IMemoryCache cache, TimeProvider clock, ILogger<DeskReadService> logger)
 {
+    /// <summary>Joins current observations and account facts without treating the former generic daily checks as strategy evidence.</summary>
     public async Task<DeskSnapshot> ReadAsync(DeskSelection selection, CancellationToken ct)
     {
         var symbols = selection.Members.Select(x => x.Symbol).ToArray();

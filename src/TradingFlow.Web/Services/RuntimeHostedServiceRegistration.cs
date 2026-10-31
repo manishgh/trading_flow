@@ -6,7 +6,8 @@ namespace TradingFlow.Web.Services;
 public sealed record RuntimeHostedServiceOptions(
     bool Enabled,
     bool EnableEarningsMonitor,
-    bool EnableMarketFeeds = false);
+    bool EnableMarketFeeds = false,
+    bool EnableStrategyAssessments = false);
 
 /// <summary>
 /// Owns the complete background-service composition for the web host. Keeping the
@@ -25,6 +26,7 @@ public static class RuntimeHostedServiceRegistration
             serviceProvider.GetRequiredService<OrderDispatchRecoveryHostedService>());
         if (!options.Enabled && !options.EnableMarketFeeds)
         {
+            if (options.EnableStrategyAssessments) services.AddHostedService<DurableJobWorkerHostedService>();
             return services;
         }
 
@@ -42,10 +44,12 @@ public static class RuntimeHostedServiceRegistration
         }
 
         // Read-only provider feeds may run while jobs and broker mutations stay paused.
-        if (!options.Enabled) return services;
+        if (!options.Enabled)
+        {
+            if (options.EnableStrategyAssessments) services.AddHostedService<DurableJobWorkerHostedService>();
+            return services;
+        }
 
-        services.AddHostedService(serviceProvider =>
-            serviceProvider.GetRequiredService<WishlistObserverService>());
         services.AddHostedService<DatabaseBackupHostedService>();
         services.AddHostedService(serviceProvider =>
             serviceProvider.GetRequiredService<AlpacaMarketStateStreamService>());

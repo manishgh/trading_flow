@@ -42,6 +42,7 @@ public sealed class WishlistsModel : PageModel
 
     public async Task OnGetAsync(CancellationToken cancellationToken) => await LoadAsync(cancellationToken);
 
+    /// <summary>Saves list settings while retaining former observation intent; no strategy is inferred or started.</summary>
     public async Task<IActionResult> OnPostSaveWishlistAsync(
         Guid? wishlistId,
         string wishlistName,
@@ -57,6 +58,7 @@ public sealed class WishlistsModel : PageModel
             return RedirectToPage("/Wishlists", new { id = wishlistId });
         }
 
+        var existing = wishlistId is { } id ? await repository.GetByIdAsync(id, cancellationToken) : null;
         var saved = await repository.SaveAsync(new Wishlist
         {
             Id = wishlistId ?? Guid.Empty,
@@ -64,7 +66,7 @@ public sealed class WishlistsModel : PageModel
             Description = description,
             IsDefault = isDefault,
             IncludeExtendedHours = includeExtendedHours,
-            IsObserved = isObserved
+            IsObserved = existing?.IsObserved ?? false
         }, cancellationToken);
         StatusMessage = $"Saved wishlist {saved.Name}.";
         return RedirectToPage("/Wishlists", new { id = saved.Id });
@@ -95,13 +97,6 @@ public sealed class WishlistsModel : PageModel
         }, cancellationToken);
         StatusMessage = $"Created wishlist {saved.Name}.";
         return RedirectToPage("/Wishlists", new { id = saved.Id });
-    }
-
-    public async Task<IActionResult> OnPostSetObservedAsync(Guid wishlistId, bool isObserved, CancellationToken cancellationToken)
-    {
-        await repository.SetObservedAsync(wishlistId, isObserved, cancellationToken);
-        StatusMessage = isObserved ? "Wishlist observer started." : "Wishlist observer paused.";
-        return RedirectToPage("/Wishlists", new { id = wishlistId });
     }
 
     public async Task<IActionResult> OnPostAddTickerAsync(

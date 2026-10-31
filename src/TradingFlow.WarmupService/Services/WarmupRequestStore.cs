@@ -8,10 +8,26 @@ public sealed class WarmupRequestStore(IOptions<WarmupOptions> options)
 {
     private readonly WarmupOptions options = options.Value;
 
+    /// <summary>Resolves all accepted ticker settings once so queue restart cannot pick up later watchlist edits.</summary>
+    public async Task<IReadOnlyList<WarmupTickerIntent>> ResolveIntentsAsync(WarmupJobRequest job, CancellationToken token)
+    {
+        var all = (await ReadAsync(token)).Where(item => item.Active).ToArray();
+        if (job.Tickers is null || job.Tickers.Count == 0) return all;
+        var requested = job.Tickers.Select(WarmupText.NormalizeTicker).Where(ticker => ticker.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existing = all.Where(item => requested.Contains(item.Ticker)).ToList();
+        existing.AddRange(requested.Except(existing.Select(item => item.Ticker), StringComparer.OrdinalIgnoreCase)
+            .Select(ticker => new WarmupTickerIntent(ticker, job.Reason, "run-now", job.QueuedAtUtc,
+                options.DefaultWarmupDays, options.DefaultNewsLookbackDays,
+                ResolveTimeframes(null), options.IncludeNewsByDefault, true)));
+        return existing.OrderBy(item => item.Ticker, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
     public Task<IReadOnlyList<WarmupTickerIntent>> UpsertAsync(
         WarmupWatchRequest request,
         CancellationToken cancellationToken)
     {
+        if (request.WarmupDays is <= 0 || request.NewsLookbackDays is < 0)
+            throw new ArgumentException("Warmup days must be positive and news lookback cannot be negative.");
         var now = DateTimeOffset.UtcNow;
         var requestedBy = String.IsNullOrWhiteSpace(request.RequestedBy) ? "manual" : request.RequestedBy!.Trim();
         var reason = String.IsNullOrWhiteSpace(request.Reason) ? "possible trend candidate" : request.Reason!.Trim();
@@ -33,8 +49,8 @@ public sealed class WarmupRequestStore(IOptions<WarmupOptions> options)
                     reason,
                     requestedBy,
                     now,
-                    Math.Max(1, request.WarmupDays ?? options.DefaultWarmupDays),
-                    Math.Max(0, request.NewsLookbackDays ?? options.DefaultNewsLookbackDays),
+                    request.WarmupDays ?? options.DefaultWarmupDays,
+                    request.NewsLookbackDays ?? options.DefaultNewsLookbackDays,
                     timeframes,
                     request.IncludeNews ?? options.IncludeNewsByDefault,
                     Active: true);
@@ -74,7 +90,9 @@ public sealed class WarmupRequestStore(IOptions<WarmupOptions> options)
         return removed;
     }
 
-    public Task MarkResultsAsync(IReadOnlyList<WarmupTickerResult> results, CancellationToken cancellationToken)
+    /// <summary>Marks only the accepted settings warmed; a later watchlist edit cannot inherit an older job's success.</summary>
+    public Task MarkResultsAsync(IReadOnlyList<WarmupTickerResult> results, IReadOnlyList<WarmupTickerIntent> accepted,
+        CancellationToken cancellationToken)
     {
         return MutateAsync(items =>
         {
@@ -85,6 +103,11 @@ public sealed class WarmupRequestStore(IOptions<WarmupOptions> options)
                 {
                     continue;
                 }
+                var original = accepted.FirstOrDefault(item => item.Ticker.Equals(result.Ticker, StringComparison.OrdinalIgnoreCase));
+                if (original is null || items[index].RequestedAtUtc != original.RequestedAtUtc ||
+                    items[index].WarmupDays != original.WarmupDays || items[index].NewsLookbackDays != original.NewsLookbackDays ||
+                    items[index].IncludeNews != original.IncludeNews || !items[index].Timeframes.SequenceEqual(original.Timeframes, StringComparer.OrdinalIgnoreCase))
+                    continue;
 
                 items[index] = items[index] with
                 {
@@ -98,6 +121,7 @@ public sealed class WarmupRequestStore(IOptions<WarmupOptions> options)
         }, cancellationToken);
     }
 
+    /// <summary>Uses the configured warmup intervals once when accepting a request.</summary>
     private IReadOnlyList<string> ResolveTimeframes(IReadOnlyCollection<string>? requested)
     {
         return (requested is { Count: > 0 } ? requested : options.DefaultTimeframes)

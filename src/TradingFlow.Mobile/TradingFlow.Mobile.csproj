@@ -16,6 +16,7 @@
 		<SingleProject>true</SingleProject>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
+		<AndroidManifestPlaceholders>applicationUsesCleartextTraffic=false</AndroidManifestPlaceholders>
 
 		<!-- Enable XAML source generation for faster build times and improved performance.
 		     This generates C# code from XAML at compile time instead of runtime inflation.
@@ -36,6 +37,10 @@
 		<ApplicationVersion>1</ApplicationVersion>
 
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">21.0</SupportedOSPlatformVersion>
+	</PropertyGroup>
+	<PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+		<!-- Debug permits loopback/emulator transport only; BackendOriginHandler rejects cleartext LAN requests. -->
+		<AndroidManifestPlaceholders>applicationUsesCleartextTraffic=true</AndroidManifestPlaceholders>
 	</PropertyGroup>
 
 	<PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-android'">

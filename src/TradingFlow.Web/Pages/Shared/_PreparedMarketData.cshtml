@@ -1,0 +1,16 @@
+@* Shared running/result evidence displays only the server's committed candle summary. *@
+@model TradingFlow.Web.Models.BacktestJobSnapshot
+@{
+    var prepared = Model.PreparedMarketData ?? Model.Result?.PreparedMarketData;
+}
+<section class="lab-panel" data-lab-prepared hidden="@(prepared is null)" style="overflow-wrap:anywhere">
+    <h3 class="sub-heading">Prepared candles</h3>
+    <p class="note">Snapshot ID: <span data-prepared-id>@prepared?.SnapshotId</span></p>
+    <p class="note">SHA-256: <span data-prepared-hash>@prepared?.SnapshotSha256</span></p>
+    <p class="note">Provider: <span data-prepared-provider>@String.Join(", ", prepared?.Providers ?? [])</span> · Feed: <span data-prepared-feed>@String.Join(", ", prepared?.DataFeeds ?? [])</span></p>
+    <p class="note">Price basis: <span data-prepared-basis>@String.Join(", ", prepared?.PriceAdjustments ?? [])</span></p>
+    <p class="note">Requested coverage (UTC): <span data-prepared-coverage>@prepared?.StartUtc.ToUniversalTime().ToString("O") to @prepared?.EndUtc.ToUniversalTime().ToString("O")</span></p>
+    <p class="note">Prepared at (UTC): <span data-prepared-time>@prepared?.PreparedAtUtc.ToUniversalTime().ToString("O")</span></p>
+    <p class="note">Queries reused: <span data-prepared-reused>@prepared?.ReusedQueryCount</span> · downloaded: <span data-prepared-downloaded>@prepared?.DownloadedQueryCount</span></p>
+    <p class="note" data-prepared-note>@prepared?.HistoricalEvidenceNote</p>
+</section>

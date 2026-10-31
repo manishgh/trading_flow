@@ -13,9 +13,12 @@ public sealed class NewsHubQuery
     public string? Provider { get; set; }
     public string? Source { get; set; }
     public string? Classification { get; set; }
+    public string? Category { get; set; }
+    public string? Sector { get; set; }
     public string? Sentiment { get; set; }
     public string? Search { get; set; }
     public bool? LinkedOnly { get; set; }
+    public bool? StockLinkedOnly { get; set; }
     public Guid? GroupId { get; set; }
     public string? Scope { get; set; }
     public string? StockSource { get; set; }
@@ -46,6 +49,13 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
         query.Scope = query.Scope?.Trim().ToLowerInvariant();
         query.Sentiment = query.Sentiment?.Trim().ToLowerInvariant();
         query.Classification = query.Classification?.Trim().ToLowerInvariant();
+        query.Category = query.Category?.Trim().ToLowerInvariant();
+        query.Sector = query.Sector?.Trim().ToLowerInvariant();
+        if (!String.IsNullOrEmpty(query.Category) && !NewsDisplayTaxonomy.Categories.Any(x => x.Key == query.Category))
+            throw new InvalidOperationException("Choose a supported news category.");
+        if (query.Sector == "all") query.Sector = null;
+        if (!String.IsNullOrEmpty(query.Sector) && !NewsDisplayTaxonomy.Sectors.Any(x => x.Key == query.Sector))
+            throw new InvalidOperationException("Choose a supported news sector topic.");
         if (query.Scope is not (null or "" or "all" or "groups" or "positions") ||
             query.Sentiment is not (null or "" or "all" or "positive" or "negative" or "neutral") ||
             query.Classification is not (null or "" or "company" or "sec filing" or "fed" or "macro" or "market"))
@@ -90,9 +100,12 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
         var hours = Math.Clamp(query.Hours ?? 4, 1, 72);
         var size = Math.Clamp(query.PageSize ?? 50, 10, 200);
         var number = Math.Clamp(query.Page ?? 1, 1, Int32.MaxValue / size);
-        var filter = new NewsFeedQuery(clock.GetUtcNow().AddHours(-hours), query.Ticker,
+        var now = clock.GetUtcNow();
+        var filter = new NewsFeedQuery(now.AddHours(-hours), query.Ticker,
             symbols, query.Provider, query.Source, query.Classification, query.Sentiment, query.Search,
-            query.LinkedOnly == true, (number - 1) * size, size);
+            query.LinkedOnly == true, (number - 1) * size, size, query.Category, query.Sector,
+            IncludeMarketNews: !String.IsNullOrWhiteSpace(query.Category) && query.Category != "company", UntilUtc: now,
+            StockLinkedOnly: query.StockLinkedOnly == true);
         var page = await news.QueryAsync(filter, token);
         var lastPage = Math.Max(1, (int)Math.Ceiling(page.TotalMatching / (double)size));
         if (number > lastPage) {
@@ -102,11 +115,17 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
         var items = page.Records.GroupBy(x => NewsFeedService.NormalizeHeadlineIdentity(x.Headline), StringComparer.Ordinal)
             .Select(group => {
                 var item = group.First();
+                var topics = group.Select(NewsDisplayTaxonomy.Describe).ToArray();
                 return new MobileNewsItem(NewsFeedService.FormatRelatedTickers(group.Select(x => x.Ticker)), item.Timestamp,
                     item.Headline, item.SentimentScore, item.Provider, item.Source, item.Url, item.Summary,
-                    NewsEvidenceClassification.Classify(item));
+                    NewsEvidenceClassification.Classify(item),
+                    topics.SelectMany(x => x.Categories).Distinct(StringComparer.Ordinal).ToArray(),
+                    topics.SelectMany(x => x.Sectors).Distinct(StringComparer.Ordinal).ToArray(),
+                    topics[0].Rationale, NewsDisplayTaxonomy.Version);
             }).ToArray();
-        return new(true, "stored", $"{stockDescription} Rolling {hours}h news feed. Matching records are counted before duplicate articles on each page are combined.".Trim(),
+        var context = filter.IncludeMarketNews && symbols is not null && String.IsNullOrWhiteSpace(query.Ticker) && query.StockLinkedOnly != true
+            ? " Broad MARKET context is included alongside stock-source stories; topic labels do not identify affected stocks." : "";
+        return new(true, "stored", $"{stockDescription} Rolling {hours}h news feed.{context} Matching records are counted before duplicate articles on each page are combined.".Trim(),
             items, page.TotalMatching, number, size);
     }
 }

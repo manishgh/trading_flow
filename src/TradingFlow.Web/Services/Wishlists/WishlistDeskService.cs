@@ -5,8 +5,7 @@ namespace TradingFlow.Web.Services.Wishlists;
 
 /// <summary>
 /// Builds the read model used by the Trade Desk and mobile wishlist screens.
-/// Signal generation stays in <see cref="WishlistObserverService"/>; this service
-/// only joins persisted signals, quotes, open trades, and related news into a
+/// This service joins historical alerts, quotes, open trades, and related news into a
 /// per-ticker operator view.
 /// </summary>
 public sealed class WishlistDeskService
@@ -197,10 +196,8 @@ public sealed record WishlistDeskSnapshot(
 /// <list type="bullet">
 /// <item><description>
 /// <b>Volume / RVOL</b> needs indicator state. <c>IndicatorSnapshot</c> is computed
-/// inside <see cref="WishlistObserverService"/> and discarded after evaluation; only
-/// alerted rows keep a copy inside <c>WishlistSignal.SnapshotJson</c>. A column fed
-/// from that would be blank for every watching row, so it would read as missing data
-/// rather than as an absent signal.
+/// by the shared candle pipeline. Historical alerts retain their original
+/// <c>WishlistSignal.SnapshotJson</c>; they do not represent a current selected-strategy check.
 /// </description></item>
 /// </list>
 /// </remarks>
@@ -246,9 +243,9 @@ public sealed record WishlistDeskRow(
 
     public bool HasNews => LatestNews is not null;
 
-    public string EligibilityLabel => LatestSignal is null ? "Watching" : "Observed setup";
+    public string EligibilityLabel => "Select a strategy";
 
-    public string EligibilityReason => LatestSignal?.Reason ?? "Waiting for observational VWAP/EMA/MACD/volume conditions.";
+    public string EligibilityReason => "Open this stock's strategy checks. Historical alerts do not establish current strategy conditions.";
 
     /// <summary>Inside mid, rendered as the grid's Last column.</summary>
     public decimal? LastPrice => Quote.MidPrice;

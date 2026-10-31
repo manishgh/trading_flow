@@ -12,7 +12,7 @@
         <span class="eyebrow">Universe management</span>
         <h1>Wishlists</h1>
         <p class="standfirst">
-            Create groups, maintain ticker context, control observation, and import a Finviz universe.
+            Create groups, maintain ticker context, and import a Finviz universe.
             This page cannot submit an order or start a strategy.
         </p>
     </div>
@@ -38,7 +38,7 @@
             var active = selected?.Id == wishlist.Id;
             <a asp-page="/Wishlists" asp-route-id="@wishlist.Id" aria-current="@(active ? "page" : null)">
                 <strong>@wishlist.Name</strong>
-                <span>@wishlist.Items.Count(item => item.Active) active · observer @(wishlist.IsObserved ? "running" : "paused")</span>
+                <span>@wishlist.Items.Count(item => item.Active) active stocks</span>
             </a>
         }
     </nav>
@@ -60,11 +60,7 @@ else
             <section class="wishlist-block" aria-labelledby="SettingsHeading">
                 <div class="wishlist-block-head">
                     <h2 id="SettingsHeading" class="section-heading">Settings</h2>
-                    <form method="post" asp-page-handler="SetObserved">
-                        <input type="hidden" name="WishlistId" value="@selected.Id" />
-                        <input type="hidden" name="IsObserved" value="@(selected.IsObserved ? "false" : "true")" />
-                        <button class="btn btn-secondary btn-md" type="submit">@(selected.IsObserved ? "Pause observer" : "Start observer")</button>
-                    </form>
+                    <a class="btn btn-secondary btn-md" asp-page="/Desk" asp-route-source="@("wishlist:" + selected.Id)">Select a strategy on Desk</a>
                 </div>
 
                 <form method="post" asp-page-handler="SaveWishlist" class="wishlist-settings">

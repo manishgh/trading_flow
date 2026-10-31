@@ -389,12 +389,12 @@
 
     function dayTitle(item, payload) {
         if (item.dayGroup === "today") {
-            return `Today · ${new Date(item.scheduledAtUtc).toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short", year: "numeric" })}`;
+            return `Today · ${new Date(item.scheduledAtUtc).toLocaleDateString(undefined, { timeZone: "America/New_York", weekday: "short", day: "2-digit", month: "short", year: "numeric" })}`;
         }
         if (item.dayGroup === "nextBusinessDay") {
             return `Next reporting day · ${payload.nextBusinessDateLabel}`;
         }
-        return new Date(item.scheduledAtUtc).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+        return new Date(item.scheduledAtUtc).toLocaleDateString(undefined, { timeZone: "America/New_York", weekday: "long", month: "long", day: "numeric" });
     }
 
     function renderTimeline(items, payload, totalForGroup) {

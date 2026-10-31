@@ -77,6 +77,7 @@ public sealed class OptimizationJobService : IDurableJobHandler
     public Task RefreshProjectionAsync(CancellationToken cancellationToken) =>
         InitializeAsync(cancellationToken);
 
+    /// <summary>Validates the objective and complete search budget before freezing files and admitting durable work.</summary>
     public async Task<OptimizationJobSnapshot> StartAsync(
         string runName,
         string configPath,
@@ -85,6 +86,7 @@ public sealed class OptimizationJobService : IDurableJobHandler
         var fullConfigPath = Path.GetFullPath(configPath);
         var optimization = yamlReader.ReadOptimizationConfig(fullConfigPath);
         var backtest = yamlReader.ReadBacktestRun(optimization.BacktestConfigPath);
+        StrategyOptimizer.ValidateConfiguration(optimization, backtest);
         var request = DurableFileJobRequest.Capture([
             fullConfigPath,
             optimization.BaseStrategyPath,
@@ -95,6 +97,7 @@ public sealed class OptimizationJobService : IDurableJobHandler
         {
             optimization = yamlReader.ReadOptimizationConfig(fullConfigPath);
             backtest = yamlReader.ReadBacktestRun(optimization.BacktestConfigPath);
+            StrategyOptimizer.ValidateConfiguration(optimization, backtest);
             request.EnsureContains([
                 fullConfigPath,
                 optimization.BaseStrategyPath,

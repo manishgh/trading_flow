@@ -352,6 +352,7 @@ public sealed class NewsFeedService : BackgroundService
         return await Task.WhenAll(tasks);
     }
 
+    /// <summary>Bind enriched sentiment to the analyzer actually used and the time its assessment became available.</summary>
     private async Task<CatalystEvent> EnrichSingleNewsAsync(
         CatalystEvent item,
         ISentimentAnalyzer sentimentAnalyzer,
@@ -374,11 +375,18 @@ public sealed class NewsFeedService : BackgroundService
                 item.Source,
                 item.Url);
             var sentiment = await sentimentAnalyzer.AnalyzeAsync(article, cancellationToken);
+            var assessedAt = DateTimeOffset.UtcNow;
+            var previousAvailable = item.DecisionAvailableAt ?? item.ReceivedAt ?? item.Timestamp;
 
             return item with
             {
                 SentimentScore = sentiment.Score,
-                Summary = preview
+                Summary = preview,
+                ClassificationVersion = sentiment.AnalyzerName,
+                DecisionAvailableAt = assessedAt > previousAvailable ? assessedAt : previousAvailable,
+                DecisionAvailabilityEvidence = item.ReceivedAt is null
+                    ? CatalystAvailabilityEvidence.ProviderTimestampAndAssessmentObservedTime
+                    : CatalystAvailabilityEvidence.NewsAndAssessmentObservedTime
             };
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)

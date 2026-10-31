@@ -31,6 +31,9 @@
                                        Text="Total P/L --"
                                        FontSize="20"
                                        FontAttributes="Bold" />
+                                <Label x:Name="ExposureLabel" Text="Gross exposure unavailable" FontSize="13" />
+                                <Label x:Name="SlotsLabel" Text="Account positions unknown" FontSize="13" />
+                                <Label x:Name="ProtectionLabel" Text="Protection unknown" FontSize="13" />
                             </VerticalStackLayout>
                             <ActivityIndicator x:Name="BusyIndicator"
                                                Grid.Column="1"
@@ -61,16 +64,18 @@
                                 Clicked="OnSourceSelected"
                                 CommandParameter="manual" />
                     </Grid>
+                    <Button x:Name="AccountButton" Text="Account holdings without local runs"
+                            Clicked="OnSourceSelected" CommandParameter="account" />
                 </VerticalStackLayout>
             </CollectionView.Header>
 
             <CollectionView.EmptyView>
                 <VerticalStackLayout Padding="12,28" Spacing="6">
-                    <Label Text="No open positions"
+                    <Label x:Name="EmptyStateTitle" Text="Reading account holdings…"
                            FontAttributes="Bold"
                            FontSize="16"
                            HorizontalTextAlignment="Center" />
-                    <Label Text="No running trades match this source filter."
+                    <Label x:Name="EmptyStateDetail" Text=""
                            FontSize="13"
                            TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                            HorizontalTextAlignment="Center" />
@@ -106,7 +111,7 @@
                                        TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                        VerticalTextAlignment="Center" />
                                 <Button Grid.Column="1"
-                                        Text="Review Exit"
+                                        Text="{Binding ReviewText}"
                                         Clicked="OnSell"
                                         CommandParameter="{Binding .}"
                                         BackgroundColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}"

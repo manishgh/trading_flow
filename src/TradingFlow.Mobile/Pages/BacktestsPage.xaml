@@ -17,44 +17,49 @@
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
                         <Label Text="Run Setup" FontAttributes="Bold" FontSize="18" />
-                        <Label Text="Pick a wishlist, choose a strategy, then run. The wishlist is the backtest universe." FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
-                        <Label Text="Wishlist" FontAttributes="Bold" FontSize="12" />
-                        <Picker x:Name="WishlistPicker" Title="Wishlist" SelectedIndexChanged="OnWishlistPicked" />
+                        <Label Text="Select stocks and strategies, preview their independent groups, then save. Start the saved plan when ready." FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
+                        <Label Text="Stock source" FontAttributes="Bold" FontSize="12" />
+                        <Picker x:Name="StockSourcePicker" Title="My wishlists or Finviz lists" SelectedIndexChanged="OnStockSourcePicked" />
                         <Label Text="Backtest profile" FontAttributes="Bold" FontSize="12" />
-                        <Picker x:Name="ConfigPicker" Title="Backtest profile" SelectedIndexChanged="OnFormChanged" />
-                        <Label Text="Strategy" FontAttributes="Bold" FontSize="12" />
-                        <Picker x:Name="StrategyPicker" Title="Strategy" SelectedIndexChanged="OnFormChanged" />
+                        <Picker x:Name="ConfigPicker" Title="Backtest profile" SelectedIndexChanged="OnBacktestProfileChanged" />
+                        <Label Text="Research execution assumptions" FontAttributes="Bold" FontSize="12" />
+                        <Picker x:Name="ExecutionReplayPicker" Title="Selected strategy / profile" SelectedIndexChanged="OnFormChanged" />
+                        <Label Text="The selected strategy supplies its horizon. Day and swing strategies use separate saved plans; preview freezes the execution assumptions." FontSize="12" />
+                        <Label Text="Strategies" FontAttributes="Bold" FontSize="12" />
+                        <VerticalStackLayout x:Name="StrategyChoices" Spacing="6" />
+                        <Label Text="Optional approved decision-context evidence" FontAttributes="Bold" FontSize="12" />
+                        <Picker x:Name="EvidencePicker" Title="No evidence selected" SelectedIndexChanged="OnEvidenceChanged" />
+                        <Label x:Name="EvidenceChoiceLabel" FontSize="12" LineBreakMode="CharacterWrap" />
 
                         <Button x:Name="AdvancedToggle" Text="Show advanced parameters" Clicked="OnToggleAdvanced" Padding="12,8" BackgroundColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                         <VerticalStackLayout x:Name="AdvancedPanel" Spacing="10" IsVisible="False">
-                            <HorizontalStackLayout Spacing="8">
-                                <CheckBox x:Name="RunAllStrategiesCheck" Scale="0.78" CheckedChanged="OnFormChanged" />
-                                <Label Text="Run all listed strategies" VerticalTextAlignment="Center" FontSize="13" />
-                            </HorizontalStackLayout>
+                            <Label Text="Optional test window (UTC). Enter both dates, or leave both blank to use lookback days." FontSize="12" />
+                            <Entry x:Name="TestStartEntry" Placeholder="From UTC: YYYY-MM-DDTHH:MMZ" TextChanged="OnFormChanged" />
+                            <Entry x:Name="TestEndEntry" Placeholder="To UTC: YYYY-MM-DDTHH:MMZ" TextChanged="OnFormChanged" />
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                                 <VerticalStackLayout Spacing="4">
                                     <Label Text="Lookback days" FontAttributes="Bold" FontSize="12" />
-                                    <Entry x:Name="LookbackEntry" Placeholder="Days" Text="60" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                    <Entry x:Name="LookbackEntry" Placeholder="Days" Keyboard="Numeric" TextChanged="OnFormChanged" />
                                 </VerticalStackLayout>
                                 <VerticalStackLayout Grid.Column="1" Spacing="4">
                                     <Label Text="Starting capital" FontAttributes="Bold" FontSize="12" />
-                                    <Entry x:Name="CapitalEntry" Placeholder="Capital" Text="10000" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                    <Entry x:Name="CapitalEntry" Placeholder="Capital" Keyboard="Numeric" TextChanged="OnFormChanged" />
                                 </VerticalStackLayout>
                             </Grid>
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                                 <VerticalStackLayout Spacing="4">
                                     <Label Text="Account risk budget %" FontAttributes="Bold" FontSize="12" />
-                                    <Entry x:Name="RiskEntry" Placeholder="Risk budget %" Text="1" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                    <Entry x:Name="RiskEntry" Placeholder="Risk budget %" Keyboard="Numeric" TextChanged="OnFormChanged" />
                                 </VerticalStackLayout>
                                 <VerticalStackLayout Grid.Column="1" Spacing="4">
                                     <Label Text="Max position notional %" FontAttributes="Bold" FontSize="12" />
-                                    <Entry x:Name="MaxPositionEntry" Placeholder="Max notional %" Text="25" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                    <Entry x:Name="MaxPositionEntry" Placeholder="Max notional %" Keyboard="Numeric" TextChanged="OnFormChanged" />
                                 </VerticalStackLayout>
                             </Grid>
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                                 <VerticalStackLayout Spacing="4">
                                     <Label Text="Max open positions" FontAttributes="Bold" FontSize="12" />
-                                    <Entry x:Name="MaxConcurrentEntry" Placeholder="Max positions" Text="4" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                                    <Entry x:Name="MaxConcurrentEntry" Placeholder="Max positions" Keyboard="Numeric" TextChanged="OnFormChanged" />
                                 </VerticalStackLayout>
                                 <VerticalStackLayout Grid.Column="1" Spacing="4">
                                     <Label Text="Market data cache" FontAttributes="Bold" FontSize="12" />
@@ -62,7 +67,18 @@
                                 </VerticalStackLayout>
                             </Grid>
                         </VerticalStackLayout>
-                        <Button x:Name="RunButton" Text="Run Backtest" Clicked="OnStartBacktest" />
+                        <Label Text="Exclude stocks" FontAttributes="Bold" />
+                        <Entry x:Name="ExcludedSymbolsEntry" Placeholder="Optional comma-separated stock symbols" TextChanged="OnFormChanged" />
+                        <Label Text="Exclusions apply to this plan. The original wishlist or saved Finviz list stays unchanged." FontSize="12" />
+                        <Label Text="Stocks per group" FontAttributes="Bold" />
+                        <Entry x:Name="GroupSizeEntry" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                        <Label Text="Or enter your own groups: one line per group as name | starting capital | comma-separated stocks. Leave stocks per group blank for manual groups." FontSize="12" />
+                        <Editor x:Name="ManualCohortsEditor" AutoSize="TextChanges" MinimumHeightRequest="70" TextChanged="OnFormChanged" />
+                        <Button x:Name="RunButton" Text="Preview groups" Clicked="OnStartBacktest" />
+                        <Button x:Name="SavePlanButton" Text="Save plan" IsEnabled="False" Clicked="OnSaveBacktestPlan" />
+                        <Picker x:Name="SavedPlanPicker" Title="Saved plans" SelectedIndexChanged="OnSavedPlanSelected" />
+                        <Button x:Name="StartPlanButton" Text="Start saved plan" IsEnabled="False" Clicked="OnStartSavedPlan" />
+                        <Label x:Name="PlanPreviewLabel" FontSize="12" />
                     </VerticalStackLayout>
                 </Border>
 
@@ -101,6 +117,8 @@
                             <Button Grid.Column="1" Text="Cancel Backtest" Clicked="OnCancelSelectedJob" BackgroundColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" />
                         </Grid>
                         <Label x:Name="ResultLabel" FontSize="13" />
+                        <Label x:Name="PreparedDataLabel" IsVisible="False" FontSize="12" LineBreakMode="CharacterWrap" />
+                        <Label x:Name="EvidenceDetailLabel" IsVisible="False" FontSize="12" LineBreakMode="CharacterWrap" />
                         <Label Text="Strategy Groups" FontAttributes="Bold" FontSize="14" />
                         <VerticalStackLayout x:Name="StrategyGroupsStack" Spacing="4" />
                         <Label Text="Recent Events" FontAttributes="Bold" FontSize="14" />

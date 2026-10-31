@@ -47,11 +47,10 @@ public static class EarningsApiEndpoints
             }
 
             var nowUtc = clock.GetUtcNow();
-            var operatorToday = DateOnly.FromDateTime(
-                TimeZoneInfo.ConvertTime(nowUtc, EarningsTimeZones.OperatorLocal).DateTime);
-            var nextBusinessDate = EarningsCalendarDates.NextWeekday(operatorToday);
+            var exchangeToday = EarningsCalendarDates.ExchangeDate(nowUtc);
+            var nextBusinessDate = EarningsCalendarDates.NextWeekday(exchangeToday);
             var snapshot = await monitor.GetCalendarAsync(
-                operatorToday.AddDays(-1),
+                exchangeToday.AddDays(-1),
                 nextBusinessDate.AddDays(1),
                 cancellationToken);
             var news = await newsFeed.GetEarningsTimelineAsync(
@@ -61,8 +60,7 @@ public static class EarningsApiEndpoints
             return await ApplyViewAsync(MapSnapshot(
                 snapshot,
                 monitor.GetStatus(),
-                operatorToday,
-                nextBusinessDate,
+                nowUtc,
                 news,
                 onlyShortHorizon: true,
                 filter,
@@ -95,8 +93,6 @@ public static class EarningsApiEndpoints
             }
 
             var snapshot = await monitor.GetCalendarAsync(fromDate, toDate, cancellationToken);
-            var operatorToday = DateOnly.FromDateTime(
-                TimeZoneInfo.ConvertTime(snapshot.GeneratedAtUtc, EarningsTimeZones.OperatorLocal).DateTime);
             var nowUtc = clock.GetUtcNow();
             var news = await newsFeed.GetEarningsTimelineAsync(
                 snapshot.Items.Select(item => item.Event.Ticker).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
@@ -105,8 +101,7 @@ public static class EarningsApiEndpoints
             return await ApplyViewAsync(MapSnapshot(
                 snapshot,
                 monitor.GetStatus(),
-                operatorToday,
-                EarningsCalendarDates.NextWeekday(operatorToday),
+                nowUtc,
                 news,
                 onlyShortHorizon: false,
                 filter,
@@ -128,18 +123,19 @@ public static class EarningsApiEndpoints
         }).RequireAuthorization();
     }
 
-    private static EarningsCalendarResponse MapSnapshot(
+    internal static EarningsCalendarResponse MapSnapshot(
         EarningsCalendarSnapshot snapshot,
         EarningsMonitorStatus monitorStatus,
-        DateOnly operatorToday,
-        DateOnly nextBusinessDate,
+        DateTimeOffset requestAtUtc,
         IReadOnlyList<EarningsNewsEvidenceResponse> news,
         bool onlyShortHorizon,
         EarningsCalendarFilter filter,
         string dateScope)
     {
+        var exchangeToday = EarningsCalendarDates.ExchangeDate(requestAtUtc);
+        var nextBusinessDate = EarningsCalendarDates.NextWeekday(exchangeToday);
         var mapped = snapshot.Items
-            .Select(item => MapItem(item, operatorToday, nextBusinessDate))
+            .Select(item => MapItem(item, exchangeToday, nextBusinessDate))
             .Where(item => !onlyShortHorizon || MatchesDateScope(item, dateScope))
             .ToArray();
         var filtered = mapped.Where(item => MatchesFilter(item, filter)).ToArray();
@@ -173,7 +169,7 @@ public static class EarningsApiEndpoints
 
     private static EarningsCalendarItemResponse MapItem(
         EarningsCalendarSnapshotItem item,
-        DateOnly operatorToday,
+        DateOnly exchangeToday,
         DateOnly nextBusinessDate)
     {
         var calendarEvent = item.Event;
@@ -188,12 +184,11 @@ public static class EarningsApiEndpoints
         var revenueEstimate = analysis?.EffectiveRevenueEstimateMillions ?? calendarEvent.RevenueEstimateMillions;
         var revenueActual = analysis?.EffectiveRevenueActualMillions ?? calendarEvent.RevenueActualMillions;
         var revenueSurprise = analysis?.EffectiveRevenueSurprisePercent ?? calendarEvent.RevenueSurprisePercent;
-        var operatorTime = TimeZoneInfo.ConvertTime(calendarEvent.ScheduledAtUtc, EarningsTimeZones.OperatorLocal);
         var newYork = TimeZoneInfo.ConvertTime(calendarEvent.ScheduledAtUtc, EarningsTimeZones.NewYork);
-        var localDate = DateOnly.FromDateTime(operatorTime.DateTime);
-        var dayGroup = localDate == operatorToday
+        var reportDate = calendarEvent.ReportDateExchange;
+        var dayGroup = reportDate == exchangeToday
             ? "today"
-            : localDate == nextBusinessDate
+            : reportDate == nextBusinessDate
                 ? "nextBusinessDay"
                 : "other";
         return new EarningsCalendarItemResponse(

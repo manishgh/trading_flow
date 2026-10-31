@@ -6,6 +6,7 @@ using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
+using TradingFlow.Backtesting;
 
 namespace TradingFlow.Web.Pages;
 
@@ -15,17 +16,20 @@ public sealed class BacktestsModel : PageModel
     private readonly OptimizationJobService optJobs;
     private readonly BacktestJobService backtestJobs;
     private readonly IWishlistRepository wishlists;
+    private readonly TradingFlow.Web.Services.Desk.DeskSources stockSources;
+    public IReadOnlyList<TradingFlow.Contracts.V1.BacktestStockSource> StockSources { get; private set; } = [];
 
     public BacktestsModel(
         ConfigCatalogService catalog,
         OptimizationJobService optJobs,
         BacktestJobService backtestJobs,
-        IWishlistRepository wishlists)
+        IWishlistRepository wishlists, TradingFlow.Web.Services.Desk.DeskSources stockSources)
     {
         this.catalog = catalog;
         this.optJobs = optJobs;
         this.backtestJobs = backtestJobs;
         this.wishlists = wishlists;
+        this.stockSources = stockSources;
     }
 
     [BindProperty] public string SelectedConfigPath { get; set; } = String.Empty;
@@ -43,6 +47,8 @@ public sealed class BacktestsModel : PageModel
     [BindProperty(SupportsGet = true)] public string? Drill { get; set; }
 
     [BindProperty(SupportsGet = true)] public string? Month { get; set; }
+    [BindProperty(SupportsGet = true)] public long ZoneOffset { get; set; }
+    public TradingFlow.Contracts.V1.RunZoneEvaluationPage? ZoneEvaluations { get; private set; }
 
     public BacktestJobSnapshot? SelectedJob { get; private set; }
 
@@ -72,7 +78,7 @@ public sealed class BacktestsModel : PageModel
     }
 
     /// <summary>
-    /// The seven preregistered gates for the drilled strategy.
+    /// Assesses the supplied snapshot only; absent run configuration and trimmed trade details remain unevaluated.
     /// </summary>
     /// <remarks>
     /// A run built on a current wishlist fails the universe gate by construction,
@@ -85,52 +91,18 @@ public sealed class BacktestsModel : PageModel
     public StrategyDiagnosticReport? DrilledDiagnostic => SelectedJob?.Result?.Diagnostics
         .FirstOrDefault(item => item.StrategyId.Equals(DrilledStrategy?.StrategyId, StringComparison.OrdinalIgnoreCase));
 
-    private IReadOnlyList<MonthlyBacktestRow>? monthlyRows;
-    public string MonthlyUnavailable { get; private set; } = "Monthly evidence unavailable.";
-    public IReadOnlyList<MonthlyBacktestRow> MonthlyRows
-    {
-        get
-        {
-            if(monthlyRows is not null)return monthlyRows;
-            try
-            {
-                var job=SelectedJob ?? throw new InvalidOperationException("No completed run selected.");
-                var result=job.Result ?? throw new InvalidOperationException("Completed result unavailable.");
-                if(!result.EconomicResultsComplete)throw new InvalidOperationException("Incomplete cohort; monthly returns unavailable.");
-                var config=catalog.GetConfig(job.ConfigPath).Config;
-                if(config.TimeWindow.Start is not { } start||config.TimeWindow.End is not { } end)
-                    throw new InvalidOperationException("A frozen start and end are needed for monthly display.");
-                var reader=new SimpleYamlReader();var values=new List<MonthlyBacktestRow>();
-                foreach(var strategy in result.StrategyResults)
-                {
-                    var path=config.Strategies.FirstOrDefault(path=>reader.ReadStrategy(path).StrategyId==strategy.StrategyId);
-                    if(path is null||!System.IO.File.Exists(path+".artifact.json"))
-                        throw new InvalidOperationException("Immutable strategy timing metadata is missing.");
-                    var manifest=System.Text.Json.JsonSerializer.Deserialize<StrategyRunArtifactManifest>(System.IO.File.ReadAllText(path+".artifact.json"),
-                        new System.Text.Json.JsonSerializerOptions{PropertyNameCaseInsensitive=true,Converters={new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.SnakeCaseLower)}});
-                    if(manifest is null || manifest.SchemaVersion != 1 || manifest.SelectionMode != StrategySelectionMode.Backtest ||
-                        manifest.Identity is null || manifest.AdmissionProfile is null)
-                        throw new InvalidOperationException("Immutable backtest strategy metadata is malformed or unsupported.");
-                    var definition=reader.ReadStrategy(path);
-                    if(TradingFlow.Domain.Research.EvidenceCanonicalJson.ComputeSha256(new CanonicalStrategyDocument(manifest.Identity.StrategyId,manifest.Identity.SemanticVersion,definition,manifest.AdmissionProfile))!=manifest.Identity.ContentSha256)
-                        throw new InvalidOperationException("Strategy snapshot hash differs from immutable metadata.");
-                    var runtime=new AuthorizedRuntimeStrategy(manifest.Identity,StrategySelectionMode.Backtest,definition,manifest.AdmissionProfile);
-                    values.AddRange(MonthlyBacktestPresentation.FromCompletedTrades(strategy,runtime,job.RunName,start,end));
-                }
-                monthlyRows=values;return values;
-            }
-            catch(Exception error) when(error is IOException or InvalidOperationException or ArgumentException or System.Text.Json.JsonException)
-            {MonthlyUnavailable=error.Message;return monthlyRows=[];}
-        }
-    }
-    public string? SelectedMonth => MonthlyRows.Any(row=>row.Month.Month==Month)?Month:
-        MonthlyRows.Where(row=>!row.Month.PartialPeriod).Select(row=>row.Month.Month).Order(StringComparer.Ordinal).LastOrDefault()
-        ?? MonthlyRows.Select(row=>row.Month.Month).Order(StringComparer.Ordinal).LastOrDefault();
+    /// <summary>Uses the worker's complete monthly records, never reconstructing returns from trimmed trade collections.</summary>
+    public IReadOnlyList<TradingFlow.Contracts.V1.MonthlyRunResult> MonthlyRows => SelectedJob?.MonthlyResults ?? [];
+    public string MonthlyUnavailable => SelectedJob?.MonthlyUnavailableReason ?? "No monthly result evidence was published for this run.";
+    public string? SelectedMonth => MonthlyRows.Any(row => row.Month == Month) ? Month :
+        MonthlyRows.Where(row => !row.PartialMonth).Select(row => row.Month).Order(StringComparer.Ordinal).LastOrDefault()
+        ?? MonthlyRows.Select(row => row.Month).Order(StringComparer.Ordinal).LastOrDefault();
+    /// <summary>Filters only the retained trade sample; monthly totals come from the separately preserved records.</summary>
     public IReadOnlyList<BacktestTrade> TradesForSelectedMonth(StrategyBacktestResult strategy)
     {
-        var row=MonthlyRows.FirstOrDefault(row=>row.AliasId==strategy.StrategyId&&row.Month.Month==SelectedMonth);
-        return row is null?[]:strategy.CompletedTrades.Where(trade=>
-            MonthlyBacktestPresentation.SourceSessionDate(trade.ExitTimestamp).ToString("yyyy-MM",System.Globalization.CultureInfo.InvariantCulture)==row.Month.Month).ToArray();
+        return (SelectedJob?.Result?.CompletedTrades ?? []).Where(trade => trade.StrategyId == strategy.StrategyId &&
+            MonthlyBacktestPresentation.SourceSessionDate(trade.ExitTimestamp, strategy.PortfolioState?.ValuationBasis)
+                .ToString("yyyy-MM",System.Globalization.CultureInfo.InvariantCulture) == SelectedMonth).ToArray();
     }
 
     public IReadOnlyList<RunConfigSummary> Configs { get; private set; } = [];
@@ -141,20 +113,27 @@ public sealed class BacktestsModel : PageModel
     public IReadOnlyList<BacktestJobSnapshot> BacktestJobs { get; private set; } = [];
     public IReadOnlyList<ResearchSnapshot> ResearchSnapshots { get; private set; } = [];
 
+    /// <summary>Loads configuration and the exact persisted execution, including jobs waiting for a worker.</summary>
     public async Task OnGetAsync(string? configPath, string? strategyPath, Guid? wishlistId, CancellationToken cancellationToken)
     {
         await LoadDataAsync(configPath, strategyPath, wishlistId, cancellationToken);
-        SelectedJob = JobId is { } id ? backtestJobs.Get(id) : null;
+        SelectedJob = JobId is { } id ? await backtestJobs.GetSnapshotAsync(id, cancellationToken) : null;
+        if (JobId is { } evidenceJob && SelectedJob?.Status == "completed" && SelectedJob.Result?.ZoneDecisions is not null)
+        {
+            try { ZoneEvaluations = await HttpContext.RequestServices.GetRequiredService<TradingFlow.Application.Jobs.RunWorkflowService>()
+                .ZoneEvaluationsAsync(evidenceJob, Math.Max(0, ZoneOffset), 50, cancellationToken); }
+            catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException or InvalidOperationException)
+            { ZoneEvaluations = new(0, Math.Max(0, ZoneOffset), 50, null, [], "Retained zone evidence could not be verified: " + exception.Message); }
+        }
     }
 
     /// <summary>
-    /// Progress poll for the running phase. Returns the same projection the
-    /// previous job page used, so the cadence and the reload-on-first-completion
-    /// behaviour are unchanged.
+    /// Returns worker progress, preparation failures and committed candle facts for the current job.
+    /// The browser patches only the existing status and evidence panel.
     /// </summary>
-    public IActionResult OnGetSnapshot(Guid id)
+    public async Task<IActionResult> OnGetSnapshotAsync(Guid id, CancellationToken cancellationToken)
     {
-        var job = backtestJobs.Get(id);
+        var job = await backtestJobs.GetSnapshotAsync(id, cancellationToken);
         if (job is null)
         {
             return NotFound();
@@ -174,6 +153,7 @@ public sealed class BacktestsModel : PageModel
             ProgressPercent = Math.Round(progressPercent, 1),
             Elapsed = elapsed.ToString(ElapsedFormat),
             job.ErrorMessage,
+            PreparedMarketData = job.PreparedMarketData ?? job.Result?.PreparedMarketData,
             CanCancel = job.Status is "queued" or "running" or "cancelling",
             Events = job.Events.TakeLast(40),
             StrategyGroups = (job.StrategyGroups ?? [])
@@ -207,15 +187,17 @@ public sealed class BacktestsModel : PageModel
         });
     }
 
+    /// <summary>Reads catalog, operator lists and persisted recent work without creating or mutating them.</summary>
     private async Task LoadDataAsync(string? configPath, string? strategyPath, Guid? wishlistId, CancellationToken cancellationToken)
     {
         Configs = catalog.GetBacktestConfigs();
+        StockSources = await stockSources.BacktestChoicesAsync(cancellationToken);
         Wishlists = await wishlists.ListAsync(cancellationToken);
         Strategies = await catalog.GetStrategiesAsync(
             StrategySelectionMode.Backtest,
             cancellationToken);
         OptimizationJobs = optJobs.List().Take(5).ToArray();
-        BacktestJobs = backtestJobs.List().Take(5).ToArray();
+        BacktestJobs = await backtestJobs.RecentSnapshotsAsync(5, cancellationToken);
         ResearchSnapshots = LoadResearchSnapshots();
 
         SelectedConfigPath = configPath ?? (Configs.FirstOrDefault()?.Path ?? String.Empty);

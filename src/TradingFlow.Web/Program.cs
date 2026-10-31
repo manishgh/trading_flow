@@ -82,6 +82,19 @@ Environment.SetEnvironmentVariable(
 builder.Services.AddApiMutationSecurity();
 builder.Services.AddSingleton<TradingFlow.Application.Jobs.IWorkflowRunConfiguration, WorkflowRunConfiguration>();
 builder.Services.AddSingleton<TradingFlow.Application.Jobs.RunWorkflowService>();
+builder.Services.AddSingleton<TradingFlow.Application.Jobs.BacktestPlanService>();
+builder.Services.AddSingleton(TradingFlow.Engine.Configuration.TradingLimitDefaultsFactory.FromRegistry());
+builder.Services.AddSingleton<TradingFlow.Domain.Execution.IOperationalTradingLimitStore, TradingFlow.Data.Orders.SqliteOperationalTradingLimitStore>();
+builder.Services.AddSingleton<TradingFlow.Application.Jobs.TradingLimitsService>();
+// Resolve admission budgets from the same host settings used by existing workers.
+builder.Services.AddSingleton(services => new TradingFlow.Application.Jobs.RunQueueLimits(
+    services.GetRequiredService<BacktestJobServiceOptions>().MaximumPendingJobs,
+    services.GetRequiredService<PaperJobServiceOptions>().MaximumPendingJobs));
+builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskStrategyAssessmentService>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.IStockStrategyEvidenceLoader, TradingFlow.Web.Services.Desk.StockStrategyEvidenceLoader>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.CurrentStockStrategyAssessmentService>();
+builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(sp =>
+    sp.GetRequiredService<TradingFlow.Web.Services.Desk.CurrentStockStrategyAssessmentService>());
 builder.Services.AddRazorPages(razor =>
 {
     razor.Conventions.AuthorizeFolder("/");
@@ -165,6 +178,16 @@ builder.Services.AddSingleton<ICandleStore>(sp =>
 });
 builder.Services.AddSingleton<ConfigCatalogService>();
 builder.Services.AddSingleton<RunConfigWriter>();
+// Web supplies its own configuration; shared research code never searches Web's local settings.
+builder.Services.AddSingleton(services => new TradingFlow.Backtesting.ConfiguredDataProviders(
+    () => TradingFlow.Alpaca.AlpacaOptions.Create(ProductionProfile.Paper) with {
+        KeyId = services.GetRequiredService<AlpacaCredentialProvider>().KeyId,
+        SecretKey = services.GetRequiredService<AlpacaCredentialProvider>().SecretKey
+    },
+    () => FinvizOptions.CreateDefault() with { AuthToken = finvizApiKey },
+    () => Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL"),
+    newsLogger: services.GetRequiredService<ILogger<TradingFlow.Alpaca.AlpacaNewsProvider>>()));
+builder.Services.AddSingleton<TradingFlow.Backtesting.IPreparedMarketDataBindingStore, PreparedMarketDataEventBindingStore>();
 builder.Services.AddSingleton<TradingFlow.Backtesting.BacktestRunner>();
 builder.Services.AddSingleton<IBacktestRunExecutor, BacktestRunExecutor>();
 builder.Services.AddSingleton(new BacktestJobServiceOptions(
@@ -193,6 +216,7 @@ builder.Services.AddSingleton(new BacktestJobServiceOptions(
             ?? Environment.GetEnvironmentVariable("TRADINGFLOW_BACKTEST_SNAPSHOT_INTERVAL_MS"),
         (int)BacktestJobServiceOptions.Default.SnapshotInterval.TotalMilliseconds))));
 builder.Services.AddSingleton<BacktestJobService>();
+builder.Services.AddSingleton<IBacktestEventSourcePreparation, BacktestEventSourcePreparation>();
 builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(serviceProvider =>
     serviceProvider.GetRequiredService<BacktestJobService>());
 builder.Services.AddSingleton(new OptimizationJobServiceOptions(
@@ -254,6 +278,7 @@ builder.Services.AddHttpClient<OfficialMarketNewsProvider>(client =>
 });
 builder.Services.AddSingleton<NewsFeedService>();
 builder.Services.AddScoped<NewsQueryService>();
+builder.Services.AddSingleton<CompanyNewsAssessmentPreviewService>();
 builder.Services.AddSingleton<NewsStockSourceService>();
 builder.Services.AddScoped<EarningsViewService>();
 builder.Services.AddSingleton<WarmupServiceClient>();
@@ -261,8 +286,6 @@ builder.Services.AddSingleton<DeskPreparationService>();
 builder.Services.AddSingleton<DeskTicketPlanService>();
 builder.Services.AddSingleton<OrderTicketPlanService>();
 builder.Services.AddSingleton<WishlistUniverseResolver>();
-builder.Services.AddSingleton<WishlistSwingWatchEvaluator>();
-builder.Services.AddSingleton<WishlistMarketMonitor>();
 builder.Services.AddSingleton<DailyObservationService>();
 builder.Services.AddSingleton<IDailyObservationService>(sp => sp.GetRequiredService<DailyObservationService>());
 builder.Services.AddSingleton<WishlistDeskService>();
@@ -280,6 +303,7 @@ builder.Services.AddSingleton<IScreenerSnapshotSource>(services => services.GetR
 builder.Services.AddSingleton<IPaperRunUniverseSnapshotResolver, PaperRunUniverseSnapshotResolver>();
 builder.Services.AddSingleton<ScreenerPresetService>();
 builder.Services.AddSingleton<PositionProtectionService>();
+builder.Services.AddSingleton<IPositionProtectionReader>(sp => sp.GetRequiredService<PositionProtectionService>());
 builder.Services.AddSingleton<IEarningsRepository, SqliteEarningsRepository>();
 builder.Services.AddSingleton(EarningsMonitorOptions.Default);
 builder.Services.AddSingleton<EarningsAnalyzer>();
@@ -339,7 +363,6 @@ builder.Services.AddSingleton<TradingFlow.Engine.Execution.IBrokerClient>(servic
 
 builder.Services.AddTransient<TradingFlow.Data.Catalysts.CatalystStreamer>();
 builder.Services.AddTransient<SymbolIntelligenceService>();
-builder.Services.AddSingleton<WishlistObserverService>();
 builder.Services.AddAlpacaQuotes();
 builder.Services.AddSingleton<AlpacaManualOrderService>();
 builder.Services.AddSingleton<IReviewedOrderBroker>(services => services.GetRequiredService<AlpacaManualOrderService>());
@@ -377,7 +400,9 @@ builder.Services.AddSingleton<TradingFlowDatabaseInitializer>();
 // principal - so this registration is what makes those work rather than a new
 // policy. Accounts are provisioned by `users add` on the CLI; there is no
 // public registration route.
-builder.Services.AddOperatorAuthentication(uiTestMode, Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_PASSWORD_MIN_LENGTH"));
+builder.Services.AddTrustedProxyTransport(builder.Configuration);
+builder.Services.AddOperatorAuthentication(uiTestMode, Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_PASSWORD_MIN_LENGTH"),
+    secureTransportRequired: !builder.Environment.IsDevelopment());
 
 builder.Services.AddSingleton<TradingFlow.Domain.Locking.ITickerLockService, TradingFlow.Data.Locking.SqliteTickerLockService>();
 builder.Services.AddSingleton<IDiscoveryRepository, SqliteDiscoveryRepository>();
@@ -559,6 +584,7 @@ builder.Services.AddSingleton<IPositionConflictGuard, PositionConflictGuard>();
 builder.Services.AddSingleton<TradingFlow.Engine.Indicators.IndicatorEngine>();
 builder.Services.AddSingleton(serviceProvider => new Lazy<IMarketDataProvider>(() =>
 {
+    // Share the host's durable raw archive so lazy market responses survive cache cleanup.
     var credentials = serviceProvider.GetRequiredService<AlpacaCredentialProvider>();
     var options = TradingFlow.Alpaca.AlpacaOptions.Create(ProductionProfile.Paper) with
     {
@@ -568,6 +594,7 @@ builder.Services.AddSingleton(serviceProvider => new Lazy<IMarketDataProvider>((
     return new TradingFlow.Alpaca.AlpacaMarketDataProvider(
         new HttpClient(),
         options,
+        serviceProvider.GetRequiredService<IRawArchiveWriter>(),
         serviceProvider.GetRequiredService<ILogger<TradingFlow.Alpaca.AlpacaMarketDataProvider>>());
 }));
 var synchronizationStartedAt = DateTimeOffset.UtcNow;
@@ -600,7 +627,8 @@ builder.Services.AddSingleton<IOrderCommandService>(serviceProvider =>
 builder.Services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOptions(
     Enabled: runtimeEnabled,
     EnableEarningsMonitor: !String.IsNullOrWhiteSpace(finvizApiKey),
-    EnableMarketFeeds: !uiTestMode && String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_ENABLE_MARKET_FEEDS"), "true", StringComparison.OrdinalIgnoreCase)));
+    EnableMarketFeeds: !uiTestMode && String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_ENABLE_MARKET_FEEDS"), "true", StringComparison.OrdinalIgnoreCase),
+    EnableStrategyAssessments: !uiTestMode));
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.ICandidateAuditEvidenceRepository, TradingFlow.Data.Orders.SqliteCandidateAuditEvidenceRepository>();
 builder.Services.AddSingleton<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>();
@@ -635,6 +663,12 @@ builder.Services.AddSingleton<IReadOnlyDictionary<string, TradingFlow.Applicatio
     return new Dictionary<string, TradingFlow.Application.Jobs.DurableJobWorkerOptions>(StringComparer.OrdinalIgnoreCase)
     {
         ["preparation"] = TradingFlow.Application.Jobs.DurableJobWorkerOptions.Default,
+        [TradingFlow.Web.Services.Desk.CurrentStockStrategyAssessmentService.Type] = TradingFlow.Application.Jobs.DurableJobWorkerOptions.Default with
+        {
+            MaximumPendingJobs = services.GetRequiredService<PaperJobServiceOptions>().MaximumPendingJobs,
+            MaximumConcurrentWorkers = services.GetRequiredService<PaperJobServiceOptions>().MaximumConcurrentJobs,
+            ProjectionRefreshInterval = services.GetRequiredService<PaperJobServiceOptions>().SnapshotInterval
+        },
         ["backtest"] = TradingFlow.Application.Jobs.DurableJobWorkerOptions.Default with
         {
             MaximumPendingJobs = backtests.MaximumPendingJobs,
@@ -655,12 +689,19 @@ builder.Services.AddSingleton<IReadOnlyDictionary<string, TradingFlow.Applicatio
         }
     };
 });
+// Keep historical research and explicit stock checks usable while trading is paused; UI tests start no jobs.
 builder.Services.AddSingleton(new DurableJobHostOptions(TimeSpan.FromSeconds(ParsePositiveInteger(
     builder.Configuration["DurableJobs:ShutdownDrainSeconds"]
         ?? Environment.GetEnvironmentVariable("TRADINGFLOW_DURABLE_JOB_SHUTDOWN_DRAIN_S"),
-    (int)DurableJobHostOptions.Default.ShutdownDrainTimeout.TotalSeconds))));
+    (int)DurableJobHostOptions.Default.ShutdownDrainTimeout.TotalSeconds)),
+    AllowedJobTypes: runtimeEnabled ? null : new HashSet<string>(uiTestMode ? [] :
+        [TradingFlow.Web.Services.Desk.CurrentStockStrategyAssessmentService.Type, "backtest"], StringComparer.Ordinal)));
 
 var app = builder.Build();
+// Reject an incomplete production host before starting workers; report missing names without exposing secrets.
+if (app.Environment.IsProduction() && !uiTestMode)
+    app.Services.GetRequiredService<AlpacaCredentialProvider>().RequireProductionConfiguration();
+app.UseTrustedProxyTransport(app.Environment);
 
 var apiProfilerLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("TradingFlow.ApiProfiler");
 TradingFlow.Domain.Logging.ApiProfiler.ConfigureMetricSink(metric =>

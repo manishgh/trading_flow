@@ -10,6 +10,7 @@
     var result = job?.Result;
     var drilled = Model.DrilledStrategy;
     var gates = Model.Gates;
+    var profile = Model.Configs.FirstOrDefault(item => item.Path == Model.SelectedConfigPath)?.Config;
 }
 
 @functions {
@@ -25,7 +26,7 @@
         <span class="eyebrow">Backtesting research</span>
         <h1>Strategy Lab</h1>
         <p class="standfirst">
-            Select strategies, run them against one wishlist universe, and compare portfolio-level
+            Select strategies and stocks from a wishlist or saved Finviz list, then compare independent portfolio
             results. A profitable run is not a promotion — the preregistered gates below decide that.
         </p>
     </div>
@@ -47,7 +48,28 @@
        ======================================================================= *@
     <form class="lab-rail" novalidate method="post" asp-page-handler="RunBacktest">
         <details class="research-configuration" open="@(Model.Phase == "configure")"><summary>@(Model.Phase == "configure" ? "Configure backtest" : "Configure another run")</summary>
-        <input type="hidden" name="SelectedConfigPath" value="@Model.SelectedConfigPath" />
+        <label for="SelectedConfigPath">Backtest profile</label>
+        <select class="input" id="SelectedConfigPath" name="SelectedConfigPath">
+            @foreach (var config in Model.Configs)
+            {
+                <option value="@config.Path" selected="@(config.Path == Model.SelectedConfigPath)"
+                        data-starting-capital="@config.Config.Portfolio.StartingCapital.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+                        data-account-risk="@config.Config.Portfolio.AccountRiskBudgetPct.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+                        data-position-notional="@config.Config.Portfolio.MaxPositionNotionalPct.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+                        data-open-positions="@config.Config.Portfolio.MaxConcurrentPositions"
+                        data-lookback-days="@config.Config.TimeWindow.LookbackDays"
+                        data-cache-policy="@config.Config.CachePolicy">@config.FileName</option>
+            }
+        </select>
+
+        <label for="ExecutionReplayPolicyId">Research execution assumptions</label>
+        <select class="input" id="ExecutionReplayPolicyId" name="ExecutionReplayPolicyId">
+            @foreach (var choice in TradingFlow.Web.Services.BacktestExecutionProfileResolver.Choices)
+            {
+                <option value="@choice.PolicyId">@choice.Name</option>
+            }
+        </select>
+        <p class="note">The strategy supplies its horizon. Day and swing strategies use separate saved plans; the preview freezes the selected fill assumptions.</p>
 
         <div data-run-validation hidden role="alert" tabindex="-1"></div>
         <fieldset class="lab-block">
@@ -55,30 +77,25 @@
                 <partial name="_Icon" model='new IconModel("layers", 15)' />Universe
             </legend>
             <div class="field">
-                <label for="WishlistId">Wishlist</label>
-                <select class="input" id="WishlistId" name="WishlistId">
-                    @foreach (var wishlist in Model.Wishlists)
+                <label for="StockSource">Stock source</label>
+                <select class="input" id="StockSource" name="StockSource">
+                    @foreach (var group in Model.StockSources.GroupBy(source => source.Kind))
                     {
-                        <option value="@wishlist.Id" selected="@(Model.WishlistId == wishlist.Id)">
-                            @wishlist.Name · @wishlist.Items.Count(item => item.Active) active
-                        </option>
+                        <optgroup label="@(group.Key == "wishlist" ? "My wishlists" : "Finviz lists")">
+                            @foreach (var source in group)
+                            {
+                                <option value="@source.Key" data-source-kind="@source.Kind" data-source-key="@source.Key"
+                                    data-wishlist-id="@source.WishlistId" data-query="@source.Query" selected="@(source.WishlistId == Model.WishlistId && source.WishlistId is not null)">@source.Name</option>
+                            }
+                        </optgroup>
                     }
                 </select>
             </div>
-            @if (Model.SelectedWishlist is { } selectedWishlist)
-            {
-                <div class="lab-symbols">
-                    @foreach (var item in selectedWishlist.Items.Where(entry => entry.Active).Take(40))
-                    {
-                        <span class="tag tag-neutral">@item.Ticker</span>
-                    }
-                </div>
-            }
             @* The single most important sentence on this screen: it is why the
                promotion gate fails, and it must not be dropped. *@
             <p class="note">
-                Point-in-time membership is required for a promotable run. This wishlist is a current
-                list, so the run is marked research-only.
+                Preview shows the exact returned stocks in each group. Current wishlist and Finviz membership
+                is research-only; it does not establish which stocks belonged to a list months ago.
             </p>
         </fieldset>
 
@@ -94,7 +111,7 @@
                         <span class="lab-strategy-body">
                             <span class="lab-strategy-name">@strategy.Definition.StrategyName · @strategy.Identity.SemanticVersion</span>
                             <span class="lab-strategy-meta">
-                                @strategy.Definition.Direction · @strategy.Definition.Timeframe / @strategy.Definition.Execution.Timeframe
+                                @StrategyHorizonResolver.Resolve(strategy.Definition) · @strategy.Definition.Direction · @strategy.Definition.Timeframe / @strategy.Definition.Execution.Timeframe
                             </span>
                             @if (strategy.Audit is { } audit)
                             {
@@ -106,7 +123,13 @@
                             @* Research-only strategies must never reach paper or live.
                                Labelling the distinction here is how the operator learns it. *@
                             <span class="tag tag-neutral">@(strategy.Lifecycle == StrategyLifecycleState.Research ? "RESEARCH ONLY" : strategy.Lifecycle.ToString().ToUpperInvariant())</span>
-                            <span class="lab-strategy-meta">hash @strategy.Identity.ContentSha256[..12]</span>
+                            <span class="lab-strategy-meta" style="overflow-wrap:anywhere">SHA-256 @strategy.Identity.ContentSha256</span>
+                            @if (strategy.Artifact.DerivedFromIdentity is { } parent)
+                            {
+                                <span class="lab-strategy-meta" style="overflow-wrap:anywhere">Parent: @parent.StrategyId @parent.SemanticVersion · @parent.ContentSha256</span>
+                            }
+                            <span class="lab-strategy-meta">Admission: @strategy.Artifact.AdmissionProfile.ProfileId @strategy.Artifact.AdmissionProfile.ProfileVersion</span>
+                            <span class="lab-strategy-meta">Execution: @strategy.Artifact.AdmissionProfile.ExecutionTimingPolicy</span>
                         </span>
                     </label>
                 }
@@ -116,6 +139,15 @@
             </p>
         </fieldset>
 
+        <fieldset class="lab-block">
+            <legend class="section-heading">Decision-context evidence</legend>
+            <label for="DecisionContextEvidence">Optional approved evidence</label>
+            <select class="input" id="DecisionContextEvidence" name="DecisionContextEvidence" data-evidence-picker>
+                <option value="">No evidence selected</option>
+            </select>
+            <p class="note" data-evidence-availability aria-live="polite"></p>
+            <div class="note" data-evidence-summary style="overflow-wrap:anywhere"></div>
+        </fieldset>
 
         <fieldset class="lab-block">
             <legend class="section-heading">Test window</legend>
@@ -135,35 +167,46 @@
                 </div>
                 <div class="field">
                     <label for="LookbackDays">Fallback lookback (days)</label>
-                    <input class="input" id="LookbackDays" name="LookbackDays" type="number" min="5" max="1825" step="1" value="180" aria-describedby="TestWindowHelp" />
+                    <input class="input" id="LookbackDays" name="LookbackDays" type="number" min="5" max="1825" step="1" value="@profile?.TimeWindow.LookbackDays" aria-describedby="TestWindowHelp" />
                 </div>
             </div>
             <p class="note" id="TestWindowHelp">Enter both dates in UTC, regardless of your device timezone. Leave both blank to use the lookback ending now. The end must follow the start and cannot be in the future.</p>
+        </fieldset>
+        <fieldset class="lab-block">
+            <legend class="section-heading">Stock groups</legend>
+            <label for="ExcludedSymbols">Exclude stocks</label>
+            <input class="input" id="ExcludedSymbols" name="ExcludedSymbols" aria-describedby="ExcludedSymbolsHelp" />
+            <p class="note" id="ExcludedSymbolsHelp">Optional comma-separated stock symbols to exclude from this plan. The original wishlist or saved Finviz list stays unchanged.</p>
+            <label for="GroupSize">Stocks per group</label>
+            <input class="input" id="GroupSize" name="GroupSize" type="number" min="1" step="1" />
+            <label for="ManualCohorts">Or enter your own groups</label>
+            <textarea class="input" id="ManualCohorts" name="ManualCohorts" rows="4" aria-describedby="ManualCohortsHelp"></textarea>
+            <p class="note" id="ManualCohortsHelp">One group per line: name | starting capital | stock symbols separated by commas. Leave stocks per group blank when entering your own groups. Automatic groups use symbols in alphabetical order and keep the final smaller group. Each strategy and group has separate capital.</p>
         </fieldset>
         <fieldset class="lab-block">
             <legend class="section-heading">Portfolio limits</legend>
             <div class="lab-parameters">
                 <div class="field">
                     <label for="StartingCapital">Starting capital (USD)</label>
-                    <input class="input" id="StartingCapital" name="StartingCapital" type="number" min="0.01" step="any" value="10000" />
+                    <input class="input" id="StartingCapital" name="StartingCapital" type="number" min="0.01" step="any" value="@profile?.Portfolio.StartingCapital.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
                 </div>
                 <div class="field">
                     <label for="AccountRiskBudgetPct">Account risk (% of equity)</label>
-                    <input class="input" id="AccountRiskBudgetPct" name="AccountRiskBudgetPct" type="number" min="0.01" max="100" step="any" value="1" />
+                    <input class="input" id="AccountRiskBudgetPct" name="AccountRiskBudgetPct" type="number" min="0.01" max="100" step="any" value="@profile?.Portfolio.AccountRiskBudgetPct.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
                 </div>
                 <div class="field">
                     <label for="MaxPositionNotionalPct">Max position notional (% of equity)</label>
-                    <input class="input" id="MaxPositionNotionalPct" name="MaxPositionNotionalPct" type="number" min="0.01" max="100" step="any" value="25" />
+                    <input class="input" id="MaxPositionNotionalPct" name="MaxPositionNotionalPct" type="number" min="0.01" max="100" step="any" value="@profile?.Portfolio.MaxPositionNotionalPct.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
                 </div>
                 <div class="field">
                     <label for="MaxConcurrentPositions">Max concurrent positions (count)</label>
-                    <input class="input" id="MaxConcurrentPositions" name="MaxConcurrentPositions" type="number" min="1" max="1000" step="1" value="4" />
+                    <input class="input" id="MaxConcurrentPositions" name="MaxConcurrentPositions" type="number" min="1" max="1000" step="1" value="@profile?.Portfolio.MaxConcurrentPositions" />
                 </div>
                 <div class="field">
                     <label for="CachePolicy">Market data</label>
                     <select class="input" id="CachePolicy" name="CachePolicy" aria-describedby="CachePolicyHelp">
-                        <option value="use_cache">Use cache</option>
-                        <option value="refresh">Refresh</option>
+                        <option value="use_cache" selected="@(profile?.CachePolicy == "use_cache")">Use cache</option>
+                        <option value="refresh" selected="@(profile?.CachePolicy == "refresh")">Refresh</option>
                     </select>
                     <p class="note" id="CachePolicyHelp">Use cached candles where available, or request a provider refresh. Neither option fills missing evidence with invented values.</p>
                 </div>
@@ -183,8 +226,13 @@
             else
             {
                 <button class="btn btn-primary btn-block btn-xl" type="submit">
-                    <partial name="_Icon" model='new IconModel("play", 15)' />Run backtest
+                    <partial name="_Icon" model='new IconModel("play", 15)' />Preview groups
                 </button>
+                <button class="btn btn-secondary btn-block" type="submit" data-backtest-action="save" disabled>Save plan</button>
+                <label for="SavedBacktestPlan">Saved plans</label>
+                <select class="input" id="SavedBacktestPlan" data-saved-backtest-plan><option value="">Select a saved plan</option></select>
+                <button class="btn btn-primary btn-block" type="button" data-start-backtest-plan disabled>Start saved plan</button>
+                <div data-backtest-plan-preview aria-live="polite" style="overflow-wrap:anywhere"></div>
             }
             <p class="note">
                 Generated run configs are audit artifacts. They are not hand-maintained ticker lists.
@@ -196,6 +244,13 @@
        Main column - one of three phases
        ======================================================================= *@
     <div class="lab-main">
+        @if (job is not null)
+        {
+            <section class="lab-panel" data-job-evidence="@job.JobId" hidden style="overflow-wrap:anywhere">
+                <h2 class="section-heading">Decision-context evidence</h2>
+                <div data-job-evidence-summary></div>
+            </section>
+        }
         @if (Model.Phase == "configure")
         {
             <section class="lab-panel">
@@ -239,8 +294,8 @@
                     </div>
                 }
                 <p class="note">
-                    Partial exits are not modelled. A backtest supports one entry and one full-position
-                    exit, so strategies that scale out will read differently here than in paper.
+                    These older summaries report completed trades. Current native daily
+                    results retain actual partial fills and positions still open at the test end.
                 </p>
             </section>
 

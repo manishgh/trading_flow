@@ -25,3 +25,7 @@
 @media(min-width:1151px){.watch-news{grid-row:1 / span 2;position:sticky;top:16px}.watch-detail{grid-column:1}}
 
 .watch-detail #watch-focus-content{align-items:start}.watch-detail .watch-actions{align-self:start}
+
+#watch-strategy-checks details{margin-top:8px;overflow-wrap:anywhere}
+#watch-strategy-checks summary{cursor:pointer;font-size:12px}
+#watch-strategy-checks pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;font-size:11px}

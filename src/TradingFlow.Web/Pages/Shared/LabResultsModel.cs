@@ -1,6 +1,8 @@
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Pages;
+using TradingFlow.Application.Jobs;
+using TradingFlow.Contracts.V1;
 
 namespace TradingFlow.Web.Pages.Shared;
 
@@ -15,6 +17,17 @@ public sealed record LabResultsModel(
     StrategyBacktestResult Drilled,
     ResearchPromotionAssessment Gates)
 {
+    /// <summary>Displays the selected strategy's server-calculated terminal book through the same API projection.</summary>
+    public RunPortfolioStateResponse? PortfolioState => RunPortfolioStateProjection.Project(Drilled.PortfolioState);
+
+    /// <summary>Uses the shared evidence contract for the selected zone strategy.</summary>
+    public IReadOnlyList<RunZoneDecisionDetail> ZoneDecisions => RunPortfolioStateProjection.ProjectZones(
+        Result.ZoneDecisions?.Where(item => item.StrategyId == Drilled.StrategyId).TakeLast(100).ToArray());
+
+    /// <summary>Limits history observations to the selected strategy without interpreting an unknown status.</summary>
+    public IReadOnlyList<RunHistoryEligibility> HistoryEligibility => RunPortfolioStateProjection.ProjectEligibility(
+        Result.HistoryEligibility.Where(item => item.StrategyId == Drilled.StrategyId).ToArray());
+
     /// <summary>Up to four rejection reasons, largest first.</summary>
     public IReadOnlyList<KeyValuePair<string, int>> TopRejections =>
         Page.DrilledDiagnostic?.RejectionCounts

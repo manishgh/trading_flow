@@ -5,8 +5,8 @@
     ViewData["Title"] = "Positions";
     ViewData["MainClass"] = "shell-flush positions-page";
 
-    string TradeKey(TradingFlow.Web.Models.MobileRunningTrade trade) =>
-        $"{trade.CloseKind}:{trade.JobId?.ToString() ?? trade.SessionId?.ToString() ?? "none"}:{trade.Ticker}";
+    // Broker symbols identify rows independently of whether local ownership details are available.
+    string TradeKey(TradingFlow.Contracts.Operator.AccountPosition trade) => $"account:{trade.Ticker}";
 
     // One list drives the header row so the sortable and fixed columns stay in the
     // same order as the body cells. A null key means the column carries no ordering.
@@ -26,20 +26,26 @@
 }
 
 @functions {
-    static string SignedClass(decimal value) =>
+    // Missing broker fields remain unknown rather than being formatted as zero.
+    static string SignedClass(decimal? value) => value is null ? "unknown" :
         value > 0 ? "value-signed up" : value < 0 ? "value-signed down" : "value-signed flat";
 
-    static string SignedMoney(decimal value) =>
-        (value > 0 ? "+" : value < 0 ? "−" : String.Empty) + Math.Abs(value).ToString("C2");
+    // Preserve the difference between an observed flat account and an unavailable P/L read.
+    static string SignedMoney(decimal? value) => value is { } known
+        ? (known > 0 ? "+" : known < 0 ? "−" : String.Empty) + Math.Abs(known).ToString("C2") : "Unavailable";
 
-    static string SignedPercent(decimal value) =>
-        (value > 0 ? "+" : value < 0 ? "−" : String.Empty) + Math.Abs(value).ToString("0.00") + "%";
+    // A missing cost basis cannot produce a meaningful percentage.
+    static string SignedPercent(decimal? value) => value is { } known
+        ? (known > 0 ? "+" : known < 0 ? "−" : String.Empty) + Math.Abs(known).ToString("0.00") + "%" : "Unavailable";
 
+    // Keep the source labels consistent with the shared account contract and Android.
     static string SourceBadge(string source) => source switch
     {
         "wishlist" => "Wishlist",
         "stockpulse" => "Stock Pulse",
         "manual" => "Manual",
+        "account" => "Account holding",
+        "multiple" => "Multiple runs",
         _ => source
     };
 }
@@ -49,7 +55,7 @@
         <span class="eyebrow">Trade book</span>
         <h1>Positions</h1>
         <p class="standfirst">
-            One live book for wishlist, Stock Pulse and manual paper positions. Values refresh every
+            Every holding in the bound paper account, including holdings without a local run. Values refresh every
             10 seconds without replacing a focused control.
         </p>
     </div>
@@ -58,38 +64,39 @@
 
 @if (!String.IsNullOrWhiteSpace(Model.ErrorMessage))
 {
-    <div class="status-banner error" role="alert" tabindex="-1" data-trades-banner>@Model.ErrorMessage</div>
+    <div class="status-banner error" role="alert" tabindex="-1" data-trades-banner data-account-read-error="@(!Model.AccountAvailable ? "true" : "false")">@Model.ErrorMessage</div>
 }
 
 <section class="metric-strip metric-strip-lg positions-summary" data-running-trades data-source="@Model.Source"
          aria-label="Book summary">
     <div>
-        <span class="micro-label">Total open P/L</span>
+        <span class="micro-label">Account open P/L</span>
         <strong class="metric-value @SignedClass(Model.TotalPl)" data-total-pl>@SignedMoney(Model.TotalPl)</strong>
     </div>
     <div>
-        <span class="micro-label">Open trades</span>
-        <strong class="metric-value" data-trade-count>@Model.Trades.Count</strong>
+        <span class="micro-label">Account positions</span>
+        <strong class="metric-value" data-trade-count>@(Model.SlotsUsed?.ToString() ?? "Unknown")</strong>
     </div>
     <div>
         <span class="micro-label">Gross exposure</span>
-        <strong class="metric-value">@Model.GrossExposure.ToString("C2")</strong>
+        <strong class="metric-value" data-gross-exposure>@(Model.GrossExposure?.ToString("C2") ?? "Unavailable")</strong>
     </div>
     @* A position whose entry bracket never landed is uncontrolled risk, and it
        was previously invisible on this page. Unknown is its own state: an
        unreadable broker is not the same as a missing stop. *@
     <div class="@(Model.UnprotectedCount > 0 ? "is-attention" : null)">
         <span class="micro-label">Unprotected</span>
-        <strong class="metric-value">@Model.UnprotectedCount</strong>
-        @if (Model.UnknownProtectionCount > 0)
-        {
-            <span class="metric-detail">@Model.UnknownProtectionCount unknown</span>
-        }
+        <strong class="metric-value" data-unprotected-count>@(Model.UnprotectedCount?.ToString() ?? "Unknown")</strong>
+        <span class="metric-detail" data-unknown-protection hidden="@(Model.UnknownProtectionCount is not > 0)">@Model.UnknownProtectionCount unknown</span>
     </div>
     <div class="@(Model.SlotsOverCap ? "is-attention" : null)">
         <span class="micro-label">Slots used</span>
-        <strong class="metric-value">
-            @if (Model.MaxConcurrentPositions > 0)
+        <strong class="metric-value" data-slots-used>
+            @if (Model.SlotsUsed is null)
+            {
+                <span class="unknown">Unknown</span>
+            }
+            else if (Model.MaxConcurrentPositions > 0)
             {
                 @($"{Model.SlotsUsed} of {Model.MaxConcurrentPositions}")
             }
@@ -105,6 +112,7 @@
         }
     </div>
 </section>
+<p class="note" data-account-detail>@Model.AccountDetail · @(Model.AccountReadAtUtc?.ToString("O") ?? "Read time unavailable"). Source filters change the rows, not account totals.</p>
 
 <div class="positions-body">
     <nav class="tab-strip positions-sources" aria-label="Position source filters">
@@ -121,7 +129,11 @@
         }
     </nav>
 
-    @if (Model.Trades.Count == 0)
+    @if (!Model.AccountAvailable)
+    {
+        <p class="empty-state" data-trades-unavailable>Account holdings are unavailable. This does not mean the account has no positions.</p>
+    }
+    else if (Model.Trades.Count == 0)
     {
         <p class="empty-state" data-trades-empty>
             No position is open for this source. @Model.EmptyStateHint
@@ -173,22 +185,22 @@
                                 <strong>@trade.Ticker</strong>
                                 <span class="cell-sub">@trade.Status</span>
                             </td>
-                            <td><span class="tag tag-neutral">@SourceBadge(trade.Source)</span></td>
-                            <td class="num">@trade.Quantity.ToString("0.####")</td>
-                            <td class="num">@trade.EntryPrice.ToString("C2")</td>
-                            <td class="num" data-trade-current>@trade.CurrentPrice.ToString("C2")</td>
+                            <td><span class="tag tag-neutral" data-trade-source>@SourceBadge(trade.Source)</span></td>
+                            <td class="num" data-trade-quantity>@trade.Quantity.ToString("0.####")</td>
+                            <td class="num" data-trade-entry>@(trade.EntryPrice?.ToString("C2") ?? "Unavailable")</td>
+                            <td class="num" data-trade-current>@(trade.CurrentPrice?.ToString("C2") ?? "Unavailable")</td>
                             <td class="num position-pl @SignedClass(trade.UnrealizedPl)" data-trade-pl>@SignedMoney(trade.UnrealizedPl)</td>
                             <td class="num @SignedClass(trade.UnrealizedPl)" data-trade-pl-pct>@SignedPercent(trade.UnrealizedPlPct)</td>
-                            <td>@trade.StrategyName</td>
+                            <td data-trade-strategy>@(String.IsNullOrEmpty(trade.StrategyName) ? "Not linked to a strategy" : trade.StrategyName)</td>
                             @* The broker's own view, not the local book's intent. *@
                             <td data-trade-protection
                                 class="@(guard.IsKnown && !guard.HasBrokerStop ? "accent-note" : guard.IsKnown ? null : "unknown")"
                                 title="@trade.ProtectionSummary">@guard.Detail</td>
-                            <td class="cell-sub">@trade.Reference</td>
-                            <td class="num">
+                            <td class="cell-sub" data-trade-reference>@trade.Reference</td>
+                            <td class="num" data-trade-actions>
                                 @* Fail closed: a locked environment renders no exit control at all,
                                    rather than a disabled one that the client could re-enable. *@
-                                @if (Model.EnvironmentState.IsEnabled)
+                                @if (Model.EnvironmentState.IsEnabled && trade.CanReviewExit)
                                 {
                                     <button type="button"
                                             class="btn btn-danger btn-sm"
@@ -198,10 +210,14 @@
                                             data-job-id="@(trade.JobId?.ToString())"
                                             data-session-id="@(trade.SessionId?.ToString())"
                                             data-quantity="@trade.Quantity.ToString("0.####")"
-                                            data-current-price="@trade.CurrentPrice.ToString("0.####")"
+                                            data-current-price="@trade.CurrentPrice?.ToString("0.####")"
                                             data-protection="@guard.Detail">
                                         Review exit
                                     </button>
+                                }
+                                else if (Model.EnvironmentState.IsEnabled)
+                                {
+                                    <a class="btn btn-secondary btn-sm" asp-page="/Orders">Review in Orders</a>
                                 }
                             </td>
                         </tr>
