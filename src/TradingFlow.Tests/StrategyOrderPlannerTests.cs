@@ -135,7 +135,8 @@ public sealed class StrategyOrderPlannerTests
             strategy.ExitRules.ProfitTargetMode,
             null,
             strategy.Execution.SlippageBps,
-            triggeredAt.AddMinutes(5));
+            triggeredAt.AddMinutes(5),
+            triggeredAt.AddMinutes(-5));
     }
 
     private static (

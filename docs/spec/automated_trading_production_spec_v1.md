@@ -255,7 +255,7 @@ Manual buy entry uses `manual_entry_policy`. `strategy_gated` requires a freshly
 
 ## 7. RSK — Risk engine and kill switches
 
-**RSK-01 (MUST):** Limits, all enforced pre-trade and monitored continuously, each a named config: swing per-trade risk `per_trade_risk_pct_swing` (default 0.5% of equity); daily realized+unrealized loss `max_daily_loss_pct` (default 2%); weekly `max_weekly_loss_pct` (default 4%); consecutive losing trades `max_consecutive_losses` (default 3); simultaneous positions `max_positions_swing` (default 3 in v1); gross/net exposure per ACC-07.
+**RSK-01 (MUST):** Limits, all enforced pre-trade and monitored continuously, each a named config: swing per-trade risk `per_trade_risk_pct_swing` (default 0.5% of equity); daily realized+unrealized loss `max_daily_loss_pct` (default 2%); weekly `max_weekly_loss_pct` (default 4%); consecutive losing trades `max_consecutive_losses` (default 3); simultaneous positions `max_positions_swing` (default 5, user-confirmed 21 October 2026); new distinct stocks entered per New York day `max_new_stocks_per_day` (default 5); gross/net exposure per ACC-07. Paper and live have separate saved profiles shared across their account's runs. Count actual first entry fills, once per stock per day; pending entries reserve capacity until filled or cancelled. Historical backtests do not inherit this operational daily-entry cap. Complete broker FILL activity pagination is bounded by `broker_fill_history_max_pages`; missing or unclassified activity rejects new admission rather than being counted as zero.
 
 **RSK-02 (MUST):** Daily-loss breach behavior: cancel all non-protective orders, preserve broker-resting protection for existing swing positions, block all new entries until the next session, and alert. Any discretionary flatten uses the explicit kill policy; no same-day live override exists.
 
@@ -520,7 +520,9 @@ Units: s = seconds, ms = milliseconds, bps = basis points, pct = percent of acco
 | max_daily_loss_pct | pct | 2 | 0.5–5 | RSK-01 |
 | max_weekly_loss_pct | pct | 4 | 1–10 | RSK-01 |
 | max_consecutive_losses | int | 3 | 2–10 | RSK-01 |
-| max_positions_swing | int | 3 | 1–20 | RSK-01 |
+| max_positions_swing | int | 5 | 1–20 | RSK-01 |
+| max_new_stocks_per_day | int | 5 | >=1 | RSK-01 |
+| broker_fill_history_max_pages | int | 100 | >=1 | RSK-01 |
 | news_stream_down_max_s | int | 120 | 30–600 | RSK-03 |
 | max_order_rejects | int | 3 | 1–10 | RSK-03 |
 | manual_kill_flatten | bool | true | — | RSK-04 |

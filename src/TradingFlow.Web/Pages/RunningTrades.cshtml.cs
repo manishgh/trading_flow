@@ -2,6 +2,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Desk;
+using TradingFlow.Contracts.Operator;
+using TradingFlow.Application.Jobs;
 
 namespace TradingFlow.Web.Pages;
 
@@ -10,21 +13,25 @@ public sealed class RunningTradesModel : PageModel
     private readonly PaperJobService paperJobs;
     private readonly MobileAutomationService automation;
     private readonly TradingEnvironmentService environments;
-    private readonly PositionProtectionService protection;
-    private readonly ConfigCatalogService catalog;
+    private readonly IPositionProtectionReader protection;
+    private readonly IDeskAccountReader account;
+    private readonly TradingLimitsService limits;
 
+    /// <summary>Uses the same account/protection readers and saved operational limits as the Positions API.</summary>
     public RunningTradesModel(
         PaperJobService paperJobs,
         MobileAutomationService automation,
         TradingEnvironmentService environments,
-        PositionProtectionService protection,
-        ConfigCatalogService catalog)
+        IPositionProtectionReader protection,
+        IDeskAccountReader account,
+        TradingLimitsService limits)
     {
         this.paperJobs = paperJobs;
         this.automation = automation;
         this.environments = environments;
         this.protection = protection;
-        this.catalog = catalog;
+        this.account = account;
+        this.limits = limits;
     }
 
     [BindProperty(SupportsGet = true)] public string Source { get; set; } = "all";
@@ -38,9 +45,12 @@ public sealed class RunningTradesModel : PageModel
 
     public TradingEnvironmentState EnvironmentState => environments.GetState(environments.Parse(Env));
 
-    public IReadOnlyList<MobileRunningTrade> Trades { get; private set; } = Array.Empty<MobileRunningTrade>();
+    public IReadOnlyList<AccountPosition> Trades { get; private set; } = [];
 
-    public decimal TotalPl { get; private set; }
+    public decimal? TotalPl { get; private set; }
+    public bool AccountAvailable { get; private set; }
+    public string AccountDetail { get; private set; } = "Account holdings have not been read.";
+    public DateTimeOffset? AccountReadAtUtc { get; private set; }
 
     public string? ErrorMessage { get; private set; }
 
@@ -58,32 +68,33 @@ public sealed class RunningTradesModel : PageModel
     /// source. Exposure is a portfolio fact; filtering the view must not make it
     /// look smaller than it is.
     /// </summary>
-    public decimal GrossExposure { get; private set; }
+    public decimal? GrossExposure { get; private set; }
 
     /// <summary>Positions with no working broker stop. Unknown does not count.</summary>
-    public int UnprotectedCount { get; private set; }
+    public int? UnprotectedCount { get; private set; }
 
     /// <summary>Positions whose protection could not be read from the broker.</summary>
-    public int UnknownProtectionCount { get; private set; }
+    public int? UnknownProtectionCount { get; private set; }
 
     /// <summary>Open position count across every source.</summary>
-    public int SlotsUsed { get; private set; }
+    public int? SlotsUsed { get; private set; }
 
-    /// <summary>The real cap from the active paper profile's portfolio config.</summary>
-    public int MaxConcurrentPositions { get; private set; }
+    /// <summary>The saved paper account profile's concurrent-position limit.</summary>
+    public int? MaxConcurrentPositions { get; private set; }
 
     /// <summary>
     /// A count over the cap is a broken risk control being reported, not a
     /// figure. The screen surfaces it as a block rather than a number.
     /// </summary>
-    public bool SlotsOverCap => MaxConcurrentPositions > 0 && SlotsUsed > MaxConcurrentPositions;
+    public bool SlotsOverCap => MaxConcurrentPositions is > 0 && SlotsUsed is { } used && used > MaxConcurrentPositions.Value;
 
     public static IReadOnlyList<(string Key, string Label)> Sources { get; } = new[]
     {
         ("all", "All"),
         ("wishlist", "Wishlist"),
         ("stockpulse", "Stock Pulse"),
-        ("manual", "Manual")
+        ("manual", "Manual"),
+        ("account", "Account holdings without local runs")
     };
 
     /// <summary>Columns the position book can be ordered by.</summary>
@@ -95,6 +106,7 @@ public sealed class RunningTradesModel : PageModel
         ("plpct", "P/L %")
     ];
 
+    /// <summary>Reads account holdings even when no local job is active.</summary>
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {
         await LoadAsync(cancellationToken);
@@ -150,32 +162,34 @@ public sealed class RunningTradesModel : PageModel
     public string EmptyStateHint => Source?.ToLowerInvariant() switch
     {
         "all" or null or "" =>
-            "Start a run from Paper Lab, or review a protected buy on the Trade Desk. Positions appear here as soon as an entry fills.",
-        _ => "Switch the source filter to All, or start a run from Paper Lab that trades this source."
+            "The broker reported no open holdings in the bound paper account.",
+        _ => "Switch the source filter to All to see every broker holding."
     };
 
     /// <summary>Whether the empty state should point back at the unfiltered book.</summary>
     public bool EmptyStateOffersAllSources =>
         !String.IsNullOrWhiteSpace(Source) && !String.Equals(Source, "all", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Projects the shared account response; totals cover all holdings before filtering and remain unknown after a failed read.</summary>
     private async Task LoadAsync(CancellationToken cancellationToken)
     {
-        var all = await RunningTradesBuilder.BuildAsync(paperJobs, automation);
-        Trades = SortTrades(RunningTradesBuilder.Filter(all, Source)).ToArray();
-        TotalPl = Trades.Sum(trade => trade.UnrealizedPl);
-
-        // Exposure and slots are portfolio facts, so they are measured across the
-        // whole book. Filtering to one source narrows what is listed, never what
-        // the account is actually carrying.
-        GrossExposure = all.Sum(trade => trade.CurrentPrice * trade.Quantity);
-        SlotsUsed = all.Count;
-        MaxConcurrentPositions = ResolveMaxConcurrentPositions();
-
-        Protection = await protection.GetAsync(
-            all.Select(trade => trade.Ticker).ToArray(),
-            cancellationToken);
-        UnprotectedCount = Protection.Values.Count(item => item.IsKnown && !item.HasBrokerStop);
-        UnknownProtectionCount = Protection.Values.Count(item => !item.IsKnown);
+        var limit = (await limits.GetAsync("paper", cancellationToken)).MaxOpenPositions;
+        var snapshot = await RunningTradesBuilder.ReadAccountAsync(account,
+            _ => RunningTradesBuilder.BuildAsync(paperJobs, automation), protection, limit, Source, cancellationToken);
+        Trades = SortTrades(snapshot.Trades).ToArray();
+        TotalPl = snapshot.TotalUnrealizedPl;
+        AccountAvailable = snapshot.Available;
+        AccountDetail = snapshot.Detail;
+        AccountReadAtUtc = snapshot.ReadAtUtc;
+        if (!snapshot.Available) ErrorMessage ??= snapshot.Detail;
+        GrossExposure = snapshot.GrossExposure;
+        SlotsUsed = snapshot.SlotsUsed;
+        MaxConcurrentPositions = snapshot.MaxConcurrentPositions;
+        UnprotectedCount = snapshot.UnprotectedCount;
+        UnknownProtectionCount = snapshot.UnknownProtectionCount;
+        Protection = snapshot.Trades.ToDictionary(item => item.Ticker,
+            item => new PositionProtection(item.Ticker, item.HasBrokerStop, item.ProtectionKnown, item.ProtectionSummary),
+            StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>Protection state for a row, or unknown when the broker was not read.</summary>
@@ -184,21 +198,8 @@ public sealed class RunningTradesModel : PageModel
             ? found
             : new PositionProtection(ticker, false, false, "Protection has not been read.");
 
-    /// <summary>
-    /// The cap the risk gate actually enforces, from the active paper profile.
-    /// Zero means it could not be read, and the screen says unknown rather than
-    /// implying an unlimited book.
-    /// </summary>
-    private int ResolveMaxConcurrentPositions()
-    {
-        var configs = catalog.GetPaperConfigs();
-        var selected = configs.FirstOrDefault(config =>
-                config.FileName.Equals("alpaca-paper.yaml", StringComparison.OrdinalIgnoreCase))
-            ?? configs.FirstOrDefault();
-        return selected?.Config.Portfolio.MaxConcurrentPositions ?? 0;
-    }
-
-    private IEnumerable<MobileRunningTrade> SortTrades(IEnumerable<MobileRunningTrade> trades)
+    /// <summary>Orders displayed rows only, preserving nullable broker fields rather than replacing them with zero.</summary>
+    private IEnumerable<AccountPosition> SortTrades(IEnumerable<AccountPosition> trades)
     {
         // No sort key keeps the builder's own order, so an operator who never touches
         // a header sees the same book they saw before sorting existed.
@@ -213,9 +214,10 @@ public sealed class RunningTradesModel : PageModel
         };
     }
 
-    private static IEnumerable<MobileRunningTrade> Order<TKey>(
-        IEnumerable<MobileRunningTrade> trades,
-        Func<MobileRunningTrade, TKey> key,
+    /// <summary>Keeps equal sort values stable by stock symbol during polling.</summary>
+    private static IEnumerable<AccountPosition> Order<TKey>(
+        IEnumerable<AccountPosition> trades,
+        Func<AccountPosition, TKey> key,
         bool descending,
         IComparer<TKey>? comparer = null)
     {

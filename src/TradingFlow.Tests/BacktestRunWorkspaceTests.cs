@@ -5,11 +5,12 @@ namespace TradingFlow.Tests;
 
 public sealed class BacktestRunWorkspaceTests
 {
+    /// <summary>Every terminal outcome retains disk inputs and immutable result identity while forbidding reuse of an audited workspace.</summary>
     [Theory]
     [InlineData("success")]
     [InlineData("failure")]
     [InlineData("cancel")]
-    public async Task OwnedInputsAreDeletedAndPublishedResultsAreKeptForEveryOutcome(string outcome)
+    public async Task OwnedInputsAndPublishedResultsAreRetainedPendingQuantReviewForEveryOutcome(string outcome)
     {
         var output = Path.Combine(Path.GetTempPath(), "backtest-workspace-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(output);
@@ -20,6 +21,7 @@ public sealed class BacktestRunWorkspaceTests
             var runner = new BacktestRunner(reader, new StrategyArtifactCatalog(repo, Path.Combine(repo,"configs/strategy-catalog.json"),reader));
             var run = reader.ReadBacktestRun(Path.Combine(repo,"configs/backtest/swing-backtest-profile.yaml"));
             var result = Path.Combine(output,"result.json");
+            Assert.Throws<InvalidOperationException>(() => runner.CreateExecutionJournalPath("candidate"));
             var workspace = runner.CreateWorkspace(run,result);
             var second = runner.CreateWorkspace(run,Path.Combine(output,"second.json"));
             Assert.NotEqual(workspace.InputRoot,second.InputRoot);
@@ -29,6 +31,27 @@ public sealed class BacktestRunWorkspaceTests
             {
                 Directory.CreateDirectory(workspace.Run.NormalizedRoot);
                 await File.WriteAllTextAsync(Path.Combine(workspace.Run.NormalizedRoot,"download.csv"),"transient");
+                var definition = reader.ReadStrategy(run.Strategies[0]);
+                var spools = new[] {
+                    workspace.Runner.CreateCandidateAuditJournalPath(definition, "X"),
+                    workspace.Runner.CreateExecutionJournalPath("candidate"),
+                    workspace.Runner.CreateExecutionJournalPath("portfolio")
+                };
+                foreach (var spool in spools)
+                {
+                    Assert.StartsWith(workspace.InputRoot + Path.DirectorySeparatorChar, spool);
+                    Directory.CreateDirectory(Path.GetDirectoryName(spool)!);
+                    if (Path.GetFileName(spool).StartsWith("s-", StringComparison.Ordinal))
+                        {
+                        using var journal = new BacktestCandidateJournal(spool);
+                        Assert.True(File.Exists(BacktestCandidateJournal.StatePath(spool)));
+                    }
+                    else
+                    {
+                        using var journal = new TradingFlow.Backtesting.Artifacts.ExecutionEventJournal(spool);
+                        Assert.True(File.Exists(journal.Path));
+                    }
+                }
                 await File.WriteAllTextAsync(result,"published result");
                 if(outcome=="failure")throw new InvalidOperationException("original failure");
                 if(outcome=="cancel")throw new OperationCanceledException();
@@ -37,12 +60,18 @@ public sealed class BacktestRunWorkspaceTests
             if(outcome=="failure")Assert.Equal("original failure",(await Assert.ThrowsAsync<InvalidOperationException>(()=>workspace.ExecuteAsync(Execute))).Message);
             else if(outcome=="cancel")await Assert.ThrowsAsync<OperationCanceledException>(()=>workspace.ExecuteAsync(Execute));
             else Assert.Equal(1,await workspace.ExecuteAsync(Execute));
-            Assert.False(Directory.Exists(workspace.InputRoot));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => workspace.ExecuteAsync(() => Task.FromResult(1)));
+            Assert.True(Directory.Exists(workspace.InputRoot));
             Assert.True(Directory.Exists(second.InputRoot));
             await second.ExecuteAsync(()=>Task.FromResult(1));
             Assert.Equal("published result",await File.ReadAllTextAsync(result));
             Assert.Equal("read-only source",await File.ReadAllTextAsync(originalInput));
-            Assert.Empty(Directory.EnumerateDirectories(output,".run-inputs-*"));
+            Assert.Equal(2, Directory.EnumerateDirectories(output,".run-inputs-*").Count());
+            var manifest = System.Text.Json.JsonSerializer.Deserialize<BacktestRunWorkspaceManifest>(
+                await File.ReadAllTextAsync(workspace.InputRoot + ".workspace.json"),
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+            Assert.Equal(outcome == "success" ? "completed" : outcome == "failure" ? "failed" : "cancelled", manifest.Outcome);
+            Assert.Equal(BacktestRunInputCleanup.FileSha256(result), manifest.ResultSha256);
         }
         finally { Directory.Delete(output,true); }
     }

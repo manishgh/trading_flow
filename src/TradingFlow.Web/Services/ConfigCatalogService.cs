@@ -11,7 +11,7 @@ namespace TradingFlow.Web.Services;
 /// Selection mode and exact promotion identity are enforced before a strategy
 /// option reaches a page or API.
 /// </summary>
-public sealed class ConfigCatalogService
+public sealed partial class ConfigCatalogService
 {
     private readonly ProjectPaths paths;
     private readonly SimpleYamlReader yamlReader;
@@ -63,6 +63,7 @@ public sealed class ConfigCatalogService
     public IReadOnlyList<RunConfigSummary> GetPaperConfigs() =>
         GetRunConfigs(paths.PaperConfigsRoot);
 
+    /// <summary>Offers intraday artifacts only to backtests; operational selection retains its daily-only restriction.</summary>
     public async Task<IReadOnlyList<StrategyOption>> GetStrategiesAsync(
         StrategySelectionMode mode,
         CancellationToken cancellationToken = default)
@@ -112,7 +113,8 @@ public sealed class ConfigCatalogService
                     StrategySelectionMode.RunLive => StrategyLifecycleState.Validated,
                     _ => artifact.EffectiveLifecycle
                 }))
-            .Where(option => option.Definition.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
+            .Where(option => option.Definition.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) ||
+                mode == StrategySelectionMode.Backtest && StrategyHorizonResolver.Resolve(option.Definition) == "day")
             .ToArray();
     }
 
@@ -165,6 +167,7 @@ public sealed class ConfigCatalogService
         return new RunConfigSummary(fullPath, Path.GetFileName(fullPath), config, strategyOptions);
     }
 
+    /// <summary>Lists valid profiles, excluding generated folders relative to this catalog rather than unrelated ancestor names.</summary>
     private IReadOnlyList<RunConfigSummary> GetRunConfigs(string root)
     {
         if (!Directory.Exists(root))
@@ -173,10 +176,10 @@ public sealed class ConfigCatalogService
         }
 
         return Directory.GetFiles(root, "*.yaml", SearchOption.AllDirectories)
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}archive{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}temp{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}ui-runs{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}strategies{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .SkipLast(1).Any(part => part.Equals("archive", StringComparison.OrdinalIgnoreCase) ||
+                    part.Equals("temp", StringComparison.OrdinalIgnoreCase) || part.Equals("ui-runs", StringComparison.OrdinalIgnoreCase) ||
+                    part.Equals("strategies", StringComparison.OrdinalIgnoreCase)))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .Select(TryGetConfig)
             .OfType<RunConfigSummary>()

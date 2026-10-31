@@ -24,7 +24,9 @@ public sealed record CandlePipelineRequest(
     bool IncludeExtendedHours = true,
     string ExchangeTimezone = "America/New_York",
     CandleStoreContext? StoreContext = null,
-    int MaxRetainedBars = 1_000_000);
+    int MaxRetainedBars = 1_000_000,
+    MarketEvidenceOperationalRules? OperationalRules = null,
+    DateOnly? CalendarEndDateInclusive = null);
 
 public sealed record CandleEvent(MarketBarEvent MarketEvent)
 {
@@ -555,6 +557,7 @@ public sealed class CandlePipelineEngine
         return derivedBars;
     }
 
+    /// <summary>Uses the caller's immutable strategy evidence rules with the provider's actual calendar, preserving production defaults.</summary>
     private static async Task<MarketEvidenceProfile> ResolveMarketEvidenceProfileAsync(
         CandlePipelineRequest request,
         IMarketDataProvider provider,
@@ -562,14 +565,20 @@ public sealed class CandlePipelineEngine
     {
         if (provider is not IMarketSessionScheduleProvider scheduleProvider)
         {
-            return MarketEvidenceProfile.ProductionDefault;
+            return new MarketEvidenceProfile(MarketEvidenceProfile.ProductionVersion,
+                MarketEvidenceProfile.DefaultLookbackSessions, MarketEvidenceProfile.DefaultMinimumValidSamples,
+                request.ExchangeTimezone, operationalRules: request.OperationalRules,
+                allowStandardWeekdayFallback: false);
         }
 
         var exchangeTimeZone = ResolveTimezone(request.ExchangeTimezone);
         var localStart = TimeZoneInfo.ConvertTime(request.Start, exchangeTimeZone);
         var localEnd = TimeZoneInfo.ConvertTime(request.End, exchangeTimeZone);
         var firstDate = DateOnly.FromDateTime(localStart.DateTime).AddDays(-1);
-        var lastDate = DateOnly.FromDateTime(localEnd.DateTime).AddDays(1);
+        var lastRequiredDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(request.End.AddTicks(-1), exchangeTimeZone).DateTime);
+        if (request.CalendarEndDateInclusive is { } declaredEnd && declaredEnd < lastRequiredDate)
+            throw new ArgumentOutOfRangeException(nameof(request.CalendarEndDateInclusive), "Calendar override cannot omit a source date before the exclusive candle cutoff.");
+        var lastDate = request.CalendarEndDateInclusive ?? DateOnly.FromDateTime(localEnd.DateTime).AddDays(1);
         var schedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(
             firstDate,
             lastDate,
@@ -580,7 +589,7 @@ public sealed class CandlePipelineEngine
             MarketEvidenceProfile.DefaultMinimumValidSamples,
             request.ExchangeTimezone,
             schedules,
-            MarketEvidenceOperationalRules.Production,
+            request.OperationalRules ?? MarketEvidenceOperationalRules.Production,
             allowStandardWeekdayFallback: false);
     }
 

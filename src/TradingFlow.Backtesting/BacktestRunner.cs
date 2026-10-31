@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using TradingFlow.Backtesting.Artifacts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -10,6 +10,7 @@ using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
@@ -29,26 +30,51 @@ public sealed record PreparedBacktestMarket(
     DateTimeOffset DataStart,
     DateTimeOffset EvaluationStart,
     DateTimeOffset WindowStart,
-    DateTimeOffset WindowEnd);
+    DateTimeOffset WindowEnd,
+    PreparedMarketDataSummary? PreparedMarketData = null);
 
 public sealed partial class BacktestRunner(
     SimpleYamlReader yamlReader,
     StrategyArtifactCatalog strategyArtifacts,
     IArtifactWriter? artifactWriter = null,
-    ILogger<BacktestRunner>? logger = null)
+    ILogger<BacktestRunner>? logger = null,
+    Func<BacktestRunConfig, IMarketDataProvider>? marketDataProviderFactory = null,
+    IStrategyDecisionContextProvider? decisionContextProvider = null,
+    IBacktestOpportunityObserver? opportunityObserver = null,
+    EventPortfolioReplayBinding? eventPortfolioReplay = null,
+    ConfiguredDataProviders? dataProviders = null,
+    IPreparedMarketDataBindingStore? preparedDataBindingStore = null)
 {
+    private readonly ConfiguredDataProviders _dataProviders = dataProviders ?? ConfiguredDataProviders.FromEnvironment();
+    private readonly IStrategyDecisionContextProvider? _decisionContextProvider = decisionContextProvider;
+    private IHistoricalNewsPresenceProvider? _historicalNewsProvider;
+    private FrozenBacktestEvidence? frozenEvidence;
+    private Action<EngineConfig>? requireLiveEvidenceScope;
+    private readonly IBacktestOpportunityObserver? _opportunityObserver = opportunityObserver;
+    private bool eventBindingFromConfig;
+    private string? reservedExecutionResultPath;
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
     private readonly ILogger<BacktestRunner> _logger = logger ?? NullLogger<BacktestRunner>.Instance;
     private IRawArchiveWriter? _rawArchiveWriter;
     private string? _csvSourceRoot;
+    private string? _transientArtifactRoot;
+    private (string RawRoot, string NormalizedRoot)? logicalInputRoots;
+    private PreparedMarketDataRequestReference? preparedDataReference;
+    private PreparedMarketDataHandle? preparedData;
+    private bool ownsPreparedData;
+    private string? preparedComparisonId;
+    private IReadOnlyDictionary<string, AuthorizedRuntimeStrategy> _validatedRuntimeStrategies =
+        new Dictionary<string, AuthorizedRuntimeStrategy>(StringComparer.Ordinal);
     private readonly StrategySessionClock _sessionClock = new();
     private CandlePipelineEngine _candlePipeline = new(NullCandleStore.Instance);
     private readonly BacktestValidator _validator = new();
 
+    /// <summary>Runs the selected configuration with a fresh execution identity or an explicitly admitted comparison data request.</summary>
     public async Task<BacktestResult> RunAsync(
         string configPath,
         CancellationToken cancellationToken,
-        IProgress<BacktestProgress>? progress = null)
+        IProgress<BacktestProgress>? progress = null,
+        PreparedMarketDataRequestReference? preparedDataReference = null)
     {
         var run = yamlReader.ReadBacktestRun(configPath);
         return await RunAsync(
@@ -56,66 +82,184 @@ public sealed partial class BacktestRunner(
             GetResultPath(run),
             DateTimeOffset.UtcNow,
             cancellationToken,
-            progress);
+            progress,
+            preparedDataReference);
     }
 
-    public async Task<BacktestResult> RunAsync(
+    /// <summary>Validates immutable strategies and forwards the admitted input selection into an isolated execution.</summary>
+    public Task<BacktestResult> RunAsync(
         string configPath,
         string resultPath,
         DateTimeOffset evaluationCutoffUtc,
         CancellationToken cancellationToken,
-        IProgress<BacktestProgress>? progress = null)
+        IProgress<BacktestProgress>? progress = null,
+        PreparedMarketDataRequestReference? preparedDataReference = null) =>
+        RunSelectedAsync(configPath, resultPath, evaluationCutoffUtc, cancellationToken, progress, preparedDataReference, null, null);
+
+    /// <summary>Executes one worker's already verified graph while its mandatory owner guard remains live through every workspace.</summary>
+    public Task<BacktestResult> RunAsync(string configPath, string resultPath, DateTimeOffset evaluationCutoffUtc,
+        CancellationToken cancellationToken, FrozenBacktestEvidence verified, Action<EngineConfig> requireLiveScope,
+        IProgress<BacktestProgress>? progress = null, PreparedMarketDataRequestReference? preparedDataReference = null)
+    {
+        ArgumentNullException.ThrowIfNull(verified);
+        ArgumentNullException.ThrowIfNull(requireLiveScope);
+        return RunSelectedAsync(configPath, resultPath, evaluationCutoffUtc, cancellationToken, progress, preparedDataReference,
+            verified, requireLiveScope);
+    }
+
+    /// <summary>Reads and authorizes the selected strategies before creating an isolated execution workspace.</summary>
+    private async Task<BacktestResult> RunSelectedAsync(string configPath, string resultPath, DateTimeOffset evaluationCutoffUtc,
+        CancellationToken cancellationToken, IProgress<BacktestProgress>? progress,
+        PreparedMarketDataRequestReference? preparedDataReference, FrozenBacktestEvidence? verified, Action<EngineConfig>? requireLiveScope)
     {
         var startedAt = DateTimeOffset.UtcNow;
         progress?.Report(BacktestProgress.StageOnly("loading_config", $"Loading run config {Path.GetFileName(configPath)}."));
         var run = yamlReader.ReadBacktestRun(configPath);
-        if (run.TimeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase))
+        if (preparedDataReference is null && run.TimeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase))
         {
-            run = run with { TimeWindow = run.TimeWindow with { End = evaluationCutoffUtc } };
+            run = run with { TimeWindow = run.TimeWindow with { End = run.TimeWindow.End ?? evaluationCutoffUtc } };
         }
         progress?.Report(BacktestProgress.StageOnly("loading_strategies", $"Loading {run.Strategies.Count} strategy config(s)."));
         var artifactValidator = new StrategyRunArtifactValidator(yamlReader, strategyArtifacts);
-        var strategies = ApplyRunSessionPolicy(
-            run,
-            run.Strategies
-                .Select(path => artifactValidator.ReadAndValidate(path, StrategySelectionMode.Backtest))
-                .ToArray());
-
-        return await RunAsync(run, strategies, startedAt, resultPath, cancellationToken, progress);
+        var runtimeStrategies = run.Strategies
+            .Select(path => artifactValidator.ReadAndValidateRuntimeArtifact(path, StrategySelectionMode.Backtest))
+            .ToArray();
+        return await RunValidatedAsync(run, runtimeStrategies, startedAt, resultPath, cancellationToken, progress, preparedDataReference,
+            verified, requireLiveScope);
     }
 
+    /// <summary>Executes explicit strategy definitions while retaining the same preparation and workspace lifetime rules.</summary>
     public async Task<BacktestResult> RunAsync(
         BacktestRunConfig run,
         StrategyDefinition[] strategies,
         DateTimeOffset startedAt,
         string resultPath,
         CancellationToken cancellationToken,
-        IProgress<BacktestProgress>? progress = null)
+        IProgress<BacktestProgress>? progress = null,
+        PreparedMarketDataRequestReference? preparedDataReference = null)
     {
+        run = await ResolveAdmittedRollingEndAsync(run, preparedDataReference, cancellationToken);
         var workspace = CreateWorkspace(run, resultPath);
+        workspace.Runner.preparedDataReference = preparedDataReference;
         return await workspace.ExecuteAsync(() => workspace.Runner.RunCoreAsync(workspace.Run, strategies, startedAt,
-            resultPath, cancellationToken, progress));
+            workspace.ResultPath, cancellationToken, progress));
     }
 
-    internal BacktestRunWorkspace CreateWorkspace(BacktestRunConfig run, string resultPath)
+    /// <summary>Keeps authorized strategy identities and comparison inputs together for the complete durable attempt.</summary>
+    internal async Task<BacktestResult> RunValidatedAsync(
+        BacktestRunConfig run, AuthorizedRuntimeStrategy[] runtimeStrategies,
+        DateTimeOffset startedAt, string resultPath, CancellationToken cancellationToken,
+        IProgress<BacktestProgress>? progress = null,
+        PreparedMarketDataRequestReference? preparedDataReference = null, FrozenBacktestEvidence? verified = null,
+        Action<EngineConfig>? requireLiveScope = null)
     {
+        run = await ResolveAdmittedRollingEndAsync(run, preparedDataReference, cancellationToken);
+        var validated = runtimeStrategies.ToDictionary(
+            artifact => artifact.Definition.StrategyId, StringComparer.Ordinal);
+        var workspace = CreateWorkspace(run, resultPath, verified, requireLiveScope);
+        workspace.Runner.preparedDataReference = preparedDataReference;
+        workspace.Runner._validatedRuntimeStrategies = validated;
+        var definitions = runtimeStrategies.Select(artifact => artifact.Definition).ToArray();
+        return await workspace.ExecuteAsync(() => workspace.Runner.RunCoreAsync(
+            workspace.Run, definitions, startedAt, workspace.ResultPath, cancellationToken, progress));
+    }
+
+    internal AuthorizedRuntimeStrategy ResolveRuntimeStrategy(StrategyDefinition strategy)
+    {
+        if (!_validatedRuntimeStrategies.TryGetValue(strategy.StrategyId, out var artifact))
+        {
+            if (_validatedRuntimeStrategies.Count > 0)
+                throw new InvalidDataException("Backtest strategy has no validated artifact identity.");
+            return StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(strategy, strategyArtifacts);
+        }
+        var actualHash = TradingFlow.Domain.Research.EvidenceCanonicalJson.ComputeSha256(
+            new CanonicalStrategyDocument(
+                artifact.Identity.StrategyId, artifact.Identity.SemanticVersion, strategy, artifact.AdmissionProfile));
+        if (artifact.SelectionMode != StrategySelectionMode.Backtest ||
+            !actualHash.Equals(artifact.Identity.ContentSha256, StringComparison.Ordinal))
+            throw new InvalidDataException("Backtest execution definition differs from its validated artifact identity.");
+        return artifact with { Definition = strategy };
+    }
+
+    // Refuse unbound treatments before market preparation; all diagnostic books retain the captured evidence graph.
+    private void RequireHistoricalDiagnosticEvidence(EngineConfig engine, IReadOnlyList<StrategyDefinition> strategies)
+    {
+        if (_historicalNewsProvider is null && !strategies.Any(strategy => strategy.EntryRules.HistoricalNewsDiagnostic is not null)) return;
+        if (_historicalNewsProvider is null || frozenEvidence is null ||
+            !String.Equals(engine.EvidenceManifestSha256, frozenEvidence.ManifestSha256, StringComparison.OrdinalIgnoreCase) ||
+            !String.Equals(engine.EvidenceDependencyGraphSha256, frozenEvidence.DependencyGraphSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Historical news diagnostic requires its selected manifest and complete frozen dependency graph before execution.");
+        if (strategies.Any(strategy => HistoricalNewsPresenceEvaluation.HasStrictNewsRequirements(strategy.EntryRules)))
+            throw new InvalidDataException("A frozen historical news diagnostic package cannot replace a selected strategy's strict news requirements.");
+        foreach (var strategy in strategies.Where(strategy => strategy.EntryRules.HistoricalNewsDiagnostic is not null))
+        {
+            var runtime = ResolveRuntimeStrategy(strategy);
+            if (runtime.SelectionMode != StrategySelectionMode.Backtest ||
+                !HistoricalCompanyNewsDiagnosticPolicy.IsBoundTreatment(strategy.EntryRules.HistoricalNewsDiagnostic,
+                    runtime.AdmissionProfile.HistoricalNewsDiagnosticPolicyId))
+                throw new InvalidDataException("Historical diagnostic treatments require an exact registered Research strategy admission profile.");
+        }
+    }
+
+    /// <summary>Keeps original provider responses at the configured raw root while isolating disposable projections and execution journals.</summary>
+    internal BacktestRunWorkspace CreateWorkspace(BacktestRunConfig run, string resultPath,
+        FrozenBacktestEvidence? verified = null, Action<EngineConfig>? requireLiveScope = null)
+    {
+        // Every nested operation uses this same clock; independently started runs get a new cutoff.
+        run = FreezeRollingEnd(run);
+        var guard = requireLiveScope ?? requireLiveEvidenceScope;
+        var reusable = verified ?? (guard is not null ? frozenEvidence : null);
+        var evidence = reusable is null ? FrozenBacktestEvidence.FromConfig(run.Engine)
+            : FrozenBacktestEvidence.FromConfig(run.Engine, reusable, guard
+                ?? throw new InvalidOperationException("Evidence reuse requires its live scope owner."));
+        var contextProvider = _decisionContextProvider ?? evidence?.StrictContextProvider;
+        if (contextProvider is not null && evidence?.HistoricalNewsProvider is not null)
+            throw new InvalidDataException("Historical diagnostic evidence cannot be combined with a strict decision-context provider.");
+        if (ExecutionReplayPolicy.IsEventPortfolio(run.Engine.ExecutionReplayPolicyId) &&
+            run.Engine.ExecutionSourceManifestPath is not null)
+            resultPath = ReserveResultPath(resultPath);
         var owner = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
+        if (eventPortfolioReplay is not null && !eventBindingFromConfig && run.Engine.ExecutionSourceManifestPath is not null)
+            throw new InvalidOperationException("Choose one explicit event binding or a configured source manifest; their provenance cannot be substituted silently.");
+        // Prepared-market and optimizer children each need their own source pass and result paths.
+        var executionBinding = eventBindingFromConfig || eventPortfolioReplay is null
+            ? EventPortfolioSourceBinding.FromConfig(run, resultPath) : eventPortfolioReplay;
+        var inputRoots = logicalInputRoots ?? (run.RawRoot, run.NormalizedRoot);
+        // Nested optimizer/preparation work must reuse the original durable owner, never a parent's disposable spool.
+        var archiveWriter = _rawArchiveWriter ?? new FileSystemRawArchiveWriter(new RawArchiveOptions(inputRoots.RawRoot));
         var inputs = Path.Combine(owner, ".run-inputs-" + Guid.NewGuid().ToString("N"));
         if (Directory.Exists(inputs)) throw new IOException("Run input workspace already exists.");
         Directory.CreateDirectory(inputs);
-        var scoped = new BacktestRunner(yamlReader, strategyArtifacts, _artifactWriter, _logger) {
-            _csvSourceRoot = _csvSourceRoot ?? run.NormalizedRoot,
-            _rawArchiveWriter = new FileSystemRawArchiveWriter(new RawArchiveOptions(Path.Combine(inputs, "archives"))),
-            _candlePipeline = new CandlePipelineEngine(new LocalFileCandleStore(Path.Combine(inputs, "candles")))
+        var scoped = new BacktestRunner(yamlReader, strategyArtifacts, _artifactWriter, _logger, marketDataProviderFactory,
+            contextProvider, _opportunityObserver, executionBinding, _dataProviders, preparedDataBindingStore) {
+            _csvSourceRoot = _csvSourceRoot ?? inputRoots.NormalizedRoot,
+            _transientArtifactRoot = inputs,
+            logicalInputRoots = inputRoots,
+            _rawArchiveWriter = archiveWriter,
+            _historicalNewsProvider = evidence?.HistoricalNewsProvider,
+            frozenEvidence = evidence,
+            requireLiveEvidenceScope = guard,
+            preparedDataReference = preparedDataReference,
+            preparedData = preparedData,
+            preparedComparisonId = preparedComparisonId ?? "run-" + Guid.NewGuid().ToString("N"),
+            _candlePipeline = new CandlePipelineEngine(new LocalFileCandleStore(Path.Combine(inputs, "candles"))),
+            eventBindingFromConfig = executionBinding is not null && (eventPortfolioReplay is null || eventBindingFromConfig),
+            reservedExecutionResultPath = executionBinding is not null && run.Engine.ExecutionSourceManifestPath is not null ? resultPath : null
         };
-        return new(scoped, run with { RawRoot = Path.Combine(inputs, "raw"), NormalizedRoot = Path.Combine(inputs, "normalized") },
-            inputs, owner, _logger);
+        return new(scoped, run with { RawRoot = inputRoots.RawRoot, NormalizedRoot = Path.Combine(inputs, "normalized") },
+            inputs, owner, _logger, resultPath);
     }
 
+    /// <summary>Validates a pinned book and publishes shared-engine results, including actual open entry fills in diagnostics.</summary>
     private async Task<BacktestResult> RunCoreAsync(BacktestRunConfig run, StrategyDefinition[] strategies,
         DateTimeOffset startedAt, string resultPath, CancellationToken cancellationToken, IProgress<BacktestProgress>? progress)
     {
+        RequireHistoricalDiagnosticEvidence(run.Engine, strategies);
+        RequireEventBinding(run);
         strategies = ApplyRunSessionPolicy(run, strategies);
+        ValidateRun(run, strategies);
+        RunUniverseValidator.RequireResolved(run);
+        await EnsurePreparedDataAsync(run, strategies, cancellationToken, progress);
         var (resolvedRun, membership, promotionEvidence) =
             await ResolveUniverseAsync(run, cancellationToken, progress);
         run = resolvedRun;
@@ -236,21 +380,33 @@ public sealed partial class BacktestRunner(
         return (resolvedRun, membership, null);
     }
 
+    /// <summary>Prepares shared completed market inputs using the consistent price basis required by exact admitted strategies.</summary>
     public async Task<PreparedBacktestMarket> PrepareMarketAsync(
         BacktestRunConfig run,
         IReadOnlyCollection<StrategyDefinition> strategies,
         CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress = null)
     {
+        run = FreezeRollingEnd(run);
         strategies = ApplyRunSessionPolicy(run, strategies);
         ValidateRun(run, strategies);
+        await EnsurePreparedDataAsync(run, strategies, cancellationToken, progress);
+        if (ExecutionReplayPolicy.IsEventPortfolio(run.Engine.ExecutionReplayPolicyId) && eventPortfolioReplay is null)
+            throw new InvalidOperationException("The SIP portfolio policy requires a frozen event source binding; candle fallback is forbidden.");
 
-        var provider = CreateProvider(run);
+        var evidenceRules = strategies.Select(strategy => MarketEvidenceOperationalRules.ForExecutionTimingPolicy(
+            ResolveRuntimeStrategy(strategy).AdmissionProfile.ExecutionTimingPolicy)).Distinct().ToArray();
+        if (evidenceRules.Length != 1)
+            throw new InvalidOperationException("Shared market preparation requires strategies with the same admitted price-adjustment basis.");
+        var provider = CompletedBacktestDataProvider.Wrap(CreateProvider(run));
         var (dataStart, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
 
         var completedTickerCount = 0;
         var totalTickerCount = run.Tickers.Count;
         var requiredTimeframes = ResolveRequiredTimeframes(strategies);
+        // SIP fills use physical events; observed five-minute bars are also needed for separately verified close valuation.
+        if (run.Engine.ExecutionReplayPolicyId is ExecutionReplayPolicy.DailyRthFiveMinuteV1 or ExecutionReplayPolicy.DailyRthSipPortfolioV1)
+            requiredTimeframes = requiredTimeframes.Append(ExecutionReplayPolicy.Timeframe).Distinct().ToArray();
         progress?.Report(new BacktestProgress(
             "market_pipeline",
             $"Preparing reusable market state for {totalTickerCount} ticker(s), {requiredTimeframes.Length} required timeframe(s).",
@@ -271,7 +427,8 @@ public sealed partial class BacktestRunner(
                 IncludeExtendedHours: true,
                 ResolveExchangeTimezone(strategies),
                 CreateCandleStoreContext(run),
-                run.Engine.MaxRetainedReplayBars),
+                run.Engine.MaxRetainedReplayBars, evidenceRules[0],
+                BacktestCalendarBounds.IntradayLastRequiredDate(run, windowEnd, ResolveExchangeTimezone(strategies))),
             provider,
             cancellationToken,
             new Progress<string>(message => progress?.Report(new BacktestProgress(
@@ -310,7 +467,8 @@ public sealed partial class BacktestRunner(
             dataStart,
             evaluationStart,
             evaluationStart,
-            windowEnd);
+            windowEnd,
+            preparedData?.Summary);
     }
 
     public async Task<BacktestResult> RunPreparedAsync(
@@ -324,6 +482,31 @@ public sealed partial class BacktestRunner(
         UniverseMembership? universeMembership = null,
         UniversePromotionEvidence? universePromotionEvidence = null)
     {
+        if (_transientArtifactRoot is null || eventBindingFromConfig)
+        {
+            var workspace = CreateWorkspace(run, resultPath);
+            workspace.Runner._validatedRuntimeStrategies = _validatedRuntimeStrategies;
+            return await workspace.ExecuteAsync(() => workspace.Runner.RunPreparedCoreAsync(
+                workspace.Run, strategies, startedAt, workspace.ResultPath, preparedMarket, cancellationToken,
+                progress, universeMembership, universePromotionEvidence));
+        }
+        return await RunPreparedCoreAsync(run, strategies, startedAt, resultPath, preparedMarket,
+            cancellationToken, progress, universeMembership, universePromotionEvidence);
+    }
+
+    /// <summary>Evaluates already prepared market state and publishes execution evidence with the original selected-data identity.</summary>
+    private async Task<BacktestResult> RunPreparedCoreAsync(
+        BacktestRunConfig run,
+        StrategyDefinition[] strategies,
+        DateTimeOffset startedAt,
+        string resultPath,
+        PreparedBacktestMarket preparedMarket,
+        CancellationToken cancellationToken,
+        IProgress<BacktestProgress>? progress = null,
+        UniverseMembership? universeMembership = null,
+        UniversePromotionEvidence? universePromotionEvidence = null)
+    {
+        RequireEventBinding(run);
         strategies = ApplyRunSessionPolicy(run, strategies);
         ValidateRun(run, strategies);
         var preparedMarketBarCount = preparedMarket.MarketState.TickerStates.Values.Sum(state =>
@@ -335,10 +518,14 @@ public sealed partial class BacktestRunner(
             preparedMarketBarCount,
             benchmarkAliasesPreparedMarket ? 0 : preparedMarket.BenchmarkBars.Count,
             run.Engine.MaxRetainedReplayBars);
-        using var candidateHypothesisJournal = new ExecutionEventJournal(Path.Combine(
-            Path.GetDirectoryName(Path.GetFullPath(resultPath))!, ".execution-journal", $"candidate-{Guid.NewGuid():N}.ndjson"));
-        using var portfolioExecutionJournal = new ExecutionEventJournal(Path.Combine(
-            Path.GetDirectoryName(Path.GetFullPath(resultPath))!, ".execution-journal", $"portfolio-{Guid.NewGuid():N}.ndjson"));
+        if (run.Engine.ExecutionReplayPolicyId is ExecutionReplayPolicy.IntradayRthFiveMinuteV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1 or ExecutionReplayPolicy.PythonZoneBounceBreakdownV1 or ExecutionReplayPolicy.PythonZoneVolumeSpreadV1)
+        {
+            EnsureStrategyWorkItemLimit(run.Tickers.Count, strategies.Length, run.Engine.MaxStrategyWorkItems);
+            return await RunIntradayPreparedAsync(run, strategies.Single(), startedAt, resultPath,
+                preparedMarket, cancellationToken, progress, universePromotionEvidence);
+        }
+        using var candidateHypothesisJournal = new ExecutionEventJournal(CreateExecutionJournalPath("candidate"));
+        using var portfolioExecutionJournal = new ExecutionEventJournal(CreateExecutionJournalPath("portfolio"));
         var executionAuditor = new ExecutionAuditor(
             capacity: 1,
             sink: candidateHypothesisJournal,
@@ -413,7 +600,7 @@ public sealed partial class BacktestRunner(
 
                 using var workItemCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
                 workItemCancellation.CancelAfter(strategyWorkItemTimeout);
-                var candidateJournalPath = CreateCandidateAuditJournalPath(run, workItem.Strategy, workItem.Ticker);
+                var candidateJournalPath = CreateCandidateAuditJournalPath(workItem.Strategy, workItem.Ticker);
                 try
                 {
                     strategyTickerBatches.Add(await ProcessPreparedStrategyTickerAsync(
@@ -480,6 +667,9 @@ public sealed partial class BacktestRunner(
             .OrderBy(x => x.EntryTimestamp)
             .ThenBy(x => x.Ticker, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        if (_opportunityObserver is not null)
+            await _opportunityObserver.ObserveAsync(CaptureOpportunities(run.RunName, run.Portfolio,
+                strategies, candidates, allBars, universeMembership, regimeCalendars), cancellationToken);
         var candidateAuditJournals = batches
             .Select(batch => batch.CandidateAuditJournalPath)
             .Where(path => !String.IsNullOrWhiteSpace(path))
@@ -487,6 +677,23 @@ public sealed partial class BacktestRunner(
             .Cast<string>()
             .ToArray();
         var candidateDiagnostics = batches.Select(batch => batch.Diagnostics).ToArray();
+        // Native daily books retain actual cutoff exposure; explicitly configured terminal exits remain required.
+        var accounting = run.Engine.ExecutionReplayPolicyId is null && strategies.All(s => s.Execution.Timeframe == "1d" &&
+            s.Session.ExchangeTimezone == "America/New_York" && !s.Session.IsContinuousMarket)
+            ? new NativeDailyAccountingContext(preparedMarket.WindowStart.ToUniversalTime(), preparedMarket.WindowEnd.ToUniversalTime(),
+                candidateSessionSchedules ?? throw new InvalidDataException("Native daily accounting requires authoritative sessions."),
+                run.Engine.PrecommittedLiquidationSourceUtc is null) : null;
+        var eventOutcome = run.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.DailyRthSipPortfolioV1
+            ? await ExecuteEventPortfolioAsync(run, strategies, candidates, allBars,
+                universeMembership, regimeCalendars, portfolioExecutionJournal, cancellationToken)
+            : accounting is not null ? BuildUnifiedPortfolioTradesWithAudit(run.Portfolio, strategies, candidates,
+                universeMembership, regimeCalendars, allBars, portfolioExecutionJournal, accounting) : null;
+        if (eventOutcome?.State is { } nativeState && batches.Any(batch => !batch.Succeeded))
+            eventOutcome = eventOutcome with { State = NativeDailySessionLedger.MarkUnavailableFrom(nativeState,
+                DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(preparedMarket.WindowStart,
+                    TimeZoneInfo.FindSystemTimeZoneById("America/New_York")).DateTime),
+                "Selected work items failed: " + String.Join("; ", batches.Where(b => !b.Succeeded)
+                    .Select(b => $"{b.Ticker} ({b.StrategyId}): {b.ErrorMessage}"))) };
         var unifiedPortfolio = BuildUnifiedPortfolioResult(
             run.Portfolio,
             strategies,
@@ -494,7 +701,7 @@ public sealed partial class BacktestRunner(
             allBars,
             universeMembership,
             regimeCalendars,
-            portfolioExecutionJournal);
+            portfolioExecutionJournal, eventOutcome);
         var unifiedCompletedTradesForAudit = unifiedPortfolio.CompletedTrades;
         var economicResultsComplete = unifiedPortfolio.EconomicResultsComplete &&
             batches.All(batch => batch.Succeeded);
@@ -509,7 +716,7 @@ public sealed partial class BacktestRunner(
             allBars,
             candidateDiagnostics,
             universeMembership,
-            regimeCalendars);
+            regimeCalendars, strategies.Length == 1 ? eventOutcome : null, accounting);
         if (!economicResultsComplete)
         {
             strategyResults = strategyResults
@@ -534,7 +741,8 @@ public sealed partial class BacktestRunner(
                 bestStrategy.AcceptedTradeCount,
                 bestStrategy.RejectedTradeCount);
         var validation = _validator.Validate(run, allBars, preparedMarket.BenchmarkBars, strategyResults);
-        var missedMoves = BuildMissedMoveAudits(strategies, candidates, allBars);
+        var missedMoves = BuildMissedMoveAudits(strategies, unifiedCompletedTradesForAudit, allBars,
+            unifiedPortfolio.PortfolioState);
         var publishedEconomics = BuildPublishedEconomicSummary(
             run.Portfolio.StartingCapital,
             bestStrategy,
@@ -574,7 +782,14 @@ public sealed partial class BacktestRunner(
             universePromotion,
             CandidateDecisionAudit: Array.Empty<BacktestCandidateDecisionAudit>(),
             ExecutionAudit: Array.Empty<BacktestExecutionAuditEvent>(),
-            EconomicResultsComplete: economicResultsComplete);
+            EconomicResultsComplete: economicResultsComplete,
+            PreparedMarketData: preparedData?.Summary ?? preparedMarket.PreparedMarketData)
+        {
+            PortfolioState = unifiedPortfolio.PortfolioState,
+            DecisionContextEvidence = frozenEvidence?.Provenance ?? (_decisionContextProvider as FrozenManifestDecisionContextProvider)?.Provenance,
+            HistoryEligibility = batches.Where(b => b.HistoryEligibility is not null)
+                .Select(b => b.HistoryEligibility!).OrderBy(h => h.StrategyId).ThenBy(h => h.Ticker).ToArray()
+        };
 
         var artifacts = await WriteResultAsync(
             resultPath,
@@ -632,7 +847,7 @@ public sealed partial class BacktestRunner(
             MaxDrawdownPct = 0m,
             WinningTradeCount = 0,
             LosingTradeCount = 0,
-            CompletedTrades = Array.Empty<BacktestTrade>(),
+            CompletedTrades = result.PortfolioState is null ? Array.Empty<BacktestTrade>() : result.CompletedTrades,
             EconomicResultsComplete = false
         };
 
@@ -646,7 +861,7 @@ public sealed partial class BacktestRunner(
             MaxDrawdownPct = 0m,
             WinningTradeCount = 0,
             LosingTradeCount = 0,
-            CompletedTrades = Array.Empty<BacktestTrade>(),
+            CompletedTrades = result.PortfolioState is null ? Array.Empty<BacktestTrade>() : result.CompletedTrades,
             EconomicResultsComplete = false
         };
 
@@ -688,13 +903,22 @@ public sealed partial class BacktestRunner(
         return strategies.ToArray();
     }
 
+    /// <summary>Rejects incompatible run modes and exit policies before collecting or replaying market data.</summary>
     private static void ValidateRun(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
     {
+        if (run.Engine.ExecutionReplayPolicyId is ExecutionReplayPolicy.IntradayRthFiveMinuteV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1 or ExecutionReplayPolicy.PythonZoneBounceBreakdownV1 or ExecutionReplayPolicy.PythonZoneVolumeSpreadV1)
+            ValidateIntradayRun(run, strategies);
+        else
+            foreach (var strategy in strategies) TechnicalExecutionEngine.RequireSupportedExitPolicy(strategy);
+        if (run.Engine.ExecutionReplayPolicyId is not null and not ExecutionReplayPolicy.IntradayRthFiveMinuteV1 and not ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1 and not ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1 and not ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1 and not ExecutionReplayPolicy.PythonZoneBounceBreakdownV1 and not ExecutionReplayPolicy.PythonZoneVolumeSpreadV1)
+            foreach (var strategy in strategies) ValidateFineExecutionPolicy(run, strategy);
         if (!run.Mode.Equals("backtest", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Expected mode backtest, got {run.Mode}.");
         }
 
+        if (ExecutionReplayPolicy.IsEventPortfolio(run.Engine.ExecutionReplayPolicyId) && strategies.Count != 1)
+            throw new InvalidOperationException("Run each SIP strategy/cohort in its own shared-capital portfolio.");
         if (strategies.Count == 0)
         {
             throw new InvalidOperationException("At least one strategy is required.");
@@ -774,6 +998,13 @@ public sealed partial class BacktestRunner(
             run.Provider);
     }
 
+    /// <summary>Resolves an absent rolling end once before preparation and replay without changing the logical window policy.</summary>
+    private static BacktestRunConfig FreezeRollingEnd(BacktestRunConfig run) =>
+        run.TimeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase) && run.TimeWindow.End is null
+            ? run with { TimeWindow = run.TimeWindow with { End = DateTimeOffset.UtcNow } }
+            : run;
+
+    /// <summary>Computes evaluation and warmup bounds from the execution's already resolved clock.</summary>
     private static (DateTimeOffset DataStart, DateTimeOffset EvaluationStart, DateTimeOffset End) ResolveWindow(TimeWindowConfig timeWindow)
     {
         if (timeWindow.Type.Equals("fixed", StringComparison.OrdinalIgnoreCase))
@@ -936,44 +1167,32 @@ public sealed partial class BacktestRunner(
             if (!context.BarsByTimeframe.TryGetValue(strategy.Timeframe, out var strategyBars) ||
                 !context.SnapshotsByTimeframe.TryGetValue(strategy.Timeframe, out var strategySnapshots))
             {
-                return new StrategyTickerBacktestBatch(
-                    ticker,
-                    strategy.StrategyId,
-                    strategy.StrategyName,
-                    true,
-                    null,
-                    Array.Empty<BacktestCandidateTrade>(),
-                    Array.Empty<BacktestCandidateDecisionAudit>(),
-                    null,
-                    StrategyCandidateDiagnostics.MissingTimeframe(strategy, "missing_signal_timeframe"));
+                return StrategyTickerBacktestBatch.Failed(ticker, strategy,
+                    $"missing_signal_timeframe: required {strategy.Timeframe} bars or indicator snapshots are absent.");
             }
 
             if (!context.BarsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionBars) ||
                 !context.SnapshotsByTimeframe.TryGetValue(strategy.Execution.Timeframe, out var executionSnapshots))
             {
-                return new StrategyTickerBacktestBatch(
-                    ticker,
-                    strategy.StrategyId,
-                    strategy.StrategyName,
-                    true,
-                    null,
-                    Array.Empty<BacktestCandidateTrade>(),
-                    Array.Empty<BacktestCandidateDecisionAudit>(),
-                    null,
-                    StrategyCandidateDiagnostics.MissingTimeframe(strategy, "missing_execution_timeframe"));
+                return StrategyTickerBacktestBatch.Failed(ticker, strategy,
+                    $"missing_execution_timeframe: required {strategy.Execution.Timeframe} bars or indicator snapshots are absent.");
             }
 
-            var signalTimeframe = ParseTimeframe(strategy.Timeframe);
-            var availableWarmupBars = strategyBars.Count(
-                bar => bar.Timestamp.Add(signalTimeframe) <= windowStart);
-            if (availableWarmupBars < run.Engine.IndicatorWarmupBars)
+            var requiredWarmupBars = Math.Max(run.Engine.IndicatorWarmupBars, strategy.EntryRules.TechnicalFactor?.RequiredCompletedBars ?? 0);
+            if (requiredWarmupBars < 2)
+                throw new InvalidOperationException("Strategy decision warm-up must require at least two completed observations.");
+            var historyEligibility = DescribeObservedHistoryEligibility(ticker, strategy.StrategyId, strategy.Timeframe,
+                strategyBars, requiredWarmupBars, windowStart, windowEnd);
+            var availableWarmupBars = historyEligibility.AvailableAtStart;
+            if (availableWarmupBars < requiredWarmupBars &&
+                !run.Engine.AllowLateWarmup)
             {
                 return StrategyTickerBacktestBatch.Failed(
                     ticker,
                     strategy,
                     $"insufficient_indicator_warmup: {ticker} {strategy.Timeframe} has " +
                     $"{availableWarmupBars} completed pre-evaluation bars; " +
-                    $"{run.Engine.IndicatorWarmupBars} required. Increase time_window.warmup_lookback_days.");
+                    $"{requiredWarmupBars} required. Increase time_window.warmup_lookback_days.");
             }
 
             candidateJournal = new BacktestCandidateJournal(candidateJournalPath);
@@ -1006,7 +1225,7 @@ public sealed partial class BacktestRunner(
                 evaluation.Candidates,
                 evaluation.CandidateDecisionAudit,
                 candidateJournal.DurableJournalPath,
-                evaluation.Diagnostics);
+                evaluation.Diagnostics) { HistoryEligibility = historyEligibility };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1030,6 +1249,23 @@ public sealed partial class BacktestRunner(
     }
 
     private static TimeSpan ParseTimeframe(string timeframe) => TimeframeParser.Parse(timeframe);
+
+    // Count real completed/available history only; this audit does not assert that all dependent indicator evidence is usable.
+    internal static BacktestHistoryEligibility DescribeObservedHistoryEligibility(string ticker, string strategyId, string timeframe,
+        IReadOnlyList<OhlcvBar> bars, int requiredBars, DateTimeOffset start, DateTimeOffset cutoff)
+    {
+        if (requiredBars < 2) throw new ArgumentOutOfRangeException(nameof(requiredBars));
+        var duration = ParseTimeframe(timeframe);
+        var availability = bars.Select(bar => bar.KnownAtUtc is { } known && known > bar.Timestamp.Add(duration)
+            ? known : bar.Timestamp.Add(duration)).Order().ToArray();
+        var before = availability.Count(time => time <= start);
+        var completed = availability.Count(time => time <= cutoff);
+        DateTimeOffset? first = completed >= requiredBars
+            ? availability.FirstOrDefault(time => time >= start && time >= availability[requiredBars - 1] && time <= cutoff) : null;
+        if (first == default(DateTimeOffset)) first = null;
+        return new(ticker, strategyId, requiredBars, before, completed, first,
+            first is null ? "still_warming_at_study_end" : "history_eligible");
+    }
 
     private static bool IsDailyOrHigher(string timeframe)
     {
@@ -1091,6 +1327,7 @@ public sealed partial class BacktestRunner(
         return index;
     }
 
+    /// <summary>Evaluates completed evidence through the shared kernel and retains stable candidate identities for the chosen execution policy.</summary>
     private async Task<StrategyCandidateEvaluation> CreateStrategyCandidatesAsync(
         BacktestRunConfig run,
         StrategyDefinition strategy,
@@ -1112,19 +1349,36 @@ public sealed partial class BacktestRunner(
     {
         var candidates = new List<BacktestCandidateTrade>();
         var diagnostics = new StrategyCandidateDiagnostics(strategy.StrategyId, strategy.StrategyName);
-        var startIndex = Math.Max(run.Engine.IndicatorWarmupBars, 1);
-        var runtimeStrategy = StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(
-            strategy,
-            strategyArtifacts);
+        // Prepared inputs can cover a larger comparison window; never inspect its later execution suffix.
+        var executablePrefix = executionBars.Select((bar, index) => (bar, index))
+            .Where(item => item.bar.Timestamp.Add(ParseTimeframe(strategy.Execution.Timeframe)) <= evaluationEnd &&
+                (item.bar.KnownAtUtc is null || item.bar.KnownAtUtc <= evaluationEnd)).ToArray();
+        executionSnapshots = executablePrefix.Select(item => executionSnapshots[item.index]).ToArray();
+        executionBars = executablePrefix.Select(item => item.bar).ToArray();
+        // The snapshot at index n-1 already contains n completed bars when its availability time arrives.
+        var startIndex = Math.Max(Math.Max(run.Engine.IndicatorWarmupBars, strategy.EntryRules.TechnicalFactor?.RequiredCompletedBars ?? 0) - 1, 1);
+        var runtimeStrategy = ResolveRuntimeStrategy(strategy);
+        var terminal = run.Engine.PrecommittedLiquidationSourceUtc;
+        var terminalProfile = runtimeStrategy.AdmissionProfile.ExecutionTimingPolicy is "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5";
+        if (terminal.HasValue != terminalProfile)
+            throw new InvalidOperationException("Terminal-open policy and immutable timing profile must agree.");
+        if (terminal is { } requested)
+        {
+            if (run.TimeWindow.Type != "fixed") throw new InvalidOperationException("Terminal-open research needs a frozen fixed window.");
+            BacktestDecisionTiming.ValidateTerminalOpen(requested, evaluationStart, evaluationEnd,
+                strategy.Execution.Timeframe, strategy.Session, candidateSessionSchedules);
+            if (!executionBars.Any(bar => bar.Timestamp == requested))
+                throw new InvalidOperationException("Prerecorded terminal source slice is missing; complete economics are unavailable.");
+        }
         var candidateDecisions = new StrategyCandidateDecisionOrchestrator(
             new StrategyDecisionKernel(),
             candidateJournal);
         var simulationRun = BacktestCandidateJournal.CreateRun(
-            new { Run = run, Strategy = runtimeStrategy.Identity, Ticker = snapshots[0].Ticker },
+            new { Run = CandidateIdentityConfiguration(run), Strategy = runtimeStrategy.Identity, Ticker = snapshots[0].Ticker },
             $"{run.RunName}:{runtimeStrategy.Identity.StrategyId}:{snapshots[0].Ticker}",
             evaluationStart);
 
-        for (var i = startIndex; i < snapshots.Count - 1; i++)
+        for (var i = startIndex; i < snapshots.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = snapshots[i];
@@ -1140,7 +1394,8 @@ public sealed partial class BacktestRunner(
             }
 
             diagnostics.EvaluatedBarCount++;
-            var discoveryExpiry = snapshots[i + 1].Timestamp.Add(ParseTimeframe(strategy.Timeframe));
+            var discoveryExpiry = BacktestDecisionTiming.ResolveExpiry(
+                signalAvailableTimestamp, strategy.Timeframe, strategy.Session, candidateSessionSchedules);
             if (discoveryExpiry > evaluationEnd)
             {
                 discoveryExpiry = evaluationEnd;
@@ -1177,16 +1432,10 @@ public sealed partial class BacktestRunner(
             foreach (var decisionTime in decisionTimes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var nextEntryIndex = FindNextValidExecutionBarIndex(
-                    executionBars,
-                    FindFirstBarIndexAtOrAfter(executionBars, decisionTime),
-                    strategy);
-                var eligibilityDay = nextEntryIndex < executionBars.Count
-                    ? DateOnly.FromDateTime(executionBars[nextEntryIndex].Timestamp.UtcDateTime)
-                    : DateOnly.FromDateTime(decisionTime.UtcDateTime);
+                var eligibilityDay = DateOnly.FromDateTime(decisionTime.UtcDateTime);
                 var universeEligible = universeMembership is null ||
                     universeMembership.IsMember(snapshot.Ticker, eligibilityDay);
-                var regimeEligible = regimeCalendar is null || regimeCalendar.IsOn(eligibilityDay);
+                var regimeEligible = regimeCalendar is null || regimeCalendar.IsOn(decisionTime);
                 var universeEvidence = new StrategyEligibilityEvidence(
                     universeEligible,
                     universeMembership is null ? "static_run_universe" : "historical_universe_membership",
@@ -1215,7 +1464,17 @@ public sealed partial class BacktestRunner(
                     signalAvailableTimestamp,
                     discoveryExpiry,
                     run.Engine.IndicatorWarmupBars,
-                    simulationRun.RunId);
+                    simulationRun.RunId,
+                    strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } factor &&
+                        factorReferenceBars.TryGetValue(factor.BenchmarkSymbol, out var reference) ? reference : null,
+                    strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } expectedFactor
+                        ? TechnicalFactorCalculator.ExpectedCompletedSessions(candidateSessionSchedules
+                            ?? throw new InvalidDataException("Relative strength requires an authoritative calendar."),
+                            decisionTime, expectedFactor.LookbackBars + 1) : null,
+                    await StrategyDecisionRequestAssembler.ResolveDrawdownContextAsync(_decisionContextProvider,
+                        snapshot.Ticker, decisionTime, barsByTimeframe, "backtest", cancellationToken),
+                    strategy.EntryRules.HistoricalNewsDiagnostic is not null && _historicalNewsProvider is not null
+                        ? await _historicalNewsProvider.ResolveAsync(snapshot.Ticker, decisionTime, cancellationToken) : null);
                 var persistedDecision = await candidateDecisions.EvaluateAsync(
                     simulationRun,
                     request,
@@ -1250,7 +1509,20 @@ public sealed partial class BacktestRunner(
                     break;
                 }
 
-                var candidate = CreateCandidate(
+                if (terminal is { } cutoff && executionBars[plannedEntryIndex].Timestamp >= cutoff)
+                {
+                    lastReason = "precommitted_terminal_entry_cutoff";
+                    break;
+                }
+
+                var candidate = run.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.DailyRthSipPortfolioV1
+                    ? CreateEventExecutionCandidate(persistedDecision.Candidate.CandidateId.ToString("D"), run, strategy,
+                        signal, canonicalOrderPlan, executionBars, executionSnapshots, plannedEntryIndex, executionAuditor)
+                    : run.Engine.ExecutionReplayPolicyId is not null
+                    ? CreateFineExecutionCandidate(persistedDecision.Candidate.CandidateId.ToString("D"), run, strategy,
+                        signal, canonicalOrderPlan, executionBars, executionSnapshots,
+                        barsByTimeframe[ExecutionReplayPolicy.Timeframe], plannedEntryIndex, executionAuditor)
+                    : CreateCandidate(
                     persistedDecision.Candidate.CandidateId.ToString("D"),
                     run,
                     strategy,
@@ -1268,7 +1540,14 @@ public sealed partial class BacktestRunner(
                 }
 
                 retainedCandidateBudget.Reserve();
-                candidates.Add(candidate.Value.Candidate);
+                // Bind execution evidence to the persisted canonical decision identity rather than a display/definition alias.
+                var decisionStrategyId = persistedDecision.Candidate.SelectedStrategy;
+                if (String.IsNullOrWhiteSpace(decisionStrategyId))
+                    throw new InvalidDataException("Triggered candidate is missing its persisted decision strategy identity.");
+                var finalized = candidate.Value.Candidate with { DecisionStrategyId = decisionStrategyId };
+                if (run.Engine.ExecutionReplayPolicyId is null && terminal is { } boundary && finalized.ExitTimestamp == boundary && !IsPriceTriggeredExitReason(finalized.ExitReason))
+                    finalized = finalized with { ExitReason = "scheduled_study_exit", ExitPrice = executionBars[candidate.Value.ExitIndex].Open };
+                candidates.Add(finalized);
                 candidateCreated = true;
                 break;
             }
@@ -1293,23 +1572,29 @@ public sealed partial class BacktestRunner(
         return Path.Combine(run.ResultsRoot, safeOwner, "portfolio", $"{run.RunName}.json");
     }
 
-    private static string CreateCandidateAuditJournalPath(
-        BacktestRunConfig run,
+    /// <summary>Hashes the accepted logical inputs, including resolved membership, while excluding random per-attempt spool locations.</summary>
+    private BacktestRunConfig CandidateIdentityConfiguration(BacktestRunConfig run) => logicalInputRoots is { } roots
+        ? run with { RawRoot = roots.RawRoot, NormalizedRoot = roots.NormalizedRoot } : run;
+
+    private string TransientArtifactRoot => _transientArtifactRoot
+        ?? throw new InvalidOperationException("Audit spools require an owned run workspace.");
+
+    internal string CreateExecutionJournalPath(string kind) =>
+        Path.Combine(TransientArtifactRoot,
+            ".execution-journal", $"{kind}-{Guid.NewGuid():N}.ndjson");
+
+    internal string CreateCandidateAuditJournalPath(
         StrategyDefinition strategy,
         string ticker)
     {
-        var owner = Environment.GetEnvironmentVariable("TRADINGFLOW_RESULT_OWNER");
-        var safeOwner = String.IsNullOrWhiteSpace(owner) ? "shared" : SanitizePathSegment(owner);
-        var directory = Path.Combine(
-            run.ResultsRoot,
-            ".candidate-journal",
-            safeOwner,
-            SanitizePathSegment(run.RunName));
-        return Path.Combine(
-            directory,
-            $"{SanitizePathSegment(strategy.StrategyId)}-{SanitizePathSegment(ticker)}-{Guid.NewGuid():N}.ndjson");
+        // The workspace GUID already isolates owners/runs. Extra hierarchy risks Windows SQLite path limits.
+        var directory = Path.Combine(TransientArtifactRoot, ".candidate-journal");
+        var strategyKey = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(strategy.StrategyId)))[..12].ToLowerInvariant();
+        return Path.Combine(directory, $"s-{strategyKey}-{SanitizePathSegment(ticker)}-{Guid.NewGuid():N}.ndjson");
     }
 
+    /// <summary>Publishes immutable results and journals, including SIP source evidence, into one hashed artifact set.</summary>
     private async Task<BacktestArtifactWriteResult> WriteResultAsync(
         string resultPath,
         BacktestResult result,
@@ -1323,7 +1608,7 @@ public sealed partial class BacktestRunner(
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
-        var exclusivePath = ReserveResultPath(resultPath);
+        var exclusivePath = reservedExecutionResultPath == resultPath ? resultPath : ReserveResultPath(resultPath);
         var artifactRoot = Path.GetDirectoryName(exclusivePath)!;
         var artifactSetId = Guid.NewGuid().ToString("D");
         var persistedResult = BacktestArtifactProjector.Project(
@@ -1369,6 +1654,42 @@ public sealed partial class BacktestRunner(
             await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "unified_portfolio_execution", portfolioExecutionAuditPath, portfolioExecutionJournal.Count, cancellationToken),
             await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "unified_completed_trades", unifiedCompletedTradesPath, unifiedCompletedTrades.Count, cancellationToken)
         };
+        // Preserve the independent valuation grid alongside native fills and source-session marks.
+        if (await WriteZoneEvaluationsAsync(exclusivePath, result, cancellationToken) is { } zoneEvaluations)
+            evidenceReferences.Add(zoneEvaluations);
+        if (result.PortfolioState is not null)
+        {
+            var calendarPath = Path.ChangeExtension(exclusivePath, ".native-daily-calendar.json");
+            await _artifactWriter.WriteStreamExclusiveAsync(calendarPath,
+                (stream, token) => JsonSerializer.SerializeAsync(stream,
+                    candidateSessionSchedules ?? throw new InvalidDataException("Native accounting calendar is missing."),
+                    cancellationToken: token), cancellationToken);
+            evidenceReferences.Add(await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot,
+                "native_daily_calendar", calendarPath, 1, cancellationToken));
+        }
+        // Preserve SIP inputs and source/outcome proof in the same hashed artifact set as ordinary execution journals.
+        var eventArtifacts = new[] {
+            ("event_source_manifest", ".event-source-manifest.json"),
+            ("event_exchange_calendar_receipt", ".event-calendar.receipt.json"),
+            ("event_exchange_calendar", ".event-calendar.json"),
+            ("event_portfolio_request", ".event-portfolio-request.json"),
+            ("event_portfolio_source_audit", ".event-portfolio-source-audit.json"),
+            ("event_portfolio_outcome", ".event-portfolio-outcome.json") };
+        if (eventArtifacts.Any(item => File.Exists(Path.ChangeExtension(resultPath, item.Item2))))
+        {
+            foreach (var (kind, extension) in eventArtifacts)
+            {
+                var path = Path.ChangeExtension(resultPath, extension);
+                if (!File.Exists(path)) throw new InvalidDataException("SIP source evidence is incomplete; result publication is withheld.");
+                long count = 1;
+                if (kind == "event_exchange_calendar")
+                {
+                    using var calendar = JsonDocument.Parse(await File.ReadAllBytesAsync(path, cancellationToken));
+                    count = calendar.RootElement.GetArrayLength();
+                }
+                evidenceReferences.Add(await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, kind, path, count, cancellationToken));
+            }
+        }
         var rawJournalDirectory = Path.Combine(
             artifactRoot,
             $"{Path.GetFileNameWithoutExtension(exclusivePath)}.artifacts",
@@ -1471,6 +1792,7 @@ public sealed partial class BacktestRunner(
         return count;
     }
 
+    /// <summary>Chooses one unused prefix before SIP execution and otherwise preserves the ordinary immutable result suffixing.</summary>
     private static string ReserveResultPath(string resultPath)
     {
         if (IsResultPathAvailable(resultPath))
@@ -1493,13 +1815,18 @@ public sealed partial class BacktestRunner(
         throw new IOException($"Could not reserve a unique result path for {resultPath}.");
     }
 
+    /// <summary>A prior result or any partial SIP publication owns its prefix and must never be overwritten.</summary>
     private static bool IsResultPathAvailable(string path) =>
         !File.Exists(path) &&
         !File.Exists(Path.ChangeExtension(path, ".candidate-decisions.json")) &&
         !File.Exists(Path.ChangeExtension(path, ".candidate-hypotheses.json")) &&
         !File.Exists(Path.ChangeExtension(path, ".portfolio-execution.json")) &&
         !File.Exists(Path.ChangeExtension(path, ".unified-completed-trades.json")) &&
-        !File.Exists(Path.ChangeExtension(path, ".manifest.json"));
+        !File.Exists(Path.ChangeExtension(path, ".manifest.json")) &&
+        !File.Exists(Path.ChangeExtension(path, ".event-source-manifest.json")) &&
+        !File.Exists(Path.ChangeExtension(path, ".event-portfolio-request.json")) &&
+        !File.Exists(Path.ChangeExtension(path, ".event-portfolio-source-audit.json")) &&
+        !File.Exists(Path.ChangeExtension(path, ".event-portfolio-outcome.json"));
 
     private static string SanitizePathSegment(string value)
     {
@@ -1728,6 +2055,8 @@ internal sealed record StrategyTickerBacktestBatch(
     string? CandidateAuditJournalPath,
     StrategyCandidateDiagnostics Diagnostics)
 {
+    public BacktestHistoryEligibility? HistoryEligibility { get; init; }
+    public DateTimeOffset? IntradayUnavailableFromUtc { get; init; }
     public static StrategyTickerBacktestBatch Failed(
         string ticker,
         StrategyDefinition strategy,

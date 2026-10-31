@@ -8,6 +8,7 @@ namespace TradingFlow.Tests;
 public sealed class ConfigCatalogServiceTests
 {
     [Fact]
+    // Keep the normal UI/API selector bound to the exact reviewed Research identities and source files.
     public async Task GetStrategies_ReturnsCurrentResearchBootstrapSet()
     {
         var repoRoot = TestRepository.FindRoot();
@@ -21,12 +22,37 @@ public sealed class ConfigCatalogServiceTests
 
         var strategies = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest);
 
-        Assert.Equal(2, strategies.Count);
+        Assert.Equal(new[]
+        {
+            "swing.connors-rsi2@6.0.0",
+            "swing.minervini-vcp@10.0.0",
+            "technical.opening-range-breakout@1.0.0",
+            "technical.opening-range-breakout@1.1.0",
+            "technical.opening-range-breakout@1.2.0",
+            "technical.previous-day-breakout@1.0.0",
+            "technical.recovery-exit-control@2.0.0",
+            "technical.recovery-sma5-exit@2.0.0",
+            "technical.recovery-sma5-news-avoidance@1.0.0",
+            "technical.recovery-sma5-news-evidence@1.0.0",
+            "technical.recovery-sma5-qualified-coverage@1.1.0",
+            "technical.recovery-sma5-qualified-negative-veto@1.1.0",
+            "technical.recovery-sma5-qualified-positive-required@1.1.0",
+            "technical.recovery-sma5-qualified-technical@1.1.0"
+        }, strategies.Select(strategy => $"{strategy.Identity.StrategyId}@{strategy.Identity.SemanticVersion}")
+            .Order(StringComparer.Ordinal));
         Assert.Contains(strategies, strategy =>
-            strategy.FileName == "minervini-trend-template-vcp.v4-trend-rider.yaml" && strategy.Audit is null);
+            strategy.FileName == "minervini-technical-template-vcp.bt-v10.yaml" && strategy.Audit is null);
         Assert.Contains(strategies, strategy =>
-            strategy.FileName == "swing-connors-rsi2-oversold.bt-v3.yaml" && strategy.Audit is null);
-        Assert.All(strategies, strategy => Assert.Equal("1d", strategy.Definition.Timeframe));
+            strategy.FileName == "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml" && strategy.Audit is null);
+        Assert.All(strategies.Where(strategy => strategy.Identity.StrategyId.StartsWith("technical.recovery-", StringComparison.Ordinal)),
+            strategy => Assert.Equal(strategy.Identity.StrategyId.Contains("qualified", StringComparison.Ordinal) ||
+                strategy.Identity.StrategyId.Contains("news-", StringComparison.Ordinal)
+                ? "technical.recovery-sma5-exit" : "technical.family03.mr_a0b1", strategy.Artifact.DerivedFromIdentity?.StrategyId));
+        Assert.All(strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "swing"),
+            strategy => Assert.Equal("1d", strategy.Definition.Timeframe));
+        var dayStrategies = strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "day").ToArray();
+        Assert.Equal(4, dayStrategies.Length);
+        Assert.All(dayStrategies, strategy => Assert.Equal("5m", strategy.Definition.Timeframe));
         Assert.All(strategies, strategy => Assert.Equal(StrategyLifecycleState.Research, strategy.Lifecycle));
         Assert.DoesNotContain(strategies, strategy =>
             strategy.FileName == "brian_shannon_mta_avwap_strategies.yaml");
@@ -67,7 +93,8 @@ public sealed class ConfigCatalogServiceTests
     }
 
     [Fact]
-    public void GetBacktestConfigs_SkipsStaleRunConfigWithoutFailingCatalog()
+    // A malformed required scalar excludes only that profile; selectable strategies are resolved separately from profile listing.
+    public void GetBacktestConfigs_SkipsMalformedRunConfigWithoutHidingValidProfile()
     {
         var repoRoot = TestRepository.FindRoot();
         var tempRoot = Path.Combine(Path.GetTempPath(), "trading-flow-catalog-test", Guid.NewGuid().ToString("N"));
@@ -82,12 +109,11 @@ public sealed class ConfigCatalogServiceTests
                 "backtest",
                 "swing-backtest-profile.yaml");
             var yaml = File.ReadAllText(sourceConfig);
-            yaml = Regex.Replace(
-                yaml,
-                @"(?ms)^strategies:\s*(?:\r?\n\s+- .*)+",
-                "strategies:\n  - strategies/missing-deleted-strategy.yaml");
+            File.WriteAllText(Path.Combine(tempRoot, "configs", "backtest", "valid-ui-profile.yaml"), yaml);
+            var malformedYaml = Regex.Replace(yaml, @"(?m)^run_name:.*$", "run_name:");
+            Assert.NotEqual(yaml, malformedYaml);
 
-            File.WriteAllText(Path.Combine(tempRoot, "configs", "backtest", "stale-ui-run.yaml"), yaml);
+            File.WriteAllText(Path.Combine(tempRoot, "configs", "backtest", "malformed-ui-profile.yaml"), malformedYaml);
 
             var reader = new SimpleYamlReader();
             var catalog = new ConfigCatalogService(
@@ -99,7 +125,8 @@ public sealed class ConfigCatalogServiceTests
 
             var configs = catalog.GetBacktestConfigs();
 
-            Assert.Empty(configs);
+            var profile = Assert.Single(configs);
+            Assert.Equal("valid-ui-profile.yaml", profile.FileName);
         }
         finally
         {
@@ -111,6 +138,7 @@ public sealed class ConfigCatalogServiceTests
     }
 
     [Fact]
+    /// <summary>Research accepts the registered day artifact while operational candidate and trading paths retain their daily restriction.</summary>
     public async Task CandidateStrategyResolver_RequiresExactCatalogIdentityAndModeAuthorization()
     {
         var root = TestRepository.FindRoot();
@@ -124,7 +152,10 @@ public sealed class ConfigCatalogServiceTests
         {
             var identity = new TradingFlow.Contracts.V1.StrategyReference(
                 option.Identity.StrategyId, option.Identity.SemanticVersion, option.Identity.ContentSha256);
-            await resolver.RequireSwingStrategyAsync(identity, "backtest");
+            await resolver.RequireBacktestStrategyAsync(identity);
+            if (StrategyHorizonResolver.Resolve(option.Definition) == "day")
+                await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.RequireSwingStrategyAsync(identity, "backtest"));
+            else await resolver.RequireSwingStrategyAsync(identity, "backtest");
             await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.RequireSwingStrategyAsync(identity with { ContentSha256 = new string('0', 64) }, "backtest"));
             await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.RequireSwingStrategyAsync(identity with { SemanticVersion = "unregistered" }, "backtest"));
             await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.RequireSwingStrategyAsync(identity, "paper_experiment"));

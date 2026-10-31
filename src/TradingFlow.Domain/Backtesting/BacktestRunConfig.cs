@@ -70,7 +70,7 @@ public sealed record DiscoveryRuntimeConfig(
 /// Controls how the tradable ticker universe is chosen for a run. "static" keeps the
 /// hand-listed <c>tickers:</c> (legacy behavior). "historical_screener" selects from a
 /// candidate pool using only data available strictly before the evaluation window starts,
-/// which removes hindsight survivorship from the universe. See
+/// which avoids within-window screening look-ahead but does not remove hindsight from a present-day candidate pool. See
 /// See the point-in-time universe boundary in docs/operating-boundaries.md.
 /// </summary>
 public sealed record UniverseConfig(
@@ -144,7 +144,16 @@ public sealed record EngineConfig(
     bool FailFast,
     int MaxRetainedReplayBars = 1_000_000,
     int MaxStrategyWorkItems = 10_000,
-    int MaxRetainedCandidates = 1_000_000);
+    int MaxRetainedCandidates = 1_000_000,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool AllowLateWarmup = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? PrecommittedLiquidationSourceUtc = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? ExecutionReplayPolicyId = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? EvidenceManifestPath = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? EvidenceResearchRoot = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? ExecutionSourceManifestPath = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? ExecutionSourceManifestSha256 = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? EvidenceManifestSha256 = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? EvidenceDependencyGraphSha256 = null);
 
 public sealed record DerivedTimeframeConfig(string Source);
 

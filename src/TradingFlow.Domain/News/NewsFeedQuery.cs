@@ -3,7 +3,8 @@ namespace TradingFlow.Domain.News;
 public sealed record NewsFeedQuery(DateTimeOffset SinceUtc, string? Ticker = null,
     IReadOnlyList<string>? ScopeTickers = null, string? Provider = null, string? Source = null,
     string? Classification = null, string? Sentiment = null, string? Search = null,
-    bool LinkedOnly = false, int Skip = 0, int Take = 50);
+    bool LinkedOnly = false, int Skip = 0, int Take = 50, string? Category = null, string? Sector = null,
+    bool IncludeMarketNews = false, DateTimeOffset? UntilUtc = null, bool StockLinkedOnly = false);
 public sealed record NewsFeedPage(IReadOnlyList<PersistedNewsItem> Records, int TotalMatching);
 
 public static class NewsEvidenceClassification

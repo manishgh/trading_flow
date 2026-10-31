@@ -12,6 +12,10 @@ Generated run artifacts and local databases are not documentation.
 - [Production Specification](spec/automated_trading_production_spec_v1.md)
 - [Documented Deviations](deviations.md)
 
+## Design Reviews Awaiting User Decision
+
+- [Project-wide design review - 19 October 2026](design-review/2026-10-19/README.md): component inventory, design flows, configuration/rule audit and approval decisions; plan 07 and design 08 record implementation and verification status, including remaining device/cloud/research checks.
+
 ## Research And Backtesting
 
 - [Non-ML Strategy Research Program](research/non-ml-strategy-research-program.md)

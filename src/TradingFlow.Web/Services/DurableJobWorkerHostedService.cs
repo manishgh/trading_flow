@@ -3,7 +3,7 @@ using TradingFlow.Domain.Jobs;
 
 namespace TradingFlow.Web.Services;
 
-public sealed record DurableJobHostOptions(TimeSpan ShutdownDrainTimeout)
+public sealed record DurableJobHostOptions(TimeSpan ShutdownDrainTimeout, IReadOnlySet<string>? AllowedJobTypes = null)
 {
     public static DurableJobHostOptions Default { get; } = new(TimeSpan.FromSeconds(10));
 
@@ -32,9 +32,11 @@ public sealed class DurableJobWorkerHostedService(
 {
     private readonly DurableJobHostOptions validatedHostOptions = hostOptions.Validate();
 
+    /// <summary>Starts only host-authorized job types; observational checks do not initialize trading handlers while trading is paused.</summary>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var registeredHandlers = handlers.ToArray();
+        var registeredHandlers = handlers.Where(handler => validatedHostOptions.AllowedJobTypes is null ||
+            validatedHostOptions.AllowedJobTypes.Contains(handler.JobType)).ToArray();
         foreach (var handler in registeredHandlers)
         {
             await handler.InitializeAsync(stoppingToken);

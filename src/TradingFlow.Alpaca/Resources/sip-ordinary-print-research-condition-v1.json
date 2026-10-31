@@ -1,0 +1,1037 @@
+{
+  "Version": "sip-ordinary-print-research-condition-v1",
+  "MetadataSources": [
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Sha256": "895d0ef2ae946a25d1f4298da6bc4139bbe6cb8472815f43e1f2c6967859608f"
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Sha256": "895d0ef2ae946a25d1f4298da6bc4139bbe6cb8472815f43e1f2c6967859608f"
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Sha256": "f088c43dd9401cad079157a833b3564d005b8d3cd97c3c279652c84899e8f51e"
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Sha256": "fa1bee5a96f152b2069fb413cd44bc99a7c8a44edd6439f1c38b67e183ad4709"
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Sha256": "fa1bee5a96f152b2069fb413cd44bc99a7c8a44edd6439f1c38b67e183ad4709"
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Sha256": "c0bbaaefbb8925e5e64a25ef0befe582144954fa29aa788796b8a96cf441cb6c"
+    }
+  ],
+  "Rules": [
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "4",
+      "Name": "On Demand Intra Day Auction",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "A",
+      "Name": "Slow Quote Offer Side",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "B",
+      "Name": "Slow Quote Bid Side",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "C",
+      "Name": "Closing Quote",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "E",
+      "Name": "Slow Quote LRP Bid Side",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "F",
+      "Name": "Slow Quote LRP Offer Side",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "H",
+      "Name": "Slow Quote Bid And Offer Side",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "L",
+      "Name": "Market Maker Quotes Closed",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "N",
+      "Name": "Non Firm Quote",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "O",
+      "Name": "Opening Quote",
+      "Disposition": 2,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "R",
+      "Name": "Regular Market Maker Open",
+      "Disposition": 2,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "U",
+      "Name": "Slow Quote LRP Bid And Offer",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "A",
+      "Code": "W",
+      "Name": "Slow Quote Set Slow List",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "4",
+      "Name": "On Demand Intra Day Auction",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "A",
+      "Name": "Slow Quote Offer Side",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "B",
+      "Name": "Slow Quote Bid Side",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "C",
+      "Name": "Closing Quote",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "E",
+      "Name": "Slow Quote LRP Bid Side",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "F",
+      "Name": "Slow Quote LRP Offer Side",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "H",
+      "Name": "Slow Quote Bid And Offer Side",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "L",
+      "Name": "Market Maker Quotes Closed",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "N",
+      "Name": "Non Firm Quote",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "O",
+      "Name": "Opening Quote",
+      "Disposition": 2,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "R",
+      "Name": "Regular Market Maker Open",
+      "Disposition": 2,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "U",
+      "Name": "Slow Quote LRP Bid And Offer",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "B",
+      "Code": "W",
+      "Name": "Slow Quote Set Slow List",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "4",
+      "Name": "On Demand Intra Day Auction",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "A",
+      "Name": "Manual Ask Automated Bid",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "B",
+      "Name": "Manual Bid Automated Ask",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "F",
+      "Name": "Fast Trading",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "H",
+      "Name": "Manual Bid And Ask",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "I",
+      "Name": "Order Imbalance",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "L",
+      "Name": "Closed Quote",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "N",
+      "Name": "Non Firm Quote",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "O",
+      "Name": "Opening Quote Automated",
+      "Disposition": 2,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "R",
+      "Name": "Regular Two Sided Open",
+      "Disposition": 2,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "U",
+      "Name": "Manual Bid And Ask Non Firm",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "X",
+      "Name": "Order Influx",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "Y",
+      "Name": "No Offer No Bid One Sided Open",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 0,
+      "Tape": "C",
+      "Code": "Z",
+      "Name": "No Open No Resume",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": " ",
+      "Name": "Regular Sale",
+      "Disposition": 2,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "4",
+      "Name": "Derivatively Priced",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "5",
+      "Name": "Market Center Reopening Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "6",
+      "Name": "Market Center Closing Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "7",
+      "Name": "Qualified Contingent Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "8",
+      "Name": "Reserved",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "9",
+      "Name": "Corrected Consolidated Close Price as per Listing Market",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "B",
+      "Name": "Average Price Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "C",
+      "Name": "Cash Trade (Same Day Clearing)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "E",
+      "Name": "Automatic Execution",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "F",
+      "Name": "Inter-market Sweep Order",
+      "Disposition": 2,
+      "IsModifierOnly": true
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "H",
+      "Name": "Price Variation Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "I",
+      "Name": "Odd Lot Trade",
+      "Disposition": 2,
+      "IsModifierOnly": true
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "K",
+      "Name": "Rule 127 (NYSE only) or Rule 155 (NYSE MKT only)",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "L",
+      "Name": "Sold Last (Late Reporting)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "M",
+      "Name": "Market Center Official Close",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "N",
+      "Name": "Next Day Trade (Next Day Clearing)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "O",
+      "Name": "Market Center Opening Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "P",
+      "Name": "Prior Reference Price",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "Q",
+      "Name": "Market Center Official Open",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "R",
+      "Name": "Seller",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "T",
+      "Name": "Extended Hours Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "U",
+      "Name": "Extended Hours Sold (Out Of Sequence)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "V",
+      "Name": "Contingent Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "X",
+      "Name": "Cross Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "A",
+      "Code": "Z",
+      "Name": "Sold (Out Of Sequence)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": " ",
+      "Name": "Regular Sale",
+      "Disposition": 2,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "4",
+      "Name": "Derivatively Priced",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "5",
+      "Name": "Market Center Reopening Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "6",
+      "Name": "Market Center Closing Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "7",
+      "Name": "Qualified Contingent Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "8",
+      "Name": "Reserved",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "9",
+      "Name": "Corrected Consolidated Close Price as per Listing Market",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "B",
+      "Name": "Average Price Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "C",
+      "Name": "Cash Trade (Same Day Clearing)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "E",
+      "Name": "Automatic Execution",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "F",
+      "Name": "Inter-market Sweep Order",
+      "Disposition": 2,
+      "IsModifierOnly": true
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "H",
+      "Name": "Price Variation Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "I",
+      "Name": "Odd Lot Trade",
+      "Disposition": 2,
+      "IsModifierOnly": true
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "K",
+      "Name": "Rule 127 (NYSE only) or Rule 155 (NYSE MKT only)",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "L",
+      "Name": "Sold Last (Late Reporting)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "M",
+      "Name": "Market Center Official Close",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "N",
+      "Name": "Next Day Trade (Next Day Clearing)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "O",
+      "Name": "Market Center Opening Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "P",
+      "Name": "Prior Reference Price",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "Q",
+      "Name": "Market Center Official Open",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "R",
+      "Name": "Seller",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "T",
+      "Name": "Extended Hours Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "U",
+      "Name": "Extended Hours Sold (Out Of Sequence)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "V",
+      "Name": "Contingent Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "X",
+      "Name": "Cross Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "B",
+      "Code": "Z",
+      "Name": "Sold (Out Of Sequence)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "1",
+      "Name": "Stopped Stock (Regular Trade)",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "4",
+      "Name": "Derivatively priced",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "5",
+      "Name": "Re-Opening Prints",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "6",
+      "Name": "Closing Prints",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "7",
+      "Name": "Qualified Contingent Trade(\u201cQCT\u201d)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "8",
+      "Name": "Placeholder For 611 Exempt",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "9",
+      "Name": "Corrected Consolidated Close (per listing market)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "@",
+      "Name": "Regular Sale",
+      "Disposition": 2,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "A",
+      "Name": "Acquisition",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "B",
+      "Name": "Bunched Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "C",
+      "Name": "Cash Sale",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "D",
+      "Name": "Distribution",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "E",
+      "Name": "Placeholder",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "F",
+      "Name": "Intermarket Sweep",
+      "Disposition": 2,
+      "IsModifierOnly": true
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "G",
+      "Name": "Bunched Sold Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "H",
+      "Name": "Price Variation Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "I",
+      "Name": "Odd Lot Trade",
+      "Disposition": 2,
+      "IsModifierOnly": true
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "K",
+      "Name": "Rule 155 Trade (AMEX)",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "L",
+      "Name": "Sold Last",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "M",
+      "Name": "Market Center Official Close",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "N",
+      "Name": "Next Day",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "O",
+      "Name": "Opening Prints",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "P",
+      "Name": "Prior Reference Price",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "Q",
+      "Name": "Market Center Official Open",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "R",
+      "Name": "Seller",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "S",
+      "Name": "Split Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "T",
+      "Name": "Form T",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "U",
+      "Name": "Extended trading hours (Sold Out of Sequence)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "V",
+      "Name": "Contingent Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "W",
+      "Name": "Average Price Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "X",
+      "Name": "Cross Trade",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "Y",
+      "Name": "Yellow Flag Regular Trade",
+      "Disposition": 0,
+      "IsModifierOnly": false
+    },
+    {
+      "Kind": 1,
+      "Tape": "C",
+      "Code": "Z",
+      "Name": "Sold (out of sequence)",
+      "Disposition": 1,
+      "IsModifierOnly": false
+    }
+  ]
+}

@@ -65,7 +65,7 @@ public sealed class SqliteDurabilityTests
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
-        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options), new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var run = CreateRun(Guid.NewGuid());
         var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
 
@@ -90,7 +90,7 @@ public sealed class SqliteDurabilityTests
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
-        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options), new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var run = CreateRun(Guid.NewGuid());
 
         await using (var context = new TradingFlowDbContext(options))
@@ -115,7 +115,7 @@ public sealed class SqliteDurabilityTests
         var options = database.CreateOptions(withDurabilityInterceptor: true);
         var contextFactory = new TestDbContextFactory(options);
         var repositories = Enumerable.Range(0, 4)
-            .Select(_ => new SqliteOrderIntentRepository(contextFactory))
+            .Select(_ => new SqliteOrderIntentRepository(contextFactory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero))))
             .ToArray();
         var run = CreateRun(Guid.NewGuid());
 
@@ -143,7 +143,7 @@ public sealed class SqliteDurabilityTests
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
         await InitializeAsync(options);
-        var intents = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var intents = new SqliteOrderIntentRepository(new TestDbContextFactory(options), new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
         reservation = reservation with { PortfolioRisk = reservation.PortfolioRisk! with { Horizon = horizon } };
 
@@ -531,6 +531,34 @@ public sealed class SqliteDurabilityTests
             (await expiredRepository.GetRiskReservationByIntentIdAsync(reserved.Intent.IntentId))!.State);
         broker.Verify(client => client.SubmitOrderAsync(
             It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>Capacity rejection expires an undispatched order with its actual reason and is a completed recovery outcome.</summary>
+    [Fact]
+    public async Task RecoverPendingAsync_ChangedTradingLimits_ExpiresWithSpecificReasonAndReleasesRisk()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        var clock = new MutableTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero));
+        var intents = new SqliteOrderIntentRepository(factory, clock);
+        var events = new SqliteOrderEventRepository(factory);
+        await InitializeAsync(options);
+        var reserved = await intents.ReserveAsync(CreateRun(Guid.NewGuid()), CreateReservation(Guid.NewGuid(), "MSFT"));
+        await new SqliteOperationalTradingLimitStore(factory).SaveAsync("paper", 2, 3, 0, clock.GetUtcNow());
+        var broker = CreateDispatchBroker(reserved.Intent, brokerOrder: null, "must-not-submit");
+        var dispatcher = CreateDispatcher(intents, events, clock);
+        Assert.Equal(0, await dispatcher.RecoverPendingAsync(broker.Object));
+        Assert.Equal(OrderState.Expired, (await events.GetCurrentAsync(reserved.Intent.ClientOrderId))!.State);
+        Assert.Equal(PortfolioRiskReservationState.Released,
+            (await intents.GetRiskReservationByIntentIdAsync(reserved.Intent.IntentId))!.State);
+        await using var verification = new TradingFlowDbContext(options);
+        var terminal = await verification.OrderEvents.Where(row => row.ClientOrderId == reserved.Intent.ClientOrderId)
+            .OrderByDescending(row => row.EventId).FirstAsync();
+        Assert.Contains("trading_limits_changed", terminal.PayloadJson);
+        Assert.DoesNotContain("owning_run_inactive", terminal.PayloadJson);
+        Assert.Contains("message", terminal.PayloadJson);
+        broker.Verify(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -2430,7 +2458,7 @@ public sealed class SqliteDurabilityTests
         var options = database.CreateOptions(withDurabilityInterceptor: true);
         var factory = new TestDbContextFactory(options);
         var run = CreateRun(Guid.NewGuid());
-        var intents = new SqliteOrderIntentRepository(factory);
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var seedEvents = new SqliteOrderEventRepository(factory);
         await InitializeAsync(options);
         var intent = (await intents.ReserveAsync(
@@ -2473,7 +2501,7 @@ public sealed class SqliteDurabilityTests
         var options = database.CreateOptions(withDurabilityInterceptor: true);
         var factory = new TestDbContextFactory(options);
         var run = CreateRun(Guid.NewGuid());
-        var intents = new SqliteOrderIntentRepository(factory);
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var events = new SqliteOrderEventRepository(factory);
         var lifecycle = new OrderLifecycleService(events);
         await InitializeAsync(options);
@@ -2696,7 +2724,7 @@ public sealed class SqliteDurabilityTests
         var options = database.CreateOptions(withDurabilityInterceptor: true);
         var factory = new TestDbContextFactory(options);
         var run = CreateRun(Guid.NewGuid());
-        var intents = new SqliteOrderIntentRepository(factory);
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var firstEvents = new SqliteOrderEventRepository(factory);
         var firstLifecycle = new OrderLifecycleService(firstEvents);
         await InitializeAsync(options);
@@ -2765,7 +2793,7 @@ public sealed class SqliteDurabilityTests
         var options = database.CreateOptions(withDurabilityInterceptor: true);
         var factory = new TestDbContextFactory(options);
         var run = CreateRun(Guid.NewGuid());
-        var intents = new SqliteOrderIntentRepository(factory);
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var events = new SqliteOrderEventRepository(factory);
         var lifecycle = new OrderLifecycleService(events);
         await InitializeAsync(options);
@@ -2954,7 +2982,7 @@ public sealed class SqliteDurabilityTests
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
-        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options), new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var run = CreateRun(Guid.NewGuid());
         var reservation = CreateReservation(Guid.NewGuid(), "MSFT") with
         {
@@ -3066,7 +3094,7 @@ public sealed class SqliteDurabilityTests
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
-        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options), new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var run = CreateRun(Guid.NewGuid());
         var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
 
@@ -3092,7 +3120,7 @@ public sealed class SqliteDurabilityTests
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
-        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options), new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var run = CreateRun(Guid.NewGuid());
         var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
 
@@ -3123,7 +3151,7 @@ public sealed class SqliteDurabilityTests
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
-        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options), new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var run = CreateRun(Guid.NewGuid());
         var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
 
@@ -3193,7 +3221,7 @@ public sealed class SqliteDurabilityTests
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
-        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options));
+        var repository = new SqliteOrderIntentRepository(new TestDbContextFactory(options), new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var run = CreateRun(Guid.NewGuid());
         run.Status = "completed";
 
@@ -3210,7 +3238,7 @@ public sealed class SqliteDurabilityTests
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
         var factory = new TestDbContextFactory(options);
-        var intents = new SqliteOrderIntentRepository(factory);
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var events = new SqliteOrderEventRepository(factory);
         var run = CreateRun(Guid.NewGuid());
 
@@ -3262,14 +3290,16 @@ public sealed class SqliteDurabilityTests
         var run = CreateRun(Guid.NewGuid());
         var repositories = new[]
         {
-            new SqliteOrderIntentRepository(factory),
-            new SqliteOrderIntentRepository(factory)
+            new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero))),
+            new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)))
         };
         var requests = new[]
         {
             WithRiskLimits(CreateReservation(Guid.NewGuid(), "MSFT"), maxPositions: 1),
             WithRiskLimits(CreateReservation(Guid.NewGuid(), "NVDA"), maxPositions: 1)
         };
+        await new SqliteOperationalTradingLimitStore(factory).SaveAsync("paper", 5, 1, 0,
+            new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero));
         var outcomes = await Task.WhenAll(requests.Select(async (request, index) =>
         {
             try
@@ -3313,6 +3343,8 @@ public sealed class SqliteDurabilityTests
                 MaxPositions = 1
             }
         };
+        await new SqliteOperationalTradingLimitStore(factory).SaveAsync("paper", 5, 1, 0,
+            new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero));
 
         var error = await Assert.ThrowsAsync<PortfolioRiskReservationRejectedException>(() =>
             repository.ReserveAsync(run, reservation));
@@ -3343,7 +3375,7 @@ public sealed class SqliteDurabilityTests
         }
 
         var run = CreateRun(Guid.NewGuid());
-        var intents = new SqliteOrderIntentRepository(factory);
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var events = new SqliteOrderEventRepository(factory);
         var first = (await intents.ReserveAsync(run, CreateReservation(Guid.NewGuid(), "MSFT"))).Intent;
         await events.TransitionAsync(new OrderTransitionRequest(
@@ -3379,7 +3411,7 @@ public sealed class SqliteDurabilityTests
         }
 
         var run = CreateRun(Guid.NewGuid());
-        var intents = new SqliteOrderIntentRepository(factory);
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var events = new SqliteOrderEventRepository(factory);
         var first = (await intents.ReserveAsync(run, CreateReservation(Guid.NewGuid(), "MSFT"))).Intent;
         var acknowledgedAtUtc = first.CreatedAtUtc.AddSeconds(2);
@@ -3430,7 +3462,7 @@ public sealed class SqliteDurabilityTests
         }
 
         var run = CreateRun(Guid.NewGuid());
-        var intents = new SqliteOrderIntentRepository(factory);
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var events = new SqliteOrderEventRepository(factory);
         var intent = (await intents.ReserveAsync(run, CreateReservation(Guid.NewGuid(), "MSFT"))).Intent;
         var brokerOrderId = "broker-partial";
@@ -3501,7 +3533,7 @@ public sealed class SqliteDurabilityTests
         }
 
         var run = CreateRun(Guid.NewGuid());
-        var intents = new SqliteOrderIntentRepository(factory);
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
         var events = new SqliteOrderEventRepository(factory);
         var positions = new SqlitePositionLedgerRepository(factory);
         var intent = (await intents.ReserveAsync(run, CreateReservation(Guid.NewGuid(), "MSFT"))).Intent;
@@ -3543,6 +3575,7 @@ public sealed class SqliteDurabilityTests
         StartedAtUtc = DateTimeOffset.UtcNow
     };
 
+    // Supply explicit fake account fill history alongside immutable reservation inputs under the fixture clock.
     private static OrderIntentReservation CreateReservation(
         Guid intentId,
         string symbol,
@@ -3577,7 +3610,8 @@ public sealed class SqliteDurabilityTests
             2_000m,
             20,
             new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero),
-            new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)));
+            new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero),
+            OperationalTradingLimitTestEvidence.Empty("paper-account", new DateTimeOffset(2026, 7, 21, 14, 30, 0, TimeSpan.Zero)), 60));
 
     private static OrderIntentReservation CreateUnpreparedExitReservation(
         Guid intentId,
@@ -3724,6 +3758,7 @@ public sealed class SqliteDurabilityTests
             timestampUtc,
             "{\"source\":\"test\"}"));
 
+    /// <summary>Seed an acknowledged order with account-fill evidence tied to this cancellation fixture's explicit clock.</summary>
     private static async Task<OrderIntentRecord> SeedAcknowledgedOrderAsync(
         SqliteOrderIntentRepository intents,
         SqliteOrderEventRepository events,
@@ -3737,6 +3772,13 @@ public sealed class SqliteDurabilityTests
         var reservation = protective
             ? CreateProtectiveReservation(intentId, symbol)
             : CreateReservation(intentId, symbol);
+        if (reservation.PortfolioRisk is { } risk)
+            reservation = reservation with { PortfolioRisk = risk with
+            {
+                AccountSnapshotRequestedAtUtc = timestampUtc,
+                AccountSnapshotObservedAtUtc = timestampUtc,
+                FillHistory = OperationalTradingLimitTestEvidence.Empty(reservation.AccountId, timestampUtc)
+            } };
         var reserved = await intents.ReserveAsync(run, reservation);
         await events.TransitionAsync(new OrderTransitionRequest(
             reserved.Intent.ClientOrderId,

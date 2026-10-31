@@ -192,6 +192,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
         }
     }
 
+    /// <summary>Recover dispatchable work; entries already expired by current account limits require no further broker action.</summary>
     public async Task<int> RecoverPendingAsync(
         IBrokerClient broker,
         CancellationToken cancellationToken = default)
@@ -233,6 +234,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
                     OrderDispatchExpiredException or
                     OrderDispatchRunInactiveException or
                     OrderDispatchUnsupportedHorizonException or
+                    PortfolioRiskReservationRejectedException or
                     PositionExitInProgressException)
                 {
                     // DispatchAsync durably terminalized these intents before throwing.
@@ -256,6 +258,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
         return recovered;
     }
 
+    /// <summary>Adopt known broker work first; only a fresh authorized entry may cross the first broker-POST boundary.</summary>
     private async Task<OrderSubmissionResult> DispatchClaimedAsync(
         OrderDispatchLease lease,
         IBrokerClient broker,
@@ -342,7 +345,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
         }
         catch (Exception exception) when (
             exception is OrderDispatchExpiredException or OrderDispatchRunInactiveException or
-                OrderDispatchUnsupportedHorizonException)
+                OrderDispatchUnsupportedHorizonException or PortfolioRiskReservationRejectedException)
         {
             var latest = await events.GetCurrentAsync(intent.ClientOrderId, cancellationToken)
                 ?? throw new InvalidOperationException(
@@ -362,8 +365,10 @@ public sealed class OrderDispatchService : IOrderDispatchService
                             {
                                 OrderDispatchExpiredException => "dispatch_expired_before_broker_post",
                                 OrderDispatchUnsupportedHorizonException => "unsupported_entry_horizon",
+                                PortfolioRiskReservationRejectedException rejection => rejection.ReasonCode,
                                 _ => "owning_run_inactive_before_broker_post"
-                            }
+                            },
+                            message = exception.Message
                         })),
                     cancellationToken);
             }

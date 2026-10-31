@@ -28,6 +28,7 @@ public partial class SettingsPage : ContentPage
         }
     }
 
+    /// <summary>Validates and saves the operator's explicit HTTPS origin before making a connection check.</summary>
     private async void OnSaveAndTest(object? sender, EventArgs e)
     {
         if (String.IsNullOrWhiteSpace(BackendUrlEntry.Text))
@@ -36,7 +37,12 @@ public partial class SettingsPage : ContentPage
             return;
         }
 
-        AppServices.Api.BaseUrl = BackendUrlEntry.Text;
+        try { AppServices.Api.BaseUrl = BackendUrlEntry.Text; }
+        catch (ArgumentException error)
+        {
+            await DisplayAlertAsync("Settings", error.Message, "OK");
+            return;
+        }
         HealthLabel.Text = "Checking backend...";
         var healthy = await AppServices.Api.CheckHealthAsync();
         HealthLabel.Text = healthy
@@ -45,34 +51,4 @@ public partial class SettingsPage : ContentPage
         HealthLabel.TextColor = healthy ? ThemePalette.Positive : ThemePalette.Negative;
     }
 
-    private async void OnUsePhoneUrl(object? sender, EventArgs e)
-    {
-        AppServices.Api.UsePhysicalDeviceDefault();
-        BackendUrlEntry.Text = AppServices.Api.BaseUrl;
-        await TestCurrentUrlAsync();
-    }
-
-    private async void OnUseNgrokUrl(object? sender, EventArgs e)
-    {
-        AppServices.Api.UseNgrokDefault();
-        BackendUrlEntry.Text = AppServices.Api.BaseUrl;
-        await TestCurrentUrlAsync();
-    }
-
-    private async void OnUseEmulatorUrl(object? sender, EventArgs e)
-    {
-        AppServices.Api.UseAndroidEmulatorDefault();
-        BackendUrlEntry.Text = AppServices.Api.BaseUrl;
-        await TestCurrentUrlAsync();
-    }
-
-    private async Task TestCurrentUrlAsync()
-    {
-        HealthLabel.Text = $"Checking {AppServices.Api.BaseUrl}...";
-        var healthy = await AppServices.Api.CheckHealthAsync();
-        HealthLabel.Text = healthy
-            ? $"Connected: {AppServices.Api.BaseUrl}"
-            : $"Unreachable: {AppServices.Api.BaseUrl}";
-        HealthLabel.TextColor = healthy ? ThemePalette.Positive : ThemePalette.Negative;
-    }
 }

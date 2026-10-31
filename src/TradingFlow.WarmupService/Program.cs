@@ -4,10 +4,11 @@ using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Storage;
 using TradingFlow.WarmupService.Models;
 using TradingFlow.WarmupService.Services;
+using TradingFlow.Contracts.V1;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
-builder.Configuration.AddJsonFile(Path.Combine("src", "TradingFlow.Web", "appsettings.local.json"), optional: true, reloadOnChange: true);
+if (builder.Environment.IsDevelopment())
+    builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
 builder.Configuration.AddEnvironmentVariables();
 
 builder.Logging.ClearProviders();
@@ -35,6 +36,7 @@ builder.Services.AddSingleton<ICandleStore>(sp =>
 });
 builder.Services.AddSingleton<IMarketDataProvider>(sp =>
 {
+    // Warm-up bars and calendar responses use the same persistent archive owner as news.
     var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<WarmupOptions>>().Value;
     var credentials = sp.GetRequiredService<WarmupCredentialResolver>();
     return new AlpacaMarketDataProvider(
@@ -44,7 +46,8 @@ builder.Services.AddSingleton<IMarketDataProvider>(sp =>
             KeyId = credentials.Resolve("Alpaca", "KeyId", "ALPACA_KEY_ID"),
             SecretKey = credentials.Resolve("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),
             MarketDataFeed = options.MarketDataFeed
-        });
+        },
+        sp.GetRequiredService<IRawArchiveWriter>());
 });
 builder.Services.AddSingleton<ICatalystProvider>(sp =>
 {
@@ -77,8 +80,19 @@ builder.Services.AddSingleton<WarmupCoordinator>();
 builder.Services.AddHostedService<WarmupBackgroundService>();
 
 var app = builder.Build();
+app.UseWarmupServiceAccess(app.Configuration);
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "TradingFlow.WarmupService" }));
+var credentialsForReadiness = app.Services.GetRequiredService<WarmupCredentialResolver>();
+var missingCredentialNames = new List<string>();
+if (String.IsNullOrWhiteSpace(credentialsForReadiness.Resolve("Alpaca", "KeyId", "ALPACA_KEY_ID"))) missingCredentialNames.Add("ALPACA_KEY_ID");
+if (String.IsNullOrWhiteSpace(credentialsForReadiness.Resolve("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"))) missingCredentialNames.Add("ALPACA_SECRET_KEY");
+if (String.IsNullOrWhiteSpace(WarmupServiceAccess.ResolveKey(app.Configuration))) missingCredentialNames.Add("WarmupService:ApiKey");
+if (app.Environment.IsProduction() && missingCredentialNames.Count > 0)
+    throw new InvalidOperationException("Missing warm-up host configuration: " + String.Join(", ", missingCredentialNames));
+
+app.MapGet("/health", () => missingCredentialNames.Count == 0
+    ? (IResult)Results.Ok(new { status = "ok", service = "TradingFlow.WarmupService" })
+    : Results.Json(new { status = "configuration_missing", missing = missingCredentialNames }, statusCode: 503));
 
 app.MapGet("/api/warmup/watchlist", async (WarmupRequestStore store, CancellationToken cancellationToken) =>
 {
@@ -88,26 +102,12 @@ app.MapGet("/api/warmup/watchlist", async (WarmupRequestStore store, Cancellatio
 
 app.MapPost("/api/warmup/watchlist", async (
     WarmupWatchRequest request,
-    WarmupRequestStore store,
     WarmupJobQueue queue,
     CancellationToken cancellationToken) =>
 {
-    var intents = await store.UpsertAsync(request, cancellationToken);
-    if (request.RunNow)
-    {
-        await queue.EnqueueAsync(new WarmupJobRequest(
-            Guid.NewGuid().ToString("N"),
-            "manual-watchlist-request",
-            intents.Select(x => x.Ticker).ToArray(),
-            DateTimeOffset.UtcNow), cancellationToken);
-    }
-
-    return Results.Accepted($"/api/warmup/watchlist", new
-    {
-        accepted = intents.Count,
-        tickers = intents.Select(x => x.Ticker).OrderBy(x => x, StringComparer.OrdinalIgnoreCase),
-        runQueued = request.RunNow
-    });
+    try { return Results.Accepted("/api/warmup/watchlist", await queue.AddWatchAsync(request, cancellationToken)); }
+    catch (Exception error) when (error is InvalidOperationException or ArgumentException)
+    { return Results.Json(new { message = error.Message }, statusCode: error is WarmupQueueFullException ? 429 : 400); }
 });
 
 app.MapDelete("/api/warmup/watchlist/{ticker}", async (
@@ -124,13 +124,34 @@ app.MapPost("/api/warmup/run-now", async (
     WarmupJobQueue queue,
     CancellationToken cancellationToken) =>
 {
-    var runId = Guid.NewGuid().ToString("N");
-    await queue.EnqueueAsync(new WarmupJobRequest(
+    string runId;
+    try { runId = WarmupJobQueue.RunIdForKey(request.IdempotencyKey); }
+    catch (ArgumentException error) { return Results.BadRequest(new { message = error.Message }); }
+    try { await queue.EnqueueAsync(new WarmupJobRequest(
         runId,
         String.IsNullOrWhiteSpace(request.Reason) ? "manual-run-now" : request.Reason!,
         request.Tickers?.Select(WarmupText.NormalizeTicker).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-        DateTimeOffset.UtcNow), cancellationToken);
+        DateTimeOffset.UtcNow), cancellationToken); }
+    catch (Exception error) when (error is InvalidOperationException or ArgumentException)
+    { return Results.Json(new { message = error.Message }, statusCode: error is WarmupQueueFullException ? 429 : 400); }
     return Results.Accepted($"/api/warmup/runs/{runId}", new { runId, queued = true });
+});
+
+app.MapGet("/api/warmup/jobs", async (WarmupJobQueue queue, CancellationToken token) =>
+    Results.Ok((await queue.ListAsync(token)).OrderByDescending(job => job.Request.QueuedAtUtc).Select(QueueStatus)));
+
+app.MapPost("/api/warmup/jobs/{runId}/cancel", async (string runId, WarmupJobQueue queue, CancellationToken token) =>
+{
+    if (!await queue.CancelAsync(runId, token)) return Results.NotFound(new { message = "Warmup job not found." });
+    var job = (await queue.ListAsync(token)).Single(item => item.Request.RunId == runId);
+    return Results.Ok(QueueStatus(job));
+});
+
+app.MapPost("/api/warmup/runs/{runId}/archive/retry", async (string runId, WarmupCoordinator coordinator, CancellationToken token) =>
+{
+    var run = await coordinator.RetryArchivesAsync(runId, token);
+    return run is null ? Results.NotFound(new { message = "Warmup run not found." }) : Results.Ok(new WarmupArchiveRetryResponse(runId,
+        run.Tickers.Select(ticker => new WarmupArchiveStatus(ticker.Ticker, ticker.CacheCompleted, ticker.ArchiveStatus, ticker.ArchiveError)).ToArray()));
 });
 
 app.MapGet("/api/warmup/runs", async (WarmupRunStore store, CancellationToken cancellationToken) =>
@@ -147,3 +168,7 @@ app.MapGet("/api/warmup/runs/{runId}", async (string runId, WarmupRunStore store
 });
 
 app.Run();
+
+/// <summary>Projects queue status without exposing the private frozen request payload or local file paths.</summary>
+static WarmupQueueStatus QueueStatus(WarmupQueuedJob job) => new(job.Request.RunId, job.Request.Reason, job.Request.QueuedAtUtc,
+    job.Status, job.Request.FrozenIntents?.Select(intent => intent.Ticker).ToArray() ?? job.Request.Tickers?.ToArray() ?? [], job.Error);

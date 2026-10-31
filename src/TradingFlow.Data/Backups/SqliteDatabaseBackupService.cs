@@ -51,6 +51,7 @@ public sealed class SqliteDatabaseBackupService
         this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    /// <summary>Creates and verifies SQLite locally, then publishes only closed immutable bytes to the configured backup destination.</summary>
     public async Task<SqliteBackupResult> CreateDailyBackupAsync(
         DateOnly operationalDate,
         CancellationToken cancellationToken = default)
@@ -75,17 +76,27 @@ public sealed class SqliteDatabaseBackupService
                     cancellationToken);
             }
 
-            var partialPath = finalPath + $".{Guid.NewGuid():N}.partial";
+            // SQLite writes only beside the local operational database. A separate backup volume receives closed bytes.
+            var stagingRoot = Path.Combine(Path.GetDirectoryName(databasePath)!, ".backup-staging");
+            Directory.CreateDirectory(stagingRoot);
+            var partialPath = Path.Combine(stagingRoot, $"{Guid.NewGuid():N}.db.partial");
             try
             {
                 await Task.Run(() => CreateOnlineBackup(partialPath), cancellationToken);
                 await SqliteBackupFile.ValidateIntegrityAsync(partialPath, cancellationToken);
+                RequireStandaloneBackup(partialPath);
                 SqliteBackupFile.FlushToDisk(partialPath);
 
                 var created = true;
                 try
                 {
-                    File.Move(partialPath, finalPath, overwrite: false);
+                    await artifactWriter.WriteStreamExclusiveAsync(finalPath, async (destination, token) =>
+                    {
+                        // The online backup connection is closed and the local copy has already passed integrity checks.
+                        await using var source = new FileStream(partialPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                            bufferSize: 16 * 1024, options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+                        await source.CopyToAsync(destination, token);
+                    }, cancellationToken);
                 }
                 catch (IOException) when (File.Exists(finalPath))
                 {
@@ -107,7 +118,7 @@ public sealed class SqliteDatabaseBackupService
             }
             finally
             {
-                SqliteBackupFile.TryDelete(partialPath);
+                DeleteStagedBackup(partialPath);
             }
         }
         finally
@@ -123,6 +134,7 @@ public sealed class SqliteDatabaseBackupService
             operationalDate.Month.ToString("00", CultureInfo.InvariantCulture),
             $"tradingflow-{operationalDate:yyyy-MM-dd}.db");
 
+    /// <summary>Copies the online database locally and converts the copied WAL header into a standalone DELETE-journal snapshot before closing it.</summary>
     private void CreateOnlineBackup(string destinationPath)
     {
         var sourceConnectionString = new SqliteConnectionStringBuilder
@@ -145,6 +157,26 @@ public sealed class SqliteDatabaseBackupService
         source.Open();
         destination.Open();
         source.BackupDatabase(destination);
+        // SQLite's backup API copies page-one WAL settings too. Only this private
+        // destination changes mode; the operational source remains in WAL mode.
+        using var mode = destination.CreateCommand();
+        mode.CommandText = "PRAGMA journal_mode=DELETE;";
+        if (!String.Equals(Convert.ToString(mode.ExecuteScalar(), CultureInfo.InvariantCulture), "delete", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The local backup could not be converted into a standalone database file.");
+    }
+
+    /// <summary>Refuses publication when the closed local snapshot still depends on an auxiliary SQLite journal.</summary>
+    private static void RequireStandaloneBackup(string path)
+    {
+        if (new[] { "-wal", "-shm", "-journal" }.Any(suffix => File.Exists(path + suffix)))
+            throw new InvalidDataException("The closed backup still has a SQLite journal; standalone bytes cannot be published.");
+    }
+
+    /// <summary>Deletes only this attempt's random staging filename and its exact SQLite companions after all connections close.</summary>
+    private static void DeleteStagedBackup(string path)
+    {
+        foreach (var suffix in new[] { "-wal", "-shm", "-journal", String.Empty })
+            SqliteBackupFile.TryDelete(path + suffix);
     }
 
     private async Task<SqliteBackupResult> ValidateAndWriteManifestAsync(

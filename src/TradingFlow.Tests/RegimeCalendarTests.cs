@@ -109,10 +109,10 @@ public sealed class RegimeCalendarTests
     }
 
     [Fact]
-    public void Build_ZeroPeriodOrNoBars_IsInactive_AlwaysOn()
+    public void Build_NoBenchmarkForAnActiveRule_FailsClosed()
     {
-        Assert.False(RegimeCalendarBuilder.Build(Array.Empty<OhlcvBar>(), 50).IsActive);
-        Assert.True(RegimeCalendarBuilder.Build(Array.Empty<OhlcvBar>(), 50).IsOn(new DateOnly(2026, 6, 1)));
+        Assert.True(RegimeCalendarBuilder.Build(Array.Empty<OhlcvBar>(), 50).IsActive);
+        Assert.False(RegimeCalendarBuilder.Build(Array.Empty<OhlcvBar>(), 50).IsOn(new DateOnly(2026, 6, 1)));
         Assert.False(RegimeCalendarBuilder.Build(new[] { Daily("2026-06-01", 10m) }, 0).IsActive);
     }
 

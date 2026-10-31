@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using TradingFlow.Domain.News;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 
@@ -9,8 +10,7 @@ namespace TradingFlow.Web.Pages;
 /// Filterable news timeline.
 /// </summary>
 /// <remarks>
-/// Every filter here reads a field the news record already carried. The dimensions
-/// existed in the data long before this screen; they simply had no UI.
+/// Topic categories are inferred display labels; they do not qualify a trading catalyst.
 /// </remarks>
 public sealed class NewsModel(
     NewsQueryService news,
@@ -42,6 +42,8 @@ public sealed class NewsModel(
     [BindProperty(SupportsGet = true)] public Guid? GroupId { get; set; }
     [BindProperty(SupportsGet = true)] public string? Source { get; set; }
     [BindProperty(SupportsGet = true)] public string? Classification { get; set; }
+    [BindProperty(SupportsGet = true)] public string Category { get; set; } = "all";
+    [BindProperty(SupportsGet = true)] public string? Sector { get; set; }
     [BindProperty(SupportsGet = true)] public string? Scope { get; set; }
     [BindProperty(SupportsGet = true)] public string? StockSource { get; set; }
     [BindProperty(SupportsGet = true)] public string View { get; set; } = "timeline";
@@ -51,6 +53,7 @@ public sealed class NewsModel(
     public NewsStockPage? StockList { get; private set; }
     public int PageCount => Math.Max(1, (int)Math.Ceiling(TotalBeforeFilters / (double)PageSize));
     [BindProperty(SupportsGet = true)] public bool LinkedOnly { get; set; }
+    [BindProperty(SupportsGet = true)] public bool StockLinkedOnly { get; set; }
 
     /// <summary>
     /// Set by the Clear control so the page knows the operator just reset the filters
@@ -63,6 +66,15 @@ public sealed class NewsModel(
     public IReadOnlyList<TradingFlow.Web.Services.Desk.DeskSource> StockSources { get; private set; } = [];
     public int TotalBeforeFilters { get; private set; }
     public string FeedDescription { get; private set; } = String.Empty;
+    public string CategoryLabel => NewsDisplayTaxonomy.Categories.FirstOrDefault(x => x.Key == Category)?.Label ?? Category;
+    public string SectorLabel => NewsDisplayTaxonomy.Sectors.FirstOrDefault(x => x.Key == Sector)?.Label ?? "All sector topics";
+    public int AdvancedFilterCount => new[] {
+        !String.IsNullOrWhiteSpace(Provider),
+        !String.IsNullOrWhiteSpace(Sentiment) && !String.Equals(Sentiment.Trim(), "all", StringComparison.OrdinalIgnoreCase),
+        !String.IsNullOrWhiteSpace(Source), !String.IsNullOrWhiteSpace(Classification),
+        View == "ticker", LinkedOnly, StockLinkedOnly
+    }.Count(active => active);
+    public bool HasAdvancedFilters => AdvancedFilterCount > 0;
 
     /// <summary>False when the feed itself is unavailable, as opposed to merely empty.</summary>
     public bool FeedEnabled { get; private set; } = true;
@@ -71,7 +83,7 @@ public sealed class NewsModel(
     {
         // Reject failed conversions of bound query values without treating unrelated
         // page-model validation (for example, unset result fields) as an invalid request.
-        var typedFilters = new[] { nameof(GroupId), nameof(Hours), nameof(PageNumber), nameof(PageSize), nameof(StocksPage), nameof(LinkedOnly), nameof(Cleared) };
+        var typedFilters = new[] { nameof(GroupId), nameof(Hours), nameof(PageNumber), nameof(PageSize), nameof(StocksPage), nameof(LinkedOnly), nameof(StockLinkedOnly), nameof(Cleared) };
         if (ModelState.Any(x => typedFilters.Contains(x.Key, StringComparer.OrdinalIgnoreCase) && x.Value?.Errors.Count > 0))
             return BadRequest("Choose valid news filters and stock-source identifiers.");
         Hours = Math.Clamp(Hours, 1, 72);
@@ -79,16 +91,19 @@ public sealed class NewsModel(
         PageNumber = Math.Clamp(PageNumber, 1, Int32.MaxValue / PageSize);
         if (View is not ("timeline" or "ticker")) return BadRequest("Choose timeline or ticker view.");
         MobileNewsFeedResponse feed;
-        try { feed = await news.QueryAsync(new NewsHubQuery { Hours = Hours, Ticker = Ticker,
+        var query = new NewsHubQuery { Hours = Hours, Ticker = Ticker,
             GroupId = GroupId, Scope = Scope, StockSource = StockSource, Provider = Provider, Source = Source,
-            Classification = Classification, Sentiment = Sentiment, Search = Search,
-            LinkedOnly = LinkedOnly, Page = PageNumber, PageSize = PageSize }, User, cancellationToken); }
+            Classification = Classification, Category = Category, Sector = Sector, Sentiment = Sentiment, Search = Search,
+            LinkedOnly = LinkedOnly, StockLinkedOnly = StockLinkedOnly, Page = PageNumber, PageSize = PageSize };
+        try { feed = await news.QueryAsync(query, User, cancellationToken); }
         catch (InvalidOperationException error) { return BadRequest(error.Message); }
         catch (UnauthorizedAccessException) when (User.Identity?.IsAuthenticated != true)
         {
             return RedirectToPage("/Login", new { ReturnUrl = $"{Request.PathBase}{Request.Path}{Request.QueryString}" });
         }
         catch (UnauthorizedAccessException) { return Unauthorized(); }
+        Category = String.IsNullOrEmpty(query.Category) ? "all" : query.Category;
+        Sector = query.Sector;
         StockSource = NewsQueryService.StockSourceKey(new() { GroupId = GroupId, Scope = Scope, StockSource = StockSource });
         if (User.Identity?.IsAuthenticated == true) StockSources = await stockSources.CatalogAsync(cancellationToken);
         if (feed.Enabled && User.Identity?.IsAuthenticated == true && news.StockSelection is { } selection)

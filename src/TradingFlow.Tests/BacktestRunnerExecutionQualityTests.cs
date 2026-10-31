@@ -1,4 +1,4 @@
-﻿using TradingFlow.Backtesting;
+using TradingFlow.Backtesting;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
@@ -85,67 +85,6 @@ public class BacktestRunnerExecutionQualityTests
         Assert.Equal(5m, trade.EntryEstimatedParticipationPct);
         Assert.Equal(candidate.StrategyId, trade.StrategyId);
         Assert.Equal(candidate.CandidateId, trade.CandidateId);
-    }
-
-    [Fact]
-    public void ResolveSecretForTesting_LoadsLocalAlpacaSettings_WhenEnvironmentIsMissing()
-    {
-        var settingsPath = CreateTemporaryAlpacaSettings("local-test-key");
-        try
-        {
-            var key = BacktestRunner.ResolveSecretForTesting("Alpaca", "KeyId", settingsPath, null);
-
-            Assert.Equal("local-test-key", key);
-        }
-        finally
-        {
-            File.Delete(settingsPath);
-        }
-    }
-
-    [Fact]
-    public void ResolveSecretForTesting_PrefersDeploymentEnvironment_OverLocalSettings()
-    {
-        var settingsPath = CreateTemporaryAlpacaSettings("local-test-key");
-        try
-        {
-            var key = BacktestRunner.ResolveSecretForTesting(
-                "Alpaca",
-                "KeyId",
-                settingsPath,
-                "environment-test-key");
-
-            Assert.Equal("environment-test-key", key);
-        }
-        finally
-        {
-            File.Delete(settingsPath);
-        }
-    }
-
-    [Fact]
-    public void ResolveSecretForTesting_UsesEnvironment_WhenLocalSettingsAreUnavailable()
-    {
-        var key = BacktestRunner.ResolveSecretForTesting(
-            "Alpaca",
-            "KeyId",
-            settingsPath: null,
-            environmentValue: "environment-test-key");
-
-        Assert.Equal("environment-test-key", key);
-    }
-
-    private static string CreateTemporaryAlpacaSettings(string keyId)
-    {
-        var settingsPath = Path.Combine(Path.GetTempPath(), $"tradingflow-test-{Guid.NewGuid():N}.json");
-        File.WriteAllText(settingsPath, $$"""
-            {
-              "Alpaca": {
-                "KeyId": "{{keyId}}"
-              }
-            }
-            """);
-        return settingsPath;
     }
 
     [Fact]

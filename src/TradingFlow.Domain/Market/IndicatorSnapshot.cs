@@ -41,4 +41,5 @@ public sealed record IndicatorSnapshot(
     int RelativeVolumeMinimumSamples = 0,
     string? DataFeed = null,
     string? AdjustmentPolicy = null,
-    string? MarketEvidenceReliability = null);
+    string? MarketEvidenceReliability = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? Sma5 = null);

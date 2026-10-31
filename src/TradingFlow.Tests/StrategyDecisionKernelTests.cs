@@ -505,7 +505,8 @@ public sealed class StrategyDecisionKernelTests
             });
     }
 
-    private static StrategyDecisionRequest RebindStrategy(
+    /// <summary>Recomputes the exact immutable identity when a controlled fixture changes strategy rules.</summary>
+    internal static StrategyDecisionRequest RebindStrategy(
         StrategyDecisionRequest request,
         StrategyDefinition strategy)
     {

@@ -43,6 +43,8 @@
                     <Button Text="Show / hide filters" Clicked="OnToggleFilters" />
                     <Label x:Name="ProviderStatusLabel" IsVisible="False" FontSize="13" LineBreakMode="WordWrap" />
                     <VerticalStackLayout x:Name="FilterHost" IsVisible="False" />
+                    <Button x:Name="AssessmentSamplesButton" Text="Review archived news assessments" Clicked="OnAssessmentSamplesClicked" IsVisible="False" />
+                    <VerticalStackLayout x:Name="AssessmentSamplesHost" IsVisible="False" Spacing="8" />
                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
                         <Button x:Name="PreviousButton" Text="Previous" Clicked="OnPreviousPage" IsEnabled="False" />
                         <Label x:Name="PageLabel" Grid.Column="1" Text="Page 1" VerticalTextAlignment="Center" HorizontalTextAlignment="Center" />

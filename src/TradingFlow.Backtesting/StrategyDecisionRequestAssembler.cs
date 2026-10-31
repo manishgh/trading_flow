@@ -18,6 +18,7 @@ namespace TradingFlow.Backtesting;
 /// </summary>
 public static class StrategyDecisionRequestAssembler
 {
+    // Freeze completed adapter evidence and preserve the runtime selection mode for isolated Research diagnostics.
     public static StrategyDecisionRequest Create(
         AuthorizedRuntimeStrategy runtimeStrategy,
         string symbol,
@@ -34,7 +35,13 @@ public static class StrategyDecisionRequestAssembler
         DateTimeOffset discoveryWindowStartUtc,
         DateTimeOffset discoveryWindowEndUtc,
         int requiredWarmupBars,
-        Guid runId)
+        Guid runId,
+        IReadOnlyList<OhlcvBar>? referenceBars = null,
+        IReadOnlyList<DateOnly>? expectedReferenceSessions = null,
+        DrawdownDecisionContext? drawdownContext = null,
+        HistoricalNewsPresenceContext? historicalNewsPresence = null,
+        PreviousSessionBreakoutContext? previousSessionContext = null,
+        IntradayZoneDecisionContext? zoneContext = null)
     {
         ArgumentNullException.ThrowIfNull(runtimeStrategy);
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
@@ -43,6 +50,10 @@ public static class StrategyDecisionRequestAssembler
         {
             throw new ArgumentException("Candidate identity requires its owning run ID.", nameof(runId));
         }
+        requiredWarmupBars = Math.Max(requiredWarmupBars, runtimeStrategy.Definition.EntryRules.TechnicalFactor?.RequiredCompletedBars ?? 0);
+        // ORB needs its three completed five-minute range bars; its twenty-session volume qualification remains in the shared evaluator.
+        if (runtimeStrategy.Definition.EntryRules.OpeningRangeBreakout is not null)
+            requiredWarmupBars = Math.Max(requiredWarmupBars, 3);
         if (requiredWarmupBars < 2)
         {
             throw new ArgumentOutOfRangeException(nameof(requiredWarmupBars));
@@ -75,6 +86,7 @@ public static class StrategyDecisionRequestAssembler
                 .Where(snapshot => snapshot.Timestamp.Add(duration) <= asOfUtc)
                 .OrderBy(snapshot => snapshot.Timestamp)
                 .ToImmutableArray();
+            RequireCausalSnapshotAlignment(symbol, timeframe, sourceBars, completedBars, completedSnapshots, duration, asOfUtc);
             bars[timeframe] = completedBars;
             snapshots[timeframe] = completedSnapshots;
             counts[timeframe] = Math.Min(completedBars.Length, completedSnapshots.Length);
@@ -136,16 +148,62 @@ public static class StrategyDecisionRequestAssembler
             catalysts.Select(ToCatalystSnapshot)
                 .OfType<StrategyCatalystSnapshot>()
                 .ToImmutableArray(),
-            asOfUtc);
+            asOfUtc,
+            runtimeStrategy.Definition.EntryRules.TechnicalFactor?.Metric == TechnicalFactorRules.RelativeRoc
+                ? CompletedReferenceBars(referenceBars ?? Array.Empty<OhlcvBar>(), asOfUtc) : null,
+            runtimeStrategy.Definition.EntryRules.TechnicalFactor?.Metric == TechnicalFactorRules.RelativeRoc
+                ? expectedReferenceSessions?.ToImmutableArray() : null,
+            drawdownContext,
+            historicalNewsPresence,
+            runtimeStrategy.SelectionMode,
+            previousSessionContext,
+            zoneContext);
     }
+
+    // A snapshot can depend on an earlier unavailable bar; timestamp filtering cannot reconstruct those indicator dependencies.
+    private static void RequireCausalSnapshotAlignment(string symbol, string timeframe, IReadOnlyList<OhlcvBar> sourceBars,
+        ImmutableArray<OhlcvBar> completedBars, ImmutableArray<IndicatorSnapshot> completedSnapshots,
+        TimeSpan duration, DateTimeOffset asOfUtc)
+    {
+        var lastSnapshot = completedSnapshots.LastOrDefault()?.Timestamp;
+        var hiddenDependency = sourceBars.FirstOrDefault(bar => bar.Timestamp.Add(duration) <= asOfUtc &&
+            bar.KnownAtUtc is { } receipt && receipt > asOfUtc && lastSnapshot is { } latest && bar.Timestamp <= latest);
+        if (hiddenDependency is null && completedBars.Length == completedSnapshots.Length &&
+            completedBars.Zip(completedSnapshots).All(pair => pair.First.Timestamp == pair.Second.Timestamp)) return;
+        var detail = hiddenDependency is null
+            ? "completed bars and indicator snapshots do not contain the same ordered source observations"
+            : $"source {hiddenDependency.Timestamp:O} is not known until {hiddenDependency.KnownAtUtc:O}, so its dependent indicator snapshots cannot be used";
+        throw new InvalidOperationException($"point_in_time_indicator_snapshots_unavailable: {symbol} {timeframe} at {asOfUtc:O}: {detail}.");
+    }
+
+    public static async ValueTask<DrawdownDecisionContext?> ResolveDrawdownContextAsync(
+        IStrategyDecisionContextProvider? provider, string symbol, DateTimeOffset asOfUtc,
+        IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> barsByTimeframe, string mode,
+        CancellationToken cancellationToken = default)
+    {
+        if (provider is null) return null;
+        var daily = barsByTimeframe.TryGetValue("1d", out var source) ? source : Array.Empty<OhlcvBar>();
+        var completed = daily.Where(bar => bar.Timestamp.AddDays(1) <= asOfUtc &&
+            (bar.KnownAtUtc is null || bar.KnownAtUtc <= asOfUtc)).OrderBy(bar => bar.Timestamp).ToImmutableArray();
+        return await provider.ResolveAsync(new(symbol, RequireUtc(asOfUtc, nameof(asOfUtc)), completed, mode), cancellationToken);
+    }
+
+    private static ImmutableArray<OhlcvBar> CompletedReferenceBars(IReadOnlyList<OhlcvBar> source, DateTimeOffset asOfUtc) =>
+        source.Where(bar => bar.Timestamp.AddDays(1) <= asOfUtc && (bar.KnownAtUtc is null || bar.KnownAtUtc <= asOfUtc))
+            .GroupBy(bar => bar.Timestamp).OrderBy(group => group.Key).Select(group =>
+            {
+                var latestKnown = group.Max(bar => bar.KnownAtUtc ?? bar.Timestamp.AddDays(1));
+                var versions = group.Where(bar => (bar.KnownAtUtc ?? bar.Timestamp.AddDays(1)) == latestKnown).Distinct().ToArray();
+                if (versions.Length != 1) throw new InvalidDataException("Benchmark revision order is ambiguous.");
+                return versions[0];
+            }).ToImmutableArray();
 
     public static AuthorizedRuntimeStrategy CreateBacktestRuntimeStrategy(
         StrategyDefinition strategy,
         StrategyArtifactCatalog strategyArtifacts)
     {
         var exact = strategyArtifacts.GetSnapshot().ExecutableArtifacts
-            .Where(artifact => artifact.Identity.StrategyId.Equals(strategy.StrategyId, StringComparison.Ordinal))
-            .FirstOrDefault(artifact => artifact.ResolvedStrategy == strategy);
+            .SingleOrDefault(artifact => artifact.ResolvedStrategy == strategy);
         var admissionProfile = exact?.AdmissionProfile ?? StrategyAdmissionProfiles.DeterministicV1;
         var semanticVersion = exact?.Identity.SemanticVersion ?? "0.0.0-backtest";
         var identity = exact?.Identity ?? new StrategyArtifactIdentity(
@@ -263,11 +321,17 @@ public static class StrategyDecisionRequestAssembler
         IReadOnlyList<IndicatorSnapshot> executionSnapshots)
     {
         var duration = TimeframeParser.Parse(orderPlan.ExecutionTimeframe);
-        var triggerBarTimestamp = orderPlan.TriggeredAtUtc.Subtract(duration);
-        var executionSnapshot = executionSnapshots.LastOrDefault(snapshot =>
-            snapshot.Timestamp == triggerBarTimestamp)
-            ?? throw new InvalidOperationException(
-                $"Triggered execution evidence {orderPlan.ExecutionTimeframe} at {triggerBarTimestamp:O} is unavailable.");
+        // The actionable decision can be later than its completed stop context.
+        // Use the planner's context instead of inventing a bar from trigger time.
+        var index = orderPlan.StopContextIndex;
+        if (index < 0 || index >= executionSnapshots.Count)
+            throw new InvalidOperationException("Triggered execution context is unavailable.");
+        var executionSnapshot = executionSnapshots[index];
+        if (executionSnapshot.Timestamp != orderPlan.StopContextTimestampUtc ||
+            !executionSnapshot.Timeframe.Equals(orderPlan.ExecutionTimeframe, StringComparison.OrdinalIgnoreCase) ||
+            executionSnapshot.Timestamp.Add(duration) > orderPlan.TriggeredAtUtc ||
+            executionSnapshot.CurrentPrice != orderPlan.TriggerReferencePrice)
+            throw new InvalidOperationException("Triggered execution context is mismatched or not completed before the decision.");
         return signal with
         {
             Timestamp = executionSnapshot.Timestamp,
@@ -338,7 +402,8 @@ public static class StrategyDecisionRequestAssembler
             catalyst);
     }
 
-    private static string[] ResolveRequiredTimeframes(StrategyDefinition strategy)
+    /// <summary>Returns exactly the setup, execution and enabled confluence timeframes consumed by the shared decision kernel.</summary>
+    public static string[] ResolveRequiredTimeframes(StrategyDefinition strategy)
     {
         var timeframes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {

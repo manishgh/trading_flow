@@ -1,5 +1,4 @@
 using System.Threading.Channels;
-using System.Text.Json.Serialization;
 using TradingFlow.Application.Preparation;
 using TradingFlow.Contracts.Preparation;
 using TradingFlow.Domain.Market;
@@ -12,8 +11,6 @@ public sealed record DailyObservationResult(
     string State,
     string Detail,
     IndicatorSnapshot? Snapshot = null,
-    WishlistSwingWatchEvaluation? Evaluation = null,
-    [property: JsonIgnore] WishlistMarketSnapshot? Observation = null,
     DateTimeOffset? ObservedAtUtc = null,
     decimal? CompletedSessionGapPercent = null);
 
@@ -40,7 +37,6 @@ public sealed class DailyObservationService : IDailyObservationService, IDisposa
     private static readonly TimeZoneInfo Exchange = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
     private readonly Lazy<IMarketDataProvider> provider;
     private readonly IPreparationCalendar calendar;
-    private readonly WishlistSwingWatchEvaluator evaluator;
     private readonly TimeProvider clock;
     private readonly ILogger<DailyObservationService> logger;
     private readonly DailyObservationOptions options;
@@ -51,13 +47,13 @@ public sealed class DailyObservationService : IDailyObservationService, IDisposa
     private readonly Task[] workers;
     private bool disposed;
 
+    /// <summary>Starts bounded technical-history workers; no independent strategy thresholds are evaluated here.</summary>
     public DailyObservationService(Lazy<IMarketDataProvider> provider, IPreparationCalendar calendar,
-        WishlistSwingWatchEvaluator evaluator, TimeProvider clock, ILogger<DailyObservationService> logger,
+        TimeProvider clock, ILogger<DailyObservationService> logger,
         DailyObservationOptions? options = null)
     {
         this.provider = provider;
         this.calendar = calendar;
-        this.evaluator = evaluator;
         this.clock = clock;
         this.logger = logger;
         this.options = options ?? new();
@@ -156,6 +152,7 @@ public sealed class DailyObservationService : IDailyObservationService, IDisposa
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
     }
 
+    /// <summary>Loads authoritative completed daily indicators only; selected strategy checks belong to the shared decision kernel.</summary>
     private async Task<(DailyObservationResult Result, DateTimeOffset? NextClose)> LoadAsync(string symbol, CancellationToken token)
     {
         var cutoff = clock.GetUtcNow();
@@ -205,9 +202,8 @@ public sealed class DailyObservationService : IDailyObservationService, IDisposa
         if (bars.Length < RequiredSessions)
             return (new("insufficient", $"{bars.Length}/{RequiredSessions} real completed daily sessions; observation is warming. No pre-listing history is synthesized.",
                 current, ObservedAtUtc: observedAt, CompletedSessionGapPercent: gap), nextClose);
-        var observation = new WishlistMarketSnapshot(symbol, current, snapshots[^2], bars.Take(bars.Length - 1).TakeLast(20).Max(x => x.High));
-        return (new("ready", $"Completed SIP/all daily evidence through {completed[^1].Date:yyyy-MM-dd}; observational swing watch only.",
-            current, evaluator.Evaluate(observation), observation, observedAt, gap), nextClose);
+        return (new("ready", $"Completed SIP/all daily indicators through {completed[^1].Date:yyyy-MM-dd}. Select a strategy to evaluate its conditions.",
+            current, observedAt, gap), nextClose);
     }
 
     private static Dictionary<DateOnly, PreparationSession> ValidateCalendar(PreparationCalendar calendar,

@@ -19,14 +19,15 @@ public sealed class UniverseSourceResolver(
 {
     private static readonly TimeSpan SourceLifetime = TimeSpan.FromMinutes(3);
 
+    /// <summary>Reads the same operator source for either research horizon without changing its membership.</summary>
     public async Task<UniverseSourceCapture> ResolveAsync(
         UniverseSourceSelectionRequest source,
         string horizon,
         CancellationToken cancellationToken = default)
     {
-        if (!horizon.Equals("swing", StringComparison.OrdinalIgnoreCase))
+        if (horizon.ToLowerInvariant() is not ("swing" or "day"))
         {
-            throw new InvalidOperationException("Only swing universe resolution is supported.");
+            throw new InvalidOperationException("Only day and swing universe resolution is supported.");
         }
 
         return source.SourceKind.Trim().ToLowerInvariant() switch
@@ -102,6 +103,17 @@ public sealed class UniverseSourceResolver(
 
 public sealed class StrategyIdentityResolver(ConfigCatalogService catalog) : IStrategyIdentityResolver
 {
+    /// <summary>Requires an exact research catalog identity without opening the daily-only operational path.</summary>
+    public async Task RequireBacktestStrategyAsync(StrategyReference strategy, CancellationToken cancellationToken = default)
+    {
+        var options = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest, cancellationToken);
+        if (!options.Any(item => item.Identity.StrategyId == strategy.StrategyId &&
+            item.Identity.SemanticVersion == strategy.SemanticVersion &&
+            item.Identity.ContentSha256.Equals(strategy.ContentSha256, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Strategy '{strategy.StrategyId}@{strategy.SemanticVersion}' is not authorized with the supplied content hash.");
+    }
+
+    /// <summary>Checks the unchanged daily-primary operational selection and authorization restrictions.</summary>
     public async Task RequireSwingStrategyAsync(
         StrategyReference strategy,
         string mode,

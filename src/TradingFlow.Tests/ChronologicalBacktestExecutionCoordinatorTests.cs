@@ -610,6 +610,80 @@ public sealed class ChronologicalBacktestExecutionCoordinatorTests
         PreventOverlappingTickerPositions: false,
         MaxBarParticipationPct: maxParticipationPct);
 
+    [Theory]
+    [InlineData("long")]
+    [InlineData("short")]
+    public void ScheduledTerminalOpenIgnoresItsLaterExtremaAndVolume(string direction)
+    {
+        BacktestTrade Execute(decimal high,decimal low,decimal close,decimal volume)
+        {
+            var coordinator=new ChronologicalBacktestExecutionCoordinator(new PortfolioConfig(10000,1,25,4,1,1,1,true),
+                [Bar(0,10,1000),RangeBar(5,11,high,low,close,volume)]);
+            var candidate=Candidate("terminal",0,5) with {Direction=direction,ExitReason="scheduled_study_exit",ExitPrice=11,
+                StopLossPrice=direction=="long"?9:11,TakeProfitPrice=direction=="long"?12:8};
+            Assert.True(coordinator.TrySchedule(new ChronologicalExecutionPlan(candidate,Strategy() with {Direction=direction},10),out _));
+            coordinator.Complete();Assert.Empty(coordinator.Failures);return Assert.Single(coordinator.CompletedTrades);
+        }
+        var plain=Execute(11,11,11,1000);var changed=Execute(1000,.01m,999,0);
+        Assert.Equal(plain.ExitPrice,changed.ExitPrice);Assert.Equal(plain.NetProfit,changed.NetProfit);Assert.Equal(plain.ShareQuantity,changed.ShareQuantity);
+        Assert.Equal(11,changed.ExitPrice);
+    }
+
+    [Fact]
+    public void FilledTargetCannotLeaveSiblingStopToConsumeALaterPosition()
+    {
+        var simulator=new RecordingExecutionSimulator();var evidence=new CollectingExecutionSink();
+        var coordinator=new ChronologicalBacktestExecutionCoordinator(Portfolio(maxParticipationPct:100),
+            [Bar(0,10,1000),RangeBar(5,10,12.5m,9.5m,12),RangeBar(10,10,10.5m,8.5m,10),
+             RangeBar(15,10,10.5m,8.5m,10),Bar(20,10,1000)],simulator,evidence);
+        Assert.True(coordinator.TrySchedule(new ChronologicalExecutionPlan(Candidate("first",0,5),Strategy(),10),out _));
+        coordinator.AdvanceThrough(Start.AddMinutes(10));Assert.Single(coordinator.CompletedTrades);
+        var next=Candidate("second",10,20) with {StopLossPrice=7,TakeProfitPrice=20,StopDistance=3,ExitReason="time_exit",ExitPrice=10};
+        Assert.True(coordinator.TrySchedule(new ChronologicalExecutionPlan(next,Strategy(),10),out _));coordinator.Complete();
+        Assert.Empty(coordinator.Failures);Assert.Equal(2,coordinator.CompletedTrades.Count);
+        Assert.Equal("time_exit",coordinator.CompletedTrades[1].ExitReason);
+        Assert.Contains(evidence.Events,item=>item.Timestamp==Start.AddMinutes(10)&&item.Message.Contains("stop-first-")&&item.Message.Contains("oco_sibling_filled"));
+    }
+
+    [Fact]
+    public void FixedCutoff_PreservesKnownOpenQuantityAndWorkingProtectionWithoutSale()
+    {
+        var coordinator = new ChronologicalBacktestExecutionCoordinator(Portfolio(maxParticipationPct:100),
+            [Bar(0,10,1000),Bar(5,10.5m,1000)]);
+        var candidate = Candidate("open",0,5) with { ExitTimestamp=null,ExitPrice=null,ExitReason="open_at_study_end" };
+        Assert.True(coordinator.TrySchedule(new(candidate,Strategy(),10),out _));
+        coordinator.Complete(Start.AddMinutes(10));
+        Assert.Empty(coordinator.Failures);Assert.Empty(coordinator.CompletedTrades);
+        var state=coordinator.Snapshot(Start.AddMinutes(10));
+        Assert.Equal(10,Assert.Single(state.OpenPositions).SignedQuantity);
+        Assert.Single(state.Fills);Assert.True(state.Fills[0].IsEntry);
+        Assert.NotEmpty(state.PendingOrders);Assert.Equal(1,state.AdmittedOrderCount);
+    }
+
+    [Fact]
+    public void FixedCutoff_PreservesPendingExitDecisionWithoutInventingExecution()
+    {
+        var coordinator = new ChronologicalBacktestExecutionCoordinator(Portfolio(maxParticipationPct:100),[Bar(0,10,1000)]);
+        var candidate = Candidate("pending",0,5) with { ExitTimestamp=null,ExitPrice=null,ExitReason="open_at_study_end",
+            PendingExitDecision=new(Start.AddMinutes(5),"technical_exit_above_sma5") };
+        Assert.True(coordinator.TrySchedule(new(candidate,Strategy(),10),out _));
+        coordinator.Complete(Start.AddMinutes(5));
+        var state=coordinator.Snapshot(Start.AddMinutes(5));
+        Assert.Single(state.PendingExits);Assert.Single(state.Fills);Assert.Empty(coordinator.CompletedTrades);
+    }
+
+    [Fact]
+    public void FixedCutoff_DoesNotPublishAnExitIntentionKnownLater()
+    {
+        var coordinator=new ChronologicalBacktestExecutionCoordinator(Portfolio(maxParticipationPct:100),[Bar(0,10,1000)]);
+        var candidate=Candidate("future-exit",0,5) with {ExitTimestamp=null,ExitPrice=null,ExitReason="open_at_study_end",
+            PendingExitDecision=new(Start.AddMinutes(6),"technical_exit_above_sma5")};
+        Assert.True(coordinator.TrySchedule(new(candidate,Strategy(),10),out _));
+        coordinator.Complete(Start.AddMinutes(5));
+        var state=coordinator.Snapshot(Start.AddMinutes(5));
+        Assert.Empty(state.PendingExits);Assert.Single(state.OpenPositions);Assert.Single(state.Fills);
+    }
+
     private static BacktestCandidateTrade Candidate(
         string identity,
         int entryMinute,

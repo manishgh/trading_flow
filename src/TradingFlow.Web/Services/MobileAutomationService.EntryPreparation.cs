@@ -375,6 +375,7 @@ public sealed partial class MobileAutomationService
                 $"Unable to build an order risk plan for {ticker}.");
     }
 
+    // Reject unsupported guardian policies before sizing an operator-requested entry.
     private static FinalizedOrder PrepareOperatorDirectOrder(
         BacktestRunConfig runConfig,
         StrategyDefinition guardianStrategy,
@@ -382,6 +383,7 @@ public sealed partial class MobileAutomationService
         decimal accountEquity,
         IndicatorSnapshot snapshot)
     {
+        TechnicalExecutionEngine.RequireSupportedExitPolicy(guardianStrategy);
         var atr = snapshot.Atr is > 0m
             ? snapshot.Atr.Value
             : throw new InvalidOperationException("Operator-direct entry requires a positive ATR.");

@@ -69,20 +69,15 @@ public sealed class BacktestSimulationCharacterizationTests
         };
         var snapshots = bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray();
         var sink = new CollectingExecutionSink();
-        var result = InvokeCreateCandidate(
-            strategy,
-            signal,
-            BuildOrderPlan(strategy, "long", 98m, 2m),
-            bars,
-            snapshots,
-            sink);
-
-        Assert.Null(result);
+        var candidate = Assert.IsType<(BacktestCandidateTrade Candidate, int ExitIndex)>(InvokeCreateCandidate(
+            strategy, signal, BuildOrderPlan(strategy, "long", 98m, 2m), bars, snapshots, sink));
+        Assert.Null(candidate.Candidate.ExitTimestamp);
+        Assert.Null(candidate.Candidate.ExitPrice);
         Assert.DoesNotContain(sink.Events, item => item.State == ExecutionState.OrderFilled);
     }
 
     [Fact]
-    public void ShortCandidateEndOfData_EmitsMatchingFillAndCloseLifecycle()
+    public void ShortCandidateEndOfData_CannotFabricateAClosedTrade()
     {
         var baseStrategy = AtrStopStrategy();
         var strategy = baseStrategy with
@@ -99,20 +94,56 @@ public sealed class BacktestSimulationCharacterizationTests
         };
         var snapshots = bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray();
         var sink = new CollectingExecutionSink();
-        var result = InvokeCreateCandidate(
-            strategy,
-            signal,
-            BuildOrderPlan(strategy, "short", 102m, 2m),
-            bars,
-            snapshots,
-            sink);
-
-        Assert.NotNull(result);
-        Assert.Single(sink.Events, item => item.State == ExecutionState.OrderFilled);
-        var closed = Assert.Single(sink.Events, item => item.State == ExecutionState.PositionClosed);
-        Assert.Contains("end_of_data", closed.Message, StringComparison.Ordinal);
+        var candidate=Assert.IsType<(BacktestCandidateTrade Candidate,int ExitIndex)>(InvokeCreateCandidate(
+            strategy,signal,BuildOrderPlan(strategy,"short",102m,2m),bars,snapshots,sink));
+        Assert.Null(candidate.Candidate.ExitTimestamp);
+        Assert.Null(candidate.Candidate.ExitPrice);
+        Assert.DoesNotContain(sink.Events,item=>item.State==ExecutionState.PositionClosed);
         Assert.All(sink.Events, item => Assert.Equal("candidate-lifecycle", item.ReferenceId));
         Assert.Equal(sink.Events.OrderBy(item => item.Timestamp), sink.Events);
+    }
+
+    [Theory]
+    [InlineData("long")]
+    [InlineData("short")]
+    public void CompletedBarTimeoutUsesLaterOpen_ForBothDirections(string direction)
+    {
+        var original=AtrStopStrategy();var strategy=original with {Direction=direction,
+            EntryRules=original.EntryRules with {EnableShort=direction=="short"},
+            ExitRules=original.ExitRules with {MaxHoldBars=1}};
+        var bars=new[]{Bar("2026-06-01T13:30:00Z",100,101,99,100),Bar("2026-06-01T13:35:00Z",100,101,99,100),
+            Bar("2026-06-01T13:40:00Z",100,101,99,100),Bar("2026-06-01T13:45:00Z",100.5m,101,99,100)};
+        var snapshots=bars.Select(bar=>Snapshot(bar.Timestamp.ToString("O"))).ToArray();
+        var sink=new CollectingExecutionSink();
+        var result=InvokeCreateCandidate(strategy,LongSignal(),BuildOrderPlan(strategy,direction,direction=="long"?98m:102m,2m),bars,snapshots,sink);
+        Assert.NotNull(result);
+        var closed=Assert.Single(sink.Events,item=>item.State==ExecutionState.PositionClosed);
+        Assert.Contains("max_hold_bars",closed.Message);Assert.Equal(bars[3].Timestamp,closed.Timestamp);
+        Assert.DoesNotContain(sink.Events,item=>item.State==ExecutionState.PositionClosed&&item.Timestamp==bars[2].Timestamp);
+    }
+
+    [Theory]
+    [InlineData("long", "2026-06-01T13:50:00Z", "confirmed_vwap_failure")]
+    [InlineData("short", "2026-06-01T13:50:00Z", "confirmed_vwap_reclaim")]
+    [InlineData("long", "2026-06-01T14:01:00Z", null)]
+    [InlineData("short", "2026-06-01T14:01:00Z", null)]
+    public void ConfirmedVwapExitWithoutLaterSlice_RetainsOnlyIntentionKnownByCutoff(string direction,string knownAt,string? reason)
+    {
+        var original=AtrStopStrategy();
+        var strategy=original with {Direction=direction,Timeframe="5m",Session=new SessionRules("America/New_York",0,0,0),
+            Execution=original.Execution with {Timeframe="5m"},
+            EntryRules=original.EntryRules with {EnableShort=direction=="short"},
+            ExitRules=original.ExitRules with {EnableAtrTrailingStop=false,EnableConfirmedVwapExit=true,
+                ConfirmedVwapExitBars=1,MinHoldBarsBeforeTechnicalExit=0}};
+        var bars=new[]{Bar("2026-06-01T13:30:00Z",100,101,99,100),Bar("2026-06-01T13:35:00Z",100,101,99,100),
+            Bar("2026-06-01T13:40:00Z",100,101,99,100) with {KnownAtUtc=DateTimeOffset.Parse(knownAt)}};
+        var snapshots=bars.Select(bar=>Snapshot(bar.Timestamp.ToString("O")) with
+            {CurrentPrice=100,Vwap=direction=="long"?101:99,Atr=1}).ToArray();
+        var candidate=Assert.IsType<(BacktestCandidateTrade Candidate,int ExitIndex)>(InvokeCreateCandidate(strategy,LongSignal(),
+            BuildOrderPlan(strategy,direction,direction=="long"?98:102,2),bars,snapshots,new CollectingExecutionSink())).Candidate;
+        Assert.Null(candidate.ExitTimestamp);Assert.Null(candidate.ExitPrice);
+        Assert.Equal(reason,candidate.PendingExitDecision?.Reason);
+        if(reason is not null)Assert.Equal(DateTimeOffset.Parse(knownAt),candidate.PendingExitDecision!.KnownAtUtc);
     }
 
     private static object? InvokeCreateCandidate(
@@ -164,7 +195,8 @@ public sealed class BacktestSimulationCharacterizationTests
             strategy.ExitRules.ProfitTargetMode,
             null,
             strategy.Execution.SlippageBps,
-            observedAt.AddMinutes(5));
+            observedAt.AddMinutes(5),
+            observedAt.AddMinutes(-5));
     }
 
     private static BacktestRunner CreateRunner()
@@ -266,7 +298,8 @@ public sealed class BacktestSimulationCharacterizationTests
             strategy.ExitRules.ProfitTargetMode,
             null,
             strategy.Execution.SlippageBps,
-            observedAt.AddMinutes(5));
+            observedAt.AddMinutes(5),
+            observedAt.AddMinutes(-5));
 
         var raw = method!.Invoke(null, [canonicalOrderPlan, EntryPrice, stopDistance]);
         Assert.NotNull(raw);

@@ -46,12 +46,20 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
         var lists = await FollowedListsAsync(ct);
         var saved = await presets.ListAsync(ScreenerScope.Swing, ct);
         return new[] { new DeskSource("all", "All wishlist stocks", "", "All active stocks across your wishlists, without duplicates.") }
-            .Concat(lists.Select(x => new DeskSource("wishlist:" + x.Id, x.Name, "My wishlists", x.IsObserved ? "Background daily wishlist alerts enabled" : "Market monitoring; background wishlist alerts off")))
+            .Concat(lists.Select(x => new DeskSource("wishlist:" + x.Id, x.Name, "My wishlists", "Wishlist stocks. Select a strategy to collect and evaluate its conditions.")))
             .Concat(BuiltIns)
             .Concat(TradingFlow.Finviz.FinvizSignalCatalog.All.Select(x => new DeskSource("signal:" + x.Code, x.Label, "Finviz lists", "Finviz discovery only; normal strategy admission is still required.", x.Query)))
             .Concat(saved.Select(x => new DeskSource("saved:" + x.Id, x.Name, "Finviz lists", "Locally saved/imported filters; not automatically synced with Finviz.", x.FilterQuery)))
             .ToArray();
     }
+
+    /// <summary>Offers real operator wishlists and saved Finviz filters to both research clients, excluding diagnostic and built-in screens.</summary>
+    public async Task<IReadOnlyList<TradingFlow.Contracts.V1.BacktestStockSource>> BacktestChoicesAsync(CancellationToken token) =>
+        (await CatalogAsync(token)).Where(source => source.Key.StartsWith("wishlist:", StringComparison.Ordinal) ||
+                source.Key.StartsWith("saved:", StringComparison.Ordinal))
+            .Select(source => source.Key.StartsWith("wishlist:", StringComparison.Ordinal)
+                ? new TradingFlow.Contracts.V1.BacktestStockSource(source.Key, source.Name, "wishlist", Guid.Parse(source.Key[9..]), null)
+                : new TradingFlow.Contracts.V1.BacktestStockSource(source.Key, source.Name, "finviz", null, source.Query)).ToArray();
 
     public static IReadOnlyList<DeskMembership> Merge(IEnumerable<Wishlist> lists) => lists
         .SelectMany(list => list.Items.Where(item => item.Active && !String.IsNullOrWhiteSpace(item.Ticker))

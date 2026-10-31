@@ -181,7 +181,16 @@ public sealed record EntryRules(
     decimal VcpMaximumVolumeRatioToPreviousContraction = 1m,
     int VcpMinimumVolumeReferenceBars = 1,
     decimal VcpBreakoutBufferPct = 0m,
-    string PortfolioRankMode = "none");
+    string PortfolioRankMode = "none",
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int Sma200RisingLookbackBars = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinBreakoutVolumeVs50DayAverage = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] TechnicalFactorRules? TechnicalFactor = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireOrderedReclaimPullback = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DrawdownQualificationRules? DrawdownQualification = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? HistoricalNewsDiagnostic = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] PreviousSessionBreakoutRules? PreviousSessionBreakout = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] OpeningRangeBreakoutRules? OpeningRangeBreakout = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayZoneRules? IntradayZone = null);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,
@@ -219,7 +228,9 @@ public sealed record ExitRules(
     // preserves the existing single-close behaviour for every other strategy.
     bool RequireConfirmedEma20Exit = false,
     int? MaxHoldBars = null,
-    decimal? ExitOnRsi2Above = null);
+    decimal? ExitOnRsi2Above = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool ExitOnCloseAboveSma5 = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ContinuationProtectionRules? ContinuationProtection = null);
 
 public sealed record ConfluenceRules(
     bool Enabled,

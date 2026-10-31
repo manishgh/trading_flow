@@ -1,6 +1,7 @@
 import {expect,test} from '@playwright/test';
 import {signIn} from './sign-in.js';
 import http from 'node:http';
+import {randomUUID} from 'node:crypto';
 const id='11111111-1111-1111-1111-111111111111';
 const sources=[{key:'all',name:'All wishlist stocks',group:'',description:'Across your wishlists'},{key:'wishlist:'+id,name:'Core',group:'My wishlists',description:'Observed'},{key:'swing:trend',name:'Established trends',group:'Finviz lists',description:'Discovery only'},{key:'saved:one',name:'My Elite momentum',group:'Finviz lists',description:'Locally imported'}];
 function row(symbol,{held=false,stale=false,followed=true}={}){return {membership:{symbol,name:symbol==='AAPL'?'Apple Inc.':symbol,wishlists:followed?[{id,name:'Core',observed:true}]:[]},quote:{midPrice:200,bidPrice:199.95,askPrice:200.05,timestamp:new Date(Date.now()-(stale?3600000:2000)).toISOString()},quoteFreshness:stale?'stale':'current',technical:{rsi:58.2,ema20:198,ema50:190,ema200:180,atr:4.2,relativeVolume:1.3,timeframe:'1d',timestamp:'2026-09-25T20:00:00Z',dataFeed:'sip'},observation:{state:'ready',detail:'260 completed daily sessions',evaluation:{shouldAlert:false,reason:'Participation below watch threshold',sourceBarTimestampUtc:'2026-09-25T20:00:00Z'}},holding:held?{symbol,quantity:10,averageEntry:180,costBasis:1800,marketValue:2000,unrealizedPl:200}:null,holdingsKnown:true,news:[{headline:symbol+' company update',url:'https://example.org/news/'+symbol,provider:'Fixture news',symbols:[symbol],publishedAtUtc:new Date().toISOString()}]};}
@@ -21,7 +22,7 @@ for(const width of [412,1280,1600])test('stock desk is readable and focused at '
  expect(await page.locator('#watch-source optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My wishlists','Finviz lists']);
  await expect(page.locator('#watch-rows tr[data-symbol=MSFT]')).toContainText('Stale');
  await page.locator('#watch-rows button').filter({hasText:'AAPL'}).click();await expect(page.locator('#watch-symbol')).toHaveText('AAPL');
- await expect(page.locator('#watch-observation')).toHaveText('Not ready');await expect(page.locator('#watch-observation-detail')).toContainText('Participation below watch threshold');await expect(page.locator('#watch-monitoring')).toContainText('Wishlist alerts enabled');
+ await expect(page.locator('#watch-observation')).toHaveText('Select a strategy');await expect(page.locator('#watch-observation-detail')).toContainText('Select a strategy');await expect(page.locator('#watch-strategy-checks')).toBeEmpty();
  await expect(page.locator('#watch-quantity')).toHaveText('10');await expect(page.locator('#watch-pl')).toContainText('200.00');
  await expect(page.locator('#watch-buy')).toHaveAttribute('href',new RegExp('wishlistId='+id));
  expect((await page.locator('#watch-buy').boundingBox()).height).toBeLessThan(80);
@@ -35,6 +36,35 @@ test('source switch discards old rows and screener-only stocks require following
  await page.locator('#watch-rows button').click();await expect(page.locator('#watch-buy')).toBeHidden();await expect(page.locator('#watch-sell')).toBeHidden();await expect(page.locator('#watch-follow')).toBeVisible();
  await page.locator('#watch-search').fill('does-not-exist');await expect(page.locator('#watch-empty')).toContainText('No matching stocks');
  await page.locator('#watch-search').clear();await expect(page.locator('#watch-rows tr')).toHaveCount(1);
+});
+
+test('uncertain strategy response retries the original key before an explicit completed refresh',async({page})=>{
+ await fixture(page);await signIn(page);
+ const strategy={strategyId:'fixture.selected',semanticVersion:'1.0.0',contentSha256:'a'.repeat(64)};
+ const keys=[],accepted=new Map();
+ await page.route('**/api/v1/desk/strategy-choices',route=>route.fulfill({json:[{candidateRunId:null,strategy,name:'Fixture selected strategy',mode:'current',runStartedAtUtc:null}]}));
+ await page.route(/\/api\/v1\/desk\/strategy-assessments(?:\/.*)?$/,async route=>{
+  const request=route.request();
+  if(request.method()==='POST'&&!request.url().endsWith('/cancel')){
+   const body=request.postDataJSON();keys.push(body.idempotencyKey);
+   if(!accepted.has(body.idempotencyKey))accepted.set(body.idempotencyKey,{contractVersion:'1.0',jobId:randomUUID(),status:'queued',detail:'Fixture queued',strategy,profileSha256:'b'.repeat(64),createdAtUtc:new Date().toISOString(),startedAtUtc:null,finishedAtUtc:null,result:null});
+   if(keys.length===1)return route.abort('failed');
+   return route.fulfill({json:accepted.get(body.idempotencyKey)});
+  }
+  const job=[...accepted.values()].find(job=>request.url().includes(job.jobId));
+  if(!job)return route.fulfill({status:404,json:{message:'Unknown fixture job'}});
+  job.status='completed';job.detail='Fixture complete';job.finishedAtUtc=new Date().toISOString();
+  job.result={contractVersion:'1.0',candidateRunId:null,strategy,readAtUtc:new Date().toISOString(),stocks:['AAPL','MSFT','NVDA'].map(symbol=>({symbol,strategy,candidateRunId:null,candidateId:null,state:'evaluated',detail:'Fixture completed checks',evaluatedAtUtc:new Date().toISOString(),latestCompletedCandleAtUtc:new Date().toISOString(),expired:false,checks:[]}))};
+  return route.fulfill({json:job});
+ });
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(3);
+ await page.locator('#watch-strategy').selectOption('0');
+ await expect(page.locator('#watch-strategy-status')).toContainText('failed',{ignoreCase:true});
+ await page.locator('#watch-strategy-refresh').click();
+ await expect.poll(()=>keys.length).toBe(2);expect(keys[0]).toBe(keys[1]);expect(accepted.size).toBe(1);
+ await expect(page.locator('#watch-strategy-status')).toContainText('completed',{timeout:12000});
+ await page.locator('#watch-strategy-refresh').click();
+ await expect.poll(()=>keys.length).toBe(3);expect(keys[2]).not.toBe(keys[0]);expect(accepted.size).toBe(2);
 });
 test('real source API accepts sanitized Elite filters and rejects missing CSRF',async({page})=>{
  await signIn(page);await page.goto('/Desk');await expect(page.locator('#watch-source')).toContainText('All wishlist stocks');await expect(page.locator('#watch-connection')).toContainText(/current quotes|no stocks in this view/);
@@ -90,7 +120,7 @@ test('news stays alongside a long wishlist and unavailable quotes are explicit',
  };});
  await page.setViewportSize({width:1600,height:1000});await page.goto('/Desk');
  await expect(page.locator('#watch-rows tr')).toHaveCount(32);await expect(page.locator('#watch-connection')).toContainText('0/32 current quotes · 32 unavailable');
- await expect(page.locator('#watch-rows tr').first()).toContainText('Loading daily history');
+ await expect(page.locator('#watch-rows tr').first()).toContainText('Select a strategy');
  const news=await page.locator('.watch-news').boundingBox(),stocks=await page.locator('.watch-stocks').boundingBox();
  expect(Math.abs(news.y-stocks.y)).toBeLessThan(5);expect(news.y).toBeLessThan(850);
  expect(await page.locator('.watch-table-scroll').evaluate(x=>x.scrollHeight>x.clientHeight)).toBe(true);

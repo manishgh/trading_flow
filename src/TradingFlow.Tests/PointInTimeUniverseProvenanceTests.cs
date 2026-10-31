@@ -5,6 +5,19 @@ namespace TradingFlow.Tests;
 
 public sealed class PointInTimeUniverseProvenanceTests
 {
+    /// <summary>Completed jobs must reopen their unchanged eligibility reasons instead of failing result/snapshot deserialization.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SavedEligibility_RoundTripsValidatedReasons(bool eligible)
+    {
+        var original = new UniversePromotionEligibility(eligible, eligible ? [] : ["missing_original_membership"]);
+        var json = System.Text.Json.JsonSerializer.Serialize(original);
+        var restored = System.Text.Json.JsonSerializer.Deserialize<UniversePromotionEligibility>(json)!;
+        Assert.Equal(original.IsEligible, restored.IsEligible);
+        Assert.Equal(original.Failures, restored.Failures);
+    }
+
     private static readonly DateOnly SessionDate = new(2026, 7, 24);
     private static readonly DateTimeOffset DecisionCutoffUtc =
         new(2026, 7, 24, 13, 25, 0, TimeSpan.Zero);

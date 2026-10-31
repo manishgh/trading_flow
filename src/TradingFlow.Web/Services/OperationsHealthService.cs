@@ -108,7 +108,9 @@ public sealed class OperationsHealthService
     private readonly IConfiguration configuration;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<OperationsHealthService> logger;
+    private readonly IHttpClientFactory httpClients;
 
+    /// <summary>Read operational evidence through existing services and HTTP clients without mutating runtime state.</summary>
     public OperationsHealthService(
         OperationalStatusService operationalStatus,
         AlpacaCredentialProvider credentials,
@@ -122,6 +124,7 @@ public sealed class OperationsHealthService
         ProjectPaths paths,
         IConfiguration configuration,
         TimeProvider timeProvider,
+        IHttpClientFactory httpClients,
         ILogger<OperationsHealthService> logger)
     {
         this.operationalStatus = operationalStatus;
@@ -133,12 +136,14 @@ public sealed class OperationsHealthService
         this.marketPredictor = marketPredictor;
         this.rawArchiveOptions = rawArchiveOptions;
         this.warmup = warmup;
+        this.httpClients = httpClients;
         this.paths = paths;
         this.configuration = configuration;
         this.timeProvider = timeProvider;
         this.logger = logger;
     }
 
+    /// <summary>Read subsystem evidence concurrently, including the actual FinBERT model-load response.</summary>
     public async Task<OperationsReport> BuildAsync(
         string quoteFeed,
         IEnumerable<DateTimeOffset?> quoteTimestamps,
@@ -151,7 +156,8 @@ public sealed class OperationsHealthService
         var accountTask = operationalStatus.GetAccountAsync(cancellationToken);
         var sessionTask = operationalStatus.GetTradingSessionAsync(cancellationToken);
         var modelTask = marketPredictor.GetHealthAsync(cancellationToken);
-        await Task.WhenAll(statusTask, accountTask, sessionTask, modelTask);
+        var sentimentTask = BuildSentimentRowAsync(now, cancellationToken);
+        await Task.WhenAll(statusTask, accountTask, sessionTask, modelTask, sentimentTask);
 
         var status = await statusTask;
         var account = await accountTask;
@@ -170,7 +176,7 @@ public sealed class OperationsHealthService
             BuildReconciliationRow(),
             BuildEntryGateRow(admissionSnapshot, now),
             BuildPredictorRow(model, now),
-            BuildSentimentRow(now),
+            await sentimentTask,
             BuildWarmupRow(warmupReport, now),
             BuildRawArchiveRow(now),
             BuildBackupRow(now)
@@ -307,21 +313,25 @@ public sealed class OperationsHealthService
             now);
     }
 
-    private SubsystemHealth BuildSentimentRow(DateTimeOffset now)
+    /// <summary>Show the actual loaded model revision or the specific failed health state; URL presence is not success.</summary>
+    private async Task<SubsystemHealth> BuildSentimentRowAsync(DateTimeOffset now, CancellationToken token)
     {
-        // An unset endpoint is the documented VADER-fallback configuration, not a
-        // fault. It renders as not-applicable so a real FinBERT outage stays
-        // visible against it.
-        var endpoint = Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL");
-        var configured = !String.IsNullOrWhiteSpace(endpoint);
+        var endpoint = Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL")
+            ?? Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL", EnvironmentVariableTarget.User);
+        if (String.IsNullOrWhiteSpace(endpoint))
+            return new("FinBERT sentiment", "sidecars/finbert-sentiment", SubsystemState.NotApplicable,
+                "Not configured", "FINBERT_SENTIMENT_URL is unset; sentiment uses the built-in VADER analyzer, identified as vader.", now);
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+            return new("FinBERT sentiment", "sidecars/finbert-sentiment", SubsystemState.Failing,
+                "Invalid address", "FINBERT_SENTIMENT_URL must be an absolute HTTP or HTTPS address.", now);
+        using var client = httpClients.CreateClient();
+        var health = await new FinbertHealthReader(client).ReadAsync(uri, token);
         return new SubsystemHealth(
             "FinBERT sentiment",
             "sidecars/finbert-sentiment",
-            configured ? SubsystemState.Healthy : SubsystemState.NotApplicable,
-            configured ? "Configured" : "Not applicable",
-            configured
-                ? $"FINBERT_SENTIMENT_URL is set; the sidecar scores headlines in place of the VADER fallback."
-                : "FINBERT_SENTIMENT_URL is unset, so sentiment uses the built-in VADER fallback. This is a supported configuration, not a failure.",
+            health.IsReady ? SubsystemState.Healthy : SubsystemState.Failing,
+            health.IsReady ? "Loaded" : "Unavailable",
+            health.Detail,
             now);
     }
 
@@ -337,6 +347,7 @@ public sealed class OperationsHealthService
             warmupReport.ManifestWrittenAtUtc);
     }
 
+    /// <summary>Reports the archive location and recent writes while making explicit that originals never expire automatically.</summary>
     private SubsystemHealth BuildRawArchiveRow(DateTimeOffset now)
     {
         var root = rawArchiveOptions.RootPath;
@@ -366,7 +377,7 @@ public sealed class OperationsHealthService
                 $"Payloads are archived before parse under {root}. " +
                 $"{(documents > 100_000 ? "over 100,000" : documents.ToString())} manifest(s); " +
                 $"newest write {(newest == default ? "none yet" : $"{newest:yyyy-MM-dd HH:mm} UTC")}. " +
-                $"Retention {rawArchiveOptions.RetentionDays} days.",
+                $"Minimum preservation period {rawArchiveOptions.RetentionDays} days; automatic deletion is disabled.",
                 now);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

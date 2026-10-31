@@ -149,6 +149,7 @@ public sealed class DeskTicketPlanService
     /// The planning core, pure over completed bars and their indicator snapshots,
     /// so the rules are testable without a live stream. Long entries only: the
     /// ticket's entry side is buy, and a sell closes a position with no bracket.
+    /// Unsupported dynamic protection is reported before any entry prices are planned.
     /// </summary>
     public static DeskTicketPlan Build(
         StrategyDefinition strategy,
@@ -159,6 +160,9 @@ public sealed class DeskTicketPlanService
         IReadOnlyList<IndicatorSnapshot> executionSnapshots,
         decimal? riskBudget)
     {
+        if (strategy.ExitRules.ContinuationProtection is not null)
+            return DeskTicketPlan.Unavailable(limit,
+                "Continuation protection requires the day-trading stop and target lifecycle, which is not connected yet.", riskBudget);
         if (setupBars.Count < 2 || setupSnapshots.Count != setupBars.Count ||
             executionBars.Count == 0 || executionSnapshots.Count != executionBars.Count)
         {

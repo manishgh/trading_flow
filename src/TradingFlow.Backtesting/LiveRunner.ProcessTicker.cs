@@ -273,6 +273,18 @@ public sealed partial class LiveRunner
                 strategy.StrategyId,
                 strategy.Timeframe,
                 lastSnapshot.Timestamp);
+            IReadOnlyList<OhlcvBar>? factorReference = null;
+            IReadOnlyList<DateOnly>? factorSessions = null;
+            if (strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } factor)
+            {
+                factorReference = await _regimeGate.LoadBenchmarkDailyBarsAsync(provider, factor.BenchmarkSymbol,
+                    ["1d"], now.AddDays(-Math.Max(400, factor.LookbackBars * 3)), now, cancellationToken);
+                if (provider is not IMarketSessionScheduleProvider calendarProvider)
+                    throw new InvalidDataException("Relative strength requires an authoritative calendar.");
+                var calendar = await calendarProvider.LoadMarketSessionSchedulesAsync(
+                    DateOnly.FromDateTime(now.AddDays(-400).UtcDateTime), DateOnly.FromDateTime(now.UtcDateTime).AddDays(1), cancellationToken);
+                factorSessions = TechnicalFactorCalculator.ExpectedCompletedSessions(calendar, now, factor.LookbackBars + 1);
+            }
             var decisionRequest = StrategyDecisionRequestAssembler.Create(
                 runtimeStrategy,
                 ticker,
@@ -292,7 +304,11 @@ public sealed partial class LiveRunner
                 setupAvailableAtUtc,
                 candidateExpiresAtUtc,
                 run.Engine.IndicatorWarmupBars,
-                _executionRunContext.RunId);
+                _executionRunContext.RunId, factorReference, factorSessions,
+                await StrategyDecisionRequestAssembler.ResolveDrawdownContextAsync(_decisionContextProvider,
+                    ticker, now, completedBarsByTimeframe.ToDictionary(pair => pair.Key,
+                        pair => (IReadOnlyList<OhlcvBar>)pair.Value, StringComparer.OrdinalIgnoreCase), run.Mode,
+                    cancellationToken));
             var persistedDecision = await _candidateDecisions.EvaluateAsync(
                 CreateProductionRun(_executionRunContext),
                 decisionRequest,

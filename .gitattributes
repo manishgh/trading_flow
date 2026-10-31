@@ -1,2 +1,5 @@
 src/TradingFlow.Data/Context/Migrations/*.cs whitespace=cr-at-eol
 *.sln text eol=crlf
+# Frozen provider/condition evidence retains exact hashed bytes on every checkout.
+src/TradingFlow.Alpaca/Resources/sip-ordinary-print-research-condition-v1.json -text
+src/TradingFlow.Tests/Fixtures/SipConditionMetadata/*.json -text

@@ -34,6 +34,7 @@ public static class StrategyCandidateStateMachine
             (StrategyCandidateState.Qualified, StrategyCandidateState.Expired) => true,
             (StrategyCandidateState.Armed, StrategyCandidateState.Triggered) => true,
             (StrategyCandidateState.Armed, StrategyCandidateState.Disarmed) => true,
+            (StrategyCandidateState.Armed, StrategyCandidateState.Rejected) => true,
             (StrategyCandidateState.Armed, StrategyCandidateState.DataError) => true,
             (StrategyCandidateState.Armed, StrategyCandidateState.Expired) => true,
             (StrategyCandidateState.Disarmed, StrategyCandidateState.DataWarming) => true,

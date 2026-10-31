@@ -8,24 +8,30 @@ using TradingFlow.Data.Context;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Domain.Execution;
+using TradingFlow.Engine.Configuration;
 
 namespace TradingFlow.Data.Orders;
 
 /// <summary>
 /// Commits an order intent as one append-only SQLite transaction.
 /// </summary>
-public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrderDispatchRepository
+public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository, IOrderDispatchRepository
 {
     private readonly IDbContextFactory<TradingFlowDbContext> contextFactory;
     private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim reservationLock = new(1, 1);
+    private readonly TradingLimitDefaults tradingLimitDefaults;
 
+    /// <summary>Use the shared mode defaults and the existing transactional account-reservation owner.</summary>
     public SqliteOrderIntentRepository(
         IDbContextFactory<TradingFlowDbContext> contextFactory,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        TradingLimitDefaults? tradingLimitDefaults = null)
     {
         this.contextFactory = contextFactory;
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.tradingLimitDefaults = tradingLimitDefaults ?? TradingLimitDefaultsFactory.FromRegistry();
     }
 
     public async Task<OrderIntentRecord?> GetByIntentIdAsync(
@@ -243,6 +249,7 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrder
         return new OrderDispatchLease(intent, state, token, leaseExpiresAtUtc);
     }
 
+    /// <summary>Fence the first broker attempt against current account limits and evidence before recording dispatch ownership.</summary>
     public async Task<OrderIntentRecord> RecordDispatchAttemptAsync(
         Guid intentId,
         Guid leaseToken,
@@ -317,6 +324,8 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrder
                     ? new OrderDispatchAdoptionRequiredException(intentId)
                     : new OrderDispatchUnsupportedHorizonException(intentId);
             }
+            if (intent.DispatchAttemptCount == 0)
+                await RequireCurrentEntryCapacityAsync(context, intent, nowUtc, cancellationToken);
         }
 
         if (intent.Kind == OrderIntentKind.ProtectiveStop &&
@@ -1026,7 +1035,8 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrder
         }
     }
 
-    private static async Task ReservePortfolioRiskAsync(
+    /// <summary>Atomically reserve account cash, daily stock capacity and open-position capacity across every run.</summary>
+    private async Task ReservePortfolioRiskAsync(
         TradingFlowDbContext context,
         ProductionRun run,
         OrderIntentReservation reservation,
@@ -1071,6 +1081,8 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrder
         var brokerSymbols = requested.BrokerPositionSymbols
             .Select(value => value.Trim().ToUpperInvariant())
             .ToHashSet(StringComparer.Ordinal);
+        var (operational, pendingOpeningSymbols) = await ReserveOperationalCapacityAsync(context, run, reservation, activeReservations,
+            serverNowUtc, cancellationToken);
         var localBuyingPower = activeReservations
             .Where(record =>
                 record.BrokerAcceptedAtUtc is null ||
@@ -1121,16 +1133,17 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrder
         }
 
         var occupiedSymbols = brokerSymbols
+            .Concat(pendingOpeningSymbols)
             .Concat(localOpenPositions)
             .Concat(activeReservations.Select(record => record.Symbol))
             .ToHashSet(StringComparer.Ordinal);
         occupiedSymbols.Add(symbol);
-        if (occupiedSymbols.Count > requested.MaxPositions)
+        if (occupiedSymbols.Count > operational.MaxOpenPositions)
         {
             throw RiskRejected(
                 reservation.IntentId,
                 "position_slot_limit",
-                $"Projected position count {occupiedSymbols.Count} exceeds {requested.MaxPositions}.");
+                $"Projected position count {occupiedSymbols.Count} exceeds the saved account limit {operational.MaxOpenPositions}.");
         }
 
         var signedNotional = reservation.Side.Equals("sell", StringComparison.Ordinal)
@@ -1163,7 +1176,7 @@ public sealed class SqliteOrderIntentRepository : IOrderIntentRepository, IOrder
             BrokerPositionCountAtReservation = brokerSymbols.Count,
             MaxGrossExposure = requested.MaxGrossExposure,
             MaxPortfolioRisk = requested.MaxPortfolioRisk,
-            MaxPositions = requested.MaxPositions,
+            MaxPositions = operational.MaxOpenPositions,
             AccountSnapshotRequestedAtUtc = requested.AccountSnapshotRequestedAtUtc,
             AccountSnapshotObservedAtUtc = requested.AccountSnapshotObservedAtUtc,
             ReservedAtUtc = serverNowUtc,

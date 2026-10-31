@@ -489,7 +489,7 @@ else if (Model.IsScreenerScope)
         <span class="metric-value @SignedClass(Model.TotalPl)">@SignedMoney(Model.TotalPl)</span>
     </div>
     <div>
-        <span class="micro-label">Observed setups</span>
+        <span class="micro-label">Past alerts</span>
         <span class="metric-value">@Model.CountFor("signal")</span>
     </div>
     <div class="@(status.AdmissionStatus == "allowed" ? null : "is-attention")">

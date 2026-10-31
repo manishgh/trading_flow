@@ -11,18 +11,22 @@ using Microsoft.Extensions.Logging;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Indicators;
+using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Alpaca;
 
-public sealed class AlpacaMarketDataProvider :
+public sealed partial class AlpacaMarketDataProvider :
     IMarketDataProvider,
     IMarketDataCompletenessProvider,
     IMarketSessionScheduleProvider,
-    IMarketDataProvenanceProvider
+    IMarketDataProvenanceProvider,
+    IHistoricalMarketDataEvidenceProvider
 {
     private readonly HttpClient _httpClient;
     private readonly AlpacaOptions _options;
+    private readonly AlpacaRawResponseArchiver _responseArchiver;
     private readonly string _marketDataFeed;
+    private readonly string _adjustmentPolicy;
     private readonly Polly.Bulkhead.AsyncBulkheadPolicy<HttpResponseMessage> _bulkhead = TradingFlow.Domain.Http.RateLimiterFactory.CreateBulkhead(10, 50);
 
     public bool OmittedSubDailyIntervalsMeanNoQualifyingTrades => true;
@@ -30,22 +34,30 @@ public sealed class AlpacaMarketDataProvider :
     public MarketDataProvenance MarketDataProvenance => new(
         "alpaca_historical_bars_v2",
         _marketDataFeed,
-        "all");
+        _adjustmentPolicy);
 
+    /// <summary>Requires durable response storage and one validated price basis for queries, bars and provenance.</summary>
     public AlpacaMarketDataProvider(
         HttpClient httpClient,
         AlpacaOptions options,
-        ILogger<AlpacaMarketDataProvider>? logger = null)
+        IRawArchiveWriter rawArchiveWriter,
+        ILogger<AlpacaMarketDataProvider>? logger = null,
+        string adjustmentPolicy = "all")
     {
+        if (adjustmentPolicy is not ("raw" or "all"))
+            throw new ArgumentException("Alpaca price adjustment must be raw or all.", nameof(adjustmentPolicy));
         _httpClient = httpClient;
         _options = options;
+        _responseArchiver = new AlpacaRawResponseArchiver(rawArchiveWriter);
         _marketDataFeed = options.ResolveMarketDataFeed();
+        _adjustmentPolicy = adjustmentPolicy;
         _httpClient.BaseAddress = AlpacaEndpointResolver.Resolve(_options.Profile).MarketDataRest;
         _httpClient.DefaultRequestHeaders.Add("APCA-API-KEY-ID", _options.KeyId);
         _httpClient.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", _options.SecretKey);
         logger?.LogInformation("Alpaca REST market data feed configured as {MarketDataFeed}.", _marketDataFeed);
     }
 
+    /// <summary>Streams only fully archived batches and stops emission when the caller cancels.</summary>
     public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
         IReadOnlyCollection<string> tickers,
         IReadOnlyCollection<string> timeframes,
@@ -70,11 +82,12 @@ public sealed class AlpacaMarketDataProvider :
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Chunk(100))
             {
-                var startStr = start.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
-                var endStr = end.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
+                var startStr = start.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFFZ", CultureInfo.InvariantCulture);
+                var endStr = end.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFFZ", CultureInfo.InvariantCulture);
                 var batchBars = await FetchBatchWithFallbackAsync(tickerBatch, timeframe, originalTimeframe, startStr, endStr, cancellationToken);
                 foreach (var bar in batchBars)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     yield return bar;
                 }
             }
@@ -84,7 +97,7 @@ public sealed class AlpacaMarketDataProvider :
     /// <summary>
     /// Loads Alpaca's official market calendar from the profile-specific trading endpoint.
     /// Alpaca returns open sessions only, so omissions are converted to explicit closed dates
-    /// after the complete response has been validated against the requested range.
+    /// after the complete response has been archived and validated against the requested range.
     /// </summary>
     public async Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadMarketSessionSchedulesAsync(
         DateOnly startDateInclusive,
@@ -105,16 +118,17 @@ public sealed class AlpacaMarketDataProvider :
             tradingEndpoint,
             $"/v2/calendar?start={Uri.EscapeDataString(start)}&end={Uri.EscapeDataString(end)}");
 
-        using var response = await SendWithRetriesAsync(requestUri.AbsoluteUri, cancellationToken);
+        var response = await SendWithRetriesAsync(requestUri.AbsoluteUri, "calendar-rest-page", cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!response.IsSuccessStatusCode)
         {
-            var error = await response.Content.ReadAsStringAsync(cancellationToken);
+            var error = response.ReadAsString();
             var providerDetail = String.IsNullOrWhiteSpace(error) ? "No provider detail." : error.Trim();
             throw new InvalidOperationException(
                 $"Alpaca trading-calendar lookup failed with HTTP {(int)response.StatusCode}: {providerDetail}");
         }
 
-        var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+        var payload = response.ReadAsString();
         Dictionary<DateOnly, MarketSessionSchedule> openSchedules;
         try
         {
@@ -146,6 +160,7 @@ public sealed class AlpacaMarketDataProvider :
         return new ReadOnlyDictionary<DateOnly, MarketSessionSchedule>(completeRange);
     }
 
+    /// <summary>Retries provider-rejected symbol batches individually; storage and parsing failures always propagate.</summary>
     private async Task<List<OhlcvBar>> FetchBatchWithFallbackAsync(
         string[] tickerBatch,
         string timeframe,
@@ -158,7 +173,7 @@ public sealed class AlpacaMarketDataProvider :
         {
             return await FetchBatchExactAsync(tickerBatch, timeframe, originalTimeframe, startStr, endStr, cancellationToken);
         }
-        catch (Exception ex) when (ex.Message.Contains("invalid symbol") && tickerBatch.Length > 1)
+        catch (HttpRequestException ex) when (ex.StatusCode.HasValue && ex.Message.Contains("invalid symbol") && tickerBatch.Length > 1)
         {
             var results = new List<OhlcvBar>();
             foreach (var ticker in tickerBatch)
@@ -167,7 +182,7 @@ public sealed class AlpacaMarketDataProvider :
                 {
                     results.AddRange(await FetchBatchExactAsync(new[] { ticker }, timeframe, originalTimeframe, startStr, endStr, cancellationToken));
                 }
-                catch (Exception innerEx) when (innerEx.Message.Contains("invalid symbol"))
+                catch (HttpRequestException innerEx) when (innerEx.StatusCode.HasValue && innerEx.Message.Contains("invalid symbol"))
                 {
                     // Log or simply ignore the single invalid symbol
                 }
@@ -176,6 +191,7 @@ public sealed class AlpacaMarketDataProvider :
         }
     }
 
+    /// <summary>Parses only committed response pages and returns a batch only after all its pages were archived.</summary>
     private async Task<List<OhlcvBar>> FetchBatchExactAsync(
         string[] tickerBatch,
         string timeframe,
@@ -195,24 +211,33 @@ public sealed class AlpacaMarketDataProvider :
                 .Select(AlpacaSymbolMapper.ToProviderSymbol)
                 .Select(Uri.EscapeDataString));
         string? nextPageToken = null;
+        var seenPageTokens = new HashSet<string>(StringComparer.Ordinal);
 
         do
         {
-            var url = $"/v2/stocks/bars?symbols={symbols}&timeframe={timeframe}&start={startStr}&end={endStr}&feed={_marketDataFeed}&adjustment=all&limit=10000";
+            var url = $"/v2/stocks/bars?symbols={symbols}&timeframe={timeframe}&start={startStr}&end={endStr}&feed={_marketDataFeed}&adjustment={_adjustmentPolicy}&limit=10000";
             if (!String.IsNullOrWhiteSpace(nextPageToken))
             {
                 url += $"&page_token={Uri.EscapeDataString(nextPageToken)}";
             }
 
-            using var response = await SendWithRetriesAsync(url, cancellationToken);
+            var response = await SendWithRetriesAsync(url, "bars-rest-page", cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!response.IsSuccessStatusCode)
             {
-                var error = await response.Content.ReadAsStringAsync(cancellationToken);
-                throw new Exception($"Alpaca API Error ({(int?)response.StatusCode}): {error}");
+                var error = response.ReadAsString();
+                throw new HttpRequestException($"Alpaca API Error ({(int?)response.StatusCode}): {error}", null, response.StatusCode);
             }
 
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            var content = response.ReadAsString();
             using var doc = JsonDocument.Parse(content);
+
+            if (_historicalCapture.Value is not null &&
+                (!doc.RootElement.TryGetProperty("bars", out var capturedBars) ||
+                 capturedBars.ValueKind != JsonValueKind.Object ||
+                 !doc.RootElement.TryGetProperty("next_page_token", out var capturedToken) ||
+                 capturedToken.ValueKind is not (JsonValueKind.String or JsonValueKind.Null)))
+                throw new InvalidDataException("Alpaca historical capture requires a bars object and explicit pagination completion token.");
             
             if (doc.RootElement.TryGetProperty("bars", out var barsElement))
             {
@@ -221,6 +246,7 @@ public sealed class AlpacaMarketDataProvider :
                     var ticker = AlpacaSymbolMapper.ToCanonicalSymbol(tickerProperty.Name);
                     foreach (var bar in tickerProperty.Value.EnumerateArray())
                     {
+                        CountHistoricalRow();
                         results.Add(new OhlcvBar(
                             ticker,
                             bar.GetProperty("t").GetDateTimeOffset(),
@@ -231,7 +257,7 @@ public sealed class AlpacaMarketDataProvider :
                             bar.GetProperty("c").GetDecimal(),
                             bar.GetProperty("v").GetDecimal(),
                             _marketDataFeed,
-                            "all",
+                            _adjustmentPolicy,
                             KnownAtUtc: null,
                             CoverageVerifiedThroughUtc: coverageVerifiedThroughUtc
                         ));
@@ -243,21 +269,41 @@ public sealed class AlpacaMarketDataProvider :
                             tokenElement.ValueKind == JsonValueKind.String
                 ? tokenElement.GetString()
                 : null;
+            if (!String.IsNullOrWhiteSpace(nextPageToken) && !seenPageTokens.Add(nextPageToken))
+                throw new InvalidDataException("Alpaca repeated a bars pagination token; the requested query is incomplete.");
         }
         while (!String.IsNullOrWhiteSpace(nextPageToken));
 
         return results;
     }
 
-    private async Task<HttpResponseMessage> SendWithRetriesAsync(string url, CancellationToken cancellationToken)
+    /// <summary>Finishes archiving complete buffered HTTP bodies despite run cancellation, then honors cancellation before handling them.</summary>
+    private async Task<ArchivedAlpacaResponse> SendWithRetriesAsync(
+        string url, string artifactType, CancellationToken cancellationToken)
     {
         int retryCount = 0;
         while (retryCount < 3)
         {
+            HttpResponseMessage response;
             try
             {
-                var response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Alpaca", url, "GET",
+                response = await TradingFlow.Domain.Logging.ApiProfiler.ProfileAsync("Alpaca", url, "GET",
                     () => _bulkhead.ExecuteAsync(ct => _httpClient.GetAsync(url, ct), cancellationToken));
+            }
+            catch (Polly.Bulkhead.BulkheadRejectedException)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+                retryCount++;
+                continue;
+            }
+
+            using (response)
+            {
+                // GetAsync has buffered the full body; run cancellation must not discard this newly received original.
+                var archivedResponse = await _responseArchiver.ArchiveAsync(
+                    response, artifactType, cancellationToken: CancellationToken.None);
+                _historicalCapture.Value?.Responses.Add(archivedResponse.Archive);
+                cancellationToken.ThrowIfCancellationRequested();
                 
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 {
@@ -268,12 +314,7 @@ public sealed class AlpacaMarketDataProvider :
                     continue;
                 }
 
-                return response;
-            }
-            catch (Polly.Bulkhead.BulkheadRejectedException)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
-                retryCount++;
+                return archivedResponse;
             }
         }
 

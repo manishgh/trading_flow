@@ -12,6 +12,7 @@ public sealed class PositionGuardianEngine
 {
     private readonly TechnicalExecutionEngine technicalExecutionEngine = new();
 
+    /// <summary>Reviews a long position only for exit policies supported by this guardian.</summary>
     public PositionGuardianDecision EvaluateLong(
         StrategyDefinition strategy,
         IReadOnlyList<OhlcvBar> executionBars,
@@ -21,6 +22,7 @@ public sealed class PositionGuardianEngine
         decimal initialStopLossPrice,
         decimal takeProfitPrice)
     {
+        TechnicalExecutionEngine.RequireSupportedExitPolicy(strategy);
         if (executionBars.Count == 0 || executionSnapshots.Count == 0)
         {
             return PositionGuardianDecision.Hold("market_state_unavailable", initialStopLossPrice);

@@ -166,6 +166,33 @@ public sealed class OrderSubmissionServiceTests
         broker.VerifyAll();
     }
 
+    /// <summary>A changed bound account is rejected after admission and before durable reservation or broker submission.</summary>
+    [Fact]
+    public async Task SubmitEntryOrderAsync_BoundAccountDiffersFromAdmission_DoesNotReserveOrCallBroker()
+    {
+        var repository = new RecordingIntentRepository();
+        var gates = new PassThroughEntryGateChain();
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        var binding = new Mock<IBrokerAccountBindingService>(MockBehavior.Strict);
+        var submission = CreateSubmission(Guid.NewGuid());
+        var observed = new BrokerAccountSnapshot("other-account", "ACTIVE", false, false, false, true,
+            100_000, 100_000, 100_000, 0, 0, submission.CreatedAtUtc, submission.CreatedAtUtc);
+        binding.Setup(service => service.ValidateAsync(broker.Object, It.IsAny<CancellationToken>()))
+            .Callback(() => { Assert.Equal(1, gates.Calls); Assert.Equal(0, repository.ReservationAttempts); })
+            .ReturnsAsync(observed);
+        var service = new OrderSubmissionService(repository, new RecordingEventRepository(repository), gates,
+            NullLogger<OrderSubmissionService>.Instance, accountBinding: binding.Object);
+
+        var error = await Assert.ThrowsAsync<BrokerAccountMismatchException>(() =>
+            service.SubmitEntryOrderAsync(submission, broker.Object, default));
+
+        Assert.Equal("paper-account", error.ExpectedAccountId);
+        Assert.Equal("other-account", error.ObservedAccountId);
+        Assert.Equal(0, repository.ReservationAttempts);
+        binding.VerifyAll();
+        broker.VerifyNoOtherCalls();
+    }
+
     [Fact]
     public async Task SubmitEntryOrderAsync_PositionConflict_DoesNotReserveOrCallBroker()
     {
@@ -810,7 +837,8 @@ public sealed class OrderSubmissionServiceTests
                         1_500m,
                         3,
                         submission.CreatedAtUtc,
-                        submission.CreatedAtUtc)),
+                        submission.CreatedAtUtc,
+                        OperationalTradingLimitTestEvidence.Empty("paper-account", submission.CreatedAtUtc), 60)),
                 cancellationToken);
         }
     }

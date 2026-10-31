@@ -15,12 +15,15 @@ namespace TradingFlow.Backtesting;
 // partial file for readability; behavior is identical to the inline version.
 public sealed partial class BacktestRunner
 {
-    private static IReadOnlyList<MissedMoveAudit> BuildMissedMoveAudits(
+    // Compare hindsight move windows with actual entry fills, including holdings still open at cutoff.
+    internal static IReadOnlyList<MissedMoveAudit> BuildMissedMoveAudits(
         IReadOnlyCollection<StrategyDefinition> strategies,
-        IReadOnlyList<BacktestCandidateTrade> candidates,
-        IReadOnlyCollection<OhlcvBar> allBars)
+        IReadOnlyList<BacktestTrade> completedTrades,
+        IReadOnlyCollection<OhlcvBar> allBars,
+        BacktestPortfolioState? portfolioState = null)
     {
         const decimal majorMoveThresholdPct = 8m;
+        var filledEntries = ResolveMissedMoveEntries(strategies, completedTrades, portfolioState);
         var strategyNames = strategies
             .Select(strategy => strategy.StrategyName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -76,11 +79,11 @@ public sealed partial class BacktestRunner
                 }
 
                 var peakTimestamp = bars[peakIndex].Timestamp;
-                var entries = candidates
+                var entries = filledEntries
                     .Where(candidate =>
                         candidate.Ticker.Equals(ticker, StringComparison.OrdinalIgnoreCase) &&
-                        candidate.EntryTimestamp >= startBar.Timestamp &&
-                        candidate.EntryTimestamp <= peakTimestamp)
+                        candidate.EntryTimestamp >= startBar.Timestamp.Add(TimeframeParser.Parse(timeframe)) &&
+                        candidate.EntryTimestamp <= peakTimestamp.Add(TimeframeParser.Parse(timeframe)))
                     .Select(candidate => candidate.StrategyName)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
@@ -111,6 +114,29 @@ public sealed partial class BacktestRunner
             .Take(100)
             .ToArray();
     }
+
+    // Native books expose authoritative fills; older and SIP books retain their completed-fill evidence.
+    private static IReadOnlyList<MissedMoveEntry> ResolveMissedMoveEntries(
+        IReadOnlyCollection<StrategyDefinition> strategies,
+        IReadOnlyList<BacktestTrade> completedTrades,
+        BacktestPortfolioState? portfolioState)
+    {
+        if (portfolioState is null)
+        {
+            return completedTrades.Where(trade => trade.ShareQuantity > 0)
+                .Select(trade => new MissedMoveEntry(trade.Ticker, trade.StrategyName, trade.EntryTimestamp))
+                .ToArray();
+        }
+
+        var namesById = strategies.ToDictionary(strategy => strategy.StrategyId,
+            strategy => strategy.StrategyName, StringComparer.OrdinalIgnoreCase);
+        return portfolioState.Fills
+            .Where(fill => fill.IsEntry && fill.Quantity > 0 && namesById.ContainsKey(fill.StrategyId))
+            .Select(fill => new MissedMoveEntry(fill.Ticker, namesById[fill.StrategyId], fill.TimestampUtc))
+            .ToArray();
+    }
+
+    private sealed record MissedMoveEntry(string Ticker, string StrategyName, DateTimeOffset EntryTimestamp);
 
     private static int ResolveMissedMoveLookaheadBars(string timeframe)
     {
@@ -151,7 +177,9 @@ public sealed partial class BacktestRunner
         IReadOnlyCollection<OhlcvBar> allBars,
         IReadOnlyCollection<StrategyCandidateDiagnostics> candidateDiagnostics,
         UniverseMembership? universeMembership = null,
-        IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars = null)
+        IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars = null,
+        PortfolioBuildOutcome? eventOutcome = null,
+        NativeDailyAccountingContext? accounting = null)
     {
         return strategies
             .Select(strategy =>
@@ -164,23 +192,33 @@ public sealed partial class BacktestRunner
                 var regimeCalendar = regimeCalendars is not null && regimeCalendars.TryGetValue(strategy.StrategyId, out var calendar)
                     ? calendar
                     : null;
-                var portfolioOutcome = BuildPortfolioTradesWithAudit(
+                var portfolioOutcome = eventOutcome is not null
+                    ? new PortfolioBuildOutcome(eventOutcome.Trades.Where(x => x.StrategyId == strategy.StrategyId).ToArray(),
+                        eventOutcome.AdmissionAudit, eventOutcome.ExecutionFailures.Where(x => x.StrategyId == strategy.StrategyId).ToArray())
+                        { State = eventOutcome.State }
+                    : BuildPortfolioTradesWithAudit(
                     portfolio,
                     strategy,
                     strategyCandidates,
                     universeMembership,
                     regimeCalendar,
-                    allBars);
+                    allBars, accounting);
                 var diagnosticsTarget = candidateDiagnostics.FirstOrDefault(diagnostic =>
                     diagnostic.StrategyId.Equals(strategy.StrategyId, StringComparison.OrdinalIgnoreCase));
                 diagnosticsTarget?.MergeRejections(portfolioOutcome.AdmissionAudit);
                 var trades = portfolioOutcome.Trades;
                 var economicResultsComplete = portfolioOutcome.ExecutionFailures.Count == 0;
-                var netProfit = trades.Sum(x => x.NetProfit);
+                var state = portfolioOutcome.State;
+                var lastEquity = state?.Sessions.LastOrDefault()?.Equity;
+                economicResultsComplete &= state is null || lastEquity is not null;
+                var netProfit = state is null ? trades.Sum(x => x.NetProfit) : (lastEquity ?? portfolio.StartingCapital) - portfolio.StartingCapital;
                 var endingCapital = portfolio.StartingCapital + netProfit;
                 var totalReturnPct = portfolio.StartingCapital == 0 ? 0 : (netProfit / portfolio.StartingCapital) * 100m;
-                var maxDrawdownPct = CalculateMaxDrawdown(portfolio.StartingCapital, trades);
-                var dailyMetrics = CalculateDailyMetrics(portfolio.StartingCapital, strategy, trades, allBars);
+                var maxDrawdownPct = state is null ? CalculateMaxDrawdown(portfolio.StartingCapital, trades) : CalculateCloseDrawdown(portfolio.StartingCapital, state);
+                var dailyMetrics = state is null ? CalculateDailyMetrics(portfolio.StartingCapital, strategy, trades, allBars)
+                    : new DailyReturnMetrics(portfolio.StartingCapital > 0 && state.Sessions.Count > 0
+                        ? Decimal.Round(netProfit / portfolio.StartingCapital / state.Sessions.Count * 100m, 4) : 0m,
+                        state.Sessions.Count);
 
                 return new StrategyBacktestResult(
                     strategy.StrategyId,
@@ -194,15 +232,16 @@ public sealed partial class BacktestRunner
                     dailyMetrics.TradingDayCount,
                     economicResultsComplete ? Decimal.Round(maxDrawdownPct, 4) : 0m,
                     strategyCandidates.Length,
-                    trades.Count,
+                    state?.AdmittedOrderCount ?? trades.Count,
                     Math.Max(
                         0,
-                        strategyCandidates.Length - trades.Count - portfolioOutcome.ExecutionFailures.Count),
+                        state is null ? strategyCandidates.Length - trades.Count - portfolioOutcome.ExecutionFailures.Count
+                            : strategyCandidates.Length - state.AdmittedOrderCount),
                     economicResultsComplete ? trades.Count(x => x.NetProfit > 0) : 0,
                     economicResultsComplete ? trades.Count(x => x.NetProfit < 0) : 0,
-                    economicResultsComplete ? trades : Array.Empty<BacktestTrade>(),
+                    economicResultsComplete || state is not null ? trades : Array.Empty<BacktestTrade>(),
                     portfolioOutcome.ExecutionFailures,
-                    economicResultsComplete);
+                    economicResultsComplete) { PortfolioState = state };
             })
             .ToArray();
     }
@@ -214,9 +253,10 @@ public sealed partial class BacktestRunner
         IReadOnlyCollection<OhlcvBar> allBars,
         UniverseMembership? universeMembership,
         IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars,
-        IExecutionEventSink? executionEvidence = null)
+        IExecutionEventSink? executionEvidence = null,
+        PortfolioBuildOutcome? eventOutcome = null)
     {
-        var portfolioOutcome = BuildUnifiedPortfolioTradesWithAudit(
+        var portfolioOutcome = eventOutcome ?? BuildUnifiedPortfolioTradesWithAudit(
             portfolio,
             strategies,
             candidates,
@@ -226,7 +266,10 @@ public sealed partial class BacktestRunner
             executionEvidence);
         var trades = portfolioOutcome.Trades;
         var economicResultsComplete = portfolioOutcome.ExecutionFailures.Count == 0;
-        var netProfit = trades.Sum(trade => trade.NetProfit);
+        var state = portfolioOutcome.State;
+        var lastEquity = state?.Sessions.LastOrDefault()?.Equity;
+        economicResultsComplete &= state is null || lastEquity is not null;
+        var netProfit = state is null ? trades.Sum(trade => trade.NetProfit) : (lastEquity ?? portfolio.StartingCapital) - portfolio.StartingCapital;
         var endingCapital = portfolio.StartingCapital + netProfit;
         var totalReturnPct = portfolio.StartingCapital <= 0m
             ? 0m
@@ -238,18 +281,19 @@ public sealed partial class BacktestRunner
             economicResultsComplete ? Decimal.Round(netProfit, 4) : 0m,
             economicResultsComplete ? Decimal.Round(totalReturnPct, 4) : 0m,
             economicResultsComplete
-                ? Decimal.Round(CalculateMaxDrawdown(portfolio.StartingCapital, trades), 4)
+                ? Decimal.Round(state is null ? CalculateMaxDrawdown(portfolio.StartingCapital, trades) : CalculateCloseDrawdown(portfolio.StartingCapital, state), 4)
                 : 0m,
             candidates.Count,
-            trades.Count,
-            Math.Max(0, candidates.Count - trades.Count - portfolioOutcome.ExecutionFailures.Count),
+            state?.AdmittedOrderCount ?? trades.Count,
+            Math.Max(0, state is null ? candidates.Count - trades.Count - portfolioOutcome.ExecutionFailures.Count
+                : candidates.Count - state.AdmittedOrderCount),
             economicResultsComplete ? trades.Count(trade => trade.NetProfit > 0m) : 0,
             economicResultsComplete ? trades.Count(trade => trade.NetProfit < 0m) : 0,
             trades,
             portfolioOutcome.AdmissionAudit.RejectionCounts,
             portfolioOutcome.AdmissionAudit.RejectionExamples,
             portfolioOutcome.ExecutionFailures,
-            economicResultsComplete);
+            economicResultsComplete) { PortfolioState = state };
     }
 
     private static IReadOnlyList<StrategyDiagnosticReport> BuildDiagnostics(
@@ -286,9 +330,10 @@ public sealed partial class BacktestRunner
                 var realizedRewardRiskRatio = averageLoss == 0
                     ? (averageWin > 0 ? 999m : 0m)
                     : averageWin / averageLoss;
-                var winRatePct = result.AcceptedTradeCount == 0
+                var closedCount = result.PortfolioState?.ClosedTradeCount ?? result.AcceptedTradeCount;
+                var winRatePct = closedCount == 0
                     ? 0
-                    : ((decimal)result.WinningTradeCount / result.AcceptedTradeCount) * 100m;
+                    : ((decimal)result.WinningTradeCount / closedCount) * 100m;
                 var dailyPnl = BuildDailyPnlSummary(result);
                 var directionPnl = BuildDirectionPnlSummary(result);
 
@@ -393,6 +438,7 @@ public sealed partial class BacktestRunner
             return suggestions;
         }
 
+        var closedCount = result.PortfolioState?.ClosedTradeCount ?? result.AcceptedTradeCount;
         if (result.AcceptedTradeCount == 0)
         {
             if (rejectionCounts.Count == 0)
@@ -421,26 +467,34 @@ public sealed partial class BacktestRunner
             return suggestions;
         }
 
+        if (closedCount == 0)
+        {
+            suggestions.Add("Orders were admitted, but no position has completed its exit. Open holdings and pending orders are reported separately.");
+            return suggestions;
+        }
+
         if (realizedRewardRiskRatio < 1m && winRatePct < 50m)
         {
-            suggestions.Add("Average loss is larger than average win with sub-50% win rate. Consider higher target_r_multiple, tighter entry quality, or smaller stop_atr_multiple.");
+            suggestions.Add("Average loss exceeds average win with sub-50% win rate. Attribute actual exit causes and costs before testing a separately frozen variant.");
         }
 
         if (exitReasonCounts.TryGetValue("stop_loss", out var stopLossCount) &&
-            stopLossCount > result.AcceptedTradeCount / 2m)
+            stopLossCount > closedCount / 2m)
         {
             suggestions.Add("More than half of trades hit stop loss. Consider widening stop_atr_multiple or adding stronger trend/setup confirmation.");
         }
 
         if (exitReasonCounts.TryGetValue("max_hold", out var maxHoldCount) &&
-            maxHoldCount > result.AcceptedTradeCount * 0.4m)
+            maxHoldCount > closedCount * 0.4m)
         {
             suggestions.Add("Many trades are timing out at max_hold. Consider tightening entries, extending max_hold_hours, or adding technical exits.");
         }
 
         if (result.TotalReturnPct > 0 && result.MaxDrawdownPct <= 2m)
         {
-            suggestions.Add("Positive return with controlled drawdown. Candidate for broader ticker/window validation before promotion.");
+            suggestions.Add(result.PortfolioState is null
+                ? "Positive realized net return. Drawdown here uses closed trades only; measure marked-to-market equity and broader sample stability before drawing risk conclusions."
+                : "Positive source-session equity return. The reported close drawdown does not measure intraday losses; a broader independent sample remains necessary.");
         }
 
         if (suggestions.Count == 0)
@@ -472,7 +526,8 @@ public sealed partial class BacktestRunner
         IReadOnlyList<BacktestCandidateTrade> candidates,
         UniverseMembership? universeMembership = null,
         RegimeCalendar? regimeCalendar = null,
-        IReadOnlyCollection<OhlcvBar>? marketBars = null)
+        IReadOnlyCollection<OhlcvBar>? marketBars = null,
+        NativeDailyAccountingContext? accounting = null)
     {
         return BuildPortfolioTradesCore(
             portfolio,
@@ -480,7 +535,7 @@ public sealed partial class BacktestRunner
             _ => strategy,
             universeMembership,
             _ => regimeCalendar,
-            marketBars ?? BuildSyntheticExecutionBars(candidates, _ => strategy));
+            marketBars ?? BuildSyntheticExecutionBars(candidates, _ => strategy), accounting: accounting);
     }
 
     private static IReadOnlyList<BacktestTrade> BuildUnifiedPortfolioTrades(
@@ -505,7 +560,8 @@ public sealed partial class BacktestRunner
         UniverseMembership? universeMembership = null,
         IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars = null,
         IReadOnlyCollection<OhlcvBar>? marketBars = null,
-        IExecutionEventSink? executionEvidence = null)
+        IExecutionEventSink? executionEvidence = null,
+        NativeDailyAccountingContext? accounting = null)
     {
         var strategiesById = strategies.ToDictionary(
             strategy => strategy.StrategyId,
@@ -528,7 +584,7 @@ public sealed partial class BacktestRunner
                     ? strategy
                     : throw new InvalidOperationException(
                         $"Candidate references unknown strategy ID '{candidate.StrategyId}'.")),
-            executionEvidence);
+            executionEvidence, accounting);
     }
 
     private static PortfolioBuildOutcome BuildPortfolioTradesCore(
@@ -538,7 +594,8 @@ public sealed partial class BacktestRunner
         UniverseMembership? universeMembership,
         Func<StrategyDefinition, RegimeCalendar?> resolveRegimeCalendar,
         IReadOnlyCollection<OhlcvBar> marketBars,
-        IExecutionEventSink? executionEvidence = null)
+        IExecutionEventSink? executionEvidence = null,
+        NativeDailyAccountingContext? accounting = null)
     {
         var admissionAudit = new PortfolioAdmissionAudit();
         var execution = new ChronologicalBacktestExecutionCoordinator(
@@ -557,6 +614,7 @@ public sealed partial class BacktestRunner
                      .GroupBy(candidate => candidate.EntryTimestamp.ToUniversalTime()))
         {
             execution.AdvanceThrough(entryGroup.Key);
+            if (execution.Failures.Count > 0) break;
             foreach (var candidate in entryGroup)
             {
                 var strategy = resolveStrategy(candidate);
@@ -573,7 +631,7 @@ public sealed partial class BacktestRunner
                 }
 
                 // Layer-2 regime gate: no new entries on days the market regime is off.
-                if (regimeCalendar is not null && !regimeCalendar.IsOn(entryDay))
+                if (regimeCalendar is not null && !regimeCalendar.IsOn(candidate.EntryTimestamp))
                 {
                     admissionAudit.Reject(candidate, "market_regime_off_on_entry_day");
                     continue;
@@ -645,8 +703,9 @@ public sealed partial class BacktestRunner
 
         }
 
-        execution.Complete();
-        foreach (var failure in execution.Failures)
+        execution.Complete(accounting?.AllowOpenAtCutoff == true ? accounting.CutoffUtc : null);
+        // Native failed executions are already admitted orders, and remain separate from admission rejections.
+        foreach (var failure in accounting is null ? execution.Failures : Array.Empty<BacktestExecutionFailure>())
         {
             admissionAudit.Reject(
                 failure.Ticker,
@@ -663,7 +722,22 @@ public sealed partial class BacktestRunner
                 .ThenBy(trade => trade.StrategyName, StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
             admissionAudit,
-            execution.Failures);
+            execution.Failures)
+        {
+            State = accounting is null ? null : BuildNativePortfolioState(portfolio.StartingCapital, execution, marketBars, accounting)
+        };
+    }
+
+    // An execution failure cannot be turned into apparently complete later monthly marks.
+    private static BacktestPortfolioState BuildNativePortfolioState(decimal capital,
+        ChronologicalBacktestExecutionCoordinator execution, IReadOnlyCollection<OhlcvBar> bars,
+        NativeDailyAccountingContext accounting)
+    {
+        var state = NativeDailySessionLedger.Analyze(capital, execution.Snapshot(accounting.CutoffUtc), bars, accounting);
+        if (execution.Failures.Count == 0) return state;
+        var first = execution.Failures.Min(f => ToExchangeDate(f.EntryTimestamp, "America/New_York"));
+        return NativeDailySessionLedger.MarkUnavailableFrom(state, first,
+            "Required execution evidence is unavailable from an admitted candidate's entry session.");
     }
 
     private static IReadOnlyCollection<OhlcvBar> BuildSyntheticExecutionBars(
@@ -691,12 +765,12 @@ public sealed partial class BacktestRunner
                         entryVolume),
                     new OhlcvBar(
                         candidate.Ticker,
-                        candidate.ExitTimestamp.ToUniversalTime(),
+                        candidate.ExitTimestamp?.ToUniversalTime() ?? throw new InvalidDataException("Synthetic fixture bars require a declared exit."),
                         timeframe,
-                        candidate.ExitPrice,
-                        candidate.ExitPrice,
-                        candidate.ExitPrice,
-                        candidate.ExitPrice,
+                        candidate.ExitPrice ?? throw new InvalidDataException("Synthetic fixture exit price is missing."),
+                        candidate.ExitPrice.Value,
+                        candidate.ExitPrice.Value,
+                        candidate.ExitPrice.Value,
                         unconstrainedSyntheticVolume)
                 };
             })
@@ -723,6 +797,18 @@ public sealed partial class BacktestRunner
         }
 
         return result.ToString();
+    }
+
+    // Report drawdown on supported session closes without reclassifying open holdings as closed trades.
+    private static decimal CalculateCloseDrawdown(decimal startingCapital, BacktestPortfolioState state)
+    {
+        var high = startingCapital; var drawdown = 0m;
+        foreach (var observation in state.Sessions.TakeWhile(s => s.Equity is not null))
+        {
+            var equity = observation.Equity!.Value; high = Math.Max(high, equity);
+            if (high > 0) drawdown = Math.Max(drawdown, (high - equity) / high * 100m);
+        }
+        return drawdown;
     }
 
     private static decimal CalculateMaxDrawdown(decimal startingCapital, IReadOnlyList<BacktestTrade> completedTrades)
@@ -809,7 +895,11 @@ public sealed partial class BacktestRunner
 internal sealed record PortfolioBuildOutcome(
     IReadOnlyList<BacktestTrade> Trades,
     PortfolioAdmissionAudit AdmissionAudit,
-    IReadOnlyList<BacktestExecutionFailure> ExecutionFailures);
+    IReadOnlyList<BacktestExecutionFailure> ExecutionFailures)
+{
+    public EventPortfolioReplayOutcome? EventReplay { get; init; }
+    public BacktestPortfolioState? State { get; init; }
+}
 
 internal sealed class PortfolioAdmissionAudit
 {

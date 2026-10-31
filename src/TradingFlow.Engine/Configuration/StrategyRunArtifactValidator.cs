@@ -108,6 +108,7 @@ public sealed class StrategyRunArtifactValidator(
         return manifest;
     }
 
+    // Validate the immutable source/snapshot and prevent Research diagnostic policy from crossing into paper or live modes.
     public StrategyDefinition ReadAndValidate(
         string strategyPath,
         StrategySelectionMode requiredMode)
@@ -128,6 +129,7 @@ public sealed class StrategyRunArtifactValidator(
                         $"Canonical strategy '{fullPath}' is not a research artifact.");
                 }
 
+                RequireDiagnosticBacktest(artifact.ResolvedStrategy, artifact.AdmissionProfile, requiredMode, artifact.Identity);
                 return artifact.ResolvedStrategy;
             }
 
@@ -155,6 +157,7 @@ public sealed class StrategyRunArtifactValidator(
         }
 
         var strategy = yamlReader.ReadStrategy(fullPath);
+        RequireDiagnosticBacktest(strategy, manifest.AdmissionProfile, requiredMode, manifest.SourceIdentity);
         var canonical = new CanonicalStrategyDocument(
             manifest.Identity.StrategyId,
             manifest.Identity.SemanticVersion,
@@ -168,6 +171,21 @@ public sealed class StrategyRunArtifactValidator(
         }
 
         return strategy;
+    }
+
+    // A diagnostic recipe cannot become a paper/live snapshot even if an ordinary grant is later created.
+    private void RequireDiagnosticBacktest(StrategyDefinition strategy, StrategyAdmissionProfile profile,
+        StrategySelectionMode mode, StrategyArtifactIdentity sourceIdentity)
+    {
+        if (strategy.EntryRules.HistoricalNewsDiagnostic is null && profile.HistoricalNewsDiagnosticPolicyId is null) return;
+        if (mode != StrategySelectionMode.Backtest ||
+            !HistoricalCompanyNewsDiagnosticPolicy.IsBoundTreatment(strategy.EntryRules.HistoricalNewsDiagnostic,
+                profile.HistoricalNewsDiagnosticPolicyId))
+            throw new InvalidDataException("Historical news diagnostic recipes are bound exclusively to their Research backtest policy.");
+        var source = strategyArtifacts.RequireExact(sourceIdentity);
+        if (source.Disposition != StrategyArtifactDisposition.Research || source.EffectiveLifecycle != StrategyLifecycleState.Research ||
+            source.AdmissionProfile != profile || source.ResolvedStrategy.EntryRules.HistoricalNewsDiagnostic != strategy.EntryRules.HistoricalNewsDiagnostic)
+            throw new InvalidDataException("Historical news diagnostic snapshot requires its exact registered Research source and unchanged admission policy.");
     }
 
     private static StrategyRunArtifactManifest DeserializeManifest(string manifestPath) =>

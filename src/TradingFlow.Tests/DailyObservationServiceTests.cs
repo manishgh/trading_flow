@@ -16,7 +16,7 @@ public sealed class DailyObservationServiceTests
     private static readonly DateTimeOffset Now = new(2026, 9, 28, 15, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public async Task ColdReadIsImmediateAndDeduplicated_ThenUsesSharedIndicatorsAndEvaluator()
+    public async Task ColdReadIsImmediateAndDeduplicated_ThenUsesSharedIndicators()
     {
         var fixture = new Fixture();
         fixture.Provider.Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -31,7 +31,6 @@ public sealed class DailyObservationServiceTests
         var result = await Ready(service);
         Assert.Equal("ready", result.State);
         Assert.Equal(1, fixture.Provider.Calls);
-        Assert.NotNull(result.Observation);
         var schedules = fixture.Calendar.Last!.Sessions.ToDictionary(x => x.Date,
             x => new MarketSessionSchedule(x.Date, x.TradingDay,
                 TimeOnly.FromDateTime(TimeZoneInfo.ConvertTime(x.OpenUtc, Exchange).DateTime),
@@ -39,7 +38,6 @@ public sealed class DailyObservationServiceTests
         var expected = new IndicatorEngine(MarketEvidenceProfile.ProductionDefault.WithSessionSchedules(schedules))
             .Compute(fixture.Provider.LastBars);
         Assert.Equal(expected[^1], result.Snapshot);
-        Assert.Equal(new WishlistSwingWatchEvaluator().Evaluate(result.Observation), result.Evaluation);
         Assert.NotNull(result.Snapshot!.RelativeVolume);
         Assert.Equal(Now, result.ObservedAtUtc);
         var bars = fixture.Provider.LastBars;
@@ -73,8 +71,6 @@ public sealed class DailyObservationServiceTests
         await using var service = fixture.Create();
         var result = await Ready(service);
         Assert.Equal("unavailable", result.State);
-        Assert.Null(result.Evaluation);
-        Assert.Null(result.Observation);
         Assert.Null(result.Snapshot);
     }
 
@@ -89,8 +85,6 @@ public sealed class DailyObservationServiceTests
         Assert.Contains("30/260", result.Detail);
         Assert.NotNull(result.Snapshot);
         Assert.Null(result.Snapshot.Ema200);
-        Assert.Null(result.Evaluation);
-        Assert.Null(result.Observation);
     }
 
     [Fact]
@@ -197,7 +191,7 @@ public sealed class DailyObservationServiceTests
             Provider = new(Calendar);
         }
         public DailyObservationService Create(DailyObservationOptions? options = null) =>
-            new(new(() => Provider), Calendar, new(), Clock, NullLogger<DailyObservationService>.Instance, options);
+            new(new(() => Provider), Calendar, Clock, NullLogger<DailyObservationService>.Instance, options);
     }
 
     private sealed class MutableClock(DateTimeOffset now) : TimeProvider

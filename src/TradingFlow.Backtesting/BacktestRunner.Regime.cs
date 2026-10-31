@@ -3,6 +3,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Regime;
+using TradingFlow.Engine.Indicators;
 
 namespace TradingFlow.Backtesting;
 
@@ -13,7 +14,11 @@ namespace TradingFlow.Backtesting;
 public sealed partial class BacktestRunner
 {
     private readonly RegimeGateService _regimeGate = new();
+    private IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? candidateSessionSchedules;
+    private IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> factorReferenceBars =
+        new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
 
+    // Load actual replay source dates for intraday books; other horizons retain their expiry-calendar lookahead.
     private async Task<IReadOnlyDictionary<string, RegimeCalendar>> BuildRegimeCalendarsAsync(
         BacktestRunConfig run,
         IReadOnlyCollection<StrategyDefinition> strategies,
@@ -23,15 +28,24 @@ public sealed partial class BacktestRunner
     {
         var calendars = new Dictionary<string, RegimeCalendar>(StringComparer.OrdinalIgnoreCase);
         var active = strategies.Where(strategy => strategy.Regime is { IsActive: true }).ToArray();
-        if (active.Length == 0)
-        {
-            return calendars;
-        }
 
         IMarketDataProvider? provider = null;
         var barsByBenchmark = new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
         try
         {
+            // Reuse a provider's explicit calendar for deterministic CSV/local fixtures as well as Alpaca; never infer one from bars.
+            provider = CreateProvider(run);
+            if (provider is IMarketSessionScheduleProvider scheduleProvider)
+            {
+                candidateSessionSchedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(
+                    DateOnly.FromDateTime(dataStart.UtcDateTime).AddDays(-1),
+                    BacktestCalendarBounds.IntradayLastRequiredDate(run, windowEnd, ResolveExchangeTimezone(strategies))
+                        ?? DateOnly.FromDateTime(windowEnd.UtcDateTime).AddDays(10), cancellationToken);
+                if (candidateSessionSchedules.Count == 0)
+                    throw new InvalidOperationException("Authoritative exchange calendar is empty; backtest setup expiry cannot be established.");
+            }
+            else if (run.Provider.Equals("alpaca", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Authoritative exchange calendar unavailable for Alpaca backtest.");
             foreach (var strategy in active)
             {
                 var regime = strategy.Regime!;
@@ -50,6 +64,8 @@ public sealed partial class BacktestRunner
                     barsByBenchmark[regime.BenchmarkSymbol] = bars;
                 }
 
+                if (bars.Count < regime.SmaPeriod + 1)
+                    throw new InvalidOperationException($"Benchmark {regime.BenchmarkSymbol} history is unavailable or insufficient for SMA{regime.SmaPeriod}; active market filter cannot be evaluated.");
                 calendars[strategy.StrategyId] = RegimeCalendarBuilder.Build(bars, regime.SmaPeriod);
             }
         }
@@ -61,6 +77,13 @@ public sealed partial class BacktestRunner
             }
         }
 
+        // Reuse the regime's native benchmark observations; the assembler truncates them per decision.
+        var needed = strategies.Select(strategy => strategy.EntryRules.TechnicalFactor)
+            .Where(factor => factor?.Metric == TechnicalFactorRules.RelativeRoc).ToArray();
+        foreach (var factor in needed)
+            if (!barsByBenchmark.ContainsKey(factor!.BenchmarkSymbol))
+                throw new InvalidOperationException("Relative strength requires an active matching benchmark regime.");
+        factorReferenceBars = barsByBenchmark;
         return calendars;
     }
 }

@@ -10,14 +10,12 @@ namespace TradingFlow.Engine.Regime;
 /// live/paper paths, so a strategy's regime rule (e.g. SPY above its 50-day SMA) is enforced identically
 /// everywhere instead of silently applying only in backtests. Loads benchmark daily bars — resampling a
 /// finer timeframe up to daily when a cache holds no native daily bars — and answers no-lookahead
-/// "is the regime on for entering on day D?" queries. A per-benchmark/per-day cache keeps the live path
-/// from re-fetching the benchmark on every ticker.
+/// "is the regime on for entering on day D?" queries. Provider-owned caches may reuse actual bars;
+/// a boolean result is never shared across strategies, feeds or later observations.
 /// </summary>
 public sealed class RegimeGateService
 {
     private readonly BarResampler resampler = new();
-    private readonly object gate = new();
-    private readonly Dictionary<string, (DateOnly AsOf, bool On)> liveCache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Loads daily benchmark bars, preferring native daily and otherwise resampling the finest available
@@ -57,8 +55,8 @@ public sealed class RegimeGateService
     /// <summary>
     /// Live/paper query: is the regime on for entering today? Fails closed (returns false) when the
     /// benchmark can't be confirmed above its SMA, so a data hiccup pauses new entries rather than
-    /// removing the protection. Cached per benchmark for the day, but a total fetch failure is not cached
-    /// so it retries on the next cycle.
+    /// removing the protection. Evaluates this exact period/provider/clock from actual bars on each call;
+    /// another strategy's SMA result or a prior feed observation cannot be reused as evidence.
     /// </summary>
     public async Task<bool> IsRegimeOnAsync(
         RegimeRules regime,
@@ -72,15 +70,6 @@ public sealed class RegimeGateService
             return true;
         }
 
-        var asOf = DateOnly.FromDateTime(now.UtcDateTime);
-        lock (gate)
-        {
-            if (liveCache.TryGetValue(regime.BenchmarkSymbol, out var cached) && cached.AsOf == asOf)
-            {
-                return cached.On;
-            }
-        }
-
         // Over-fetch so the SMA has enough prior daily closes.
         var start = now.AddDays(-((regime.SmaPeriod * 2) + 20));
         var daily = await LoadBenchmarkDailyBarsAsync(provider, regime.BenchmarkSymbol, availableIntervals, start, now, cancellationToken);
@@ -90,13 +79,7 @@ public sealed class RegimeGateService
             return false;
         }
 
-        var on = RegimeCalendarBuilder.IsRegimeOnAsOf(daily, regime.SmaPeriod, asOf);
-        lock (gate)
-        {
-            liveCache[regime.BenchmarkSymbol] = (asOf, on);
-        }
-
-        return on;
+        return RegimeCalendarBuilder.IsRegimeOnAt(daily, regime.SmaPeriod, now);
     }
 
     private static async Task<IReadOnlyList<OhlcvBar>> LoadIntervalAsync(
@@ -115,6 +98,7 @@ public sealed class RegimeGateService
                 bars.Add(bar);
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception)
         {
             // A missing timeframe/benchmark surfaces as empty so the caller can try the next timeframe.

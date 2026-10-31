@@ -22,6 +22,18 @@
 
                 <Border Style="{StaticResource CardBorder}" Padding="10">
                     <VerticalStackLayout Spacing="8">
+                        <Label Text="Account trading limits" FontAttributes="Bold" />
+                        <Label Text="New stocks per New York trading day" FontSize="12" />
+                        <Entry x:Name="DailyNewStockLimitEntry" Keyboard="Numeric" />
+                        <Label Text="Open stock positions at once" FontSize="12" />
+                        <Entry x:Name="AccountOpenPositionLimitEntry" Keyboard="Numeric" />
+                        <Button x:Name="SaveTradingLimitsButton" Text="Save trading limits" Clicked="OnSaveTradingLimits" />
+                        <Label x:Name="TradingLimitRuleLabel" FontSize="12" />
+                        <Label x:Name="TradingLimitStatusLabel" Text="Loading account limits…" FontSize="12" />
+                    </VerticalStackLayout>
+                </Border>
+                <Border Style="{StaticResource CardBorder}" Padding="10">
+                    <VerticalStackLayout Spacing="8">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                             <VerticalStackLayout Spacing="0">
                                 <Label Text="Quick Run" FontAttributes="Bold" FontSize="16" />

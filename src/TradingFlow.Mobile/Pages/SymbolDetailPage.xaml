@@ -23,12 +23,24 @@
                    TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" />
 
             <VerticalStackLayout Spacing="6">
-                <Label Text="TradingFlow Decision" FontAttributes="Bold" FontSize="18" />
+                <Label Text="Quotes and holdings" FontAttributes="Bold" FontSize="18" />
                 <Label x:Name="DecisionStatusLabel" FontAttributes="Bold" />
                 <Label x:Name="DecisionReasonLabel" LineBreakMode="WordWrap" />
                 <Label x:Name="QuoteLabel" FontFamily="monospace" />
                 <Label x:Name="QuoteAgeLabel" Style="{StaticResource SubHeadline}" />
                 <Label x:Name="PositionLabel" Style="{StaticResource SubHeadline}" />
+            </VerticalStackLayout>
+
+            <VerticalStackLayout Spacing="8">
+                <Label Text="Strategy" FontAttributes="Bold" FontSize="18" />
+                <Picker x:Name="StrategyPicker" Title="Select a strategy" SelectedIndexChanged="OnStrategyChanged" />
+                <Label x:Name="StrategyStatusLabel" Text="Select a strategy" LineBreakMode="WordWrap" />
+                <Label x:Name="StrategyTimeLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                <Button x:Name="CancelStrategyButton" Text="Cancel strategy checks" IsVisible="False" Clicked="OnCancelStrategyClicked" />
+                <VerticalStackLayout x:Name="StrategyChecks" Spacing="8" />
+                <Button Text="Open candidate review" Clicked="OnCandidateReviewClicked" />
+                <Label Text="Strategy checks do not submit an order. Quotes may be newer than the strategy evaluation."
+                       Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
             </VerticalStackLayout>
 
             <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}" />

@@ -8,6 +8,7 @@ public static class BacktestArtifactProjector
     public const string SummaryRetentionMode = "summary";
     public const string FullRetentionMode = "full";
 
+    // Apply configured detail retention while preserving the independently reconcilable portfolio accounting evidence.
     public static BacktestResult Project(BacktestResult result, ArtifactRetentionConfig artifacts)
     {
         var retentionMode = NormalizeRetentionMode(artifacts.RetentionMode);
@@ -20,6 +21,7 @@ public static class BacktestArtifactProjector
         };
     }
 
+    // Trim only the old trade/order presentation detail; retain state fills/sessions, eligibility and terminal exposure.
     private static BacktestResult ProjectSummary(BacktestResult result)
     {
         return result with
@@ -39,6 +41,7 @@ public static class BacktestArtifactProjector
         };
     }
 
+    // Keep the existing full default and deterministic spelling for explicitly selected retention modes.
     private static string NormalizeRetentionMode(string? retentionMode)
     {
         return String.IsNullOrWhiteSpace(retentionMode)

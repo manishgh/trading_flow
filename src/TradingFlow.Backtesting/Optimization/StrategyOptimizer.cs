@@ -12,6 +12,7 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
 {
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
 
+    /// <summary>Rejects unsupported objectives and excessive work before allocating a workspace or requesting market data.</summary>
     public async Task<OptimizationResult> OptimizeAsync(
         string optimizationConfigPath,
         CancellationToken cancellationToken,
@@ -22,6 +23,9 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
     {
         var config = yamlReader.ReadOptimizationConfig(optimizationConfigPath);
         var run = yamlReader.ReadBacktestRun(config.BacktestConfigPath);
+        if (evaluationCutoffUtc is not null && run.TimeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase))
+            run = run with { TimeWindow = run.TimeWindow with { End = run.TimeWindow.End ?? evaluationCutoffUtc } };
+        ValidateConfiguration(config, run);
         var resultOwner = durableAttemptRoot ?? Path.Combine(run.ResultsRoot, "optimization", config.RunName);
         var workspace = runner.CreateWorkspace(run, Path.Combine(resultOwner, "optimization.json"));
         var scoped = new StrategyOptimizer(yamlReader, workspace.Runner, _artifactWriter);
@@ -29,6 +33,7 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
             progress, optimizationProgress, durableAttemptRoot, evaluationCutoffUtc, workspace.Run));
     }
 
+    /// <summary>Reuses prepared market state and evaluates one bounded parameter combination at a time.</summary>
     private async Task<OptimizationResult> OptimizeCoreAsync(string optimizationConfigPath, CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress, IProgress<OptimizationProgress>? optimizationProgress,
         string? durableAttemptRoot, DateTimeOffset? evaluationCutoffUtc, BacktestRunConfig scopedRun)
@@ -37,20 +42,12 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         var config = yamlReader.ReadOptimizationConfig(optimizationConfigPath);
         var baseStrategy = yamlReader.ReadStrategy(config.BaseStrategyPath);
         var backtestConfig = scopedRun;
-        if (evaluationCutoffUtc is not null &&
-            backtestConfig.TimeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase))
-        {
-            backtestConfig = backtestConfig with
-            {
-                TimeWindow = backtestConfig.TimeWindow with { End = evaluationCutoffUtc }
-            };
-        }
 
-        var permutations = GeneratePermutations(config.Parameters);
+        var permutationCount = ValidateConfiguration(config, backtestConfig);
         var runs = new List<OptimizationRun>();
         progress?.Report(BacktestProgress.StageOnly(
             "optimization_prepare_market",
-            $"Preparing candles and indicators once for {permutations.Count} optimization permutation(s)."));
+            $"Preparing candles and indicators once for {permutationCount} optimization permutation(s)."));
         var preparedMarket = await runner.PrepareMarketAsync(
             backtestConfig,
             [baseStrategy],
@@ -67,12 +64,12 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
             "optimization_prepare_market",
             "Reusable candle and indicator state is ready. Evaluating parameter combinations."));
 
-        for (var i = 0; i < permutations.Count; i++)
+        var i = 0;
+        foreach (var p in EnumeratePermutations(config.Parameters))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var p = permutations[i];
             var permutationNumber = i + 1;
-            var permutationLabel = $"Permutation {permutationNumber} of {permutations.Count}";
+            var permutationLabel = $"Permutation {permutationNumber} of {permutationCount}";
 
             var testStrategy = ApplyParameters(baseStrategy, p);
             // Give it a unique ID to distinguish
@@ -82,7 +79,7 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
             optimizationProgress?.Report(new OptimizationProgress(
                 "started",
                 permutationNumber,
-                permutations.Count,
+                permutationCount,
                 testStrategy.StrategyName,
                 p,
                 null,
@@ -122,15 +119,18 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
                 result.StrategyResults.FirstOrDefault()?.LosingTradeCount ?? 0,
                 result);
             runs.Add(optimizationRun);
+            // Only selected results are published; do not retain every full backtest result while searching.
+            runs = RankRuns(runs, config.TopNResults).ToList();
             optimizationProgress?.Report(new OptimizationProgress(
                 "completed",
                 permutationNumber,
-                permutations.Count,
+                permutationCount,
                 testStrategy.StrategyName,
                 p,
                 optimizationRun,
                 RankRuns(runs, config.TopNResults),
                 $"Completed {permutationLabel}: return {optimizationRun.TotalReturnPct:0.00}%, daily avg {optimizationRun.AverageDailyReturnPct:0.0000}%, net {optimizationRun.NetProfit:0.00}, drawdown {optimizationRun.MaxDrawdownPct:0.00}%."));
+            i++;
         }
 
         var topRuns = RankRuns(runs, config.TopNResults);
@@ -141,7 +141,7 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
             config.Metric,
             startedAt,
             DateTimeOffset.UtcNow,
-            permutations.Count,
+            permutationCount,
             topRuns);
 
         var resultPath = durableAttemptRoot is null
@@ -157,6 +157,7 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         return optimizationResult;
     }
 
+    /// <summary>Retains the best requested results in stable objective order, including stable ties.</summary>
     private static OptimizationRun[] RankRuns(IEnumerable<OptimizationRun> runs, int topN)
     {
         return runs
@@ -176,60 +177,87 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         return String.Join(", ", parameters.Select(p => $"{p.Key.Split('.').Last()}={p.Value}"));
     }
 
-    private decimal ExtractMetric(BacktestResult result, string strategyId, string metricName)
+    /// <summary>Reads the requested strategy's objective; an absent strategy or unknown metric cannot become a zero/default score.</summary>
+    internal static decimal ExtractMetric(BacktestResult result, string strategyId, string metricName)
     {
-        var strategy = result.StrategyResults.FirstOrDefault();
-        if (strategy == null) return 0;
+        var metric = NormalizeMetric(metricName);
+        var strategy = result.StrategyResults.SingleOrDefault(item => item.StrategyId == strategyId)
+            ?? throw new InvalidOperationException($"Optimization result does not contain strategy '{strategyId}'.");
 
-        return metricName.ToLowerInvariant() switch
+        return metric switch
         {
             "totalreturnpct" => strategy.TotalReturnPct,
             "averagedailyreturnpct" => strategy.AverageDailyReturnPct,
             "netprofit" => strategy.NetProfit,
             "maxdrawdownpct" => -strategy.MaxDrawdownPct, // negative so higher is better
             "winrate" => strategy.AcceptedTradeCount == 0 ? 0 : ((decimal)strategy.WinningTradeCount / strategy.AcceptedTradeCount) * 100,
-            _ => strategy.TotalReturnPct
+            _ => throw new InvalidOperationException("The validated optimization objective is not implemented.")
         };
     }
 
-    private IReadOnlyList<IReadOnlyDictionary<string, object>> GeneratePermutations(IReadOnlyDictionary<string, IReadOnlyList<object>> parameters)
+    /// <summary>Checks the complete search against the existing strategy/ticker work budget before any product is generated.</summary>
+    public static int ValidateConfiguration(OptimizationConfig config, BacktestRunConfig run)
     {
-        var result = new List<IReadOnlyDictionary<string, object>>();
-        if (parameters.Count == 0)
-        {
-            result.Add(new Dictionary<string, object>());
-            return result;
-        }
-
-        var keys = parameters.Keys.ToArray();
-        GeneratePermutationsRecursive(parameters, keys, 0, new Dictionary<string, object>(), result);
-        return result;
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(run);
+        NormalizeMetric(config.Metric);
+        if (config.TopNResults <= 0) throw new ArgumentOutOfRangeException(nameof(config), "Optimization top_n_results must be positive.");
+        var stockCount = Math.Max(1, run.Tickers.Count);
+        var maximumPermutations = run.Engine.MaxStrategyWorkItems / stockCount;
+        return CountPermutations(config.Parameters, maximumPermutations);
     }
 
-    private void GeneratePermutationsRecursive(
-        IReadOnlyDictionary<string, IReadOnlyList<object>> parameters,
-        string[] keys,
-        int keyIndex,
-        Dictionary<string, object> current,
-        List<IReadOnlyDictionary<string, object>> result)
+    /// <summary>Uses division before multiplication, rejecting huge products without overflow or reading their values.</summary>
+    internal static int CountPermutations(IReadOnlyDictionary<string, IReadOnlyList<object>> parameters, int maximum)
     {
-        if (keyIndex >= keys.Length)
+        ArgumentNullException.ThrowIfNull(parameters);
+        if (maximum <= 0) throw new InvalidOperationException("The configured engine.max_strategy_work_items does not allow even one optimization combination for these stocks.");
+        var count = 1;
+        foreach (var parameter in parameters)
         {
-            result.Add(new Dictionary<string, object>(current));
-            return;
+            if (String.IsNullOrWhiteSpace(parameter.Key) || parameter.Value is null || parameter.Value.Count == 0)
+                throw new ArgumentException("Every optimization parameter requires a name and at least one value.", nameof(parameters));
+            if (count > maximum / parameter.Value.Count)
+                throw new InvalidOperationException($"Optimization combinations exceed the configured strategy/ticker work budget ({maximum} combinations available for these stocks). Reduce the parameter values or increase engine.max_strategy_work_items.");
+            count *= parameter.Value.Count;
         }
-
-        var key = keys[keyIndex];
-        var values = parameters[key];
-
-        foreach (var value in values)
-        {
-            current[key] = value;
-            GeneratePermutationsRecursive(parameters, keys, keyIndex + 1, current, result);
-        }
-
-        current.Remove(key);
+        return count;
     }
+
+    /// <summary>Produces one independent combination at a time in the existing key/value order, without recursive product allocation.</summary>
+    internal static IEnumerable<IReadOnlyDictionary<string, object>> EnumeratePermutations(IReadOnlyDictionary<string, IReadOnlyList<object>> parameters)
+    {
+        var axes = parameters.ToArray();
+        if (axes.Any(axis => axis.Value is null || axis.Value.Count == 0))
+            throw new ArgumentException("Optimization parameter values cannot be empty.", nameof(parameters));
+        var indexes = new int[axes.Length];
+        while (true)
+        {
+            var combination = new Dictionary<string, object>(axes.Length);
+            for (var axis = 0; axis < axes.Length; axis++)
+                combination.Add(axes[axis].Key, axes[axis].Value[indexes[axis]]);
+            yield return combination;
+
+            var changing = axes.Length - 1;
+            while (changing >= 0 && ++indexes[changing] == axes[changing].Value.Count)
+            {
+                indexes[changing] = 0;
+                changing--;
+            }
+            if (changing < 0) yield break;
+        }
+    }
+
+    /// <summary>Defines supported objectives once so admission and scoring reject the same misspellings.</summary>
+    private static string NormalizeMetric(string metricName) => metricName?.Trim().ToLowerInvariant() switch
+    {
+        "totalreturnpct" => "totalreturnpct",
+        "averagedailyreturnpct" => "averagedailyreturnpct",
+        "netprofit" => "netprofit",
+        "maxdrawdownpct" => "maxdrawdownpct",
+        "winrate" => "winrate",
+        _ => throw new ArgumentException($"Unsupported optimization metric '{metricName}'. Choose TotalReturnPct, AverageDailyReturnPct, NetProfit, MaxDrawdownPct or WinRate.", nameof(metricName))
+    };
 
     private StrategyDefinition ApplyParameters(StrategyDefinition baseStrategy, IReadOnlyDictionary<string, object> parameters)
     {

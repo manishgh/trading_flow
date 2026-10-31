@@ -19,7 +19,8 @@
 
 <section class="panel">
     <h2>Add Warmup Stocks</h2>
-    <form method="post" asp-page-handler="Add" class="tf-grid-form">
+    <form method="post" asp-page-handler="Add" class="tf-grid-form" data-warmup-add-form>
+        <input type="hidden" name="AddCommandKey" value="@Model.AddCommandKey" />
         <label>
             Tickers
             <textarea name="TickersCsv" rows="2" placeholder="POET, RGTI, NVTS">@Model.TickersCsv</textarea>
@@ -54,6 +55,10 @@
     </form>
 </section>
 
+@section Scripts {
+    <script src="~/js/warmup-form.js" asp-append-version="true" defer></script>
+}
+
 <section class="panel">
     <div class="panel-header">
         <div>
@@ -61,6 +66,7 @@
             <p>Warmup service: @Model.ServiceBaseUrl</p>
         </div>
         <form method="post" asp-page-handler="RunNow">
+            <input type="hidden" name="RunNowCommandKey" value="@Model.RunNowCommandKey" />
             <button class="button" type="submit">Run All Now</button>
         </form>
     </div>
@@ -110,7 +116,22 @@
 </section>
 
 <section class="panel">
+    <h2>Accepted warmup jobs</h2>
+    <p>Queued work is saved before acceptance. Restart resumes interrupted jobs with the same stocks and settings.</p>
+    @foreach (var job in Model.Jobs.OrderByDescending(item => item.QueuedAtUtc).Take(20))
+    {
+        <div><strong>@job.RunId · @job.Status</strong><p>@String.Join(", ", job.Tickers) · @job.Error</p>
+        @if (job.Status is "queued" or "running")
+        {
+            <form method="post" asp-page-handler="CancelJob"><input type="hidden" name="runId" value="@job.RunId" /><button type="submit">Cancel job</button></form>
+        }
+        </div>
+    }
+</section>
+
+<section class="panel">
     <h2>Recent Warmup Runs</h2>
+    <p>Cache completion and archive delivery are separate. Local committed means captured files are stored locally; remote pending means cloud upload still needs retry.</p>
     <div class="table-scroll">
         <table>
             <thead>
@@ -119,14 +140,15 @@
                     <th>Status</th>
                     <th>Reason</th>
                     <th>Tickers</th>
-                    <th>Succeeded</th>
+                    <th>Cache completed</th>
                     <th>Failed</th>
+                    <th>Archive delivery</th>
                 </tr>
             </thead>
             <tbody>
             @if (Model.Runs.Count == 0)
             {
-                <tr><td colspan="6">No warmup runs yet.</td></tr>
+                <tr><td colspan="7">No warmup runs yet.</td></tr>
             }
             else
             {
@@ -139,6 +161,14 @@
                         <td>@run.RequestedTickerCount</td>
                         <td>@run.SucceededTickerCount</td>
                         <td>@run.FailedTickerCount</td>
+                        <td>
+                            @foreach (var ticker in run.Tickers)
+                            { <p>@ticker.Ticker: @ticker.ArchiveStatus.Replace('_', ' ') · @ticker.ArchiveError</p> }
+                            @if (run.Tickers.Any(ticker => ticker.ArchiveStatus is "remote_pending" or "local_failed"))
+                            {
+                                <form method="post" asp-page-handler="RetryArchives"><input type="hidden" name="runId" value="@run.RunId" /><button type="submit">Retry archive delivery</button></form>
+                            }
+                        </td>
                     </tr>
                 }
             }

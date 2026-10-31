@@ -12,7 +12,7 @@ public sealed class RegimeGateServiceTests
     private static readonly DateTimeOffset Now = new(2026, 6, 10, 14, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public async Task IsRegimeOnAsync_WithNativeDaily_ReturnsRegimeAndCachesForTheDay()
+    public async Task IsRegimeOnAsync_WithNativeDaily_EvaluatesEachActualObservation()
     {
         // Rising daily closes -> latest close above the 3-day SMA -> regime on.
         var provider = new FakeProvider(new Dictionary<string, IReadOnlyList<OhlcvBar>>
@@ -26,7 +26,22 @@ public sealed class RegimeGateServiceTests
 
         Assert.True(first);
         Assert.True(second);
-        Assert.Equal(1, provider.CallCount); // second call served from the per-day cache
+        Assert.Equal(2, provider.CallCount);
+    }
+
+    /// <summary>Different strategy SMA periods must not inherit one another's same-day benchmark answer.</summary>
+    [Fact]
+    public async Task DifferentPeriodsAndProviders_DoNotShareARegimeBoolean()
+    {
+        decimal[] prices = [10, 100, 95];
+        var bars = prices.Select((price, index) => new OhlcvBar("SPY", Now.AddDays(index - 5), "1d",
+            price, price, price, price, 1000)).ToArray();
+        var provider = new FakeProvider(new Dictionary<string, IReadOnlyList<OhlcvBar>> { ["1d"] = bars });
+        var service = new RegimeGateService();
+        Assert.False(await service.IsRegimeOnAsync(SpyAboveSma3 with { SmaPeriod = 2 }, provider, ["1d"], Now, default));
+        Assert.True(await service.IsRegimeOnAsync(SpyAboveSma3, provider, ["1d"], Now, default));
+        var otherFeed = new FakeProvider(new Dictionary<string, IReadOnlyList<OhlcvBar>> { ["1d"] = FallingDaily("2026-06-01", 9) });
+        Assert.False(await service.IsRegimeOnAsync(SpyAboveSma3, otherFeed, ["1d"], Now, default));
     }
 
     [Fact]

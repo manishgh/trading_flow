@@ -1,10 +1,12 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Engine.Configuration;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
+using TradingFlow.Backtesting;
 
 namespace TradingFlow.Web.Pages;
 
@@ -14,17 +16,20 @@ public sealed class BacktestsModel : PageModel
     private readonly OptimizationJobService optJobs;
     private readonly BacktestJobService backtestJobs;
     private readonly IWishlistRepository wishlists;
+    private readonly TradingFlow.Web.Services.Desk.DeskSources stockSources;
+    public IReadOnlyList<TradingFlow.Contracts.V1.BacktestStockSource> StockSources { get; private set; } = [];
 
     public BacktestsModel(
         ConfigCatalogService catalog,
         OptimizationJobService optJobs,
         BacktestJobService backtestJobs,
-        IWishlistRepository wishlists)
+        IWishlistRepository wishlists, TradingFlow.Web.Services.Desk.DeskSources stockSources)
     {
         this.catalog = catalog;
         this.optJobs = optJobs;
         this.backtestJobs = backtestJobs;
         this.wishlists = wishlists;
+        this.stockSources = stockSources;
     }
 
     [BindProperty] public string SelectedConfigPath { get; set; } = String.Empty;
@@ -41,8 +46,9 @@ public sealed class BacktestsModel : PageModel
     /// </summary>
     [BindProperty(SupportsGet = true)] public string? Drill { get; set; }
 
-    /// <summary>Metric the leaderboard is ranked on.</summary>
-    [BindProperty(SupportsGet = true)] public string Metric { get; set; } = "return";
+    [BindProperty(SupportsGet = true)] public string? Month { get; set; }
+    [BindProperty(SupportsGet = true)] public long ZoneOffset { get; set; }
+    public TradingFlow.Contracts.V1.RunZoneEvaluationPage? ZoneEvaluations { get; private set; }
 
     public BacktestJobSnapshot? SelectedJob { get; private set; }
 
@@ -67,14 +73,12 @@ public sealed class BacktestsModel : PageModel
 
             return results.FirstOrDefault(item =>
                     item.StrategyId.Equals(Drill, StringComparison.OrdinalIgnoreCase))
-                ?? results.FirstOrDefault(item =>
-                    item.StrategyId.Equals(SelectedJob!.Result!.Winner?.StrategyId, StringComparison.OrdinalIgnoreCase))
-                ?? results[0];
+                ?? results.OrderBy(item=>item.StrategyName,StringComparer.Ordinal).First();
         }
     }
 
     /// <summary>
-    /// The seven preregistered gates for the drilled strategy.
+    /// Assesses the supplied snapshot only; absent run configuration and trimmed trade details remain unevaluated.
     /// </summary>
     /// <remarks>
     /// A run built on a current wishlist fails the universe gate by construction,
@@ -87,74 +91,18 @@ public sealed class BacktestsModel : PageModel
     public StrategyDiagnosticReport? DrilledDiagnostic => SelectedJob?.Result?.Diagnostics
         .FirstOrDefault(item => item.StrategyId.Equals(DrilledStrategy?.StrategyId, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Metrics the leaderboard can be ranked on.</summary>
-    public static IReadOnlyList<(string Key, string Label)> Metrics { get; } =
-    [
-        ("return", "Total return %"),
-        ("daily", "Avg daily return %"),
-        ("net", "Net profit"),
-        ("drawdown", "Max drawdown %"),
-        ("winrate", "Win rate %")
-    ];
-
-    /// <summary>
-    /// Strategies ordered on the chosen metric. Drawdown sorts ascending because
-    /// less is better; everything else descending.
-    /// </summary>
-    public IReadOnlyList<StrategyBacktestResult> Leaderboard
+    /// <summary>Uses the worker's complete monthly records, never reconstructing returns from trimmed trade collections.</summary>
+    public IReadOnlyList<TradingFlow.Contracts.V1.MonthlyRunResult> MonthlyRows => SelectedJob?.MonthlyResults ?? [];
+    public string MonthlyUnavailable => SelectedJob?.MonthlyUnavailableReason ?? "No monthly result evidence was published for this run.";
+    public string? SelectedMonth => MonthlyRows.Any(row => row.Month == Month) ? Month :
+        MonthlyRows.Where(row => !row.PartialMonth).Select(row => row.Month).Order(StringComparer.Ordinal).LastOrDefault()
+        ?? MonthlyRows.Select(row => row.Month).Order(StringComparer.Ordinal).LastOrDefault();
+    /// <summary>Filters only the retained trade sample; monthly totals come from the separately preserved records.</summary>
+    public IReadOnlyList<BacktestTrade> TradesForSelectedMonth(StrategyBacktestResult strategy)
     {
-        get
-        {
-            var results = SelectedJob?.Result?.StrategyResults ?? [];
-            return Metric switch
-            {
-                "daily" => results.OrderByDescending(item => item.AverageDailyReturnPct).ToArray(),
-                "net" => results.OrderByDescending(item => item.NetProfit).ToArray(),
-                "drawdown" => results.OrderBy(item => item.MaxDrawdownPct).ToArray(),
-                "winrate" => results.OrderByDescending(WinRatePct).ToArray(),
-                _ => results.OrderByDescending(item => item.TotalReturnPct).ToArray()
-            };
-        }
-    }
-
-    public static decimal WinRatePct(StrategyBacktestResult strategy)
-    {
-        var decided = strategy.WinningTradeCount + strategy.LosingTradeCount;
-        return decided <= 0 ? 0m : (decimal)strategy.WinningTradeCount / decided * 100m;
-    }
-
-    /// <summary>The value the leaderboard bar and figure show for one strategy.</summary>
-    public decimal MetricValue(StrategyBacktestResult strategy) => Metric switch
-    {
-        "daily" => strategy.AverageDailyReturnPct,
-        "net" => strategy.NetProfit,
-        "drawdown" => strategy.MaxDrawdownPct,
-        "winrate" => WinRatePct(strategy),
-        _ => strategy.TotalReturnPct
-    };
-
-    /// <summary>
-    /// Rank of <paramref name="strategy"/> on one matrix metric, 1 being best.
-    /// Cell tint encodes rank rather than absolute value so the table stays
-    /// readable whatever the scale.
-    /// </summary>
-    public int RankOn(string metric, StrategyBacktestResult strategy)
-    {
-        var results = SelectedJob?.Result?.StrategyResults ?? [];
-        Func<StrategyBacktestResult, decimal> selector = metric switch
-        {
-            "daily" => item => item.AverageDailyReturnPct,
-            "net" => item => item.NetProfit,
-            "drawdown" => item => -item.MaxDrawdownPct,
-            "trades" => item => item.AcceptedTradeCount,
-            "winrate" => WinRatePct,
-            "hold" => item => (decimal)(BacktestDerivedMetrics.AverageHold(item)?.TotalMinutes ?? 0),
-            "profitfactor" => item => BacktestDerivedMetrics.ProfitFactor(item) ?? 0m,
-            _ => item => item.TotalReturnPct
-        };
-        var ordered = results.OrderByDescending(selector).ToArray();
-        var index = Array.FindIndex(ordered, item => item.StrategyId == strategy.StrategyId);
-        return index < 0 ? results.Count : index + 1;
+        return (SelectedJob?.Result?.CompletedTrades ?? []).Where(trade => trade.StrategyId == strategy.StrategyId &&
+            MonthlyBacktestPresentation.SourceSessionDate(trade.ExitTimestamp, strategy.PortfolioState?.ValuationBasis)
+                .ToString("yyyy-MM",System.Globalization.CultureInfo.InvariantCulture) == SelectedMonth).ToArray();
     }
 
     public IReadOnlyList<RunConfigSummary> Configs { get; private set; } = [];
@@ -165,20 +113,27 @@ public sealed class BacktestsModel : PageModel
     public IReadOnlyList<BacktestJobSnapshot> BacktestJobs { get; private set; } = [];
     public IReadOnlyList<ResearchSnapshot> ResearchSnapshots { get; private set; } = [];
 
+    /// <summary>Loads configuration and the exact persisted execution, including jobs waiting for a worker.</summary>
     public async Task OnGetAsync(string? configPath, string? strategyPath, Guid? wishlistId, CancellationToken cancellationToken)
     {
         await LoadDataAsync(configPath, strategyPath, wishlistId, cancellationToken);
-        SelectedJob = JobId is { } id ? backtestJobs.Get(id) : null;
+        SelectedJob = JobId is { } id ? await backtestJobs.GetSnapshotAsync(id, cancellationToken) : null;
+        if (JobId is { } evidenceJob && SelectedJob?.Status == "completed" && SelectedJob.Result?.ZoneDecisions is not null)
+        {
+            try { ZoneEvaluations = await HttpContext.RequestServices.GetRequiredService<TradingFlow.Application.Jobs.RunWorkflowService>()
+                .ZoneEvaluationsAsync(evidenceJob, Math.Max(0, ZoneOffset), 50, cancellationToken); }
+            catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException or InvalidOperationException)
+            { ZoneEvaluations = new(0, Math.Max(0, ZoneOffset), 50, null, [], "Retained zone evidence could not be verified: " + exception.Message); }
+        }
     }
 
     /// <summary>
-    /// Progress poll for the running phase. Returns the same projection the
-    /// previous job page used, so the cadence and the reload-on-first-completion
-    /// behaviour are unchanged.
+    /// Returns worker progress, preparation failures and committed candle facts for the current job.
+    /// The browser patches only the existing status and evidence panel.
     /// </summary>
-    public IActionResult OnGetSnapshot(Guid id)
+    public async Task<IActionResult> OnGetSnapshotAsync(Guid id, CancellationToken cancellationToken)
     {
-        var job = backtestJobs.Get(id);
+        var job = await backtestJobs.GetSnapshotAsync(id, cancellationToken);
         if (job is null)
         {
             return NotFound();
@@ -198,6 +153,7 @@ public sealed class BacktestsModel : PageModel
             ProgressPercent = Math.Round(progressPercent, 1),
             Elapsed = elapsed.ToString(ElapsedFormat),
             job.ErrorMessage,
+            PreparedMarketData = job.PreparedMarketData ?? job.Result?.PreparedMarketData,
             CanCancel = job.Status is "queued" or "running" or "cancelling",
             Events = job.Events.TakeLast(40),
             StrategyGroups = (job.StrategyGroups ?? [])
@@ -231,15 +187,17 @@ public sealed class BacktestsModel : PageModel
         });
     }
 
+    /// <summary>Reads catalog, operator lists and persisted recent work without creating or mutating them.</summary>
     private async Task LoadDataAsync(string? configPath, string? strategyPath, Guid? wishlistId, CancellationToken cancellationToken)
     {
         Configs = catalog.GetBacktestConfigs();
+        StockSources = await stockSources.BacktestChoicesAsync(cancellationToken);
         Wishlists = await wishlists.ListAsync(cancellationToken);
         Strategies = await catalog.GetStrategiesAsync(
             StrategySelectionMode.Backtest,
             cancellationToken);
         OptimizationJobs = optJobs.List().Take(5).ToArray();
-        BacktestJobs = backtestJobs.List().Take(5).ToArray();
+        BacktestJobs = await backtestJobs.RecentSnapshotsAsync(5, cancellationToken);
         ResearchSnapshots = LoadResearchSnapshots();
 
         SelectedConfigPath = configPath ?? (Configs.FirstOrDefault()?.Path ?? String.Empty);
@@ -257,19 +215,19 @@ public sealed class BacktestsModel : PageModel
         if (!Directory.Exists(root)) return [];
 
         return Directory.EnumerateFiles(root, "leaderboard.csv", SearchOption.AllDirectories)
-            .Select(path =>
+            .SelectMany(path =>
             {
                 var directory = Path.GetDirectoryName(path)!;
                 var runId = Path.GetFileName(directory);
-                var best = System.IO.File.ReadLines(path)
+                var strategies = System.IO.File.ReadLines(path)
                     .Skip(1)
                     .Select(ParseLeaderboardLine)
                     .Where(x => x is not null)
                     .Cast<ResearchStrategyRow>()
-                    .OrderByDescending(x => x.TotalReturnPct)
-                    .FirstOrDefault();
-                
-                if (best is null) return null;
+                    .OrderBy(x => x.StrategyName, StringComparer.Ordinal)
+                    .ToArray();
+
+                if (strategies.Length == 0) return Array.Empty<ResearchSnapshot>();
 
                 var universeSource = "unknown";
                 var runConfigPath = Path.Combine(directory, "run_config.yaml");
@@ -302,11 +260,11 @@ public sealed class BacktestsModel : PageModel
                     }
                     else if (manifestContent.Contains("\"promoted_strategies\"", StringComparison.OrdinalIgnoreCase))
                     {
-                        decision = "PROMOTED";
+                        decision = "Legacy label; exact-identity authorization required";
                     }
                 }
 
-                return new ResearchSnapshot(runId, directory, best.StrategyName, best.TotalReturnPct, best.MaxDrawdownPct, best.AcceptedTradeCount, universeSource, decision);
+                return strategies.Select(strategy => new ResearchSnapshot(runId, directory, strategy.StrategyName, strategy.AcceptedTradeCount, universeSource, decision)).ToArray();
             })
             .Where(x => x is not null)
             .Cast<ResearchSnapshot>()
@@ -362,9 +320,7 @@ public sealed class BacktestsModel : PageModel
     public sealed record ResearchSnapshot(
         string RunId,
         string Directory,
-        string BestStrategyName,
-        decimal TotalReturnPct,
-        decimal MaxDrawdownPct,
+        string StrategyName,
         int AcceptedTradeCount,
         string UniverseSource,
         string Decision);

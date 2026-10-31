@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using TradingFlow.Alpaca;
 using TradingFlow.Engine.Pipeline;
@@ -7,22 +8,21 @@ namespace TradingFlow.Tests;
 
 public class AlpacaCandlePipelineIntegrationTests(ITestOutputHelper output)
 {
+    /// <summary>Exercises archived fake HTTP bars and calendars through the real bounded pipeline without operator credentials.</summary>
     [Fact]
     public async Task RunAsync_AlpacaMarketData_ProcessesCandlesThroughTplDataflowBlocks()
     {
-        var options = TryLoadAlpacaOptions();
-        if (options is null)
+        using var archive = new OwnedAlpacaTestArchive();
+        using var httpClient = new HttpClient(new FixtureMarketHandler());
+        var options = AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
         {
-            return;
-        }
-
-        using var httpClient = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(45)
+            KeyId = "fixture",
+            SecretKey = "fixture",
+            MarketDataFeed = "sip"
         };
-        var provider = new AlpacaMarketDataProvider(httpClient, options);
+        var provider = new AlpacaMarketDataProvider(httpClient, options, archive.Writer);
         var engine = new CandlePipelineEngine();
-        var end = DateTimeOffset.UtcNow;
+        var end = new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero);
         var start = end.AddDays(-7);
 
         var result = await engine.RunAsync(
@@ -69,45 +69,31 @@ public class AlpacaCandlePipelineIntegrationTests(ITestOutputHelper output)
         }
     }
 
-    private static AlpacaOptions? TryLoadAlpacaOptions()
+    private sealed class FixtureMarketHandler : HttpMessageHandler
     {
-        var keyId = Environment.GetEnvironmentVariable("ALPACA_KEY_ID");
-        var secretKey = Environment.GetEnvironmentVariable("ALPACA_SECRET_KEY");
-        if (String.IsNullOrWhiteSpace(keyId) || String.IsNullOrWhiteSpace(secretKey))
+        /// <summary>Returns fixed five-minute sessions and their official-shaped calendars with no network transport.</summary>
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var settingsPath = Path.GetFullPath(Path.Combine(
-                AppContext.BaseDirectory,
-                "..",
-                "..",
-                "..",
-                "..",
-                "TradingFlow.Web",
-                "appsettings.local.json"));
-            if (!File.Exists(settingsPath))
+            var sessions = Enumerable.Range(0, 5).Select(day => new DateTimeOffset(2026, 6, 1 + day, 13, 30, 0, TimeSpan.Zero)).ToArray();
+            string payload;
+            if (request.RequestUri!.AbsolutePath == "/v2/calendar")
             {
-                return null;
+                payload = JsonSerializer.Serialize(sessions.Select(session => new
+                {
+                    date = session.ToString("yyyy-MM-dd"), open = "09:30", close = "16:00"
+                }));
             }
-
-            using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
-            if (!document.RootElement.TryGetProperty("Alpaca", out var alpaca))
+            else
             {
-                return null;
+                var bars = new[] { "AAPL", "AMD" }.ToDictionary(ticker => ticker, ticker =>
+                    sessions.SelectMany(session => Enumerable.Range(0, 78).Select(index => new
+                    {
+                        t = session.AddMinutes(index * 5), o = 100m + index, h = 102m + index,
+                        l = 99m + index, c = 101m + index, v = 1000m
+                    })).ToArray());
+                payload = JsonSerializer.Serialize(new { bars, next_page_token = (string?)null });
             }
-
-            keyId = alpaca.TryGetProperty("KeyId", out var keyElement) ? keyElement.GetString() : null;
-            secretKey = alpaca.TryGetProperty("SecretKey", out var secretElement) ? secretElement.GetString() : null;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(payload), RequestMessage = request });
         }
-
-        if (String.IsNullOrWhiteSpace(keyId) || String.IsNullOrWhiteSpace(secretKey))
-        {
-            return null;
-        }
-
-        return AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
-        {
-            KeyId = keyId,
-            SecretKey = secretKey,
-            MarketDataFeed = "sip"
-        };
     }
 }

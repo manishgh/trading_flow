@@ -5,6 +5,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Research;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Execution;
+using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Risk;
 using TradingFlow.Engine.Sessions;
@@ -24,16 +25,28 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
     private readonly CompletedBarExecutionPlanner executionPlanner = new();
     private readonly StrategyInitialStopResolver stopResolver = new();
 
+    // Evaluate shared completed entry evidence; only the declared day lifecycle may carry continuation protection.
     public StrategyDecisionResult Evaluate(StrategyDecisionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ValidateRequest(request);
+        if (request.Strategy.EntryRules.IntradayZone is { } zoneRules) zoneRules.Validate(request.Strategy);
+        else if (request.Strategy.EntryRules.PreviousSessionBreakout is { } dayRules) dayRules.Validate(request.Strategy);
+        else if (request.Strategy.EntryRules.OpeningRangeBreakout is { } openingRules) openingRules.Validate(request.Strategy);
+        else TechnicalExecutionEngine.RequireSupportedExitPolicy(request.Strategy);
+        var validatedFactor = ValidateRequest(request);
+        var drawdown = request.Strategy.Timeframe == "1d"
+            ? DrawdownQualificationAnalyzer.Analyze(request.BarsByTimeframe[request.Strategy.Timeframe],
+                request.SnapshotsByTimeframe[request.Strategy.Timeframe],
+                request.BarsByTimeframe[request.Strategy.Timeframe].Length - 1, request.AsOfUtc,
+                request.Strategy.EntryRules.DrawdownQualification, context: request.DrawdownContext)
+            : null;
 
         var rules = new List<StrategyDecisionRule>();
         var transitions = new List<StrategyCandidateTransition>();
         var asOfUtc = request.AsOfUtc.ToUniversalTime();
         var currentState = request.Candidate.State;
 
+        // Bind consumed evidence to the semantic hash while preserving adapter details separately in the audit.
         StrategyDecisionResult Finish(
             StrategyCandidateState state,
             string? direction = null,
@@ -41,7 +54,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
             StrategyOrderPlan? orderPlan = null,
             string? noEntryReason = null)
         {
-            var semantic = new
+            object semantic = new
             {
                 schemaVersion = 1,
                 strategy = request.StrategyIdentity,
@@ -76,6 +89,32 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                     .Select(ToSemanticCatalyst)
                     .ToArray()
             };
+            if (request.Strategy.EntryRules.DrawdownQualification is { Mode: "gate" } activeDrawdown &&
+                (activeDrawdown.UsesSectorContext || activeDrawdown.UsesEventContext || activeDrawdown.MinimumMaturedEpisodes > 0))
+            {
+                // Bind consumed context only for gates that use it. Legacy/default hashes remain exact.
+                var fields = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                    EvidenceCanonicalJson.SerializeToUtf8Bytes(semantic))!;
+                var history = activeDrawdown.MinimumMaturedEpisodes > 0 ? request.DrawdownContext?.History : null;
+                var source = request.BarsByTimeframe[request.Strategy.Timeframe];
+                fields["drawdownContext"] = JsonSerializer.SerializeToElement(new {
+                    context = drawdown?.Context,
+                    history = history is null ? null : new { history.SecurityId, history.AdjustmentVersion,
+                        history.Identity, history.CalendarKnownAtUtc, history.CalendarSha256,
+                        expectedSessionTimestamps = history.ExpectedSessionTimestamps.Where(time =>
+                            time >= source[0].Timestamp && time <= source[^1].Timestamp).ToArray() } });
+                semantic = fields;
+            }
+            if (request.Strategy.EntryRules.HistoricalNewsDiagnostic is not null)
+            {
+                // Exact assumed clocks and consumed revisions are part of this Research decision identity.
+                var fields = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                    EvidenceCanonicalJson.SerializeToUtf8Bytes(semantic))!;
+                fields["historicalNewsPresence"] = request.HistoricalNewsPresence is { } presence
+                    ? JsonSerializer.Deserialize<JsonElement>(EvidenceCanonicalJson.SerializeToUtf8Bytes(presence))
+                    : JsonSerializer.SerializeToElement<object?>(null);
+                semantic = fields;
+            }
             var audit = new
             {
                 schemaVersion = 1,
@@ -87,7 +126,8 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                     .LastOrDefault(item => item.Event == signal.Catalyst),
                 universe = request.Candidate.Universe,
                 regime = request.Candidate.Regime,
-                rules
+                rules,
+                drawdownQualification = drawdown
             };
             var canonical = EvidenceCanonicalJson.SerializeToUtf8Bytes(audit);
             return new StrategyDecisionResult(
@@ -99,7 +139,8 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 orderPlan,
                 noEntryReason,
                 EvidenceCanonicalJson.ComputeSha256(semantic),
-                Encoding.UTF8.GetString(canonical));
+                Encoding.UTF8.GetString(canonical),
+                drawdown);
         }
 
         if (!request.Candidate.Discovery.IsPersisted)
@@ -170,6 +211,81 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         var setupSnapshots = request.SnapshotsByTimeframe[request.Strategy.Timeframe];
         var latest = setupSnapshots[^1];
         var setupAvailableAt = latest.Timestamp.Add(TimeframeParser.Parse(request.Strategy.Timeframe));
+        if (request.Strategy.EntryRules.IntradayZone is not null)
+        {
+            var evaluation = request.ZoneContext;
+            var pending = evaluation?.Signal;
+            var reason = evaluation?.RejectionReason ?? "intraday_zone_context_unavailable";
+            AddRule(rules, "qualification", pending is null ? reason : "intraday_zone_qualified",
+                pending is not null, "intraday_zone", new { evaluation });
+            if (pending is null)
+            {
+                var failedState = FailAdmission(ref currentState, reason, asOfUtc, transitions);
+                return Finish(failedState, noEntryReason: reason);
+            }
+            var zoneExecutionBars = request.BarsByTimeframe["5m"];
+            if (pending.MaxFilledParentTradesPerSession != request.Strategy.EntryRules.IntradayZone.MaxFilledParentTradesPerSession ||
+                !(request.Strategy.EntryRules.IntradayZone.IsPythonFixedTargetComparison
+                    ? PythonZoneComparisonEvaluator.MatchesDecision(evaluation!, zoneExecutionBars[^1], asOfUtc,
+                        request.SnapshotsByTimeframe["5m"][^1], zoneExecutionBars.Length >= 2 ? zoneExecutionBars[^2] : null,
+                        request.Strategy.EntryRules.IntradayZone)
+                    : IntradayZonePatternEvaluator.MatchesDecision(evaluation!, zoneExecutionBars[^1], asOfUtc, request.SnapshotsByTimeframe["5m"][^1])))
+                throw new InvalidOperationException("Zone intent does not match this completed five-minute decision clock.");
+            Move(ref currentState, StrategyCandidateState.Qualified, "intraday_zone_qualified", asOfUtc, transitions);
+            Move(ref currentState, StrategyCandidateState.Armed, "intraday_zone_market_prepared", asOfUtc, transitions);
+            var plan = new StrategyOrderPlan(request.Strategy.StrategyId, request.Strategy.StrategyName,
+                pending.Direction, asOfUtc, asOfUtc, "5m", zoneExecutionBars.Length - 1,
+                pending.EntryReferencePrice, pending.InitialStopPrice, request.Strategy.ExitRules.TargetRMultiple,
+                request.Strategy.ExitRules.ProfitTargetMode, null, request.Strategy.Execution.SlippageBps,
+                pending.EntryCutoffUtc ?? pending.SessionDeadlineUtc, pending.ConfirmationBar.Timestamp,
+                ZoneEntry: pending, ZoneAlternatives: evaluation!.OrderedAlternatives);
+            Move(ref currentState, StrategyCandidateState.Triggered, "intraday_zone_market_committed", asOfUtc, transitions);
+            return Finish(StrategyCandidateState.Triggered, pending.Direction, orderPlan: plan);
+        }
+        if (request.Strategy.EntryRules.OpeningRangeBreakout is not null)
+        {
+            var evaluation = request.PreviousSessionContext is { } context
+                ? new OpeningRangeBreakoutEvaluator().Evaluate(request.Strategy, setupBars, setupSnapshots, context, asOfUtc)
+                : new PreviousSessionBreakoutEvaluation(null, "opening_range_context_unavailable");
+            AddRule(rules, "qualification", evaluation.RejectionReason ?? "opening_range_qualified",
+                evaluation.Signal is not null, "opening_range_breakout", new { evaluation, context = request.PreviousSessionContext });
+            if (evaluation.Signal is not { } pending)
+            {
+                var failedState = FailAdmission(ref currentState, evaluation.RejectionReason!, asOfUtc, transitions);
+                return Finish(failedState, noEntryReason: evaluation.RejectionReason);
+            }
+            Move(ref currentState, StrategyCandidateState.Qualified, "opening_range_qualified", asOfUtc, transitions);
+            Move(ref currentState, StrategyCandidateState.Armed, pending.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket ? "next_open_market_prepared" : "pending_stop_market_prepared", asOfUtc, transitions);
+            var plan = new StrategyOrderPlan(request.Strategy.StrategyId, request.Strategy.StrategyName,
+                pending.Direction, pending.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket ? asOfUtc : pending.OpeningRangeCompletedAtUtc!.Value, pending.ActiveAtUtc, "5m",
+                pending.BreakoutIndex, pending.LimitPrice, pending.InitialStopPrice,
+                request.Strategy.ExitRules.TargetRMultiple, request.Strategy.ExitRules.ProfitTargetMode, null,
+                request.Strategy.Execution.SlippageBps, pending.ExpiresAtUtc, pending.ConfirmationTimestampUtc, pending);
+            Move(ref currentState, StrategyCandidateState.Triggered, pending.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket ? "next_open_market_committed" : "pending_stop_market_activated", asOfUtc, transitions);
+            return Finish(StrategyCandidateState.Triggered, pending.Direction, orderPlan: plan);
+        }
+        if (request.Strategy.EntryRules.PreviousSessionBreakout is not null)
+        {
+            var dayEvaluation = request.PreviousSessionContext is { } context
+                ? new PreviousSessionBreakoutEvaluator().Evaluate(request.Strategy, setupBars, context, asOfUtc)
+                : new PreviousSessionBreakoutEvaluation(null, "previous_session_context_unavailable");
+            AddRule(rules, "qualification", dayEvaluation.RejectionReason ?? "previous_session_breakout_confirmed",
+                dayEvaluation.Signal is not null, "previous_session_breakout", new { evaluation = dayEvaluation, context = request.PreviousSessionContext });
+            if (dayEvaluation.Signal is not { } pending)
+            {
+                var failedState = FailAdmission(ref currentState, dayEvaluation.RejectionReason!, asOfUtc, transitions);
+                return Finish(failedState, noEntryReason: dayEvaluation.RejectionReason);
+            }
+            Move(ref currentState, StrategyCandidateState.Qualified, "previous_session_breakout_confirmed", asOfUtc, transitions);
+            Move(ref currentState, StrategyCandidateState.Armed, "pending_limit_prepared", asOfUtc, transitions);
+            var plan = new StrategyOrderPlan(request.Strategy.StrategyId, request.Strategy.StrategyName,
+                pending.Direction, pending.BreakoutTimestampUtc.AddMinutes(5), pending.ActiveAtUtc, "5m",
+                pending.BreakoutIndex, pending.LimitPrice, pending.InitialStopPrice,
+                request.Strategy.ExitRules.TargetRMultiple, request.Strategy.ExitRules.ProfitTargetMode, null,
+                request.Strategy.Execution.SlippageBps, pending.ExpiresAtUtc, pending.BreakoutTimestampUtc, pending);
+            Move(ref currentState, StrategyCandidateState.Triggered, "pending_limit_activated", asOfUtc, transitions);
+            return Finish(StrategyCandidateState.Triggered, pending.Direction, orderPlan: plan);
+        }
         if (!sessionClock.ValidateExecutionWindow(latest.Timestamp, request.Strategy.Timeframe, request.Strategy.Session))
         {
             AddRule(rules, "qualification", "outside_session_window", false, "exchange_calendar", new
@@ -197,7 +313,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
             request.Strategy,
             setupBars,
             pointInTimeSnapshots[request.Strategy.Timeframe],
-            setupSnapshots.Length - 1);
+            setupSnapshots.Length - 1, request.ReferenceBars?.ToArray(), request.AsOfUtc, request.ReferenceSessionDates?.ToArray(), validatedFactor);
         if (signal is null)
         {
             AddRule(rules, "qualification", "setup_signal_not_available", false, "signal_generator", new
@@ -341,12 +457,18 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
             return Finish(StrategyCandidateState.Armed, direction, signal, noEntryReason: reason);
         }
 
+        // Historical stop context is not the time an order became actionable.
+        // In particular, a prior-session intraday close cannot backdate a daily
+        // setup, a delayed receipt, or a later admission decision.
+        var triggeredAtUtc = triggerSnapshot.Timestamp.Add(TimeframeParser.Parse(request.Strategy.Execution.Timeframe));
+        if (triggeredAtUtc < setupAvailableAt) triggeredAtUtc = setupAvailableAt;
+        if (triggeredAtUtc < asOfUtc) triggeredAtUtc = asOfUtc;
         var orderPlan = new StrategyOrderPlan(
             request.Strategy.StrategyId,
             request.Strategy.StrategyName,
             direction,
             setupAvailableAt,
-            triggerSnapshot.Timestamp.Add(TimeframeParser.Parse(request.Strategy.Execution.Timeframe)),
+            triggeredAtUtc,
             request.Strategy.Execution.Timeframe,
             stopContextIndex,
             triggerSnapshot.CurrentPrice,
@@ -357,20 +479,47 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 ? triggerSnapshot.Vwap
                 : null,
             request.Strategy.Execution.SlippageBps,
-            request.Candidate.Discovery.ExpiresAtUtc);
+            request.Candidate.Discovery.ExpiresAtUtc,
+            executionSnapshots[stopContextIndex].Timestamp.ToUniversalTime());
         AddRule(rules, "trigger", "execution_trigger_satisfied", true, "execution_confirmation", new
         {
             trigger.ConfirmationIndex,
             trigger.StopContextIndex,
             orderPlan
         });
+        if (request.Strategy.EntryRules.DrawdownQualification is { Mode: "gate" } && drawdown is not null)
+        {
+            var passed = drawdown.Verdict == "qualifies";
+            var reason = passed ? drawdown.Reason : $"drawdown_{drawdown.Verdict}:{drawdown.Reason}";
+            AddRule(rules, "qualifier", reason, passed, DrawdownQualificationRules.ContractVersion, drawdown);
+            if (!passed)
+            {
+                // This opportunity is decided at its original trigger; it must not wait
+                // for another bar to make the optional qualifier pass.
+                Move(ref currentState, StrategyCandidateState.Rejected, reason, asOfUtc, transitions);
+                return Finish(StrategyCandidateState.Rejected, direction, signal, noEntryReason: reason);
+            }
+        }
+        if (request.Strategy.EntryRules.HistoricalNewsDiagnostic is not null)
+        {
+            var diagnostic = HistoricalNewsPresenceEvaluation.Evaluate(request);
+            rules.AddRange(diagnostic.Rules);
+            if (diagnostic.RejectionReason is { } reason)
+            {
+                // Reject this original opportunity permanently; a later query/revision cannot postpone its trigger.
+                Move(ref currentState, StrategyCandidateState.Rejected, reason, asOfUtc, transitions);
+                return Finish(StrategyCandidateState.Rejected, direction, signal, noEntryReason: reason);
+            }
+        }
         Move(ref currentState, StrategyCandidateState.Triggered, "execution_trigger_satisfied", asOfUtc, transitions);
         return Finish(StrategyCandidateState.Triggered, direction, signal, orderPlan);
     }
 
-    private static void ValidateRequest(StrategyDecisionRequest request)
+    // Verify immutable identity, policy/mode binding and aligned completed inputs before computing any strategy fields.
+    private static TechnicalFactorEvidence? ValidateRequest(StrategyDecisionRequest request)
     {
         RequireUtc(request.AsOfUtc, nameof(request.AsOfUtc));
+        HistoricalNewsPresenceEvaluation.ValidateBinding(request);
         if (request.Candidate.CandidateId == Guid.Empty ||
             String.IsNullOrWhiteSpace(request.Candidate.Identity.Symbol) ||
             String.IsNullOrWhiteSpace(request.Candidate.Identity.SetupKey))
@@ -378,8 +527,9 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
             throw new InvalidOperationException("Candidate identity, symbol, and setup key are required.");
         }
 
-        if (!request.Strategy.StrategyId.Equals(request.StrategyIdentity.StrategyId, StringComparison.Ordinal) ||
-            !request.Candidate.Identity.StrategyContentSha256.Equals(request.StrategyIdentity.ContentSha256, StringComparison.Ordinal))
+        // The canonical document binds the source definition (including a research alias)
+        // to the catalog identity. String equality of those IDs is not an identity proof.
+        if (!request.Candidate.Identity.StrategyContentSha256.Equals(request.StrategyIdentity.ContentSha256, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Candidate, strategy definition, and immutable identity do not match.");
         }
@@ -395,16 +545,18 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 "Strategy definition, admission profile, and immutable content hash do not match.");
         }
 
-        if (!request.AdmissionProfile.ExecutionTimingPolicy.Equals(
-                "completed-bar-next-executable-bar-v1",
-                StringComparison.Ordinal))
+        if (request.AdmissionProfile.ExecutionTimingPolicy is not
+            ("completed-bar-next-executable-bar-v1" or "completed-bar-asof-regime-scheduled-expiry-v2" or
+             "completed-bar-next-slice-market-exits-v3" or "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5" or
+             "completed-bar-pending-limit-session-deadline-v1" or OpeningRangeBreakoutRules.ExecutionTimingPolicy or OpeningRangeBreakoutRules.NextBarMarketTimingPolicy or IntradayZoneRules.ExecutionTimingPolicy or IntradayZoneRules.PythonComparisonTimingPolicy))
         {
             throw new InvalidOperationException(
                 $"Unsupported execution timing policy '{request.AdmissionProfile.ExecutionTimingPolicy}'.");
         }
 
         ValidateDiscovery(request.Candidate);
-        ValidateMarketEvidence(request.Candidate.MarketState);
+        ValidateMarketEvidence(request.Candidate.MarketState,
+            MarketEvidenceOperationalRules.ForExecutionTimingPolicy(request.AdmissionProfile.ExecutionTimingPolicy));
         var requiredTimeframes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             request.Strategy.Timeframe,
@@ -432,10 +584,50 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 request.Candidate.MarketState);
         }
 
+        if (request.Strategy.EntryRules.DrawdownQualification is { } drawdownRules)
+        {
+            drawdownRules.Validate();
+            if (request.Strategy.Timeframe != "1d")
+                throw new InvalidOperationException("Drawdown qualification requires completed native daily evidence.");
+        }
+        if (request.Strategy.EntryRules.TechnicalFactor is { } factor)
+        {
+            factor.Validate();
+            if (request.AdmissionProfile.Indicators.DerivedIndicatorProfileVersion != "2.2.0" ||
+                request.Strategy.Timeframe != "1d" || request.Strategy.Session.IsContinuousMarket ||
+                request.Strategy.Session.ExchangeTimezone != "America/New_York" ||
+                !request.Strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Technical factors require the versioned 2.2.0 long native-daily profile.");
+        }
+        if (request.ReferenceBars is { } reference)
+        {
+            var referenceFactor = request.Strategy.EntryRules.TechnicalFactor;
+            if (referenceFactor?.Metric != TechnicalFactorRules.RelativeRoc)
+                throw new InvalidOperationException("Undeclared benchmark reference evidence.");
+            DateTimeOffset? previous = null;
+            foreach (var bar in reference)
+            {
+                if (bar.Ticker != referenceFactor.BenchmarkSymbol || bar.Timeframe != "1d" ||
+                    previous is { } prior && bar.Timestamp <= prior || bar.Timestamp.AddDays(1) > request.AsOfUtc ||
+                    bar.KnownAtUtc is { } known && known > request.AsOfUtc ||
+                    bar.DataFeed != request.Candidate.MarketState.Feed || bar.AdjustmentPolicy != request.Candidate.MarketState.AdjustmentPolicy)
+                    throw new InvalidOperationException("Benchmark evidence is duplicated, future-known or has mismatched provenance.");
+                previous = bar.Timestamp;
+            }
+        }
         foreach (var catalyst in request.Catalysts)
         {
             ValidateCatalyst(catalyst, request.Candidate.Identity.Symbol);
         }
+        if (request.Strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } requiredFactor &&
+            request.Candidate.MarketState.IsWarm && request.Candidate.Universe.IsEligible)
+        {
+            var setup = request.BarsByTimeframe[request.Strategy.Timeframe];
+            return TechnicalFactorCalculator.Analyze(requiredFactor, setup,
+                request.SnapshotsByTimeframe[request.Strategy.Timeframe], setup.Length - 1,
+                request.ReferenceBars?.ToArray(), request.AsOfUtc, request.ReferenceSessionDates?.ToArray());
+        }
+        return null;
     }
 
     private static void ValidateDiscovery(StrategyCandidateSnapshot candidate)
@@ -454,13 +646,14 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         }
     }
 
-    private static void ValidateMarketEvidence(StrategyMarketStateEvidence evidence)
+    /// <summary>Requires actual SIP provenance, warm bars and the price basis bound to the already hash-verified admission profile.</summary>
+    private static void ValidateMarketEvidence(StrategyMarketStateEvidence evidence, MarketEvidenceOperationalRules rules)
     {
         RequireUtc(evidence.VerifiedAtUtc, nameof(evidence.VerifiedAtUtc));
         if (String.IsNullOrWhiteSpace(evidence.StateFingerprint) ||
             !evidence.Provider.Equals("alpaca", StringComparison.OrdinalIgnoreCase) ||
-            !evidence.Feed.Equals("sip", StringComparison.OrdinalIgnoreCase) ||
-            !evidence.AdjustmentPolicy.Equals("all", StringComparison.OrdinalIgnoreCase) ||
+            !evidence.Feed.Equals(rules.RequiredDataFeed, StringComparison.OrdinalIgnoreCase) ||
+            !evidence.AdjustmentPolicy.Equals(rules.RequiredAdjustmentPolicy, StringComparison.OrdinalIgnoreCase) ||
             !evidence.Reliability.Equals("verified_same_feed", StringComparison.OrdinalIgnoreCase) ||
             evidence.CompletedBarsByTimeframe.IsEmpty ||
             evidence.RequiredWarmupBarsByTimeframe.IsEmpty ||
@@ -469,7 +662,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 !evidence.CompletedBarsByTimeframe.TryGetValue(pair.Key, out var completed) ||
                 (evidence.IsWarm && completed < pair.Value)))
         {
-            throw new InvalidOperationException("Authoritative warm market evidence requires Alpaca SIP/all and sufficient verified bars.");
+            throw new InvalidOperationException($"Authoritative warm market evidence requires Alpaca {rules.RequiredDataFeed}/{rules.RequiredAdjustmentPolicy} and sufficient verified bars.");
         }
     }
 

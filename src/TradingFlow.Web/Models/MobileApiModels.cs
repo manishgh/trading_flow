@@ -63,11 +63,6 @@ public sealed record MobileRunningTrade(
     DateTimeOffset? UpdatedAtUtc = null,
     string ProtectionSummary = "");
 
-public sealed record MobileRunningTradesResponse(
-    IReadOnlyList<MobileRunningTrade> Trades,
-    decimal TotalUnrealizedPl,
-    int Count);
-
 public sealed record MobileOrderActivityResponse(
     Guid RunId,
     string ClientOrderId,
@@ -103,7 +98,9 @@ public sealed record MobileNewsItem(
     string? Provider,
     string? Source,
     string? Url,
-    string? Summary, string? Classification = null);
+    string? Summary, string? Classification = null,
+    IReadOnlyList<string>? Categories = null, IReadOnlyList<string>? Sectors = null,
+    string? CategoryRationale = null, string? CategoryVersion = null);
 
 public sealed record MobileWishlistResponse(
     Guid Id,
@@ -242,7 +239,6 @@ public sealed record MobileWishlistSaveRequest(
     bool? IncludeExtendedHours,
     bool? IsObserved);
 
-public sealed record MobileWishlistObserveRequest(bool IsObserved);
 
 public sealed record MobileWishlistItemRequest(
     string Ticker,
@@ -259,45 +255,3 @@ public sealed record MobileOrderPreviewRequest(
     bool AllowExtendedHoursTrading);
 
 public sealed record MobileOrderConfirmRequest(string TicketToken);
-
-
-public sealed record MobileWishlistMonitorSnapshotRequest(
-    string Ticker,
-    DateTimeOffset? Timestamp,
-    string? Timeframe,
-    decimal CurrentPrice,
-    decimal CurrentVolume,
-    decimal? Atr,
-    decimal? Ema10,
-    decimal? Ema20,
-    decimal? MacdHistogram,
-    decimal? PreviousMacdHistogram,
-    decimal? PreviousVolume,
-    decimal? DailyRelativeVolume,
-    decimal? RecentHigh,
-    string? NewsHeadline,
-    string? NewsUrl,
-    string? NewsProvider,
-    decimal? NewsSentiment);
-
-public sealed record MobileWishlistMonitorRequest(
-    IReadOnlyList<MobileWishlistMonitorSnapshotRequest> Snapshots);
-
-public sealed record MobileWishlistMonitorResponse(
-    IReadOnlyList<MobileWishlistMonitorEvaluationResponse> Evaluations,
-    IReadOnlyList<MobileWishlistSignalResponse> PersistedSignals);
-
-public sealed record MobileWishlistMonitorEvaluationResponse(
-    string Ticker,
-    bool ShouldAlert,
-    string SignalType,
-    string Severity,
-    decimal Price,
-    string Reason,
-    decimal Score,
-    decimal? DailyRelativeVolume,
-    decimal? DistanceFromRecentHighPct,
-    decimal? Ema20ExtensionAtr,
-    string? NewsHeadline,
-    string? NewsUrl,
-    string? NewsProvider);

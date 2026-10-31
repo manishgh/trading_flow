@@ -257,6 +257,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         this.admission = admission;
     }
 
+    /// <summary>Validates immutable entry terms, resumes an existing intent, or obtains admission before reserving a new entry.</summary>
     public async Task<OrderSubmissionResult> SubmitEntryOrderAsync(
         EntryOrderSubmission submission,
         IBrokerClient brokerClient,
@@ -283,6 +284,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             cancellationToken);
     }
 
+    /// <summary>Preserves account validation, durable reservation and broker dispatch order inside one mutation scope.</summary>
     private async Task<OrderSubmissionResult> SubmitBracketOrderCoreAsync(
         EntryOrderSubmission submission,
         IBrokerClient brokerClient,
@@ -291,35 +293,22 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
     {
         using var commandMutation = brokerMutations.Enter(
             $"reserve and dispatch entry {submission.IntentId:N}");
-        var sessionDate = approval.TradeDate;
-        var submitOutsideRegularHours = approval.SubmitOutsideRegularHours;
         if (accountBinding is not null)
         {
-            var boundAccount = await accountBinding.ValidateAsync(brokerClient, cancellationToken);
-            if (!boundAccount.AccountId.Equals(
-                    approval.PortfolioRisk.AccountId,
-                    StringComparison.Ordinal))
-            {
-                throw new BrokerAccountMismatchException(
-                    approval.PortfolioRisk.AccountId,
-                    boundAccount.AccountId);
-            }
+            await ValidateBrokerAccountAsync(approval.PortfolioRisk.AccountId, brokerClient, cancellationToken);
         }
 
-        if (submission.OperatorOverride is not null)
-        {
-            if (!submission.RunContext.Profile.Equals("paper", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "Operator-direct entries are permitted only in the paper profile.");
-            }
+        ValidateOperatorOverride(submission);
+        var reservationResult = await intentRepository.ReserveAsync(
+            ToRun(submission.RunContext), CreateEntryReservation(submission, approval), cancellationToken);
+        return await DispatchReservedEntryAsync(reservationResult, brokerClient, cancellationToken);
+    }
 
-            if (submission.StrategyIdentity is not null || submission.StrategySelectionMode is not null)
-            {
-                throw new InvalidOperationException(
-                    "An operator override cannot also claim strategy execution authorization.");
-            }
-        }
+    /// <summary>Builds the same immutable request evidence and reservation terms without persistence or broker side effects.</summary>
+    private static OrderIntentReservation CreateEntryReservation(EntryOrderSubmission submission, EntryGateApproval approval)
+    {
+        var sessionDate = approval.TradeDate;
+        var submitOutsideRegularHours = approval.SubmitOutsideRegularHours;
         var requestJson = JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
@@ -354,10 +343,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             submitOutsideRegularHours,
             sessionDate
         });
-        var run = ToRun(submission.RunContext);
-        var reservationResult = await intentRepository.ReserveAsync(
-            run,
-            new OrderIntentReservation(
+        return new OrderIntentReservation(
                 submission.IntentId,
                 submission.OperatorOverride is null
                     ? OrderIntentKind.StrategyEntry
@@ -383,10 +369,14 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 CandidateSemanticDecisionSha256: submission.OperatorOverride is null
                     ? submission.Candidate.SemanticDecisionSha256
                     : null,
-                PositionGenerationEventId: null),
-            cancellationToken);
-        var intent = reservationResult.Intent;
+                PositionGenerationEventId: null);
+    }
 
+    /// <summary>Requires the persisted intent's run to remain active before logging its reservation and dispatching the existing client ID.</summary>
+    private async Task<OrderSubmissionResult> DispatchReservedEntryAsync(OrderIntentReservationResult reservationResult,
+        IBrokerClient brokerClient, CancellationToken cancellationToken)
+    {
+        var intent = reservationResult.Intent;
         if (!reservationResult.OwningRunStatus.Equals("running", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
@@ -1841,6 +1831,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             ? brokerOrder
             : brokerOrder with { ClientOrderId = ownerClientOrderId };
 
+    /// <summary>Requires the current bound broker account to match the account that owns the admitted intent.</summary>
     private async Task ValidateBrokerAccountAsync(
         string expectedIntentAccountId,
         IBrokerClient brokerClient,
@@ -2323,6 +2314,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         bool SubmitOutsideRegularHours,
         EquityTradingSession Session);
 
+    /// <summary>Rejects missing entry identity, evidence, broker terms or run provenance before lookup, admission or persistence.</summary>
     private static void Validate(EntryOrderSubmission submission)
     {
         if (submission.IntentId == Guid.Empty || submission.Candidate.CandidateId == Guid.Empty ||
@@ -2332,20 +2324,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 "Run, candidate, and intent identity are required before order submission.");
         }
 
-        if (submission.OperatorOverride is not null)
-        {
-            if (!submission.RunContext.Profile.Equals("paper", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "Operator-direct entries are permitted only in the paper profile.");
-            }
-
-            if (submission.StrategyIdentity is not null || submission.StrategySelectionMode is not null)
-            {
-                throw new InvalidOperationException(
-                    "An operator override cannot also claim strategy execution authorization.");
-            }
-        }
+        ValidateOperatorOverride(submission);
 
         if (submission.Candidate.RevalidatedAtUtc == default ||
             submission.Candidate.DiscoveredAtUtc == default ||
@@ -2390,6 +2369,16 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         {
             throw new InvalidOperationException("Execution run provenance is invalid.");
         }
+    }
+
+    /// <summary>Keeps operator-only paper authorization separate from a claim of strategy authorization, with the existing errors and check order.</summary>
+    private static void ValidateOperatorOverride(EntryOrderSubmission submission)
+    {
+        if (submission.OperatorOverride is null) return;
+        if (!submission.RunContext.Profile.Equals("paper", StringComparison.Ordinal))
+            throw new InvalidOperationException("Operator-direct entries are permitted only in the paper profile.");
+        if (submission.StrategyIdentity is not null || submission.StrategySelectionMode is not null)
+            throw new InvalidOperationException("An operator override cannot also claim strategy execution authorization.");
     }
 
     private static ProductionRun ToRun(ExecutionRunContext context) => new()

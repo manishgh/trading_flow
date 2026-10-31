@@ -1,4 +1,7 @@
 using TradingFlow.Web.Models;
+using TradingFlow.Contracts.Operator;
+using TradingFlow.Contracts.V1;
+using TradingFlow.Web.Services.Desk;
 
 namespace TradingFlow.Web.Services;
 
@@ -9,6 +12,56 @@ namespace TradingFlow.Web.Services;
 /// </summary>
 public static class RunningTradesBuilder
 {
+    /// <summary>Reads the actual account first; local jobs only supply optional labels and never create or remove broker holdings.</summary>
+    public static async Task<AccountPositionsResponse> ReadAccountAsync(IDeskAccountReader accountReader,
+        Func<CancellationToken, Task<IReadOnlyList<MobileRunningTrade>>> readLocalMetadata,
+        IPositionProtectionReader protectionReader, int? configuredPositionLimit, string? source,
+        CancellationToken token)
+    {
+        var account = await accountReader.ReadAsync(token);
+        if (!account.Available || !account.Holdings.Any(item => item.Quantity != 0))
+            return ProjectAccount(account, [], new Dictionary<string, PositionProtection>(), configuredPositionLimit, source);
+        // Missing local metadata must not hide actual holdings. Existing local
+        // readers report their own failures; no local price or quantity is used here.
+        IReadOnlyList<MobileRunningTrade> metadata;
+        try { metadata = await readLocalMetadata(token); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            metadata = [];
+            account = account with { Detail = account.Detail + " Local run details are unavailable; broker holdings are still shown." };
+        }
+        var protections = await protectionReader.GetAsync(account.Holdings.Where(item => item.Quantity != 0).ToArray(), token);
+        return ProjectAccount(account, metadata, protections, configuredPositionLimit, source);
+    }
+
+    /// <summary>Projects broker numbers and independent full-account totals before applying a source filter.</summary>
+    public static AccountPositionsResponse ProjectAccount(DeskAccount account, IReadOnlyList<MobileRunningTrade> metadata,
+        IReadOnlyDictionary<string, PositionProtection> protections, int? configuredPositionLimit, string? source)
+    {
+        if (!account.Available)
+            return new(false, account.Detail, account.ReadAtUtc, [], null, null, null, configuredPositionLimit, null, null);
+        var held = account.Holdings.Where(item => item.Quantity != 0).ToArray();
+        var all = held.Select(holding => {
+            var runs = metadata.Where(item => item.Ticker.Equals(holding.Symbol, StringComparison.OrdinalIgnoreCase))
+                .Select(item => new PositionRunReference(item.Source, item.Reference, item.StrategyName, item.Quantity,
+                    item.JobId, item.SessionId, item.CloseKind, item.StopLossPrice, item.TakeProfitPrice)).Distinct().ToArray();
+            var protection = protections.GetValueOrDefault(holding.Symbol);
+            return new AccountPosition(new PortfolioPositionResponse(holding.Symbol, holding.Quantity, holding.AverageEntry,
+                holding.CostBasis, holding.MarketValue, holding.UnrealizedPl), runs,
+                protection?.IsKnown == true, protection?.HasBrokerStop == true,
+                protection?.Detail ?? "Broker protection has not been read.");
+        }).ToArray();
+        var filtered = String.IsNullOrWhiteSpace(source) || source.Equals("all", StringComparison.OrdinalIgnoreCase)
+            ? all : all.Where(item => item.Source.Equals(source, StringComparison.OrdinalIgnoreCase) ||
+                item.Runs.Any(run => run.Source.Equals(source, StringComparison.OrdinalIgnoreCase))).ToArray();
+        return new(true, account.Detail, account.ReadAtUtc, filtered,
+            held.All(item => item.UnrealizedPl is not null) ? held.Sum(item => item.UnrealizedPl!.Value) : null,
+            held.All(item => item.MarketValue is not null) ? held.Sum(item => Math.Abs(item.MarketValue!.Value)) : null,
+            held.Length, configuredPositionLimit,
+            all.Count(item => item.ProtectionKnown && !item.HasBrokerStop), all.Count(item => !item.ProtectionKnown));
+    }
+
+    /// <summary>Reads optional local run labels and intended protection; account-wide screens use ReadAccountAsync for position truth.</summary>
     public static async Task<IReadOnlyList<MobileRunningTrade>> BuildAsync(
         PaperJobService paperJobs,
         MobileAutomationService automation)

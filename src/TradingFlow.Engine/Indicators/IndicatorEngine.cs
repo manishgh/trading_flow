@@ -80,6 +80,7 @@ public sealed class IndicatorEngine : IIndicatorCalculator
                 standardIndicators.MacdLine[i],
                 standardIndicators.MacdSignal[i],
                 standardIndicators.MacdHistogram[i],
+                Sma5: standardIndicators.Sma5[i],
                 Sma10: standardIndicators.Sma10[i],
                 Sma20: standardIndicators.Sma20[i],
                 Sma50: standardIndicators.Sma50[i],
@@ -118,6 +119,7 @@ public sealed class IndicatorEngine : IIndicatorCalculator
             Volume = bar.Volume
         }).ToArray();
 
+        var sma5 = quotes.GetSma(5).Select(x => ToDecimal(x.Sma)).ToArray();
         var sma10 = quotes.GetSma(10).Select(x => ToDecimal(x.Sma)).ToArray();
         var sma20 = quotes.GetSma(20).Select(x => ToDecimal(x.Sma)).ToArray();
         var sma50 = quotes.GetSma(50).Select(x => ToDecimal(x.Sma)).ToArray();
@@ -137,6 +139,7 @@ public sealed class IndicatorEngine : IIndicatorCalculator
         var bollinger = quotes.GetBollingerBands(BollingerPeriod, 2).ToArray();
 
         return new StandardIndicatorSeries(
+            sma5,
             sma10,
             sma20,
             sma50,
@@ -633,6 +636,7 @@ public sealed class IndicatorEngine : IIndicatorCalculator
     }
 
     private sealed record StandardIndicatorSeries(
+        decimal?[] Sma5,
         decimal?[] Sma10,
         decimal?[] Sma20,
         decimal?[] Sma50,

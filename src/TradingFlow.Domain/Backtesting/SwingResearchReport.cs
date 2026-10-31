@@ -1,9 +1,12 @@
 namespace TradingFlow.Domain.Backtesting;
 
+public enum SwingTradeTimestampBasis { Unspecified, SourceSliceStart, CompletedSliceEnd }
+
 public sealed record SwingResearchOptions(
     decimal MinimumOpportunityMovePct = 10m,
     int MaximumOpportunityHoldingBars = 30,
-    int MaximumOpportunitiesPerDirectionPerTicker = 5);
+    int MaximumOpportunitiesPerDirectionPerTicker = 5,
+    SwingTradeTimestampBasis TradeTimestampBasis = SwingTradeTimestampBasis.Unspecified);
 
 public sealed record SwingResearchReport(
     string RunName,
@@ -12,7 +15,9 @@ public sealed record SwingResearchReport(
     decimal EndingCapital,
     decimal TotalReturnPct,
     IReadOnlyList<SwingWeeklyEquity> WeeklyEquity,
-    IReadOnlyList<SwingTickerResearch> Tickers);
+    IReadOnlyList<SwingTickerResearch> Tickers,
+    string TimestampScope = "source_slice_start",
+    string ExcursionScope = "daily_slice_extrema_not_intrabar_trade_path");
 
 public sealed record SwingWeeklyEquity(
     DateOnly WeekStart,

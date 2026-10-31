@@ -27,6 +27,49 @@ var serializerOptions = new JsonSerializerOptions
 };
 serializerOptions.Converters.Add(new JsonStringEnumConverter());
 
+// Packages retained news through existing evidence components; it does not start an economic or trading job.
+if (args.Length > 0 && args[0].Equals("evidence-package-historical-news", StringComparison.Ordinal))
+{
+    await TradingFlow.Cli.HistoricalDiagnosticNewsPackagingCommand.ExecuteAsync(args[1..]);
+    return;
+}
+
+// Cleanup is a saved quant-review operation, independent of strategy promotion or broker execution.
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.BacktestInputCleanupCommand.Name, StringComparison.Ordinal))
+{
+    await TradingFlow.Cli.BacktestInputCleanupCommand.RunAsync(args[1..], Console.Out);
+    return;
+}
+
+// Diagnostic inputs are explicit and read-only; never discover or create an operator database by machine path.
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.DataInspectionCommand.Name, StringComparison.Ordinal))
+{
+    TradingFlow.Cli.DataInspectionCommand.Run(args[1..], Console.Out);
+    return;
+}
+
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.NewsCategoryPilotCommand.Name, StringComparison.Ordinal))
+{
+    TradingFlow.Cli.NewsCategoryPilotCommand.Run(args[1..]);
+    return;
+}
+
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.ExecutionSourceAuditCommand.Name, StringComparison.Ordinal))
+{
+    using var cancellation = new CancellationTokenSource();
+    ConsoleCancelEventHandler cancelHandler = (_, signal) => { signal.Cancel = true; cancellation.Cancel(); };
+    Console.CancelKeyPress += cancelHandler;
+    try { await TradingFlow.Cli.ExecutionSourceAuditCommand.RunAsync(args[1..], cancellation.Token); }
+    finally { Console.CancelKeyPress -= cancelHandler; }
+    return;
+}
+
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.NewsAssessmentCommand.Name, StringComparison.Ordinal))
+{
+    Environment.ExitCode = TradingFlow.Cli.NewsAssessmentCommand.Run(args[1..], Console.Out);
+    return;
+}
+
 if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.SharedNewsImportCommand.Name, StringComparison.Ordinal))
 {
     using var cancellation = new CancellationTokenSource();
@@ -230,8 +273,8 @@ if (args.Length > 0 &&
                       serializerOptions)
                   ?? throw new InvalidDataException(
                       "The frozen evidence collection request is empty.");
-    var keyId = ResolveSecret("Alpaca", "KeyId", "ALPACA_KEY_ID");
-    var secretKey = ResolveSecret("Alpaca", "SecretKey", "ALPACA_SECRET_KEY");
+    var keyId = ResolveSecret("ALPACA_KEY_ID");
+    var secretKey = ResolveSecret("ALPACA_SECRET_KEY");
     if (String.IsNullOrWhiteSpace(keyId) || String.IsNullOrWhiteSpace(secretKey))
     {
         throw new InvalidOperationException(
@@ -844,6 +887,7 @@ if (args.Length > 0 && args[0].Equals("optimize", StringComparison.OrdinalIgnore
 
 if (args.Length > 0 && args[0].Equals("warm-candles", StringComparison.OrdinalIgnoreCase))
 {
+    // Preserve original downloads in the accepted run archive before writing reusable candle projections.
     var configPathForWarmup = RequireRunConfigArgument(args, "warm-candles");
     var reader = new SimpleYamlReader();
     var run = reader.ReadBacktestRun(configPathForWarmup);
@@ -855,7 +899,8 @@ if (args.Length > 0 && args[0].Equals("warm-candles", StringComparison.OrdinalIg
     var result = await warmer.WarmAsync(
         new TradingFlow.Alpaca.AlpacaMarketDataProvider(
             new HttpClient(),
-            ResolveAlpacaOptions(run)),
+            ResolveAlpacaOptions(run),
+            new FileSystemRawArchiveWriter(new RawArchiveOptions(run.RawRoot))),
         new TradingFlow.Data.Csv.RollingCandleWarmRequest(
             run.Tickers,
             run.Intervals,
@@ -908,7 +953,9 @@ if (args.Length > 0 && args[0].Equals("warm-catalysts", StringComparison.Ordinal
     var provider = new TradingFlow.Data.Catalysts.CachedCatalystProvider(
         rawProvider,
         outputRoot,
-        refresh ? "refresh" : run.CachePolicy);
+        refresh ? "refresh" : run.CachePolicy,
+        new FileSystemRawArchiveWriter(new RawArchiveOptions(run.RawRoot)),
+        run.RawRoot);
 
     var warmed = new List<CatalystWarmTickerResult>();
     foreach (var ticker in run.Tickers)
@@ -1113,62 +1160,13 @@ static string RequireRunConfigArgument(string[] args, string commandName)
     return args[1];
 }
 
-static TradingFlow.Engine.Abstractions.ICatalystProvider? CreateRawNewsProvider(TradingFlow.Domain.Backtesting.BacktestRunConfig run)
-{
-    return run.News.ProviderName.ToLowerInvariant() switch
-    {
-        "alpaca" => new TradingFlow.Alpaca.AlpacaNewsProvider(
-            new HttpClient(),
-            ResolveAlpacaOptions(run),
-            CreateRawArchiveWriter(),
-            sentimentAnalyzer: CreateSentimentAnalyzer(run.News.SentimentTimeoutSeconds),
-            maxArticlesPerTicker: run.News.MaxArticlesPerTicker),
-        "finviz" => new TradingFlow.Finviz.FinvizNewsProvider(
-            new TradingFlow.Finviz.FinvizClient(
-                new HttpClient(),
-                TradingFlow.Finviz.FinvizOptions.CreateDefault() with
-                {
-                    AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? ""
-                },
-                CreateRawArchiveWriter())),
-        "none" => null,
-        _ => throw new NotSupportedException($"Unsupported news provider: {run.News.ProviderName}")
-    };
-}
+// Reuse the shared raw adapters; the standalone CLI reads only its own environment credentials.
+static TradingFlow.Engine.Abstractions.ICatalystProvider? CreateRawNewsProvider(TradingFlow.Domain.Backtesting.BacktestRunConfig run) =>
+    TradingFlow.Backtesting.ConfiguredDataProviders.FromEnvironment().CreateNews(run, CreateRawArchiveWriter());
 
-static TradingFlow.Engine.Abstractions.ISentimentAnalyzer CreateSentimentAnalyzer(int? timeoutSeconds = null)
-{
-    var endpoint = Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL");
-    if (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
-    {
-        return new TradingFlow.Alpaca.FinbertHttpSentimentAnalyzer(
-            new HttpClient(),
-            uri,
-            requestTimeout: TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds ?? 3)));
-    }
-
-    return new TradingFlow.Alpaca.VaderSentimentAnalyzer();
-}
-
-static TradingFlow.Engine.Abstractions.IMarketDataProvider CreateProvider(TradingFlow.Domain.Backtesting.BacktestRunConfig run)
-{
-    return run.Provider.ToLowerInvariant() switch
-    {
-        "csv" => new TradingFlow.Data.Csv.CsvMarketDataProvider(run.NormalizedRoot),
-        "alpaca" => new TradingFlow.Alpaca.AlpacaMarketDataProvider(
-            new HttpClient(),
-            ResolveAlpacaOptions(run)),
-        "finviz" => new TradingFlow.Finviz.FinvizMarketDataProvider(
-            new TradingFlow.Finviz.FinvizClient(
-                new HttpClient(),
-                TradingFlow.Finviz.FinvizOptions.CreateDefault() with
-                {
-                    AuthToken = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ?? ""
-                },
-                CreateRawArchiveWriter())),
-        _ => throw new NotSupportedException($"Unsupported market data provider: {run.Provider}")
-    };
-}
+// The CLI owns archive location and leaves caching to the command that requested it.
+static TradingFlow.Engine.Abstractions.IMarketDataProvider CreateProvider(TradingFlow.Domain.Backtesting.BacktestRunConfig run) =>
+    TradingFlow.Backtesting.ConfiguredDataProviders.FromEnvironment().CreateMarket(run, CreateRawArchiveWriter());
 
 static int? ParseIntOption(string[] args, string name)
 {
@@ -1257,41 +1255,13 @@ static int ResolveWarmupDataDays(TradingFlow.Domain.Backtesting.BacktestRunConfi
     return Math.Max(1, warmupDays > 0 ? warmupDays : run.TimeWindow.LookbackDays);
 }
 
-static TradingFlow.Alpaca.AlpacaOptions ResolveAlpacaOptions(TradingFlow.Domain.Backtesting.BacktestRunConfig run)
-{
-    return TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
-    {
-        KeyId = ResolveSecret("Alpaca", "KeyId", "ALPACA_KEY_ID"),
-        SecretKey = ResolveSecret("Alpaca", "SecretKey", "ALPACA_SECRET_KEY"),
-        MarketDataFeed = run.Providers.Alpaca.DataFeed
-    };
-}
+// Calendar and broker commands share the same explicit run feed and standalone credential source.
+static TradingFlow.Alpaca.AlpacaOptions ResolveAlpacaOptions(TradingFlow.Domain.Backtesting.BacktestRunConfig run) =>
+    TradingFlow.Backtesting.ConfiguredDataProviders.FromEnvironment().AlpacaOptionsFor(run);
 
-static string ResolveSecret(string section, string key, string environmentVariable)
-{
-    var environmentValue = Environment.GetEnvironmentVariable(environmentVariable);
-    if (!String.IsNullOrWhiteSpace(environmentValue))
-    {
-        return environmentValue;
-    }
-
-    var settingsPath = FindRepositoryFile(Path.Combine("src", "TradingFlow.Web", "appsettings.local.json"));
-    if (settingsPath is not null)
-    {
-        using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
-        if (document.RootElement.TryGetProperty(section, out var sectionElement) &&
-            sectionElement.TryGetProperty(key, out var keyElement))
-        {
-            var localValue = keyElement.GetString();
-            if (!String.IsNullOrWhiteSpace(localValue))
-            {
-                return localValue;
-            }
-        }
-    }
-
-    return String.Empty;
-}
+// A command must not borrow credentials from another host's local settings file.
+static string ResolveSecret(string environmentVariable) =>
+    Environment.GetEnvironmentVariable(environmentVariable) ?? String.Empty;
 
 static IRawArchiveWriter CreateRawArchiveWriter()
 {

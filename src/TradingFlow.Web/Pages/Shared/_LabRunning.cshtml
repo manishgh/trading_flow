@@ -20,7 +20,7 @@
         ("Setup", "Config, strategies, universe",
             ["loading_config", "loading_strategies", "finviz_candidates", "resolving_universe"]),
         ("Market data", "Candles and indicators",
-            ["market_pipeline", "preparing_ticker_contexts"]),
+            ["preparing_candles", "market_pipeline", "preparing_ticker_contexts"]),
         ("Evaluation", "Strategy matrix",
             ["strategy_group_ready", "running_strategy_matrix", "running_strategy_ticker", "finished_strategy_ticker"]),
         ("Results", "Portfolio and audit",
@@ -39,7 +39,7 @@
                 <span class="tag @(Model.Status == "completed" ? "tag-neutral" : "tag-accent")" data-lab-status>@Model.Status</span>
             </h2>
             <p class="lab-run-stage">
-                <span data-lab-stage>@Model.CurrentStage.Replace('_', ' ')</span> ·
+                <span data-lab-stage>@(Model.CurrentStage == "preparing_candles" ? "Preparing candles" : Model.CurrentStage.Replace('_', ' '))</span> ·
                 elapsed <span data-lab-elapsed>@elapsed.ToString(@"hh\:mm\:ss")</span>
             </p>
         </div>
@@ -100,10 +100,8 @@
         </div>
     }
 
-    @if (!String.IsNullOrWhiteSpace(Model.ErrorMessage))
-    {
-        <p class="callout">@Model.ErrorMessage</p>
-    }
+    <p class="callout" data-lab-error hidden="@(String.IsNullOrWhiteSpace(Model.ErrorMessage))">@Model.ErrorMessage</p>
+    <partial name="_PreparedMarketData" model="Model" />
 
     <section class="lab-activity">
         <h3 class="sub-heading">Activity</h3>

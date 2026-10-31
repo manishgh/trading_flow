@@ -51,7 +51,8 @@ public sealed record SimulatedOrderCommand(
     decimal? LimitPrice = null,
     decimal? StopPrice = null,
     string? TargetClientOrderId = null,
-    string? FixedFeeGroupId = null);
+    string? FixedFeeGroupId = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? OcoGroupId = null);
 
 public sealed record SimulatedWorkingOrder(
     SimulatedOrderCommand Command,
@@ -184,7 +185,7 @@ public sealed partial class DeterministicExecutionSimulator
 
         foreach (var command in orderedCommands.Where(item => item.KnownAtUtc <= request.Market.StartUtc))
         {
-            ApplyCommand(command, working, knownOrderContracts, positions, request.Market, events);
+            ApplyCommand(command, working, knownOrderContracts, positions, events);
         }
 
         var capacity = request.Policy.MaxParticipationPct > 0m
@@ -206,6 +207,8 @@ public sealed partial class DeterministicExecutionSimulator
                      .ThenBy(item => item.Command.ClientOrderId, StringComparer.Ordinal)
                      .ToArray())
         {
+            // A fully filled OCO sibling may have cancelled this snapshot entry earlier in the same step.
+            if (!working.ContainsKey(order.Command.ClientOrderId)) continue;
             var maximumOrderFill = remainingCapacity;
             if (order.Command.IsRiskReducing)
             {
@@ -257,7 +260,7 @@ public sealed partial class DeterministicExecutionSimulator
                 FinraTafCap = remainingTafCap
             };
             var effectiveOrderType = order.StopTriggered
-                ? SimulatedOrderType.Limit
+                ? (order.Command.OrderType == SimulatedOrderType.Stop ? SimulatedOrderType.Market : SimulatedOrderType.Limit)
                 : order.Command.OrderType;
             var fill = SimulateCore(
                 new ExecutionSimulationRequest(
@@ -285,6 +288,15 @@ public sealed partial class DeterministicExecutionSimulator
 
             if (fill.Status == SimulatedFillStatus.NoFill)
             {
+                if (!order.StopTriggered && order.Command.OrderType == SimulatedOrderType.Stop &&
+                    order.Command.StopPrice is { } stop &&
+                    (order.Command.Side == SimulatedOrderSide.Sell ? market.Low <= stop : market.High >= stop))
+                {
+                    var activated = order with { StopTriggered = true };
+                    working[order.Command.ClientOrderId] = activated;
+                    events.Add(CreateStateEvent(activated, "triggered", positions,
+                        request.Market.EndUtc, "stop_market_activated"));
+                }
                 if (!order.StopTriggered &&
                     order.Command.OrderType == SimulatedOrderType.StopLimit &&
                     fill.Reason == "ambiguous_intrabar_stop_limit_sequence")
@@ -328,6 +340,7 @@ public sealed partial class DeterministicExecutionSimulator
             {
                 FilledQuantity = cumulativeQuantity,
                 FilledNotional = cumulativeNotional,
+                StopTriggered = order.StopTriggered || order.Command.OrderType is SimulatedOrderType.Stop or SimulatedOrderType.StopLimit,
                 FixedFeeCharged = true,
                 FinraTafCharged = order.FinraTafCharged + CalculateFinraTafFee(
                     fill.FilledQuantity,
@@ -375,6 +388,11 @@ public sealed partial class DeterministicExecutionSimulator
                     request.Market.EndUtc,
                     "position_quantity_exhausted"));
             }
+            if (remainingQuantity == 0 && !String.IsNullOrWhiteSpace(order.Command.OcoGroupId))
+            {
+                CancelOcoSiblings(order, working, positions, events, request.Market.EndUtc);
+            }
+
             if (remainingQuantity > 0 &&
                 order.Command.TimeInForce == SimulatedTimeInForce.ImmediateOrCancel &&
                 !(order.Command.IsRiskReducing && position.SignedQuantity == 0))
@@ -392,7 +410,7 @@ public sealed partial class DeterministicExecutionSimulator
         // slice. They are committed afterward and become eligible on the next slice.
         foreach (var command in orderedCommands.Where(item => item.KnownAtUtc > request.Market.StartUtc))
         {
-            ApplyCommand(command, working, knownOrderContracts, positions, request.Market, events);
+            ApplyCommand(command, working, knownOrderContracts, positions, events);
         }
 
         lastSequences[symbol] = request.Market.SourceSequence;
@@ -411,7 +429,6 @@ public sealed partial class DeterministicExecutionSimulator
         IDictionary<string, SimulatedWorkingOrder> working,
         IDictionary<string, SimulatedOrderCommand> knownOrderContracts,
         IReadOnlyDictionary<string, SimulatedPosition> positions,
-        ExecutionMarketSlice market,
         ICollection<SimulatedExecutionEvent> events)
     {
         ValidateCommand(command);
@@ -465,10 +482,11 @@ public sealed partial class DeterministicExecutionSimulator
             if (!NormalizeSymbol(command.Symbol).Equals(NormalizeSymbol(target.Command.Symbol), StringComparison.Ordinal) ||
                 command.Side != target.Command.Side ||
                 command.IsRiskReducing != target.Command.IsRiskReducing ||
+                !String.Equals(command.OcoGroupId, target.Command.OcoGroupId, StringComparison.Ordinal) ||
                 command.Quantity < target.FilledQuantity)
             {
                 throw new InvalidOperationException(
-                    "A replacement must preserve symbol, side, and risk classification and cannot reduce total quantity below prior fills.");
+                    "A replacement must preserve symbol, side, risk classification, and OCO group and cannot reduce total quantity below prior fills.");
             }
 
             ValidateRiskReduction(command, positions, command.Quantity - target.FilledQuantity);
@@ -487,7 +505,23 @@ public sealed partial class DeterministicExecutionSimulator
                 target.FilledNotional,
                 target.FixedFeeCharged,
                 target.FinraTafCharged,
-                target.StopTriggered && command.OrderType == SimulatedOrderType.StopLimit);
+                target.StopTriggered && command.OrderType is SimulatedOrderType.Stop or SimulatedOrderType.StopLimit);
+        }
+    }
+
+    private static void CancelOcoSiblings(SimulatedWorkingOrder order,
+        IDictionary<string, SimulatedWorkingOrder> working,
+        IReadOnlyDictionary<string, SimulatedPosition> positions,
+        ICollection<SimulatedExecutionEvent> events, DateTimeOffset timestamp)
+    {
+        if (String.IsNullOrWhiteSpace(order.Command.OcoGroupId)) return;
+        var symbol = NormalizeSymbol(order.Command.Symbol);
+        foreach (var sibling in working.Values.Where(sibling =>
+            NormalizeSymbol(sibling.Command.Symbol) == symbol &&
+            String.Equals(sibling.Command.OcoGroupId, order.Command.OcoGroupId, StringComparison.Ordinal)).ToArray())
+        {
+            working.Remove(sibling.Command.ClientOrderId);
+            events.Add(CreateStateEvent(sibling, "canceled", positions, timestamp, "oco_sibling_filled"));
         }
     }
 
@@ -684,6 +718,7 @@ public sealed partial class DeterministicExecutionSimulator
         left.LimitPrice == right.LimitPrice &&
         left.StopPrice == right.StopPrice &&
         String.Equals(left.FixedFeeGroupId, right.FixedFeeGroupId, StringComparison.Ordinal) &&
+        String.Equals(left.OcoGroupId, right.OcoGroupId, StringComparison.Ordinal) &&
         String.Equals(left.TargetClientOrderId, right.TargetClientOrderId, StringComparison.Ordinal);
 
     private static string ResolveFixedFeeGroupId(SimulatedOrderCommand command) =>

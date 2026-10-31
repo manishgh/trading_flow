@@ -61,6 +61,18 @@ public sealed class BasicStrategyEvaluator
             return $"rsi_outside_range (Actual: {signal.CurrentRsi:F2}, Required: {strategy.EntryRules.MinEntryRsi:F2}-{strategy.EntryRules.MaxEntryRsi:F2})";
         }
 
+        if (strategy.EntryRules.TechnicalFactor is { } factor)
+        {
+            factor.Validate();
+            var evidence = signal.TechnicalFactor;
+            if (evidence?.Metric != factor.Metric || evidence.Value is not { } value)
+                return $"technical_factor_unavailable ({evidence?.UnavailableReason ?? factor.Metric})";
+            if (factor.MinValue is { } min && value <= min || factor.MaxValue is { } max && value >= max)
+                return FormattableString.Invariant($"technical_factor_threshold_failed ({factor.Metric}: {value})");
+            if (factor.MaxContextValue is { } context &&
+                (evidence.ContextValue is null || evidence.ContextValue > context))
+                return FormattableString.Invariant($"technical_factor_context_failed ({factor.Metric}: {evidence.ContextValue})");
+        }
         var researchRuleRejection = GetResearchRuleRejection(strategy, signal);
         if (researchRuleRejection is not null)
         {
@@ -373,6 +385,11 @@ public sealed class BasicStrategyEvaluator
             return "sma50_not_above_sma150";
         }
 
+        if (rules.Sma200RisingLookbackBars > 0 && !signal.IsSma200Rising) return "sma200_not_rising";
+        if (rules.MinBreakoutVolumeVs50DayAverage is { } requiredVolume &&
+            (signal.BreakoutVolumeVs50DayAverage is null || signal.BreakoutVolumeVs50DayAverage < requiredVolume))
+            return "breakout_volume_below_prior_50_day_average_threshold";
+
         if (rules.RequireSma150AboveSma200 && !signal.IsSma150AboveSma200)
         {
             return "sma150_not_above_sma200";
@@ -389,6 +406,10 @@ public sealed class BasicStrategyEvaluator
         {
             return $"price_too_far_below_52_week_high (Actual: {signal.PriceVs52WeekHighPct?.ToString("F2") ?? "n/a"}, RequiredMin: {maxDistanceFromHigh:F2})";
         }
+
+        if (rules.SetupType.Equals("volatility_contraction_pattern", StringComparison.OrdinalIgnoreCase) &&
+            signal.VcpStructureRejectionReason is { } structureReason)
+            return $"vcp_structure_rejected ({structureReason})";
 
         if (rules.MinContractions is { } minContractions &&
             (signal.VolatilityContractions is null || signal.VolatilityContractions.Value < minContractions))

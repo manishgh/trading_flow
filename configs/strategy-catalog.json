@@ -2,6 +2,72 @@
   "schemaVersion": 1,
   "admissionProfiles": [
     {
+      "profileId": "python-zone-volume-spread-candle-research-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-next-open-zone-fixed-target-session-deadline-v1"
+    },
+    {
+      "profileId": "python-zone-comparison-candle-research-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-next-open-zone-fixed-target-session-deadline-v1"
+    },
+    {
+      "profileId": "intraday-zone-sip-research-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-sip-market-session-deadline-v1"
+    },
+    {
+      "profileId": "opening-range-breakout-next-open-research-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-next-open-market-session-deadline-v1"
+    },
+    {
+      "profileId": "opening-range-breakout-research-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-pending-stop-market-session-deadline-v1"
+    },
+    {
+      "profileId": "previous-session-breakout-research-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-pending-limit-session-deadline-v1"
+    },
+    {
       "profileId": "default-deterministic-v1",
       "profileVersion": "1.0.0",
       "parserProfile": "simple-yaml-strict-v1",
@@ -11,9 +77,253 @@
       "derivedIndicatorProfileVersion": "1.0.0",
       "riskPolicy": "account-risk-budget-v1",
       "executionTimingPolicy": "completed-bar-next-executable-bar-v1"
+    },
+    {
+      "profileId": "method-alignment-v2",
+      "profileVersion": "2.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.0.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-asof-regime-scheduled-expiry-v2"
+    },
+    {
+      "profileId": "causal-market-exits-v3",
+      "profileVersion": "3.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.1.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-next-slice-market-exits-v3"
+    },
+    {
+      "profileId": "historical-news-presence-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-next-slice-market-exits-v3",
+      "historicalNewsDiagnosticPolicyId": "historical-news-presence-research-v1"
+    },
+    {
+      "profileId": "historical-company-news-assessment-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-next-slice-market-exits-v3",
+      "historicalNewsDiagnosticPolicyId": "historical-company-news-assessment-research-v1"
+    },
+    {
+      "profileId": "native-recovery-open-cutoff-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-next-slice-market-exits-v3"
     }
   ],
   "strategies": [
+    {
+      "sourcePath": "configs/backtest/strategies/zone-breakout-retest.bt-v1.yaml",
+      "strategyId": "technical.zone-breakout-retest",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "python-zone-volume-spread-candle-research-v1",
+      "reason": "Approved design 20: replace D's long bounce with a completed resistance flip, later actual retest and reclaim. Freeze the armed box, consume emitted alternatives and preserve D shorts, stops, target planning, costs, capital and sessions. Research diagnostic only; no profitability or trading authorization."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/zone-two-candle-stop.bt-v1.yaml",
+      "strategyId": "technical.zone-two-candle-stop",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "python-zone-volume-spread-candle-research-v1",
+      "reason": "Approved design 19: long stop below the lower low of the previous and confirmation candles with the unchanged ATR buffer; short source-zone stop unchanged. Reuse D entry, volume, target, cost, sizing and session rules; recompute quantity and prospective targets from the new stop. Research diagnostic only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/zone-bounce-volume.bt-v1.yaml",
+      "strategyId": "technical.zone-bounce-volume",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "python-zone-volume-spread-candle-research-v1",
+      "reason": "Approved design 18 volume-only comparison: long-bounce RVOL is descriptive with valid evidence required; short breakdown RVOL stays >=1.2. Existing next-zone targets, disabled ratio filter, zone stops, modeled costs and account limits remain unchanged. Research diagnostic only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/zone-risk-target.bt-v1.yaml",
+      "strategyId": "technical.zone-risk-target",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "python-zone-volume-spread-candle-research-v1",
+      "reason": "Approved design 18 target-only comparison: both-side RVOL >=1.2 remains. Known next-zone targets must cover full modeled costs; only absent eligible targets permit an admission-frozen planned net-2R target. Existing quantity sizing, structural stops and costs remain; planned ratio is not guaranteed realized reward. Research diagnostic only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/zone-bounce-volume-risk-target.bt-v1.yaml",
+      "strategyId": "technical.zone-bounce-volume-risk-target",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "python-zone-volume-spread-candle-research-v1",
+      "reason": "Approved design 18 combined comparison: descriptive long-bounce RVOL, unchanged short RVOL >=1.2, cost-covering known-zone targets and planned net-2R fallback only when a next zone is absent. Freeze targets before later execution; preserve sizing, stops, fees and session limits. Research diagnostic only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/python-zone-volume-spread-no-rr.bt-v1.yaml",
+      "strategyId": "technical.zone-volume-spread-no-rr",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "python-zone-volume-spread-candle-research-v1",
+      "reason": "Approved separate comparison with minimum reward/risk filter disabled (minimum_reward_risk: 0). Preserve existing RTH 15m pivot-count zones, both-side same-clock RVOL >=1.2, synthetic full spread 10bps, slippage and configured fees, shared risk/notional sizing, ordered next-zone alternatives, fixed stops/targets, close-10 inclusive entry cutoff and close-5 liquidation. Select the first sized alternative with positive estimated risk; retain fee-net reward/risk for audit even when negative. Research candle diagnostic only; no paper/live authority."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/python-zone-volume-spread-comparison.bt-v1.yaml",
+      "strategyId": "technical.zone-volume-spread-comparison",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "python-zone-volume-spread-candle-research-v1",
+      "reason": "Approved volume/spread comparison on existing causal RTH 15m zones; confirmed pivot count >=2 approximates touches. Both sides require same-clock median RVOL >=1.2; no VWAP filter. Synthetic full spread 10bps, maximum 20bps, ordered next-zone alternatives and zone/ATR stops. Chronological shared sizing selects first planned ticket-fee reward/risk >=1.5; final entry close-10 inclusive, liquidation close-5. Candle diagnostic only, not historical quote evidence or paper/live authority."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/python-zone-comparison.bt-v1.yaml",
+      "strategyId": "technical.zone-python-comparison",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "python-zone-comparison-candle-research-v1",
+      "reason": "Approved Python comparison on existing causal 15m zones; confirmed pivot count >=2 approximates touches. Completed 5m ATR14 and RTH VWAP, asymmetric bounce/breakdown, short same-clock median RVOL >=1.2, fixed next-zone target and zone/ATR stop, close-30 inclusive entry cutoff and close-5 liquidation. Candle-based diagnostic only; no quote freshness gate, continuation, paper or live authority."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/intraday-zone.bt-v1.yaml",
+      "strategyId": "technical.zone-intraday",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "intraday-zone-sip-research-v1",
+      "reason": "Approved 15m close-pivot zones with 5m breakout/retest and rejection/bounce, session VWAP and same-clock twenty-session median volume; historical SIP quote execution only. No paper/live authority."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v3.yaml",
+      "strategyId": "technical.opening-range-breakout",
+      "semanticVersion": "1.2.0",
+      "lifecycle": "research",
+      "admissionProfileId": "opening-range-breakout-next-open-research-v1",
+      "reason": "Approved stage 2: fifteen-minute range, frozen body direction and twenty-session median opening RVOL > 1. Completed post-range five-minute close strictly beyond outward-valid trigger commits next-opening market entry (earliest 09:50 New York). Stop is completed breakout candle low/high rounded outward without added buffer. Known-close sizing, actual gap fills and 3R, lagged opening liquidity, existing protection/costs/caps/deadline and two filled parents with fresh post-resolution inside rearm. Diagnostic backtest research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v2.yaml",
+      "strategyId": "technical.opening-range-breakout",
+      "semanticVersion": "1.1.0",
+      "lifecycle": "research",
+      "admissionProfileId": "opening-range-breakout-research-v1",
+      "reason": "Approved stage 1 outward rounding of submitted triggers and opposite-range stops; preserves raw opening OHLC, full-tick breakout buffer, sizing from submitted levels and actual-fill 3R. All opening, volume, body-direction, continuation, re-entry, two-filled-parent and session-exit rules match the retained 1.0.0 control. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.opening-range-breakout",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "8345a4e9a29ab99260f3566572d447386ae5465f0f74e250fdf8b2e8876ba8e7"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v1.yaml",
+      "strategyId": "technical.opening-range-breakout",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "opening-range-breakout-research-v1",
+      "reason": "Approved 27 October 2026 fifteen-minute opening range, prior-twenty-session opening RVOL above one, opening-body direction, stop-market entry and opposite-range stop. Maximum two filled parent trades per session, no overlap and fresh inside-range return after resolution. Existing 3R continuation protection; diagnostic research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/previous-day-breakout.bt-v1.yaml",
+      "strategyId": "technical.previous-day-breakout",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "previous-session-breakout-research-v1",
+      "reason": "Approved 25 October 2026 regular-session five-minute previous-session breakout baseline, mirrored pullbacks, one-bar pending expiry, exact breakout stop and 3R continuation protection. OHLC diagnostic execution only; no historical liquidity or borrow claim."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/recovery-sma5-qualified-technical.bt-v1.yaml",
+      "strategyId": "technical.recovery-sma5-qualified-technical",
+      "semanticVersion": "1.1.0",
+      "lifecycle": "research",
+      "admissionProfileId": "native-recovery-open-cutoff-v1",
+      "reason": "Fixed inclusive 1-3 predecline ATR band at rebound close; technical control without a news dependency. Approved 25 October 3R target; original ranking, stops, position sizing and early exits unchanged.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.recovery-sma5-exit",
+        "semanticVersion": "2.0.0",
+        "contentSha256": "ad27d9ed0855760bf17fb4fec8ed9b97938dc3a1f52710097b6c63dc4a64c4a8"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/recovery-sma5-qualified-coverage.bt-v1.yaml",
+      "strategyId": "technical.recovery-sma5-qualified-coverage",
+      "semanticVersion": "1.1.0",
+      "lifecycle": "research",
+      "admissionProfileId": "historical-company-news-assessment-v1",
+      "reason": "Fixed inclusive 1-3 predecline ATR band at rebound close; approved 25 October 3R target; original ranking, stops, position sizing and early exits unchanged; common complete issuer-assessment coverage under frozen retrospective provider-update assumptions; Qualified Assessed News Coverage. No historical classifier-availability or accuracy claim.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.recovery-sma5-exit",
+        "semanticVersion": "2.0.0",
+        "contentSha256": "ad27d9ed0855760bf17fb4fec8ed9b97938dc3a1f52710097b6c63dc4a64c4a8"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/recovery-sma5-qualified-negative-veto.bt-v1.yaml",
+      "strategyId": "technical.recovery-sma5-qualified-negative-veto",
+      "semanticVersion": "1.1.0",
+      "lifecycle": "research",
+      "admissionProfileId": "historical-company-news-assessment-v1",
+      "reason": "Fixed inclusive 1-3 predecline ATR band at rebound close; approved 25 October 3R target; original ranking, stops, position sizing and early exits unchanged; common complete issuer-assessment coverage under frozen retrospective provider-update assumptions; Qualified Negative Company News Veto. No historical classifier-availability or accuracy claim.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.recovery-sma5-exit",
+        "semanticVersion": "2.0.0",
+        "contentSha256": "ad27d9ed0855760bf17fb4fec8ed9b97938dc3a1f52710097b6c63dc4a64c4a8"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/recovery-sma5-qualified-positive-required.bt-v1.yaml",
+      "strategyId": "technical.recovery-sma5-qualified-positive-required",
+      "semanticVersion": "1.1.0",
+      "lifecycle": "research",
+      "admissionProfileId": "historical-company-news-assessment-v1",
+      "reason": "Fixed inclusive 1-3 predecline ATR band at rebound close; approved 25 October 3R target; original ranking, stops, position sizing and early exits unchanged; common complete issuer-assessment coverage under frozen retrospective provider-update assumptions; Qualified Positive Company News Required. No historical classifier-availability or accuracy claim.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.recovery-sma5-exit",
+        "semanticVersion": "2.0.0",
+        "contentSha256": "ad27d9ed0855760bf17fb4fec8ed9b97938dc3a1f52710097b6c63dc4a64c4a8"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/recovery-sma5-news-evidence.bt-v1.yaml",
+      "strategyId": "technical.recovery-sma5-news-evidence",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "historical-news-presence-v1",
+      "reason": "Same SMA5 recovery rules with the common historical news query/revision evidence check. Actual receipt clocks remain unchanged; diagnostic availability is a separate frozen assumption.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.recovery-sma5-exit",
+        "semanticVersion": "2.0.0",
+        "contentSha256": "ad27d9ed0855760bf17fb4fec8ed9b97938dc3a1f52710097b6c63dc4a64c4a8"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/recovery-sma5-news-avoidance.bt-v1.yaml",
+      "strategyId": "technical.recovery-sma5-news-avoidance",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "historical-news-presence-v1",
+      "reason": "Same SMA5 recovery and common news-evidence check, rejecting entries with a selected provider-linked company article published within the frozen 120-hour window. Research only; no original-delivery or classifier-accuracy claim.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.recovery-sma5-exit",
+        "semanticVersion": "2.0.0",
+        "contentSha256": "ad27d9ed0855760bf17fb4fec8ed9b97938dc3a1f52710097b6c63dc4a64c4a8"
+      }
+    },
     {
       "sourcePath": "configs/strategies/kristjan_qullamaggie_stream_methodology.yaml",
       "strategyId": "swing.qullamaggie-episodic-pivot",
@@ -34,9 +344,9 @@
       "sourcePath": "configs/strategies/minervini-trend-template-vcp.v4-trend-rider.yaml",
       "strategyId": "swing.minervini-vcp",
       "semanticVersion": "4.0.0",
-      "lifecycle": "research",
+      "lifecycle": "archived",
       "admissionProfileId": "default-deterministic-v1",
-      "reason": "Canonical stale research control; clean revalidation is required."
+      "reason": "Preserved previous research control; superseded by the explicit method-alignment study version."
     },
     {
       "sourcePath": "configs/strategies/swing-catalyst-drift.v5.yaml",
@@ -114,9 +424,9 @@
       "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-oversold.bt-v3.yaml",
       "strategyId": "swing.connors-rsi2",
       "semanticVersion": "3.0.0",
-      "lifecycle": "research",
+      "lifecycle": "archived",
       "admissionProfileId": "default-deterministic-v1",
-      "reason": "Canonical untuned Connors RSI2 benchmark."
+      "reason": "Preserved previous research control; superseded by the explicit method-alignment study version."
     },
     {
       "sourcePath": "configs/backtest/strategies/swing-mean-reversion-reclaim.tech-only.bt-v1.yaml",
@@ -133,6 +443,64 @@
       "lifecycle": "archived",
       "admissionProfileId": "default-deterministic-v1",
       "reason": "Superseded RSI2 recovery variant."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/minervini-technical-template-vcp.bt-v9.yaml",
+      "strategyId": "swing.minervini-vcp",
+      "semanticVersion": "9.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "method-alignment-v2",
+      "reason": "Preserved prior study; completed-bar timeout/terminal-exit timing superseded by causal-market-exits-v3."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml",
+      "strategyId": "swing.connors-rsi2",
+      "semanticVersion": "5.0.0",
+      "lifecycle": "archived",
+      "admissionProfileId": "method-alignment-v2",
+      "reason": "Preserved prior study; completed-bar timeout/terminal-exit timing superseded by causal-market-exits-v3."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/minervini-technical-template-vcp.bt-v10.yaml",
+      "strategyId": "swing.minervini-vcp",
+      "semanticVersion": "10.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "causal-market-exits-v3",
+      "reason": "Same economic rules; causal completed-bar market exit scheduling and improved research diagnostics."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml",
+      "strategyId": "swing.connors-rsi2",
+      "semanticVersion": "6.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "causal-market-exits-v3",
+      "reason": "Same economic rules; causal completed-bar market exit scheduling and improved research diagnostics."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/recovery-exit-control.bt-v2.yaml",
+      "strategyId": "technical.recovery-exit-control",
+      "semanticVersion": "2.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "native-recovery-open-cutoff-v1",
+      "reason": "Broad recovery price-only control with SMA5 exit disabled; native execution retains actual open exposure at cutoff. Original parent and its terminal-liquidation results remain immutable historical evidence.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.family03.mr_a0b1",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "c151cb4becae9f19b0aeeab7517c884401f14d716fbc404e78bf8dfa4b8396bb"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/recovery-sma5-exit.bt-v2.yaml",
+      "strategyId": "technical.recovery-sma5-exit",
+      "semanticVersion": "2.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "native-recovery-open-cutoff-v1",
+      "reason": "Same broad recovery price-only rules and native execution as the paired control; only the SMA5 technical exit is enabled. Research registration grants no paper/live authority.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.family03.mr_a0b1",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "c151cb4becae9f19b0aeeab7517c884401f14d716fbc404e78bf8dfa4b8396bb"
+      }
     }
   ]
 }

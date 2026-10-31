@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using TradingFlow.Application.Jobs;
 using TradingFlow.Backtesting;
+using TradingFlow.Contracts.V1;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Jobs;
 using TradingFlow.Engine.Configuration;
@@ -19,18 +20,32 @@ public interface IBacktestRunExecutor
         string resultPath,
         DateTimeOffset evaluationCutoffUtc,
         CancellationToken cancellationToken,
-        IProgress<BacktestProgress>? progress = null);
+        IProgress<BacktestProgress>? progress = null,
+        PreparedMarketDataRequestReference? preparedDataReference = null);
+
+    /// <summary>Assessment execution requires an executor that propagates the exact retained evidence and its live owner guard.</summary>
+    Task<BacktestResult> RunAsync(string configPath, string resultPath, DateTimeOffset evaluationCutoffUtc,
+        CancellationToken cancellationToken, FrozenBacktestEvidence verified, Action<EngineConfig> requireLiveScope,
+        IProgress<BacktestProgress>? progress = null, PreparedMarketDataRequestReference? preparedDataReference = null) =>
+        throw new NotSupportedException("This executor does not support operation-scoped evidence verification.");
 }
 
 public sealed class BacktestRunExecutor(BacktestRunner runner) : IBacktestRunExecutor
 {
+    /// <summary>Passes one worker's existing provider and required lifetime guard through all runner workspaces.</summary>
+    public Task<BacktestResult> RunAsync(string configPath, string resultPath, DateTimeOffset evaluationCutoffUtc,
+        CancellationToken cancellationToken, FrozenBacktestEvidence verified, Action<EngineConfig> requireLiveScope,
+        IProgress<BacktestProgress>? progress = null, PreparedMarketDataRequestReference? preparedDataReference = null) =>
+        runner.RunAsync(configPath, resultPath, evaluationCutoffUtc, cancellationToken, verified, requireLiveScope, progress, preparedDataReference);
+
     public Task<BacktestResult> RunAsync(
         string configPath,
         string resultPath,
         DateTimeOffset evaluationCutoffUtc,
         CancellationToken cancellationToken,
-        IProgress<BacktestProgress>? progress = null) =>
-        runner.RunAsync(configPath, resultPath, evaluationCutoffUtc, cancellationToken, progress);
+        IProgress<BacktestProgress>? progress = null,
+        PreparedMarketDataRequestReference? preparedDataReference = null) =>
+        runner.RunAsync(configPath, resultPath, evaluationCutoffUtc, cancellationToken, progress, preparedDataReference);
 }
 
 public enum BacktestCancellationOutcome
@@ -70,19 +85,26 @@ public sealed class BacktestJobService : IDurableJobHandler
     private readonly SimpleYamlReader yamlReader;
     private readonly BacktestJobServiceOptions options;
     private readonly ILogger<BacktestJobService> logger;
+    private readonly MonthlyRunResultWriter monthlyResults;
+    private readonly IBacktestEventSourcePreparation? eventSourcePreparation;
 
+    /// <summary>Use the existing durable worker and immutable strategy validator for execution and monthly publication.</summary>
     public BacktestJobService(
         IBacktestRunExecutor runner,
         IDurableJobRepository repository,
         SimpleYamlReader yamlReader,
         BacktestJobServiceOptions options,
-        ILogger<BacktestJobService>? logger = null)
+        StrategyArtifactCatalog strategyArtifacts,
+        ILogger<BacktestJobService>? logger = null,
+        IBacktestEventSourcePreparation? eventSourcePreparation = null)
     {
         this.runner = runner;
         this.repository = repository;
         this.yamlReader = yamlReader;
         this.options = ValidateOptions(options);
         this.logger = logger ?? NullLogger<BacktestJobService>.Instance;
+        this.eventSourcePreparation = eventSourcePreparation;
+        monthlyResults = new MonthlyRunResultWriter(new StrategyRunArtifactValidator(yamlReader, strategyArtifacts));
     }
 
     public string JobType => "backtest";
@@ -102,6 +124,7 @@ public sealed class BacktestJobService : IDurableJobHandler
     public Task RefreshProjectionAsync(CancellationToken cancellationToken) =>
         InitializeAsync(cancellationToken);
 
+    /// <summary>Captures immutable inputs before admission and discards only this rejected job's uniquely owned parameter file.</summary>
     public async Task<BacktestJobSnapshot> StartAsync(
         string runName,
         string configPath,
@@ -111,35 +134,73 @@ public sealed class BacktestJobService : IDurableJobHandler
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         var fullConfigPath = Path.GetFullPath(configPath);
         var runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
-        var request = DurableFileJobRequest.Capture([fullConfigPath, .. runConfig.Strategies]);
-        using (request.AcquireVerifiedReadLease())
+        var originalConfigPath = fullConfigPath;
+        var admittedAt = DateTimeOffset.UtcNow;
+        if (runConfig.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1 &&
+            runConfig.Engine.ExecutionSourceManifestPath is null)
         {
+            var preparation = eventSourcePreparation ?? throw new InvalidOperationException(
+                "The saved quote-execution plan needs the configured historical SIP preparation service.");
+            using var originalLease = DurableFileJobRequest.Capture([originalConfigPath]).AcquireVerifiedReadLease();
+            fullConfigPath = await preparation.PrepareAsync(fullConfigPath, runConfig, admittedAt, cancellationToken);
             runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
-            request.EnsureContains([fullConfigPath, .. runConfig.Strategies]);
         }
-        var job = new MutableBacktestJob(Guid.NewGuid(), runName, fullConfigPath, DateTimeOffset.UtcNow);
-        var persisted = new PersistedJob
+        using var evidenceScope = WorkflowEvidenceVerificationScope.Open(this, runConfig.Engine);
+        var job = new MutableBacktestJob(Guid.NewGuid(), runName, fullConfigPath, admittedAt);
+        var inputFiles = ResolveInputs(fullConfigPath, runConfig, evidenceScope).Append(originalConfigPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        PreparedMarketDataRequestReference? preparedReference = null;
+        var preparedPath = Path.Combine(Path.GetFullPath(runConfig.ResultsRoot), "_prepared-requests", job.JobId.ToString("N"), "request.json");
+        var accepted = false;
+        try
         {
-            Id = job.JobId,
-            JobType = JobType,
-            RunName = job.RunName,
-            ConfigPath = job.ConfigPath,
-            RequestJson = request.Serialize(),
-            SnapshotJson = JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
-            Status = "queued",
-            CreatedAt = job.CreatedAt
-        };
+            using (DurableFileJobRequest.Capture(inputFiles).AcquireVerifiedReadLease())
+            {
+                if (runConfig.Provider.Equals("finviz", StringComparison.OrdinalIgnoreCase))
+                    throw new NotSupportedException("Finviz does not provide a raw API for Historical OHLCV Bars. Please use Alpaca instead.");
+                if (!runConfig.Provider.Equals("csv", StringComparison.OrdinalIgnoreCase))
+                {
+                    var dataRequest = new PreparedMarketDataRequest(1, "run-" + job.JobId.ToString("N"), job.CreatedAt,
+                        [new(job.JobId.ToString("N"), runConfig with { Strategies = [] }, runConfig.Strategies.Select(yamlReader.ReadStrategy).ToArray())]);
+                    new PreparedMarketDataService(ConfiguredDataProviders.FromEnvironment()).ValidateRequest(dataRequest);
+                    preparedReference = await PreparedMarketDataService.WriteRequestAsync(dataRequest, preparedPath, cancellationToken);
+                }
+            }
+            var request = DurableFileJobRequest.Capture(preparedReference is null ? inputFiles : inputFiles.Append(preparedReference.Path)) with
+                { CapturedAtUtc = job.CreatedAt, PreparedMarketData = preparedReference };
+            using (request.AcquireVerifiedReadLease())
+            {
+                runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
+                request.EnsureContains(ResolveInputs(fullConfigPath, runConfig, evidenceScope));
+            }
+            var persisted = new PersistedJob
+            {
+                Id = job.JobId,
+                JobType = JobType,
+                RunName = job.RunName,
+                ConfigPath = job.ConfigPath,
+                RequestJson = request.Serialize(),
+                SnapshotJson = JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
+                Status = "queued",
+                CreatedAt = job.CreatedAt
+            };
 
-        if (!await repository.TryEnqueueAsync(persisted, options.MaximumPendingJobs, cancellationToken))
-        {
-            throw new InvalidOperationException(
-                $"The backtest queue already contains its maximum of {options.MaximumPendingJobs} non-terminal jobs.");
+            if (!await repository.TryEnqueueAsync(persisted, options.MaximumPendingJobs, cancellationToken))
+            {
+                throw new InvalidOperationException(
+                    $"The backtest queue already contains its maximum of {options.MaximumPendingJobs} non-terminal jobs.");
+            }
+            accepted = true;
+
+            var projectedJob = jobs.GetOrAdd(job.JobId, job);
+
+            PruneTerminalJobs();
+            return projectedJob.ToSnapshot();
         }
-
-        var projectedJob = jobs.GetOrAdd(job.JobId, job);
-
-        PruneTerminalJobs();
-        return projectedJob.ToSnapshot();
+        finally
+        {
+            if (!accepted && preparedReference is not null)
+                await PreparedRequestStagingCleanup.DiscardAsync(preparedReference, preparedPath, repository, job.JobId);
+        }
     }
 
     public async Task<BacktestCancellationOutcome> CancelJobAsync(
@@ -182,14 +243,29 @@ public sealed class BacktestJobService : IDurableJobHandler
     public BacktestJobSnapshot? Get(Guid jobId) =>
         jobs.TryGetValue(jobId, out var job) ? job.ToSnapshot() : null;
 
+    /// <summary>Reads queued or recovered work directly, including cohort jobs not yet loaded by a worker.</summary>
+    public async Task<BacktestJobSnapshot?> GetSnapshotAsync(Guid jobId, CancellationToken token = default)
+    {
+        var persisted = await repository.GetJobAsync(jobId, token);
+        return persisted?.JobType == JobType ? MutableBacktestJob.FromPersisted(persisted, JsonOptions).ToSnapshot() : null;
+    }
+
+    /// <summary>Lists recent persisted executions even when all worker slots are occupied.</summary>
+    public async Task<IReadOnlyList<BacktestJobSnapshot>> RecentSnapshotsAsync(int count, CancellationToken token = default) =>
+        (await repository.GetJobsAsync(JobType, token)).OrderByDescending(job => job.CreatedAt).Take(count)
+            .Select(job => MutableBacktestJob.FromPersisted(job, JsonOptions).ToSnapshot()).ToArray();
+
     public Task RecoverAsync(PersistedJob job, CancellationToken cancellationToken) => Task.CompletedTask;
 
+    /// <summary>Execute frozen inputs under this lease and publish monthly evidence before trimming the persisted UI snapshot.</summary>
     public async Task<DurableJobCompletion> ExecuteAsync(
         DurableJobExecutionContext context,
         CancellationToken cancellationToken)
     {
         var request = DurableFileJobRequest.Deserialize(context.Job.RequestJson);
         using var inputLease = request.AcquireVerifiedReadLease();
+        var capturedRun = yamlReader.ReadBacktestRun(context.Job.ConfigPath);
+        using var evidenceScope = WorkflowEvidenceVerificationScope.Open(this, capturedRun.Engine);
         var job = jobs.GetOrAdd(
             context.Job.Id,
             _ => MutableBacktestJob.FromPersisted(context.Job, JsonOptions));
@@ -198,15 +274,18 @@ public sealed class BacktestJobService : IDurableJobHandler
         await context.SaveSnapshotAsync(JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions), cancellationToken);
 
         var progress = new InlineProgress<BacktestProgress>(update =>
+        {
+            job.SetPreparedMarketData(update.PreparedMarketData);
             job.Report(
                 update.Stage,
                 update.Message,
                 update.Ticker,
                 update.CompletedTickerCount,
                 update.TotalTickerCount,
-                update.StrategyName));
+                update.StrategyName);
+        });
         var runConfig = yamlReader.ReadBacktestRun(job.ConfigPath);
-        request.EnsureContains([job.ConfigPath, .. runConfig.Strategies]);
+        request.EnsureContains(ResolveInputs(job.ConfigPath, runConfig, evidenceScope));
         var attemptResultPath = Path.Combine(
             runConfig.ResultsRoot,
             ".durable-attempts",
@@ -214,23 +293,34 @@ public sealed class BacktestJobService : IDurableJobHandler
             job.JobId.ToString("N"),
             context.LeaseToken.ToString("N"),
             "result.json");
-        var runTask = runner.RunAsync(
+        var runTask = evidenceScope is not null ? runner.RunAsync(job.ConfigPath, attemptResultPath, request.CapturedAtUtc,
+            cancellationToken, evidenceScope.Resolve(runConfig.Engine), evidenceScope.Guard, progress, request.PreparedMarketData)
+            : runner.RunAsync(
             job.ConfigPath,
             attemptResultPath,
             request.CapturedAtUtc,
             cancellationToken,
-            progress);
+            progress,
+            request.PreparedMarketData);
         await PersistWhileRunningAsync(runTask, job, context, cancellationToken);
         var result = await runTask;
         cancellationToken.ThrowIfCancellationRequested();
 
+        var monthly = await monthlyResults.WriteAsync(runConfig, result, request.CapturedAtUtc,
+            request.Workflow?.Cohort?.CohortName ?? job.RunName, request.Workflow?.Provenance.Strategies,
+            cancellationToken, request.Workflow?.Cohort);
         var projected = ProjectResultForUi(result);
         var completedAt = DateTimeOffset.UtcNow;
-        var completedSnapshot = job.ToTerminalSnapshot("completed", completedAt, null, projected);
+        var completedSnapshot = job.ToTerminalSnapshot("completed", completedAt, null, projected, monthly);
         return DurableJobCompletion.Completed(
             JsonSerializer.Serialize(completedSnapshot, JsonOptions),
             result.ResultPath);
     }
+
+    /// <summary>Retains all ordinary captured-input checks while reusing only this attempt's exact diagnostic graph.</summary>
+    private static IReadOnlyList<string> ResolveInputs(string path, BacktestRunConfig run, WorkflowEvidenceVerificationScope? scope) =>
+        scope is null ? BacktestRunInputFiles.Resolve(path, run)
+        : BacktestRunInputFiles.Resolve(path, run, scope.Resolve(run.Engine), scope.Guard);
 
     public Task OnTerminalPublishedAsync(PersistedJob persisted, CancellationToken cancellationToken)
     {
@@ -284,23 +374,34 @@ public sealed class BacktestJobService : IDurableJobHandler
         }
     }
 
+    /// <summary>Persists progress until execution ends; cancellation waits for the runner to drain before releasing its lease and input files.</summary>
     private async Task PersistWhileRunningAsync(
         Task runTask,
         MutableBacktestJob job,
         DurableJobExecutionContext context,
         CancellationToken cancellationToken)
     {
-        while (!runTask.IsCompleted)
+        try
         {
-            var delay = Task.Delay(options.SnapshotInterval, cancellationToken);
-            if (await Task.WhenAny(runTask, delay) == runTask)
+            while (!runTask.IsCompleted)
             {
-                break;
-            }
+                var delay = Task.Delay(options.SnapshotInterval, cancellationToken);
+                if (await Task.WhenAny(runTask, delay) == runTask)
+                {
+                    break;
+                }
 
-            await context.SaveSnapshotAsync(
-                JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
-                cancellationToken);
+                await context.SaveSnapshotAsync(
+                    JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
+                    cancellationToken);
+            }
+        }
+        catch
+        {
+            // Snapshot failure must drain children as well, so no evidence lease is released under a running workspace.
+            try { await runTask; }
+            catch { /* Preserve the original snapshot/cancellation failure after execution drains. */ }
+            throw;
         }
     }
 
@@ -384,8 +485,14 @@ public sealed class BacktestJobService : IDurableJobHandler
         public ConcurrentQueue<string> Events { get; } = new();
         public ConcurrentDictionary<string, MutableStrategyRunGroup> StrategyGroups { get; } = new(StringComparer.OrdinalIgnoreCase);
         public BacktestResult? Result { get; private set; }
+        public PreparedMarketDataSummary? PreparedMarketData { get; private set; }
+        public IReadOnlyList<MonthlyRunResult> MonthlyResults { get; private set; } = [];
+        public string? MonthlyUnavailableReason { get; private set; }
+        public BacktestCohortExecution? Cohort { get; private set; }
+        public string? ArtifactDirectory { get; private set; }
         public bool IsTerminal => IsTerminalStatus(Status);
 
+        /// <summary>Restores the persisted progress/result evidence, then applies the repository's authoritative job status.</summary>
         public static MutableBacktestJob FromPersisted(PersistedJob persisted, JsonSerializerOptions jsonOptions)
         {
             var job = new MutableBacktestJob(persisted.Id, persisted.RunName, persisted.ConfigPath, persisted.CreatedAt);
@@ -411,6 +518,7 @@ public sealed class BacktestJobService : IDurableJobHandler
             }
         }
 
+        /// <summary>Restores durable status and the exact saved cohort so Web snapshots retain original capital and plan identity.</summary>
         public void ApplyPersistedState(PersistedJob persisted)
         {
             lock (stateLock)
@@ -420,9 +528,11 @@ public sealed class BacktestJobService : IDurableJobHandler
                 FinishedAt = persisted.FinishedAt;
                 CancellationRequestedAt = persisted.CancellationRequestedAtUtc;
                 ErrorMessage = persisted.ErrorMessage;
+                Cohort = DurableFileJobRequest.Deserialize(persisted.RequestJson).Workflow?.Cohort;
             }
         }
 
+        /// <summary>Restore both compact monthly evidence and the bounded result when a durable projection is refreshed.</summary>
         public void ApplySnapshot(BacktestJobSnapshot snapshot)
         {
             lock (stateLock)
@@ -431,6 +541,10 @@ public sealed class BacktestJobService : IDurableJobHandler
                 CompletedTickerCount = snapshot.CompletedTickerCount;
                 TotalTickerCount = snapshot.TotalTickerCount;
                 Result = snapshot.Result;
+                PreparedMarketData = snapshot.PreparedMarketData ?? snapshot.Result?.PreparedMarketData;
+                MonthlyResults = snapshot.MonthlyResults ?? [];
+                MonthlyUnavailableReason = snapshot.MonthlyUnavailableReason;
+                ArtifactDirectory = snapshot.ArtifactDirectory;
                 while (Events.TryDequeue(out _)) { }
                 foreach (var entry in snapshot.Events.TakeLast(80))
                 {
@@ -468,13 +582,22 @@ public sealed class BacktestJobService : IDurableJobHandler
             }
         }
 
+        /// <summary>Retains committed public input evidence as progress advances beyond the preparation stage.</summary>
+        public void SetPreparedMarketData(PreparedMarketDataSummary? summary)
+        {
+            if (summary is null) return;
+            lock (stateLock) PreparedMarketData = summary;
+        }
+
         public BacktestJobSnapshot ToSnapshot() => ToTerminalSnapshot(Status, FinishedAt, ErrorMessage, Result);
 
+        /// <summary>Capture one consistent terminal view, retaining monthly evidence even after full trades are trimmed.</summary>
         public BacktestJobSnapshot ToTerminalSnapshot(
             string status,
             DateTimeOffset? finishedAt,
             string? error,
-            BacktestResult? result)
+            BacktestResult? result,
+            MonthlyRunResultReport? monthly = null)
         {
             lock (stateLock)
             {
@@ -496,7 +619,12 @@ public sealed class BacktestJobService : IDurableJobHandler
                         .OrderBy(group => group.StrategyName, StringComparer.OrdinalIgnoreCase)
                         .Select(group => group.ToSnapshot())
                         .ToArray(),
-                    CancellationRequestedAt);
+                    CancellationRequestedAt,
+                    ArtifactDirectory: result is null ? ArtifactDirectory : Path.GetDirectoryName(result.ResultPath),
+                    MonthlyResults: monthly?.Results ?? MonthlyResults,
+                    MonthlyUnavailableReason: monthly?.UnavailableReason ?? MonthlyUnavailableReason,
+                    Cohort: monthly?.Cohort ?? Cohort,
+                    PreparedMarketData: result?.PreparedMarketData ?? PreparedMarketData);
             }
         }
 

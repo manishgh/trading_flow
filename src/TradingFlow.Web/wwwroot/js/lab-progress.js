@@ -4,6 +4,7 @@
    in place. It replaces the result panel after the first transition to a terminal
    status, because the results phase is server-rendered and there is nothing
    useful to patch into it. */
+// Connects one job panel to polling until that panel leaves the current page.
 (() => {
     const script = document.currentScript ?? document.querySelector("script[data-job-id]");
     const jobId = script?.dataset.jobId;
@@ -18,18 +19,43 @@
     const percentNode = root.querySelector("[data-lab-percent]");
     const progressNode = root.querySelector("[data-lab-progress]");
     const eventsNode = root.querySelector("[data-lab-events]");
+    const errorNode = root.querySelector("[data-lab-error]");
+    const preparedNode = root.querySelector("[data-lab-prepared]");
 
     let reloaded = false;
     let busy = false;
 
+    // Patches server text without treating evidence or failures as HTML.
     function setText(node, value) {
         if (node && value !== undefined && value !== null && node.textContent !== String(value)) {
             node.textContent = String(value);
         }
     }
 
+    // Displays only committed summary fields; a queued job has no selected snapshot yet.
+    function renderPrepared(prepared) {
+        if (!preparedNode) return;
+        preparedNode.hidden = !prepared;
+        const fields = {
+            id: prepared?.snapshotId,
+            hash: prepared?.snapshotSha256,
+            provider: prepared?.providers?.join(", "),
+            feed: prepared?.dataFeeds?.join(", "),
+            basis: prepared?.priceAdjustments?.join(", "),
+            coverage: prepared ? `${prepared.startUtc} to ${prepared.endUtc}` : "",
+            time: prepared?.preparedAtUtc,
+            reused: prepared?.reusedQueryCount,
+            downloaded: prepared?.downloadedQueryCount,
+            note: prepared?.historicalEvidenceNote
+        };
+        for (const [field, value] of Object.entries(fields)) {
+            setText(preparedNode.querySelector(`[data-prepared-${field}]`), value ?? "");
+        }
+    }
+
+    // Rejects late replies after navigation and replaces only this job's terminal result panel.
     async function poll() {
-        if (busy || reloaded) return;
+        if (busy || reloaded || !root.isConnected) return;
         busy = true;
         try {
             const response = await window.tradingFlowFetch(`/Backtests?handler=Snapshot&id=${encodeURIComponent(jobId)}`, {
@@ -38,9 +64,14 @@
             });
             if (!response.ok) return;
             const snapshot = await response.json();
+            if (!root.isConnected || String(snapshot.jobId).toLowerCase() !== jobId.toLowerCase()) return;
 
             setText(statusNode, snapshot.status);
-            setText(stageNode, String(snapshot.currentStage ?? "").replaceAll("_", " "));
+            const stage = String(snapshot.currentStage ?? "");
+            setText(stageNode, stage === "preparing_candles" ? "Preparing candles" : stage.replaceAll("_", " "));
+            setText(errorNode, snapshot.errorMessage ?? "");
+            if (errorNode) errorNode.hidden = !snapshot.errorMessage;
+            renderPrepared(snapshot.preparedMarketData);
             setText(elapsedNode, snapshot.elapsed);
             setText(completedNode, snapshot.completedTickerCount);
             setText(totalNode, snapshot.totalTickerCount);
@@ -63,7 +94,9 @@
 
                 const rendered = await window.tradingFlowFetch(location.href, { cache: "no-store" });
                 if (!rendered.ok) throw new Error("Result view unavailable");
-                const documentView = new DOMParser().parseFromString(await rendered.text(), "text/html");
+                const html = await rendered.text();
+                if (!root.isConnected) return;
+                const documentView = new DOMParser().parseFromString(html, "text/html");
                 const current = document.querySelector(".lab-main");
                 const replacement = documentView.querySelector(".lab-main");
                 if (!current || !replacement) throw new Error("Result panel unavailable");

@@ -45,6 +45,7 @@ public sealed class WorkflowConfigurationTests
     }
 
     [Fact]
+    // Both modes must preserve their selected profile and the frozen mixed-source membership.
     public async Task RealConfigurationAdapter_PreservesFixedWindowAndMixedSourceMembership()
     {
         var repo = TestRepository.FindRoot();
@@ -58,8 +59,11 @@ public sealed class WorkflowConfigurationTests
             var authorization = new StrategyAuthorizationTestRegistry();
             var writer = new RunConfigWriter(new ProjectPaths(temporary), reader, AtomicFileArtifactWriter.Instance, artifacts, store, authorization);
             var catalog = new ConfigCatalogService(new ProjectPaths(repo), reader, artifacts, store, authorization);
-            var adapter = new WorkflowRunConfiguration(catalog, writer, reader);
-            var strategy = (await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest)).First();
+            var limits = new Mock<TradingFlow.Domain.Execution.IOperationalTradingLimitStore>();
+            limits.Setup(item => item.GetAsync("paper_experiment", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TradingFlow.Domain.Execution.OperationalTradingLimits("paper", 5, 5, 0, null));
+            var adapter = new WorkflowRunConfiguration(catalog, writer, reader, limits.Object);
+            var strategy = (await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest)).First(item => item.Definition.Timeframe == "1d");
             var identity = new StrategyReference(strategy.Identity.StrategyId, strategy.Identity.SemanticVersion, strategy.Identity.ContentSha256);
             var now = new DateTimeOffset(2026, 6, 15, 12, 0, 0, TimeSpan.Zero);
             var preview = new UniversePreviewResponse(ContractVersions.VersionOne, Guid.NewGuid(), "swing", now, now.AddMinutes(5),
@@ -68,7 +72,8 @@ public sealed class WorkflowConfigurationTests
                     new("AAPL", "watching", [new("finviz", "screen", now, now.AddMinutes(5), new string('c',64), false)])
                 ], [], now);
             var backtest = new StartBacktestRequest(ContractVersions.VersionOne, "fixed_window", preview.UniverseSnapshotId,
-                [identity], now.AddMonths(-6), now.AddDays(-1), 10000, 1, 25, 4, "use_cache", "full", "backtest-fixture");
+                [identity], now.AddMonths(-6), now.AddDays(-1), 10000, 1, 25, 4, "use_cache", "full", "backtest-fixture",
+                catalog.GetBacktestConfigs().First().FileName);
             var files = await adapter.WriteAsync(backtest, preview, "fixed_window", default);
             var parsed = reader.ReadBacktestRun(files[0]);
             Assert.Equal(backtest.TestWindowStartUtc, parsed.TimeWindow.Start);
@@ -80,10 +85,12 @@ public sealed class WorkflowConfigurationTests
             var registered = writer.RegisterPaperExperiment(strategy.Path, "1.0.0", "fixture", Guid.NewGuid(), now);
             var paper = new StartPaperRunRequest(ContractVersions.VersionOne, "mixed_sources", preview.UniverseSnapshotId,
                 new(registered.Identity.StrategyId, registered.Identity.SemanticVersion, registered.Identity.ContentSha256),
-                false, false, "limit", "day", "strategy_validated", "paper-fixture", "paper_experiment");
+                false, false, "limit", "day", "strategy_validated", "paper-fixture", "paper_experiment",
+                catalog.GetPaperConfigs().First().FileName);
             files = await adapter.WriteAsync(paper, preview, "mixed_sources", default);
             parsed = reader.ReadBacktestRun(files[0]);
             Assert.Equal(new[] { "MSFT" }, parsed.Discovery!.WishlistTickers);
+            Assert.Equal(5, parsed.Portfolio.MaxConcurrentPositions);
             Assert.Equal(new[] { "AAPL" }, parsed.Discovery.FinvizTickers);
             Assert.Null(parsed.Discovery.WishlistId);
             Assert.True(String.IsNullOrEmpty(parsed.Discovery.FinvizQuery));

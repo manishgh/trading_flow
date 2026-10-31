@@ -17,14 +17,15 @@ public sealed partial class SignalGenerator
         bool IsVolatilityHalving,
         bool IsVolumeDryUp,
         decimal? BreakoutVolumeRatio,
-        decimal? StructuralStopPrice) GetVcpContext(
+        decimal? StructuralStopPrice,
+        string? DiagnosticRejectionReason) GetVcpContext(
             StrategyDefinition strategy,
             IReadOnlyList<OhlcvBar> bars,
             int index)
     {
         if (!UsesLongSetup(strategy, "volatility_contraction_pattern"))
         {
-            return (false, null, false, false, null, null);
+            return (false, null, false, false, null, null, null);
         }
 
         var rules = strategy.EntryRules;
@@ -52,7 +53,8 @@ public sealed partial class SignalGenerator
             isVolatilityHalving,
             hasVolumeDryUp,
             analysis.BreakoutVolumeRatio,
-            analysis.Contractions.LastOrDefault()?.Low.Price);
+            analysis.Contractions.LastOrDefault()?.Low.Price,
+            analysis.DiagnosticRejectionReason);
     }
 
     private static (decimal? PriceVsLowPct, decimal? PriceVsHighPct) Get52WeekPriceContext(
@@ -100,6 +102,19 @@ public sealed partial class SignalGenerator
         var recentHigh = priorBars.Max(x => x.High);
         var pullbackLow = priorBars.Min(x => x.Low);
         var pullbackLowOffset = Array.FindIndex(priorBars, x => x.Low == pullbackLow);
+        if (rules.RequireOrderedReclaimPullback)
+        {
+            // Anchor to the most recent highest high, then require a strictly later
+            // completed bar. A same-bar high/low has no known intrabar ordering.
+            var peakOffset = Array.FindLastIndex(priorBars, x => x.High == recentHigh);
+            if (peakOffset >= priorBars.Length - 1)
+            {
+                return (false, null, recentHigh, null);
+            }
+
+            pullbackLow = priorBars.Skip(peakOffset + 1).Min(x => x.Low);
+            pullbackLowOffset = Array.FindIndex(priorBars, peakOffset + 1, x => x.Low == pullbackLow);
+        }
         var pullbackLowIndex = pullbackLowOffset < 0 ? -1 : start + pullbackLowOffset;
         if (recentHigh <= 0m || pullbackLow <= 0m || pullbackLowIndex < 0)
         {
@@ -135,7 +150,7 @@ public sealed partial class SignalGenerator
         return (reclaimedSma10 && reclaimedSma20, pullbackDepthPct, recentHigh, pullbackLow);
     }
 
-    // Archetype C (doctrine §6C): the L4 trigger is today's first close back above the prior day's high,
+    // Archetype C (doctrine §6C): the L4 trigger is today's close back above the prior day's high,
     // and the L3 setup is an oversold "stretch" (consecutive down closes, RSI(2) oversold, or a close
     // below the lower Bollinger band) within the lookback ending at the prior bar. StretchLow is the
     // lowest low across the stretch (and the reclaim bar) and feeds the swing-low stop.

@@ -9,7 +9,9 @@ WORKDIR /app
 COPY sidecars/finbert-sentiment/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY sidecars/finbert-sentiment/app.py sidecars/finbert-sentiment/download_model.py ./
+COPY sidecars/finbert-sentiment/app.py sidecars/finbert-sentiment/model_runtime.py sidecars/finbert-sentiment/download_model.py ./
+ARG FINBERT_MODEL_REVISION
+ENV FINBERT_MODEL_REVISION=${FINBERT_MODEL_REVISION}
 RUN python download_model.py
 
 EXPOSE 8088

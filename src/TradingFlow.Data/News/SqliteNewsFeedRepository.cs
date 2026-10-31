@@ -12,11 +12,20 @@ public sealed class SqliteNewsFeedRepository : INewsFeedRepository
         using var db = await dbFactory.CreateDbContextAsync(token);
         var since = filter.SinceUtc.ToUniversalTime();
         var query = db.NewsItems.AsNoTracking().Where(x => x.Timestamp >= since);
-        if (filter.ScopeTickers is { } tickers) query = query.Where(x => tickers.Contains(x.Ticker));
+        if (filter.UntilUtc is { } until) {
+            var cutoff = until.ToUniversalTime();
+            query = query.Where(x => x.Timestamp <= cutoff);
+        }
+        var includeMarket = filter.IncludeMarketNews && String.IsNullOrWhiteSpace(filter.Ticker) && !filter.StockLinkedOnly;
+        if (filter.ScopeTickers is { } tickers)
+            query = query.Where(x => tickers.Contains(x.Ticker) || (includeMarket && x.Ticker == "MARKET"));
         if (!String.IsNullOrWhiteSpace(filter.Ticker)) {
             var ticker = filter.Ticker.Trim().ToUpperInvariant();
-            query = query.Where(x => x.Ticker == ticker || x.Ticker == "MARKET");
+            query = query.Where(x => x.Ticker == ticker);
         }
+        if (filter.StockLinkedOnly) query = query.Where(x => x.Ticker != "MARKET");
+        if (!String.IsNullOrWhiteSpace(filter.Category)) query = query.Where(NewsDisplayTaxonomy.CategoryPredicate(filter.Category));
+        if (!String.IsNullOrWhiteSpace(filter.Sector)) query = query.Where(NewsDisplayTaxonomy.SectorPredicate(filter.Sector));
         if (!String.IsNullOrWhiteSpace(filter.Provider)) {
             var provider = filter.Provider.Trim().ToLowerInvariant(); query = query.Where(x => x.Provider.ToLower() == provider);
         }

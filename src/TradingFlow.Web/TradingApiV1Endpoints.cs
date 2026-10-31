@@ -14,6 +14,7 @@ namespace TradingFlow.Web;
 
 public static class TradingApiV1Endpoints
 {
+    /// <summary>Maps authenticated operator workflows and publishes artifact-derived strategy horizons and research-only execution choices.</summary>
     public static IEndpointRouteBuilder MapTradingFlowApiV1(this IEndpointRouteBuilder endpoints)
     {
         // Every endpoint under this group requires a signed-in operator.
@@ -52,10 +53,10 @@ public static class TradingApiV1Endpoints
                         option.Identity.SemanticVersion,
                         option.Identity.ContentSha256),
                     option.Definition.StrategyName,
-                    "swing",
+                    StrategyHorizonResolver.Resolve(option.Definition),
                     option.Definition.Direction,
                     option.Lifecycle.ToString().ToLowerInvariant(),
-                    option.Definition.EntryRules.RequirePositiveNews,
+                    UsesNews(option.Definition),
                     new[]
                     {
                         option.Definition.Timeframe,
@@ -69,7 +70,7 @@ public static class TradingApiV1Endpoints
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .ToArray(),
                     null))
-                    .ToArray());
+                    .ToArray(), selectionMode == StrategySelectionMode.Backtest ? catalog.GetDecisionContextEvidenceChoices() : []);
             return Results.Ok(response);
         });
 
@@ -79,6 +80,9 @@ public static class TradingApiV1Endpoints
         group.MapCandidateWorkflowEndpoints();
         group.MapWishlistBulkEndpoints();
         group.MapRunWorkflowEndpoints();
+        group.MapBacktestPlanEndpoints();
+        group.MapWarmupQueueEndpoints();
+        group.MapTradingLimitEndpoints();
         group.MapPreparationEndpoints();
 
         group.MapCandidateStreamEndpoints();
@@ -110,7 +114,8 @@ public static class TradingApiV1Endpoints
                 catalog.GetPaperConfigs().Select(ToMobileRunConfig).ToArray(),
                 strategies.Select(ToMobileStrategy).ToArray(),
                 paperExperimentStrategies.Select(ToMobileStrategy).ToArray(),
-                paperShadowStrategies.Select(ToMobileStrategy).ToArray()));
+                paperShadowStrategies.Select(ToMobileStrategy).ToArray(), catalog.GetDecisionContextEvidenceChoices(),
+                BacktestExecutionProfileResolver.Choices));
         });
 
 
@@ -217,6 +222,8 @@ public static class TradingApiV1Endpoints
                 return Results.BadRequest("Wishlist name is required.");
             }
 
+            // Preserve the operator's former observation intent as stored history; this flag cannot select or run a strategy.
+            var existing = request.Id is { } id ? await wishlists.GetByIdAsync(id, cancellationToken) : null;
             var saved = await wishlists.SaveAsync(new Wishlist
             {
                 Id = request.Id ?? Guid.Empty,
@@ -224,28 +231,10 @@ public static class TradingApiV1Endpoints
                 Description = request.Description,
                 IsDefault = request.IsDefault ?? false,
                 IncludeExtendedHours = request.IncludeExtendedHours ?? true,
-                IsObserved = request.IsObserved ?? false
+                IsObserved = existing?.IsObserved ?? false
             }, cancellationToken);
             var loaded = await wishlists.GetByIdAsync(saved.Id, cancellationToken) ?? saved;
             return Results.Ok(ToMobileWishlist(loaded));
-        });
-
-        group.MapPost("/wishlists/{wishlistId:guid}/observe", async (
-            Guid wishlistId,
-            MobileWishlistObserveRequest request,
-            IWishlistRepository wishlists,
-            CancellationToken cancellationToken) =>
-        {
-            try
-            {
-                await wishlists.SetObservedAsync(wishlistId, request.IsObserved, cancellationToken);
-                var updated = await wishlists.GetByIdAsync(wishlistId, cancellationToken);
-                return updated is null ? Results.NotFound() : Results.Ok(ToMobileWishlist(updated));
-            }
-            catch (InvalidOperationException exception)
-            {
-                return Results.BadRequest(exception.Message);
-            }
         });
 
         group.MapDelete("/wishlists/{wishlistId:guid}", async (
@@ -290,21 +279,6 @@ public static class TradingApiV1Endpoints
         });
 
 
-        group.MapPost("/wishlists/{wishlistId:guid}/monitor/evaluate", async (
-            Guid wishlistId,
-            MobileWishlistMonitorRequest request,
-            WishlistMarketMonitor monitor,
-            CancellationToken cancellationToken) =>
-        {
-            var snapshots = request.Snapshots
-                .Where(snapshot => !String.IsNullOrWhiteSpace(snapshot.Ticker))
-                .Select(ToWishlistMarketSnapshot)
-                .ToDictionary(snapshot => snapshot.Ticker, StringComparer.OrdinalIgnoreCase);
-            var result = await monitor.EvaluateAndPersistAlertsAsync(wishlistId, snapshots, cancellationToken);
-            return Results.Ok(new MobileWishlistMonitorResponse(
-                result.Evaluations.Select(ToMobileWishlistEvaluation).ToArray(),
-                result.PersistedSignals.Select(ToMobileWishlistSignal).ToArray()));
-        });
         group.MapGet("/wishlists/signals", async (
             Guid? wishlistId,
             string? ticker,
@@ -441,14 +415,17 @@ public static class TradingApiV1Endpoints
         group.MapGet("/running-trades", async (
             string? source,
             PaperJobService paperJobs,
-            MobileAutomationService automation) =>
+            MobileAutomationService automation,
+            TradingFlow.Web.Services.Desk.IDeskAccountReader account,
+            IPositionProtectionReader protection,
+            TradingFlow.Application.Jobs.TradingLimitsService limits,
+            CancellationToken cancellationToken) =>
         {
-            var trades = await RunningTradesBuilder.BuildAsync(paperJobs, automation);
-            var filtered = RunningTradesBuilder.Filter(trades, source);
-            return Results.Ok(new MobileRunningTradesResponse(
-                filtered,
-                filtered.Sum(trade => trade.UnrealizedPl),
-                filtered.Count));
+            // Broker holdings own quantities and values. Local jobs add labels;
+            // filtering rows never reduces the account's exposure or open count.
+            var limit = (await limits.GetAsync("paper", cancellationToken)).MaxOpenPositions;
+            return Results.Ok(await RunningTradesBuilder.ReadAccountAsync(account,
+                _ => RunningTradesBuilder.BuildAsync(paperJobs, automation), protection, limit, source, cancellationToken));
         });
 
         group.MapGet("/orders", async (
@@ -564,6 +541,13 @@ public static class TradingApiV1Endpoints
             catch (InvalidOperationException error) { return Results.BadRequest(new { error = error.Message }); }
         }).AllowAnonymous();
 
+        // Reads verified retrospective samples only; this authenticated route never invokes providers or inference.
+        group.MapGet("/news/company-assessments", (int? page, int? pageSize, CompanyNewsAssessmentPreviewService assessments) =>
+        {
+            try { return Results.Ok(assessments.Read(page ?? 1, pageSize ?? 25)); }
+            catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
+        });
+
         group.MapPost("/news/refresh", async (
             NewsFeedService newsFeed,
             CancellationToken cancellationToken) =>
@@ -659,82 +643,6 @@ public static class TradingApiV1Endpoints
 
 
 
-    private static WishlistMarketSnapshot ToWishlistMarketSnapshot(MobileWishlistMonitorSnapshotRequest request)
-    {
-        var ticker = request.Ticker.Trim().ToUpperInvariant();
-        var timestamp = request.Timestamp ?? DateTimeOffset.UtcNow;
-        var current = new IndicatorSnapshot(
-            ticker,
-            timestamp,
-            String.IsNullOrWhiteSpace(request.Timeframe) ? "1d" : request.Timeframe.Trim(),
-            request.CurrentPrice,
-            request.CurrentVolume,
-            Vwap: null,
-            Rsi: null,
-            Atr: request.Atr,
-            Ema20: request.Ema20,
-            Ema50: null,
-            Ema200: null,
-            BollingerMiddle: null,
-            BollingerUpper: null,
-            BollingerLower: null,
-            RelativeVolume: request.DailyRelativeVolume,
-            MacdLine: request.MacdHistogram,
-            MacdSignal: 0m,
-            MacdHistogram: request.MacdHistogram,
-            Catalyst: BuildRequestCatalyst(request, ticker, timestamp),
-            Ema10: request.Ema10);
-        IndicatorSnapshot? previous = null;
-        if (request.PreviousMacdHistogram is not null || request.PreviousVolume is not null)
-        {
-            previous = current with
-            {
-                Timestamp = timestamp.AddDays(-1),
-                CurrentVolume = request.PreviousVolume ?? request.CurrentVolume,
-                MacdHistogram = request.PreviousMacdHistogram
-            };
-        }
-
-        return new WishlistMarketSnapshot(ticker, current, previous, request.RecentHigh);
-    }
-
-    private static MobileWishlistMonitorEvaluationResponse ToMobileWishlistEvaluation(WishlistSwingWatchEvaluation evaluation)
-    {
-        return new MobileWishlistMonitorEvaluationResponse(
-            evaluation.Ticker,
-            evaluation.ShouldAlert,
-            evaluation.SignalType,
-            evaluation.Severity,
-            evaluation.Price,
-            evaluation.Reason,
-            evaluation.Score,
-            evaluation.DailyRelativeVolume,
-            evaluation.DistanceFromRecentHighPct,
-            evaluation.Ema20ExtensionAtr,
-            evaluation.NewsHeadline,
-            evaluation.NewsUrl,
-            evaluation.NewsProvider);
-    }
-
-    private static CatalystEvent? BuildRequestCatalyst(
-        MobileWishlistMonitorSnapshotRequest request,
-        string ticker,
-        DateTimeOffset timestamp)
-    {
-        if (String.IsNullOrWhiteSpace(request.NewsHeadline) && String.IsNullOrWhiteSpace(request.NewsUrl))
-        {
-            return null;
-        }
-
-        return new CatalystEvent(
-            ticker,
-            timestamp,
-            CatalystType.NewsReport,
-            String.IsNullOrWhiteSpace(request.NewsHeadline) ? "Matched news catalyst" : request.NewsHeadline.Trim(),
-            request.NewsSentiment ?? 0m,
-            Provider: String.IsNullOrWhiteSpace(request.NewsProvider) ? "news" : request.NewsProvider.Trim(),
-            Url: String.IsNullOrWhiteSpace(request.NewsUrl) ? null : request.NewsUrl.Trim());
-    }
     private static MobileWishlistResponse ToMobileWishlist(Wishlist wishlist)
     {
         return new MobileWishlistResponse(
@@ -840,9 +748,14 @@ public static class TradingApiV1Endpoints
             summary.Config.Mode,
             summary.Config.Provider,
             summary.Config.Tickers,
-            summary.Config.Intervals);
+            summary.Config.Intervals,
+            new(summary.Config.TimeWindow.LookbackDays, summary.Config.Portfolio.StartingCapital,
+                summary.Config.Portfolio.AccountRiskBudgetPct, summary.Config.Portfolio.MaxPositionNotionalPct,
+                summary.Config.Portfolio.MaxConcurrentPositions, summary.Config.CachePolicy,
+                summary.Config.Engine.ExecutionReplayPolicyId));
     }
 
+    /// <summary>Publishes exact catalog identity, original lineage and admission policy for both clients.</summary>
     private static MobileStrategyOption ToMobileStrategy(StrategyOption option)
     {
         var strategy = option.Definition;
@@ -866,16 +779,20 @@ public static class TradingApiV1Endpoints
             option.Audit?.Trades,
             option.Audit?.WinRatePct,
             option.Audit?.AverageHold,
-            option.Audit?.ResultPath);
+            option.Audit?.ResultPath,
+            option.Artifact.DerivedFromIdentity is { } parent
+                ? new(parent.StrategyId, parent.SemanticVersion, parent.ContentSha256) : null,
+            new(option.Artifact.AdmissionProfile.ProfileId, option.Artifact.AdmissionProfile.ProfileVersion,
+                option.Artifact.AdmissionProfile.ExecutionTimingPolicy, option.Artifact.AdmissionProfile.RiskPolicy),
+            StrategyHorizonResolver.Resolve(strategy));
     }
 
-    private static bool UsesNews(StrategyDefinition strategy)
+    /// <summary>Labels declared news use in both client catalogs without enabling a live provider for historical diagnostics.</summary>
+    internal static bool UsesNews(StrategyDefinition strategy)
     {
-        return strategy.EntryRules.RequirePositiveNews ||
-            strategy.EntryRules.MinNewsSentiment is not null ||
-            strategy.EntryRules.VetoNewsSentimentBelow is not null ||
-            strategy.EntryRules.SetupType.Contains("news", StringComparison.OrdinalIgnoreCase) ||
-            strategy.EntryRules.SetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase);
+        return strategy.EntryRules.HistoricalNewsDiagnostic is not null ||
+            StrategyCapabilityInspector.UsesNews(strategy) ||
+            strategy.EntryRules.SetupType.Contains("news", StringComparison.OrdinalIgnoreCase);
     }
 
     private static IEnumerable<MobileNotificationItem> ToNotifications(BacktestJobSnapshot job)

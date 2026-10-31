@@ -14,7 +14,6 @@ public partial class WishlistsPage : ContentPage
     private string watchScope = "all";
     private string watchSearch = String.Empty;
     private readonly ObservableCollection<string> suggestions = new();
-    private readonly HashSet<Guid> seenSignalIds = new();
     private readonly IDispatcherTimer refreshTimer;
     private IReadOnlyList<MobileWishlistResponse> wishlists = Array.Empty<MobileWishlistResponse>();
     private MobileWishlistResponse? selectedWishlist;
@@ -115,17 +114,9 @@ public partial class WishlistsPage : ContentPage
         ProcessSignals(desk.RecentSignals, notifyNewSignals);
     }
 
+    /// <summary>Shows existing alerts as history; polling never republishes an old generic alert as a fresh strategy notification.</summary>
     private void ProcessSignals(IReadOnlyList<MobileWishlistSignalResponse> latest, bool notifyNew)
     {
-        foreach (var signal in latest)
-        {
-            var isNewSignal = seenSignalIds.Add(signal.Id);
-            if (notifyNew && isNewSignal)
-            {
-                LocalSignalNotificationService.ShowSignal(signal.Ticker, signal.SignalType, signal.Reason);
-            }
-        }
-
         ApplySignalsToTickerCards(latest);
     }
 
@@ -162,7 +153,7 @@ public partial class WishlistsPage : ContentPage
 
             return watchScope switch
             {
-                "signal" => card.StatusText.Contains("Observed setup", StringComparison.OrdinalIgnoreCase),
+                "signal" => card.StatusText.Contains("Historical alert", StringComparison.OrdinalIgnoreCase),
                 "trade" => !String.IsNullOrWhiteSpace(card.TradeText),
                 "news" => card.HasNewsLink,
                 _ => true
@@ -236,8 +227,6 @@ public partial class WishlistsPage : ContentPage
 
         WishlistDetailLabel.Text = selectedWishlist.DetailText;
         StockCountLabel.Text = $"{selectedWishlist.ActiveItemCount} active";
-        ObserveButton.Text = selectedWishlist.IsObserved ? "Pause" : "Observe";
-        ObserveButton.BackgroundColor = selectedWishlist.IsObserved ? ThemePalette.Negative : ThemePalette.Positive;
 
         var desired = selectedWishlist.Items
             .Where(item => item.Active)
@@ -276,8 +265,6 @@ public partial class WishlistsPage : ContentPage
         selectedWishlist = desk.Wishlist;
         WishlistDetailLabel.Text = selectedWishlist.DetailText;
         StockCountLabel.Text = $"{desk.Rows.Count} active | {desk.TotalText}";
-        ObserveButton.Text = selectedWishlist.IsObserved ? "Pause" : "Observe";
-        ObserveButton.BackgroundColor = selectedWishlist.IsObserved ? ThemePalette.Negative : ThemePalette.Positive;
 
         var desiredTickers = desk.Rows.Select(row => row.Ticker).ToHashSet(StringComparer.OrdinalIgnoreCase);
         for (var index = items.Count - 1; index >= 0; index--)
@@ -482,25 +469,6 @@ public partial class WishlistsPage : ContentPage
         EnsureStreams();
     }
 
-    private async void OnToggleObserve(object? sender, EventArgs e)
-    {
-        if (selectedWishlist is null)
-        {
-            await DisplayAlertAsync("Wishlists", "Create or select a wishlist first.", "OK");
-            return;
-        }
-
-        try
-        {
-            selectedWishlist = await api.SetWishlistObservedAsync(selectedWishlist.Id, !selectedWishlist.IsObserved);
-            await LoadAsync();
-        }
-        catch (Exception exception)
-        {
-            await DisplayAlertAsync("Observe", exception.Message, "OK");
-        }
-    }
-
     private async void OnAddTicker(object? sender, EventArgs e)
     {
         await AddTickerAsync(TickerEntry.Text);
@@ -625,8 +593,8 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
     private string priceText = "Last --";
     private string bidAskText = "Streaming quotes...";
     private string movementText = String.Empty;
-    private string statusText = "Watching";
-    private string eligibilityReason = "Waiting for VWAP/EMA/MACD/volume conditions.";
+    private string statusText = "Select a strategy";
+    private string eligibilityReason = "Select a strategy in stock details to collect and evaluate its conditions.";
     private string newsText = "No related news";
     private string tradeText = "No open trade";
     private string? newsUrl;
@@ -778,7 +746,7 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
 
     public void ApplySignal(MobileWishlistSignalResponse signal)
     {
-        ApplyStatus("Observed setup", signal.Reason);
+        ApplyStatus("Historical alert", signal.Reason);
     }
 
     public void ClearSignal()
@@ -788,16 +756,16 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
             return;
         }
 
-        ApplyStatus("Watching", "Waiting for VWAP/EMA/MACD/volume conditions.");
+        ApplyStatus("Select a strategy", "Select a strategy in stock details to collect and evaluate its conditions.");
     }
 
     private void ApplyStatus(string status, string reason)
     {
-        StatusText = String.IsNullOrWhiteSpace(status) ? "Watching" : status;
+        StatusText = String.IsNullOrWhiteSpace(status) ? "Select a strategy" : status;
         EligibilityReason = String.IsNullOrWhiteSpace(reason)
-            ? "Waiting for VWAP/EMA/MACD/volume conditions."
+            ? "Select a strategy in stock details to collect and evaluate its conditions."
             : reason;
-        StatusColor = StatusText.Equals("Observed setup", StringComparison.OrdinalIgnoreCase)
+        StatusColor = StatusText.Equals("Historical alert", StringComparison.OrdinalIgnoreCase)
             ? ThemePalette.Positive
             : StatusText.Equals("In trade", StringComparison.OrdinalIgnoreCase)
                 ? ThemePalette.AccentStrong

@@ -17,6 +17,30 @@ public sealed class UniverseWorkflowIntegrityTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-09-27T12:00:00Z");
     private static readonly StrategyReference Strategy = new("swing.test", "test", new string('a', 64));
 
+    /// <summary>Day previews preserve their horizon and source evidence while operational candidate creation remains disabled.</summary>
+    [Fact]
+    public async Task DayPreview_PersistsHorizonAndCannotStartOperationalCandidates()
+    {
+        await using var database = new CandidateWorkflowTestDatabase();
+        await database.InitializeAsync();
+        var clock = new CandidateWorkflowTestClock(Now);
+        var id = Guid.NewGuid();
+        var wishlists = new Mock<IWishlistRepository>();
+        wishlists.Setup(item => item.GetByIdAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(
+            new Wishlist { Id = id, UpdatedAtUtc = Now, Items = [new WishlistItem { Ticker = "MSFT", Active = true }] });
+        var resolver = new UniverseSourceResolver(wishlists.Object, Mock.Of<IScreenerSnapshotSource>(), clock);
+        var service = new UniverseDiscoveryService(resolver, database.Discovery, database.Workflows, database.Workflows, clock);
+        var preview = await service.PreviewAsync(new("1.0", "day", null, [new("wishlist", id.ToString(), id)]));
+        var stored = await database.Workflows.GetAsync(preview.UniverseSnapshotId, default);
+        var restored = UniverseDiscoveryService.ReadPreview(stored!, preview.UniverseSnapshotId);
+        Assert.Equal("day", restored.Horizon);
+        Assert.Equal(preview.ContentSha256, restored.ContentSha256);
+        Assert.Equal("MSFT", Assert.Single(restored.Members).Symbol);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Workflow(database, clock).StartAsync(Request(restored)));
+        await using var context = database.CreateDbContext();
+        Assert.Empty(await context.Candidates.ToArrayAsync());
+    }
+
     [Fact]
     public async Task Preview_RejectsObservationAfterExplicitCutoff()
     {

@@ -97,3 +97,6 @@ deploy/aks/rendered/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Run reports and logs stay out of git; keep them only as long as they are useful.
+outputs/

@@ -24,6 +24,14 @@ public sealed class WarmupOptions
 
     public int MaxParallelTickers { get; init; } = 4;
 
+    public int MaximumPendingJobs { get; init; } = 32;
+
+    public int MaximumTickersPerJob { get; init; } = 250;
+
+    public int MaximumHistoryDays { get; init; } = 1825;
+
+    public long MaximumBarsPerJob { get; init; } = 2000000;
+
     public string NightlyRunLocalTime { get; init; } = "20:30";
 
     public string MarketTimeZone { get; init; } = "America/New_York";
@@ -43,11 +51,15 @@ public sealed record WarmupWatchRequest(
     int? NewsLookbackDays = null,
     IReadOnlyCollection<string>? Timeframes = null,
     bool? IncludeNews = null,
-    bool RunNow = false);
+    bool RunNow = false,
+    string? IdempotencyKey = null);
+
+public sealed record WarmupWatchAcceptance(int Accepted, IReadOnlyList<string> Tickers, bool RunQueued);
 
 public sealed record WarmupRunNowRequest(
     IReadOnlyCollection<string>? Tickers = null,
-    string? Reason = null);
+    string? Reason = null,
+    string? IdempotencyKey = null);
 
 public sealed record WarmupTickerIntent(
     string Ticker,
@@ -67,7 +79,11 @@ public sealed record WarmupJobRequest(
     string RunId,
     string Reason,
     IReadOnlyCollection<string>? Tickers,
-    DateTimeOffset QueuedAtUtc);
+    DateTimeOffset QueuedAtUtc,
+    IReadOnlyList<WarmupTickerIntent>? FrozenIntents = null,
+    string? CommandSha256 = null);
+
+public sealed record WarmupQueuedJob(WarmupJobRequest Request, string Status, string? Error = null);
 
 public sealed record WarmupRunRecord(
     string RunId,
@@ -89,7 +105,19 @@ public sealed record WarmupTickerResult(
     DateTimeOffset EndUtc,
     IReadOnlyList<string> Timeframes,
     IReadOnlyList<string> ArtifactPaths,
-    string? Error);
+    string? Error,
+    bool CacheCompleted = false,
+    string ArchiveStatus = "not_attempted",
+    string? ArchiveManifestPath = null,
+    string? ArchiveError = null);
+
+public sealed record WarmupArchivePublication(string Status, string? ManifestPath,
+    IReadOnlyList<string> FrozenPaths, string? Error = null);
+
+public sealed record WarmupArchiveFile(string Name, long Length, string Sha256);
+
+public sealed record WarmupArchiveManifest(string RunId, string Ticker, DateTimeOffset CapturedAtUtc,
+    IReadOnlyList<WarmupArchiveFile> Files);
 
 public sealed record WarmupArtifacts(
     string Ticker,

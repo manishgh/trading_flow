@@ -18,9 +18,20 @@ public partial class PaperPage : ContentPage, IQueryAttributable
     private BacktestJobSnapshot? selectedJob;
     private BacktestJobSnapshot? lastRun;
     private StartPaperRunRequest? pendingRequest;
+    private TradingLimitProfileResponse? tradingLimits;
     private string? preparationKey;
+    private long lastSeenSessionVersion;
+    private bool startingRun;
+
+    /// <summary>Binds an accepted preparation link to the currently signed-in connection rather than a prior hidden-page owner.</summary>
     public void ApplyQueryAttributes(IDictionary<string,object> query)
-    { if(query.TryGetValue("preparationKey",out var key)) { preparationKey=Uri.UnescapeDataString(key.ToString()??""); pendingRequest=null; } }
+    {
+        if (lastSeenSessionVersion != api.SessionVersion) OnSessionChanged(this, EventArgs.Empty);
+        if (query.TryGetValue("preparationKey", out var key)) {
+            preparationKey = Uri.UnescapeDataString(key.ToString() ?? "");
+            pendingRequest = null;
+        }
+    }
     private bool isLoading;
     private CancellationTokenSource? pageLifetime;
     private bool suppressPersist;
@@ -28,6 +39,7 @@ public partial class PaperPage : ContentPage, IQueryAttributable
     private bool updatingJobs;
     private bool formRestored;
 
+    /// <summary>Initializes page controls and records which account owns any retained retry command.</summary>
     public PaperPage()
     {
         InitializeComponent();
@@ -42,28 +54,40 @@ public partial class PaperPage : ContentPage, IQueryAttributable
         PaperModePicker.SelectedIndex = 0;
         OrderExpirationPicker.SelectedIndex = 0;
         EntryOrderTypePicker.SelectedIndex = 0;
+        lastSeenSessionVersion = api.SessionVersion;
         suppressPersist = false;
         refreshTimer = Dispatcher.CreateTimer();
         refreshTimer.Interval = TimeSpan.FromSeconds(6);
         refreshTimer.Tick += async (_, _) => await LoadAsync(showBusy: false);
     }
 
+    /// <summary>Detects connection changes missed while hidden, then loads only this appearance's account data.</summary>
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        if (lastSeenSessionVersion != api.SessionVersion) OnSessionChanged(this, EventArgs.Empty);
         pageLifetime?.Cancel(); pageLifetime?.Dispose(); pageLifetime = new();
+        isLoading = false; startingRun = false;
+        var token = pageLifetime.Token;
+        var version = api.SessionVersion;
         api.SessionChanged += OnSessionChanged;
         refreshTimer.Start();
         await LoadAsync();
-        if(preparationKey is not null)
+        if (!IsCurrentOwner(version, token)) return;
+        if (preparationKey is { } key)
         {
-            try {var review=await api.Workflow.AcceptedPreparationAsync(preparationKey,pageLifetime.Token);
+            try {
+                var review = await api.Workflow.AcceptedPreparationAsync(key, token);
+                RequireCurrentOwner(version, token);
                 StatusLabel.Text=$"Preparation {review.UniverseSnapshotId}: {String.Join(", ",review.Symbols)}. Expires {review.ExpiresAtUtc.ToLocalTime():g}. Source selectors are replaced by this accepted membership.";
                 WishlistPicker.IsEnabled=false;ScreenerEntry.IsEnabled=false;
-            } catch(Exception ex) {StatusLabel.Text=ex.Message;}
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { if (IsCurrentOwner(version, token)) StatusLabel.Text = ex.Message; }
         }
     }
 
+    /// <summary>Cancels all calls for this appearance; the next appearance verifies changes missed while unsubscribed.</summary>
     protected override void OnDisappearing()
     {
         refreshTimer.Stop(); pageLifetime?.Cancel();
@@ -71,13 +95,22 @@ public partial class PaperPage : ContentPage, IQueryAttributable
         base.OnDisappearing();
     }
 
+    /// <summary>Clears account-owned rows, settings and accepted preparation/retry identities before another connection can reuse them.</summary>
     private void OnSessionChanged(object? sender, EventArgs e)
     {
+        lastSeenSessionVersion = api.SessionVersion;
         pageLifetime?.Cancel(); refreshTimer.Stop(); catalog = null; pendingRequest = null; preparationKey = null;
-        jobs.Clear(); selectedJob = null; RenderSelectedJob();
+        tradingLimits = null; DailyNewStockLimitEntry.Text = String.Empty; AccountOpenPositionLimitEntry.Text = String.Empty;
+        wishlists = []; ConfigPicker.ItemsSource = null; StrategyPicker.ItemsSource = null; WishlistPicker.ItemsSource = null;
+        jobs.Clear(); automationSessions.Clear(); newsItems.Clear(); positions.Clear(); selectedJob = null; lastRun = null;
+        RenderSelectedJob(); RenderLastRun();
+        WishlistPicker.IsEnabled = true; ScreenerEntry.IsEnabled = true;
+        RunButton.IsEnabled = false; SaveTradingLimitsButton.IsEnabled = false;
+        NewsStatusLabel.Text = String.Empty; TradingLimitRuleLabel.Text = String.Empty; TradingLimitStatusLabel.Text = String.Empty;
         StatusLabel.Text = "Connection changed. Reopen this page after signing in.";
     }
 
+    /// <summary>Loads read models with a captured owner and lifetime so delayed responses cannot repopulate another account's page.</summary>
     private async Task LoadAsync(bool showBusy = true)
     {
         if (isLoading)
@@ -86,14 +119,15 @@ public partial class PaperPage : ContentPage, IQueryAttributable
         }
 
         var token = pageLifetime?.Token ?? new CancellationToken(true);
-        if (token.IsCancellationRequested) return;
+        var version = api.SessionVersion;
+        if (!IsCurrentOwner(version, token)) return;
         isLoading = true;
         BusyIndicator.IsVisible = showBusy;
         BusyIndicator.IsRunning = showBusy;
         try
         {
             var healthy = await api.CheckHealthAsync(token);
-            token.ThrowIfCancellationRequested();
+            RequireCurrentOwner(version, token);
             StatusLabel.Text = healthy
                 ? $"Connected: {api.BaseUrl}"
                 : $"Backend unreachable: {api.BaseUrl}";
@@ -103,8 +137,18 @@ public partial class PaperPage : ContentPage, IQueryAttributable
             refreshingForm = true;
             var previousConfig = (ConfigPicker.SelectedItem as MobileRunConfigOption)?.Path;
             var previousStrategy = (StrategyPicker.SelectedItem as MobileStrategyOption)?.Path;
-            catalog = await api.GetCatalogAsync(token);
-            token.ThrowIfCancellationRequested();
+            var loadedCatalog = await api.GetCatalogAsync(token);
+            RequireCurrentOwner(version, token);
+            var loadedLimits = await api.Workflow.TradingLimitsAsync("paper", token);
+            RequireCurrentOwner(version, token);
+            catalog = loadedCatalog;
+            tradingLimits = loadedLimits;
+            DailyNewStockLimitEntry.Text = tradingLimits.MaxNewStocksPerDay.ToString();
+            AccountOpenPositionLimitEntry.Text = tradingLimits.MaxOpenPositions.ToString();
+            TradingLimitRuleLabel.Text = tradingLimits.CountingRule;
+            TradingLimitStatusLabel.Text = "Loaded account limits. Saving does not start a run.";
+            SaveTradingLimitsButton.IsEnabled = true;
+            RequireCurrentOwner(version, token);
             ConfigPicker.ItemsSource = catalog?.PaperConfigs.ToList();
             RestoreFormState();
             ApplyPaperModeSelection();
@@ -121,8 +165,9 @@ public partial class PaperPage : ContentPage, IQueryAttributable
             }
 
             var previousWishlistId = (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Id;
-            wishlists = await api.GetWishlistsAsync(token) ?? Array.Empty<MobileWishlistResponse>();
-            token.ThrowIfCancellationRequested();
+            var loadedWishlists = await api.GetWishlistsAsync(token) ?? Array.Empty<MobileWishlistResponse>();
+            RequireCurrentOwner(version, token);
+            wishlists = loadedWishlists;
             suppressPersist = true;
             WishlistPicker.ItemsSource = wishlists.ToList();
             WishlistPicker.SelectedItem = wishlists.FirstOrDefault(wishlist => wishlist.Id == previousWishlistId)
@@ -136,9 +181,9 @@ public partial class PaperPage : ContentPage, IQueryAttributable
             refreshingForm = false;
             }
             var latestJobs = await api.GetPaperJobsAsync(token) ?? Array.Empty<BacktestJobSnapshot>();
-            token.ThrowIfCancellationRequested();
+            RequireCurrentOwner(version, token);
             var latestAutomationSessions = await api.GetAutomationSessionsAsync(token) ?? Array.Empty<MobileAutomationSessionSnapshot>();
-            token.ThrowIfCancellationRequested();
+            RequireCurrentOwner(version, token);
             lastRun = latestJobs.FirstOrDefault();
             RenderLastRun();
 
@@ -158,24 +203,39 @@ public partial class PaperPage : ContentPage, IQueryAttributable
             }
 
             if (selectedJob is { } selection) await RefreshSelectedAsync(selection.JobId, token);
-            token.ThrowIfCancellationRequested();
+            RequireCurrentOwner(version, token);
             RenderSelectedJob();
         }
         catch (OperationCanceledException) { }
         catch (Exception exception)
         {
+            if (!IsCurrentOwner(version, token)) return;
             StatusLabel.Text = $"Error: {exception.Message}";
             StatusLabel.TextColor = ThemePalette.Negative;
             await DisplayAlertAsync("Paper", exception.Message, "OK");
         }
         finally
         {
-            refreshingForm = false; updatingJobs = false;
-            isLoading = false;
-            BusyIndicator.IsRunning = false;
-            BusyIndicator.IsVisible = false;
-            RefreshRoot.IsRefreshing = false;
+            if (IsCurrentOwner(version, token))
+            {
+                refreshingForm = false; updatingJobs = false;
+                isLoading = false;
+                BusyIndicator.IsRunning = false;
+                BusyIndicator.IsVisible = false;
+                RefreshRoot.IsRefreshing = false;
+            }
         }
+    }
+
+    /// <summary>Accepts UI updates only for the captured account and still-visible page lifetime.</summary>
+    private bool IsCurrentOwner(long version, CancellationToken token) =>
+        !token.IsCancellationRequested && version == api.SessionVersion && version == lastSeenSessionVersion;
+
+    /// <summary>Stops processing before assigning a delayed response from an earlier account or appearance.</summary>
+    private void RequireCurrentOwner(long version, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (!IsCurrentOwner(version, token)) throw new OperationCanceledException("The paper page's signed-in connection changed.");
     }
 
     private void ApplyPaperModeSelection()
@@ -200,12 +260,45 @@ public partial class PaperPage : ContentPage, IQueryAttributable
         SaveFormState();
     }
 
+    /// <summary>Saves the common paper-account limits without submitting a run or an order.</summary>
+    private async void OnSaveTradingLimits(object? sender, EventArgs e)
+    {
+        if (tradingLimits is null) return;
+        var lifetime = pageLifetime;
+        var token = lifetime?.Token ?? new CancellationToken(true);
+        var version = api.SessionVersion;
+        var profile = tradingLimits;
+        if (!IsCurrentOwner(version, token)) return;
+        if (!Int32.TryParse(DailyNewStockLimitEntry.Text, out var daily) || daily <= 0 ||
+            !Int32.TryParse(AccountOpenPositionLimitEntry.Text, out var open) || open <= 0)
+        {
+            TradingLimitStatusLabel.Text = "Both limits must be positive whole numbers.";
+            return;
+        }
+        SaveTradingLimitsButton.IsEnabled = false;
+        try
+        {
+            var saved = await api.Workflow.SaveTradingLimitsAsync(new(ContractVersions.VersionOne, "paper", daily, open, profile.Revision), token);
+            if (!IsCurrentOwner(version, token) || !ReferenceEquals(lifetime, pageLifetime)) return;
+            tradingLimits = saved;
+            TradingLimitRuleLabel.Text = tradingLimits.CountingRule;
+            TradingLimitStatusLabel.Text = "Account limits saved. No run has started.";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (IsCurrentOwner(version, token) && ReferenceEquals(lifetime, pageLifetime)) TradingLimitStatusLabel.Text = error.Message; }
+        finally { if (IsCurrentOwner(version, token) && ReferenceEquals(lifetime, pageLifetime)) SaveTradingLimitsButton.IsEnabled = true; }
+    }
+
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
 
     private async void OnRefreshClicked(object? sender, EventArgs e) => await LoadAsync();
 
+    /// <summary>Shows catalyst news only while the captured page and signed-in connection still own the response.</summary>
     private async void OnTestNews(object? sender, EventArgs e)
     {
+        var token = pageLifetime?.Token ?? new CancellationToken(true);
+        var version = api.SessionVersion;
+        if (!IsCurrentOwner(version, token)) return;
         if (ConfigPicker.SelectedItem is not MobileRunConfigOption config)
         {
             await DisplayAlertAsync("News", "Select a paper environment first.", "OK");
@@ -216,7 +309,8 @@ public partial class PaperPage : ContentPage, IQueryAttributable
         {
             NewsStatusLabel.Text = "Loading catalyst news...";
             var tickers = GetSelectedWishlistTickers();
-            var feed = await api.GetNewsFeedAsync(config.Path, tickers, 48);
+            var feed = await api.GetNewsFeedAsync(config.Path, tickers, 48, token);
+            RequireCurrentOwner(version, token);
             newsItems.Clear();
 
             if (feed is null)
@@ -233,15 +327,21 @@ public partial class PaperPage : ContentPage, IQueryAttributable
                 newsItems.Add(item);
             }
         }
+        catch (OperationCanceledException) { }
         catch (Exception exception)
         {
+            if (!IsCurrentOwner(version, token)) return;
             NewsStatusLabel.Text = $"News error: {exception.Message}";
             await DisplayAlertAsync("News", exception.Message, "OK");
         }
     }
 
+    /// <summary>Retains an uncertain command for the same owner, and prevents late acceptance from restoring a prior account's run.</summary>
     private async void OnStartPaperRun(object? sender, EventArgs e)
     {
+        var token = pageLifetime?.Token ?? new CancellationToken(true);
+        var version = api.SessionVersion;
+        if (startingRun || !IsCurrentOwner(version, token)) return;
         if (ConfigPicker.SelectedItem is not MobileRunConfigOption config ||
             StrategyPicker.SelectedItem is not MobileStrategyOption strategy)
         {
@@ -251,6 +351,7 @@ public partial class PaperPage : ContentPage, IQueryAttributable
 
         try
         {
+            startingRun = true;
             RunButton.IsEnabled = false;
             if (pendingRequest is null)
             {
@@ -261,10 +362,15 @@ public partial class PaperPage : ContentPage, IQueryAttributable
                     sources.Add(new("finviz", ScreenerEntry.Text.Trim(), Query: ScreenerEntry.Text.Trim()));
                 Guid universeId;
                 if(preparationKey is not null) {
-                    var accepted=await api.Workflow.AcceptedPreparationAsync(preparationKey);
+                    var accepted=await api.Workflow.AcceptedPreparationAsync(preparationKey, token);
+                    RequireCurrentOwner(version, token);
                     if(DateTimeOffset.UtcNow>=accepted.ExpiresAtUtc)throw new InvalidOperationException("Preparation expired. Collect a new morning review.");
                     universeId=accepted.UniverseSnapshotId;
-                } else universeId=(await api.Workflow.PreviewAsync(new(ContractVersions.VersionOne,"swing",null,sources))).UniverseSnapshotId;
+                } else {
+                    var preview = await api.Workflow.PreviewAsync(new(ContractVersions.VersionOne,"swing",null,sources), token);
+                    RequireCurrentOwner(version, token);
+                    universeId = preview.UniverseSnapshotId;
+                }
                 pendingRequest = new(ContractVersions.VersionOne,
                     String.IsNullOrWhiteSpace(RunNameEntry.Text) ? $"paper_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}" : RunNameEntry.Text.Trim(),
                     universeId, new(strategy.ArtifactStrategyId, strategy.SemanticVersion, strategy.ContentSha256),
@@ -272,8 +378,11 @@ public partial class PaperPage : ContentPage, IQueryAttributable
                     OrderExpirationPicker.SelectedItem?.ToString() ?? "day", "strategy_validated", Guid.NewGuid().ToString("N"),
                     PaperModePicker.SelectedIndex == 1 ? "paper_experiment" : "paper_shadow", config.FileName);
             }
-            var job = await api.StartPaperRunAsync(pendingRequest);
-            pendingRequest = null;            if (job is not null)
+            var command = pendingRequest;
+            var job = await api.StartPaperRunAsync(command, token);
+            RequireCurrentOwner(version, token);
+            if (ReferenceEquals(command, pendingRequest)) pendingRequest = null;
+            if (job is not null)
             {
                 jobs.Insert(0, job);
                 selectedJob = job;
@@ -281,13 +390,15 @@ public partial class PaperPage : ContentPage, IQueryAttributable
                 await DisplayAlertAsync("Paper", $"Started {job.RunName}.", "OK");
             }
         }
+        catch (OperationCanceledException) { }
         catch (Exception exception)
         {
+            if (!IsCurrentOwner(version, token)) return;
             await DisplayAlertAsync("Paper", exception.Message, "OK");
         }
         finally
         {
-            RunButton.IsEnabled = true;
+            if (IsCurrentOwner(version, token)) { startingRun = false; RunButton.IsEnabled = StrategyPicker.Items.Count > 0; }
         }
     }
 
@@ -334,10 +445,12 @@ public partial class PaperPage : ContentPage, IQueryAttributable
         LastRunStatusLabel.Text = $"{lastRun.Status} - {lastRun.LatestEvent}";
     }
 
+    /// <summary>Refreshes details without letting a prior account's response replace the current selection.</summary>
     private async Task RefreshSelectedAsync(Guid id, CancellationToken token)
     {
+        var version = api.SessionVersion;
         var detail = await api.GetPaperJobAsync(id, token);
-        if (!token.IsCancellationRequested && selectedJob?.JobId == id) selectedJob = detail ?? selectedJob;
+        if (IsCurrentOwner(version, token) && selectedJob?.JobId == id) selectedJob = detail ?? selectedJob;
     }
     private void RenderSelectedJob()
     {
@@ -369,13 +482,16 @@ public partial class PaperPage : ContentPage, IQueryAttributable
         _ = LoadPositionsAsync(selectedJob.JobId);
     }
 
+    /// <summary>Reads selected-run positions only for the appearance and account that requested them.</summary>
     private async Task LoadPositionsAsync(Guid jobId)
     {
+        var token = pageLifetime?.Token ?? new CancellationToken(true);
+        var version = api.SessionVersion;
+        if (!IsCurrentOwner(version, token)) return;
         try
         {
-            var token = pageLifetime?.Token ?? new CancellationToken(true);
             var latest = await api.GetPaperPositionsAsync(jobId, token) ?? Array.Empty<MobilePaperPositionResponse>();
-            if (token.IsCancellationRequested || selectedJob?.JobId != jobId)
+            if (!IsCurrentOwner(version, token) || selectedJob?.JobId != jobId)
             {
                 return; // Selection changed while loading.
             }
@@ -394,30 +510,38 @@ public partial class PaperPage : ContentPage, IQueryAttributable
         }
     }
 
+    /// <summary>Cancels the captured run without clearing another account's later selection.</summary>
     private async void OnCancelSelectedJob(object? sender, EventArgs e)
     {
-        if (selectedJob is null)
+        var token = pageLifetime?.Token ?? new CancellationToken(true);
+        var version = api.SessionVersion;
+        if (selectedJob is not { } job || !IsCurrentOwner(version, token)) return;
+        try
         {
-            return;
+            await api.CancelPaperJobAsync(job.JobId, token);
+            RequireCurrentOwner(version, token);
+            if (selectedJob?.JobId == job.JobId) { selectedJob = null; JobsView.SelectedItem = null; RenderSelectedJob(); }
+            await LoadAsync();
         }
-
-        await api.CancelPaperJobAsync(selectedJob.JobId);
-        selectedJob = null;
-        JobsView.SelectedItem = null;
-        RenderSelectedJob();
-        await LoadAsync();
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (IsCurrentOwner(version, token)) await DisplayAlertAsync("Paper", error.Message, "OK"); }
     }
 
+    /// <summary>Requests cancellation for this account's selected run and suppresses acknowledgements after owner changes.</summary>
     private async void OnCancelBrokerOrders(object? sender, EventArgs e)
     {
-        if (selectedJob is null)
+        var token = pageLifetime?.Token ?? new CancellationToken(true);
+        var version = api.SessionVersion;
+        if (selectedJob is not { } job || !IsCurrentOwner(version, token)) return;
+        try
         {
-            return;
+            await api.CancelBrokerOrdersAsync(job.JobId, token);
+            RequireCurrentOwner(version, token);
+            await DisplayAlertAsync("Paper", "Broker-order cancellation request sent.", "OK");
+            if (IsCurrentOwner(version, token)) await LoadAsync();
         }
-
-        await api.CancelBrokerOrdersAsync(selectedJob.JobId);
-        await DisplayAlertAsync("Paper", "Broker-order cancellation request sent.", "OK");
-        await LoadAsync();
+        catch (OperationCanceledException) { }
+        catch (Exception error) { if (IsCurrentOwner(version, token)) await DisplayAlertAsync("Paper", error.Message, "OK"); }
     }
 
     private void OnToggleAdvanced(object? sender, EventArgs e)

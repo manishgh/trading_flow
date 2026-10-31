@@ -67,6 +67,7 @@ public static class ResearchPromotionGates
     /// </summary>
     public const decimal ConcentrationCeilingPct = 40m;
 
+    /// <summary>Assesses only the supplied run evidence; absent configuration or trimmed trade details remain unevaluated.</summary>
     public static ResearchPromotionAssessment Evaluate(
         StrategyBacktestResult strategy,
         BacktestRunConfig? config,
@@ -127,7 +128,7 @@ public static class ResearchPromotionGates
     {
         if (config is null)
         {
-            return NotEvaluated("timing", "Timing", "The run configuration was not recorded with this result.");
+            return NotEvaluated("timing", "Timing", "The run configuration was not supplied to this assessment; timing has not been evaluated.");
         }
 
         var warmupBars = config.Engine.IndicatorWarmupBars;
@@ -142,11 +143,12 @@ public static class ResearchPromotionGates
                 : $"Indicators are not warmed before scoring: {warmupBars} warm-up bars over {warmupDays} warm-up days.");
     }
 
+    /// <summary>Checks configured fees only when the assessment receives the run configuration.</summary>
     private static PromotionGate EvaluateExecution(BacktestRunConfig? config)
     {
         if (config is null)
         {
-            return NotEvaluated("execution", "Execution", "The run configuration was not recorded with this result.");
+            return NotEvaluated("execution", "Execution", "The run configuration was not supplied to this assessment; execution costs have not been evaluated.");
         }
 
         // Fees on both sides are the minimum honest cost model. A run with none
@@ -162,17 +164,26 @@ public static class ResearchPromotionGates
     }
 
     /// <summary>
-    /// Measured directly from the completed trades: what share of the net profit
-    /// came from the single best ticker.
+    /// Measures ticker concentration only from a complete closed-trade record set;
+    /// native closed counts distinguish missing details from actual zero trades and admitted open orders.
     /// </summary>
     private static PromotionGate EvaluateConcentration(StrategyBacktestResult strategy)
     {
-        var totalNet = strategy.CompletedTrades.Sum(trade => trade.NetProfit);
+        var expectedClosedTrades = strategy.PortfolioState?.ClosedTradeCount ?? strategy.AcceptedTradeCount;
+        if (expectedClosedTrades < 0 || strategy.CompletedTrades.Count != expectedClosedTrades)
+        {
+            return NotEvaluated("concentration", "Concentration",
+                $"Complete closed-trade details were not supplied to this assessment " +
+                $"({strategy.CompletedTrades.Count} available records; {expectedClosedTrades} reported closed trades); " +
+                "concentration has not been evaluated.");
+        }
+
         if (strategy.CompletedTrades.Count == 0)
         {
             return NotEvaluated("concentration", "Concentration", "The strategy produced no completed trades to measure.");
         }
 
+        var totalNet = strategy.CompletedTrades.Sum(trade => trade.NetProfit);
         if (totalNet <= 0m)
         {
             // Nothing to be concentrated in: a losing run is not carried by one

@@ -9,11 +9,13 @@ namespace TradingFlow.Alpaca;
 
 public sealed class FinbertHttpSentimentAnalyzer : ISentimentAnalyzer
 {
+    public static TimeSpan DefaultRequestTimeout { get; } = TimeSpan.FromSeconds(3);
     private readonly HttpClient _httpClient;
     private readonly ISentimentAnalyzer _fallback;
     private readonly ILogger<FinbertHttpSentimentAnalyzer> _logger;
     private readonly TimeSpan _requestTimeout;
 
+    /// <summary>Use the configured sidecar transport while preserving the fallback analyzer's own identity on failure.</summary>
     public FinbertHttpSentimentAnalyzer(
         HttpClient httpClient,
         Uri endpoint,
@@ -25,11 +27,12 @@ public sealed class FinbertHttpSentimentAnalyzer : ISentimentAnalyzer
         _httpClient.BaseAddress ??= endpoint;
         _fallback = fallback ?? new VaderSentimentAnalyzer();
         _logger = logger ?? NullLogger<FinbertHttpSentimentAnalyzer>.Instance;
-        _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(3);
+        _requestTimeout = requestTimeout ?? DefaultRequestTimeout;
     }
 
     public string AnalyzerName => "finbert-http";
 
+    /// <summary>Accept inference only with its loaded immutable model revision; unverified responses use the named fallback.</summary>
     public async Task<SentimentResult> AnalyzeAsync(NewsArticle article, CancellationToken cancellationToken)
     {
         try
@@ -55,15 +58,18 @@ public sealed class FinbertHttpSentimentAnalyzer : ISentimentAnalyzer
             }
 
             var result = await response.Content.ReadFromJsonAsync<FinbertAnalyzeResponse>(cancellationToken: linkedCts.Token);
-            if (result is null)
+            if (result is null || !IsLoadedPinnedModel(result.Model, result.ModelRevision, result.ModelLoaded) ||
+                !IsValidInference(result))
             {
+                _logger.LogWarning("FinBERT returned missing model provenance or invalid inference; falling back to {FallbackAnalyzer}.",
+                    _fallback.AnalyzerName);
                 return await _fallback.AnalyzeAsync(article, cancellationToken);
             }
 
             return new SentimentResult(
-                Math.Clamp(result.Score, -1m, 1m),
+                result.Score,
                 result.Label,
-                AnalyzerName,
+                $"{AnalyzerName}:{result.Model}@{result.ModelRevision!.ToLowerInvariant()}",
                 result.Confidence);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -84,6 +90,20 @@ public sealed class FinbertHttpSentimentAnalyzer : ISentimentAnalyzer
         }
     }
 
+    /// <summary>Share the same loaded-revision requirement with operational health; endpoint configuration alone is insufficient.</summary>
+    public static bool IsLoadedPinnedModel(string? model, string? revision, bool loaded) =>
+        loaded && model == "ProsusAI/finbert" && revision is { Length: 40 } && revision.All(Uri.IsHexDigit);
+
+    /// <summary>Require the existing three-label signed-score contract instead of silently clamping malformed output.</summary>
+    private static bool IsValidInference(FinbertAnalyzeResponse result) =>
+        result.Confidence is >= 0 and <= 1 && (result.Label switch
+        {
+            "positive" => result.Score == result.Confidence,
+            "negative" => result.Score == -result.Confidence,
+            "neutral" => result.Score == 0m,
+            _ => false
+        });
+
     private sealed record FinbertAnalyzeRequest(
         [property: JsonPropertyName("text")] string Text,
         [property: JsonPropertyName("headline")] string Headline,
@@ -92,5 +112,8 @@ public sealed class FinbertHttpSentimentAnalyzer : ISentimentAnalyzer
     private sealed record FinbertAnalyzeResponse(
         [property: JsonPropertyName("label")] string Label,
         [property: JsonPropertyName("score")] decimal Score,
-        [property: JsonPropertyName("confidence")] decimal Confidence);
+        [property: JsonPropertyName("confidence")] decimal Confidence,
+        [property: JsonPropertyName("model")] string? Model,
+        [property: JsonPropertyName("model_revision")] string? ModelRevision,
+        [property: JsonPropertyName("model_loaded")] bool ModelLoaded);
 }

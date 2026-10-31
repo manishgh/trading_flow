@@ -2,7 +2,7 @@
 
 **Status:** Binding system boundary
 
-**Updated:** 2026-07-26
+**Updated:** 2026-10-25
 
 TradingFlow is an API-first US-equities research, backtesting, and paper-trading
 system. These boundaries prevent research assumptions from leaking into execution
@@ -95,7 +95,29 @@ Non-ML alpha research is intentionally limited to two tracks:
 2. Isolated paired tests of stock trend, VCP, validated classified catalysts, or
    completed sub-daily entry confirmation against that frozen baseline.
 
-No additional broad strategy family is admitted until these baselines are measured.
+On 25 October 2026 the user separately approved one research-only regular-session
+five-minute previous-session breakout baseline, registered as
+`technical.previous-day-breakout@1.0.0`. This narrow authorization covers both
+directions, the approved pattern-selected pending limit, exact breakout-candle
+stop, 3R initial target with shared continuation protection, one-bar entry expiry,
+and cancellation/liquidation five minutes before the exchange session close.
+It uses the shared decision, risk, chronological execution and saved-plan workflow.
+It does not inherit a daily swing indicator warm-up; it requires complete real
+preceding-session price context and the applicable exchange calendar.
+
+Its `intraday-rth5m-limit-portfolio-v1` execution is an explicit OHLC diagnostic.
+Retrospective bar participation, the documented opening-liquidation liquidity
+assumption, and unproved historical short borrow must remain visible in retained
+evidence. Missing setup or execution intervals suppress the affected economic
+suffix; they cannot be interpreted as observed non-trades. A current wishlist
+remains a frozen diagnostic cohort, not historical point-in-time membership.
+This authorization does not enable paper/live day trading or waive data,
+retention, holdout, execution-calibration or promotion requirements.
+
+On 27 October 2026 the user also approved the fifteen-minute opening-range breakout research baseline described in `docs/design-review/2026-10-19/12-opening-range-breakout-2026-10-27.md`: completed opening range, relative opening volume and opening direction, stop-market entry, opposite-range protective stop, 3R initial target and shared continuation protection. The limit is two filled parent entries per stock per session, with no overlap and a completed return inside the range before a second breakout. It remains an OHLC diagnostic through the existing shared saved-plan workflow, without paper/live authorization.
+
+Except for these separately approved baselines, no additional broad strategy family
+is admitted until these baselines are measured.
 Generic sentiment, present-day universes projected backward, and parameter searches
 remain diagnostic and cannot promote.
 

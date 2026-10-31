@@ -44,6 +44,7 @@ public sealed class StrategyArtifactCatalog
         return ResolveInsideRepository(artifact.SourcePath);
     }
 
+    // Research news diagnostics remain backtest-only even if an unrelated authorization grant names their identity.
     public IReadOnlyList<StrategyArtifact> GetSelectable(
         StrategySelectionMode mode,
         IReadOnlyCollection<StrategyArtifactIdentity>? authorizedPaperShadow = null,
@@ -53,7 +54,12 @@ public sealed class StrategyArtifactCatalog
         var blocked = (suspended ?? [])
             .Select(IdentityKey)
             .ToHashSet(StringComparer.Ordinal);
-        var artifacts = GetSnapshot().ExecutableArtifacts;
+        var artifacts = GetSnapshot().ExecutableArtifacts.Where(artifact => mode == StrategySelectionMode.Backtest ||
+            artifact.ResolvedStrategy.EntryRules.HistoricalNewsDiagnostic is null &&
+            artifact.ResolvedStrategy.EntryRules.PreviousSessionBreakout is null &&
+            artifact.ResolvedStrategy.EntryRules.OpeningRangeBreakout is null &&
+            artifact.ResolvedStrategy.EntryRules.IntradayZone is null &&
+            artifact.AdmissionProfile.HistoricalNewsDiagnosticPolicyId is null).ToArray();
         return mode switch
         {
             StrategySelectionMode.Backtest or
@@ -97,6 +103,7 @@ public sealed class StrategyArtifactCatalog
                    $"Strategy source '{sourcePath}' is not an executable research artifact in the lifecycle catalog.");
     }
 
+    // Bind each derived run snapshot to its exact source identity without changing canonical strategy content.
     public StrategyArtifact CreateDerivedArtifact(
         StrategyArtifact source,
         StrategyDefinition resolvedStrategy,
@@ -140,9 +147,11 @@ public sealed class StrategyArtifactCatalog
             source.SourceSha256,
             resolvedStrategy,
             source.AdmissionProfile,
-            source.Identity.ContentSha256);
+            source.Identity.ContentSha256,
+            source.Identity);
     }
 
+    // Resolve classified source files and optional immutable parent lineage using the shared canonical identity rules.
     private StrategyCatalogSnapshot Load()
     {
         if (!File.Exists(manifestPath))
@@ -237,7 +246,9 @@ public sealed class StrategyArtifactCatalog
                 relativePath,
                 sourceSha,
                 definition,
-                profile));
+                profile,
+                item.DerivedFromIdentity?.ContentSha256,
+                item.DerivedFromIdentity));
         }
 
         return new StrategyCatalogSnapshot(executable, archived);
@@ -323,6 +334,7 @@ public sealed class StrategyArtifactCatalog
             .ToArray();
     }
 
+    // Preserve the optional Research-only diagnostic policy inside the artifact's immutable identity.
     private static StrategyAdmissionProfile ToDomain(ManifestAdmissionProfile profile) =>
         new(
             Required(profile.ProfileId, nameof(profile.ProfileId)),
@@ -334,7 +346,8 @@ public sealed class StrategyArtifactCatalog
                 Required(profile.DerivedIndicatorProfile, nameof(profile.DerivedIndicatorProfile)),
                 Required(profile.DerivedIndicatorProfileVersion, nameof(profile.DerivedIndicatorProfileVersion))),
             Required(profile.RiskPolicy, nameof(profile.RiskPolicy)),
-            Required(profile.ExecutionTimingPolicy, nameof(profile.ExecutionTimingPolicy)));
+            Required(profile.ExecutionTimingPolicy, nameof(profile.ExecutionTimingPolicy)),
+            profile.HistoricalNewsDiagnosticPolicyId);
 
     private static StrategyLifecycleState ParseLifecycle(string value) =>
         value.Trim().ToLowerInvariant() switch
@@ -380,6 +393,7 @@ public sealed class StrategyArtifactCatalog
         public string DerivedIndicatorProfileVersion { get; init; } = String.Empty;
         public string RiskPolicy { get; init; } = String.Empty;
         public string ExecutionTimingPolicy { get; init; } = String.Empty;
+        public string? HistoricalNewsDiagnosticPolicyId { get; init; }
     }
 
     private sealed class ManifestStrategy
@@ -390,5 +404,6 @@ public sealed class StrategyArtifactCatalog
         public string Lifecycle { get; init; } = String.Empty;
         public string AdmissionProfileId { get; init; } = String.Empty;
         public string Reason { get; init; } = String.Empty;
+        public StrategyArtifactIdentity? DerivedFromIdentity { get; init; }
     }
 }

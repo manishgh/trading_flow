@@ -14,7 +14,7 @@ using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Alpaca;
 
-public sealed class AlpacaNewsProvider : ICatalystProvider
+public sealed class AlpacaNewsProvider : ICatalystEvidenceProvider
 {
     private sealed record CachedArticleSentiment(
         decimal Score,
@@ -61,7 +61,12 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
 
     public string ProviderName => "alpaca";
 
-    public async Task<IReadOnlyList<CatalystEvent>> GetCatalystsAsync(string ticker, DateTimeOffset windowStart, DateTimeOffset windowEnd, CancellationToken cancellationToken)
+    /// <summary>Retains the established event-list API; consumers needing coverage use the typed collection result.</summary>
+    public async Task<IReadOnlyList<CatalystEvent>> GetCatalystsAsync(string ticker, DateTimeOffset windowStart, DateTimeOffset windowEnd, CancellationToken cancellationToken) =>
+        (await GetCatalystEvidenceAsync(ticker, windowStart, windowEnd, cancellationToken)).Events;
+
+    /// <summary>Returns actual query coverage so HTTP failures and collection caps cannot be interpreted as an absence of news.</summary>
+    public async Task<CatalystQueryResult> GetCatalystEvidenceAsync(string ticker, DateTimeOffset windowStart, DateTimeOffset windowEnd, CancellationToken cancellationToken)
     {
         var events = new List<CatalystEvent>();
         var pendingArticles = new List<ReceivedNewsArticle>();
@@ -70,6 +75,8 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         string? pageToken = null;
         var pagesRead = 0;
         var reachedArticleCap = false;
+        string? malformedArticleReason = null;
+        var malformedArticles = 0;
 
         do
         {
@@ -83,14 +90,15 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
                     ticker,
                     response.StatusCode,
                     response.Archive.Manifest.ArchiveId);
-                return events;
+                return new(events, false, $"Alpaca news returned HTTP {(int)response.StatusCode}.", pagesRead, windowStart, windowEnd);
             }
 
             var receivedAt = response.Archive.Manifest.ReceivedAtUtc;
             using var doc = JsonDocument.Parse(response.Payload);
-            if (!doc.RootElement.TryGetProperty("news", out var newsArray))
+            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+                !doc.RootElement.TryGetProperty("news", out var newsArray) || newsArray.ValueKind != JsonValueKind.Array)
             {
-                return events;
+                return new(events, false, "Alpaca news response did not contain the news array.", pagesRead, windowStart, windowEnd);
             }
 
             foreach (var item in newsArray.EnumerateArray())
@@ -101,9 +109,11 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
                     break;
                 }
 
-                var article = ParseArticle(ticker, item);
+                var article = ParseArticle(ticker, item, out var invalidReason);
                 if (article is null)
                 {
+                    malformedArticles++;
+                    malformedArticleReason ??= invalidReason;
                     continue;
                 }
 
@@ -144,7 +154,11 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
             events.AddRange(analyzedEvents);
         }
 
-        return events;
+        var complete = malformedArticles == 0 && !reachedArticleCap && String.IsNullOrWhiteSpace(pageToken);
+        return new(events, complete, malformedArticles > 0 ? $"Alpaca news contained {malformedArticles} malformed article(s): {malformedArticleReason}. Coverage is incomplete." :
+            reachedArticleCap ? "Alpaca news article limit was reached; coverage is incomplete." :
+            !String.IsNullOrWhiteSpace(pageToken) ? "Alpaca news pagination limit was reached; coverage is incomplete." :
+            "Alpaca news window was fully queried.", pagesRead, windowStart, windowEnd);
     }
 
     private async Task<IReadOnlyList<CatalystEvent>> AnalyzeArticlesAsync(
@@ -335,30 +349,52 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         return TimeSpan.FromMilliseconds(Math.Min(5000, 300 * Math.Pow(2, attempt - 1)));
     }
 
-    private NewsArticle? ParseArticle(string requestedTicker, JsonElement item)
+    /// <summary>Accepts only provider-identified, timestamped headlines; malformed rows make strict coverage incomplete without fabricating events.</summary>
+    private NewsArticle? ParseArticle(string requestedTicker, JsonElement item, out string? invalidReason)
     {
-        var headline = GetString(item, "headline");
-        if (String.IsNullOrWhiteSpace(headline))
+        invalidReason = null;
+        if (item.ValueKind != JsonValueKind.Object)
         {
+            invalidReason = "article is not an object";
             return null;
         }
-
-        var createdAt = GetDate(item, "created_at") ?? DateTimeOffset.UtcNow;
-        var id = GetString(item, "id")
-            ?? GetString(item, "news_id")
-            ?? $"{requestedTicker}:{createdAt.UtcDateTime:O}:{headline.GetHashCode(StringComparison.Ordinal)}";
+        var headline = item.TryGetProperty("headline", out var headlineValue) && headlineValue.ValueKind == JsonValueKind.String
+            ? headlineValue.GetString() : null;
+        if (String.IsNullOrWhiteSpace(headline))
+        {
+            invalidReason = "missing headline";
+            return null;
+        }
+        var id = GetString(item, "id") ?? GetString(item, "news_id");
+        if (String.IsNullOrWhiteSpace(id))
+        {
+            invalidReason = "missing provider article ID";
+            return null;
+        }
+        var createdAt = GetDate(item, "created_at");
+        if (createdAt is null)
+        {
+            invalidReason = "missing or invalid created_at publication timestamp";
+            return null;
+        }
+        var updatedAt = GetDate(item, "updated_at");
+        if (item.TryGetProperty("updated_at", out var update) && update.ValueKind != JsonValueKind.Null && updatedAt is null)
+        {
+            invalidReason = "invalid updated_at revision timestamp";
+            return null;
+        }
 
         return new NewsArticle(
             ProviderName,
             id,
             headline,
-            createdAt,
+            createdAt.Value,
             GetSymbols(item, requestedTicker),
             GetString(item, "summary"),
             GetString(item, "content"),
             GetString(item, "source"),
             GetString(item, "url"),
-            GetDate(item, "updated_at"));
+            updatedAt);
     }
 
     private static string? GetString(JsonElement item, string propertyName)
@@ -376,11 +412,14 @@ public sealed class AlpacaNewsProvider : ICatalystProvider
         };
     }
 
+    /// <summary>Requires an ISO provider timestamp with an explicit UTC/offset designator; local-clock defaults are never evidence.</summary>
     private static DateTimeOffset? GetDate(JsonElement item, string propertyName)
     {
-        return item.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(value.GetString(), out var parsed)
-            ? parsed
-            : null;
+        if (!item.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.String) return null;
+        var text = value.GetString();
+        var timeSeparator = text?.IndexOf('T') ?? -1;
+        if (timeSeparator < 0 || !(text!.EndsWith('Z') || text.IndexOf('+', timeSeparator) >= 0 || text.IndexOf('-', timeSeparator) >= 0)) return null;
+        return value.TryGetDateTimeOffset(out var parsed) ? parsed.ToUniversalTime() : null;
     }
 
     private static IReadOnlyList<string> GetSymbols(JsonElement item, string requestedTicker)

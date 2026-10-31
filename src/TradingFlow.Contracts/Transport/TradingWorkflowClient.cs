@@ -6,7 +6,7 @@ using TradingFlow.Contracts.V1;
 namespace TradingFlow.Contracts.Transport;
 
 /// <summary>Platform-neutral application transport; the caller owns cookie and cancellation lifetime.</summary>
-public sealed class TradingWorkflowClient(HttpClient http, Func<string> baseUrl)
+public sealed partial class TradingWorkflowClient(HttpClient http, Func<string> baseUrl)
 {
     private string Url(string path) => baseUrl().TrimEnd('/') + "/api/v1/" + path;
     public Task<StrategyCatalogResponse> CatalogAsync(string mode, CancellationToken token = default) => GetAsync<StrategyCatalogResponse>("strategies?mode=" + Uri.EscapeDataString(mode), token);
@@ -25,6 +25,8 @@ public sealed class TradingWorkflowClient(HttpClient http, Func<string> baseUrl)
     public Task<RunJobResponse> StartAsync(StartPaperRunRequest request, CancellationToken token = default) => PostAsync<StartPaperRunRequest, RunJobResponse>("paper/runs", request, token);
     public Task<RunJobResponse[]> JobsAsync(string kind, CancellationToken token = default) => GetAsync<RunJobResponse[]>("workflow/jobs?kind=" + Uri.EscapeDataString(kind), token);
     public Task<RunJobDetailsResponse> DetailsAsync(Guid id, CancellationToken token = default) => GetAsync<RunJobDetailsResponse>($"workflow/jobs/{id}/details", token);
+    public Task<RunZoneEvaluationPage> ZoneEvaluationsAsync(Guid id, long offset = 0, int limit = 50, CancellationToken token = default) =>
+        GetAsync<RunZoneEvaluationPage>($"workflow/jobs/{id}/zone-evaluations?offset={offset}&limit={limit}", token);
     public Task<RunJobResponse> CancelAsync(Guid id, CancellationToken token = default) => PostAsync<CancelJobRequest, RunJobResponse>($"workflow/jobs/{id}/cancel", new(ContractVersions.VersionOne, "Operator requested cancellation"), token);
 
     public Task<TradingFlow.Contracts.Preparation.PreparationDefinition[]> PreparationAsync(CancellationToken token = default) => GetAsync<TradingFlow.Contracts.Preparation.PreparationDefinition[]>("preparation", token);

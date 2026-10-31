@@ -54,11 +54,6 @@
                                    FontSize="12"
                                    TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                         </VerticalStackLayout>
-                        <Button x:Name="ObserveButton"
-                                Grid.Column="1"
-                                Text="Observe"
-                                Clicked="OnToggleObserve"
-                                SemanticProperties.Description="Start or pause continuous watchlist observation" />
                     </Grid>
 
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
@@ -93,10 +88,10 @@
                                     CommandParameter="all"
                                     SemanticProperties.Description="Show all watched markets" />
                             <Button x:Name="WatchSignalButton"
-                                    Text="Signals"
+                                    Text="Past alerts"
                                     Clicked="OnWatchScopeSelected"
                                     CommandParameter="signal"
-                                    SemanticProperties.Description="Show only markets with an active signal" />
+                                    SemanticProperties.Description="Show stocks with a historical alert; these are not current strategy checks" />
                             <Button x:Name="WatchTradeButton"
                                     Text="In trade"
                                     Clicked="OnWatchScopeSelected"

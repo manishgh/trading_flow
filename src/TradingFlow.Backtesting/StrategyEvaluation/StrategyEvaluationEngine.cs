@@ -52,13 +52,26 @@ public sealed class StrategyEvaluationEngine
             provider,
             cancellationToken);
 
+        IReadOnlyList<OhlcvBar>? factorReference = null;
+        IReadOnlyList<DateOnly>? factorSessions = null;
+        if (strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } factor)
+        {
+            factorReference = await new TradingFlow.Engine.Regime.RegimeGateService().LoadBenchmarkDailyBarsAsync(
+                provider, factor.BenchmarkSymbol, ["1d"], end.AddDays(-Math.Max(400, factor.LookbackBars * 3)), end, cancellationToken);
+            if (provider is not IMarketSessionScheduleProvider calendarProvider)
+                throw new InvalidDataException("Relative strength preview requires an authoritative calendar.");
+            var calendar = await calendarProvider.LoadMarketSessionSchedulesAsync(
+                DateOnly.FromDateTime(end.AddDays(-Math.Max(400, factor.LookbackBars * 3)).UtcDateTime),
+                DateOnly.FromDateTime(end.UtcDateTime).AddDays(1), cancellationToken);
+            factorSessions = TechnicalFactorCalculator.ExpectedCompletedSessions(calendar, end, factor.LookbackBars + 1);
+        }
         var results = await Task.WhenAll(tickers
             .Select(ticker => EvaluateTickerAsync(
                 ticker,
                 runtimeStrategy,
                 marketState,
                 end.ToUniversalTime(),
-                runConfig)));
+                runConfig, factorReference, factorSessions)));
 
         return new StrategyEvaluationResponse(
             runConfig.RunName,
@@ -77,7 +90,7 @@ public sealed class StrategyEvaluationEngine
         AuthorizedRuntimeStrategy runtimeStrategy,
         CandlePipelineResult marketState,
         DateTimeOffset asOfUtc,
-        BacktestRunConfig runConfig)
+        BacktestRunConfig runConfig, IReadOnlyList<OhlcvBar>? referenceBars, IReadOnlyList<DateOnly>? referenceSessions)
     {
         var strategy = runtimeStrategy.Definition;
         if (!marketState.TickerStates.TryGetValue(ticker, out var tickerState))
@@ -94,9 +107,10 @@ public sealed class StrategyEvaluationEngine
             return StrategyTickerEvaluation.NoData(ticker, strategy.Timeframe, "missing_strategy_timeframe_bars");
         }
 
-        var latest = strategySnapshots[^1];
+        var latest = strategySnapshots.LastOrDefault(snapshot => snapshot.Timestamp.Add(ParseTimeframe(strategy.Timeframe)) <= asOfUtc);
+        if (latest is null) return StrategyTickerEvaluation.NoData(ticker, strategy.Timeframe, "no_completed_setup_evidence");
         var setupAvailableAt = latest.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
-        var decisionTime = asOfUtc >= setupAvailableAt ? asOfUtc : setupAvailableAt;
+        var decisionTime = asOfUtc;
         var expiresAt = decisionTime.Add(ParseTimeframe(strategy.Timeframe));
         var setupKey = $"preview:{strategy.StrategyId}:{latest.Timestamp:O}";
         var candidateJournal = new BacktestCandidateJournal();
@@ -143,7 +157,7 @@ public sealed class StrategyEvaluationEngine
                 setupAvailableAt,
                 expiresAt,
                 runConfig.Engine.IndicatorWarmupBars,
-                simulationRun.RunId);
+                simulationRun.RunId, referenceBars, referenceSessions);
             var persisted = await candidateDecisions.EvaluateAsync(
                 simulationRun,
                 decisionRequest);

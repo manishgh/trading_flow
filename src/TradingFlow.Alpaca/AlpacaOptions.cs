@@ -12,6 +12,9 @@ public sealed record AlpacaOptions(
     int AssetEligibilityCacheSeconds = 3_600,
     int TradingCalendarCacheSeconds = 3_600)
 {
+    public int AccountFillHistoryMaxPages { get; init; } =
+        (int)ProductionParameterRegistry.ByName["broker_fill_history_max_pages"].DefaultValue!;
+
     public Uri BaseUrl => AlpacaEndpointResolver.Resolve(Profile).TradingRest;
 
     public static AlpacaOptions Create(ProductionProfile profile)

@@ -1,7 +1,43 @@
+# Operational SQLite and warm-up JSON each have one owner on separate local block volumes.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: trading-flow-azurefile-explicit
+  name: trading-flow-disk-retained
+provisioner: disk.csi.azure.com
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters:
+  skuName: StandardSSD_LRS
+  fsType: ext4
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trading-flow-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: trading-flow-disk-retained
+  resources:
+    requests:
+      storage: 512Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trading-flow-warmup-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: trading-flow-disk-retained
+  resources:
+    requests:
+      storage: 512Gi
+---
+# Only completed, closed backup files use Azure Files; no operational database opens here.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: trading-flow-backup-files-retained
 provisioner: file.csi.azure.com
 allowVolumeExpansion: true
 reclaimPolicy: Retain
@@ -16,69 +52,32 @@ parameters:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: trading-flow-data-pv
-spec:
-  capacity:
-    storage: 512Gi
-  accessModes:
-    - ReadWriteMany
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: trading-flow-azurefile-explicit
-  csi:
-    driver: file.csi.azure.com
-    readOnly: false
-    volumeHandle: trading-flow-data
-    volumeAttributes:
-      resourceGroup: "__TRADINGFLOW_RESOURCE_GROUP__"
-      storageAccount: "__TRADINGFLOW_STORAGE_ACCOUNT__"
-      shareName: tradingflow-data
-      protocol: smb
-      storeAccountKey: "false"
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: trading-flow-data
-spec:
-  accessModes:
-    - ReadWriteMany
-  storageClassName: trading-flow-azurefile-explicit
-  volumeName: trading-flow-data-pv
-  resources:
-    requests:
-      storage: 512Gi
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: trading-flow-ui-runs-pv
+  name: trading-flow-backups-pv
 spec:
   capacity:
     storage: 64Gi
-  accessModes:
-    - ReadWriteMany
+  accessModes: [ReadWriteMany]
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: trading-flow-azurefile-explicit
+  storageClassName: trading-flow-backup-files-retained
   csi:
     driver: file.csi.azure.com
     readOnly: false
-    volumeHandle: trading-flow-ui-runs
+    volumeHandle: trading-flow-backups
     volumeAttributes:
       resourceGroup: "__TRADINGFLOW_RESOURCE_GROUP__"
       storageAccount: "__TRADINGFLOW_STORAGE_ACCOUNT__"
-      shareName: tradingflow-ui-runs
+      shareName: tradingflow-backups
       protocol: smb
       storeAccountKey: "false"
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: trading-flow-ui-runs
+  name: trading-flow-backups
 spec:
-  accessModes:
-    - ReadWriteMany
-  storageClassName: trading-flow-azurefile-explicit
-  volumeName: trading-flow-ui-runs-pv
+  accessModes: [ReadWriteMany]
+  storageClassName: trading-flow-backup-files-retained
+  volumeName: trading-flow-backups-pv
   resources:
     requests:
       storage: 64Gi

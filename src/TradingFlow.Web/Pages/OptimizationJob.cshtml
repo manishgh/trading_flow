@@ -21,7 +21,6 @@
             const currentRunTitle = document.getElementById('currentRunTitle');
             const currentRunParameters = document.getElementById('currentRunParameters');
             const resultPanel = document.getElementById('topPermutationsPanel');
-            const resultMetric = document.getElementById('topPermutationsMetric');
             const resultBody = document.getElementById('topPermutationsBody');
             const cancelButton = document.getElementById('cancelOptimizationButton');
 
@@ -36,10 +35,6 @@
 
             function formatDecimal(value) {
                 return Number(value ?? 0).toFixed(2);
-            }
-
-            function formatDaily(value) {
-                return Number(value ?? 0).toFixed(4);
             }
 
             function renderParameters(parameters) {
@@ -58,10 +53,7 @@
                     <td>${escapeHtml(run.permutation)} / ${escapeHtml(run.totalPermutations)}</td>
                     <td>${escapeHtml(run.strategyName)}</td>
                     <td>${renderParameters(run.parameterValues)}</td>
-                    <td><b>${formatDecimal(run.totalReturnPct)}%</b></td>
-                    <td>${formatDaily(run.averageDailyReturnPct)}%</td>
-                    <td>${formatDecimal(run.netProfit)}</td>
-                    <td>${formatDecimal(run.maxDrawdownPct)}%</td>
+                    <td>Verified monthly evidence unavailable in optimization summary</td>
                     <td>${trades}</td>
                     <td>${formatDecimal(winRate)}%</td>
                 </tr>`;
@@ -116,17 +108,13 @@
                     }
                 }
 
-                if (data.result && resultPanel && resultMetric && resultBody) {
+                if (data.result && resultPanel && resultBody) {
                     resultPanel.hidden = false;
-                    resultMetric.textContent = data.result.metric;
                     resultBody.innerHTML = (data.result.topRuns ?? []).map(run => `<tr>
-                        <td>#${escapeHtml(run.rank)}</td>
+                        <td>${escapeHtml(run.runName)}</td>
                         <td>${escapeHtml(run.strategyName ?? '')}</td>
                         <td>${renderParameters(run.parameterValues)}</td>
-                        <td><b>${formatDecimal(run.totalReturnPct)}%</b></td>
-                        <td>${formatDaily(run.averageDailyReturnPct)}%</td>
-                        <td>${formatDecimal(run.netProfit)}</td>
-                        <td>${formatDecimal(run.maxDrawdownPct)}%</td>
+                        <td>Verified monthly evidence unavailable in optimization summary</td>
                         <td>${escapeHtml(run.totalTrades)}</td>
                         <td>${formatDecimal(run.winRate)}%</td>
                     </tr>`).join('');
@@ -199,17 +187,15 @@
     </section>
 
     <section id="topPermutationsPanel" class="panel" hidden="@(Model.Job.Result is null && Model.Job.CompletedRuns.Count == 0)">
-            <h2>Completed Combinations</h2>
+            <h2>Combination summaries</h2>
+            <p class="note">Final optimization summaries show the historically retained subset, without a monthly ranking. Verified monthly evidence is required to compare performance.</p>
             <table class="data-table">
                 <thead>
                     <tr>
                         <th>Run</th>
                         <th>Strategy</th>
                         <th>Parameters</th>
-                        <th id="topPermutationsMetric">Return %</th>
-                        <th>Daily Avg</th>
-                        <th>Net</th>
-                        <th>Drawdown</th>
+                        <th>Monthly evidence</th>
                         <th>Trades</th>
                         <th>Win %</th>
                     </tr>
@@ -217,23 +203,20 @@
                 <tbody id="topPermutationsBody">
                     @if (Model.Job.Result is not null)
                     {
-                        foreach (var run in Model.Job.Result.TopRuns)
+                        foreach (var run in Model.Job.Result.TopRuns.OrderBy(run => run.BacktestResult.RunName, StringComparer.Ordinal))
                         {
                             var totalTrades = run.WinningTradeCount + run.LosingTradeCount;
                             var winRate = totalTrades == 0 ? 0 : Math.Round((decimal)run.WinningTradeCount / totalTrades * 100, 1);
                             <tr>
-                                <td>#@run.Rank</td>
-                                <td>@run.BacktestResult.Winner?.StrategyName</td>
+                                <td>@run.BacktestResult.RunName</td>
+                                <td>@String.Join(", ", run.BacktestResult.StrategyResults.Select(strategy => strategy.StrategyName).Order(StringComparer.Ordinal))</td>
                                 <td>
                                     @foreach (var p in run.ParameterValues)
                                     {
                                         <span class="pill">@p.Key.Split('.').Last(): <b>@p.Value</b></span>
                                     }
                                 </td>
-                                <td><b>@run.TotalReturnPct.ToString("0.00")%</b></td>
-                                <td>@run.AverageDailyReturnPct.ToString("0.####")%</td>
-                                <td>@run.NetProfit.ToString("0.00")</td>
-                                <td>@run.MaxDrawdownPct.ToString("0.00")%</td>
+                                <td>Verified monthly evidence unavailable in optimization summary</td>
                                 <td>@totalTrades</td>
                                 <td>@winRate%</td>
                             </tr>
@@ -254,10 +237,7 @@
                                         <span class="pill">@p.Key.Split('.').Last(): <b>@p.Value</b></span>
                                     }
                                 </td>
-                                <td><b>@run.TotalReturnPct?.ToString("0.00")%</b></td>
-                                <td>@run.AverageDailyReturnPct?.ToString("0.####")%</td>
-                                <td>@run.NetProfit?.ToString("0.00")</td>
-                                <td>@run.MaxDrawdownPct?.ToString("0.00")%</td>
+                                <td>Verified monthly evidence unavailable in optimization summary</td>
                                 <td>@totalTrades</td>
                                 <td>@winRate%</td>
                             </tr>

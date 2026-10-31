@@ -114,16 +114,9 @@ resource runtimeContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
   }
 }
 
-resource dataShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
-  name: '${storage.name}/default/tradingflow-data'
-  properties: {
-    shareQuota: 512
-    enabledProtocols: 'SMB'
-  }
-}
-
-resource uiRunsShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
-  name: '${storage.name}/default/tradingflow-ui-runs'
+// Operational SQLite uses an AKS-managed local block disk. Only closed backup artifacts use this share.
+resource backupShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
+  name: '${storage.name}/default/tradingflow-backups'
   properties: {
     shareQuota: 64
     enabledProtocols: 'SMB'
@@ -250,9 +243,9 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource kubeletDataShareContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(dataShare.id, aks.properties.identityProfile.kubeletidentity.objectId, 'StorageFileDataSmbShareContributor')
-  scope: dataShare
+resource kubeletBackupShareContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(backupShare.id, aks.properties.identityProfile.kubeletidentity.objectId, 'StorageFileDataSmbShareContributor')
+  scope: backupShare
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0c867c2a-1d8c-454a-a3db-ab2ea1bdc8bb')
     principalId: aks.properties.identityProfile.kubeletidentity.objectId
@@ -260,13 +253,23 @@ resource kubeletDataShareContributor 'Microsoft.Authorization/roleAssignments@20
   }
 }
 
-resource kubeletUiRunsShareContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(uiRunsShare.id, aks.properties.identityProfile.kubeletidentity.objectId, 'StorageFileDataSmbShareContributor')
-  scope: uiRunsShare
+resource webFederatedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: webIdentity
+  name: 'web-kubernetes'
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0c867c2a-1d8c-454a-a3db-ab2ea1bdc8bb')
-    principalId: aks.properties.identityProfile.kubeletidentity.objectId
-    principalType: 'ServicePrincipal'
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:trading-flow-paper:trading-flow-web'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
+resource warmupFederatedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: paperIdentity
+  name: 'warmup-kubernetes'
+  properties: {
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:trading-flow-paper:trading-flow-warmup'
+    audiences: ['api://AzureADTokenExchange']
   }
 }
 
@@ -331,6 +334,7 @@ resource liveKeyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-0
 }
 
 output aksName string = aks.name
+output tenantId string = tenant().tenantId
 output resourceGroupName string = resourceGroup().name
 output acrLoginServer string = acr.properties.loginServer
 output keyVaultName string = keyVault.name

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Text.Json.Serialization;
 
 namespace TradingFlow.Domain.Strategies;
 
@@ -88,7 +89,8 @@ public sealed record StrategyAdmissionProfile(
     string ParserProfile,
     StrategyIndicatorProfile Indicators,
     string RiskPolicy,
-    string ExecutionTimingPolicy);
+    string ExecutionTimingPolicy,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? HistoricalNewsDiagnosticPolicyId = null);
 
 public static class StrategyAdmissionProfiles
 {
@@ -131,7 +133,9 @@ public sealed record StrategyArtifact(
     string SourceSha256,
     StrategyDefinition ResolvedStrategy,
     StrategyAdmissionProfile AdmissionProfile,
-    string? DerivedFromContentSha256 = null);
+    string? DerivedFromContentSha256 = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    StrategyArtifactIdentity? DerivedFromIdentity = null);
 
 public sealed record ArchivedStrategyArtifact(
     StrategyArtifactIdentity Identity,

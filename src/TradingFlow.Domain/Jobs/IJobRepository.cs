@@ -23,6 +23,12 @@ public sealed record DurableJobLease(
 /// </summary>
 public interface IDurableJobRepository : IJobRepository
 {
+    /// <summary>Accepts every job in one transaction, or none, after checking the queue budget.</summary>
+    Task<bool> TryEnqueueBatchAsync(
+        IReadOnlyList<PersistedJob> jobs,
+        int maximumNonTerminalJobs,
+        CancellationToken cancellationToken);
+
     Task<bool> TryEnqueueAsync(
         PersistedJob job,
         int maximumNonTerminalJobs,

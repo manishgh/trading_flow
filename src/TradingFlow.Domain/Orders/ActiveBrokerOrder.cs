@@ -23,4 +23,5 @@ public sealed record ActiveBrokerOrder(
     decimal? BracketTakeProfitPrice = null,
     decimal? BracketStopPrice = null,
     string? ReplacesOrderId = null,
-    string? ReplacedByOrderId = null);
+    string? ReplacedByOrderId = null,
+    string? PositionIntent = null);

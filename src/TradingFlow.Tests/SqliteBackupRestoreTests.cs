@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Moq;
 using TradingFlow.Data.Backups;
 using TradingFlow.Data.Context;
 using TradingFlow.Domain.Persistence;
@@ -9,6 +10,51 @@ namespace TradingFlow.Tests;
 
 public sealed class SqliteBackupRestoreTests
 {
+    /// <summary>A separate destination receives closed bytes, while success or failed publication removes only the owned local staging file.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BackupPublication_StagesSqliteLocally_AndCleansAfterPublisherFailure(bool failPublication)
+    {
+        var writer = new Mock<IArtifactWriter>(MockBehavior.Strict);
+        await using var fixture = new BackupFixture(writer.Object);
+        await fixture.InitializeAsync();
+        var staged = false;
+        writer.Setup(item => item.WriteStreamExclusiveAsync(It.IsAny<string>(), It.IsAny<Func<Stream, CancellationToken, Task>>(), It.IsAny<CancellationToken>()))
+            .Returns<string, Func<Stream, CancellationToken, Task>, CancellationToken>(async (path, write, token) => {
+                // The publisher observes an already-closed local database, never an active SQLite destination connection.
+                var local = Assert.Single(Directory.GetFiles(Path.Combine(fixture.Root, "source", ".backup-staging")));
+                using (var exclusive = new FileStream(local, FileMode.Open, FileAccess.Read, FileShare.None)) Assert.True(exclusive.Length > 0);
+                using (var snapshot = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder {
+                    DataSource = local, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly, Pooling = false }.ToString()))
+                {
+                    snapshot.Open();
+                    using var journalMode = snapshot.CreateCommand();
+                    journalMode.CommandText = "PRAGMA journal_mode;";
+                    Assert.Equal("delete", journalMode.ExecuteScalar());
+                }
+                Assert.Single(Directory.GetFiles(Path.GetDirectoryName(local)!));
+                staged = true;
+                if (failPublication) throw new IOException("fixture destination unavailable");
+                await AtomicFileArtifactWriter.Instance.WriteStreamExclusiveAsync(path, write, token);
+            });
+        writer.Setup(item => item.WriteTextAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns<string, string, CancellationToken>((path, text, token) => AtomicFileArtifactWriter.Instance.WriteTextAsync(path, text, token));
+        if (failPublication)
+            await Assert.ThrowsAsync<IOException>(() => fixture.BackupService.CreateDailyBackupAsync(new(2026, 7, 21)));
+        else
+            Assert.True((await fixture.BackupService.CreateDailyBackupAsync(new(2026, 7, 21))).Created);
+        Assert.True(staged);
+        Assert.Empty(Directory.GetFiles(Path.Combine(fixture.Root, "source", ".backup-staging")));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "source", "tradingflow.db")));
+        using var operational = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder {
+            DataSource = Path.Combine(fixture.Root, "source", "tradingflow.db"), Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        operational.Open();
+        using var operationalMode = operational.CreateCommand();
+        operationalMode.CommandText = "PRAGMA journal_mode;";
+        Assert.Equal("wal", operationalMode.ExecuteScalar());
+    }
+
     [Fact]
     public async Task BackupThenRestore_PreservesPointInTimeSnapshotAndManifest()
     {
@@ -133,7 +179,8 @@ public sealed class SqliteBackupRestoreTests
     {
         private readonly string databasePath;
 
-        public BackupFixture()
+        /// <summary>Creates a unique source and backup destination; an optional writer simulates remote publication failure.</summary>
+        public BackupFixture(IArtifactWriter? writer = null)
         {
             Root = Path.Combine(Path.GetTempPath(), $"tradingflow-backup-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Root);
@@ -142,7 +189,7 @@ public sealed class SqliteBackupRestoreTests
             BackupService = new SqliteDatabaseBackupService(
                 databasePath,
                 Path.Combine(Root, "backups"),
-                AtomicFileArtifactWriter.Instance,
+                writer ?? AtomicFileArtifactWriter.Instance,
                 new FixedTimeProvider(new DateTimeOffset(2026, 7, 22, 0, 45, 0, TimeSpan.Zero)));
         }
 

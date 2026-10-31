@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using TradingFlow.Mobile.Controls;
 using TradingFlow.Mobile.Services;
 using TradingFlow.Mobile.Resources.Styles;
+using TradingFlow.Contracts.Presentation;
 
 namespace TradingFlow.Mobile.Pages;
 
@@ -14,6 +15,7 @@ public partial class NewsPage : ContentPage
     private bool providerBusy;
     private int page = 1;
     private long groupsSession = -1;
+    private CancellationTokenSource? assessmentRead;
 
     public NewsPage()
     {
@@ -46,6 +48,7 @@ public partial class NewsPage : ContentPage
     }
     protected override void OnDisappearing()
     {
+        CancelAssessmentRead();
         refreshTimer.Stop();
         AppServices.Api.SessionChanged -= OnSessionChanged;
         reads.Deactivate();
@@ -54,6 +57,11 @@ public partial class NewsPage : ContentPage
     }
     private void SetSession()
     {
+        CancelAssessmentRead();
+        AssessmentSamplesHost.Children.Clear();
+        AssessmentSamplesHost.IsVisible = false;
+        AssessmentSamplesButton.IsVisible = AppServices.Api.CurrentUserName is not null;
+        AssessmentSamplesButton.IsEnabled = true;
         groupsSession = -1; page = 1;
         ProviderStatusLabel.IsVisible = false;
         newsItems.Clear();
@@ -122,6 +130,51 @@ public partial class NewsPage : ContentPage
             if (reads.Active) await LoadAsync(false);
         }
     }
+    /// <summary>Cancels only the explicit assessment read when the page, account or backend changes.</summary>
+    private void CancelAssessmentRead()
+    {
+        assessmentRead?.Cancel(); assessmentRead?.Dispose(); assessmentRead = null;
+    }
+
+    /// <summary>Displays server-computed historical samples separately from live articles, with actual assessment clocks.</summary>
+    private async void OnAssessmentSamplesClicked(object? sender, EventArgs e)
+    {
+        if (!reads.Active || AppServices.Api.CurrentUserName is null) return;
+        CancelAssessmentRead();
+        var request = assessmentRead = new CancellationTokenSource();
+        var token = request.Token;
+        var session = AppServices.Api.SessionVersion;
+        AssessmentSamplesButton.IsEnabled = false;
+        AssessmentSamplesHost.Children.Clear(); AssessmentSamplesHost.IsVisible = true;
+        try
+        {
+            var result = await AppServices.Api.GetCompanyNewsAssessmentSamplesAsync(token);
+            if (token.IsCancellationRequested || !reads.Active || session != AppServices.Api.SessionVersion) return;
+            if (result is null) throw new InvalidOperationException("No assessment response returned.");
+            AssessmentSamplesHost.Children.Add(new Label { Text = result.Message, LineBreakMode = LineBreakMode.WordWrap });
+            if (result.Summary is { } summary)
+                AssessmentSamplesHost.Children.Add(new Label { Text = String.Join("\n", CompanyNewsAssessmentPresentation.Lines(summary)), FontSize = 12 });
+            foreach (var sample in result.Samples)
+                AssessmentSamplesHost.Children.Add(new Label {
+                    Text = $"{sample.Symbol}: {sample.Headline}\n{sample.CompanyDirection} · {sample.Category}\n" +
+                        (sample.CompanyName is null ? "" : $"Company name: {sample.CompanyName} · {sample.CompanyNameProvider} capture UTC: {sample.CompanyNameObservedAtUtc:O}. This capture does not prove the name was known at the old trade time.\n") +
+                        $"Text tone: {sample.TextTone ?? "Not assessed"}; model confidence: {sample.ModelConfidence?.ToString("P1") ?? "Not assessed"}\n" +
+                        $"{sample.Explanation}\nText support: {sample.TextSupport}\nEvidence: {sample.EvidenceText}\n" +
+                        $"Published UTC: {sample.PublishedAtUtc?.ToString("O") ?? "Unknown"}\nActually assessed UTC: {sample.AssessedAtUtc:O}",
+                    LineBreakMode = LineBreakMode.WordWrap, FontSize = 13 });
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            if (reads.Active && session == AppServices.Api.SessionVersion && !token.IsCancellationRequested)
+                AssessmentSamplesHost.Children.Add(new Label { Text = "Assessment samples unavailable: " + exception.Message });
+        }
+        finally
+        {
+            if (ReferenceEquals(assessmentRead, request)) { assessmentRead = null; request.Dispose(); AssessmentSamplesButton.IsEnabled = true; }
+        }
+    }
+
     private async void OnNewsSelected(object? sender, SelectionChangedEventArgs e)
     {
         var selected = e.CurrentSelection.FirstOrDefault() as MobileNewsItem;

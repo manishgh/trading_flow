@@ -8,15 +8,31 @@ public sealed record BacktestCandidateTrade(
     decimal EntryPrice,
     decimal StopLossPrice,
     decimal TakeProfitPrice,
-    DateTimeOffset ExitTimestamp,
-    decimal ExitPrice,
+    DateTimeOffset? ExitTimestamp,
+    decimal? ExitPrice,
     string ExitReason,
     decimal StopDistance,
     decimal EntryLiquidityEvidenceVolume = 0m,
     decimal SelectionScore = 0m,
     string InitialStopKind = "structural",
     string StrategyId = "",
-    string CandidateId = "");
+    string CandidateId = "")
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public CandidateExecutionReplay? ExecutionReplay { get; init; }
+
+    // A completed exit decision can await an executable slice beyond the frozen study.
+    public BacktestPendingExitDecision? PendingExitDecision { get; init; }
+    public string DecisionStrategyId { get; init; } = "";
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IntradayExecutionEvidence? IntradayExecution { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public TradingFlow.Domain.Strategies.IntradayZoneSignal? ZoneExecution { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<TradingFlow.Domain.Strategies.IntradayZoneSignal>? ZoneAlternatives { get; init; }
+}
+
+public sealed record BacktestPendingExitDecision(DateTimeOffset KnownAtUtc, string Reason);
 
 public sealed record BacktestTrade(
     string Ticker,

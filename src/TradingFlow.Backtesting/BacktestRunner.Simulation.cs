@@ -119,7 +119,10 @@ public sealed partial class BacktestRunner
         var exitStartIndex = FindNextValidExecutionBarIndex(bars, entryIndex + 1, strategy);
         if (exitStartIndex >= bars.Count)
         {
-            return null;
+            auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, ExecutionState.SignalGenerated,
+                "Completed signal retained without an executable exit horizon", candidateId);
+            return (BuildOpenCandidate(run, candidateId, strategy, signal, "long", entryTimestamp,
+                entryPrice, initialStopLossPrice, takeProfitPrice, stopDistance, bars[entryIndex - 1].Volume), entryIndex);
         }
 
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"LONG signal generated at {signal.CurrentPrice}", candidateId);
@@ -127,11 +130,21 @@ public sealed partial class BacktestRunner
 
         var technicalEngine = new TradingFlow.Engine.Execution.TechnicalExecutionEngine();
 
+        BacktestPendingExitDecision? pendingExit = null;
         var eligibleBarsHeld = 1;
         for (var i = exitStartIndex; i < bars.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bar = bars[i];
+            // This boundary is frozen before prices are read; never choose it from the final observed stock bar.
+            if (run.Engine.PrecommittedLiquidationSourceUtc == bar.Timestamp)
+            {
+                auditor.LogEvent(signal.Ticker,strategy.StrategyName,bar.Timestamp,ExecutionState.PositionClosed,
+                    "Exit via scheduled_study_exit at precommitted session open",candidateId);
+                return (BuildCandidate(candidateId,strategy,signal,"long",entryTimestamp,entryPrice,
+                    initialStopLossPrice,takeProfitPrice,bar.Timestamp,bar.Open,"scheduled_study_exit",
+                    stopDistance,bars[entryIndex-1].Volume),i);
+            }
             if (!_sessionClock.ValidateExecutionWindow(
                     bar.Timestamp,
                     strategy.Execution.Timeframe,
@@ -190,13 +203,14 @@ public sealed partial class BacktestRunner
                 var hasNextExitBar = nextExitIndex < bars.Count;
                 if (!hasNextExitBar)
                 {
+                    pendingExit ??= PendingExitDecision(run, strategy, bar, "confirmed_vwap_failure");
                     continue;
                 }
 
                 var exitBar = hasNextExitBar ? bars[nextExitIndex] : bar;
                 var exitSnapshot = hasNextExitBar ? snapshots[nextExitIndex] : snapshots[i];
                 var exitBasis = hasNextExitBar ? exitBar.Open : exitBar.Close;
-                var confirmedExitPrice = ApplyLongExitSlippage(exitBasis, exitSnapshot.RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
+                var confirmedExitPrice = ApplyLongExitSlippage(exitBasis, (run.Engine.PrecommittedLiquidationSourceUtc == exitBar.Timestamp ? snapshots[i].RelativeVolume : exitSnapshot.RelativeVolume) ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, exitBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via confirmed_vwap_failure at {confirmedExitPrice}", candidateId);
                 return (BuildCandidate(candidateId, strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, exitBar.Timestamp, confirmedExitPrice, "confirmed_vwap_failure", stopDistance, bars[entryIndex - 1].Volume), hasNextExitBar ? nextExitIndex : i);
             }
@@ -224,7 +238,7 @@ public sealed partial class BacktestRunner
             if (exitPrice.HasValue && exitReason is not null)
             {
                 // In backtest, for technical exit, we exit on next bar open
-                if (exitReason.StartsWith("technical_exit"))
+                if (!IsPriceTriggeredExitReason(exitReason))
                 {
                     var nextExitIndex = FindNextValidExecutionBarIndex(
                         bars,
@@ -232,11 +246,14 @@ public sealed partial class BacktestRunner
                         strategy);
                     if (nextExitIndex >= bars.Count)
                     {
+                        pendingExit ??= PendingExitDecision(run, strategy, bar, exitReason);
                         continue;
                     }
 
                     var nextBar = bars[nextExitIndex];
-                    var nextRelativeVolume = snapshots[nextExitIndex].RelativeVolume ?? relativeVolume;
+                    var nextRelativeVolume = run.Engine.PrecommittedLiquidationSourceUtc == nextBar.Timestamp
+                        ? snapshots[i].RelativeVolume ?? relativeVolume
+                        : snapshots[nextExitIndex].RelativeVolume ?? relativeVolume;
                     var nextExitPrice = ApplyLongExitSlippage(nextBar.Open, nextRelativeVolume, strategy, approximateTradeAmount);
                     auditor.LogEvent(signal.Ticker, strategy.StrategyName, nextBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via {exitReason} at {nextExitPrice}", candidateId);
                     return (BuildCandidate(candidateId, strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, nextBar.Timestamp, nextExitPrice, exitReason, stopDistance, bars[entryIndex - 1].Volume), nextExitIndex);
@@ -253,20 +270,9 @@ public sealed partial class BacktestRunner
             }
         }
 
-        var finalIndex = FindPreviousValidExecutionBarIndex(
-            bars,
-            bars.Count - 1,
-            strategy);
-        if (finalIndex < entryIndex)
-        {
-            return null;
-        }
-
-        var finalBar = bars[finalIndex];
-        var finalRelativeVolume = snapshots[finalIndex].RelativeVolume ?? relativeVolume;
-        var finalExitPrice = ApplyLongExitSlippage(finalBar.Close, finalRelativeVolume, strategy, approximateTradeAmount);
-        auditor.LogEvent(signal.Ticker, strategy.StrategyName, finalBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via end_of_data at {finalExitPrice}", candidateId);
-        return (BuildCandidate(candidateId, strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, finalBar.Timestamp, finalExitPrice, "end_of_data", stopDistance, bars[entryIndex - 1].Volume), finalIndex);
+        return (BuildOpenCandidate(run, candidateId, strategy, signal, "long", entryTimestamp,
+            entryPrice, initialStopLossPrice, takeProfitPrice, stopDistance, bars[entryIndex - 1].Volume)
+            with { PendingExitDecision = pendingExit }, bars.Count - 1);
     }
 
     private (BacktestCandidateTrade Candidate, int ExitIndex)? CreateShortCandidate(
@@ -308,17 +314,30 @@ public sealed partial class BacktestRunner
         var exitStartIndex = FindNextValidExecutionBarIndex(bars, entryIndex + 1, strategy);
         if (exitStartIndex >= bars.Count)
         {
-            return null;
+            auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, ExecutionState.SignalGenerated,
+                "Completed short signal retained without an executable exit horizon", candidateId);
+            return (BuildOpenCandidate(run, candidateId, strategy, signal, "short", entryTimestamp,
+                entryPrice, initialStopLossPrice, takeProfitPrice, stopDistance, bars[entryIndex - 1].Volume), entryIndex);
         }
 
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"SHORT signal generated at {signal.CurrentPrice}", candidateId);
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, entryTimestamp, TradingFlow.Engine.Execution.ExecutionState.OrderFilled, $"Simulated short fill at {entryPrice} (Stop: {initialStopLossPrice}, TP: {takeProfitPrice})", candidateId);
 
+        BacktestPendingExitDecision? pendingExit = null;
         var eligibleBarsHeld = 1;
         for (var i = exitStartIndex; i < bars.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bar = bars[i];
+            // This boundary is frozen before prices are read; never choose it from the final observed stock bar.
+            if (run.Engine.PrecommittedLiquidationSourceUtc == bar.Timestamp)
+            {
+                auditor.LogEvent(signal.Ticker,strategy.StrategyName,bar.Timestamp,ExecutionState.PositionClosed,
+                    "Exit via scheduled_study_exit at precommitted session open",candidateId);
+                return (BuildCandidate(candidateId,strategy,signal,"short",entryTimestamp,entryPrice,
+                    initialStopLossPrice,takeProfitPrice,bar.Timestamp,bar.Open,"scheduled_study_exit",
+                    stopDistance,bars[entryIndex-1].Volume),i);
+            }
             if (!_sessionClock.ValidateExecutionWindow(
                     bar.Timestamp,
                     strategy.Execution.Timeframe,
@@ -364,13 +383,14 @@ public sealed partial class BacktestRunner
                 var hasNextExitBar = nextExitIndex < bars.Count;
                 if (!hasNextExitBar)
                 {
+                    pendingExit ??= PendingExitDecision(run, strategy, bar, "confirmed_vwap_reclaim");
                     continue;
                 }
 
                 var exitBar = hasNextExitBar ? bars[nextExitIndex] : bar;
                 var exitSnapshot = hasNextExitBar ? snapshots[nextExitIndex] : snapshots[i];
                 var exitBasis = hasNextExitBar ? exitBar.Open : exitBar.Close;
-                var confirmedExitPrice = ApplyShortExitSlippage(exitBasis, exitSnapshot.RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
+                var confirmedExitPrice = ApplyShortExitSlippage(exitBasis, (run.Engine.PrecommittedLiquidationSourceUtc == exitBar.Timestamp ? snapshots[i].RelativeVolume : exitSnapshot.RelativeVolume) ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, exitBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via confirmed_vwap_reclaim at {confirmedExitPrice}", candidateId);
                 return (BuildCandidate(candidateId, strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, exitBar.Timestamp, confirmedExitPrice, "confirmed_vwap_reclaim", stopDistance, bars[entryIndex - 1].Volume), hasNextExitBar ? nextExitIndex : i);
             }
@@ -395,7 +415,7 @@ public sealed partial class BacktestRunner
 
             if (exitPrice.HasValue && exitReason is not null)
             {
-                if (exitReason.StartsWith("technical_exit", StringComparison.Ordinal))
+                if (!IsPriceTriggeredExitReason(exitReason))
                 {
                     var nextExitIndex = FindNextValidExecutionBarIndex(
                         bars,
@@ -403,11 +423,14 @@ public sealed partial class BacktestRunner
                         strategy);
                     if (nextExitIndex >= bars.Count)
                     {
+                        pendingExit ??= PendingExitDecision(run, strategy, bar, exitReason);
                         continue;
                     }
 
                     var nextBar = bars[nextExitIndex];
-                    var nextRelativeVolume = snapshots[nextExitIndex].RelativeVolume ?? relativeVolume;
+                    var nextRelativeVolume = run.Engine.PrecommittedLiquidationSourceUtc == nextBar.Timestamp
+                        ? snapshots[i].RelativeVolume ?? relativeVolume
+                        : snapshots[nextExitIndex].RelativeVolume ?? relativeVolume;
                     var nextExitPrice = ApplyShortExitSlippage(
                         nextBar.Open,
                         nextRelativeVolume,
@@ -466,20 +489,9 @@ public sealed partial class BacktestRunner
             }
         }
 
-        var finalIndex = FindPreviousValidExecutionBarIndex(
-            bars,
-            bars.Count - 1,
-            strategy);
-        if (finalIndex < entryIndex)
-        {
-            return null;
-        }
-
-        var finalBar = bars[finalIndex];
-        var finalRelativeVolume = snapshots[finalIndex].RelativeVolume ?? relativeVolume;
-        var finalExitPrice = ApplyShortExitSlippage(finalBar.Close, finalRelativeVolume, strategy, approximateTradeAmount);
-        auditor.LogEvent(signal.Ticker, strategy.StrategyName, finalBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via end_of_data at {finalExitPrice}", candidateId);
-        return (BuildCandidate(candidateId, strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, finalBar.Timestamp, finalExitPrice, "end_of_data", stopDistance, bars[entryIndex - 1].Volume), finalIndex);
+        return (BuildOpenCandidate(run, candidateId, strategy, signal, "short", entryTimestamp,
+            entryPrice, initialStopLossPrice, takeProfitPrice, stopDistance, bars[entryIndex - 1].Volume)
+            with { PendingExitDecision = pendingExit }, bars.Count - 1);
     }
 
     private static (decimal? ExitPrice, string? ExitReason) EvaluateShortBarForExit(
@@ -706,8 +718,8 @@ public sealed partial class BacktestRunner
         decimal entryPrice,
         decimal stopLossPrice,
         decimal takeProfitPrice,
-        DateTimeOffset exitTimestamp,
-        decimal exitPrice,
+        DateTimeOffset? exitTimestamp,
+        decimal? exitPrice,
         string exitReason,
         decimal stopDistance,
         decimal entryBarVolume)
@@ -721,7 +733,7 @@ public sealed partial class BacktestRunner
             Decimal.Round(stopLossPrice, 4),
             Decimal.Round(takeProfitPrice, 4),
             exitTimestamp,
-            Decimal.Round(exitPrice, 4),
+            exitPrice is { } price ? Decimal.Round(price, 4) : null,
             exitReason,
             Decimal.Round(stopDistance, 4),
             entryBarVolume,
@@ -729,6 +741,26 @@ public sealed partial class BacktestRunner
             ResolveInitialStopKind(strategy),
             strategy.StrategyId,
             candidateId);
+    }
+
+    // Preserve an unfinished hypothesis without manufacturing an executable exit or weakening a required liquidation.
+    private static BacktestCandidateTrade BuildOpenCandidate(BacktestRunConfig run, string candidateId,
+        StrategyDefinition strategy, TradeSignal signal, string direction, DateTimeOffset entryTimestamp,
+        decimal entryPrice, decimal stopPrice, decimal targetPrice, decimal distance, decimal volume)
+    {
+        if (run.Engine.PrecommittedLiquidationSourceUtc is not null)
+            throw new InvalidOperationException("Required precommitted liquidation has no executable source slice.");
+        return BuildCandidate(candidateId, strategy, signal, direction, entryTimestamp, entryPrice,
+            stopPrice, targetPrice, null, null, "open_at_study_end", distance, volume);
+    }
+
+    // A pending intention is known only when its completed source and any delayed receipt are both available.
+    private static BacktestPendingExitDecision? PendingExitDecision(BacktestRunConfig run, StrategyDefinition strategy,
+        OhlcvBar source, string reason)
+    {
+        var completed = source.Timestamp.Add(ParseTimeframe(strategy.Execution.Timeframe));
+        var known = source.KnownAtUtc is { } receipt && receipt > completed ? receipt : completed;
+        return run.TimeWindow.End is { } cutoff && known > cutoff ? null : new(known.ToUniversalTime(), reason);
     }
 
     private static string ResolveInitialStopKind(StrategyDefinition strategy) =>

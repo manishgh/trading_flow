@@ -76,6 +76,7 @@ public static class ProductionParameterRegistry
 
     public static IReadOnlyDictionary<string, ProductionParameterDefinition> ByName => ByNameValue;
 
+    /// <summary>Declare shared operating defaults and supported ranges once for every host and client projection.</summary>
     private static List<ProductionParameterDefinition> BuildDefinitions()
     {
         return
@@ -162,7 +163,9 @@ public static class ProductionParameterRegistry
             Decimal("max_daily_loss_pct", 2m, 0.5m, 5m, ProductionParameterUnit.Percent, "RSK-01"),
             Decimal("max_weekly_loss_pct", 4m, 1m, 10m, ProductionParameterUnit.Percent, "RSK-01"),
             Integer("max_consecutive_losses", 3, 2, 10, ProductionParameterUnit.None, "RSK-01"),
-            Integer("max_positions_swing", 3, 1, 20, ProductionParameterUnit.None, "RSK-01"),
+            Integer("max_positions_swing", 5, 1, 20, ProductionParameterUnit.None, "RSK-01"),
+            Integer("max_new_stocks_per_day", 5, 1, null, ProductionParameterUnit.Symbols, "RSK-01"),
+            Integer("broker_fill_history_max_pages", 100, 1, null, ProductionParameterUnit.None, "RSK-01"),
             Integer("news_stream_down_max_s", 120, 30, 600, ProductionParameterUnit.Seconds, "RSK-03"),
             Integer("max_order_rejects", 3, 1, 10, ProductionParameterUnit.None, "RSK-03"),
             Boolean("manual_kill_flatten", true, "RSK-04"),

@@ -11,7 +11,7 @@
     var lab = Model.Page;
     var result = Model.Result;
     var drilled = Model.Drilled;
-    var winnerId = result.Winner?.StrategyId;
+    var monthTrades = lab.TradesForSelectedMonth(drilled);
 }
 
 @functions {
@@ -30,17 +30,6 @@
         : span.Value.TotalHours >= 1 ? $"{span.Value.TotalHours:0.0} h"
         : $"{span.Value.TotalMinutes:0} m";
 
-    // Cell tint encodes the strategy's rank on that metric, best to worst, so the
-    // table stays readable whatever scale each column is measured on.
-    static string RankClass(int rank) => rank switch
-    {
-        1 => "rank-1",
-        2 => "rank-2",
-        3 => "rank-3",
-        4 => "rank-4",
-        _ => "rank-5"
-    };
-
     static string GateGlyph(GateOutcome outcome) => outcome switch
     {
         GateOutcome.Passed => "✓",
@@ -55,224 +44,112 @@
         _ => "is-unknown"
     };
 
-    // Series are told apart by dash pattern, not hue, so the chart survives the
-    // colour-blind scheme and a greyscale print.
-    static string Dash(int index) => index switch
-    {
-        0 => "none",
-        1 => "5 3",
-        2 => "2 3",
-        3 => "8 3",
-        4 => "1 3",
-        5 => "6 2 2 2",
-        _ => "3 5"
-    };
 }
 
-@* --- 1. Summary --------------------------------------------------------- *@
-<section class="lab-summary">
-    <div class="lab-winner">
-        <span class="eyebrow">Winner</span>
-        @if (result.Winner is { } winner)
-        {
-            <strong class="lab-winner-name">@winner.StrategyName</strong>
-            <span class="lab-winner-detail">
-                @Signed(winner.TotalReturnPct) return · @Signed(winner.AverageDailyReturnPct, "%", "0.0000") daily ·
-                DD @winner.MaxDrawdownPct.ToString("0.00")% · ranked on total return
-            </span>
-        }
-        else
-        {
-            <span class="unknown">No strategy produced a comparable result.</span>
-        }
-    </div>
-    <div>
-        <span class="micro-label">Ending capital</span>
-        <strong class="lab-figure">@result.EndingCapital.ToString("C2")</strong>
-        <span class="@SignedClass(result.NetProfit)">@SignedMoney(result.NetProfit)</span>
-    </div>
-    <div>
-        <span class="micro-label">Accepted trades</span>
-        <strong class="lab-figure">@result.AcceptedTradeCount</strong>
-        <span class="note">@result.WinningTradeCount wins / @result.LosingTradeCount losses</span>
-    </div>
-    <div>
-        <span class="micro-label">Daily average</span>
-        <strong class="lab-figure @SignedClass(result.AverageDailyReturnPct)">@Signed(result.AverageDailyReturnPct, "%", "0.0000")</strong>
-        <span class="note">@result.TradingDayCount trading days</span>
-    </div>
-</section>
+<partial name="_PreparedMarketData" model="Model.Job" />
 
-@* --- 2. Equity curves and leaderboard ------------------------------------ *@
-<section class="lab-curves">
-    <div class="lab-curve-panel">
-        <h2 class="section-heading">Equity curves</h2>
-        @if (!Model.HasCurve)
-        {
-            <p class="empty-state">No strategy produced enough exits to plot a curve.</p>
-        }
-        else
-        {
-            // The chart is assembled as markup here rather than in the view.
-                // Razor treats <text> as its own control construct, so an SVG
-                // <text> element written inline inside a loop is a parse error;
-                // building the children as a string sidesteps that and keeps the
-                // geometry in one readable place.
-                var maximum = Model.AxisMaximum;
-                var minimum = Model.AxisMinimum;
-                var range = Math.Max(0.01m, maximum - minimum);
-                const decimal plotLeft = 42m, plotRight = 634m, plotTop = 8m, plotBottom = 188m;
-                decimal Y(decimal percent) => plotBottom - (percent - minimum) / range * (plotBottom - plotTop);
-
-                var chart = new System.Text.StringBuilder();
-
-                // Gridlines at max, midpoint and min, with axis labels.
-                foreach (var level in new[] { maximum, (maximum + minimum) / 2m, minimum })
-                {
-                    var y = Y(level).ToString("0.0");
-                    chart.Append($"<line x1=\"{plotLeft}\" x2=\"{plotRight}\" y1=\"{y}\" y2=\"{y}\" stroke=\"var(--color-neutral-300)\" stroke-width=\"1\" />");
-                    chart.Append($"<text x=\"{plotLeft - 6m}\" y=\"{(Y(level) + 3m).ToString("0.0")}\" text-anchor=\"end\" font-size=\"9.5\" fill=\"var(--color-neutral-700)\">{Signed(level)}</text>");
-                }
-
-                // The zero line is heavier: it is the only gridline that means
-                // something on its own.
-                if (minimum < 0m && maximum > 0m)
-                {
-                    var zero = Y(0m).ToString("0.0");
-                    chart.Append($"<line x1=\"{plotLeft}\" x2=\"{plotRight}\" y1=\"{zero}\" y2=\"{zero}\" stroke=\"var(--color-neutral-600)\" stroke-width=\"1.5\" />");
-                }
-
-                var seriesIndex = 0;
-                foreach (var series in Model.Series)
-                {
-                    var percents = Model.ReturnPercents(series);
-                    var step = percents.Count <= 1 ? 0m : (plotRight - plotLeft) / (percents.Count - 1);
-                    var points = String.Join(" ", percents.Select((percent, index) =>
-                        $"{(plotLeft + step * index).ToString("0.0")},{Y(percent).ToString("0.0")}"));
-                    var stroke = series.TotalReturnPct >= 0m ? "var(--color-text)" : "var(--color-accent)";
-                    var width = seriesIndex == 0 ? "2.4" : "1.6";
-                    chart.Append($"<polyline points=\"{points}\" fill=\"none\" stroke=\"{stroke}\" stroke-width=\"{width}\" stroke-dasharray=\"{Dash(seriesIndex)}\" />");
-                    chart.Append($"<circle cx=\"{(plotLeft + step * (percents.Count - 1)).ToString("0.0")}\" cy=\"{Y(percents[^1]).ToString("0.0")}\" r=\"3\" fill=\"{stroke}\" />");
-                    seriesIndex++;
-            }
-            <svg viewBox="0 0 640 210" width="100%" class="lab-equity-chart" role="img"
-                 aria-label="Realised equity by strategy, as a percentage of starting capital">@Html.Raw(chart.ToString())</svg>
-            <div class="lab-legend">
-                @foreach (var entry in Model.Series.Select((series, index) => (series, index)))
-                {
-                    <span class="lab-legend-item">
-                        <svg width="16" height="6" aria-hidden="true">
-                            <line x1="0" y1="3" x2="16" y2="3"
-                                  stroke="@(entry.series.TotalReturnPct >= 0m ? "var(--color-text)" : "var(--color-accent)")"
-                                  stroke-width="2" stroke-dasharray="@Dash(entry.index)" />
-                        </svg>
-                        @entry.series.Name
-                        <span class="@SignedClass(entry.series.TotalReturnPct)">@Signed(entry.series.TotalReturnPct)</span>
-                    </span>
-                }
-            </div>
-            @* The honest label. This is realised equity replayed from exits, not a
-               per-bar curve, so within-bar drawdown is understated. *@
-            <p class="note">
-                Realised equity, replayed from completed trades at their exit timestamps. The curve is a
-                step function and within-bar drawdown is understated.
-            </p>
-        }
-    </div>
-
-    <div class="lab-leaderboard">
-        <div class="lab-leaderboard-head">
-            <h2 class="section-heading">
-                <partial name="_Icon" model='new IconModel("trending-up", 15)' />Leaderboard
-            </h2>
-            <form method="get" class="lab-metric-form">
-                <input type="hidden" name="jobId" value="@Model.Job.JobId" />
-                <input type="hidden" name="wishlistId" value="@lab.WishlistId" />
-                <input type="hidden" name="drill" value="@lab.Drill" />
-                <label class="visually-hidden" for="LeaderboardMetric">Leaderboard metric</label>
-                <select class="input" id="LeaderboardMetric" name="metric" data-auto-submit>
-                    @foreach (var (key, label) in TradingFlow.Web.Pages.BacktestsModel.Metrics)
-                    {
-                        <option value="@key" selected="@(lab.Metric == key)">@label</option>
-                    }
-                </select>
-            </form>
-        </div>
-        <ol class="lab-leaderboard-list">
-            @foreach (var entry in lab.Leaderboard.Select((strategy, index) => (strategy, rank: index + 1)))
-            {
-                var value = lab.MetricValue(entry.strategy);
-                var width = Math.Abs(value) / Model.LeaderboardScale * 100m;
-                <li>
-                    <span class="lab-rank @(entry.rank == 1 ? "is-first" : null)">@entry.rank</span>
-                    <span class="lab-leaderboard-name">@entry.strategy.StrategyName</span>
-                    <span class="lab-leaderboard-value @SignedClass(value)">
-                        @(lab.Metric == "net" ? SignedMoney(value) : Signed(value))
-                    </span>
-                    <span class="lab-bar">
-                        <progress class="lab-bar-fill tf-progress @(entry.rank == 1 ? "is-first" : null)" max="100"
-                                  value="@width.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)" aria-label="Relative metric magnitude for @entry.strategy.StrategyName"></progress>
-                    </span>
-                </li>
-            }
-        </ol>
-    </div>
-</section>
-
-@* --- 3. Strategy x metric matrix ----------------------------------------- *@
 <section class="lab-panel">
-    <h2 class="section-heading">Strategy × metric matrix</h2>
-    <div class="table-scroll">
-        <table class="grid-table lab-matrix">
-            <thead>
-                <tr>
-                    <th scope="col">Strategy</th>
-                    <th scope="col" class="num">Return</th>
-                    <th scope="col" class="num">Daily avg</th>
-                    <th scope="col" class="num">Net</th>
-                    <th scope="col" class="num">Max DD</th>
-                    <th scope="col" class="num">Trades</th>
-                    <th scope="col" class="num">Win rate</th>
-                    <th scope="col" class="num">Avg hold</th>
-                    <th scope="col" class="num">Profit factor</th>
-                </tr>
-            </thead>
+    <h2 class="section-heading">Monthly strategy returns</h2>
+    @if (Model.Job.Cohort is { } cohort)
+    {
+        <p class="note">Saved plan @cohort.PlanId · @cohort.CohortName · Starting capital USD @cohort.StartingCapital.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)</p>
+    }
+    else
+    {
+        <p class="note">Starting capital USD @result.StartingCapital.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)</p>
+    }
+    <p class="note">Each strategy and stock group has separate capital. Monthly percentages use that month's opening equity. The valuation method is shown for each result; realised closed-trade equity omits changes in open positions. Missing execution or valuation evidence is shown explicitly.</p>
+    @if (lab.MonthlyRows.Count == 0)
+    {
+        <p class="empty-state">@lab.MonthlyUnavailable</p>
+    }
+    else
+    {
+        <form method="get">
+            <input type="hidden" name="jobId" value="@Model.Job.JobId" />
+            <input type="hidden" name="wishlistId" value="@lab.WishlistId" />
+            <input type="hidden" name="drill" value="@lab.Drill" />
+            <label for="resultMonth">Source-session month</label>
+            <select class="input" id="resultMonth" name="month">
+            @foreach(var month in lab.MonthlyRows.Select(row=>row.Month).Distinct().OrderDescending())
+            {<option value="@month" selected="@(month==lab.SelectedMonth)">@month</option>}
+            </select>
+            <button class="btn btn-secondary" type="submit">Show month</button>
+        </form>
+        <div class="table-scroll"><table class="grid-table">
+            <thead><tr><th>Strategy / version / group</th><th>Month / valuation</th><th class="num">Opening / closing equity</th><th class="num">Monthly return</th><th class="num">Monthly drawdown</th><th class="num">Monthly realized net / unrealized at month end</th><th class="num">Monthly fees / exposure at month end</th><th class="num">Closed / open / fills</th></tr></thead>
             <tbody>
-                @foreach (var strategy in result.StrategyResults)
-                {
-                    var isWinner = strategy.StrategyId == winnerId;
-                    var isDrilled = strategy.StrategyId == drilled.StrategyId;
-                    var profitFactor = BacktestDerivedMetrics.ProfitFactor(strategy);
-                    <tr class="@(isWinner ? "is-winner" : null)" aria-selected="@(isDrilled ? "true" : null)">
-                        <td>
-                            <a class="lab-matrix-link"
-                               asp-page="/Backtests"
-                               asp-route-jobId="@Model.Job.JobId"
-                               asp-route-wishlistId="@lab.WishlistId"
-                               asp-route-metric="@lab.Metric"
-                               asp-route-drill="@strategy.StrategyId">@strategy.StrategyName</a>
-                        </td>
-                        <td class="num @RankClass(lab.RankOn("return", strategy)) @SignedClass(strategy.TotalReturnPct)">@Signed(strategy.TotalReturnPct)</td>
-                        <td class="num @RankClass(lab.RankOn("daily", strategy)) @SignedClass(strategy.AverageDailyReturnPct)">@Signed(strategy.AverageDailyReturnPct, "%", "0.0000")</td>
-                        <td class="num @RankClass(lab.RankOn("net", strategy)) @SignedClass(strategy.NetProfit)">@SignedMoney(strategy.NetProfit)</td>
-                        <td class="num @RankClass(lab.RankOn("drawdown", strategy))">@strategy.MaxDrawdownPct.ToString("0.00")%</td>
-                        <td class="num @RankClass(lab.RankOn("trades", strategy))">@strategy.AcceptedTradeCount</td>
-                        <td class="num @RankClass(lab.RankOn("winrate", strategy))">@TradingFlow.Web.Pages.BacktestsModel.WinRatePct(strategy).ToString("0.0")%</td>
-                        <td class="num @RankClass(lab.RankOn("hold", strategy))">@Hold(BacktestDerivedMetrics.AverageHold(strategy))</td>
-                        @* Undefined rather than infinite when nothing has lost yet:
-                           a huge number would read as an extraordinary edge. *@
-                        <td class="num @RankClass(lab.RankOn("profitfactor", strategy)) @(profitFactor is null ? "unknown" : null)">
-                            @(profitFactor is { } factor ? factor.ToString("0.00") : "no losses yet")
-                        </td>
-                    </tr>
-                }
+            @foreach(var row in lab.MonthlyRows.Where(row=>row.Month==lab.SelectedMonth).OrderBy(row=>row.StrategyName ?? row.Strategy.StrategyId))
+            {
+                <tr aria-selected="@((row.StrategyAlias ?? row.Strategy.StrategyId)==drilled.StrategyId?"true":null)">
+                    <td><a asp-page="/Backtests" asp-route-jobId="@Model.Job.JobId" asp-route-wishlistId="@lab.WishlistId" asp-route-drill="@(row.StrategyAlias ?? row.Strategy.StrategyId)" asp-route-month="@lab.SelectedMonth">@(row.StrategyName ?? row.Strategy.StrategyId) · @row.Strategy.SemanticVersion</a><span class="note">@row.CohortName · @row.Strategy.ContentSha256</span></td>
+                    <td>@row.Month @(row.PartialMonth?"(partial month)":"")<span class="note" title="@row.ValuationBasis">@(row.ValuationBasis.StartsWith("marked_to_market_", StringComparison.Ordinal) ? "Daily close equity, including open positions" : row.ValuationBasis == "realized_closed_trade_equity" ? "Realized closed-trade equity" : "Valuation unavailable")</span></td>
+                    <td class="num">@(row.OpeningEquity?.ToString("N2") ?? "unavailable") / @(row.ClosingEquity?.ToString("N2") ?? "unavailable")</td>
+                    <td class="num">@(row.ReturnPct is { } value?Signed(value):"unavailable")<span class="note">@row.UnavailableReason</span></td>
+                    <td class="num">@(row.MaxDrawdownPct is { } drawdown ? drawdown.ToString("0.00") + "%" : "unavailable")</td>
+                    <td class="num">@(row.RealizedNetProfit?.ToString("N2") ?? "unavailable") / @(row.UnrealizedProfit?.ToString("N2") ?? "unavailable")</td>
+                    <td class="num">@(row.Fees?.ToString("N2") ?? "unavailable") / @(row.GrossExposurePct?.ToString("0.00") ?? "unavailable")%</td>
+                    <td class="num">@(row.ClosedTrades?.ToString() ?? "unavailable") / @(row.OpenPositions?.ToString() ?? "unavailable") / @(row.FillCount?.ToString() ?? "unavailable")</td>
+                </tr>
+            }
             </tbody>
-        </table>
-    </div>
-    <p class="note">
-        Cell tint is the strategy's rank on that metric, best to worst. Click a row to drill into its trades.
-    </p>
+        </table></div>
+    }
 </section>
+
+@if (Model.PortfolioState is { } portfolio)
+{
+    <partial name="_BacktestPortfolioState" model="portfolio" />
+}
+@if (Model.Page.ZoneEvaluations is { } trace)
+{
+    <section class="lab-panel">
+        <h2 class="section-heading">Every evaluated zone candle</h2>
+        <p class="note">@trace.TotalCount retained rows. Showing offset @trace.Offset, up to @trace.Limit rows. Rejected bars include the engine's original predicates and clocks. Planned costs and targets are estimates.</p>
+        @if (trace.UnavailableReason is { } unavailable) { <p class="note">@unavailable</p> }
+        @foreach (var row in trace.Rows)
+        {
+            <details><summary>@row.Ticker / @(row.ResolutionReason ?? "pattern admitted") / @(row.CandidateId ?? "no candidate")</summary>
+            @foreach (var line in TradingFlow.Contracts.Presentation.ZoneEvaluationPresentation.Lines(row)) { <p class="note">@line</p> }
+            </details>
+        }
+        @if (trace.Offset > 0) { <a asp-page="/Backtests" asp-route-jobId="@Model.Job.JobId" asp-route-drill="@Model.Drilled.StrategyId" asp-route-zoneOffset="@Math.Max(0, trace.Offset - trace.Limit)">Previous candles</a> }
+        @if (trace.NextOffset is { } next) { <a asp-page="/Backtests" asp-route-jobId="@Model.Job.JobId" asp-route-drill="@Model.Drilled.StrategyId" asp-route-zoneOffset="@next">Next candles</a> }
+    </section>
+}
+@if (Model.ZoneDecisions.Count > 0)
+{
+    <section class="lab-panel">
+        <h2 class="section-heading">Zone entry and execution evidence</h2>
+        <p class="note">Latest @Model.ZoneDecisions.Count hypotheses. Complete decision and execution journals retain all events; each row names its execution policy. Planned prices do not establish fills.</p>
+        @foreach (var decision in Model.ZoneDecisions)
+        {
+            <details>
+                <summary>@decision.Ticker / @decision.Pattern / @decision.Status</summary>
+                @foreach (var line in TradingFlow.Contracts.Presentation.IntradayZoneDecisionPresentation.Lines(decision))
+                {
+                    <p class="note">@line</p>
+                }
+            </details>
+        }
+    </section>
+}
+@if (Model.HistoryEligibility.Count > 0)
+{
+    <section class="lab-panel">
+        <h2 class="section-heading">Price history available for each stock — @drilled.StrategyName</h2>
+        @foreach (var history in Model.HistoryEligibility)
+        {
+            var historyLabel = history.Status switch
+            {
+                "history_eligible" => "Enough history for this strategy",
+                "still_warming_at_study_end" => "Not enough history by test end",
+                _ => history.Status.Replace('_', ' ')
+            };
+            <p>@history.Ticker · @historyLabel · completed bars at start @history.AvailableAtStart; at cutoff @history.AvailableAtCutoff / @history.RequiredBars required · first eligible decision UTC @(history.FirstEligibleDecisionUtc?.ToString("u") ?? "not reached")</p>
+        }
+    </section>
+}
 
 @* --- 4. Promotion gates and analyzer ------------------------------------- *@
 <section class="lab-gates-row">
@@ -299,7 +176,7 @@
     </div>
 
     <div class="lab-analyzer">
-        <h2 class="section-heading">Analyzer — @drilled.StrategyName</h2>
+        <h2 class="section-heading">Analyzer — @drilled.StrategyName · full-window counts</h2>
         @if (lab.DrilledDiagnostic is { } diagnostic)
         {
             <dl class="fact-list">
@@ -307,21 +184,8 @@
                 <dd>@diagnostic.EvaluatedBarCount.ToString("#,##0")</dd>
                 <dt>Candidates</dt>
                 <dd>@diagnostic.CandidateTradeCount.ToString("#,##0")</dd>
-                <dt>Accepted</dt>
+                <dt>Admitted orders</dt>
                 <dd>@diagnostic.AcceptedTradeCount.ToString("#,##0")</dd>
-                <dt>Per trading day</dt>
-                <dd>@diagnostic.DailyPnl.AverageNetProfitPerTradingDay.ToString("C2")</dd>
-                <dt>Best / worst day</dt>
-                <dd>
-                    <span class="@SignedClass(diagnostic.DailyPnl.BestDayNetProfit)">@SignedMoney(diagnostic.DailyPnl.BestDayNetProfit)</span>
-                    /
-                    <span class="@SignedClass(diagnostic.DailyPnl.WorstDayNetProfit)">@SignedMoney(diagnostic.DailyPnl.WorstDayNetProfit)</span>
-                </dd>
-                <dt>Long / short</dt>
-                <dd>
-                    @String.Join(" · ", diagnostic.DirectionPnl.Select(direction =>
-                        $"{direction.Direction} {direction.TradeCount} trades {direction.NetProfit:C2}"))
-                </dd>
             </dl>
 
             <h3 class="sub-heading">Top rejections</h3>
@@ -363,9 +227,9 @@
 @* --- 5. Trades ----------------------------------------------------------- *@
 <section class="lab-panel">
     <h2 class="section-heading">Trades — @drilled.StrategyName</h2>
-    @if (drilled.CompletedTrades.Count == 0)
+    @if (monthTrades.Count == 0)
     {
-        <p class="empty-state">This strategy produced no completed trades.</p>
+        <p class="empty-state">No completed-position details are available in this view for the selected month. Monthly totals are shown above.</p>
     }
     else
     {
@@ -384,7 +248,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var trade in drilled.CompletedTrades.OrderByDescending(item => item.ExitTimestamp).Take(10))
+                    @foreach (var trade in monthTrades.OrderByDescending(item => item.ExitTimestamp).Take(10))
                     {
                         var rMultiple = BacktestDerivedMetrics.RMultiple(trade);
                         <tr>
@@ -412,8 +276,8 @@
             </table>
         </div>
         <p class="note">
-            Most recent 10 of @drilled.CompletedTrades.Count accepted trades · one entry and one full
-            exit per trade.
+            Showing up to 10 of @monthTrades.Count retained completed-position summaries in @lab.SelectedMonth.
+            A completed position may include multiple entry or exit fills.
         </p>
     }
 </section>
