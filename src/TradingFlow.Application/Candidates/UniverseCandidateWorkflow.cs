@@ -28,6 +28,9 @@ public interface IUniverseSourceResolver
 
 public interface IStrategyIdentityResolver
 {
+    /// <summary>Checks research selection separately from the daily-only operational candidate path.</summary>
+    Task RequireBacktestStrategyAsync(StrategyReference strategy, CancellationToken cancellationToken = default) =>
+        RequireSwingStrategyAsync(strategy, "backtest", cancellationToken);
     Task RequireSwingStrategyAsync(
         StrategyReference strategy,
         string mode,
@@ -56,13 +59,16 @@ public sealed class UniverseDiscoveryService(
     IApplicationEventRepository events,
     TimeProvider timeProvider) : IUniverseDiscoveryService
 {
+    /// <summary>Captures current source membership for the requested research horizon without granting execution authority.</summary>
     public async Task<UniversePreviewResponse> PreviewAsync(UniversePreviewRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.ContractVersion != ContractVersions.VersionOne ||
-            !String.Equals(request.Horizon, "swing", StringComparison.OrdinalIgnoreCase) ||
+            request.Horizon?.ToLowerInvariant() is not ("swing" or "day") ||
             request.Sources is null || request.Sources.Count == 0 || request.Sources.Any(source => source is null))
-            throw new InvalidOperationException("A supported swing universe contract and at least one source are required.");
+            throw new InvalidOperationException("A supported day or swing universe contract and at least one source are required.");
+
+        var horizon = request.Horizon.ToLowerInvariant();
 
         var startedAt = timeProvider.GetUtcNow().ToUniversalTime();
         if (request.AsOfUtc is { } requested && (requested == default || requested > startedAt))
@@ -73,7 +79,7 @@ public sealed class UniverseDiscoveryService(
         var captures = new List<UniverseSourceCapture>();
         foreach (var selection in request.Sources.OrderBy(item => item.SourceKind, StringComparer.Ordinal)
                      .ThenBy(item => item.SourceKey, StringComparer.Ordinal))
-            captures.Add(await sources.ResolveAsync(selection, "swing", cancellationToken));
+            captures.Add(await sources.ResolveAsync(selection, horizon, cancellationToken));
         var resolvedAt = timeProvider.GetUtcNow().ToUniversalTime();
         var cutoff = request.AsOfUtc?.ToUniversalTime() ?? resolvedAt;
         foreach (var capture in captures)
@@ -87,20 +93,20 @@ public sealed class UniverseDiscoveryService(
             await repository.CommitSnapshotAsync(new DiscoverySnapshotRequest(
                 snapshotId,
                 DeterministicGuid($"{snapshotId:N}\u001f{capture.SourceKind}\u001f{capture.SourceKey}"),
-                capture.SourceKind, capture.SourceKey, "swing", capture.ObservedAtUtc, capture.ExpiresAtUtc,
+                capture.SourceKind, capture.SourceKey, horizon, capture.ObservedAtUtc, capture.ExpiresAtUtc,
                 0, capture.Symbols, capture.IsDiagnostic, capture.ProviderTimestampUtc, capture.ProviderReference), cancellationToken);
         }
         var members = await repository.GetActiveAsync(snapshotId, cutoff, cancellationToken);
         if (members.Count == 0)
-            throw new InvalidOperationException("The selected sources produced no unexpired swing candidates.");
-        var response = ToResponse(snapshotId, resolvedAt, members, cutoff);
+            throw new InvalidOperationException("The selected sources produced no unexpired stocks.");
+        var response = ToResponse(snapshotId, resolvedAt, members, cutoff, horizon);
         await previews.SaveAsync(new UniversePreviewRecord
         {
             UniverseSnapshotId = snapshotId,
             Horizon = response.Horizon,
             RequestSha256 = Sha256(JsonSerializer.Serialize(new
             {
-                horizon = "swing", asOfUtc = request.AsOfUtc?.ToUniversalTime(),
+                horizon, asOfUtc = request.AsOfUtc?.ToUniversalTime(),
                 sources = request.Sources.OrderBy(item => item.SourceKind, StringComparer.Ordinal).ThenBy(item => item.SourceKey, StringComparer.Ordinal)
             })),
             ContentSha256 = response.ContentSha256,
@@ -113,8 +119,9 @@ public sealed class UniverseDiscoveryService(
         return response;
     }
 
+    /// <summary>Preserves the source horizon in the immutable preview while retaining the existing swing default.</summary>
     public static UniversePreviewResponse ToResponse(Guid snapshotId, DateTimeOffset resolvedAtUtc,
-        IReadOnlyList<ActiveDiscoveryAggregate> aggregates, DateTimeOffset? decisionCutoffUtc = null)
+        IReadOnlyList<ActiveDiscoveryAggregate> aggregates, DateTimeOffset? decisionCutoffUtc = null, string horizon = "swing")
     {
         var members = aggregates.OrderBy(item => item.Symbol, StringComparer.Ordinal)
             .Select(item => new UniverseMemberResponse(item.Symbol, "discovered",
@@ -122,7 +129,7 @@ public sealed class UniverseDiscoveryService(
                     .Select(source => new UniverseSourceEvidenceResponse(source.SourceKind, source.SourceKey,
                         source.ObservedAtUtc, source.ExpiresAtUtc, source.ContentSha256, source.IsDiagnostic, source.RawReference)).ToArray())).ToArray();
         var expiresAt = members.SelectMany(member => member.Sources).Select(source => source.ExpiresAtUtc).DefaultIfEmpty(resolvedAtUtc).Min();
-        var response = new UniversePreviewResponse(ContractVersions.VersionOne, snapshotId, "swing", resolvedAtUtc,
+        var response = new UniversePreviewResponse(ContractVersions.VersionOne, snapshotId, horizon, resolvedAtUtc,
             expiresAt, String.Empty, members, [], decisionCutoffUtc ?? resolvedAtUtc);
         return response with { ContentSha256 = ContentHash(response) };
     }
@@ -130,6 +137,7 @@ public sealed class UniverseDiscoveryService(
     public static string ContentHash(UniversePreviewResponse response) =>
         Sha256(JsonSerializer.Serialize(response with { ContentSha256 = String.Empty }));
 
+    /// <summary>Rejects changed membership, clocks or horizon when restoring retained source evidence.</summary>
     public static UniversePreviewResponse ReadPreview(UniversePreviewRecord record, Guid snapshotId)
     {
         UniversePreviewResponse preview;
@@ -143,7 +151,7 @@ public sealed class UniverseDiscoveryService(
             throw new InvalidOperationException("Universe snapshot payload is invalid.", exception);
         }
         if (record.UniverseSnapshotId != snapshotId || preview.UniverseSnapshotId != snapshotId ||
-            preview.ContractVersion != ContractVersions.VersionOne || record.Horizon != "swing" || preview.Horizon != record.Horizon ||
+            preview.ContractVersion != ContractVersions.VersionOne || record.Horizon is not ("swing" or "day") || preview.Horizon != record.Horizon ||
             preview.ResolvedAtUtc != record.ResolvedAtUtc || preview.ExpiresAtUtc != record.ExpiresAtUtc ||
             preview.DecisionCutoffUtc == default || preview.DecisionCutoffUtc > preview.ResolvedAtUtc ||
             preview.Members is null || preview.Members.Count == 0 || preview.Exclusions is null ||
@@ -219,6 +227,8 @@ public sealed class CandidateWorkflowService(
         var record = await previews.GetAsync(request.UniverseSnapshotId, cancellationToken)
             ?? throw new InvalidOperationException("Universe snapshot is missing or expired.");
         var preview = UniverseDiscoveryService.ReadPreview(record, request.UniverseSnapshotId);
+        if (preview.Horizon != "swing")
+            throw new InvalidOperationException("Day research sources cannot start operational candidate runs.");
         now = timeProvider.GetUtcNow().ToUniversalTime();
         if (preview.ExpiresAtUtc <= now || preview.ResolvedAtUtc > now || preview.DecisionCutoffUtc > asOf ||
             preview.Members.Any(member => member.Sources is null || member.Sources.Count == 0 ||
@@ -263,7 +273,8 @@ public sealed class CandidateWorkflowService(
         return await queries.GetRunAsync(created.CandidateRunId, cancellationToken)
             ?? throw new InvalidOperationException("Candidate run was not visible after atomic creation.");
     }
-    private static string ResolveCodeIdentity()
+    /// <summary>Returns the compiled source identity shared by durable observational candidate runs.</summary>
+    public static string ResolveCodeIdentity()
     {
         var version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(CandidateWorkflowService).Assembly)?.InformationalVersion;
         var hash = version?.Split('+').LastOrDefault();

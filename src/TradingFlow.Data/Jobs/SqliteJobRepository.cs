@@ -18,26 +18,36 @@ public sealed class SqliteJobRepository : IDurableJobRepository
         _contextFactory = contextFactory;
     }
 
-    public async Task<bool> TryEnqueueAsync(
+    /// <summary>Uses the same atomic admission rule for a single job and a cohort comparison.</summary>
+    public Task<bool> TryEnqueueAsync(
         PersistedJob job,
+        int maximumNonTerminalJobs,
+        CancellationToken cancellationToken) =>
+        TryEnqueueBatchAsync([job], maximumNonTerminalJobs, cancellationToken);
+
+    /// <summary>Checks capacity and inserts the entire matrix while holding SQLite's write transaction.</summary>
+    public async Task<bool> TryEnqueueBatchAsync(
+        IReadOnlyList<PersistedJob> jobs,
         int maximumNonTerminalJobs,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(job);
-        ArgumentException.ThrowIfNullOrWhiteSpace(job.JobType);
+        ArgumentNullException.ThrowIfNull(jobs);
+        if (jobs.Count == 0 || jobs.Any(job => job is null || String.IsNullOrWhiteSpace(job.JobType)) ||
+            jobs.Select(job => job.Id).Distinct().Count() != jobs.Count || jobs.Select(job => job.JobType).Distinct().Count() != 1)
+            throw new ArgumentException("Select distinct jobs of one kind for atomic admission.", nameof(jobs));
         if (maximumNonTerminalJobs <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(maximumNonTerminalJobs));
         }
 
-        if (!job.Status.Equals("queued", StringComparison.OrdinalIgnoreCase))
+        if (jobs.Any(job => !job.Status.Equals("queued", StringComparison.OrdinalIgnoreCase)))
         {
-            throw new ArgumentException("A newly enqueued durable job must have queued status.", nameof(job));
+            throw new ArgumentException("New durable jobs must have queued status.", nameof(jobs));
         }
 
-        if (job.CreatedAtUtcTicks == 0)
+        foreach (var job in jobs)
         {
-            job.CreatedAtUtcTicks = job.CreatedAt.UtcTicks;
+            if (job.CreatedAtUtcTicks == 0) job.CreatedAtUtcTicks = job.CreatedAt.UtcTicks;
         }
 
         await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
@@ -49,22 +59,24 @@ public sealed class SqliteJobRepository : IDurableJobRepository
         await context.Database.UseTransactionAsync(transaction, cancellationToken);
         try
         {
-            if (await context.Jobs.AnyAsync(candidate => candidate.Id == job.Id, cancellationToken))
+            var ids = jobs.Select(job => job.Id).ToArray();
+            if (await context.Jobs.AnyAsync(candidate => ids.Contains(candidate.Id), cancellationToken))
                 return false;
+            var jobType = jobs[0].JobType;
             var nonTerminalCount = await context.Jobs.CountAsync(candidate =>
-                candidate.JobType == job.JobType &&
+                candidate.JobType == jobType &&
                 candidate.Status != "completed" &&
                 candidate.Status != "failed" &&
                 candidate.Status != "cancelled" &&
                 candidate.Status != "interrupted",
                 cancellationToken);
-            if (nonTerminalCount >= maximumNonTerminalJobs)
+            if (jobs.Count > maximumNonTerminalJobs - nonTerminalCount)
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return false;
             }
 
-            context.Jobs.Add(job);
+            context.Jobs.AddRange(jobs);
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return true;

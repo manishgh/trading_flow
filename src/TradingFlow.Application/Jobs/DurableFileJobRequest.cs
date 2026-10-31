@@ -9,7 +9,8 @@ public sealed record DurableFileJobRequest(
     int SchemaVersion,
     DateTimeOffset CapturedAtUtc,
     IReadOnlyList<DurableFileEvidence> Files,
-    WorkflowJobContext? Workflow = null)
+    WorkflowJobContext? Workflow = null,
+    TradingFlow.Domain.Backtesting.PreparedMarketDataRequestReference? PreparedMarketData = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -163,4 +164,6 @@ public sealed class DurableFileReadLease : IDisposable
     }
 }
 
-public sealed record WorkflowJobContext(TradingFlow.Contracts.V1.RunProvenance Provenance, string RequestSha256);
+public sealed record WorkflowJobContext(TradingFlow.Contracts.V1.RunProvenance Provenance, string RequestSha256,
+    TradingFlow.Contracts.V1.BacktestCohortExecution? Cohort = null,
+    TradingFlow.Contracts.V1.DecisionContextEvidenceSummary? EvidenceSummary = null);

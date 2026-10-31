@@ -1,0 +1,201 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using TradingFlow.Application.Candidates;
+using TradingFlow.Contracts.V1;
+using TradingFlow.Domain.Jobs;
+using TradingFlow.Domain.Persistence;
+
+namespace TradingFlow.Application.Jobs;
+
+/// <summary>Saves immutable plans in the existing application event store; ordinary durable workers execute their jobs.</summary>
+public sealed class BacktestPlanService(IApplicationEventRepository events, IUniversePreviewRepository previews,
+    IDurableJobRepository jobs, RunWorkflowService workflow, IWorkflowRunConfiguration configuration, RunQueueLimits limits, TimeProvider clock)
+{
+    private const string Stream = "backtest-plans";
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+
+    /// <summary>Validates a preview without writing files, jobs or source lists.</summary>
+    public async Task<BacktestPlanResponse> PreviewAsync(SaveBacktestPlanRequest request, CancellationToken token = default)
+    {
+        RunWorkflowService.ValidateBacktest(request.Run, clock.GetUtcNow());
+        request = request with { Run = await configuration.NormalizeBacktestRequestAsync(request.Run, token) };
+        await workflow.RequireSelectedStrategiesAsync(request.Run.Strategies, "backtest", token);
+        var stored = await previews.GetAsync(request.Run.UniverseSnapshotId, token)
+            ?? throw new InvalidOperationException("Preview the stock source before saving a plan.");
+        var source = UniverseDiscoveryService.ReadPreview(stored, request.Run.UniverseSnapshotId);
+        if (source.ExpiresAtUtc <= clock.GetUtcNow())
+            throw new InvalidOperationException("The stock source preview expired. Preview it again and review the groups before saving.");
+        request = request with { ExcludedSymbols = NormalizeExclusions(request.ExcludedSymbols) };
+        var cohorts = BuildCohorts(request, source.Members.Select(item => item.Symbol).ToArray());
+        var count = checked(cohorts.Count * request.Run.Strategies.Count);
+        if (count > limits.Backtest)
+            throw new InvalidOperationException($"This plan needs {count} executions; the configured backtest queue budget is {limits.Backtest}. Change the resource budget or reduce this plan.");
+        var configurationHash = await configuration.GetBacktestConfigurationHashAsync(request.Run.ConfigurationKey, token);
+        var evidence = await configuration.GetDecisionContextEvidenceAsync(request.Run, token);
+        var settings = await configuration.GetBacktestResolvedSettingsAsync(request.Run, token);
+        if (settings is not null && settings.Horizon != source.Horizon)
+            throw new InvalidOperationException("The source preview horizon differs from the selected strategy. Preview the stock source again for this strategy.");
+        if (settings is not null && !settings.ConfigurationSha256.Equals(configurationHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The backtest profile changed while preparing review settings. Preview the plan again.");
+        if (request.Run.ConfigurationSha256 is { } reviewedHash &&
+            !configurationHash.Equals(reviewedHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The backtest profile changed since this preview. Preview the groups again before saving.");
+        return new(0, clock.GetUtcNow(), request.Run with { ConfigurationSha256 = configurationHash }, cohorts, count, limits.Backtest,
+            "Cohorts use the source stocks after explicit exclusions. The original source snapshot is retained; current wishlist/Finviz membership does not establish historical membership.", source,
+            configurationHash, request.ExcludedSymbols, evidence, settings);
+    }
+
+    /// <summary>Appends one immutable plan; the event sequence is its stable database identity.</summary>
+    public async Task<BacktestPlanResponse> SaveAsync(SaveBacktestPlanRequest request, CancellationToken token = default)
+    {
+        var plan = await PreviewAsync(request, token);
+        var sequence = await events.AppendAsync(Stream, "backtest.plan.saved", plan.SavedAtUtc, JsonSerializer.Serialize(plan, Json), token);
+        return plan with { PlanId = sequence };
+    }
+
+    /// <summary>Reads one exact saved plan rather than substituting a newer stock list.</summary>
+    public async Task<BacktestPlanResponse?> GetAsync(long id, CancellationToken token = default)
+    {
+        if (id <= 0) return null;
+        var record = (await events.ListAsync(Stream, id - 1, 1, token)).FirstOrDefault();
+        return record?.EventSequence == id ? Read(record) : null;
+    }
+
+    /// <summary>Pages the existing event stream and returns the requested recent saved plans.</summary>
+    public async Task<IReadOnlyList<BacktestPlanResponse>> ListAsync(CancellationToken token = default)
+    {
+        var bounds = await events.GetBoundsAsync(Stream, token);
+        var result = new Queue<BacktestPlanResponse>();
+        long after = 0;
+        while (after < bounds.Latest)
+        {
+            var records = await events.ListAsync(Stream, after, 500, token);
+            if (records.Count == 0) break;
+            foreach (var record in records)
+            {
+                result.Enqueue(Read(record));
+                if (result.Count > 500) result.Dequeue();
+            }
+            after = records[^1].EventSequence;
+        }
+        return result.Reverse().ToArray();
+    }
+
+    /// <summary>Prepares all independent books then admits all jobs transactionally; retries use the same exact job IDs.</summary>
+    public async Task<BacktestPlanStartResponse> StartAsync(long id, StartBacktestPlanRequest request, CancellationToken token = default)
+    {
+        if (request.ContractVersion != ContractVersions.VersionOne || String.IsNullOrWhiteSpace(request.IdempotencyKey) || request.IdempotencyKey.Length > 100)
+            throw new InvalidOperationException("A supported contract and a retry key of at most 100 characters are required.");
+        var plan = await GetAsync(id, token) ?? throw new InvalidOperationException("Saved backtest plan not found.");
+        if (plan.ExecutionCount > limits.Backtest)
+            throw new InvalidOperationException("The complete plan exceeds the current backtest queue budget.");
+        using var scope = await configuration.OpenEvidenceVerificationScopeAsync(plan.Run, token);
+        var evidence = await configuration.GetDecisionContextEvidenceAsync(plan.Run, token, scope);
+        if (plan.EvidenceSummary?.DependencyGraphSha256 != evidence?.DependencyGraphSha256)
+            throw new InvalidDataException("Decision-context dependencies differ from the saved plan. Review and save a new plan before starting.");
+        var attempts = new List<PersistedJob>(plan.ExecutionCount);
+        try
+        {
+            await PrepareExecutionsAsync(plan, request.IdempotencyKey, attempts, token, scope);
+            var comparisonId = "comparison-" + Convert.ToHexStringLower(SHA256.HashData(
+                Encoding.UTF8.GetBytes($"{plan.PlanId}:{request.IdempotencyKey}")));
+            await workflow.AttachPreparedComparisonAsync(comparisonId, attempts, plan.Run.TestWindowEndUtc, token);
+            var accepted = await AdmitExecutionsAsync(attempts, request.IdempotencyKey, token);
+            return new(id, request.IdempotencyKey, accepted.Select(RunWorkflowService.Project).ToArray());
+        }
+        finally
+        {
+            // Acceptance is transactional. Cleanup checks the durable winner before removing any attempt's inputs.
+            foreach (var attempt in attempts) await workflow.DiscardUnacceptedInputsAsync(attempt);
+        }
+    }
+
+    /// <summary>Prepares each exact strategy/group independently and records completed attempts for cleanup if a later group fails.</summary>
+    private async Task PrepareExecutionsAsync(BacktestPlanResponse plan, string startKey, List<PersistedJob> attempts, CancellationToken token,
+        IWorkflowEvidenceVerificationScope? evidenceScope)
+    {
+        foreach (var cohort in plan.Cohorts)
+        foreach (var strategy in plan.Run.Strategies)
+        {
+            var key = ExecutionKey(plan.PlanId, startKey, cohort.Name, strategy);
+            var run = plan.Run with { Strategies = [strategy], StartingCapital = cohort.StartingCapital, ConfigurationSha256 = plan.ConfigurationSha256,
+                RunName = $"{plan.Run.RunName[..Math.Min(plan.Run.RunName.Length, 65)]}_{key[..20]}", IdempotencyKey = key };
+            attempts.Add(await workflow.PrepareCohortAsync(run,
+                new(plan.PlanId, cohort.Name, cohort.Symbols, cohort.StartingCapital, strategy), plan.Source, token, evidenceScope));
+        }
+    }
+
+    /// <summary>Accepts the complete matrix once, or returns its exact durable retry outcome; never accepts a partial comparison.</summary>
+    private async Task<IReadOnlyList<PersistedJob>> AdmitExecutionsAsync(IReadOnlyList<PersistedJob> prepared, string startKey, CancellationToken token)
+    {
+        var prior = await Task.WhenAll(prepared.Select(job => jobs.GetJobAsync(job.Id, token)));
+        if (prior.Any(job => job is not null) || !await jobs.TryEnqueueBatchAsync(prepared, limits.Backtest, token))
+        {
+            var existing = await Task.WhenAll(prepared.Select(job => jobs.GetJobAsync(job.Id, token)));
+            if (existing.Any(job => job is null))
+                throw new InvalidOperationException("No new jobs were accepted: the complete comparison does not fit the available queue capacity, or its earlier execution set is incomplete.");
+            for (var index = 0; index < prepared.Count; index++)
+                if (DurableFileJobRequest.Deserialize(existing[index]!.RequestJson).Workflow?.RequestSha256 !=
+                    DurableFileJobRequest.Deserialize(prepared[index].RequestJson).Workflow?.RequestSha256)
+                    throw new IdempotencyKeyConflictException(startKey);
+            return existing.Select(job => job!).ToArray();
+        }
+        return prepared;
+    }
+
+    /// <summary>Applies plan-only exclusions, then partitions selected symbols or validates explicit groups with independent capital.</summary>
+    internal static IReadOnlyList<BacktestCohort> BuildCohorts(SaveBacktestPlanRequest request, IReadOnlyList<string> members)
+    {
+        var source = members.Select(item => item.Trim().ToUpperInvariant()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        if (source.Length == 0) throw new InvalidOperationException("The selected stock source is empty.");
+        var excluded = NormalizeExclusions(request.ExcludedSymbols);
+        var unknown = excluded.Except(source, StringComparer.Ordinal).ToArray();
+        if (unknown.Length > 0)
+            throw new InvalidOperationException($"Excluded stocks must belong to the reviewed source. Unknown: {String.Join(", ", unknown)}.");
+        var excludedSet = excluded.ToHashSet(StringComparer.Ordinal);
+        source = source.Where(symbol => !excludedSet.Contains(symbol)).ToArray();
+        if (source.Length == 0) throw new InvalidOperationException("The exclusions leave no stocks to run.");
+        if (request.Cohorts is { Count: > 0 } manual)
+        {
+            if (request.GroupSize is not null || manual.Any(group => String.IsNullOrWhiteSpace(group.Name) || group.Name.Length > 100 ||
+                    group.StartingCapital <= 0 || group.Symbols is null || group.Symbols.Count == 0) ||
+                manual.Select(group => group.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != manual.Count)
+                throw new InvalidOperationException("Use automatic grouping or distinct named manual groups with positive capital.");
+            var validated = manual.Select(group =>
+            {
+                var symbols = group.Symbols.Select(symbol => symbol.Trim().ToUpperInvariant()).ToArray();
+                if (symbols.Distinct(StringComparer.Ordinal).Count() != symbols.Length || symbols.Any(symbol => !source.Contains(symbol, StringComparer.Ordinal)))
+                    throw new InvalidOperationException($"Group '{group.Name}' contains duplicate stocks or stocks outside the selected run stocks.");
+                return group with { Name = group.Name.Trim(), Symbols = symbols.Order(StringComparer.Ordinal).ToArray() };
+            }).ToArray();
+            var covered = validated.SelectMany(group => group.Symbols).ToHashSet(StringComparer.Ordinal);
+            var missing = source.Where(symbol => !covered.Contains(symbol)).ToArray();
+            if (missing.Length > 0)
+                throw new InvalidOperationException($"Manual groups must include all selected source stocks. Missing: {String.Join(", ", missing)}. Change the source selection explicitly if these stocks should be excluded.");
+            return validated;
+        }
+        if (request.GroupSize is not > 0)
+            throw new InvalidOperationException("Enter a positive group size or provide manual groups.");
+        return source.Chunk(request.GroupSize.Value).Select((symbols, index) =>
+            new BacktestCohort($"Group {index + 1}", symbols, request.Run.StartingCapital)).ToArray();
+    }
+
+    /// <summary>Stores exclusions in one canonical form; blank entries fail rather than silently changing the requested selection.</summary>
+    private static string[] NormalizeExclusions(IReadOnlyList<string>? symbols)
+    {
+        if (symbols is null) return [];
+        if (symbols.Any(String.IsNullOrWhiteSpace))
+            throw new InvalidOperationException("Excluded stock symbols cannot be blank.");
+        return symbols.Select(symbol => symbol.Trim().ToUpperInvariant()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>Restores the immutable plan payload and its database sequence.</summary>
+    private static BacktestPlanResponse Read(ApplicationEventRecord record) =>
+        (JsonSerializer.Deserialize<BacktestPlanResponse>(record.PayloadJson, Json)
+            ?? throw new InvalidDataException("Saved plan payload is empty.")) with { PlanId = record.EventSequence };
+
+    /// <summary>Binds each retry to one start, cohort and complete strategy identity without relying on display-name prefixes.</summary>
+    private static string ExecutionKey(long id, string start, string cohort, StrategyReference strategy) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { id, start, cohort, strategy }, Json))));
+}

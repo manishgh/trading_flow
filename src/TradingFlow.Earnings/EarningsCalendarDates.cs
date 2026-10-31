@@ -1,11 +1,14 @@
 namespace TradingFlow.Earnings;
 
 /// <summary>
-/// Resolves the next weekday used by the short-horizon earnings monitor.
+/// Resolves exchange dates and the next weekday used by the short-horizon earnings monitor.
 /// Provider results remain authoritative; this helper only skips weekends.
 /// </summary>
 public static class EarningsCalendarDates
 {
+    public static DateOnly ExchangeDate(DateTimeOffset instant) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(instant, EarningsTimeZones.NewYork).DateTime);
+
     public static DateOnly NextWeekday(DateOnly date)
     {
         var candidate = date.AddDays(1);

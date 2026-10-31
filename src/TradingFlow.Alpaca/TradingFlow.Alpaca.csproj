@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="TradingFlow.Tests" />
+    <EmbeddedResource Include="Resources\sip-ordinary-print-research-condition-v1.json" />
     <ProjectReference Include="..\TradingFlow.Domain\TradingFlow.Domain.csproj" />
     <ProjectReference Include="..\TradingFlow.Engine\TradingFlow.Engine.csproj" />
   </ItemGroup>

@@ -14,8 +14,9 @@ using TradingFlow.Engine.Storage;
 
 namespace TradingFlow.Alpaca;
 
-public sealed class AlpacaBrokerClient :
+public sealed partial class AlpacaBrokerClient :
     IBrokerClient,
+    IBrokerFillHistoryProvider,
     IBrokerAccountProvider,
     IBrokerMarketObservationProvider,
     IDisposable
@@ -589,7 +590,12 @@ public sealed class AlpacaBrokerClient :
         });
     }
 
-    public async Task<System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken)
+    /// <summary>Read all open account orders with explicit roles; a saturated provider page cannot establish complete pending exposure.</summary>
+    public async Task<System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken) =>
+        (await ReadOpenOrdersWithArchiveAsync(cancellationToken)).Orders;
+
+    /// <summary>Retain the immutable response identity when pending orders are included in an account-capacity assessment.</summary>
+    private async Task<(System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder> Orders, string ArchiveId)> ReadOpenOrdersWithArchiveAsync(CancellationToken cancellationToken)
     {
         return await ApiProfiler.ProfileAsync("Alpaca", "/v2/orders", "GET", async () =>
         {
@@ -604,6 +610,8 @@ public sealed class AlpacaBrokerClient :
             }
 
             using var doc = JsonDocument.Parse(response.Payload);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() >= 500)
+                throw new InvalidDataException("Alpaca open orders are malformed or fill the provider's maximum page; complete pending exposure was not established.");
 
             var orders = new System.Collections.Generic.List<ActiveBrokerOrder>();
             foreach (var element in doc.RootElement.EnumerateArray())
@@ -627,7 +635,7 @@ public sealed class AlpacaBrokerClient :
                 }
             }
 
-            return (System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>)orders;
+            return ((System.Collections.Generic.IReadOnlyList<ActiveBrokerOrder>)orders, response.Archive.Manifest.ArchiveId);
         });
     }
 
@@ -667,6 +675,7 @@ public sealed class AlpacaBrokerClient :
         });
     }
 
+    /// <summary>Preserve broker opening/closing intent alongside the order identity without inferring it from its side.</summary>
     private static ActiveBrokerOrder ParseOrder(
         JsonElement element,
         string operation,
@@ -700,7 +709,8 @@ public sealed class AlpacaBrokerClient :
             bracketTakeProfitPrice,
             bracketStopPrice,
             ParseOptionalString(element, "replaces"),
-            ParseOptionalString(element, "replaced_by"));
+            ParseOptionalString(element, "replaced_by"),
+            ParseOptionalString(element, "position_intent"));
     }
 
     private static (decimal? TakeProfitPrice, decimal? StopPrice) ParseBracketLegPrices(
@@ -748,10 +758,14 @@ public sealed class AlpacaBrokerClient :
         throw new HttpRequestException(message, null, response.StatusCode);
     }
 
-    private static bool IsOpenStatus(string status) =>
-        status.Trim().ToLowerInvariant() is
-            "accepted" or "pending_new" or "accepted_for_bidding" or "new" or
-            "partially_filled" or "pending_cancel" or "pending_replace";
+    /// <summary>Retains pending and held broker orders so account capacity and protection readers can inspect their actual executability.</summary>
+    private static bool IsOpenStatus(string status) => status.Trim().ToLowerInvariant() switch
+    {
+        "accepted" or "pending_new" or "accepted_for_bidding" or "new" or "partially_filled" or
+            "pending_cancel" or "pending_replace" or "held" or "done_for_day" or "stopped" or "suspended" or "calculated" => true,
+        "filled" or "canceled" or "expired" or "rejected" or "replaced" => false,
+        _ => throw new InvalidDataException("Alpaca open-order response contains an unrecognized state; complete pending exposure was not established.")
+    };
 
     private static string RequireString(JsonElement element, string propertyName, string operation)
     {

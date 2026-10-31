@@ -10,10 +10,10 @@ using TradingFlow.Engine.Indicators;
 namespace TradingFlow.Data.Csv;
 
 /// <summary>
-/// Caches one exact ticker/timeframe/range slice and reuses it only when its
-/// non-secret source descriptor, manifest, and CSV contents agree.
+/// Reuses exact ordinary cache entries or compatible prepared-history slices only
+/// when their source descriptors, manifests and retained source files agree.
 /// </summary>
-public sealed class CachedMarketDataProvider :
+public sealed partial class CachedMarketDataProvider :
     IMarketDataProvider,
     IMarketSessionScheduleProvider,
     IMarketDataCompletenessProvider,
@@ -71,6 +71,7 @@ public sealed class CachedMarketDataProvider :
             : throw new InvalidOperationException(
                 "The wrapped market-data provider does not expose authoritative provenance.");
 
+    /// <summary>Reuses complete matching calendar coverage before collecting missing dates; refresh still collects a new response.</summary>
     public async Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadMarketSessionSchedulesAsync(
         DateOnly startDateInclusive,
         DateOnly endDateInclusive,
@@ -108,6 +109,13 @@ public sealed class CachedMarketDataProvider :
                 {
                     return cached;
                 }
+
+                var prepared = await TryReadExistingPreparedCalendarAsync(
+                    startDateInclusive, endDateInclusive, cancellationToken);
+                if (prepared is not null)
+                {
+                    return prepared;
+                }
             }
 
             if (innerProvider is not IMarketSessionScheduleProvider scheduleProvider)
@@ -138,6 +146,54 @@ public sealed class CachedMarketDataProvider :
         finally
         {
             gate.Release();
+        }
+    }
+
+    /// <summary>Reuses contiguous authoritative cached dates only when they contain all required preceding sessions, otherwise loads the bounded calendar fallback.</summary>
+    public async Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadSessionContextCalendarAsync(
+        DateOnly firstDate, CancellationToken cancellationToken, int requiredCompletedSessions = 1)
+    {
+        if (requiredCompletedSessions <= 0) throw new ArgumentOutOfRangeException(nameof(requiredCompletedSessions));
+        if (!cachePolicy.Equals("refresh", StringComparison.OrdinalIgnoreCase) && sourceDescriptor is not null)
+        {
+            var cached = await TryReadCalendarContextAsync(firstDate, cancellationToken);
+            if (cached is not null && cached.Values.Count(session => session.IsTradingDay && session.TradeDate < firstDate) >= requiredCompletedSessions)
+            {
+                return cached;
+            }
+            var prepared = await TryReadExistingPreparedSessionContextAsync(firstDate, cancellationToken);
+            if (prepared is not null && prepared.Values.Count(session => session.IsTradingDay && session.TradeDate < firstDate) >= requiredCompletedSessions)
+            {
+                return prepared;
+            }
+        }
+
+        return await LoadMarketSessionSchedulesAsync(firstDate.AddYears(-1), firstDate, cancellationToken);
+    }
+
+    /// <summary>Requires a validated complete calendar prefix and a prior trading date, so closed dates never stand in for missing dates.</summary>
+    private async Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>?> TryReadCalendarContextAsync(
+        DateOnly firstDate, CancellationToken cancellationToken)
+    {
+        var calendarRoot = Path.Combine(normalizedRoot, "_market_sessions");
+        var manifestPath = Path.Combine(calendarRoot, "manifest.json");
+        try
+        {
+            var manifest = await MarketSessionCalendarCacheStore.ReadAsync<MarketSessionCalendarCacheManifest>(
+                manifestPath, cancellationToken);
+            if (manifest is null || manifest.CoverageStart >= firstDate || manifest.CoverageEnd < firstDate)
+            {
+                return null;
+            }
+
+            var cached = await TryReadCalendarAsync(calendarRoot, manifestPath, sourceDescriptor!.ProviderIdentity,
+                manifest.CoverageStart, firstDate, freshnessPolicy.TimeProvider.GetUtcNow(), cancellationToken);
+            return cached is not null && cached.Values.Any(session => session.IsTradingDay && session.TradeDate < firstDate)
+                ? cached : null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            return null;
         }
     }
 
@@ -269,6 +325,7 @@ public sealed class CachedMarketDataProvider :
         return validated;
     }
 
+    /// <summary>Publishes a calendar selection while retaining prior source payloads and manifests.</summary>
     private async Task WriteCommittedCalendarAsync(
         string calendarRoot,
         string manifestPath,
@@ -284,17 +341,10 @@ public sealed class CachedMarketDataProvider :
         var dataPath = Path.Combine(calendarRoot, dataFileName);
         var dataTempPath = $"{dataPath}.tmp";
         var manifestTempPath = $"{manifestPath}.{transactionId}.tmp";
-        string? priorDataPath = null;
         var committed = false;
 
         try
         {
-            priorDataPath = await TryResolvePriorCalendarDataPathAsync(
-                calendarRoot,
-                manifestPath,
-                providerIdentity,
-                cancellationToken);
-
             var document = new MarketSessionCalendarCacheDocument(
                 MarketSessionCalendarCacheManifest.CurrentSchemaVersion,
                 coverageStart,
@@ -316,6 +366,7 @@ public sealed class CachedMarketDataProvider :
             File.Move(dataTempPath, dataPath);
             if (File.Exists(manifestPath))
             {
+                PreservePreviousManifest(manifestPath);
                 File.Replace(manifestTempPath, manifestPath, destinationBackupFileName: null);
             }
             else
@@ -324,11 +375,7 @@ public sealed class CachedMarketDataProvider :
             }
             committed = true;
 
-            if (priorDataPath is not null &&
-                !String.Equals(priorDataPath, dataPath, StringComparison.OrdinalIgnoreCase))
-            {
-                TryDelete(priorDataPath);
-            }
+            // Original normalized calendars remain protected even after a newer selection is published.
         }
         finally
         {
@@ -338,38 +385,6 @@ public sealed class CachedMarketDataProvider :
             {
                 TryDelete(dataPath);
             }
-        }
-    }
-
-    private static async Task<string?> TryResolvePriorCalendarDataPathAsync(
-        string calendarRoot,
-        string manifestPath,
-        string providerIdentity,
-        CancellationToken cancellationToken)
-    {
-        if (!File.Exists(manifestPath))
-        {
-            return null;
-        }
-
-        try
-        {
-            var prior = await MarketSessionCalendarCacheStore.ReadAsync<MarketSessionCalendarCacheManifest>(
-                manifestPath,
-                cancellationToken);
-            return prior is not null &&
-                   prior.SchemaVersion == MarketSessionCalendarCacheManifest.CurrentSchemaVersion &&
-                   String.Equals(prior.ProviderIdentity, providerIdentity, StringComparison.Ordinal) &&
-                   MarketSessionCalendarCacheManifest.IsSafeDataFileName(prior.DataFileName)
-                ? ResolveContainedPath(calendarRoot, prior.DataFileName)
-                : null;
-        }
-        catch (Exception exception) when (
-            exception is IOException or
-            UnauthorizedAccessException or
-            System.Text.Json.JsonException)
-        {
-            return null;
         }
     }
 
@@ -428,6 +443,7 @@ public sealed class CachedMarketDataProvider :
         }
     }
 
+    /// <summary>Reads exact ordinary cache or a verified prepared-history slice before downloading; refresh bypasses both readers.</summary>
     private async Task<IReadOnlyList<OhlcvBar>> ResolveSliceAsync(
         string ticker,
         string timeframe,
@@ -453,6 +469,12 @@ public sealed class CachedMarketDataProvider :
             if (cached is not null)
             {
                 return cached;
+            }
+
+            var prepared = await TryReadExistingPreparedBarsAsync(ticker, timeframe, startUtc, endUtc, cancellationToken);
+            if (prepared is not null)
+            {
+                return prepared;
             }
         }
 
@@ -625,6 +647,7 @@ public sealed class CachedMarketDataProvider :
             last == manifest.BarCoverage.LastBarUtc;
     }
 
+    /// <summary>Publishes a legacy cache selection while retaining prior source payloads and manifests.</summary>
     private static async Task WriteCommittedSliceAsync(
         string dataPath,
         string manifestPath,
@@ -644,13 +667,6 @@ public sealed class CachedMarketDataProvider :
         var committedDataPath = Path.Combine(directory, dataFileName);
         var dataTempPath = $"{committedDataPath}.tmp";
         var manifestTempPath = $"{manifestPath}.{transactionId}.tmp";
-        var priorDataPath = await TryResolveCommittedDataPathAsync(
-            dataPath,
-            manifestPath,
-            ticker,
-            timeframe,
-            descriptor,
-            cancellationToken);
         var manifestCommitted = false;
 
         try
@@ -678,6 +694,7 @@ public sealed class CachedMarketDataProvider :
             File.Move(dataTempPath, committedDataPath);
             if (File.Exists(manifestPath))
             {
+                PreservePreviousManifest(manifestPath);
                 File.Replace(manifestTempPath, manifestPath, destinationBackupFileName: null);
             }
             else
@@ -686,7 +703,7 @@ public sealed class CachedMarketDataProvider :
             }
 
             manifestCommitted = true;
-            CleanupUnreferencedDataFiles(dataPath, committedDataPath, priorDataPath);
+            // Previously committed source candles remain protected after refresh.
         }
         finally
         {
@@ -699,87 +716,18 @@ public sealed class CachedMarketDataProvider :
         }
     }
 
-    private static async Task<string?> TryResolveCommittedDataPathAsync(
-        string logicalDataPath,
-        string manifestPath,
-        string ticker,
-        string timeframe,
-        MarketDataCacheSourceDescriptor descriptor,
-        CancellationToken cancellationToken)
+    /// <summary>Protects the legacy selection receipt before its mutable latest pointer is replaced.</summary>
+    private static void PreservePreviousManifest(string manifestPath)
     {
-        if (!File.Exists(manifestPath))
-        {
-            return null;
-        }
-
-        try
-        {
-            var manifest = await MarketDataCacheManifestStore.ReadAsync(
-                manifestPath,
-                cancellationToken);
-            if (manifest is null ||
-                manifest.ManifestSchemaVersion != MarketDataCacheManifest.CurrentManifestSchemaVersion ||
-                manifest.CsvSchemaVersion != MarketDataCacheManifest.CurrentCsvSchemaVersion ||
-                !String.Equals(manifest.ProviderIdentity, descriptor.ProviderIdentity, StringComparison.Ordinal) ||
-                !String.Equals(manifest.DataFeed, descriptor.DataFeed, StringComparison.Ordinal) ||
-                !String.Equals(manifest.AdjustmentPolicy, descriptor.AdjustmentPolicy, StringComparison.Ordinal) ||
-                !String.Equals(manifest.RestatementRevision, descriptor.RestatementRevision, StringComparison.Ordinal) ||
-                !String.Equals(manifest.Ticker, ticker, StringComparison.Ordinal) ||
-                !String.Equals(manifest.Timeframe, timeframe, StringComparison.Ordinal) ||
-                !MarketDataCacheManifest.IsSafeDataFileName(manifest.DataFileName, timeframe))
-            {
-                return null;
-            }
-
-            var directory = Path.GetFullPath(Path.GetDirectoryName(logicalDataPath)!);
-            var candidate = Path.GetFullPath(Path.Combine(directory, manifest.DataFileName));
-            return String.Equals(Path.GetDirectoryName(candidate), directory, StringComparison.OrdinalIgnoreCase)
-                ? candidate
-                : null;
-        }
-        catch (Exception exception) when (
-            exception is IOException or
-            UnauthorizedAccessException or
-            System.Text.Json.JsonException)
-        {
-            return null;
-        }
+        var retainedPath = Path.Combine(Path.GetDirectoryName(manifestPath)!,
+            $"retained-{Path.GetFileName(manifestPath)}-{Guid.NewGuid():N}.json");
+        File.Copy(manifestPath, retainedPath, overwrite: false);
     }
-
-    private static void CleanupUnreferencedDataFiles(
-        string logicalDataPath,
-        string committedDataPath,
-        string? priorDataPath)
-    {
-        try
-        {
-            if (priorDataPath is not null &&
-                !String.Equals(priorDataPath, committedDataPath, StringComparison.OrdinalIgnoreCase))
-            {
-                TryDelete(priorDataPath);
-            }
-
-            var directory = Path.GetDirectoryName(logicalDataPath)!;
-            var pattern = $"{Path.GetFileNameWithoutExtension(logicalDataPath)}-*.csv";
-            foreach (var candidate in Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly))
-            {
-                if (!String.Equals(candidate, committedDataPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    TryDelete(candidate);
-                }
-            }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // Cache publication already committed. Cleanup is bounded best effort and
-            // must never turn a valid committed slice into a failed provider read.
-        }
-    }
-
     private string GetPath(string ticker, string timeframe) =>
         Path.Combine(normalizedRoot, ticker, $"bars_{timeframe}.csv");
 
-    private static async Task<FileStream> AcquireExclusiveFileLockAsync(
+    /// <summary>Serializes cooperating cache readers and writers through a filesystem lease, bounded to thirty seconds and caller cancellation.</summary>
+    internal static async Task<FileStream> AcquireExclusiveFileLockAsync(
         string lockPath,
         CancellationToken cancellationToken)
     {
@@ -804,7 +752,7 @@ public sealed class CachedMarketDataProvider :
                 if (elapsed.Elapsed >= TimeSpan.FromSeconds(30))
                 {
                     throw new TimeoutException(
-                        $"Timed out waiting for exclusive market-data cache lock '{lockPath}'.",
+                        $"Timed out waiting for exclusive cache lock '{lockPath}'.",
                         lastContention);
                 }
 
@@ -847,55 +795,12 @@ public sealed class CachedMarketDataProvider :
         stream.Flush(flushToDisk: true);
     }
 
+    /// <summary>Parses ordinary cache bytes through the shared streaming CSV reader used by prepared source slices.</summary>
     private static IReadOnlyList<OhlcvBar> ParseCsv(byte[] bytes, string timeframe)
     {
         using var stream = new MemoryStream(bytes, writable: false);
         using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        var header = reader.ReadLine() ??
-            throw new InvalidDataException("Cached market-data CSV has no schema header.");
-        if (!String.Equals(header, CsvHeader, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("Cached market-data CSV schema does not match the manifest schema.");
-        }
-
-        var columns = header.Split(',');
-        var index = columns
-            .Select((name, i) => (Name: name.Trim(), Index: i))
-            .ToDictionary(x => x.Name, x => x.Index, StringComparer.OrdinalIgnoreCase);
-        var bars = new List<OhlcvBar>();
-
-        while (reader.ReadLine() is { } line)
-        {
-            if (String.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            var fields = line.Split(',');
-            if (fields.Length != columns.Length)
-            {
-                throw new InvalidDataException("Cached market-data row does not match the CSV schema.");
-            }
-
-            bars.Add(new OhlcvBar(
-                GetString(fields, index, "ticker"),
-                DateTimeOffset.Parse(
-                    GetString(fields, index, "timestamp"),
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.RoundtripKind),
-                timeframe,
-                GetDecimal(fields, index, "open"),
-                GetDecimal(fields, index, "high"),
-                GetDecimal(fields, index, "low"),
-                GetDecimal(fields, index, "close"),
-                GetDecimal(fields, index, "volume"),
-                GetString(fields, index, "data_feed"),
-                GetString(fields, index, "adjustment_policy"),
-                ParseOptionalTimestamp(GetString(fields, index, "known_at_utc")),
-                ParseOptionalTimestamp(GetString(fields, index, "coverage_verified_through_utc"))));
-        }
-
-        return bars;
+        return ParseCsvRows(reader, timeframe).ToArray();
     }
 
     private static string NormalizePathSegment(string value, string parameterName, bool upperCase)
