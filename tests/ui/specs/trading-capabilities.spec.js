@@ -150,6 +150,7 @@ test.describe("news hub", () => {
 
   test("exposes every filter dimension the news record carries", async ({ page }) => {
     await page.goto("/News");
+    await page.locator('.news-more-filters > summary').click();
     for (const id of ["#Hours", "#GroupId", "#Ticker", "#Provider", "#Sentiment", "#Search"]) {
       await expect(page.locator(id)).toBeVisible();
     }

@@ -79,6 +79,16 @@ parameters:
         Assert.Contains("maximum of 1", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Unsupported objectives are rejected at admission, without leaving a queued job behind.</summary>
+    [Fact]
+    public async Task StartAsync_RejectsUnknownObjectiveBeforeEnqueue()
+    {
+        var source = await File.ReadAllTextAsync(optimizationPath);
+        await File.WriteAllTextAsync(optimizationPath, source.Replace("metric: TotalReturnPct", "metric: TotalRetunPct", StringComparison.Ordinal));
+        await Assert.ThrowsAsync<ArgumentException>(() => CreateService(OptimizationJobServiceOptions.Default).StartAsync("invalid-objective", optimizationPath));
+        Assert.Empty(await repository.GetAllJobsAsync(CancellationToken.None));
+    }
+
     private OptimizationJobService CreateService(OptimizationJobServiceOptions options)
     {
         var reader = new SimpleYamlReader();

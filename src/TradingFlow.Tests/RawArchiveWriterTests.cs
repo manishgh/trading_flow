@@ -186,32 +186,77 @@ public sealed class RawArchiveWriterTests
         }
     }
 
+    // Expiry requests must fail without changing original payloads, receipts, or unrelated files.
     [Fact]
-    public async Task EnforceRetentionAsync_DeletesOnlyExpiredDatedDirectories()
+    public async Task EnforceRetentionAsync_RejectsAutomaticExpiryAndPreservesAllFiles()
     {
         var root = CreateTemporaryRoot();
         try
         {
             var writer = new FileSystemRawArchiveWriter(new RawArchiveOptions(root, 730));
-            await writer.ArchiveAsync(
+            var expiredReceipt = await writer.ArchiveAsync(
                 new RawArchiveRequest("finviz", "csv", new DateTimeOffset(2024, 7, 20, 1, 0, 0, TimeSpan.Zero), "csv"),
                 new byte[] { 1 });
-            await writer.ArchiveAsync(
+            var recentReceipt = await writer.ArchiveAsync(
                 new RawArchiveRequest("finviz", "csv", new DateTimeOffset(2024, 7, 22, 1, 0, 0, TimeSpan.Zero), "csv"),
                 new byte[] { 2 });
             var unrelatedDirectory = Path.Combine(root, "finviz", "manual-review");
             Directory.CreateDirectory(unrelatedDirectory);
-            await File.WriteAllTextAsync(Path.Combine(unrelatedDirectory, "keep.txt"), "keep");
+            var unrelatedPath = Path.Combine(unrelatedDirectory, "keep.txt");
+            var datedUnrelatedPath = Path.Combine(root, "finviz", "2024-07-20", "keep.txt");
+            await File.WriteAllTextAsync(unrelatedPath, "keep");
+            await File.WriteAllTextAsync(datedUnrelatedPath, "keep inside expired date");
+            var preservedPaths = new[]
+            {
+                expiredReceipt.PayloadPath,
+                expiredReceipt.ManifestPath,
+                recentReceipt.PayloadPath,
+                recentReceipt.ManifestPath,
+                unrelatedPath,
+                datedUnrelatedPath
+            };
+            var originalBytes = new Dictionary<string, byte[]>();
+            foreach (var path in preservedPaths)
+            {
+                originalBytes.Add(path, await File.ReadAllBytesAsync(path));
+            }
 
-            var result = await writer.EnforceRetentionAsync(
-                new DateTimeOffset(2026, 7, 21, 12, 0, 0, TimeSpan.Zero));
+            var exception = await Assert.ThrowsAsync<NotSupportedException>(
+                () => writer.EnforceRetentionAsync(
+                    new DateTimeOffset(2026, 7, 21, 12, 0, 0, TimeSpan.Zero)));
 
-            Assert.Equal(new DateOnly(2024, 7, 21), result.DeleteBeforeDate);
-            Assert.Equal(2, result.DateDirectoriesExamined);
-            Assert.Equal(1, result.DateDirectoriesDeleted);
-            Assert.False(Directory.Exists(Path.Combine(root, "finviz", "2024-07-20")));
-            Assert.True(Directory.Exists(Path.Combine(root, "finviz", "2024-07-22")));
-            Assert.True(File.Exists(Path.Combine(unrelatedDirectory, "keep.txt")));
+            Assert.Contains("separate explicit approval", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(preservedPaths.Length, Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Count());
+            foreach (var path in preservedPaths)
+            {
+                Assert.Equal(originalBytes[path], await File.ReadAllBytesAsync(path));
+            }
+        }
+        finally
+        {
+            DeleteTemporaryRoot(root);
+        }
+    }
+
+    // A cancelled expiry request must retain cancellation semantics before refusing expiry.
+    [Fact]
+    public async Task EnforceRetentionAsync_CancelledRequestDoesNotTouchArchives()
+    {
+        var root = CreateTemporaryRoot();
+        try
+        {
+            var writer = new FileSystemRawArchiveWriter(new RawArchiveOptions(root));
+            var receipt = await writer.ArchiveAsync(
+                new RawArchiveRequest("alpaca", "bars", new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero), "json"),
+                new byte[] { 1, 2, 3 });
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => writer.EnforceRetentionAsync(DateTimeOffset.UtcNow, cancellation.Token));
+
+            Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(receipt.PayloadPath));
+            Assert.True(File.Exists(receipt.ManifestPath));
         }
         finally
         {

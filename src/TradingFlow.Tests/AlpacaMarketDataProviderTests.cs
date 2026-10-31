@@ -5,8 +5,49 @@ using TradingFlow.Engine.Abstractions;
 
 namespace TradingFlow.Tests;
 
-public class AlpacaMarketDataProviderTests
+public class AlpacaMarketDataProviderTests : IDisposable
 {
+    private readonly OwnedAlpacaTestArchive archive = new();
+
+    /// <summary>Releases the unique synthetic archive even when a test fails.</summary>
+    public void Dispose() => archive.Dispose();
+
+    /// <summary>The requested price basis remains identical in every HTTP page, parsed candle and provider declaration.</summary>
+    [Theory]
+    [InlineData("raw")]
+    [InlineData("all")]
+    public async Task PriceAdjustment_UsesActualProviderQueryWithoutRelabelingCandles(string adjustment)
+    {
+        using var handler = new PagedBarsHandler();
+        using var http = new HttpClient(handler);
+        var provider = new AlpacaMarketDataProvider(http,
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with { KeyId = "fixture", SecretKey = "fixture" },
+            archive.Writer, adjustmentPolicy: adjustment);
+        var bars = new List<TradingFlow.Domain.Market.OhlcvBar>();
+        await foreach (var bar in provider.GetBarsAsync(["AMD", "MU", "NVDA"], ["15m"],
+            DateTimeOffset.Parse("2026-06-08T20:00:00Z"), DateTimeOffset.Parse("2026-06-08T21:00:00Z"), default)) bars.Add(bar);
+        Assert.Equal(2, handler.RequestUris.Count);
+        Assert.All(handler.RequestUris, uri => Assert.Contains($"adjustment={adjustment}&", uri.Query));
+        Assert.Equal(3, bars.Count);
+        Assert.All(bars, bar => Assert.Equal(adjustment, bar.AdjustmentPolicy));
+        Assert.Equal(adjustment, provider.MarketDataProvenance.AdjustmentPolicy);
+        Assert.Equal(100m, bars.Single(bar => bar.Ticker == "AMD").Open);
+    }
+
+    /// <summary>Unsupported bases fail during adapter construction before any request or provenance publication.</summary>
+    [Theory]
+    [InlineData("split")]
+    [InlineData("RAW")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void PriceAdjustment_RejectsUnsupportedValues(string? adjustment)
+    {
+        using var http = new HttpClient();
+        Assert.Throws<ArgumentException>(() => new AlpacaMarketDataProvider(http,
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper), archive.Writer, adjustmentPolicy: adjustment!));
+    }
+
+    /// <summary>Declares source metadata without exposing credentials while requiring an archive owner.</summary>
     [Fact]
     public void MarketDataProvenance_IsExplicitAndContainsNoCredentials()
     {
@@ -17,7 +58,7 @@ public class AlpacaMarketDataProviderTests
                 KeyId = "secret-key-id",
                 SecretKey = "secret-key-value",
                 MarketDataFeed = "sip"
-            });
+            }, archive.Writer);
 
         var provenance = provider.MarketDataProvenance;
 
@@ -27,6 +68,7 @@ public class AlpacaMarketDataProviderTests
         Assert.DoesNotContain("secret", String.Join('|', provenance.ProviderIdentity, provenance.DataFeed, provenance.AdjustmentPolicy));
     }
 
+    /// <summary>Retains the documented omission contract when durable archival is configured.</summary>
     [Fact]
     public void ProviderDeclaresDocumentedNoTradeIntervalOmissionSemantics()
     {
@@ -37,7 +79,7 @@ public class AlpacaMarketDataProviderTests
             {
                 KeyId = "test-key",
                 SecretKey = "test-secret"
-            });
+            }, archive.Writer);
 
         var completeness = Assert.IsAssignableFrom<IMarketDataCompletenessProvider>(provider);
         Assert.True(completeness.OmittedSubDailyIntervalsMeanNoQualifyingTrades);
@@ -148,6 +190,7 @@ public class AlpacaMarketDataProviderTests
         Assert.False(AlpacaStreamClient.SubscriptionAcknowledgementMatchesExpected(incomplete!, expected));
     }
 
+    /// <summary>Reads every archived page while preserving query and bar provenance.</summary>
     [Fact]
     public async Task GetBarsAsync_FollowsNextPageToken_ForMultiSymbolResponses()
     {
@@ -160,7 +203,7 @@ public class AlpacaMarketDataProviderTests
                 KeyId = "test-key",
                 SecretKey = "test-secret",
                 MarketDataFeed = "sip"
-            });
+            }, archive.Writer);
 
         var bars = new List<TradingFlow.Domain.Market.OhlcvBar>();
         await foreach (var bar in provider.GetBarsAsync(
@@ -191,6 +234,7 @@ public class AlpacaMarketDataProviderTests
         });
     }
 
+    /// <summary>Preserves class-share normalization through the archived response boundary.</summary>
     [Fact]
     public async Task GetBarsAsync_MapsClassShareSymbolAtProviderBoundary()
     {
@@ -203,7 +247,7 @@ public class AlpacaMarketDataProviderTests
                 KeyId = "test-key",
                 SecretKey = "test-secret",
                 MarketDataFeed = "sip"
-            });
+            }, archive.Writer);
 
         var bars = new List<TradingFlow.Domain.Market.OhlcvBar>();
         await foreach (var bar in provider.GetBarsAsync(

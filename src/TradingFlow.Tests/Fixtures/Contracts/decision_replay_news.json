@@ -212,7 +212,7 @@
       "inputs": {
         "ConfirmationIndex": "2",
         "StopContextIndex": "2",
-        "orderPlan": "{\u0022StrategyId\u0022:\u0022strategy.kernel-golden\u0022,\u0022StrategyName\u0022:\u0022Kernel Golden Fixture\u0022,\u0022Direction\u0022:\u0022long\u0022,\u0022SetupAvailableAtUtc\u0022:\u00222026-06-11T14:00:00\u002B00:00\u0022,\u0022TriggeredAtUtc\u0022:\u00222026-06-11T14:00:00\u002B00:00\u0022,\u0022ExecutionTimeframe\u0022:\u00221d\u0022,\u0022StopContextIndex\u0022:2,\u0022TriggerReferencePrice\u0022:10.20,\u0022InitialStopPrice\u0022:9.95,\u0022TargetRMultiple\u0022:3,\u0022ProfitTargetMode\u0022:\u0022r_multiple\u0022,\u0022ProfitTargetReferencePrice\u0022:null,\u0022SlippageBps\u0022:5,\u0022ExpiresAtUtc\u0022:\u00222026-06-11T14:09:00\u002B00:00\u0022}"
+        "orderPlan": "{\u0022StrategyId\u0022:\u0022strategy.kernel-golden\u0022,\u0022StrategyName\u0022:\u0022Kernel Golden Fixture\u0022,\u0022Direction\u0022:\u0022long\u0022,\u0022SetupAvailableAtUtc\u0022:\u00222026-06-11T14:00:00\u002B00:00\u0022,\u0022TriggeredAtUtc\u0022:\u00222026-06-11T14:04:00\u002B00:00\u0022,\u0022ExecutionTimeframe\u0022:\u00221d\u0022,\u0022StopContextIndex\u0022:2,\u0022TriggerReferencePrice\u0022:10.20,\u0022InitialStopPrice\u0022:9.95,\u0022TargetRMultiple\u0022:3,\u0022ProfitTargetMode\u0022:\u0022r_multiple\u0022,\u0022ProfitTargetReferencePrice\u0022:null,\u0022SlippageBps\u0022:5,\u0022ExpiresAtUtc\u0022:\u00222026-06-11T14:09:00\u002B00:00\u0022,\u0022StopContextTimestampUtc\u0022:\u00222026-06-10T14:00:00\u002B00:00\u0022}"
       }
     }
   ],

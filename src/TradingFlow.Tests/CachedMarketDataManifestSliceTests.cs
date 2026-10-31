@@ -302,6 +302,7 @@ public sealed class CachedMarketDataManifestSliceTests
         Assert.Empty(Directory.EnumerateFiles(directory.Path, "*.tmp", SearchOption.AllDirectories));
     }
 
+    /// <summary>Refresh changes the latest selection while preserving prior payloads and unclassified source files.</summary>
     [Fact]
     public async Task SuccessfulRefresh_AtomicallySwitchesToNewImmutableDataFile()
     {
@@ -328,12 +329,13 @@ public sealed class CachedMarketDataManifestSliceTests
 
         var refreshedDataPath = await ResolveCommittedDataPathAsync(manifestPath);
         Assert.NotEqual(originalDataPath, refreshedDataPath);
-        Assert.False(File.Exists(originalDataPath));
-        Assert.False(File.Exists(orphanPath));
+        Assert.True(File.Exists(originalDataPath));
+        Assert.True(File.Exists(orphanPath));
         Assert.True(File.Exists(refreshedDataPath));
-        Assert.Single(Directory.EnumerateFiles(
+        Assert.Equal(3, Directory.EnumerateFiles(
             Path.GetDirectoryName(manifestPath)!,
-            "bars_5m-*.csv"));
+            "bars_5m-*.csv").Count());
+        Assert.Single(Directory.EnumerateFiles(Path.GetDirectoryName(manifestPath)!, "retained-*.json"));
     }
 
     [Fact]

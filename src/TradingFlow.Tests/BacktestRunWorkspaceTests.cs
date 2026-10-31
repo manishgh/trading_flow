@@ -5,11 +5,12 @@ namespace TradingFlow.Tests;
 
 public sealed class BacktestRunWorkspaceTests
 {
+    /// <summary>Every terminal outcome retains disk inputs and immutable result identity while forbidding reuse of an audited workspace.</summary>
     [Theory]
     [InlineData("success")]
     [InlineData("failure")]
     [InlineData("cancel")]
-    public async Task OwnedInputsAreDeletedAndPublishedResultsAreKeptForEveryOutcome(string outcome)
+    public async Task OwnedInputsAndPublishedResultsAreRetainedPendingQuantReviewForEveryOutcome(string outcome)
     {
         var output = Path.Combine(Path.GetTempPath(), "backtest-workspace-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(output);
@@ -59,12 +60,18 @@ public sealed class BacktestRunWorkspaceTests
             if(outcome=="failure")Assert.Equal("original failure",(await Assert.ThrowsAsync<InvalidOperationException>(()=>workspace.ExecuteAsync(Execute))).Message);
             else if(outcome=="cancel")await Assert.ThrowsAsync<OperationCanceledException>(()=>workspace.ExecuteAsync(Execute));
             else Assert.Equal(1,await workspace.ExecuteAsync(Execute));
-            Assert.False(Directory.Exists(workspace.InputRoot));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => workspace.ExecuteAsync(() => Task.FromResult(1)));
+            Assert.True(Directory.Exists(workspace.InputRoot));
             Assert.True(Directory.Exists(second.InputRoot));
             await second.ExecuteAsync(()=>Task.FromResult(1));
             Assert.Equal("published result",await File.ReadAllTextAsync(result));
             Assert.Equal("read-only source",await File.ReadAllTextAsync(originalInput));
-            Assert.Empty(Directory.EnumerateDirectories(output,".run-inputs-*"));
+            Assert.Equal(2, Directory.EnumerateDirectories(output,".run-inputs-*").Count());
+            var manifest = System.Text.Json.JsonSerializer.Deserialize<BacktestRunWorkspaceManifest>(
+                await File.ReadAllTextAsync(workspace.InputRoot + ".workspace.json"),
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+            Assert.Equal(outcome == "success" ? "completed" : outcome == "failure" ? "failed" : "cancelled", manifest.Outcome);
+            Assert.Equal(BacktestRunInputCleanup.FileSha256(result), manifest.ResultSha256);
         }
         finally { Directory.Delete(output,true); }
     }

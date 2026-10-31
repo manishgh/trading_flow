@@ -45,6 +45,35 @@ public sealed class EntryGateChainTests
     }
 
     [Fact]
+    // Missing broker history must be recorded as a failed exposure gate, not assumed to mean no entries today.
+    public async Task ExecuteAsync_MissingFillHistory_RejectsBeforeSubmission()
+    {
+        var fixture = new Fixture();
+        fixture.Broker.FillHistoryException = new InvalidOperationException("Account fills unavailable.");
+        var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() => fixture.Chain.ExecuteAsync(
+            fixture.Submission, fixture.Broker, (_, _) => Task.FromResult("must-not-submit")));
+        Assert.Equal(EntryGateSlot.Exposure, error.Slot);
+        Assert.Equal(RejectCode.REJECT_DEGRADED_DATA, error.RejectCode);
+        Assert.Contains("Account fills unavailable", fixture.Evaluations.Requests[^1].InputsJson);
+    }
+
+    /// <summary>Slow history calls cannot submit using a quote or account snapshot that expired during collection.</summary>
+    [Theory]
+    [InlineData(3, EntryGateSlot.QuoteAge)]
+    [InlineData(61, EntryGateSlot.Account)]
+    public async Task ExecuteAsync_HistoryLatency_RechecksFreshnessBeforeAdmission(int latencySeconds, EntryGateSlot slot)
+    {
+        var clock = new MutableClock();
+        var fixture = new Fixture(timeProvider: clock);
+        fixture.Broker.AfterFillHistory = () => clock.Now = Now.AddSeconds(latencySeconds);
+        var error = await Assert.ThrowsAsync<EntryGateRejectedException>(() => fixture.Chain.ExecuteAsync(
+            fixture.Submission, fixture.Broker, (_, _) => Task.FromResult("must-not-submit")));
+        Assert.Equal(slot, error.Slot);
+        Assert.Equal(RejectCode.REJECT_DEGRADED_DATA, error.RejectCode);
+        Assert.Contains(fixture.Evaluations.Requests, gate => !gate.Passed && gate.InputsJson.Contains("final_admission", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ExecuteAsync_HaltedSecurity_StopsAtFourthGateEvenWithFreshTrade()
     {
         var fixture = new Fixture(SecurityTradingState.Halted);
@@ -271,6 +300,7 @@ public sealed class EntryGateChainTests
 
     private sealed class Fixture
     {
+        // Assemble explicit operational profiles and broker evidence without reading an operator account.
         public Fixture(
             SecurityTradingState tradingState = SecurityTradingState.TradingObserved,
             ISecurityTradingStatusProvider? tradingStatusProvider = null,
@@ -350,7 +380,7 @@ public sealed class EntryGateChainTests
                 Authorizations,
                 tradingStatusProvider ?? new FixedTradingStatusProvider(tradingState, Now),
                 new EntryGateOptions(20, 2_000, 20m, 15m, 15m, 75m, 3),
-                timeProvider ?? new FixedTimeProvider(Now));
+                timeProvider ?? new FixedTimeProvider(Now), new TestTradingLimits());
         }
 
         public EntryOrderSubmission Submission { get; set; }
@@ -364,6 +394,13 @@ public sealed class EntryGateChainTests
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    private sealed class MutableClock : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = EntryGateChainTests.Now;
+        /// <summary>Advance only when the fake provider completes its deliberately slow request.</summary>
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     private sealed class SequencedTimeProvider(params DateTimeOffset[] values) : TimeProvider
@@ -486,7 +523,18 @@ public sealed class EntryGateChainTests
             CancellationToken cancellationToken = default) => submit(cancellationToken);
     }
 
-    private sealed class TestBroker : IBrokerClient, IBrokerAccountProvider, IBrokerMarketObservationProvider
+    private sealed class TestTradingLimits : IOperationalTradingLimitStore
+    {
+        // Preserve this fixture's deliberately selected three-position profile instead of relying on global defaults.
+        public Task<OperationalTradingLimits> GetAsync(string mode, CancellationToken token = default) =>
+            Task.FromResult(new OperationalTradingLimits("paper", 5, 3, 0, null));
+
+        // This admission fixture never edits saved settings.
+        public Task<OperationalTradingLimits> SaveAsync(string mode, int maxNewStocksPerDay, int maxOpenPositions,
+            long expectedRevision, DateTimeOffset nowUtc, CancellationToken token = default) => throw new NotSupportedException();
+    }
+
+    private sealed class TestBroker : IBrokerClient, IBrokerAccountProvider, IBrokerMarketObservationProvider, IBrokerFillHistoryProvider
     {
         public TestBroker(DateTimeOffset now)
         {
@@ -501,10 +549,21 @@ public sealed class EntryGateChainTests
         public BrokerMarketObservation MarketObservation { get; set; }
         public BrokerAccountSnapshot AccountSnapshot { get; set; }
         public Exception? MarketObservationException { get; set; }
+        public Exception? FillHistoryException { get; set; }
+        public Action? AfterFillHistory { get; set; }
         public int AccountCalls { get; private set; }
         public int PositionCalls { get; private set; }
         public int OpenOrderCalls { get; private set; }
         public DateTimeOffset? LastSessionRequestUtc { get; private set; }
+
+        // Supply complete deterministic fake account history; it never queries or modifies a broker account.
+        public Task<BrokerFillHistorySnapshot> GetFillHistoryAsync(string accountId, DateOnly newYorkDate, CancellationToken cancellationToken)
+        {
+            AfterFillHistory?.Invoke();
+            return FillHistoryException is not null ? Task.FromException<BrokerFillHistorySnapshot>(FillHistoryException) :
+                Task.FromResult(new BrokerFillHistorySnapshot(accountId, newYorkDate, Now, Now,
+                    TradingLimitDay.StartUtc(newYorkDate), Now, true, [], 1, ["fixture-only"], []));
+        }
 
         public Task<TradingSessionSnapshot> GetSessionAsync(
             DateTimeOffset timestampUtc,

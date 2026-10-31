@@ -119,7 +119,6 @@ public sealed class ProductionCompositionTests
             typeof(DurableJobWorkerHostedService),
             typeof(PreparationSchedulerHostedService),
             typeof(EarningsMonitorHostedService),
-            typeof(TradingFlow.Web.Services.Wishlists.WishlistObserverService),
             typeof(DatabaseBackupHostedService),
             typeof(AlpacaMarketStateStreamService),
             typeof(AlpacaOrderSynchronizationHostedService),
@@ -171,6 +170,30 @@ public sealed class ProductionCompositionTests
             Enabled: false, EnableEarningsMonitor: true, EnableMarketFeeds: true));
         Assert.Equal(new[] { typeof(NewsFeedService), typeof(AlpacaNewsStreamService), typeof(EarningsMonitorHostedService) },
             services.Where(x => x.ServiceType == typeof(IHostedService)).Select(ResolveHostedServiceType).ToArray());
+    }
+
+    /// <summary>One existing worker serves explicit checks and historical backtests while broker and feed services stay paused.</summary>
+    [Fact]
+    public void RuntimeComposition_PausedTradingStartsOnlyExistingDurableWorker()
+    {
+        var services = new ServiceCollection();
+        services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOptions(
+            Enabled: false, EnableEarningsMonitor: false, EnableStrategyAssessments: true));
+        Assert.Equal(new[] { typeof(DurableJobWorkerHostedService) },
+            services.Where(item => item.ServiceType == typeof(IHostedService)).Select(ResolveHostedServiceType).ToArray());
+    }
+
+    /// <summary>Pin the production allow-list to the two approved paused jobs and the empty UI-test branch.</summary>
+    [Fact]
+    public void RuntimeComposition_PausedJobPolicyAllowsOnlyAssessmentAndHistoricalBacktest()
+    {
+        var program = File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Web", "Program.cs"));
+        var normalized = System.Text.RegularExpressions.Regex.Replace(program, @"\s+", " ");
+        Assert.Contains(
+            "AllowedJobTypes: runtimeEnabled ? null : new HashSet<string>(uiTestMode ? [] : " +
+            "[TradingFlow.Web.Services.Desk.CurrentStockStrategyAssessmentService.Type, \"backtest\"], StringComparer.Ordinal)",
+            normalized,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -255,27 +278,6 @@ public sealed class ProductionCompositionTests
                 File.ReadAllText(source),
                 StringComparison.OrdinalIgnoreCase);
         }
-    }
-
-    [Fact]
-    public void WishlistObservation_ConsumesBoundedDailyEvidenceWithoutExecutionStream()
-    {
-        var root = TestRepository.FindRoot();
-        var observerPath = Path.Combine(
-            root,
-            "src",
-            "TradingFlow.Web",
-            "Services",
-            "Wishlists",
-            "WishlistObserverService.cs");
-        var source = File.ReadAllText(observerPath);
-
-        Assert.Contains("IDailyObservationService", source, StringComparison.Ordinal);
-        Assert.Contains("dailyObservations.GetAsync", source, StringComparison.Ordinal);
-        Assert.Contains("daily.State != \"ready\"", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("ReplaceScopeAsync", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("AlpacaMarketDataProvider", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("GetBarsAsync", source, StringComparison.Ordinal);
     }
 
     private static Type ResolveHostedServiceType(ServiceDescriptor descriptor)

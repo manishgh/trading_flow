@@ -77,7 +77,7 @@ for(const width of [390,1440])test('News stock-source dropdown and exact stock f
   expect(url.searchParams.get('source')).toBe('wire');
   await page.reload();await expect(dropdown).toHaveValue('wishlists');
   await expect(page.getByRole('heading',{name:'Stocks in this source',exact:true})).toBeVisible();
-  const feedBox=await page.getByRole('region',{name:'Timeline',exact:true}).boundingBox();
+  const feedBox=await page.locator('section[aria-labelledby="news-results-heading"]').boundingBox();
   const stocksBox=await page.getByRole('complementary',{name:'Stocks in this source',exact:true}).boundingBox();
   if(width>=980) { expect(stocksBox.x).toBeGreaterThan(feedBox.x+feedBox.width); expect(Math.abs(stocksBox.y-feedBox.y)).toBeLessThan(2); }
   else expect(stocksBox.y).toBeGreaterThan(feedBox.y+feedBox.height);

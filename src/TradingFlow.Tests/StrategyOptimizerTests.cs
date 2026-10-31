@@ -7,6 +7,7 @@ namespace TradingFlow.Tests;
 
 public class StrategyOptimizerTests
 {
+    /// <summary>Exercises the existing parameter mappings without changing strategy rules.</summary>
     [Fact]
     public void ApplyParameter_MapsSwingResearchFields()
     {
@@ -41,10 +42,13 @@ public class StrategyOptimizerTests
         Assert.Equal(15.0m, strategy.EntryRules.MinVolumeSmaRisePct);
     }
 
+    /// <summary>Runs the existing deterministic CSV fixture, checks reusable preparation/progress and removes every temporary artifact.</summary>
     [Fact]
     public async Task OptimizeAsync_ForwardsInnerBacktestProgress()
     {
         var root = Path.Combine(Path.GetTempPath(), "trading-flow-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
         var configRoot = Path.Combine(root, "configs");
         var dataRoot = Path.Combine(root, "data");
         var resultRoot = Path.Combine(root, "results");
@@ -232,6 +236,14 @@ parameters:
                 Assert.Null(update.CompletedRun!.BacktestResult.Validation.Benchmark.BenchmarkReturnPct);
                 Assert.True(update.CompletedRun.BacktestResult.ProcessedBarCount > 0);
             });
+        }
+        finally
+        {
+            var parent = Path.Combine(Path.GetTempPath(), "trading-flow-tests");
+            if (!String.Equals(Path.GetDirectoryName(Path.GetFullPath(root)), Path.GetFullPath(parent), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Optimizer fixture cleanup escaped its temporary directory.");
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
     }
 
     private static string NormalizePath(string path)

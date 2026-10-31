@@ -152,6 +152,30 @@ public sealed class BacktestArtifactIntegrityTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    // Recomputed hashes cannot legitimize a completed trade whose recorded exit occurred before its actual entry.
+    [Fact]
+    public async Task PublishedManifest_RejectsExitBeforeEntryEvenWhenHashesMatch()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var (manifestPath, references) = await WriteValidManifestAsync(root);
+            references = await ReplaceCompletedTradeEvidenceAsync(root, references, exitPrice: 11m);
+            var tradeReference = references.Single(item => item.Kind == "unified_completed_trades");
+            var tradePath = Path.Combine(root, tradeReference.Path);
+            var trades = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(tradePath))!.AsArray();
+            trades[0]!["EntryTimestamp"] = "2026-06-01T14:05:00Z";
+            await File.WriteAllTextAsync(tradePath, trades.ToJsonString());
+            var replacement = await BacktestArtifactIntegrity.CreateReferenceAsync(root, tradeReference.Kind, tradePath, 1);
+            references = references.Select(item => item.Kind == tradeReference.Kind ? replacement : item).ToArray();
+            File.Delete(manifestPath);
+            await WriteManifestAsync(manifestPath, references);
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => BacktestArtifactIntegrity.VerifyManifestAsync(manifestPath));
+            Assert.Contains("exits before", error.Message, StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     [Fact]
     public async Task PublishedManifest_RejectsUnifiedPortfolioTradeWithMismatchedFillEconomics()
     {
@@ -227,8 +251,12 @@ public sealed class BacktestArtifactIntegrityTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
-    [Fact]
-    public async Task PublishedManifest_AcceptsNeutralEconomicsForTerminalOpenExposure()
+    /// <summary>Only an explicit missing-evidence contract permits a failure before any physical position exists.</summary>
+    [Theory]
+    [InlineData(10, false, true)]
+    [InlineData(0, true, true)]
+    [InlineData(0, false, false)]
+    public async Task PublishedManifest_AcceptsNeutralEconomicsForTerminalOpenExposure(int openQuantity, bool unavailable, bool accepted)
     {
         var root = CreateRoot();
         try
@@ -243,14 +271,14 @@ public sealed class BacktestArtifactIntegrityTests
                 DateTimeOffset.Parse("2026-06-01T13:30:00Z"),
                 "exit_not_filled_before_end_of_data",
                 10,
-                10,
+                openQuantity,
                 0,
-                10,
-                100m,
+                openQuantity,
+                openQuantity * 10m,
                 0m,
                 1m,
                 10m,
-                DateTimeOffset.Parse("2026-06-01T14:00:00Z"));
+                DateTimeOffset.Parse("2026-06-01T14:00:00Z"), EvidenceUnavailable: unavailable);
 
             var portfolioReference = references.Single(item => item.Kind == "unified_portfolio_execution");
             var portfolioPath = Path.Combine(root, portfolioReference.Path);
@@ -315,9 +343,15 @@ public sealed class BacktestArtifactIntegrityTests
                 references,
                 new BacktestArtifactCoverage(1, 1, 0, [], 1, [failure]));
 
-            var verified = await BacktestArtifactIntegrity.VerifyManifestAsync(manifestPath);
-
-            Assert.Equal(1, verified.Coverage.ExecutionFailureCount);
+            if (accepted)
+            {
+                var verified = await BacktestArtifactIntegrity.VerifyManifestAsync(manifestPath);
+                Assert.Equal(1, verified.Coverage.ExecutionFailureCount);
+            }
+            else
+            {
+                await Assert.ThrowsAsync<InvalidDataException>(() => BacktestArtifactIntegrity.VerifyManifestAsync(manifestPath));
+            }
         }
         finally { Directory.Delete(root, recursive: true); }
     }

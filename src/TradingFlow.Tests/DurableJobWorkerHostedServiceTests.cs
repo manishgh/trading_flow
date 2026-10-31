@@ -9,6 +9,36 @@ namespace TradingFlow.Tests;
 
 public sealed class DurableJobWorkerHostedServiceTests
 {
+    /// <summary>Paused trading permits only observational work; excluded trading handlers never initialize or acquire jobs.</summary>
+    [Fact]
+    public async Task AllowedJobTypes_DoNotInitializeOrPollTradingHandlers()
+    {
+        var acquired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var repository = new Mock<IDurableJobRepository>(MockBehavior.Strict);
+        repository.Setup(item => item.TryAcquireNextAsync("strategy_assessment", It.IsAny<string>(), It.IsAny<DateTimeOffset>(),
+                It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .Returns(() => { acquired.TrySetResult(); return Task.FromResult<DurableJobLease?>(null); });
+        var observation = new Mock<IDurableJobHandler>();
+        observation.SetupGet(item => item.JobType).Returns("strategy_assessment");
+        observation.Setup(item => item.InitializeAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        observation.Setup(item => item.RefreshProjectionAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var trading = new Mock<IDurableJobHandler>(MockBehavior.Strict);
+        trading.SetupGet(item => item.JobType).Returns("paper");
+        var options = DurableJobWorkerOptions.Default with {
+            MaximumConcurrentWorkers = 1, IdlePollInterval = TimeSpan.FromMilliseconds(10), ProjectionRefreshInterval = TimeSpan.FromSeconds(1) };
+        using var service = new DurableJobWorkerHostedService(repository.Object, [observation.Object, trading.Object],
+            new Dictionary<string, DurableJobWorkerOptions> { ["strategy_assessment"] = options },
+            new DurableJobHostOptions(TimeSpan.FromSeconds(1), new HashSet<string>(["strategy_assessment"], StringComparer.Ordinal)),
+            TimeProvider.System, NullLogger<DurableJobWorkerHostedService>.Instance);
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            await acquired.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            trading.Verify(item => item.InitializeAsync(It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally { await service.StopAsync(CancellationToken.None); }
+    }
+
     [Fact]
     public async Task ProjectionRefreshFailure_IsRetriedWithoutTerminatingWorkers()
     {

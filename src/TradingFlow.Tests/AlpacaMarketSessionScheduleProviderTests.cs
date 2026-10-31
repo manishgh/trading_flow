@@ -5,8 +5,13 @@ using TradingFlow.Engine.Configuration;
 
 namespace TradingFlow.Tests;
 
-public sealed class AlpacaMarketSessionScheduleProviderTests
+public sealed class AlpacaMarketSessionScheduleProviderTests : IDisposable
 {
+    private readonly OwnedAlpacaTestArchive archive = new();
+
+    /// <summary>Releases the unique synthetic archive even when a calendar test fails.</summary>
+    public void Dispose() => archive.Dispose();
+
     [Fact]
     public async Task LoadMarketSessionSchedulesAsync_UsesTradingEndpointAndReturnsCompleteRange()
     {
@@ -109,14 +114,15 @@ public sealed class AlpacaMarketSessionScheduleProviderTests
         Assert.Equal(0, handler.CallCount);
     }
 
-    private static AlpacaMarketDataProvider CreateProvider(HttpClient httpClient, ProductionProfile profile) =>
+    /// <summary>Uses the fixture-owned raw writer for deterministic calendar responses.</summary>
+    private AlpacaMarketDataProvider CreateProvider(HttpClient httpClient, ProductionProfile profile) =>
         new(
             httpClient,
             AlpacaOptions.Create(profile) with
             {
                 KeyId = "test-key",
                 SecretKey = "test-secret"
-            });
+            }, archive.Writer);
 
     private sealed class CalendarHandler(HttpStatusCode statusCode, string payload) : HttpMessageHandler
     {

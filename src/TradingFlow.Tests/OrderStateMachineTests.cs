@@ -566,7 +566,8 @@ public sealed class SqliteOrderEventRepositoryTests
                     2_000m,
                     20,
                     IntentCreatedAtUtc,
-                    IntentCreatedAtUtc));
+                    IntentCreatedAtUtc,
+                    OperationalTradingLimitTestEvidence.Empty("paper-account", IntentCreatedAtUtc), 60));
             return (await Intents.ReserveAsync(run, reservation)).Intent;
         }
 

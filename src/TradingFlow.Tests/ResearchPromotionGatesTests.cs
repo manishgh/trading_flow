@@ -113,6 +113,83 @@ public sealed class ResearchPromotionGatesTests
         Assert.Equal(ResearchPromotionAssessment.RetainResearch, assessment.Decision);
     }
 
+    [Fact]
+    // A view that omits configuration cannot claim it was never preserved, or pass its configuration gates.
+    public void Evaluate_AbsentAssessmentConfigRemainsUnevaluatedWithoutClaimingItWasNotRecorded()
+    {
+        var assessment = ResearchPromotionGates.Evaluate(Strategy(), null, Eligible());
+
+        foreach (var key in new[] { "timing", "execution" })
+        {
+            var gate = assessment.Gates.Single(item => item.Key == key);
+            Assert.Equal(GateOutcome.NotEvaluated, gate.Outcome);
+            Assert.Contains("not supplied to this assessment", gate.Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("not recorded", gate.Reason, StringComparison.Ordinal);
+        }
+        Assert.Equal(ResearchPromotionAssessment.RetainResearch, assessment.Decision);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    // Neither an empty projection nor a favorable subset can produce a concentration pass.
+    public void Evaluate_TrimmedLegacyClosedTradeDetailsRemainUnevaluated(int retainedCount)
+    {
+        var full = Strategy(Trade("AAA", 300m), Trade("BBB", 300m), Trade("CCC", 400m));
+        var trimmed = full with { CompletedTrades = full.CompletedTrades.Take(retainedCount).ToArray() };
+
+        var assessment = ResearchPromotionGates.Evaluate(trimmed, Config(), Eligible());
+        var gate = assessment.Gates.Single(item => item.Key == "concentration");
+
+        Assert.Equal(GateOutcome.NotEvaluated, gate.Outcome);
+        Assert.Contains($"{retainedCount} available records; 3 reported closed trades", gate.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("produced no completed trades", gate.Reason, StringComparison.Ordinal);
+        Assert.Equal(ResearchPromotionAssessment.RetainResearch, assessment.Decision);
+    }
+
+    [Fact]
+    // Native books count closed positions separately from admitted orders and still-open holdings.
+    public void Evaluate_NativeConcentrationUsesClosedCountRatherThanAdmittedCount()
+    {
+        var full = Strategy(Trade("AAA", 300m), Trade("BBB", 300m), Trade("CCC", 400m)) with
+        {
+            AcceptedTradeCount = 5,
+            PortfolioState = State(closedCount: 3, admittedCount: 5)
+        };
+        var complete = ResearchPromotionGates.Evaluate(full, Config(), Eligible());
+        var trimmed = ResearchPromotionGates.Evaluate(full with { CompletedTrades = [] }, Config(), Eligible());
+
+        Assert.Equal(GateOutcome.Passed, complete.Gates.Single(item => item.Key == "concentration").Outcome);
+        var missing = trimmed.Gates.Single(item => item.Key == "concentration");
+        Assert.Equal(GateOutcome.NotEvaluated, missing.Outcome);
+        Assert.Contains("0 available records; 3 reported closed trades", missing.Reason, StringComparison.Ordinal);
+        Assert.Equal(ResearchPromotionAssessment.RetainResearch, trimmed.Decision);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    // Complete zero-closed-trade evidence retains its truthful explanation even if native orders remain open.
+    public void Evaluate_ActualZeroCompletedTradesRemainUnevaluated(bool native)
+    {
+        var strategy = Strategy() with
+        {
+            AcceptedTradeCount = native ? 2 : 0,
+            PortfolioState = native ? State(closedCount: 0, admittedCount: 2) : null
+        };
+
+        var gate = ResearchPromotionGates.Evaluate(strategy, Config(), Eligible())
+            .Gates.Single(item => item.Key == "concentration");
+
+        Assert.Equal(GateOutcome.NotEvaluated, gate.Outcome);
+        Assert.Contains("produced no completed trades", gate.Reason, StringComparison.Ordinal);
+    }
+
+    // Supplies native count evidence without reconstructing closed counts from current positions or admissions.
+    private static BacktestPortfolioState State(int closedCount, int admittedCount) => new(
+        "marked_to_market_native_daily_source_session_equity", DateTimeOffset.Parse("2026-10-21T04:00:00Z"),
+        admittedCount, admittedCount, closedCount, [], [], [], [], []);
+
     private static UniversePromotionEligibility Eligible() => new(true, []);
 
     private static StrategyBacktestResult Strategy(params BacktestTrade[] trades) => new(

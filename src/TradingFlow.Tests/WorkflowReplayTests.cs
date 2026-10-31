@@ -104,7 +104,8 @@ public sealed class WorkflowReplayTests
             """{"symbol":"RGTI","quantity":10,"takeProfitPrice":12.2,"submitOutsideRegularHours":false}""",
             clock.Now.AddMinutes(1),
             new PortfolioRiskReservationRequest("replay-account", "swing", 100000m, 100000m, 0m, 0m,
-                new HashSet<string>(StringComparer.Ordinal), 102m, 10m, 100000m, 2000m, 20, clock.Now, clock.Now),
+                new HashSet<string>(StringComparer.Ordinal), 102m, 10m, 100000m, 2000m, 20, clock.Now, clock.Now,
+                OperationalTradingLimitTestEvidence.Empty("replay-account", clock.Now), 60),
             candidate.Version, candidate.SemanticDecisionSha256);
         var entry = (await intents.ReserveAsync(run, reservation)).Intent;
         Assert.False((await intents.ReserveAsync(run, reservation)).Created);

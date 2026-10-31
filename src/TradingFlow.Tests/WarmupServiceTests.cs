@@ -8,8 +8,11 @@ using TradingFlow.WarmupService.Services;
 
 namespace TradingFlow.Tests;
 
-public sealed class WarmupServiceTests
+public sealed class WarmupServiceTests : IDisposable
 {
+    private readonly List<string> roots = [];
+
+    /// <summary>Verifies atomic watchlist edits using only disposable state.</summary>
     [Fact]
     public async Task Watchlist_store_upserts_and_removes_tickers_atomically()
     {
@@ -37,6 +40,7 @@ public sealed class WarmupServiceTests
         Assert.Equal("RGTI", stored[0].Ticker);
     }
 
+    /// <summary>Verifies cached provider data, captured artifacts and completed run history remain distinct from archive delivery.</summary>
     [Fact]
     public async Task Coordinator_warms_candles_news_artifacts_and_run_history()
     {
@@ -44,6 +48,7 @@ public sealed class WarmupServiceTests
         var options = Options.Create(new WarmupOptions
         {
             DataRoot = root,
+            CacheRoot = Path.Combine(root, "cache"),
             ArchiveRoot = Path.Combine(root, "archive"),
             ProviderName = "test",
             DefaultTimeframes = ["1m", "5m"],
@@ -94,9 +99,23 @@ public sealed class WarmupServiceTests
         Assert.Equal("warmed", Assert.Single(watchlist).LastStatus);
     }
 
-    private static string CreateTempRoot()
+    /// <summary>Allocates a tracked temporary directory rather than allowing tests to use application data roots.</summary>
+    private string CreateTempRoot()
     {
-        return Path.Combine(Path.GetTempPath(), "tradingflow-warmup-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(Path.GetTempPath(), "tradingflow-warmup-tests", Guid.NewGuid().ToString("N"));
+        roots.Add(path);
+        return path;
+    }
+
+    /// <summary>Removes every test-created database/artifact directory after verifying its exact temporary parent.</summary>
+    public void Dispose()
+    {
+        var parent = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "tradingflow-warmup-tests"));
+        foreach (var root in roots)
+        {
+            if (Path.GetDirectoryName(Path.GetFullPath(root)) != parent) throw new InvalidOperationException("Warmup test cleanup escaped its temporary parent.");
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 
     private sealed class FakeMarketDataProvider : IMarketDataProvider

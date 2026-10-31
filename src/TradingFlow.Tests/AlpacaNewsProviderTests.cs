@@ -18,6 +18,65 @@ public sealed class AlpacaNewsProviderTests : IDisposable
     private IRawArchiveWriter CreateArchiveWriter() =>
         new FileSystemRawArchiveWriter(new RawArchiveOptions(archiveRoot));
 
+    /// <summary>A successful empty query is different from a failed or malformed query; neither yields fabricated news.</summary>
+    [Theory]
+    [InlineData(HttpStatusCode.OK, "{\"news\":[]}", true)]
+    [InlineData(HttpStatusCode.Unauthorized, "{}", false)]
+    [InlineData(HttpStatusCode.OK, "{}", false)]
+    public async Task CurrentEvidence_DistinguishesCompleteEmptyFromUncollectedNews(HttpStatusCode status, string payload, bool complete)
+    {
+        using var http = new HttpClient(new QueueHttpMessageHandler(new HttpResponseMessage(status) { Content = JsonContent(payload) }));
+        var provider = new AlpacaNewsProvider(http,
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with { KeyId = "fixture", SecretKey = "fixture" },
+            CreateArchiveWriter());
+        var end = DateTimeOffset.UtcNow;
+        var result = await provider.GetCatalystEvidenceAsync("AAPL", end.AddHours(-4), end, CancellationToken.None);
+        Assert.Equal(complete, result.Complete);
+        Assert.Empty(result.Events);
+        Assert.Equal(end, result.WindowEndUtc);
+        Assert.Equal(complete ? 1 : 0, result.PagesRead);
+        if (status == HttpStatusCode.Unauthorized) Assert.Contains("401", result.Detail);
+    }
+
+    /// <summary>A skipped or repaired provider row cannot establish a completely assessed news window.</summary>
+    [Theory]
+    [InlineData("missing-id")]
+    [InlineData("blank-id")]
+    [InlineData("missing-publication")]
+    [InlineData("invalid-publication")]
+    [InlineData("publication-without-offset")]
+    [InlineData("missing-headline")]
+    [InlineData("invalid-revision")]
+    public async Task MalformedNewsRow_IsExplicitlyIncompleteAndNeverGetsSyntheticIdentityOrTime(string defect)
+    {
+        var article = new Dictionary<string, object?> { ["id"] = "fixture-invalid-" + defect,
+            ["headline"] = "Fixture provider headline", ["created_at"] = "2026-06-09T14:00:00Z" };
+        switch (defect)
+        {
+            case "missing-id": article.Remove("id"); break;
+            case "blank-id": article["id"] = " "; break;
+            case "missing-publication": article.Remove("created_at"); break;
+            case "invalid-publication": article["created_at"] = "not-a-timestamp"; break;
+            case "publication-without-offset": article["created_at"] = "2026-06-09T14:00:00"; break;
+            case "missing-headline": article.Remove("headline"); break;
+            case "invalid-revision": article["updated_at"] = "not-a-timestamp"; break;
+        }
+        var payload = JsonSerializer.Serialize(new { news = new[] { article } });
+        using var http = new HttpClient(new QueueHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent(payload) },
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent(payload) }));
+        var provider = new AlpacaNewsProvider(http,
+            AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with { KeyId = "fixture", SecretKey = "fixture" },
+            CreateArchiveWriter());
+        var end = DateTimeOffset.UtcNow;
+        var result = await provider.GetCatalystEvidenceAsync("AAPL", end.AddHours(-4), end, default);
+        Assert.False(result.Complete);
+        Assert.Contains("malformed", result.Detail);
+        Assert.Empty(result.Events);
+        // Existing event-list callers receive a soft empty list, not a fatal parsing failure or a fabricated article.
+        Assert.Empty(await provider.GetCatalystsAsync("AAPL", end.AddHours(-4), end, default));
+    }
+
     [Fact]
     public async Task GetCatalystsAsync_FollowsPaginationAndMapsArticleMetadata()
     {

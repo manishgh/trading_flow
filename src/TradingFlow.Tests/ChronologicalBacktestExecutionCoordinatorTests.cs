@@ -645,6 +645,45 @@ public sealed class ChronologicalBacktestExecutionCoordinatorTests
         Assert.Contains(evidence.Events,item=>item.Timestamp==Start.AddMinutes(10)&&item.Message.Contains("stop-first-")&&item.Message.Contains("oco_sibling_filled"));
     }
 
+    [Fact]
+    public void FixedCutoff_PreservesKnownOpenQuantityAndWorkingProtectionWithoutSale()
+    {
+        var coordinator = new ChronologicalBacktestExecutionCoordinator(Portfolio(maxParticipationPct:100),
+            [Bar(0,10,1000),Bar(5,10.5m,1000)]);
+        var candidate = Candidate("open",0,5) with { ExitTimestamp=null,ExitPrice=null,ExitReason="open_at_study_end" };
+        Assert.True(coordinator.TrySchedule(new(candidate,Strategy(),10),out _));
+        coordinator.Complete(Start.AddMinutes(10));
+        Assert.Empty(coordinator.Failures);Assert.Empty(coordinator.CompletedTrades);
+        var state=coordinator.Snapshot(Start.AddMinutes(10));
+        Assert.Equal(10,Assert.Single(state.OpenPositions).SignedQuantity);
+        Assert.Single(state.Fills);Assert.True(state.Fills[0].IsEntry);
+        Assert.NotEmpty(state.PendingOrders);Assert.Equal(1,state.AdmittedOrderCount);
+    }
+
+    [Fact]
+    public void FixedCutoff_PreservesPendingExitDecisionWithoutInventingExecution()
+    {
+        var coordinator = new ChronologicalBacktestExecutionCoordinator(Portfolio(maxParticipationPct:100),[Bar(0,10,1000)]);
+        var candidate = Candidate("pending",0,5) with { ExitTimestamp=null,ExitPrice=null,ExitReason="open_at_study_end",
+            PendingExitDecision=new(Start.AddMinutes(5),"technical_exit_above_sma5") };
+        Assert.True(coordinator.TrySchedule(new(candidate,Strategy(),10),out _));
+        coordinator.Complete(Start.AddMinutes(5));
+        var state=coordinator.Snapshot(Start.AddMinutes(5));
+        Assert.Single(state.PendingExits);Assert.Single(state.Fills);Assert.Empty(coordinator.CompletedTrades);
+    }
+
+    [Fact]
+    public void FixedCutoff_DoesNotPublishAnExitIntentionKnownLater()
+    {
+        var coordinator=new ChronologicalBacktestExecutionCoordinator(Portfolio(maxParticipationPct:100),[Bar(0,10,1000)]);
+        var candidate=Candidate("future-exit",0,5) with {ExitTimestamp=null,ExitPrice=null,ExitReason="open_at_study_end",
+            PendingExitDecision=new(Start.AddMinutes(6),"technical_exit_above_sma5")};
+        Assert.True(coordinator.TrySchedule(new(candidate,Strategy(),10),out _));
+        coordinator.Complete(Start.AddMinutes(5));
+        var state=coordinator.Snapshot(Start.AddMinutes(5));
+        Assert.Empty(state.PendingExits);Assert.Single(state.OpenPositions);Assert.Single(state.Fills);
+    }
+
     private static BacktestCandidateTrade Candidate(
         string identity,
         int entryMinute,

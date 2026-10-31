@@ -6,13 +6,43 @@ namespace TradingFlow.Tests;
 public sealed class StrategyArtifactCatalogTests
 {
     [Fact]
+    // The bootstrap exposes only the exact reviewed Research recipes; registration never grants execution authority.
     public void Bootstrap_ClassifiesEveryStrategyExactlyOnceAndStartsFailClosed()
     {
         var catalog = CreateCatalog();
 
         var snapshot = catalog.GetSnapshot();
 
-        Assert.Equal(2, snapshot.ExecutableArtifacts.Count);
+        Assert.Equal(
+            new[]
+            {
+                "swing.connors-rsi2@6.0.0",
+                "swing.minervini-vcp@10.0.0",
+                "technical.opening-range-breakout@1.0.0",
+                "technical.opening-range-breakout@1.1.0",
+                "technical.opening-range-breakout@1.2.0",
+                "technical.previous-day-breakout@1.0.0",
+                "technical.recovery-exit-control@2.0.0",
+                "technical.recovery-sma5-exit@2.0.0",
+                "technical.recovery-sma5-news-avoidance@1.0.0",
+                "technical.recovery-sma5-news-evidence@1.0.0",
+                "technical.recovery-sma5-qualified-coverage@1.1.0",
+                "technical.recovery-sma5-qualified-negative-veto@1.1.0",
+                "technical.recovery-sma5-qualified-positive-required@1.1.0",
+                "technical.recovery-sma5-qualified-technical@1.1.0",
+                "technical.zone-bounce-volume-risk-target@1.0.0",
+                "technical.zone-bounce-volume@1.0.0",
+                "technical.zone-breakout-retest@1.0.0",
+                "technical.zone-intraday@1.0.0",
+                "technical.zone-python-comparison@1.0.0",
+                "technical.zone-risk-target@1.0.0",
+                "technical.zone-two-candle-stop@1.0.0",
+                "technical.zone-volume-spread-comparison@1.0.0",
+                "technical.zone-volume-spread-no-rr@1.0.0"
+            },
+            snapshot.ExecutableArtifacts
+                .Select(artifact => $"{artifact.Identity.StrategyId}@{artifact.Identity.SemanticVersion}")
+                .Order(StringComparer.Ordinal));
         Assert.Equal(17, snapshot.ArchivedArtifacts.Count);
         Assert.All(
             snapshot.ExecutableArtifacts,

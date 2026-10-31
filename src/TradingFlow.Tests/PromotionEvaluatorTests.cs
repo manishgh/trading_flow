@@ -5,6 +5,19 @@ namespace TradingFlow.Tests;
 public sealed class PromotionEvaluatorTests
 {
     [Fact]
+    public void Evaluate_OpenAndPendingAdmissions_DoNotInflateCompletedSample()
+    {
+        var strategy=StrategyResult(12,4,40,SpreadTrades(("AAA",300m),("BBB",300m),("CCC",400m))) with
+        {
+            PortfolioState=new("marked_to_market_native_daily_source_session_equity",DateTimeOffset.UtcNow,
+                40,10,3,[],[],[],[],[])
+        };
+        var assessment=PromotionEvaluator.Evaluate(strategy,Validation(5,12,6,new[]{2m,1m,3m}),universePromotion:EligibleUniverse());
+        Assert.False(assessment.Eligible);
+        Assert.Contains(assessment.FailedChecks,reason=>reason.StartsWith("sample_size (3 completed"));
+    }
+
+    [Fact]
     public void Evaluate_RobustStrategy_IsEligible()
     {
         var strategy = StrategyResult(

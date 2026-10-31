@@ -112,13 +112,35 @@ public sealed class SwingCausalityAndMethodTests
         var method=typeof(BacktestRunner).GetMethod("ProcessPreparedStrategyTickerAsync",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!;
         var scratch=Path.Combine(Path.GetTempPath(),"TradingFlowWarmup-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(scratch);
         try {
-            async Task<StrategyTickerBacktestBatch> Evaluate(bool late)=>await (Task<StrategyTickerBacktestBatch>)method.Invoke(runner,[
-                profile with {Engine=profile.Engine with {IndicatorWarmupBars=3,AllowLateWarmup=late}},contexts,strategy,"SPY",
+            async Task<StrategyTickerBacktestBatch> Evaluate(bool late,int required=3,
+                IReadOnlyDictionary<string,PreparedTickerEvaluationContext>? selectedContexts=null,
+                TradingFlow.Domain.Strategies.StrategyDefinition? selectedStrategy=null)=>await (Task<StrategyTickerBacktestBatch>)method.Invoke(runner,[
+                profile with {Engine=profile.Engine with {IndicatorWarmupBars=required,AllowLateWarmup=late}},selectedContexts??contexts,selectedStrategy??strategy,"SPY",
                 bars[1].Timestamp,bars[^1].Timestamp.AddDays(1),null,RegimeCalendar.Inactive,new ExecutionAuditor(100),
-                Path.Combine(scratch,late?"late.ndjson":"strict.ndjson"),new RetainedCandidateBudget(100),CancellationToken.None])!;
+                Path.Combine(scratch,$"{late}-{required}-{Guid.NewGuid():N}.ndjson"),new RetainedCandidateBudget(100),CancellationToken.None])!;
             var strict=await Evaluate(false);Assert.False(strict.Succeeded);Assert.Contains("insufficient_indicator_warmup",strict.ErrorMessage);
             var late=await Evaluate(true);Assert.True(late.Succeeded,late.ErrorMessage);Assert.NotEmpty(late.CandidateTrades);
-            Assert.All(late.CandidateTrades,trade=>Assert.True(trade.EntryTimestamp>=bars[3].Timestamp.AddDays(1)));
+            Assert.All(late.CandidateTrades,trade=>Assert.True(trade.EntryTimestamp>=bars[3].Timestamp));
+            var warming=await Evaluate(true,30);Assert.True(warming.Succeeded,warming.ErrorMessage);
+            Assert.Empty(warming.CandidateTrades);
+            Assert.Equal("still_warming_at_study_end",warming.HistoryEligibility!.Status);
+            var delayed=bars.Select((bar,i)=>i is >=2 and <=4 ? bar with {KnownAtUtc=bars[9].Timestamp}:bar).ToArray();
+            var delayedContext=context with {BarsByTimeframe=new Dictionary<string,IReadOnlyList<OhlcvBar>>{{"1d",delayed}}};
+            var delayedResult=await Evaluate(true,3,new Dictionary<string,PreparedTickerEvaluationContext>{{"SPY",delayedContext}});
+            Assert.False(delayedResult.Succeeded);Assert.Empty(delayedResult.CandidateTrades);
+            Assert.Contains("point_in_time_indicator_snapshots_unavailable",delayedResult.ErrorMessage);
+            var observedHistory=BacktestRunner.DescribeObservedHistoryEligibility("SPY",strategy.StrategyId,"1d",delayed,3,
+                bars[1].Timestamp,bars[^1].Timestamp.AddDays(1));
+            Assert.Equal(bars[6].Timestamp,observedHistory.FirstEligibleDecisionUtc);
+            Assert.Equal(1,observedHistory.AvailableAtStart);Assert.Equal(12,observedHistory.AvailableAtCutoff);
+            var missing=context with {BarsByTimeframe=new Dictionary<string,IReadOnlyList<OhlcvBar>>()};
+            var missingResult=await Evaluate(true,3,new Dictionary<string,PreparedTickerEvaluationContext>{{"SPY",missing}});
+            Assert.False(missingResult.Succeeded);Assert.Contains("missing_signal_timeframe",missingResult.ErrorMessage);
+            var missingExecution=await Evaluate(true,3,selectedStrategy:strategy with {Execution=strategy.Execution with {Timeframe="15m"}});
+            Assert.False(missingExecution.Succeeded);Assert.Contains("missing_execution_timeframe",missingExecution.ErrorMessage);
+            var gap=context with {ErrorMessage="Required completed daily session 2026-06-05 is absent from the prepared source."};
+            var gapResult=await Evaluate(true,3,new Dictionary<string,PreparedTickerEvaluationContext>{{"SPY",gap}});
+            Assert.False(gapResult.Succeeded);Assert.Contains("2026-06-05",gapResult.ErrorMessage);
         } finally {Directory.Delete(scratch,true);}
     }
 
@@ -136,6 +158,7 @@ public sealed class SwingCausalityAndMethodTests
         } finally {File.Delete(path);}
     }
 
+    /// <summary>Prepares the injected frozen bars and retains its owned input copy pending quant cleanup review.</summary>
     [Fact]
     public async Task FrozenSource_IsPreservedAcrossOwnedRunWorkspace()
     {
@@ -152,10 +175,11 @@ public sealed class SwingCausalityAndMethodTests
             var prepared=await owned.ExecuteAsync(()=>owned.Runner.PrepareMarketAsync(owned.Run,[strategy],CancellationToken.None));
             Assert.True(prepared.MarketState.TickerStates.ContainsKey("SPY"));
             Assert.Equal(12,prepared.MarketState.TickerStates["SPY"].BarsByTimeframe["1d"].Count);
-            Assert.False(Directory.Exists(owned.InputRoot));
+            Assert.True(Directory.Exists(owned.InputRoot));
         } finally {Directory.Delete(scratch,true);}
     }
 
+    /// <summary>Keeps generated audit paths short and retains their owned spool until quant cleanup approval.</summary>
     [Fact]
     public async Task AuditJournalNames_KeepProductionLengthSqlitePathsShort_AndOwned()
     {
@@ -183,7 +207,7 @@ public sealed class SwingCausalityAndMethodTests
                 Assert.True(File.Exists(BacktestCandidateJournal.StatePath(path)));
                 return Task.FromResult(1);
             });
-            Assert.False(Directory.Exists(workspace.InputRoot));
+            Assert.True(Directory.Exists(workspace.InputRoot));
         }
         finally { Directory.Delete(scratch, true); }
     }
@@ -205,7 +229,7 @@ public sealed class SwingCausalityAndMethodTests
     }
 
     [Fact]
-    public async Task ValidatedSnapshotIdentity_IsWrittenToPublishedAudit_AndOwnedInputsDeleted()
+    public async Task ValidatedSnapshotIdentity_IsWrittenToPublishedAudit_AndOwnedInputsRetainedForReview()
     {
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
         var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader);
@@ -229,15 +253,16 @@ public sealed class SwingCausalityAndMethodTests
             await runner.RunValidatedAsync(run,[runtime],DateTimeOffset.UtcNow,Path.Combine(scratch,"result.json"),CancellationToken.None);
             var audits=String.Join("\n",Directory.EnumerateFiles(scratch,"*.ndjson",SearchOption.AllDirectories).Select(File.ReadAllText));
             Assert.Contains(version,audits);Assert.Contains(hash,audits);Assert.Contains("causal-market-exits-v3",audits);
-            Assert.DoesNotContain("0.0.0-backtest",audits);Assert.Empty(Directory.EnumerateDirectories(scratch,".run-inputs-*"));
+            Assert.DoesNotContain("0.0.0-backtest",audits);Assert.NotEmpty(Directory.EnumerateDirectories(scratch,".run-inputs-*"));
             // Mutating a validated definition must fail rather than relabel it as diagnostic.
             var changed=runtime with {Definition=runtime.Definition with {StrategyName="changed after validation"}};
-            var failed=await runner.RunValidatedAsync(run,[changed],DateTimeOffset.UtcNow,Path.Combine(scratch,"changed.json"),CancellationToken.None);
-            Assert.False(failed.EconomicResultsComplete);
-            Assert.Empty(Directory.EnumerateDirectories(scratch,".run-inputs-*"));
+            var changedError=await Assert.ThrowsAsync<InvalidDataException>(()=>runner.RunValidatedAsync(run,[changed],
+                DateTimeOffset.UtcNow,Path.Combine(scratch,"changed.json"),CancellationToken.None));
+            Assert.Contains("differs from its validated artifact identity",changedError.Message);
+            Assert.NotEmpty(Directory.EnumerateDirectories(scratch,".run-inputs-*"));
             await Assert.ThrowsAsync<ArgumentException>(()=>runner.RunValidatedAsync(run,[runtime,runtime],DateTimeOffset.UtcNow,
                 Path.Combine(scratch,"duplicate.json"),CancellationToken.None));
-            Assert.Empty(Directory.EnumerateDirectories(scratch,".run-inputs-*"));
+            Assert.NotEmpty(Directory.EnumerateDirectories(scratch,".run-inputs-*"));
         } finally {Directory.Delete(scratch,true);}
     }
 
@@ -254,12 +279,22 @@ public sealed class SwingCausalityAndMethodTests
         Assert.Empty(unfilled.StrategiesWithEntries);
     }
 
-    private sealed class FrozenProvider(OhlcvBar[] bars):TradingFlow.Engine.Abstractions.IMarketDataProvider
+    private sealed class FrozenProvider(OhlcvBar[] bars):TradingFlow.Engine.Abstractions.IMarketDataProvider,
+        TradingFlow.Engine.Abstractions.IMarketSessionScheduleProvider
     {
         public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> symbols,IReadOnlyCollection<string> frames,
             DateTimeOffset start,DateTimeOffset end,[System.Runtime.CompilerServices.EnumeratorCancellation]CancellationToken token)
         {
             await Task.Yield();foreach(var bar in bars){token.ThrowIfCancellationRequested();yield return bar;}
+        }
+
+        // The fixture explicitly supplies session metadata; production does not infer a calendar from these sample bars.
+        public Task<IReadOnlyDictionary<DateOnly,MarketSessionSchedule>> LoadMarketSessionSchedulesAsync(DateOnly start,DateOnly end,CancellationToken token)
+        {
+            IReadOnlyDictionary<DateOnly,MarketSessionSchedule> calendar=Enumerable.Range(0,end.DayNumber-start.DayNumber+1)
+                .Select(i=>start.AddDays(i)).ToDictionary(day=>day,
+                    day=>day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday ? MarketSessionSchedule.Closed(day) : MarketSessionSchedule.RegularDay(day));
+            return Task.FromResult(calendar);
         }
     }
 
