@@ -18,9 +18,6 @@ public sealed class StrategyArtifactCatalogTests
             {
                 "swing.connors-rsi2@6.0.0",
                 "swing.connors-rsi2@7.0.0",
-                "swing.minervini-vcp@10.0.0",
-                "technical.opening-range-breakout@1.0.0",
-                "technical.opening-range-breakout@1.1.0",
                 "technical.opening-range-breakout@1.2.0",
                 "technical.previous-day-breakout@1.0.0",
                 "technical.recovery-exit-control@2.0.0",
@@ -44,7 +41,7 @@ public sealed class StrategyArtifactCatalogTests
             snapshot.ExecutableArtifacts
                 .Select(artifact => $"{artifact.Identity.StrategyId}@{artifact.Identity.SemanticVersion}")
                 .Order(StringComparer.Ordinal));
-        Assert.Equal(17, snapshot.ArchivedArtifacts.Count);
+        Assert.Equal(20, snapshot.ArchivedArtifacts.Count);
         Assert.All(
             snapshot.ExecutableArtifacts,
             artifact =>
@@ -62,7 +59,7 @@ public sealed class StrategyArtifactCatalogTests
     {
         var artifacts = CreateCatalog().GetSelectable(StrategySelectionMode.Backtest);
 
-        Assert.Contains(artifacts, item =>
+        Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.minervini-vcp" &&
             item.Identity.SemanticVersion == "10.0.0");
         Assert.Contains(artifacts, item =>
@@ -94,7 +91,7 @@ public sealed class StrategyArtifactCatalogTests
     }
 
     [Fact]
-    public void ArchivedArtifacts_RemainStrictlyParseableDailySwingEvidence()
+    public void ArchivedArtifacts_RemainStrictlyParseableEvidence()
     {
         var root = TestRepository.FindRoot();
         var archived = CreateCatalog().GetSnapshot().ArchivedArtifacts;
@@ -102,7 +99,10 @@ public sealed class StrategyArtifactCatalogTests
 
         Assert.NotEmpty(archived);
         Assert.All(archived, artifact =>
-            Assert.Equal("1d", reader.ReadStrategy(Path.Combine(root, artifact.SourcePath)).Timeframe));
+        {
+            var strategy = reader.ReadStrategy(Path.Combine(root, artifact.SourcePath));
+            if (StrategyHorizonResolver.Resolve(strategy) == "swing") Assert.Equal("1d", strategy.Timeframe);
+        });
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public sealed class StrategyArtifactCatalogTests
         var catalog = CreateCatalog();
         var source = Assert.Single(
             catalog.GetSelectable(StrategySelectionMode.Backtest),
-            artifact => artifact.Identity.StrategyId == "swing.minervini-vcp");
+            artifact => artifact.Identity.StrategyId == "swing.connors-rsi2" && artifact.Identity.SemanticVersion == "6.0.0");
         var changed = source.ResolvedStrategy with
         {
             EntryRules = source.ResolvedStrategy.EntryRules with

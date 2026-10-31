@@ -15,7 +15,6 @@ public sealed class RecoveryStrategyCatalogTests(ITestOutputHelper output)
 
     [Theory]
     [InlineData("swing.connors-rsi2", "6.0.0", "f56ef8e2505d7e6118bfb7c534c5c71ad03936da4cbf13b5e13e5566e6876df0")]
-    [InlineData("swing.minervini-vcp", "10.0.0", "1e19dbbcb6671980733bd78edf9f0a93e88f90ee47bf375424f4b11a8e7c8d0b")]
     // Freeze the pre-registration catalog identities retained in the October 21 catalog response.
     public void OriginalResearchControls_KeepTheirPublishedCanonicalHashes(string id, string version, string hash)
     {

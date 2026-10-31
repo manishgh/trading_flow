@@ -76,7 +76,7 @@ public sealed class OpeningRangeWorkflowIntegrationTests
         var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), new SimpleYamlReader());
         var artifacts = catalog.GetSelectable(StrategySelectionMode.Backtest)
             .Where(artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout").ToArray();
-        Assert.Equal(new[] { "1.0.0", "1.1.0", "1.2.0" }, artifacts.Select(artifact => artifact.Identity.SemanticVersion));
+        Assert.Equal(new[] { "1.2.0" }, artifacts.Select(artifact => artifact.Identity.SemanticVersion));
         foreach (var identity in artifacts.Select(artifact => artifact.Identity))
         foreach (var mode in new[] { StrategySelectionMode.CreatePaperExperiment, StrategySelectionMode.DiagnosticReplay,
             StrategySelectionMode.RunPaperExperiment, StrategySelectionMode.RunPaperShadow, StrategySelectionMode.RunLive })
@@ -86,22 +86,20 @@ public sealed class OpeningRangeWorkflowIntegrationTests
 
     /// <summary>The corrected recipe is separately registered; adding a policy must never change the published control's canonical hash.</summary>
     [Fact]
-    public void OpeningRangeCatalog_PreservesControlHashAndOnlyChangesSubmittedPricePolicy()
+    public void OpeningRangeCatalog_ArchivesReplacedVersionsAndKeepsTheirOnlyDifference()
     {
         var root = TestRepository.FindRoot();
         var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), new SimpleYamlReader());
-        var artifacts = catalog.GetSelectable(StrategySelectionMode.Backtest)
-            .Where(artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout").ToArray();
-        var control = Assert.Single(artifacts, artifact => artifact.Identity.SemanticVersion == "1.0.0");
-        var rounded = Assert.Single(artifacts, artifact => artifact.Identity.SemanticVersion == "1.1.0");
-        Assert.Equal("8345a4e9a29ab99260f3566572d447386ae5465f0f74e250fdf8b2e8876ba8e7", control.Identity.ContentSha256);
-        Assert.Equal("5ef1364778548b873e6bec863b43ab29de0166d1df811497d5f3ca28dcbc3981", rounded.Identity.ContentSha256);
-        Assert.NotEqual(control.Identity.ContentSha256, rounded.Identity.ContentSha256);
-        Assert.Equal(control.Identity, rounded.DerivedFromIdentity);
-        var expected = control.ResolvedStrategy with { Version = 2, StrategyName = rounded.ResolvedStrategy.StrategyName,
-            EntryRules = control.ResolvedStrategy.EntryRules with { OpeningRangeBreakout = new(
+        var archived = catalog.GetSnapshot().ArchivedArtifacts
+            .Where(artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout")
+            .Select(artifact => artifact.Identity.SemanticVersion).Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(new[] { "1.0.0", "1.1.0" }, archived);
+        var control = ReadStrategy("opening-range-breakout.bt-v1.yaml");
+        var rounded = ReadStrategy("opening-range-breakout.bt-v2.yaml");
+        var expected = control with { Version = 2, StrategyName = rounded.StrategyName,
+            EntryRules = control.EntryRules with { OpeningRangeBreakout = new(
                 OpeningRangeBreakoutRules.OutwardOrderRoundingPolicyId, 2) } };
-        Assert.Equal(expected, rounded.ResolvedStrategy);
+        Assert.Equal(expected, rounded);
     }
 
     /// <summary>The new recipe automatically selects its explicit market clock and cannot share a stop/limit plan.</summary>

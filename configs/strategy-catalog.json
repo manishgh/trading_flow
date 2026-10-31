@@ -232,9 +232,9 @@
       "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v2.yaml",
       "strategyId": "technical.opening-range-breakout",
       "semanticVersion": "1.1.0",
-      "lifecycle": "research",
+      "lifecycle": "archived",
       "admissionProfileId": "opening-range-breakout-research-v1",
-      "reason": "Approved stage 1 outward rounding of submitted triggers and opposite-range stops; preserves raw opening OHLC, full-tick breakout buffer, sizing from submitted levels and actual-fill 3R. All opening, volume, body-direction, continuation, re-entry, two-filled-parent and session-exit rules match the retained 1.0.0 control. Diagnostic backtest research only.",
+      "reason": "Archived 31 October 2026: replaced by 1.2.0.",
       "derivedFromIdentity": {
         "strategyId": "technical.opening-range-breakout",
         "semanticVersion": "1.0.0",
@@ -245,9 +245,9 @@
       "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v1.yaml",
       "strategyId": "technical.opening-range-breakout",
       "semanticVersion": "1.0.0",
-      "lifecycle": "research",
+      "lifecycle": "archived",
       "admissionProfileId": "opening-range-breakout-research-v1",
-      "reason": "Approved 27 October 2026 fifteen-minute opening range, prior-twenty-session opening RVOL above one, opening-body direction, stop-market entry and opposite-range stop. Maximum two filled parent trades per session, no overlap and fresh inside-range return after resolution. Existing 3R continuation protection; diagnostic research only."
+      "reason": "Archived 31 October 2026: replaced by 1.2.0; this version lost stock-sessions to the stop tick filter."
     },
     {
       "sourcePath": "configs/backtest/strategies/previous-day-breakout.bt-v1.yaml",
@@ -475,9 +475,9 @@
       "sourcePath": "configs/backtest/strategies/minervini-technical-template-vcp.bt-v10.yaml",
       "strategyId": "swing.minervini-vcp",
       "semanticVersion": "10.0.0",
-      "lifecycle": "research",
+      "lifecycle": "archived",
       "admissionProfileId": "causal-market-exits-v3",
-      "reason": "Same economic rules; causal completed-bar market exit scheduling and improved research diagnostics."
+      "reason": "Archived 31 October 2026: the pivot analyzer ignores the leg after the last pivot and has no first-cross rule, and the published batches produced no trades."
     },
     {
       "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml",

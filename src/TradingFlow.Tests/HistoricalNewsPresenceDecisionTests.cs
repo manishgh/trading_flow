@@ -13,7 +13,6 @@ public sealed class HistoricalNewsPresenceDecisionTests
     // Null optional diagnostic fields must not change previously published technical strategy identities.
     [Theory]
     [InlineData("swing.connors-rsi2", "6.0.0", "f56ef8e2505d7e6118bfb7c534c5c71ad03936da4cbf13b5e13e5566e6876df0")]
-    [InlineData("swing.minervini-vcp", "10.0.0", "1e19dbbcb6671980733bd78edf9f0a93e88f90ee47bf375424f4b11a8e7c8d0b")]
     [InlineData("technical.recovery-sma5-exit", "2.0.0", "ad27d9ed0855760bf17fb4fec8ed9b97938dc3a1f52710097b6c63dc4a64c4a8")]
     public void OriginalTechnicalArtifacts_RetainTheirPublishedCanonicalIdentities(string id, string version, string hash)
     {

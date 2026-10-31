@@ -20,8 +20,6 @@ public sealed partial class IntradayBacktestIntegrationTests
     /// <summary>The ordinary prepared runner retains all ORB versions, fractional source evidence, actual-fill 3R and monthly identity.</summary>
     [Theory]
     [InlineData(false, false, false)]
-    [InlineData(true, false, false)]
-    [InlineData(true, true, false)]
     [InlineData(true, true, true)]
     public async Task PreparedRunner_PublishesVerifiedIntradayArtifactsAndMonthlyResults(bool openingRange, bool outwardRounding, bool completedBreakout)
     {

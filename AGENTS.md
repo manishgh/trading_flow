@@ -320,7 +320,7 @@ Paper configs:
 Strategy classification:
 
 - `configs/strategy-catalog.json` is the authority.
-- The catalog holds 23 research artifacts and 17 archived artifacts, with no paper
+- The catalog holds 21 research artifacts and 20 archived artifacts, with no paper
   execution or live authorization.
 - Research/archive is artifact disposition. Paper experiment, paper shadow, and
   validated are exact-identity authorization grants.

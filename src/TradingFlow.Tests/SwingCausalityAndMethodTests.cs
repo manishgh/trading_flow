@@ -213,7 +213,6 @@ public sealed class SwingCausalityAndMethodTests
     }
 
     [Theory]
-    [InlineData("minervini-technical-template-vcp.bt-v10.yaml", "swing.minervini-vcp", "10.0.0")]
     [InlineData("swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml", "swing.connors-rsi2", "6.0.0")]
     public void CanonicalRuntimeIdentity_SurvivesResearchYamlAlias(string file, string id, string version)
     {

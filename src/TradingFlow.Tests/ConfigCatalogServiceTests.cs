@@ -26,9 +26,6 @@ public sealed class ConfigCatalogServiceTests
         {
             "swing.connors-rsi2@6.0.0",
             "swing.connors-rsi2@7.0.0",
-            "swing.minervini-vcp@10.0.0",
-            "technical.opening-range-breakout@1.0.0",
-            "technical.opening-range-breakout@1.1.0",
             "technical.opening-range-breakout@1.2.0",
             "technical.previous-day-breakout@1.0.0",
             "technical.recovery-exit-control@2.0.0",
@@ -51,8 +48,6 @@ public sealed class ConfigCatalogServiceTests
         }, strategies.Select(strategy => $"{strategy.Identity.StrategyId}@{strategy.Identity.SemanticVersion}")
             .Order(StringComparer.Ordinal));
         Assert.Contains(strategies, strategy =>
-            strategy.FileName == "minervini-technical-template-vcp.bt-v10.yaml" && strategy.Audit is null);
-        Assert.Contains(strategies, strategy =>
             strategy.FileName == "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml" && strategy.Audit is null);
         Assert.All(strategies.Where(strategy => strategy.Identity.StrategyId.StartsWith("technical.recovery-", StringComparison.Ordinal)),
             strategy => Assert.Equal(strategy.Identity.StrategyId.Contains("qualified", StringComparison.Ordinal) ||
@@ -61,7 +56,7 @@ public sealed class ConfigCatalogServiceTests
         Assert.All(strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "swing"),
             strategy => Assert.Equal("1d", strategy.Definition.Timeframe));
         var dayStrategies = strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "day").ToArray();
-        Assert.Equal(13, dayStrategies.Length);
+        Assert.Equal(11, dayStrategies.Length);
         Assert.All(dayStrategies, strategy => Assert.Contains(strategy.Definition.Timeframe, new[] { "5m", "15m" }));
         Assert.All(strategies, strategy => Assert.Equal(StrategyLifecycleState.Research, strategy.Lifecycle));
         Assert.DoesNotContain(strategies, strategy =>

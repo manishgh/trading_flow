@@ -459,7 +459,7 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
             .Replace("  start:", "  start: 2026-01-07T05:00:00Z", StringComparison.Ordinal)
             .Replace("  end:", "  end: 2026-02-03T05:00:00Z", StringComparison.Ordinal)
             .Replace("  starting_capital: 10000", "  starting_capital: 1000", StringComparison.Ordinal)
-            .Replace("  - strategies/minervini-technical-template-vcp.bt-v10.yaml",
+            .Replace("  - strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml",
                 "  - " + fixture.Config.Strategies[0].Replace('\\', '/'), StringComparison.Ordinal);
         await File.WriteAllTextAsync(configPath, text);
         var executor = new ResultBacktestExecutor(fixture.Result);
