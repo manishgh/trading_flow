@@ -18,6 +18,7 @@ public sealed partial class BacktestRunner
     private IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> factorReferenceBars =
         new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
 
+    // Load actual replay source dates for intraday books; other horizons retain their expiry-calendar lookahead.
     private async Task<IReadOnlyDictionary<string, RegimeCalendar>> BuildRegimeCalendarsAsync(
         BacktestRunConfig run,
         IReadOnlyCollection<StrategyDefinition> strategies,
@@ -32,17 +33,19 @@ public sealed partial class BacktestRunner
         var barsByBenchmark = new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            if (run.Provider.Equals("alpaca", StringComparison.OrdinalIgnoreCase))
+            // Reuse a provider's explicit calendar for deterministic CSV/local fixtures as well as Alpaca; never infer one from bars.
+            provider = CreateProvider(run);
+            if (provider is IMarketSessionScheduleProvider scheduleProvider)
             {
-                provider = CreateProvider(run);
-                if (provider is not IMarketSessionScheduleProvider scheduleProvider)
-                    throw new InvalidOperationException("Authoritative exchange calendar unavailable for Alpaca backtest.");
                 candidateSessionSchedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(
                     DateOnly.FromDateTime(dataStart.UtcDateTime).AddDays(-1),
-                    DateOnly.FromDateTime(windowEnd.UtcDateTime).AddDays(10), cancellationToken);
+                    BacktestCalendarBounds.IntradayLastRequiredDate(run, windowEnd, ResolveExchangeTimezone(strategies))
+                        ?? DateOnly.FromDateTime(windowEnd.UtcDateTime).AddDays(10), cancellationToken);
                 if (candidateSessionSchedules.Count == 0)
                     throw new InvalidOperationException("Authoritative exchange calendar is empty; backtest setup expiry cannot be established.");
             }
+            else if (run.Provider.Equals("alpaca", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Authoritative exchange calendar unavailable for Alpaca backtest.");
             foreach (var strategy in active)
             {
                 var regime = strategy.Regime!;

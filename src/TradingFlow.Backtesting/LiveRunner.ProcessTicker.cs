@@ -304,7 +304,11 @@ public sealed partial class LiveRunner
                 setupAvailableAtUtc,
                 candidateExpiresAtUtc,
                 run.Engine.IndicatorWarmupBars,
-                _executionRunContext.RunId, factorReference, factorSessions);
+                _executionRunContext.RunId, factorReference, factorSessions,
+                await StrategyDecisionRequestAssembler.ResolveDrawdownContextAsync(_decisionContextProvider,
+                    ticker, now, completedBarsByTimeframe.ToDictionary(pair => pair.Key,
+                        pair => (IReadOnlyList<OhlcvBar>)pair.Value, StringComparer.OrdinalIgnoreCase), run.Mode,
+                    cancellationToken));
             var persistedDecision = await _candidateDecisions.EvaluateAsync(
                 CreateProductionRun(_executionRunContext),
                 decisionRequest,

@@ -13,7 +13,7 @@ public static class PortfolioCloseValuation
 {
     public static PortfolioCloseValuationResult Analyze(decimal startingCash,
         IReadOnlyList<PortfolioValuationFill> fills, IReadOnlyList<PortfolioCloseMark> marks,
-        IReadOnlyList<DateTimeOffset>? expectedValuationTimes = null)
+        IReadOnlyList<DateTimeOffset>? expectedValuationTimes = null, bool sampleOnlyExpectedTimes = false)
     {
         if (startingCash <= 0) throw new ArgumentOutOfRangeException(nameof(startingCash));
         foreach (var fill in fills)
@@ -27,8 +27,11 @@ public static class PortfolioCloseValuation
             .ToDictionary(group => group.Key, group => group.Select(mark => mark.Price).Distinct().Single());
         if (expectedValuationTimes?.Any(time => time == default || time.Offset != TimeSpan.Zero) == true)
             throw new ArgumentException("Expected valuation grid requires UTC times.");
-        var times = marks.Select(mark => mark.Timestamp).Concat(fills.Select(fill => fill.Timestamp))
-            .Concat(expectedValuationTimes ?? []).Distinct().Order().ToArray();
+        if (sampleOnlyExpectedTimes && (expectedValuationTimes is null || expectedValuationTimes.Count == 0 ||
+            fills.Any(fill => fill.Timestamp > expectedValuationTimes.Max())))
+            throw new ArgumentException("Explicit close sampling requires a grid covering all fills.");
+        var times = (sampleOnlyExpectedTimes ? expectedValuationTimes! : marks.Select(mark => mark.Timestamp)
+            .Concat(fills.Select(fill => fill.Timestamp)).Concat(expectedValuationTimes ?? [])).Distinct().Order().ToArray();
         var orderedFills = fills.OrderBy(fill => fill.Timestamp).ToArray();
         var positions = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
         var observations = new List<PortfolioCloseObservation>();

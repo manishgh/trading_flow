@@ -119,7 +119,10 @@ public sealed partial class BacktestRunner
         var exitStartIndex = FindNextValidExecutionBarIndex(bars, entryIndex + 1, strategy);
         if (exitStartIndex >= bars.Count)
         {
-            throw new InvalidOperationException("Entry slice exists without a later causal liquidation slice; economics are incomplete.");
+            auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, ExecutionState.SignalGenerated,
+                "Completed signal retained without an executable exit horizon", candidateId);
+            return (BuildOpenCandidate(run, candidateId, strategy, signal, "long", entryTimestamp,
+                entryPrice, initialStopLossPrice, takeProfitPrice, stopDistance, bars[entryIndex - 1].Volume), entryIndex);
         }
 
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"LONG signal generated at {signal.CurrentPrice}", candidateId);
@@ -127,6 +130,7 @@ public sealed partial class BacktestRunner
 
         var technicalEngine = new TradingFlow.Engine.Execution.TechnicalExecutionEngine();
 
+        BacktestPendingExitDecision? pendingExit = null;
         var eligibleBarsHeld = 1;
         for (var i = exitStartIndex; i < bars.Count; i++)
         {
@@ -199,6 +203,7 @@ public sealed partial class BacktestRunner
                 var hasNextExitBar = nextExitIndex < bars.Count;
                 if (!hasNextExitBar)
                 {
+                    pendingExit ??= PendingExitDecision(run, strategy, bar, "confirmed_vwap_failure");
                     continue;
                 }
 
@@ -241,6 +246,7 @@ public sealed partial class BacktestRunner
                         strategy);
                     if (nextExitIndex >= bars.Count)
                     {
+                        pendingExit ??= PendingExitDecision(run, strategy, bar, exitReason);
                         continue;
                     }
 
@@ -264,7 +270,9 @@ public sealed partial class BacktestRunner
             }
         }
 
-        throw new InvalidOperationException("No later executable slice for causal liquidation; end-of-data cannot be a retroactive closed trade.");
+        return (BuildOpenCandidate(run, candidateId, strategy, signal, "long", entryTimestamp,
+            entryPrice, initialStopLossPrice, takeProfitPrice, stopDistance, bars[entryIndex - 1].Volume)
+            with { PendingExitDecision = pendingExit }, bars.Count - 1);
     }
 
     private (BacktestCandidateTrade Candidate, int ExitIndex)? CreateShortCandidate(
@@ -306,12 +314,16 @@ public sealed partial class BacktestRunner
         var exitStartIndex = FindNextValidExecutionBarIndex(bars, entryIndex + 1, strategy);
         if (exitStartIndex >= bars.Count)
         {
-            throw new InvalidOperationException("Entry slice exists without a later causal liquidation slice; economics are incomplete.");
+            auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, ExecutionState.SignalGenerated,
+                "Completed short signal retained without an executable exit horizon", candidateId);
+            return (BuildOpenCandidate(run, candidateId, strategy, signal, "short", entryTimestamp,
+                entryPrice, initialStopLossPrice, takeProfitPrice, stopDistance, bars[entryIndex - 1].Volume), entryIndex);
         }
 
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"SHORT signal generated at {signal.CurrentPrice}", candidateId);
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, entryTimestamp, TradingFlow.Engine.Execution.ExecutionState.OrderFilled, $"Simulated short fill at {entryPrice} (Stop: {initialStopLossPrice}, TP: {takeProfitPrice})", candidateId);
 
+        BacktestPendingExitDecision? pendingExit = null;
         var eligibleBarsHeld = 1;
         for (var i = exitStartIndex; i < bars.Count; i++)
         {
@@ -371,6 +383,7 @@ public sealed partial class BacktestRunner
                 var hasNextExitBar = nextExitIndex < bars.Count;
                 if (!hasNextExitBar)
                 {
+                    pendingExit ??= PendingExitDecision(run, strategy, bar, "confirmed_vwap_reclaim");
                     continue;
                 }
 
@@ -410,6 +423,7 @@ public sealed partial class BacktestRunner
                         strategy);
                     if (nextExitIndex >= bars.Count)
                     {
+                        pendingExit ??= PendingExitDecision(run, strategy, bar, exitReason);
                         continue;
                     }
 
@@ -475,7 +489,9 @@ public sealed partial class BacktestRunner
             }
         }
 
-        throw new InvalidOperationException("No later executable slice for causal short liquidation; end-of-data cannot be a retroactive closed trade.");
+        return (BuildOpenCandidate(run, candidateId, strategy, signal, "short", entryTimestamp,
+            entryPrice, initialStopLossPrice, takeProfitPrice, stopDistance, bars[entryIndex - 1].Volume)
+            with { PendingExitDecision = pendingExit }, bars.Count - 1);
     }
 
     private static (decimal? ExitPrice, string? ExitReason) EvaluateShortBarForExit(
@@ -702,8 +718,8 @@ public sealed partial class BacktestRunner
         decimal entryPrice,
         decimal stopLossPrice,
         decimal takeProfitPrice,
-        DateTimeOffset exitTimestamp,
-        decimal exitPrice,
+        DateTimeOffset? exitTimestamp,
+        decimal? exitPrice,
         string exitReason,
         decimal stopDistance,
         decimal entryBarVolume)
@@ -717,7 +733,7 @@ public sealed partial class BacktestRunner
             Decimal.Round(stopLossPrice, 4),
             Decimal.Round(takeProfitPrice, 4),
             exitTimestamp,
-            Decimal.Round(exitPrice, 4),
+            exitPrice is { } price ? Decimal.Round(price, 4) : null,
             exitReason,
             Decimal.Round(stopDistance, 4),
             entryBarVolume,
@@ -725,6 +741,26 @@ public sealed partial class BacktestRunner
             ResolveInitialStopKind(strategy),
             strategy.StrategyId,
             candidateId);
+    }
+
+    // Preserve an unfinished hypothesis without manufacturing an executable exit or weakening a required liquidation.
+    private static BacktestCandidateTrade BuildOpenCandidate(BacktestRunConfig run, string candidateId,
+        StrategyDefinition strategy, TradeSignal signal, string direction, DateTimeOffset entryTimestamp,
+        decimal entryPrice, decimal stopPrice, decimal targetPrice, decimal distance, decimal volume)
+    {
+        if (run.Engine.PrecommittedLiquidationSourceUtc is not null)
+            throw new InvalidOperationException("Required precommitted liquidation has no executable source slice.");
+        return BuildCandidate(candidateId, strategy, signal, direction, entryTimestamp, entryPrice,
+            stopPrice, targetPrice, null, null, "open_at_study_end", distance, volume);
+    }
+
+    // A pending intention is known only when its completed source and any delayed receipt are both available.
+    private static BacktestPendingExitDecision? PendingExitDecision(BacktestRunConfig run, StrategyDefinition strategy,
+        OhlcvBar source, string reason)
+    {
+        var completed = source.Timestamp.Add(ParseTimeframe(strategy.Execution.Timeframe));
+        var known = source.KnownAtUtc is { } receipt && receipt > completed ? receipt : completed;
+        return run.TimeWindow.End is { } cutoff && known > cutoff ? null : new(known.ToUniversalTime(), reason);
     }
 
     private static string ResolveInitialStopKind(StrategyDefinition strategy) =>

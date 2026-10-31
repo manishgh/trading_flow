@@ -19,9 +19,12 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     private readonly IDeterministicExecutionSimulator _simulator;
     private readonly TimelineBar[] _timeline;
     private readonly HashSet<MarketBarIdentity> _marketBarIdentities;
+    private readonly HashSet<MarketBarIdentity> _duplicateBarIdentities;
     private readonly List<ExecutionTracker> _active = [];
     private readonly List<BacktestTrade> _completed = [];
     private readonly List<BacktestExecutionFailure> _failures = [];
+    private readonly List<ExecutionTracker> _scheduled = [];
+    private readonly List<BacktestPortfolioFill> _fills = [];
     private readonly Dictionary<string, TimelineBar> _lastBarsBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private ExecutionBookState _state = ExecutionBookState.Empty;
     private int _nextTimelineIndex;
@@ -39,6 +42,9 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         _portfolio = portfolio;
         _simulator = simulator ?? new DeterministicExecutionSimulator();
         _executionEvidence = executionEvidence;
+        _duplicateBarIdentities = marketBars.GroupBy(bar => new MarketBarIdentity(
+            NormalizeSymbol(bar.Ticker), bar.Timeframe.Trim().ToLowerInvariant(), bar.Timestamp.ToUniversalTime()))
+            .Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet();
         _timeline = BuildTimeline(marketBars);
         _marketBarIdentities = marketBars
             .Select(bar => new MarketBarIdentity(
@@ -74,6 +80,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
 
         while (_nextTimelineIndex < _timeline.Length && _timeline[_nextTimelineIndex].AvailableAtUtc <= cutoff)
         {
+            if (_failures.Count > 0) return;
             AdvanceBar(_timeline[_nextTimelineIndex++]);
         }
     }
@@ -94,8 +101,15 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             return false;
         }
 
-        if (!HasExecutionBar(plan.Candidate.Ticker, plan.Strategy.Execution.Timeframe, entryTimestamp))
+        if (plan.Candidate.ExecutionReplay is { } replay &&
+            (replay.PolicyId != ExecutionReplayPolicy.DailyRthFiveMinuteV1 || replay.RequiredSliceStarts.Count == 0 ||
+             replay.RequiredSliceStarts[0] != entryTimestamp))
+            throw new InvalidOperationException("Unknown or mismatched execution replay policy.");
+        if (!HasExecutionBar(plan.Candidate.Ticker, plan.ExecutionTimeframe, entryTimestamp))
         {
+            if (plan.Candidate.ExecutionReplay is not null)
+                Fail(new ExecutionTracker(plan.Candidate.CandidateId, plan,
+                    $"entry-{plan.Candidate.CandidateId}", $"exit-{plan.Candidate.CandidateId}"), "entry_execution_bar_missing");
             rejectionReason = "entry_execution_bar_missing";
             return false;
         }
@@ -115,8 +129,8 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         var hasMixedTimeframeExposure = _active.Any(tracker =>
             !tracker.IsTerminal &&
             tracker.Plan.Candidate.Ticker.Equals(plan.Candidate.Ticker, StringComparison.OrdinalIgnoreCase) &&
-            !tracker.Plan.Strategy.Execution.Timeframe.Equals(
-                plan.Strategy.Execution.Timeframe,
+            !tracker.Plan.ExecutionTimeframe.Equals(
+                plan.ExecutionTimeframe,
                 StringComparison.OrdinalIgnoreCase));
         if (hasMixedTimeframeExposure)
         {
@@ -138,16 +152,19 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         }
         _knownIdentities.Add(identity);
 
-        _active.Add(new ExecutionTracker(
+        var tracker = new ExecutionTracker(
             identity,
             plan,
             $"entry-{identity}",
-            $"exit-{identity}"));
+            $"exit-{identity}");
+        _active.Add(tracker);
+        _scheduled.Add(tracker);
         rejectionReason = null;
         return true;
     }
 
-    public void Complete()
+    // A bounded study can retain known open state; the original unbounded completion still requires liquidation.
+    public void Complete(DateTimeOffset? cutoffUtc = null)
     {
         if (_active.Count == 0)
         {
@@ -156,11 +173,14 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
 
         while (_nextTimelineIndex < _timeline.Length)
         {
+            if (cutoffUtc is { } cutoff && _timeline[_nextTimelineIndex].AvailableAtUtc > cutoff) break;
+            if (_failures.Count > 0) return;
             AdvanceBar(_timeline[_nextTimelineIndex++]);
         }
 
         foreach (var tracker in _active.Where(item => !item.IsTerminal).ToArray())
         {
+            if (cutoffUtc is not null && tracker.Plan.Candidate.ExecutionReplay is null) continue;
             Fail(tracker, tracker.EntryFilledQuantity == 0
                 ? "entry_not_filled_before_end_of_data"
                 : "exit_not_filled_before_end_of_data");
@@ -169,10 +189,86 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         _active.RemoveAll(item => item.IsTerminal && !HasWorkingOrders(item));
     }
 
+    // Export the admitted book without mutating or cancelling its still-working orders.
+    public BacktestPortfolioState Snapshot(DateTimeOffset cutoffUtc)
+    {
+        var positions = _scheduled.Where(t => t.EntryFilledQuantity > t.ExitFilledQuantity).Select(t =>
+        {
+            var candidate = t.Plan.Candidate;
+            var quantity = (t.EntryFilledQuantity - t.ExitFilledQuantity) * (t.IsShort ? -1 : 1);
+            var basis = t.EntryFilledNotional / t.EntryFilledQuantity;
+            _lastBarsBySymbol.TryGetValue(NormalizeSymbol(candidate.Ticker), out var mark);
+            return new BacktestOpenPosition(candidate.CandidateId, candidate.StrategyId, candidate.Ticker,
+                quantity, basis, mark?.Bar.Close, mark?.AvailableAtUtc,
+                mark is null ? null : quantity * (mark.Bar.Close - basis));
+        }).ToArray();
+        var orders = _state.WorkingOrders.Values.Select(order =>
+        {
+            var owner = _active.Single(t => t.OwnsOrder(order.Command.ClientOrderId));
+            var c = owner.Plan.Candidate;
+            var entry = order.Command.ClientOrderId == owner.EntryClientOrderId;
+            return new BacktestPendingOrder(c.CandidateId, c.StrategyId, c.Ticker, order.Command.ClientOrderId,
+                order.Command.Side.ToString(), order.Command.OrderType.ToString(), order.RemainingQuantity,
+                order.FilledQuantity == 0 ? "working" : "partially_filled", entry ? order.RemainingQuantity * c.EntryPrice : 0,
+                order.Command.KnownAtUtc);
+        }).ToArray();
+        var pending = _scheduled.Where(t => !t.IsTerminal && t.EntryFilledQuantity > t.ExitFilledQuantity &&
+                t.Plan.Candidate.PendingExitDecision is { } exit && exit.KnownAtUtc <= cutoffUtc)
+            .Select(t => new BacktestPendingExit(t.Identity, t.Plan.Candidate.StrategyId, t.Plan.Candidate.Ticker,
+                t.Plan.Candidate.PendingExitDecision!.KnownAtUtc, t.Plan.Candidate.PendingExitDecision.Reason)).ToArray();
+        var snapshot = new BacktestPortfolioState(NativeDailySessionLedger.ValuationBasis, cutoffUtc.ToUniversalTime(), _scheduled.Count,
+            _scheduled.Count(t => t.EntryFilledQuantity > 0), _completed.Count, _fills.ToArray(), positions, orders, pending, [])
+        {
+            AdmittedOrders = _scheduled.Select(t => new BacktestAdmittedOrder(t.Identity, t.Plan.Candidate.StrategyId,
+                t.Plan.Candidate.Ticker, t.Plan.RequestedQuantity, t.Plan.Candidate.EntryPrice,
+                t.Plan.Candidate.Direction, t.Plan.Candidate.EntryTimestamp)
+                { DecisionStrategyId = t.Plan.Candidate.DecisionStrategyId }).ToArray()
+        };
+        AppendCutoffEvidence(snapshot);
+        return snapshot;
+    }
+
+    // Retain actual command state independently of later result projection for artifact reconciliation.
+    private void AppendCutoffEvidence(BacktestPortfolioState snapshot)
+    {
+        var pendingOrders = snapshot.PendingOrders.ToLookup(p => p.CandidateId, StringComparer.Ordinal);
+        var pendingExits = snapshot.PendingExits.ToLookup(p => p.CandidateId, StringComparer.Ordinal);
+        var quantities = snapshot.OpenPositions.ToDictionary(p => p.CandidateId, p => p.SignedQuantity, StringComparer.Ordinal);
+        for (var index = 0; index < snapshot.AdmittedOrders.Count; index++)
+        {
+            var order = snapshot.AdmittedOrders[index];
+            var candidate = _scheduled[index].Plan.Candidate;
+            _executionEvidence?.Append(new ExecutionEvent(order.Ticker, candidate.StrategyName, snapshot.CutoffUtc,
+                ExecutionState.OrderStateChanged, "Known native book state at study cutoff", "portfolio_execution",
+                order.CandidateId, JsonSerializer.Serialize(new
+                {
+                    snapshot.CutoffUtc,
+                    AdmittedOrder = order,
+                    PendingOrders = pendingOrders[order.CandidateId].ToArray(),
+                    PendingExits = pendingExits[order.CandidateId].ToArray(),
+                    TerminalSignedQuantity = quantities.GetValueOrDefault(order.CandidateId)
+                })));
+        }
+    }
+
     private bool HasWorkingOrders(ExecutionTracker tracker) => _state.WorkingOrders.Keys.Any(tracker.OwnsOrder);
 
     private void AdvanceBar(TimelineBar timelineBar)
     {
+        foreach (var active in _active.Where(t => !t.IsTerminal && t.Plan.Candidate.ExecutionReplay is not null).ToArray())
+        {
+            var required = active.Plan.Candidate.ExecutionReplay!.RequiredSliceStarts;
+            if (active.NextRequiredSlice < required.Count)
+            {
+                var expected = required[active.NextRequiredSlice];
+                if (expected.AddMinutes(5) <= timelineBar.AvailableAtUtc &&
+                    !HasExecutionBar(active.Plan.Candidate.Ticker, ExecutionReplayPolicy.Timeframe, expected))
+                {
+                    Fail(active, $"required_execution_slice_missing:{expected:O}");
+                    return;
+                }
+            }
+        }
         var symbol = NormalizeSymbol(timelineBar.Bar.Ticker);
         var trackers = _active
             .Where(tracker => !tracker.IsTerminal || HasWorkingOrders(tracker))
@@ -185,9 +281,30 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             return;
         }
 
+        // A fine-policy order requires every authoritative regular-session slice
+        // while active. Never turn a gap into a no-touch observation.
+        var fineTrackers = trackers.Where(t => !t.IsTerminal && t.Plan.Candidate.ExecutionReplay is not null).ToArray();
+        foreach (var tracker in fineTrackers)
+        {
+            var required = tracker.Plan.Candidate.ExecutionReplay!.RequiredSliceStarts;
+            if (tracker.NextRequiredSlice >= required.Count) { Fail(tracker, "execution_past_terminal_boundary"); return; }
+            var expected = required[tracker.NextRequiredSlice];
+            if (timelineBar.StartUtc < expected) return; // extended hours, never executable under this policy
+            if (timelineBar.StartUtc != expected) { Fail(tracker, $"required_execution_slice_missing:{expected:O}"); return; }
+            var observed = timelineBar.Bar;
+            if (observed.Volume <= 0 || observed.Low <= 0 || observed.Low > observed.High ||
+                observed.Open < observed.Low || observed.Open > observed.High ||
+                observed.Close < observed.Low || observed.Close > observed.High ||
+                _duplicateBarIdentities.Contains(new MarketBarIdentity(symbol, ExecutionReplayPolicy.Timeframe, expected)))
+            { Fail(tracker, $"required_execution_slice_invalid:{expected:O}"); return; }
+            if (timelineBar.AvailableAtUtc != timelineBar.EndUtc)
+            { Fail(tracker, "delayed_execution_evidence_unsupported"); return; }
+            tracker.NextRequiredSlice++;
+        }
         var bar = timelineBar.Bar;
         var terminalOpen = trackers.Any(tracker => !tracker.IsTerminal && tracker.Plan.Candidate.ExitReason == "scheduled_study_exit" &&
-            tracker.Plan.Candidate.ExitTimestamp.ToUniversalTime() <= timelineBar.StartUtc);
+            tracker.Plan.Candidate.ExitTimestamp?.ToUniversalTime() == timelineBar.StartUtc) ||
+            fineTrackers.Any(tracker => tracker.Plan.Candidate.ExecutionReplay!.TerminalOpenUtc == timelineBar.StartUtc);
         if (terminalOpen)
         {
             if (!_lastBarsBySymbol.TryGetValue(symbol, out var previous) || previous.AvailableAtUtc > timelineBar.StartUtc || previous.Bar.Volume <= 0)
@@ -257,6 +374,13 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             AppendExecutionEvidence(step.Events);
             ApplyEvents(step.Events, bar);
             FinalizeTerminalTrackers();
+            foreach (var tracker in fineTrackers.Where(t => !t.IsTerminal))
+            {
+                if (tracker.EntrySubmitted && tracker.EntryFilledQuantity == 0)
+                    tracker.IsTerminal = true; // IOC non-fill is a recorded observation, not an open position
+                else if (timelineBar.StartUtc == tracker.Plan.Candidate.ExecutionReplay!.TerminalOpenUtc)
+                    Fail(tracker, "terminal_open_quantity_unresolved");
+            }
         _active.RemoveAll(item => item.IsTerminal && !HasWorkingOrders(item));
     }
 
@@ -313,12 +437,12 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                     tracker.Plan.Candidate.EntryTimestamp.ToUniversalTime(),
                     _nextCommandSequence++,
                     IsRiskReducing: false,
-                    SimulatedTimeInForce.Day,
+                    tracker.Plan.Candidate.ExecutionReplay is null ? SimulatedTimeInForce.Day : SimulatedTimeInForce.ImmediateOrCancel,
                     FixedFeeGroupId: $"entry-fee-{tracker.Identity}"));
             }
 
             var priceTriggeredExitIsDue = IsPriceTriggeredExit(tracker.Plan.Candidate.ExitReason) &&
-                tracker.Plan.Candidate.ExitTimestamp.ToUniversalTime() <= timestamp;
+                tracker.Plan.Candidate.ExitTimestamp?.ToUniversalTime() <= timestamp;
             if (priceTriggeredExitIsDue && _state.WorkingOrders.ContainsKey(tracker.EntryClientOrderId))
             {
                 commands.Add(new SimulatedOrderCommand(
@@ -340,12 +464,16 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 }
             }
 
-            AddProtectiveOrderCommands(timestamp, tracker, commands);
-
-            if (tracker.ExitSubmitted ||
-                IsPriceTriggeredExit(tracker.Plan.Candidate.ExitReason) ||
-                tracker.Plan.Candidate.ExitTimestamp.ToUniversalTime() > timestamp)
+            if (tracker.MarketExitSubmitted)
             {
+                CancelProtectiveOrders(timestamp, tracker, commands);
+                continue;
+            }
+            if (IsPriceTriggeredExit(tracker.Plan.Candidate.ExitReason) ||
+                tracker.Plan.Candidate.ExitTimestamp is null ||
+                tracker.Plan.Candidate.ExitTimestamp.Value.ToUniversalTime() > timestamp)
+            {
+                AddProtectiveOrderCommands(timestamp, tracker, commands);
                 continue;
             }
 
@@ -361,13 +489,14 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                     tracker.IsShort ? SimulatedOrderSide.Sell : SimulatedOrderSide.Buy,
                     SimulatedOrderType.Market,
                     0,
-                    tracker.Plan.Candidate.ExitTimestamp.ToUniversalTime(),
+                    tracker.Plan.Candidate.ExitTimestamp.Value.ToUniversalTime(),
                     _nextCommandSequence++,
                     IsRiskReducing: false,
                     TargetClientOrderId: tracker.EntryClientOrderId));
             }
 
             tracker.ExitSubmitted = true;
+            tracker.MarketExitSubmitted = true;
             if (tracker.EntryFilledQuantity == 0)
             {
                 Fail(tracker, "entry_not_filled_before_planned_exit");
@@ -380,8 +509,8 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 tracker.Plan.Candidate.Ticker,
                 tracker.IsShort ? SimulatedOrderSide.Buy : SimulatedOrderSide.Sell,
                 SimulatedOrderType.Market,
-                tracker.EntryFilledQuantity,
-                tracker.Plan.Candidate.ExitTimestamp.ToUniversalTime(),
+                tracker.EntryFilledQuantity - tracker.ExitFilledQuantity,
+                tracker.Plan.Candidate.ExitTimestamp.Value.ToUniversalTime(),
                 _nextCommandSequence++,
                 IsRiskReducing: true,
                 SimulatedTimeInForce.Day,
@@ -486,8 +615,8 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     {
         var candidate = tracker.Plan.Candidate;
         return candidate.ExitReason.Equals("trailing_stop", StringComparison.OrdinalIgnoreCase) &&
-            candidate.ExitTimestamp.ToUniversalTime() <= timestamp
-                ? candidate.ExitPrice
+            candidate.ExitTimestamp?.ToUniversalTime() <= timestamp
+                ? candidate.ExitPrice ?? throw new InvalidDataException("A price-triggered exit requires its price.")
                 : candidate.StopLossPrice;
     }
 
@@ -549,6 +678,11 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             }
 
             tracker.ExecutionFees += executionEvent.Fees;
+            _fills.Add(new(tracker.Identity, tracker.Plan.Candidate.StrategyId, tracker.Plan.Candidate.Ticker,
+                executionEvent.Side == SimulatedOrderSide.Buy,
+                executionEvent.ClientOrderId == tracker.EntryClientOrderId, executionEvent.LastFillQuantity,
+                executionEvent.FillPrice!.Value, executionEvent.Fees, executionEvent.OccurredAtUtc,
+                NativeDailySessionLedger.SourceSessionDate(executionEvent.OccurredAtUtc)));
         }
     }
 
@@ -579,7 +713,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 candidate.StrategyName,
                 candidate.Direction,
                 tracker.FirstEntryFillUtc ?? candidate.EntryTimestamp.ToUniversalTime(),
-                tracker.LastExitFillUtc ?? candidate.ExitTimestamp.ToUniversalTime(),
+                tracker.LastExitFillUtc ?? candidate.ExitTimestamp?.ToUniversalTime() ?? throw new InvalidDataException("A completed position requires an actual exit fill."),
                 tracker.EntryFilledQuantity,
                 Decimal.Round(entryPrice, 6),
                 Decimal.Round(exitPrice, 6),
@@ -629,6 +763,10 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             lastBar?.Bar.Close,
             lastBar?.AvailableAtUtc);
         _failures.Add(failure);
+        // Preserve every open exposure when a fine treatment aborts globally.
+        if (tracker.Plan.Candidate.ExecutionReplay is not null)
+            foreach (var other in _active.Where(item => !item.IsTerminal).ToArray())
+                Fail(other, "treatment_aborted_after_missing_or_invalid_execution_evidence");
         _executionEvidence?.Append(new ExecutionEvent(
             failure.Ticker,
             failure.StrategyName,
@@ -671,7 +809,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         IReadOnlyCollection<ExecutionTracker> trackers)
     {
         var executionTimeframes = trackers
-            .Select(tracker => tracker.Plan.Strategy.Execution.Timeframe.Trim().ToLowerInvariant())
+            .Select(tracker => tracker.Plan.ExecutionTimeframe.Trim().ToLowerInvariant())
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         if (executionTimeframes.Length != 1)
@@ -767,6 +905,8 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         public bool IsShort => Plan.Candidate.Direction.Equals("short", StringComparison.OrdinalIgnoreCase);
         public bool EntrySubmitted { get; set; }
         public bool ExitSubmitted { get; set; }
+        public bool MarketExitSubmitted { get; set; }
+        public int NextRequiredSlice { get; set; }
         public bool IsTerminal { get; set; }
         public int EntryFilledQuantity { get; set; }
         public decimal EntryFilledNotional { get; set; }
@@ -860,7 +1000,11 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
 internal sealed record ChronologicalExecutionPlan(
     BacktestCandidateTrade Candidate,
     StrategyDefinition Strategy,
-    int RequestedQuantity);
+    int RequestedQuantity)
+{
+    public string ExecutionTimeframe => Candidate.ExecutionReplay is null
+        ? Strategy.Execution.Timeframe : ExecutionReplayPolicy.Timeframe;
+}
 
 internal sealed record ActiveBacktestExecution(
     string Ticker,

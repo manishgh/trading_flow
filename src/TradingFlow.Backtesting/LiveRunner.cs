@@ -37,8 +37,11 @@ public sealed partial class LiveRunner(
     IMarketStateSnapshotProvider? marketStateSnapshots = null,
     TradingFlow.Domain.Persistence.ICandidateRepository? candidateRepository = null,
     TimeProvider? timeProvider = null,
-    TimeSpan? iterationInterval = null)
+    TimeSpan? iterationInterval = null,
+    IStrategyDecisionContextProvider? decisionContextProvider = null)
 {
+    private readonly IStrategyDecisionContextProvider? _configuredDecisionContextProvider = decisionContextProvider;
+    private IStrategyDecisionContextProvider? _decisionContextProvider;
     private readonly CandlePipelineEngine _candlePipeline = new(candleStore);
     private readonly TechnicalExecutionEngine _technicalExecutionEngine = new();
     private readonly ExecutionAuditor _auditor = new();
@@ -99,6 +102,7 @@ public sealed partial class LiveRunner(
             progress);
     }
 
+    /// <summary>Validates supported strategies before starting provider or broker work for this run.</summary>
     private async Task RunCoreAsync(
         BacktestRunConfig run,
         StrategyDefinition[] strategies,
@@ -106,7 +110,9 @@ public sealed partial class LiveRunner(
         CancellationToken cancellationToken,
         IProgress<string>? progress)
     {
+        foreach (var strategy in strategies) TechnicalExecutionEngine.RequireSupportedExitPolicy(strategy);
         RunUniverseValidator.RequireResolved(run);
+        _decisionContextProvider = _configuredDecisionContextProvider ?? FrozenManifestDecisionContextProvider.FromConfig(run.Engine);
         RequireSwingStrategies(strategies);
         runtimeStrategies = authorizations;
         logger.LogInformation("Starting LiveRunner for run: {RunName}", run.RunName);

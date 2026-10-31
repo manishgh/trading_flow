@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Engine.Risk;
 
 namespace TradingFlow.Backtesting.Artifacts;
 
@@ -115,6 +116,7 @@ public static class BacktestArtifactIntegrity
         }
     }
 
+    // Build a bounded disk index that connects original decisions/events to every published trade and native book claim.
     private static async Task VerifySemanticContinuityAsync(
         string artifactRoot,
         BacktestArtifactManifest manifest,
@@ -126,10 +128,10 @@ public static class BacktestArtifactIntegrity
             await using var connection = new SqliteConnection($"Data Source={indexPath};Mode=ReadWriteCreate");
             await connection.OpenAsync(cancellationToken);
             await ExecuteAsync(connection,
-                "CREATE TABLE ids(candidate_id TEXT PRIMARY KEY, has_hypothesis INTEGER NOT NULL DEFAULT 0, has_portfolio INTEGER NOT NULL DEFAULT 0, has_completed_trade INTEGER NOT NULL DEFAULT 0);",
+                "CREATE TABLE ids(candidate_id TEXT PRIMARY KEY, ticker TEXT, strategy_id TEXT, has_hypothesis INTEGER NOT NULL DEFAULT 0, has_portfolio INTEGER NOT NULL DEFAULT 0, has_completed_trade INTEGER NOT NULL DEFAULT 0);",
                 cancellationToken);
             await ExecuteAsync(connection,
-                "CREATE TABLE fills(candidate_id TEXT NOT NULL, is_risk_reducing INTEGER NOT NULL, quantity INTEGER NOT NULL, notional TEXT NOT NULL, fees TEXT NOT NULL);",
+                "CREATE TABLE fills(candidate_id TEXT NOT NULL, is_risk_reducing INTEGER NOT NULL, quantity INTEGER NOT NULL, notional TEXT NOT NULL, fees TEXT NOT NULL, payload TEXT NOT NULL);",
                 cancellationToken);
             await ExecuteAsync(connection,
                 "CREATE INDEX idx_fills_candidate_id ON fills(candidate_id);",
@@ -137,13 +139,15 @@ public static class BacktestArtifactIntegrity
             await ExecuteAsync(connection,
                 "CREATE TABLE failures(candidate_id TEXT PRIMARY KEY, reason TEXT NOT NULL, open_signed_quantity INTEGER NOT NULL, payload TEXT NOT NULL);",
                 cancellationToken);
+            await ExecuteAsync(connection,
+                "CREATE TABLE terminal_states(candidate_id TEXT PRIMARY KEY, payload TEXT NOT NULL);", cancellationToken);
 
             var decisions = RequiredPath(artifactRoot, manifest, "candidate_decisions");
             await foreach (var item in ReadJsonFileArrayAsync(decisions, cancellationToken))
             {
                 var candidate = RequireProperty(item, "Candidate");
                 var candidateId = RequireString(candidate, "CandidateId");
-                await InsertCandidateAsync(connection, candidateId, cancellationToken);
+                await InsertCandidateAsync(connection, candidateId, candidate, cancellationToken);
             }
 
             var hypotheses = RequiredPath(artifactRoot, manifest, "candidate_hypotheses");
@@ -173,13 +177,24 @@ public static class BacktestArtifactIntegrity
             {
                 economicSummary.Add(await VerifyCompletedTradeAsync(connection, trade, cancellationToken));
             }
+            BacktestPortfolioState? nativeState = null;
+            if (TryGetProperty(unifiedPortfolio, "PortfolioState", out var stateJson) && stateJson.ValueKind == JsonValueKind.Object)
+            {
+                nativeState = stateJson.Deserialize<BacktestPortfolioState>()
+                    ?? throw new InvalidDataException("Native portfolio state is empty.");
+                await VerifyNativeStateAsync(connection, artifactRoot, manifest, nativeState,
+                    RequireDecimal(unifiedPortfolio, "StartingCapital"), economicSummary.TradeCount, cancellationToken);
+                var topState = RequireProperty(result.RootElement, "PortfolioState").Deserialize<BacktestPortfolioState>();
+                if (JsonSerializer.Serialize(topState) != JsonSerializer.Serialize(nativeState))
+                    throw new InvalidDataException("Top-level and unified native state differ.");
+            }
             await VerifyPublishedClaimsAsync(
                 connection,
                 manifest,
                 result.RootElement,
                 unifiedPortfolio,
                 economicSummary,
-                cancellationToken);
+                cancellationToken, nativeState);
         }
         finally
         {
@@ -188,6 +203,7 @@ public static class BacktestArtifactIntegrity
         }
     }
 
+    // Index original execution envelopes before projections can discard their fill clocks or terminal command details.
     private static async Task VerifyExecutionReferencesAsync(
         SqliteConnection connection,
         string path,
@@ -217,6 +233,8 @@ public static class BacktestArtifactIntegrity
                 !String.IsNullOrWhiteSpace(evidenceJson.GetString()))
             {
                 using var evidence = JsonDocument.Parse(evidenceJson.GetString()!);
+                if (TryGetProperty(evidence.RootElement, "AdmittedOrder", out _) && TryGetProperty(evidence.RootElement, "CutoffUtc", out _))
+                    await InsertTerminalStateAsync(connection, candidateId, item.GetRawText(), cancellationToken);
                 if (TryGetProperty(evidence.RootElement, "OpenSignedQuantity", out _))
                 {
                     var failureCandidateId = RequireString(evidence.RootElement, "CandidateId");
@@ -231,6 +249,7 @@ public static class BacktestArtifactIntegrity
                         candidateId,
                         RequireString(evidence.RootElement, "Reason"),
                         RequireSignedInt32(evidence.RootElement, "OpenSignedQuantity"),
+                        TryGetProperty(evidence.RootElement, "EvidenceUnavailable", out var unavailable) && unavailable.ValueKind == JsonValueKind.True,
                         evidenceJson.GetString()!,
                         cancellationToken);
                 }
@@ -248,21 +267,24 @@ public static class BacktestArtifactIntegrity
                         fillQuantity,
                         fillPrice,
                         fees,
+                        item.GetRawText(),
                         cancellationToken);
                 }
             }
         }
     }
 
+    /// <summary>Record unresolved exposure or explicitly unavailable execution evidence, including prefill failures.</summary>
     private static async Task InsertFailureAsync(
         SqliteConnection connection,
         string candidateId,
         string reason,
         int openSignedQuantity,
+        bool evidenceUnavailable,
         string payload,
         CancellationToken cancellationToken)
     {
-        if (openSignedQuantity == 0)
+        if (openSignedQuantity == 0 && !evidenceUnavailable)
             throw new InvalidDataException(
                 $"Execution failure candidate '{candidateId}' has no unresolved open quantity.");
 
@@ -291,7 +313,8 @@ public static class BacktestArtifactIntegrity
         JsonElement result,
         JsonElement unifiedPortfolio,
         VerifiedPortfolioEconomics economics,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        BacktestPortfolioState? nativeState = null)
     {
         var terminalFailureCount = await CountRowsAsync(connection, "failures", cancellationToken);
         var coverageFailures = manifest.Coverage.ExecutionFailures ?? [];
@@ -336,25 +359,27 @@ public static class BacktestArtifactIntegrity
             throw new InvalidDataException(
                 "Unified portfolio execution failure count does not match terminal evidence.");
 
-        var expectedComplete = terminalFailureCount == 0 && manifest.Coverage.FailedWorkItemCount == 0;
+        var expectedComplete = terminalFailureCount == 0 && manifest.Coverage.FailedWorkItemCount == 0 &&
+            (nativeState is null || nativeState.Sessions.Count > 0 && nativeState.Sessions.All(s => s.UnavailableReason is null && s.Equity is not null));
         var topLevelComplete = RequireBoolean(result, "EconomicResultsComplete");
         var unifiedComplete = RequireBoolean(unifiedPortfolio, "EconomicResultsComplete");
         if (topLevelComplete != expectedComplete || unifiedComplete != expectedComplete)
             throw new InvalidDataException(
                 "Economic completeness does not match terminal execution evidence.");
 
-        if (RequireInt32AllowZero(unifiedPortfolio, "AcceptedTradeCount") != economics.TradeCount)
+        if (RequireInt32AllowZero(unifiedPortfolio, "AcceptedTradeCount") != (nativeState?.AdmittedOrderCount ?? economics.TradeCount))
             throw new InvalidDataException(
                 "Unified portfolio accepted-trade count does not match the completed-trade artifact.");
 
         if (expectedComplete)
         {
-            VerifyCompletePortfolioEconomics(unifiedPortfolio, economics);
+            if (nativeState is null) VerifyCompletePortfolioEconomics(unifiedPortfolio, economics);
+            else VerifyNativeEconomicClaims(unifiedPortfolio, nativeState);
         }
         else
         {
-            VerifyNeutralEconomicProjection(result, "Backtest result");
-            VerifyNeutralEconomicProjection(unifiedPortfolio, "Unified portfolio");
+            VerifyNeutralEconomicProjection(result, "Backtest result", allowClosedFacts: nativeState is not null);
+            VerifyNeutralEconomicProjection(unifiedPortfolio, "Unified portfolio", allowClosedFacts: nativeState is not null);
         }
 
         var strategyResults = RequireProperty(result, "StrategyResults");
@@ -367,8 +392,163 @@ public static class BacktestArtifactIntegrity
                 throw new InvalidDataException(
                     "A strategy result claims complete economics while the unified portfolio is incomplete.");
             if (!strategyComplete)
-                VerifyNeutralEconomicProjection(strategyResult, "Strategy result");
+                VerifyNeutralEconomicProjection(strategyResult, "Strategy result", allowClosedFacts:
+                    TryGetProperty(strategyResult, "PortfolioState", out var strategyState) && strategyState.ValueKind == JsonValueKind.Object);
         }
+    }
+
+    // Verify native admitted/open state against actual portfolio fills and the independently retained session calendar.
+    private static async Task VerifyNativeStateAsync(SqliteConnection connection, string artifactRoot,
+        BacktestArtifactManifest manifest, BacktestPortfolioState state, decimal startingCapital, int closedCount,
+        CancellationToken token)
+    {
+        if (state.ValuationBasis is not (NativeDailySessionLedger.ValuationBasis or IntradayPortfolioExecution.ValuationBasis) || state.CutoffUtc <= state.StartUtc ||
+            state.StartUtc.Offset != TimeSpan.Zero || state.CutoffUtc.Offset != TimeSpan.Zero ||
+            state.ClosedTradeCount != closedCount || state.AdmittedOrderCount != state.AdmittedOrders.Count ||
+            state.AdmittedOrders.Select(o => o.CandidateId).Distinct(StringComparer.Ordinal).Count() != state.AdmittedOrderCount ||
+            state.FilledCandidateCount != state.Fills.Select(f => f.CandidateId).Distinct(StringComparer.Ordinal).Count())
+            throw new InvalidDataException("Native state identity, period or lifecycle counts are inconsistent.");
+        var orders = state.AdmittedOrders.ToDictionary(o => o.CandidateId, StringComparer.Ordinal);
+        foreach (var order in orders.Values)
+        {
+            if (order.RequestedQuantity <= 0 || order.ReferencePrice <= 0 || order.Direction is not ("long" or "short") ||
+                !await ExistsAsync(connection, order.CandidateId, "has_hypothesis = 1", token))
+                throw new InvalidDataException("Native admitted order lacks its positive plan or candidate hypothesis.");
+            await VerifyNativeCandidateIdentityAsync(connection, order, token);
+            await VerifyNativeTerminalStateAsync(connection, order, state, token);
+        }
+        if (await CountRowsAsync(connection, "terminal_states", token) != orders.Count)
+            throw new InvalidDataException("Native state omitted or duplicated an original cutoff observation.");
+        foreach (var group in state.Fills.GroupBy(f => f.CandidateId))
+        {
+            if (!orders.TryGetValue(group.Key, out var order) || group.Any(f => f.StrategyId != order.StrategyId || f.Ticker != order.Ticker ||
+                f.IsBuy != (f.IsEntry == (order.Direction == "long"))))
+                throw new InvalidDataException("Native fill differs from its admitted candidate or side.");
+            await VerifyNativeFillEventsAsync(connection, order, group.ToArray(), state.ValuationBasis, token);
+            var actual = await ReadFillSummaryAsync(connection, group.Key, token);
+            if (actual.EntryQuantity != group.Where(f => f.IsEntry).Sum(f => f.Quantity) ||
+                actual.ExitQuantity != group.Where(f => !f.IsEntry).Sum(f => f.Quantity) ||
+                actual.EntryNotional != group.Where(f => f.IsEntry).Sum(f => f.Quantity * f.Price) ||
+                actual.ExitNotional != group.Where(f => !f.IsEntry).Sum(f => f.Quantity * f.Price) ||
+                actual.Fees != group.Sum(f => f.Fees) || actual.EntryQuantity > order.RequestedQuantity)
+                throw new InvalidDataException("Native fill ledger does not reconcile with portfolio execution evidence.");
+        }
+        if (await CountRowsAsync(connection, "fills", token) != state.Fills.Count)
+            throw new InvalidDataException("Native state omitted or duplicated portfolio fills.");
+        if (state.PendingOrders.Any(o => !orders.ContainsKey(o.CandidateId) || o.RemainingQuantity <= 0 || o.ReservedNotional < 0) ||
+            state.PendingOrders.Select(o => o.OrderId).Distinct(StringComparer.Ordinal).Count() != state.PendingOrders.Count ||
+            state.PendingExits.Any(e => !state.OpenPositions.Any(p => p.CandidateId == e.CandidateId)))
+            throw new InvalidDataException("Native pending state lacks its actual admitted order or position.");
+        await using var calendarInput = File.OpenRead(RequiredPath(artifactRoot, manifest, "native_daily_calendar"));
+        var calendar = await JsonSerializer.DeserializeAsync<Dictionary<DateOnly, TradingFlow.Engine.Indicators.MarketSessionSchedule>>(
+            calendarInput, cancellationToken: token) ?? throw new InvalidDataException("Native valuation calendar is absent.");
+        NativeDailySessionLedger.VerifyRecordedState(startingCapital, state, new(state.StartUtc, state.CutoffUtc, calendar, true));
+    }
+
+    // Bind symbols and catalog strategy IDs to decisions; the original cutoff plan separately binds definition strategy IDs used by fills.
+    private static async Task VerifyNativeCandidateIdentityAsync(SqliteConnection connection, BacktestAdmittedOrder order, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT ticker, strategy_id FROM ids WHERE candidate_id = $candidate_id;";
+        command.Parameters.AddWithValue("$candidate_id", order.CandidateId);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        if (!await reader.ReadAsync(token) || reader.IsDBNull(0) || reader.IsDBNull(1) ||
+            reader.GetString(0) != order.Ticker || reader.GetString(1) != order.DecisionStrategyId)
+            throw new InvalidDataException("Native admitted ticker or catalog strategy differs from its original candidate decision.");
+    }
+
+    // Match a multiset of physical fill events so a shifted month, changed side, split fill or duplicate cannot hide in aggregate totals.
+    private static async Task VerifyNativeFillEventsAsync(SqliteConnection connection, BacktestAdmittedOrder order,
+        IReadOnlyList<BacktestPortfolioFill> fills, string valuationBasis, CancellationToken token)
+    {
+        var firstEntry = fills.Where(fill => fill.IsEntry).Select(fill => (DateTimeOffset?)fill.TimestampUtc).Min();
+        if (fills.Any(fill => !fill.IsEntry && (firstEntry is null || fill.TimestampUtc < firstEntry)))
+            throw new InvalidDataException("An exit fill precedes its parent's first actual entry fill.");
+        var remaining = fills.GroupBy(fill => fill).ToDictionary(group => group.Key, group => group.Count());
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT payload FROM fills WHERE candidate_id = $candidate_id;";
+        command.Parameters.AddWithValue("$candidate_id", order.CandidateId);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token))
+        {
+            using var envelope = JsonDocument.Parse(reader.GetString(0));
+            var original = envelope.RootElement;
+            using var payload = JsonDocument.Parse(RequireString(original, "EvidenceJson"));
+            var execution = payload.RootElement.Deserialize<SimulatedExecutionEvent>()
+                ?? throw new InvalidDataException("Native fill has no original execution event.");
+            if (!Enum.IsDefined(execution.Side) || RequireString(original, "ReferenceId") != order.CandidateId ||
+                RequireString(original, "Ticker") != order.Ticker || execution.Symbol != order.Ticker ||
+                RequireDateTimeOffset(original, "Timestamp") != execution.OccurredAtUtc || execution.FillPrice is not > 0 ||
+                execution.LastFillQuantity <= 0 || execution.Fees < 0)
+                throw new InvalidDataException("Native fill identity, side or timestamp differs from its original execution envelope.");
+            var observed = new BacktestPortfolioFill(order.CandidateId, order.StrategyId, execution.Symbol,
+                execution.Side == SimulatedOrderSide.Buy, !execution.IsRiskReducing, execution.LastFillQuantity,
+                execution.FillPrice.Value, execution.Fees, execution.OccurredAtUtc,
+                NativeDailySessionLedger.SourceSessionDate(execution.OccurredAtUtc, valuationBasis));
+            if (!remaining.TryGetValue(observed, out var count) || count == 0)
+                throw new InvalidDataException("Native fill does not match one original execution event's timestamp, side, quantity, price and fees.");
+            remaining[observed] = count - 1;
+        }
+        if (remaining.Values.Any(count => count != 0))
+            throw new InvalidDataException("Native fill has no matching original execution event.");
+    }
+
+    // Compare every pending command and intention with the coordinator's immutable cutoff observation, including empty lists.
+    private static async Task VerifyNativeTerminalStateAsync(SqliteConnection connection, BacktestAdmittedOrder order,
+        BacktestPortfolioState state, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT payload FROM terminal_states WHERE candidate_id = $candidate_id;";
+        command.Parameters.AddWithValue("$candidate_id", order.CandidateId);
+        var json = await command.ExecuteScalarAsync(token) as string
+            ?? throw new InvalidDataException("Native admitted order has no original cutoff observation.");
+        using var envelope = JsonDocument.Parse(json);
+        using var payload = JsonDocument.Parse(RequireString(envelope.RootElement, "EvidenceJson"));
+        var observation = payload.RootElement;
+        var pendingOrders = RequireProperty(observation, "PendingOrders").Deserialize<BacktestPendingOrder[]>()
+            ?? throw new InvalidDataException("Native cutoff observation has no pending-order list.");
+        var pendingExits = RequireProperty(observation, "PendingExits").Deserialize<BacktestPendingExit[]>()
+            ?? throw new InvalidDataException("Native cutoff observation has no pending-exit list.");
+        if (RequireDateTimeOffset(envelope.RootElement, "Timestamp") != state.CutoffUtc ||
+            RequireString(envelope.RootElement, "Ticker") != order.Ticker ||
+            RequireDateTimeOffset(observation, "CutoffUtc") != state.CutoffUtc ||
+            RequireProperty(observation, "AdmittedOrder").Deserialize<BacktestAdmittedOrder>() != order ||
+            RequireSignedInt32(observation, "TerminalSignedQuantity") != state.OpenPositions.Where(position => position.CandidateId == order.CandidateId).Sum(position => position.SignedQuantity) ||
+            !pendingOrders.OrderBy(item => item.OrderId, StringComparer.Ordinal).SequenceEqual(
+                state.PendingOrders.Where(item => item.CandidateId == order.CandidateId).OrderBy(item => item.OrderId, StringComparer.Ordinal)) ||
+            !pendingExits.SequenceEqual(state.PendingExits.Where(item => item.CandidateId == order.CandidateId)))
+            throw new InvalidDataException("Native pending order, exit intention or admitted plan differs from its original cutoff execution state.");
+    }
+
+    // A candidate has exactly one cutoff observation; duplicates are conflicting lifecycle evidence.
+    private static async Task InsertTerminalStateAsync(SqliteConnection connection, string candidateId, string payload, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO terminal_states(candidate_id, payload) VALUES ($candidate_id, $payload);";
+        command.Parameters.AddWithValue("$candidate_id", candidateId);
+        command.Parameters.AddWithValue("$payload", payload);
+        try { await command.ExecuteNonQueryAsync(token); }
+        catch (SqliteException error) when (error.SqliteErrorCode == 19)
+        { throw new InvalidDataException("Native candidate has duplicate cutoff execution observations.", error); }
+    }
+
+    // Equity claims include realized and unrealized profit; the original closed-trade verifier remains for older results.
+    private static void VerifyNativeEconomicClaims(JsonElement portfolio, BacktestPortfolioState state)
+    {
+        var starting = RequireDecimal(portfolio, "StartingCapital");
+        var ending = state.Sessions[^1].Equity ?? throw new InvalidDataException("Native final equity is unavailable.");
+        var high = starting; var drawdown = 0m;
+        foreach (var session in state.Sessions)
+        {
+            var equity = session.Equity ?? throw new InvalidDataException("Native equity prefix is incomplete.");
+            high = Math.Max(high, equity);
+            if (high > 0) drawdown = Math.Max(drawdown, (high - equity) / high * 100m);
+        }
+        if (RequireDecimal(portfolio, "EndingCapital") != Decimal.Round(ending, 4) ||
+            RequireDecimal(portfolio, "NetProfit") != Decimal.Round(ending - starting, 4) ||
+            RequireDecimal(portfolio, "TotalReturnPct") != Decimal.Round(starting > 0 ? (ending - starting) / starting * 100m : 0, 4) ||
+            RequireDecimal(portfolio, "MaxDrawdownPct") != Decimal.Round(drawdown, 4))
+            throw new InvalidDataException("Native equity claims do not match the reconciled session ledger.");
     }
 
     private static void VerifyCompletePortfolioEconomics(
@@ -392,7 +572,8 @@ public static class BacktestArtifactIntegrity
         }
     }
 
-    private static void VerifyNeutralEconomicProjection(JsonElement projection, string description)
+    // Withhold scalar economic claims when execution is incomplete, retaining native closed facts for supported earlier months.
+    private static void VerifyNeutralEconomicProjection(JsonElement projection, string description, bool allowClosedFacts = false)
     {
         var startingCapital = RequireDecimal(projection, "StartingCapital");
         if (RequireDecimal(projection, "EndingCapital") != startingCapital ||
@@ -407,7 +588,7 @@ public static class BacktestArtifactIntegrity
         }
 
         var completedTrades = RequireProperty(projection, "CompletedTrades");
-        if (completedTrades.ValueKind != JsonValueKind.Array || completedTrades.GetArrayLength() != 0)
+        if (completedTrades.ValueKind != JsonValueKind.Array || !allowClosedFacts && completedTrades.GetArrayLength() != 0)
             throw new InvalidDataException(
                 $"{description} publishes completed trades despite incomplete execution evidence.");
     }
@@ -464,6 +645,8 @@ public static class BacktestArtifactIntegrity
         var expectedNetProfit = RequireDecimal(trade, "NetProfit");
         var direction = RequireString(trade, "Direction");
         var exitTimestamp = RequireDateTimeOffset(trade, "ExitTimestamp");
+        if (TryGetProperty(trade, "EntryTimestamp", out var entryTimestamp) && entryTimestamp.GetDateTimeOffset() > exitTimestamp)
+            throw new InvalidDataException("A completed trade exits before its actual entry timestamp.");
         var fills = await ReadFillSummaryAsync(connection, candidateId, cancellationToken);
         if (fills.EntryQuantity != expectedQuantity || fills.ExitQuantity != expectedQuantity)
             throw new InvalidDataException(
@@ -493,6 +676,7 @@ public static class BacktestArtifactIntegrity
         return new VerifiedTradeEconomics(exitTimestamp, netProfit);
     }
 
+    // Retain the original envelope beside aggregate columns so native reports can reconcile exact physical events.
     private static async Task InsertFillAsync(
         SqliteConnection connection,
         string candidateId,
@@ -500,16 +684,18 @@ public static class BacktestArtifactIntegrity
         int quantity,
         decimal price,
         decimal fees,
+        string payload,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
         command.CommandText =
-            "INSERT INTO fills(candidate_id, is_risk_reducing, quantity, notional, fees) VALUES ($candidate_id, $is_risk_reducing, $quantity, $notional, $fees);";
+            "INSERT INTO fills(candidate_id, is_risk_reducing, quantity, notional, fees, payload) VALUES ($candidate_id, $is_risk_reducing, $quantity, $notional, $fees, $payload);";
         command.Parameters.AddWithValue("$candidate_id", candidateId);
         command.Parameters.AddWithValue("$is_risk_reducing", isRiskReducing ? 1 : 0);
         command.Parameters.AddWithValue("$quantity", quantity);
         command.Parameters.AddWithValue("$notional", (quantity * price).ToString(CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$fees", fees.ToString(CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$payload", payload);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -548,17 +734,21 @@ public static class BacktestArtifactIntegrity
         return summary;
     }
 
+    // Keep original symbol and catalog strategy with the decision ID; older realized-only reports may omit those fields.
     private static async Task InsertCandidateAsync(
         SqliteConnection connection,
         string candidateId,
+        JsonElement candidate,
         CancellationToken cancellationToken)
     {
         try
         {
-            await ExecuteAsync(connection,
-                "INSERT INTO ids(candidate_id) VALUES ($candidate_id);",
-                cancellationToken,
-                candidateId);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "INSERT INTO ids(candidate_id, ticker, strategy_id) VALUES ($candidate_id, $ticker, $strategy_id);";
+            command.Parameters.AddWithValue("$candidate_id", candidateId);
+            command.Parameters.AddWithValue("$ticker", TryGetProperty(candidate, "Symbol", out var ticker) && ticker.ValueKind == JsonValueKind.String ? ticker.GetString()! : DBNull.Value);
+            command.Parameters.AddWithValue("$strategy_id", TryGetProperty(candidate, "SelectedStrategy", out var strategy) && strategy.ValueKind == JsonValueKind.String ? strategy.GetString()! : DBNull.Value);
+            await command.ExecuteNonQueryAsync(cancellationToken);
         }
         catch (SqliteException exception) when (exception.SqliteErrorCode == 19)
         {
@@ -689,12 +879,13 @@ public static class BacktestArtifactIntegrity
         }
     }
 
+    /// <summary>Counts each artifact using its declared container shape, rejecting malformed SIP evidence objects.</summary>
     private static async Task<long> CountRecordsAsync(
         string kind,
         string path,
         CancellationToken cancellationToken)
     {
-        if (kind == "candidate_raw_journal")
+        if (kind is "candidate_raw_journal" or "zone_evaluations")
         {
             long lines = 0;
             using var reader = new StreamReader(path);
@@ -702,6 +893,14 @@ public static class BacktestArtifactIntegrity
             return lines;
         }
         if (kind == "backtest_result") return 1;
+        if (kind is "native_daily_calendar" or "event_source_manifest" or "event_portfolio_request" or "event_portfolio_source_audit" or "event_portfolio_outcome" or "event_exchange_calendar_receipt")
+        {
+            await using var documentStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var document = await JsonDocument.ParseAsync(documentStream, cancellationToken: cancellationToken);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("SIP source evidence requires one complete JSON object.");
+            return 1;
+        }
 
         await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
             64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);

@@ -6,7 +6,8 @@ public sealed record BacktestProgress(
     string? Ticker,
     int CompletedTickerCount,
     int TotalTickerCount,
-    string? StrategyName = null)
+    string? StrategyName = null,
+    TradingFlow.Domain.Backtesting.PreparedMarketDataSummary? PreparedMarketData = null)
 {
     public static BacktestProgress StageOnly(string stage, string message)
     {

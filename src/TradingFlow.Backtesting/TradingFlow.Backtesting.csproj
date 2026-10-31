@@ -16,5 +16,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="TradingFlow.Tests" />
+    <InternalsVisibleTo Include="TradingFlow.Web" />
   </ItemGroup>
 </Project>
