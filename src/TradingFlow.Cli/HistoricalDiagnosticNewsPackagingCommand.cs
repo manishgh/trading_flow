@@ -33,7 +33,8 @@ public static class HistoricalDiagnosticNewsPackagingCommand
             var store = new FileSystemImmutableArtifactStore(new ImmutableArtifactStoreOptions(Path.Combine(evidenceRoot, "objects")));
             var catalog = new SqliteEvidenceCatalog(new EvidenceCatalogOptions(Path.GetFullPath(Require(options, "--catalog")),
                 EvidenceCatalogOpenMode.OpenExisting), store);
-            await HistoricalCatalogArchiveImporter.ImportAsync(catalog, store, datasets, derivedRoot, cancellationToken: cancellationToken);
+            var marketDataRest = TradingFlow.Alpaca.AlpacaEndpointResolver.Resolve(TradingFlow.Engine.Configuration.ProductionProfile.Paper).MarketDataRest;
+            await HistoricalCatalogArchiveImporter.ImportAsync(catalog, store, datasets, derivedRoot, marketDataRest, cancellationToken: cancellationToken);
             if (options.ContainsKey("--calendar-manifest"))
                 HistoricalCatalogArchiveImporter.ImportCapturedCalendar(derivedRoot,
                     Path.GetFullPath(Require(options, "--calendar-manifest")), Path.GetFullPath(Require(options, "--calendar-payload")));

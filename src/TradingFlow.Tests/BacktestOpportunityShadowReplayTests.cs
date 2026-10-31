@@ -69,7 +69,7 @@ public sealed class BacktestOpportunityShadowReplayTests
         Assert.All(outcomes, item => Assert.InRange(item.CompletedTrade!.ShareQuantity, 1, 250));
         var method = typeof(BacktestRunner).GetMethod("BuildUnifiedPortfolioResult", BindingFlags.Static | BindingFlags.NonPublic)!;
         var combined = (UnifiedPortfolioBacktestResult)method.Invoke(null,
-            new object?[] { snapshot.Portfolio, snapshot.Strategies, snapshot.Candidates, snapshot.MarketBars, null, null, null })!;
+            new object?[] { snapshot.Portfolio, snapshot.Strategies, snapshot.Candidates, snapshot.MarketBars, null, null, null, null })!;
         Assert.Single(combined.CompletedTrades);
         Assert.Contains("portfolio_overlapping_ticker_position", combined.AdmissionRejectionCounts!.Keys);
     }

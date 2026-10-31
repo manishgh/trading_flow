@@ -1,3 +1,4 @@
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Web.Services;
 
@@ -24,7 +25,7 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
-    public void BacktestResearchStrategies_ContainOnlyDailySwingSetups()
+    public void BacktestResearchStrategies_UseDailySetupsUnlessDeclaredSameDay()
     {
         var root = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
@@ -37,7 +38,10 @@ public sealed class RunConfigParsingTests
         foreach (var path in paths)
         {
             var strategy = reader.ReadStrategy(path);
-            Assert.Equal("1d", strategy.Timeframe, ignoreCase: true);
+            if (StrategyHorizonResolver.Resolve(strategy) == "swing")
+                Assert.Equal("1d", strategy.Timeframe, ignoreCase: true);
+            else
+                Assert.NotEqual("1d", strategy.Timeframe, StringComparer.OrdinalIgnoreCase);
         }
     }
 

@@ -37,7 +37,16 @@ public sealed class ConfigCatalogServiceTests
             "technical.recovery-sma5-qualified-coverage@1.1.0",
             "technical.recovery-sma5-qualified-negative-veto@1.1.0",
             "technical.recovery-sma5-qualified-positive-required@1.1.0",
-            "technical.recovery-sma5-qualified-technical@1.1.0"
+            "technical.recovery-sma5-qualified-technical@1.1.0",
+            "technical.zone-bounce-volume-risk-target@1.0.0",
+            "technical.zone-bounce-volume@1.0.0",
+            "technical.zone-breakout-retest@1.0.0",
+            "technical.zone-intraday@1.0.0",
+            "technical.zone-python-comparison@1.0.0",
+            "technical.zone-risk-target@1.0.0",
+            "technical.zone-two-candle-stop@1.0.0",
+            "technical.zone-volume-spread-comparison@1.0.0",
+            "technical.zone-volume-spread-no-rr@1.0.0"
         }, strategies.Select(strategy => $"{strategy.Identity.StrategyId}@{strategy.Identity.SemanticVersion}")
             .Order(StringComparer.Ordinal));
         Assert.Contains(strategies, strategy =>
@@ -51,8 +60,8 @@ public sealed class ConfigCatalogServiceTests
         Assert.All(strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "swing"),
             strategy => Assert.Equal("1d", strategy.Definition.Timeframe));
         var dayStrategies = strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "day").ToArray();
-        Assert.Equal(4, dayStrategies.Length);
-        Assert.All(dayStrategies, strategy => Assert.Equal("5m", strategy.Definition.Timeframe));
+        Assert.Equal(13, dayStrategies.Length);
+        Assert.All(dayStrategies, strategy => Assert.Contains(strategy.Definition.Timeframe, new[] { "5m", "15m" }));
         Assert.All(strategies, strategy => Assert.Equal(StrategyLifecycleState.Research, strategy.Lifecycle));
         Assert.DoesNotContain(strategies, strategy =>
             strategy.FileName == "brian_shannon_mta_avwap_strategies.yaml");

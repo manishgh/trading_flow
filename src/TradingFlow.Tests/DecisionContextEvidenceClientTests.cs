@@ -38,7 +38,7 @@ public sealed class DecisionContextEvidenceClientTests
             "Fixed buy fee USD: 1 · Fixed sell fee USD: 2",
             "SEC fee rate: 0.00001 · FINRA TAF per share USD: 0.0002 · FINRA TAF cap USD: 8",
             "Maximum bar participation percent: 5 · Impact bps at maximum participation: 3",
-            "Execution replay policy: native-open-cutoff", "Cutoff policy: Not specified", "Precommitted liquidation source UTC: Not specified",
+            "Execution replay policy: native-open-cutoff", "Strategy horizon: swing", "Cutoff policy: Not specified", "Precommitted liquidation source UTC: Not specified",
             "Recipe: Recovery fixture · recipe 2.0.0 (" + new string('d', 64) + ")", "Adverse slippage bps: 10",
             "Parent: original 1.0.0 (" + new string('f', 64) + ")", "Admission: reviewed-native 1.0.0",
             "Execution timing: existing-native · Risk policy: shared-risk"

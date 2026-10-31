@@ -49,6 +49,8 @@ public sealed class SipExecutionArchiveCollector(HttpClient client)
     public const string Version = "alpaca-sip-raw-nanosecond-archive-v1";
     public const string QuoteSizeContract = "alpaca-cta-utp-shares-from-2025-11-03";
     private static readonly long ShareSizeStart = SipNanosecondTime.Parse("2025-11-03T00:00:00Z");
+    // Market data endpoints are profile-neutral; the resolver still owns the address.
+    private static readonly Uri MarketDataRest = AlpacaEndpointResolver.Resolve(TradingFlow.Engine.Configuration.ProductionProfile.Paper).MarketDataRest;
 
     public async Task<SipArchiveManifest> CollectAsync(SipArchiveRequest request, string directory,
         long minimumFreeBytes = 2_000_000_000, int maximumPages = 1_000_000,
@@ -103,7 +105,7 @@ public sealed class SipExecutionArchiveCollector(HttpClient client)
                 var query = $"symbols={Uri.EscapeDataString(request.Symbol)}&start={Uri.EscapeDataString(request.StartInclusive)}" +
                     $"&end={Uri.EscapeDataString(SipNanosecondTime.Format(end - 1))}&feed=sip&sort=asc&limit=10000" +
                     $"&asof={request.MappingAsOf}" + (token is null ? "" : "&page_token=" + Uri.EscapeDataString(token));
-                var bytes = await FetchAsync($"https://data.alpaca.markets/v2/stocks/{request.Kind}?{query}", cancellationToken);
+                var bytes = await FetchAsync($"{MarketDataRest.AbsoluteUri}v2/stocks/{request.Kind}?{query}", cancellationToken);
                 var audit = Inspect(bytes, request, start, end);
                 var compressed = Compress(bytes);
                 var payloadPath = Path.Combine(directory, prefix + ".json.gz");

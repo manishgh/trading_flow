@@ -13,7 +13,7 @@ public static class HistoricalCatalogArchiveImporter
 {
     /// <summary>Copies verified original raw bytes and frozen catalog lineage into a new output root without changing any original object.</summary>
     public static async Task<HistoricalEvidenceManifest> ImportAsync(IEvidenceCatalog catalog, IImmutableArtifactStore store,
-        IEnumerable<string> datasetIds, string outputRoot, DateTimeOffset? builtAtUtc = null, CancellationToken cancellationToken = default)
+        IEnumerable<string> datasetIds, string outputRoot, Uri marketDataRest, DateTimeOffset? builtAtUtc = null, CancellationToken cancellationToken = default)
     {
         if (!Path.IsPathFullyQualified(outputRoot)) throw new InvalidDataException("Derived archive output must be absolute.");
         if (Directory.Exists(outputRoot) && Directory.EnumerateFileSystemEntries(outputRoot).Any())
@@ -54,7 +54,7 @@ public static class HistoricalCatalogArchiveImporter
                     using var copy = new MemoryStream();
                     await raw.CopyToAsync(copy, cancellationToken);
                     var bytes = copy.ToArray();
-                    VerifyRequest(request, selected, token);
+                    VerifyRequest(request, selected, token, marketDataRest);
                     var resource = Uri.TryCreate(request.Endpoint, UriKind.Absolute, out var endpoint) ? endpoint.AbsolutePath : request.Endpoint;
                     var parameters = Parameters(request, token);
                     var payloadPath = Path.Combine("datasets", selected.Artifact.Content.Sha256 + ".json");
@@ -108,13 +108,13 @@ public static class HistoricalCatalogArchiveImporter
     }
 
     /// <summary>Checks the immutable observation belongs to the exact request and reuses its provider adapter to verify the actual request URI hash.</summary>
-    private static void VerifyRequest(EvidenceCollectionRequest request, EvidenceSourceObservation observation, string? token)
+    private static void VerifyRequest(EvidenceCollectionRequest request, EvidenceSourceObservation observation, string? token, Uri marketDataRest)
     {
         if (observation.IngestionRequestId != request.RequestId || observation.Endpoint != request.Endpoint ||
             observation.RequestedStartUtc != request.RequestedStartUtc || observation.RequestedEndUtc != request.RequestedEndUtc ||
             !observation.RequestedSymbols.SequenceEqual(request.Symbols)) throw new InvalidDataException("Catalog raw page request identity differs.");
         if (!request.Endpoint.EndsWith("/v1beta1/news", StringComparison.Ordinal)) return;
-        var adapter = new AlpacaNewsEvidenceRequestAdapter(new Uri("https://data.alpaca.markets"));
+        var adapter = new AlpacaNewsEvidenceRequestAdapter(marketDataRest);
         using var message = adapter.CreateRequest(request, token);
         var actualHash = HistoricalEvidenceManifestStore.Hash(Encoding.UTF8.GetBytes(message.RequestUri!.AbsoluteUri));
         if (!observation.RequestAttributes.TryGetValue("request_uri_sha256", out var expected) || actualHash != expected)
