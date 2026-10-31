@@ -1,6 +1,6 @@
 # Azure Kubernetes Service Deployment
 
-For the current source, start with the [5 October 2026 deployment plan](integration/azure-deployment-plan-2026-10-05.md). The historical templates below need the ownership, SQLite storage and ingress changes identified there before deployment.
+For the current source, start with [deployment ownership and service access, 21 October 2026](integration/service-access-and-storage-2026-10-21.md). It identifies the authoritative templates, single SQLite owner, private warm-up access and checks still required before deployment. The instructions below are historical context, not authorization to apply the former shared-files layout.
 
 This is the primary Azure deployment path for TradingFlow.
 
