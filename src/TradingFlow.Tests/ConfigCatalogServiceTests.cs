@@ -25,6 +25,7 @@ public sealed class ConfigCatalogServiceTests
         Assert.Equal(new[]
         {
             "swing.connors-rsi2@6.0.0",
+            "swing.connors-rsi2@7.0.0",
             "swing.minervini-vcp@10.0.0",
             "technical.opening-range-breakout@1.0.0",
             "technical.opening-range-breakout@1.1.0",

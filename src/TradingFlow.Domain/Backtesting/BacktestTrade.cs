@@ -21,6 +21,10 @@ public sealed record BacktestCandidateTrade(
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public CandidateExecutionReplay? ExecutionReplay { get; init; }
 
+    // Sizing input known before the open; null keeps the original open-derived sizing.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? PlanningReferencePrice { get; init; }
+
     // A completed exit decision can await an executable slice beyond the frozen study.
     public BacktestPendingExitDecision? PendingExitDecision { get; init; }
     public string DecisionStrategyId { get; init; } = "";

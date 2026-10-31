@@ -66,10 +66,12 @@ public sealed partial class BacktestRunner
         var referenceVolume = snapshots[plan.StopContextIndex].RelativeVolume ?? 1m;
         var entryPrice = DynamicSlippageModel.ApplyLongSlippage(opening.Open, referenceVolume,
             strategy.Execution.SlippageBps, amount);
-        var distance = entryPrice - plan.InitialStopPrice;
+        // A kept gap needs no special exit here: the book's stop acts on the first slice after the fill.
+        var planningPrice = strategy.Execution.KeepsOpeningGaps() ? daily[entryIndex - 1].Close : entryPrice;
+        var distance = planningPrice - plan.InitialStopPrice;
         if (distance <= 0 || plan.InitialStopPrice <= 0) return null;
-        var target = ResolveTakeProfitPrice(plan, entryPrice, distance);
-        if (target <= entryPrice) return null;
+        var target = ResolveTakeProfitPrice(plan, planningPrice, distance);
+        if (target <= planningPrice) return null;
 
         var (exitIndex, reason) = FineExecutionTiming.DailyExit(strategy, daily, snapshots, entryIndex,
             terminalSource, bar => _sessionClock.ValidateExecutionWindow(bar.Timestamp, strategy.Execution.Timeframe, strategy.Session),

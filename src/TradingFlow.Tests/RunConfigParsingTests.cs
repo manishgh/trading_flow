@@ -25,6 +25,28 @@ public sealed class RunConfigParsingTests
     }
 
     [Fact]
+    public void OpeningGapPolicy_IsOptInAndRejectsUnknownValues()
+    {
+        var root = FindRepositoryRoot();
+        var reader = new SimpleYamlReader();
+        var strategies = Path.Combine(root, "configs", "backtest", "strategies");
+        var kept = Path.Combine(strategies, "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
+        Assert.Equal(ExecutionRules.KeepAndExitNextOpen, reader.ReadStrategy(kept).Execution.OpeningGapPolicy);
+        Assert.Null(reader.ReadStrategy(Path.Combine(strategies, "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml")).Execution.OpeningGapPolicy);
+
+        var invalid = Path.Combine(Path.GetTempPath(), $"opening-gap-{Guid.NewGuid():N}.yaml");
+        try
+        {
+            File.WriteAllText(invalid, File.ReadAllText(kept).Replace(ExecutionRules.KeepAndExitNextOpen, "guess"));
+            Assert.Throws<InvalidOperationException>(() => reader.ReadStrategy(invalid));
+        }
+        finally
+        {
+            File.Delete(invalid);
+        }
+    }
+
+    [Fact]
     public void BacktestResearchStrategies_UseDailySetupsUnlessDeclaredSameDay()
     {
         var root = FindRepositoryRoot();

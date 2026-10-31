@@ -668,7 +668,7 @@ public sealed partial class BacktestRunner
                     candidate.Ticker,
                     side,
                     equity,
-                    candidate.EntryPrice,
+                    candidate.PlanningReferencePrice ?? candidate.EntryPrice,
                     PlannedStopRequest.FromResolvedPrice(
                         candidate.InitialStopKind.Equals("atr", StringComparison.OrdinalIgnoreCase)
                             ? PlannedStopKind.Atr

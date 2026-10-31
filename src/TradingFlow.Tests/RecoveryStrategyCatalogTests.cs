@@ -20,7 +20,7 @@ public sealed class RecoveryStrategyCatalogTests(ITestOutputHelper output)
     public void OriginalResearchControls_KeepTheirPublishedCanonicalHashes(string id, string version, string hash)
     {
         var artifact = Assert.Single(CreateCatalog().GetSnapshot().ExecutableArtifacts,
-            artifact => artifact.Identity.StrategyId == id);
+            artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == version);
         Assert.Equal(new StrategyArtifactIdentity(id, version, hash), artifact.Identity);
         Assert.Null(artifact.DerivedFromIdentity);
         Assert.Null(artifact.DerivedFromContentSha256);
@@ -117,7 +117,7 @@ public sealed class RecoveryStrategyCatalogTests(ITestOutputHelper output)
         Assert.Equal(control.Identity, derived.DerivedFromIdentity);
         Assert.Equal(control.Identity.ContentSha256, derived.DerivedFromContentSha256);
         var originalControl = Assert.Single(catalog.GetSnapshot().ExecutableArtifacts,
-            artifact => artifact.Identity.StrategyId == "swing.connors-rsi2");
+            artifact => artifact.Identity.StrategyId == "swing.connors-rsi2" && artifact.Identity.SemanticVersion == "6.0.0");
         Assert.DoesNotContain("derivedFromIdentity", Encoding.UTF8.GetString(
             EvidenceCanonicalJson.SerializeToUtf8Bytes(originalControl)), StringComparison.Ordinal);
     }

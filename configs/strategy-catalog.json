@@ -101,6 +101,17 @@
       "executionTimingPolicy": "completed-bar-next-slice-market-exits-v3"
     },
     {
+      "profileId": "causal-market-exits-kept-gaps-v4",
+      "profileVersion": "4.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.1.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-v4"
+    },
+    {
       "profileId": "historical-news-presence-v1",
       "profileVersion": "1.0.0",
       "parserProfile": "simple-yaml-strict-v2",
@@ -467,6 +478,14 @@
       "lifecycle": "research",
       "admissionProfileId": "causal-market-exits-v3",
       "reason": "Same economic rules; causal completed-bar market exit scheduling and improved research diagnostics."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml",
+      "strategyId": "swing.connors-rsi2",
+      "semanticVersion": "7.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "causal-market-exits-kept-gaps-v4",
+      "reason": "Same entry and exit rules as 6.0.0; plans from the prior close and keeps trades that open beyond the stop instead of deleting them with a future price."
     },
     {
       "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml",

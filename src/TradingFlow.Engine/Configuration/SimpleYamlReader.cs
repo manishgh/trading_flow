@@ -224,7 +224,8 @@ public sealed class SimpleYamlReader
                     OptionalString(map, "execution.confirmation.trend_filter", "none"),
                     OptionalString(map, "execution.confirmation.momentum_filter", "none"),
                     OptionalDecimal(map, "execution.confirmation.min_close_location_value"),
-                    OptionalDecimal(map, "execution.confirmation.max_close_location_value"))),
+                    OptionalDecimal(map, "execution.confirmation.max_close_location_value")),
+                OptionalNullableString(map, "execution.opening_gap_policy")),
             new SessionRules(
                 RequireString(map, "session.exchange_timezone"),
                 RequireInt(map, "session.quiet_minutes_after_open"),
@@ -237,6 +238,9 @@ public sealed class SimpleYamlReader
             throw new InvalidOperationException("SMA200 rise lookback must be nonnegative; breakout volume threshold must be positive.");
         if (strategy.EntryRules.MinBreakoutVolumeVs50DayAverage is not null && !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The prior-50-day breakout-volume rule requires completed daily bars.");
+        if (strategy.Execution.OpeningGapPolicy is { } gapPolicy && (gapPolicy != ExecutionRules.KeepAndExitNextOpen ||
+            !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Opening gap policy '{gapPolicy}' requires '{ExecutionRules.KeepAndExitNextOpen}' on a daily strategy.");
         strategy.ExitRules.ContinuationProtection?.Validate(strategy.ExitRules);
         strategy.EntryRules.PreviousSessionBreakout?.Validate(strategy);
         strategy.EntryRules.OpeningRangeBreakout?.Validate(strategy);

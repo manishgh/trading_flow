@@ -242,10 +242,17 @@ public sealed record ConfluenceRules(
 public sealed record ExecutionRules(
     string Timeframe,
     decimal SlippageBps,
-    ExecutionConfirmationRules? Confirmation = null)
+    ExecutionConfirmationRules? Confirmation = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? OpeningGapPolicy = null)
 {
+    /// <summary>Plan from the prior close, keep a trade that opens beyond its stop, and exit it at the next eligible open.</summary>
+    public const string KeepAndExitNextOpen = "keep_and_exit_next_open";
+
     public ExecutionConfirmationRules EffectiveConfirmation =>
         Confirmation ?? ExecutionConfirmationRules.Disabled;
+
+    public bool KeepsOpeningGaps() => OpeningGapPolicy == KeepAndExitNextOpen;
 }
 
 /// <summary>

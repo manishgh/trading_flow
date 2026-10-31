@@ -96,7 +96,9 @@ public sealed partial class BacktestRunner
         var entryPrice = TradingFlow.Engine.Risk.DynamicSlippageModel.ApplyLongSlippage(entryBar.Open, relativeVolume, strategy.Execution.SlippageBps, approximateTradeAmount);
 
         var initialStopLossPrice = canonicalOrderPlan.InitialStopPrice;
-        var stopDistance = entryPrice - initialStopLossPrice;
+        // The open is unknown when the decision is made, so a kept-gap plan uses only the prior close.
+        var planningPrice = strategy.Execution.KeepsOpeningGaps() ? bars[entryIndex - 1].Close : entryPrice;
+        var stopDistance = planningPrice - initialStopLossPrice;
         if (initialStopLossPrice <= 0m || stopDistance <= 0m)
         {
             return null;
@@ -105,9 +107,9 @@ public sealed partial class BacktestRunner
         var currentStopLossPrice = initialStopLossPrice;
         var takeProfitPrice = ResolveTakeProfitPrice(
             canonicalOrderPlan,
-            entryPrice,
+            planningPrice,
             stopDistance);
-        if (takeProfitPrice <= entryPrice)
+        if (takeProfitPrice <= planningPrice)
         {
             return null;
         }
@@ -127,6 +129,15 @@ public sealed partial class BacktestRunner
 
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"LONG signal generated at {signal.CurrentPrice}", candidateId);
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, entryTimestamp, TradingFlow.Engine.Execution.ExecutionState.OrderFilled, $"Simulated fill at {entryPrice} (Stop: {initialStopLossPrice}, TP: {takeProfitPrice})", candidateId);
+
+        if (strategy.Execution.KeepsOpeningGaps() && entryPrice <= initialStopLossPrice)
+        {
+            var gapExitBar = bars[exitStartIndex];
+            var gapExitPrice = ApplyLongExitSlippage(gapExitBar.Open, snapshots[exitStartIndex].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
+            auditor.LogEvent(signal.Ticker, strategy.StrategyName, gapExitBar.Timestamp, ExecutionState.PositionClosed, $"Exit via {GapThroughStopExitReason} at {gapExitPrice}", candidateId);
+            return (BuildCandidate(candidateId, strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice,
+                gapExitBar.Timestamp, gapExitPrice, GapThroughStopExitReason, stopDistance, bars[entryIndex - 1].Volume), exitStartIndex);
+        }
 
         var technicalEngine = new TradingFlow.Engine.Execution.TechnicalExecutionEngine();
 
@@ -293,7 +304,8 @@ public sealed partial class BacktestRunner
         var approximateTradeAmount = run.Portfolio.StartingCapital / run.Portfolio.MaxConcurrentPositions;
         var entryPrice = ApplyShortEntrySlippage(entryBar.Open, relativeVolume, strategy, approximateTradeAmount);
         var initialStopLossPrice = canonicalOrderPlan.InitialStopPrice;
-        var stopDistance = initialStopLossPrice - entryPrice;
+        var planningPrice = strategy.Execution.KeepsOpeningGaps() ? bars[entryIndex - 1].Close : entryPrice;
+        var stopDistance = initialStopLossPrice - planningPrice;
         if (initialStopLossPrice <= 0m || stopDistance <= 0m)
         {
             return null;
@@ -302,9 +314,9 @@ public sealed partial class BacktestRunner
         var currentStopLossPrice = initialStopLossPrice;
         var takeProfitPrice = ResolveTakeProfitPrice(
             canonicalOrderPlan,
-            entryPrice,
+            planningPrice,
             stopDistance);
-        if (takeProfitPrice <= 0 || takeProfitPrice >= entryPrice)
+        if (takeProfitPrice <= 0 || takeProfitPrice >= planningPrice)
         {
             return null;
         }
@@ -322,6 +334,15 @@ public sealed partial class BacktestRunner
 
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"SHORT signal generated at {signal.CurrentPrice}", candidateId);
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, entryTimestamp, TradingFlow.Engine.Execution.ExecutionState.OrderFilled, $"Simulated short fill at {entryPrice} (Stop: {initialStopLossPrice}, TP: {takeProfitPrice})", candidateId);
+
+        if (strategy.Execution.KeepsOpeningGaps() && entryPrice >= initialStopLossPrice)
+        {
+            var gapExitBar = bars[exitStartIndex];
+            var gapExitPrice = ApplyShortExitSlippage(gapExitBar.Open, snapshots[exitStartIndex].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
+            auditor.LogEvent(signal.Ticker, strategy.StrategyName, gapExitBar.Timestamp, ExecutionState.PositionClosed, $"Exit via {GapThroughStopExitReason} at {gapExitPrice}", candidateId);
+            return (BuildCandidate(candidateId, strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice,
+                gapExitBar.Timestamp, gapExitPrice, GapThroughStopExitReason, stopDistance, bars[entryIndex - 1].Volume), exitStartIndex);
+        }
 
         BacktestPendingExitDecision? pendingExit = null;
         var eligibleBarsHeld = 1;
@@ -740,8 +761,15 @@ public sealed partial class BacktestRunner
             ResolvePortfolioSelectionScore(strategy, signal),
             ResolveInitialStopKind(strategy),
             strategy.StrategyId,
-            candidateId);
+            candidateId)
+        {
+            PlanningReferencePrice = strategy.Execution.KeepsOpeningGaps()
+                ? Decimal.Round(direction == "long" ? stopLossPrice + stopDistance : stopLossPrice - stopDistance, 4)
+                : null
+        };
     }
+
+    private const string GapThroughStopExitReason = "gap_fill_through_structural_stop";
 
     // Preserve an unfinished hypothesis without manufacturing an executable exit or weakening a required liquidation.
     private static BacktestCandidateTrade BuildOpenCandidate(BacktestRunConfig run, string candidateId,

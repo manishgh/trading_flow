@@ -146,6 +146,75 @@ public sealed class BacktestSimulationCharacterizationTests
         if(reason is not null)Assert.Equal(DateTimeOffset.Parse(knownAt),candidate.PendingExitDecision!.KnownAtUtc);
     }
 
+    [Theory]
+    [InlineData("long", 95, 98, 94)]
+    [InlineData("short", 105, 102, 106)]
+    public void OpeningGapBeyondStop_IsKeptAndExitsAtNextOpenWhenPolicyIsSet(string direction, double open, double stop, double nextOpen)
+    {
+        var strategy = GapStrategy(direction, ExecutionRules.KeepAndExitNextOpen);
+        var bars = GapBars((decimal)open, (decimal)nextOpen);
+        var sink = new CollectingExecutionSink();
+
+        var result = Assert.IsType<(BacktestCandidateTrade Candidate, int ExitIndex)>(InvokeCreateCandidate(strategy, LongSignal(),
+            BuildOrderPlan(strategy, direction, (decimal)stop, 2m), bars, bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray(), sink));
+
+        Assert.Equal("gap_fill_through_structural_stop", result.Candidate.ExitReason);
+        Assert.Equal(bars[2].Timestamp, result.Candidate.ExitTimestamp);
+        Assert.Equal(2, result.ExitIndex);
+        // Sizing and risk come from the prior close, which was known before the open.
+        Assert.Equal(100m, result.Candidate.PlanningReferencePrice);
+        Assert.Equal(2m, result.Candidate.StopDistance);
+    }
+
+    [Theory]
+    [InlineData("long", 95, 98)]
+    [InlineData("short", 105, 102)]
+    public void OpeningGapBeyondStop_KeepsOriginalDeletionWithoutPolicy(string direction, double open, double stop)
+    {
+        var strategy = GapStrategy(direction, null);
+        var bars = GapBars((decimal)open, (decimal)open);
+
+        Assert.Null(InvokeCreateCandidate(strategy, LongSignal(), BuildOrderPlan(strategy, direction, (decimal)stop, 2m), bars,
+            bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray(), new CollectingExecutionSink()));
+    }
+
+    [Theory]
+    [InlineData("long", 98)]
+    [InlineData("short", 102)]
+    public void OpeningWithinStop_UsesPriorCloseForPlanButStillFillsAtTheOpen(string direction, double stop)
+    {
+        var strategy = GapStrategy(direction, ExecutionRules.KeepAndExitNextOpen);
+        var bars = GapBars(100.5m, 100.5m);
+
+        var candidate = Assert.IsType<(BacktestCandidateTrade Candidate, int ExitIndex)>(InvokeCreateCandidate(strategy, LongSignal(),
+            BuildOrderPlan(strategy, direction, (decimal)stop, 2m), bars, bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray(),
+            new CollectingExecutionSink())).Candidate;
+
+        Assert.Equal(100m, candidate.PlanningReferencePrice);
+        Assert.NotEqual("gap_fill_through_structural_stop", candidate.ExitReason);
+        Assert.InRange(candidate.EntryPrice, 100.4m, 100.6m);
+    }
+
+    private static StrategyDefinition GapStrategy(string direction, string? policy)
+    {
+        var original = AtrStopStrategy();
+        return original with
+        {
+            Direction = direction,
+            EntryRules = original.EntryRules with { EnableShort = direction == "short" },
+            Execution = original.Execution with { OpeningGapPolicy = policy, SlippageBps = 0m }
+        };
+    }
+
+    // Bar 0 is the completed bar before the decision; bar 1 opens at the tested price.
+    private static OhlcvBar[] GapBars(decimal open, decimal nextOpen) =>
+    [
+        Bar("2026-06-01T13:30:00Z", 100m, 101m, 99m, 100m),
+        Bar("2026-06-01T13:35:00Z", open, Math.Max(open, nextOpen) + 0.1m, Math.Min(open, nextOpen) - 0.1m, nextOpen),
+        Bar("2026-06-01T13:40:00Z", nextOpen, nextOpen + 0.1m, nextOpen - 0.1m, nextOpen),
+        Bar("2026-06-01T13:45:00Z", nextOpen, nextOpen + 0.1m, nextOpen - 0.1m, nextOpen)
+    ];
+
     private static object? InvokeCreateCandidate(
         StrategyDefinition strategy,
         TradeSignal signal,

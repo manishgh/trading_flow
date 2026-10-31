@@ -59,6 +59,23 @@ public sealed class BacktestOpportunityShadowReplayTests
     }
 
     [Fact]
+    public void KeptOpeningGap_IsSizedFromThePriorCloseAndCompletesThroughThePortfolioBook()
+    {
+        var baseStrategy = Strategy();
+        var strategy = baseStrategy with { Execution = baseStrategy.Execution with { Timeframe = "5m" } };
+        var candidate = new BacktestCandidateTrade("X", strategy.StrategyName, "long", Start, 9, 9.5m, 12, Start.AddMinutes(5), 9,
+            "gap_fill_through_structural_stop", 0.5m, StrategyId: strategy.StrategyId, CandidateId: "gap") { PlanningReferencePrice = 10 };
+        var method = typeof(BacktestRunner).GetMethod("BuildUnifiedPortfolioResult", BindingFlags.Static | BindingFlags.NonPublic)!;
+
+        var combined = (UnifiedPortfolioBacktestResult)method.Invoke(null, new object?[] { Portfolio(), new[] { strategy },
+            new[] { candidate }, new[] { Bar(0, 9), Bar(5, 9), Bar(10, 9) }, null, null, null, null })!;
+
+        var trade = Assert.Single(combined.CompletedTrades);
+        // One percent of 10,000 at 0.50 risk per share allows at most 200 shares, whatever the open turned out to be.
+        Assert.InRange(trade.ShareQuantity, 1, 200);
+    }
+
+    [Fact]
     public void OverlappingControlCandidatesEachReceiveAnIndependentBookWithoutCapitalExpansion()
     {
         var snapshot = Snapshot(Candidate("first", 9.99m), Candidate("second", 9.99m));
