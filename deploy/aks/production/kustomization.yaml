@@ -8,20 +8,18 @@ resources:
   - storage.yaml
   - keyvault-secretproviderclasses.yaml
   - web.yaml
-  - paper-worker-shards.yaml
+  - web-ingress.yaml
+  # The Web owner runs existing durable workers in-process. External shards require a separately verified writer migration.
   - warmup-service.yaml
   - networkpolicy.yaml
   - pdb.yaml
 images:
   - name: tradingflow-web
-    newName: tradingflowprod.azurecr.io/tradingflow-web
-    newTag: 2026.06.14
-  - name: tradingflow-worker
-    newName: tradingflowprod.azurecr.io/tradingflow-worker
-    newTag: 2026.06.14
+    newName: __TRADINGFLOW_REGISTRY__/tradingflow-web
+    newTag: __TRADINGFLOW_IMAGE_TAG__
   - name: tradingflow-finbert
-    newName: tradingflowprod.azurecr.io/tradingflow-finbert
-    newTag: 2026.06.14
+    newName: __TRADINGFLOW_REGISTRY__/tradingflow-finbert
+    newTag: __TRADINGFLOW_IMAGE_TAG__
   - name: tradingflow-warmup-service
-    newName: tradingflowprod.azurecr.io/tradingflow-warmup-service
-    newTag: 2026.06.14
+    newName: __TRADINGFLOW_REGISTRY__/tradingflow-warmup-service
+    newTag: __TRADINGFLOW_IMAGE_TAG__

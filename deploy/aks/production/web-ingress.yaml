@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: trading-flow-web
+spec:
+  ingressClassName: "__TRADINGFLOW_INGRESS_CLASS__"
+  tls:
+    - hosts: ["__TRADINGFLOW_PUBLIC_HOST__"]
+      secretName: "__TRADINGFLOW_TLS_SECRET__"
+  rules:
+    - host: "__TRADINGFLOW_PUBLIC_HOST__"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: trading-flow-web
+                port:
+                  number: 80

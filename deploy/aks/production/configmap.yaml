@@ -6,8 +6,11 @@ data:
   ASPNETCORE_URLS: "http://+:8080"
   DOTNET_ENVIRONMENT: "Production"
   ASPNETCORE_ENVIRONMENT: "Production"
+  AllowedHosts: "__TRADINGFLOW_PUBLIC_HOST__"
+  Transport__TrustedProxyNetworks__0: "__TRADINGFLOW_INGRESS_PROXY_CIDR__"
   TRADINGFLOW_DATA_ROOT: "/app/data"
-  TRADINGFLOW_CACHE_ROOT: "/app/cache"
+  TRADINGFLOW_CACHE_ROOT: "/app/data/cache"
+  TRADINGFLOW_BACKUP_ROOT: "/app/backups"
   TRADINGFLOW_CANDLE_STORE: "local-file"
   TRADINGFLOW_CANDLE_HOT_CACHE: "pod-local-emptydir"
   TRADINGFLOW_CANDLE_ARCHIVE_MODE: "tradingflow-owned"
@@ -25,7 +28,7 @@ data:
   TRADINGFLOW_MARKET_DATA_FEED: "sip"
   WarmupService__BaseUrl: "http://trading-flow-warmup-service"
   Warmup__DataRoot: "/app/data/warmup"
-  Warmup__CacheRoot: "/app/cache/warmup"
+  Warmup__CacheRoot: "/app/data/warmup/cache"
   Warmup__ArchiveRoot: "/app/data/warmup/archive"
   Warmup__ProviderName: "alpaca"
   Warmup__MarketDataFeed: "sip"
@@ -41,13 +44,3 @@ data:
   Warmup__MarketTimeZone: "America/New_York"
   Warmup__RunNightlyScheduler: "true"
   Warmup__BlobPrefix: "warmup"
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: trading-flow-paper-shards
-data:
-  shard-0: "POET,RGTI,NVTS"
-  shard-1: "MXL,MU,MSFT"
-  shard-2: "NVDA,INTC,APP"
-  shard-3: "CRDO,RDW,OUST,SPCE"

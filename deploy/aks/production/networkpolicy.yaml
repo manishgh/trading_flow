@@ -19,7 +19,9 @@ spec:
     - Ingress
   ingress:
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: "__TRADINGFLOW_INGRESS_NAMESPACE__"
       ports:
         - protocol: TCP
           port: 8080
@@ -48,7 +50,9 @@ spec:
     - Ingress
   ingress:
     - from:
-        - podSelector: {}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: trading-flow-web
       ports:
         - protocol: TCP
           port: 8080

@@ -6,6 +6,8 @@ metadata:
     app.kubernetes.io/name: trading-flow-warmup-service
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: trading-flow-warmup-service
@@ -15,7 +17,7 @@ spec:
         app.kubernetes.io/name: trading-flow-warmup-service
         azure.workload.identity/use: "true"
     spec:
-      serviceAccountName: trading-flow-paper-worker
+      serviceAccountName: trading-flow-warmup
       terminationGracePeriodSeconds: 60
       nodeSelector:
         workload: trading
@@ -56,8 +58,6 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /app/data
-            - name: cache
-              mountPath: /app/cache
             - name: paper-secrets-store
               mountPath: /mnt/secrets-store
               readOnly: true
@@ -71,16 +71,13 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: trading-flow-data
-        - name: cache
-          emptyDir:
-            sizeLimit: 50Gi
+            claimName: trading-flow-warmup-data
         - name: paper-secrets-store
           csi:
             driver: secrets-store.csi.k8s.io
             readOnly: true
             volumeAttributes:
-              secretProviderClass: trading-flow-paper-kv
+              secretProviderClass: trading-flow-warmup-kv
 ---
 apiVersion: v1
 kind: Service
