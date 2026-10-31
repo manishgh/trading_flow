@@ -95,7 +95,7 @@ public sealed class StrategyOrderPlanner
                 Decimal.Round(planned.EstimatedEntryPrice, 4),
                 Decimal.Round(planned.StopTriggerPrice, 4),
                 Decimal.Round(takeProfitPrice, 4),
-                request.ExecutionSignal.Timestamp),
+                request.OrderPlan.TriggeredAtUtc),
             null,
             null);
     }

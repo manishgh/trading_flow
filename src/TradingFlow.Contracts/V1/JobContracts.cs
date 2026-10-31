@@ -14,7 +14,10 @@ public sealed record StartBacktestRequest(
     string CachePolicy,
     string RetentionPolicy,
     string IdempotencyKey,
-    string? ConfigurationKey = null);
+    string? ConfigurationKey = null,
+    string? ConfigurationSha256 = null,
+    DecisionContextEvidenceReference? DecisionContextEvidence = null,
+    string? ExecutionReplayPolicyId = null);
 
 public sealed record StartPaperRunRequest(
     string ContractVersion,
@@ -48,7 +51,10 @@ public sealed record RunJobResponse(
     int TotalWorkItemCount,
     long LatestEventSequence,
     string? ResultReference,
-    JobFailureResponse? Failure);
+    JobFailureResponse? Failure,
+    BacktestCohortExecution? Cohort = null,
+    PreparedMarketDataSummaryResponse? PreparedMarketData = null,
+    DecisionContextEvidenceSummary? EvidenceSummary = null);
 
 public sealed record JobFailureResponse(
     string Code,
@@ -65,8 +71,92 @@ public sealed record JobProgressResponse(
     DateTimeOffset UpdatedAtUtc);
 
 public sealed record RunJobDetailsResponse(RunJobResponse Job, IReadOnlyList<string> Events, RunResultSummary? Result,
-    IReadOnlyList<RunStrategyProgress> Strategies);
+    IReadOnlyList<RunStrategyProgress> Strategies, IReadOnlyList<MonthlyRunResult>? MonthlyResults = null,
+    string? MonthlyUnavailableReason = null, PreparedMarketDataSummaryResponse? PreparedMarketData = null,
+    RunPortfolioStateResponse? PortfolioState = null, IReadOnlyList<RunHistoryEligibility>? HistoryEligibility = null,
+    DecisionContextEvidenceSummary? EvidenceSummary = null,
+    IReadOnlyList<RunZoneDecisionDetail>? ZoneDecisions = null, int ZoneDecisionCount = 0);
+
+/// <summary>The actual terminal book; reservations remain separate from cash and marked holdings.</summary>
+public sealed record RunPortfolioStateResponse(string ValuationBasis, DateTimeOffset CutoffUtc,
+    int AdmittedOrderCount, int FilledCandidateCount, int ClosedTradeCount, int FillCount,
+    decimal? Cash, decimal? RealizedNetProfit, decimal? Fees, decimal? PositionValue,
+    decimal? UnrealizedProfit, decimal? Equity, decimal? GrossExposurePct, string? UnavailableReason,
+    IReadOnlyList<RunOpenPosition> OpenPositions, IReadOnlyList<RunPendingOrder> PendingOrders,
+    IReadOnlyList<RunPendingExit> PendingExits,
+    IReadOnlyList<RunIntradayDecisionDetail>? IntradayDecisions = null, int IntradayDecisionCount = 0);
+
+/// <summary>Server-observed intraday intent and protection facts; clients display them without recalculating trading decisions.</summary>
+public sealed record RunIntradayDecisionDetail(string CandidateId, string StrategyId, string Ticker, string Direction,
+    string EntryMethod, decimal PreviousSessionHigh, decimal PreviousSessionLow,
+    DateTimeOffset BreakoutTimestampUtc, DateTimeOffset ConfirmationTimestampUtc,
+    DateTimeOffset ActiveAtUtc, DateTimeOffset ExpiresAtUtc, DateTimeOffset SessionDeadlineUtc,
+    decimal LimitPrice, decimal FrozenStopPrice, decimal? ActualEntryPrice, decimal CurrentStopPrice, decimal? TargetPrice,
+    string Status, string ResolutionReason, DateTimeOffset? LastObservedAtUtc, DateTimeOffset? ProtectionEffectiveAfterUtc,
+    string EntryOrderMode = "next_bar_limit", decimal? TriggerPrice = null,
+    decimal? OpeningRangeHigh = null, decimal? OpeningRangeLow = null, decimal? OpeningRangeOpen = null,
+    decimal? OpeningRangeClose = null, DateTimeOffset? OpeningRangeCompletedAtUtc = null,
+    decimal? OpeningRelativeVolume = null, int? OpeningVolumeBaselineSampleCount = null,
+    int MaxFilledParentTradesPerSession = 1, bool RequireRangeReturnBeforeReentry = false);
+public sealed record RunOpenPosition(string CandidateId, string StrategyId, string Ticker,
+    int SignedQuantity, decimal EntryBasis, decimal? MarkPrice, DateTimeOffset? MarkTimestampUtc,
+    decimal? UnrealizedProfit);
+public sealed record RunPendingOrder(string CandidateId, string StrategyId, string Ticker,
+    string OrderId, string Side, string OrderType, int RemainingQuantity, string Status,
+    decimal ReservedNotional, DateTimeOffset KnownAtUtc);
+public sealed record RunPendingExit(string CandidateId, string StrategyId, string Ticker,
+    DateTimeOffset KnownAtUtc, string Reason);
+public sealed record RunHistoryEligibility(string Ticker, string StrategyId, int RequiredBars,
+    int AvailableAtStart, int AvailableAtCutoff, DateTimeOffset? FirstEligibleDecisionUtc, string Status);
+
+/// <summary>Publishes committed candle evidence without server paths or provider credentials.</summary>
+public sealed record PreparedMarketDataSummaryResponse(string SnapshotId, string SnapshotSha256,
+    DateTimeOffset PreparedAtUtc, DateTimeOffset StartUtc, DateTimeOffset EndUtc,
+    IReadOnlyList<string> Providers, IReadOnlyList<string> DataFeeds, IReadOnlyList<string> PriceAdjustments,
+    int ReusedQueryCount, int DownloadedQueryCount, string HistoricalEvidenceNote);
 public sealed record RunResultSummary(decimal? StartingCapital, decimal? EndingCapital, decimal? NetProfit,
     decimal? TotalReturnPct, decimal? AverageDailyReturnPct, decimal? MaxDrawdownPct, int? AcceptedTradeCount, int? CandidateTradeCount);
 public sealed record RunStrategyProgress(string StrategyName, string Status, int CompletedTickerCount,
     int TotalTickerCount, string? CurrentTicker, IReadOnlyList<string> RecentEvents);
+
+/// <summary>Server-calculated zone intent and observed execution, shared by Web and Android.</summary>
+public sealed record RunZoneDecisionDetail(string CandidateId, string StrategyId, string Ticker, string Direction,
+    string Pattern, long ZoneId, int ZoneVersion, string ZoneRole, decimal ZoneBottom, decimal ZoneTop, int PivotCount,
+    DateTimeOffset PivotBarStartUtc, DateTimeOffset PivotCompletedAtUtc, DateTimeOffset PivotConfirmedAtUtc,
+    DateTimeOffset ZoneKnownAtUtc, DateTimeOffset? FlippedAtUtc, DateTimeOffset ConfirmationBarStartUtc,
+    DateTimeOffset ConfirmationCompletedAtUtc, decimal ConfirmationClose, decimal? Vwap, decimal? SlotRelativeVolume,
+    decimal? SlotMedianVolume, int SlotSampleCount, decimal FrozenStopPrice, DateTimeOffset SessionDeadlineUtc,
+    string Status, string ResolutionReason, decimal? ActualEntryPrice, decimal? ActualExitPrice,
+    string? ZonePolicyId = null, DateTimeOffset? EntryCutoffUtc = null, decimal? FixedTargetPrice = null,
+    decimal? Atr = null, long? TargetZoneId = null, decimal? TargetZoneBottom = null, decimal? TargetZoneTop = null,
+    RunZoneVolumeSpreadDetail? VolumeSpread = null,
+    IReadOnlyList<RunZoneAlternativeDecisionDetail>? AlternativeDecisions = null,
+    RunZoneTargetPlanningDetail? TargetPlan = null, string? LongBounceVolumeMode = null,
+    string? StopBasis = null, decimal? PreviousLow = null, decimal? ConfirmationLow = null,
+    decimal? RawStopPrice = null, decimal? TickSize = null,
+    RunZoneRetestDetail? Retest = null, int? TargetZoneVersion = null, DateTimeOffset? TargetZoneKnownAtUtc = null);
+
+/// <summary>Server-owned arm and active-source versions; clients display these without reconstructing the entry.</summary>
+public sealed record RunZoneRetestDetail(int ResistanceVersion, decimal ResistanceBottom, decimal ResistanceTop,
+    DateTimeOffset ResistanceKnownAtUtc, DateTimeOffset FlippedAtUtc, decimal FlipAtr, bool CanArmRetest,
+    int ActiveSourceVersion, decimal ActiveSourceBottom, decimal ActiveSourceTop,
+    DateTimeOffset ActiveSourceKnownAtUtc, DateTimeOffset ConfirmationSnapshotAsOfUtc);
+
+/// <summary>Frozen prospective cost estimate; the fallback multiple does not guarantee realized reward/risk.</summary>
+public sealed record RunZoneTargetPlanningDetail(string TargetOrigin, decimal? FallbackNetRiskMultiple,
+    int? PlannedQuantity = null, decimal? PlannerLossDollars = null, decimal? PlannerRiskBudgetDollars = null,
+    decimal? EstimatedEntryFillPrice = null, decimal? EstimatedStopFillPrice = null,
+    decimal? EstimatedEntryFees = null, decimal? EstimatedStopExitFees = null, decimal? EstimatedTargetFees = null,
+    decimal? EstimatedNetStopRisk = null, decimal? EstimatedNetReward = null, decimal? EstimatedNetRewardRisk = null,
+    decimal? AdverseCostBps = null, decimal? ResolvedTargetPrice = null);
+
+/// <summary>Server-frozen synthetic quote and ratio audit; MinimumRewardRisk zero means the minimum reward/risk filter is disabled.</summary>
+public sealed record RunZoneVolumeSpreadDetail(decimal BidPrice, decimal AskPrice, decimal FullSpreadBps,
+    decimal MaximumSpreadBps, decimal MinimumRewardRisk, int OrderedAlternativeIndex, decimal? PlannedQuantity,
+    decimal? EstimatedRoundTripTicketFees, decimal? EstimatedNetRiskDollars, decimal? EstimatedNetRewardDollars,
+    decimal? SelectedRewardRisk);
+
+/// <summary>Observed ordered admission checks copied from the server without client-side strategy decisions.</summary>
+public sealed record RunZoneAlternativeDecisionDetail(int AlternativeIndex, string Direction, long ZoneId,
+    decimal? PlannedQuantity, decimal? EstimatedNetRiskDollars, decimal? EstimatedNetRewardDollars,
+    decimal? RewardRisk, bool Selected, string Reason, RunZoneTargetPlanningDetail? TargetPlan = null);

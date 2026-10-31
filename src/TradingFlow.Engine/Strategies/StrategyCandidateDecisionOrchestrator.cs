@@ -32,6 +32,7 @@ public sealed class StrategyCandidateDecisionOrchestrator(
     IStrategyDecisionKernel kernel,
     ICandidateRepository candidates) : IStrategyCandidateDecisionOrchestrator
 {
+    // Persist discovery and shared-kernel transitions, admitting the approved day horizon only for research backtests.
     public async Task<PersistedStrategyDecision> EvaluateAsync(
         ProductionRun run,
         StrategyDecisionRequest request,
@@ -39,7 +40,7 @@ public sealed class StrategyCandidateDecisionOrchestrator(
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(request);
-        RequireSwingStrategy(request.Strategy);
+        RequireSupportedStrategy(request);
         RequireRunProvenance(run, request);
 
         var existing = await candidates.GetAsync(request.Candidate.CandidateId, cancellationToken);
@@ -94,6 +95,7 @@ public sealed class StrategyCandidateDecisionOrchestrator(
         return new PersistedStrategyDecision(applied, decision, false);
     }
 
+    // Preserve the strategy-derived horizon with the persisted candidate's immutable identity and provenance.
     private static CandidateRecord CreateDiscoveryRecord(
         ProductionRun run,
         StrategyDecisionRequest request) => new()
@@ -103,7 +105,7 @@ public sealed class StrategyCandidateDecisionOrchestrator(
         DiscoveredAtUtc = request.Candidate.Discovery.ObservedAtUtc,
         RevalidatedAtUtc = request.AsOfUtc,
         DiscoverySource = String.Join(",", request.Candidate.Discovery.Sources),
-        Horizon = "swing",
+        Horizon = StrategyHorizonResolver.Resolve(request.Strategy),
         LastPrice = ResolveLastPrice(request),
         SetupScoresJson = JsonSerializer.Serialize(new
         {
@@ -130,8 +132,28 @@ public sealed class StrategyCandidateDecisionOrchestrator(
         CodeVersion = run.CodeVersion
     };
 
-    private static void RequireSwingStrategy(StrategyDefinition strategy)
+    // Day strategy support is isolated to the approved backtest mode; operational consumers keep their existing gate.
+    private static void RequireSupportedStrategy(StrategyDecisionRequest request)
     {
+        var strategy = request.Strategy;
+        if (strategy.EntryRules.IntradayZone is { } intradayZone)
+        {
+            intradayZone.Validate(strategy);
+            if (request.SelectionMode == StrategySelectionMode.Backtest) return;
+            throw new InvalidOperationException("Intraday zone strategies are supported only in research backtests.");
+        }
+        if (strategy.EntryRules.OpeningRangeBreakout is { } openingRange)
+        {
+            openingRange.Validate(strategy);
+            if (request.SelectionMode == StrategySelectionMode.Backtest) return;
+            throw new InvalidOperationException("Opening-range day strategies are supported only in research backtests.");
+        }
+        if (strategy.EntryRules.PreviousSessionBreakout is not null)
+        {
+            strategy.EntryRules.PreviousSessionBreakout.Validate(strategy);
+            if (request.SelectionMode == StrategySelectionMode.Backtest) return;
+            throw new InvalidOperationException("Previous-session day strategies are supported only in research backtests.");
+        }
         if (!strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(

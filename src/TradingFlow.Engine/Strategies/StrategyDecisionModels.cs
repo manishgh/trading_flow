@@ -81,7 +81,12 @@ public sealed record StrategyDecisionRequest(
     ImmutableArray<StrategyCatalystSnapshot> Catalysts,
     DateTimeOffset AsOfUtc,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<OhlcvBar>? ReferenceBars = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<DateOnly>? ReferenceSessionDates = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<DateOnly>? ReferenceSessionDates = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DrawdownDecisionContext? DrawdownContext = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] HistoricalNewsPresenceContext? HistoricalNewsPresence = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] StrategySelectionMode? SelectionMode = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] PreviousSessionBreakoutContext? PreviousSessionContext = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayZoneDecisionContext? ZoneContext = null);
 
 public sealed record StrategyDecisionRule(
     string Stage,
@@ -115,7 +120,11 @@ public sealed record StrategyOrderPlan(
     string ProfitTargetMode,
     decimal? ProfitTargetReferencePrice,
     decimal SlippageBps,
-    DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset ExpiresAtUtc,
+    DateTimeOffset StopContextTimestampUtc,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] PreviousSessionBreakoutSignal? PendingEntry = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayZoneSignal? ZoneEntry = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<IntradayZoneSignal>? ZoneAlternatives = null);
 
 public sealed record StrategyDecisionResult(
     StrategyCandidateState State,
@@ -126,7 +135,8 @@ public sealed record StrategyDecisionResult(
     StrategyOrderPlan? OrderPlan,
     string? NoEntryReason,
     string SemanticDecisionSha256,
-    string CanonicalDecisionJson)
+    string CanonicalDecisionJson,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DrawdownQualificationAudit? DrawdownQualification = null)
 {
     public bool IsTriggered => State == StrategyCandidateState.Triggered;
 }

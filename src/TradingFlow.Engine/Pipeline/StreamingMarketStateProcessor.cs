@@ -29,14 +29,14 @@ public sealed class StreamingMarketStateProcessor
     private readonly StreamingMarketStateOptions options;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<StreamingMarketStateProcessor> logger;
-    private Indicators.IIndicatorCalculator indicatorCalculator;
-    private BarResampler barResampler;
+    private CalculationTools calculationTools;
     private long fencingFloor;
     private long activeOwnershipFence;
     private long snapshotReadyFence;
 
     public int RecoveryLookbackDays => options.RecoveryLookbackDays;
 
+    /// <summary>Creates the ordinary processor with the existing indicator implementation and fenced source store.</summary>
     public StreamingMarketStateProcessor(
         ICandleStore candleStore,
         CandleStoreContext storeContext,
@@ -53,6 +53,7 @@ public sealed class StreamingMarketStateProcessor
     {
     }
 
+    /// <summary>Owns one consistent calculator/resampler pair while allowing controlled indicator instrumentation in tests.</summary>
     public StreamingMarketStateProcessor(
         ICandleStore candleStore,
         CandleStoreContext storeContext,
@@ -70,8 +71,7 @@ public sealed class StreamingMarketStateProcessor
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        this.indicatorCalculator = indicatorCalculator ?? throw new ArgumentNullException(nameof(indicatorCalculator));
-        barResampler = new BarResampler();
+        calculationTools = new(indicatorCalculator ?? throw new ArgumentNullException(nameof(indicatorCalculator)), new BarResampler());
         options.Validate();
     }
 
@@ -90,8 +90,7 @@ public sealed class StreamingMarketStateProcessor
         }
 
         var profile = MarketEvidenceProfile.ProductionDefault.WithSessionSchedules(schedules);
-        Volatile.Write(ref indicatorCalculator, new IndicatorEngine(profile));
-        Volatile.Write(ref barResampler, new BarResampler(profile));
+        Volatile.Write(ref calculationTools, new(new IndicatorEngine(profile), new BarResampler(profile)));
     }
 
     /// <summary>
@@ -417,6 +416,7 @@ public sealed class StreamingMarketStateProcessor
         }
     }
 
+    /// <summary>Checks current ownership, repair, completeness and freshness before reusing only unchanged completed-bar calculations.</summary>
     public async Task<TickerMarketState?> GetTickerStateAsync(
         string symbol,
         IReadOnlyCollection<string> requiredTimeframes,
@@ -431,15 +431,17 @@ public sealed class StreamingMarketStateProcessor
 
         // A snapshot read must not allocate a pipeline or become its owner.
         if (!pipelines.TryGetValue(NormalizeSymbol(symbol), out var pipeline)) return null;
+        var tools = Volatile.Read(ref calculationTools);
         var state = await EnqueueAsync(
             pipeline,
             () => Task.FromResult(
                 !pipeline.IsReady || pipeline.NeedsRepair
                     ? null
-                    : BuildCompletedState(pipeline, asOfUtc)),
+                    : BuildCompletedState(pipeline, asOfUtc, tools.Resampler)),
             waitForCapacity: true,
             cancellationToken);
-        if (state is null || !SnapshotFenceIsCurrent(snapshotFence))
+        if (state is null || !SnapshotFenceIsCurrent(snapshotFence) || !ReferenceEquals(tools, Volatile.Read(ref calculationTools)) ||
+            !OwnsCurrentPipeline(pipeline))
         {
             return null;
         }
@@ -464,23 +466,39 @@ public sealed class StreamingMarketStateProcessor
             return null;
         }
 
-        var currentResampler = Volatile.Read(ref barResampler);
         if (IsExtendedSessionActive(asOfUtc) && bars.Any(pair =>
-                !HasLatestCompletedTimeframe(pair.Value, pair.Key, asOfUtc, currentResampler)))
+                !HasLatestCompletedTimeframe(pair.Value, pair.Key, asOfUtc, tools.Resampler)))
         {
             return null;
         }
 
         var snapshots = bars.ToDictionary(
             pair => pair.Key,
-            pair => (IReadOnlyList<IndicatorSnapshot>)Volatile.Read(ref indicatorCalculator).Compute(pair.Value),
+            pair => GetOrComputeIndicators(pipeline, pair.Key, pair.Value, tools, state.BarsByTimeframe.ContainsKey(pair.Key)),
             StringComparer.OrdinalIgnoreCase);
-        if (!SnapshotFenceIsCurrent(snapshotFence))
+        if (!SnapshotFenceIsCurrent(snapshotFence) || !ReferenceEquals(tools, Volatile.Read(ref calculationTools)) ||
+            !OwnsCurrentPipeline(pipeline))
         {
             return null;
         }
 
         return new TickerMarketState(NormalizeSymbol(symbol), bars, snapshots);
+    }
+
+    /// <summary>Rejects computation from a draining or replaced symbol owner even when the process-wide stream fence is unchanged.</summary>
+    private bool OwnsCurrentPipeline(SymbolPipeline pipeline) => !pipeline.IsEvicting &&
+        pipelines.TryGetValue(pipeline.Symbol, out var current) && ReferenceEquals(current, pipeline);
+
+    /// <summary>Reuses only identical completed input records under the same calendar/calculator pair; quality and as-of checks remain outside the cache.</summary>
+    private static IReadOnlyList<IndicatorSnapshot> GetOrComputeIndicators(SymbolPipeline pipeline, string timeframe,
+        IReadOnlyList<OhlcvBar> bars, CalculationTools tools, bool cacheable)
+    {
+        if (cacheable && pipeline.IndicatorCache.TryGetValue(timeframe, out var cached) &&
+            ReferenceEquals(cached.Tools, tools) && cached.Bars.SequenceEqual(bars))
+            return cached.Snapshots;
+        var snapshots = Array.AsReadOnly(tools.Calculator.Compute(bars).ToArray());
+        if (cacheable) pipeline.IndicatorCache[timeframe] = new(tools, bars.ToArray(), snapshots);
+        return snapshots;
     }
 
     private bool TryCaptureSnapshotFence(out long fencingToken)
@@ -602,9 +620,11 @@ public sealed class StreamingMarketStateProcessor
     public bool RequiresRepair(string symbol) =>
         pipelines.TryGetValue(NormalizeSymbol(symbol), out var pipeline) && pipeline.NeedsRepair;
 
+    /// <summary>Selects versions known at the requested cutoff and derives complete buckets using one captured calendar profile.</summary>
     private CompletedMarketState BuildCompletedState(
         SymbolPipeline pipeline,
-        DateTimeOffset asOfUtc)
+        DateTimeOffset asOfUtc,
+        BarResampler? capturedResampler = null)
     {
         var utc = asOfUtc.ToUniversalTime();
         var baseBars = pipeline.Bars.Values
@@ -617,7 +637,7 @@ public sealed class StreamingMarketStateProcessor
         {
             ["1m"] = baseBars
         };
-        var resampler = Volatile.Read(ref barResampler);
+        var resampler = capturedResampler ?? Volatile.Read(ref calculationTools).Resampler;
         foreach (var timeframe in options.DerivedTimeframes
                      .Where(value => !value.Equals("1m", StringComparison.OrdinalIgnoreCase))
                      .Distinct(StringComparer.OrdinalIgnoreCase))
@@ -1154,6 +1174,10 @@ public sealed class StreamingMarketStateProcessor
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 
+    private sealed record CalculationTools(Indicators.IIndicatorCalculator Calculator, BarResampler Resampler);
+    private sealed record CachedIndicatorSeries(CalculationTools Tools, IReadOnlyList<OhlcvBar> Bars,
+        IReadOnlyList<IndicatorSnapshot> Snapshots);
+
     private sealed class SymbolPipeline
     {
         private int isEvicting;
@@ -1180,6 +1204,7 @@ public sealed class StreamingMarketStateProcessor
         public SortedDictionary<DateTimeOffset, List<OhlcvBar>> Bars { get; } = [];
         public HashSet<DateTimeOffset> PendingMissingMinutes { get; } = [];
         public HashSet<DateTimeOffset> ConfirmedNoTradeMinutes { get; } = [];
+        public ConcurrentDictionary<string, CachedIndicatorSeries> IndicatorCache { get; } = new(StringComparer.OrdinalIgnoreCase);
         public long FencingToken { get; set; }
         public bool IsReady { get; set; }
         public bool NeedsRepair { get; set; }

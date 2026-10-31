@@ -143,6 +143,18 @@ public sealed record MarketEvidenceOperationalRules(
         2,
         45);
 
+    /// <summary>Uses the immutable admission timing contract's price basis; ordinary production evidence stays adjusted SIP data.</summary>
+    public static MarketEvidenceOperationalRules ForExecutionTimingPolicy(string policy) => policy switch
+    {
+        "completed-bar-next-executable-bar-v1" or "completed-bar-asof-regime-scheduled-expiry-v2" or
+        "completed-bar-next-slice-market-exits-v3" or "completed-bar-pending-limit-session-deadline-v1" or
+        "completed-bar-pending-stop-market-session-deadline-v1" or "completed-bar-next-open-market-session-deadline-v1" => Production,
+        "completed-bar-sip-market-session-deadline-v1" or "completed-bar-next-open-zone-fixed-target-session-deadline-v1" => Production with { RequiredAdjustmentPolicy = "raw" },
+        "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5" =>
+            Production with { RequiredAdjustmentPolicy = "raw" },
+        _ => throw new InvalidOperationException($"Unsupported execution timing policy '{policy}'.")
+    };
+
     public void Validate()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(RequiredDataFeed);

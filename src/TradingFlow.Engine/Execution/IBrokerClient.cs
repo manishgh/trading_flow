@@ -75,6 +75,13 @@ public interface IAccountScopedBrokerOrderReader : IBrokerOrderReader, IBrokerAc
 {
 }
 
+/// <summary>Optional broker capability; absence prevents claims of a complete account-wide daily-entry count.</summary>
+public interface IBrokerFillHistoryProvider
+{
+    Task<TradingFlow.Domain.Execution.BrokerFillHistorySnapshot> GetFillHistoryAsync(
+        string accountId, DateOnly newYorkDate, CancellationToken cancellationToken);
+}
+
 public interface IBrokerClient :
     IAccountScopedBrokerOrderReader,
     ITradingSessionProvider,

@@ -4,7 +4,8 @@ public sealed record StrategyCatalogResponse(
     string ContractVersion,
     string Mode,
     DateTimeOffset GeneratedAtUtc,
-    IReadOnlyList<StrategyCatalogItemResponse> Strategies);
+    IReadOnlyList<StrategyCatalogItemResponse> Strategies,
+    IReadOnlyList<DecisionContextEvidenceChoice>? EvidenceChoices = null);
 
 public sealed record StrategyCatalogItemResponse(
     StrategyReference Identity,

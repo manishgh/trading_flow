@@ -75,8 +75,10 @@ public sealed class EntryGateChain(
     IStrategyAuthorizationPolicy strategyAuthorizations,
     ISecurityTradingStatusProvider tradingStatuses,
     EntryGateOptions options,
-    TimeProvider timeProvider) : IEntryGateChain
+    TimeProvider timeProvider,
+    IOperationalTradingLimitStore tradingLimits) : IEntryGateChain
 {
+    /// <summary>Evaluate shared strategy/account rules and pass complete account-wide fill evidence to atomic reservation.</summary>
     public async Task<T> ExecuteAsync<T>(
         EntryOrderSubmission submission,
         IBrokerClient brokerClient,
@@ -479,12 +481,28 @@ public sealed class EntryGateChain(
                     var grossExposure = Math.Abs(reservationAccount.LongMarketValue) +
                         Math.Abs(reservationAccount.ShortMarketValue);
                     var maxGrossPct = options.MaxGrossExposurePct;
-                    var maxPositions = options.MaxPositions;
+                    var modeLimits = await tradingLimits.GetAsync(submission.RunContext.Profile, token);
+                    var maxPositions = modeLimits.MaxOpenPositions;
+                    BrokerFillHistorySnapshot? fillHistory = null;
+                    string? fillHistoryError = null;
+                    try
+                    {
+                        if (brokerClient is not IBrokerFillHistoryProvider fills)
+                            throw new InvalidOperationException("This broker does not provide complete account fill history; account-wide daily limits cannot be verified.");
+                        using var historyTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                        historyTimeout.CancelAfter(options.AccountSnapshotMaxAge);
+                        fillHistory = await fills.GetFillHistoryAsync(reservationAccount.AccountId,
+                            TradingLimitDay.At(timeProvider.GetUtcNow()), historyTimeout.Token);
+                    }
+                    catch (Exception error) when (error is not OperationCanceledException || !token.IsCancellationRequested)
+                    {
+                        fillHistoryError = error.Message;
+                    }
                     var exposureAllowed = grossExposure + notional <= reservationAccount.Equity * maxGrossPct / 100m &&
-                        positions.Count < maxPositions;
+                        positions.Count < maxPositions && fillHistory is { Complete: true } && fillHistoryError is null;
                     await RequireAsync(
                         submission, results, EntryGateSlot.Exposure,
-                        exposureAllowed, RejectCode.REJECT_BUDGET_EXHAUSTED,
+                        exposureAllowed, fillHistoryError is null ? RejectCode.REJECT_BUDGET_EXHAUSTED : RejectCode.REJECT_DEGRADED_DATA,
                         new
                         {
                             horizon = submission.Candidate.Horizon,
@@ -492,9 +510,13 @@ public sealed class EntryGateChain(
                             proposedNotional = notional,
                             maxGrossExposure = reservationAccount.Equity * maxGrossPct / 100m,
                             currentPositions = positions.Count,
-                            maxPositions
+                            maxPositions,
+                            modeLimits.MaxNewStocksPerDay,
+                            modeLimits.Revision,
+                            fillHistory,
+                            fillHistoryError
                         },
-                        now, token);
+                        timeProvider.GetUtcNow(), token);
 
                     var expectedSlippageBps = CalculateExpectedSlippageBps(submission, market!);
                     await RequireAsync(
@@ -515,6 +537,7 @@ public sealed class EntryGateChain(
                         duplicateOrders.Length == 0, RejectCode.REJECT_DUPLICATE_EVENT,
                         new { duplicateOrders }, now, token);
 
+                    await RequireFreshAdmissionEvidenceAsync(submission, results, reservationAccount, market!, token);
                     await PersistAsync(submission, results, candidateRejection: null, token);
                     var maxGrossExposure = reservationAccount.Equity * maxGrossPct / 100m;
                     var maxPortfolioRisk = perTradeRiskLimit * maxPositions;
@@ -540,7 +563,9 @@ public sealed class EntryGateChain(
                                 maxPortfolioRisk,
                                 maxPositions,
                                 reservationAccount.RequestedAtUtc.ToUniversalTime(),
-                                reservationAccount.ObservedAtUtc.ToUniversalTime())),
+                                reservationAccount.ObservedAtUtc.ToUniversalTime(),
+                                fillHistory,
+                                options.AccountSnapshotMaxAgeSeconds)),
                         token);
                 },
                 cancellationToken);
@@ -634,6 +659,36 @@ public sealed class EntryGateChain(
             $"Entry rejected at {GateName(slot)} for {submission.Order.Ticker}: {rejectCode}.");
     }
 
+    /// <summary>Recheck snapshot ages after broker/history calls; replace a failed gate before any admission callback can reserve capital.</summary>
+    private async Task RequireFreshAdmissionEvidenceAsync(EntryOrderSubmission submission,
+        List<GateEvaluationAppendRequest> results, BrokerAccountSnapshot account,
+        BrokerMarketObservation market, CancellationToken token)
+    {
+        var observed = timeProvider.GetUtcNow();
+        var accountAge = observed - account.ObservedAtUtc;
+        var quoteAge = market.QuoteTimestampUtc is { } quote ? observed - quote : (TimeSpan?)null;
+        var tradeAge = market.LastTradeTimestampUtc is { } trade ? observed - trade : (TimeSpan?)null;
+        var accountFresh = accountAge >= TimeSpan.Zero && accountAge <= options.AccountSnapshotMaxAge;
+        var marketFresh = quoteAge is { } qa && qa >= TimeSpan.Zero && qa <= options.QuoteMaxAge &&
+            tradeAge is { } ta && ta >= TimeSpan.Zero && ta <= options.QuoteMaxAge;
+        if (accountFresh && marketFresh) return;
+        var slot = accountFresh ? EntryGateSlot.QuoteAge : EntryGateSlot.Account;
+        var reject = RejectCode.REJECT_DEGRADED_DATA;
+        var index = results.FindIndex(result => result.GateOrder == (int)slot);
+        if (index < 0) throw new InvalidOperationException("The original freshness gate is missing.");
+        results[index] = Result(submission, slot, false, reject, new
+        {
+            phase = "final_admission", observedAtUtc = observed, accountObservedAtUtc = account.ObservedAtUtc,
+            accountAgeMs = accountAge.TotalMilliseconds, quoteAgeMs = quoteAge?.TotalMilliseconds,
+            tradeAgeMs = tradeAge?.TotalMilliseconds, maxAccountAgeMs = options.AccountSnapshotMaxAge.TotalMilliseconds,
+            maxQuoteAgeMs = options.QuoteMaxAge.TotalMilliseconds
+        }, observed);
+        await PersistAsync(submission, results, CreateCandidateRejection(submission, slot, reject), token);
+        throw new EntryGateRejectedException(slot, reject,
+            "Account or market evidence expired while collecting account history. Refresh the entry before reserving capital.");
+    }
+
+    /// <summary>Persist the ordered gate assessment and any corresponding candidate rejection as one batch.</summary>
     private Task PersistAsync(
         EntryOrderSubmission submission,
         IReadOnlyList<GateEvaluationAppendRequest> results,

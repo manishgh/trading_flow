@@ -7,6 +7,7 @@ namespace TradingFlow.Engine.Configuration;
 
 public sealed class SimpleYamlReader
 {
+    // Resolve typed rules, including fixed Research diagnostic treatments, and reject unknown YAML keys.
     public StrategyDefinition ReadStrategy(string path)
     {
         var map = new TrackingConfigurationMap(ReadKeyValueMap(path));
@@ -165,7 +166,13 @@ public sealed class SimpleYamlReader
                 PortfolioRankMode: OptionalString(map, "entry_rules.portfolio_rank_mode", "none"),
                 Sma200RisingLookbackBars: OptionalInt(map, "entry_rules.sma200_rising_lookback_bars", 0),
                 MinBreakoutVolumeVs50DayAverage: OptionalDecimal(map, "entry_rules.min_breakout_volume_vs_50_day_average"),
-                TechnicalFactor: ReadTechnicalFactor(map)),
+                TechnicalFactor: ReadTechnicalFactor(map),
+                RequireOrderedReclaimPullback: OptionalBool(map, "entry_rules.require_ordered_reclaim_pullback", false),
+                DrawdownQualification: ReadDrawdownQualification(map),
+                HistoricalNewsDiagnostic: ReadHistoricalNewsDiagnostic(map),
+                PreviousSessionBreakout: ReadPreviousSessionBreakout(map),
+                OpeningRangeBreakout: ReadOpeningRangeBreakout(map),
+                IntradayZone: ReadIntradayZone(map)),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -205,7 +212,8 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "exit_rules.require_confirmed_ema20_exit", false),
                 OptionalNullableInt(map, "exit_rules.max_hold_bars"),
                 OptionalDecimal(map, "exit_rules.exit_on_rsi2_above"),
-                OptionalBool(map, "exit_rules.exit_on_close_above_sma5", false)),
+                OptionalBool(map, "exit_rules.exit_on_close_above_sma5", false),
+                ReadContinuationProtection(map)),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
                 RequireDecimal(map, "execution.slippage_bps"),
@@ -229,6 +237,10 @@ public sealed class SimpleYamlReader
             throw new InvalidOperationException("SMA200 rise lookback must be nonnegative; breakout volume threshold must be positive.");
         if (strategy.EntryRules.MinBreakoutVolumeVs50DayAverage is not null && !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The prior-50-day breakout-volume rule requires completed daily bars.");
+        strategy.ExitRules.ContinuationProtection?.Validate(strategy.ExitRules);
+        strategy.EntryRules.PreviousSessionBreakout?.Validate(strategy);
+        strategy.EntryRules.OpeningRangeBreakout?.Validate(strategy);
+        strategy.EntryRules.IntradayZone?.Validate(strategy);
         map.ThrowIfUnknownKeys(path);
         return strategy;
     }
@@ -286,7 +298,14 @@ public sealed class SimpleYamlReader
                 OptionalInt(runMap, "engine.max_strategy_work_items", 10_000),
                 OptionalInt(runMap, "engine.max_retained_candidates", 1_000_000),
                 OptionalBool(runMap, "engine.allow_late_warmup", false),
-                OptionalDateTimeOffset(runMap, "engine.precommitted_liquidation_source_utc")),
+                OptionalDateTimeOffset(runMap, "engine.precommitted_liquidation_source_utc"),
+                OptionalNullableString(runMap, "engine.execution_replay_policy_id")) {
+                    EvidenceManifestPath = OptionalNullableString(runMap, "engine.evidence_manifest_path"),
+                    EvidenceResearchRoot = OptionalNullableString(runMap, "engine.evidence_research_root"),
+                    EvidenceManifestSha256 = OptionalNullableString(runMap, "engine.evidence_manifest_sha256"),
+                    EvidenceDependencyGraphSha256 = OptionalNullableString(runMap, "engine.evidence_dependency_graph_sha256"),
+                    ExecutionSourceManifestPath = OptionalNullableString(runMap, "engine.execution_source_manifest_path"),
+                    ExecutionSourceManifestSha256 = OptionalNullableString(runMap, "engine.execution_source_manifest_sha256") },
             new TimeWindowConfig(
                 RequireString(runMap, "time_window.type"),
                 RequireInt(runMap, "time_window.lookback_days"),
@@ -491,6 +510,7 @@ public sealed class SimpleYamlReader
             OptionalList(runMap, "discovery.earnings_tickers"));
     }
 
+    /// <summary>Reads optimizer choices, rejecting an explicitly empty parameter axis rather than silently deleting it.</summary>
     public OptimizationConfig ReadOptimizationConfig(string path)
     {
         var map = ReadKeyValueMap(path);
@@ -522,10 +542,9 @@ public sealed class SimpleYamlReader
                         parsedValues.Add(cleanVal);
                 }
 
-                if (parsedValues.Count > 0)
-                {
-                    parameters[paramKey] = parsedValues;
-                }
+                if (parsedValues.Count == 0)
+                    throw new InvalidDataException($"Optimization parameter '{paramKey}' requires at least one value.");
+                parameters[paramKey] = parsedValues;
             }
         }
 
@@ -628,6 +647,104 @@ public sealed class SimpleYamlReader
         {
             throw new InvalidOperationException($"Duplicate YAML key '{key}' in '{path}'.");
         }
+    }
+
+    // Only reviewed presence/assessment treatments are supported; diagnostic timing has no editable YAML knobs.
+    private static string? ReadHistoricalNewsDiagnostic(IReadOnlyDictionary<string, List<string>> map)
+    {
+        var treatment = OptionalNullableString(map, "entry_rules.historical_news_diagnostic");
+        return treatment is null or HistoricalNewsDiagnosticPolicy.EvidenceChecked or HistoricalNewsDiagnosticPolicy.AvoidRecentCompanyNews ||
+            HistoricalCompanyNewsDiagnosticPolicy.IsTreatment(treatment)
+            ? treatment : throw new InvalidOperationException("Unsupported historical_news_diagnostic treatment.");
+    }
+
+    // An explicit mapping selects the fixed baseline; omission preserves existing canonical strategy bytes.
+    private static PreviousSessionBreakoutRules? ReadPreviousSessionBreakout(IReadOnlyDictionary<string, List<string>> map)
+    {
+        const string section = "entry_rules.previous_session_breakout";
+        if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(section + ".", StringComparison.OrdinalIgnoreCase)))
+            return null;
+        return new PreviousSessionBreakoutRules(OptionalString(map, section + ".policy_id", "previous-session-breakout-v1"));
+    }
+    // An explicit mapping selects the reviewed ORB policy; omission preserves historical strategy identities.
+    // Resolve the approved immutable zone recipe; unsupported keys remain strict parser errors.
+    private static IntradayZoneRules? ReadIntradayZone(IReadOnlyDictionary<string, List<string>> map)
+    {
+        const string section = "entry_rules.intraday_zone";
+        if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(section + ".", StringComparison.OrdinalIgnoreCase))) return null;
+        return new IntradayZoneRules(OptionalString(map, section + ".policy_id", "intraday-close-pivot-zones-v1"),
+            OptionalInt(map, section + ".max_filled_parent_trades_per_session", 2),
+            OptionalInt(map, section + ".pivot_strength", 3), OptionalInt(map, section + ".prior_session_count", 5),
+            OptionalDecimal(map, section + ".merge_atr_multiple") ?? .35m,
+            OptionalDecimal(map, section + ".flip_atr_multiple") ?? .2m,
+            ReadPythonZoneComparison(map), ReadPythonZoneVolumeSpreadComparison(map));
+    }
+
+    // Comparison inputs are explicit rather than silently borrowing base engine constants.
+    private static PythonZoneComparisonRules? ReadPythonZoneComparison(IReadOnlyDictionary<string, List<string>> map)
+    {
+        const string section = "entry_rules.intraday_zone.python_comparison";
+        if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(section + ".", StringComparison.OrdinalIgnoreCase))) return null;
+        return new(RequireInt(map, section + ".minimum_pivot_count"), RequireInt(map, section + ".minimum_zone_count"),
+            RequireDecimal(map, section + ".long_touch_dollar_tolerance"), RequireDecimal(map, section + ".long_vwap_allowance_atr_multiple"),
+            RequireDecimal(map, section + ".maximum_vwap_distance_atr_multiple"), RequireDecimal(map, section + ".minimum_short_relative_volume"),
+            RequireDecimal(map, section + ".stop_atr_multiple"), RequireInt(map, section + ".entry_cutoff_minutes_before_close"));
+    }
+
+    // A separate explicit section freezes the new recipe without changing the original comparison's serialized identity.
+    private static PythonZoneVolumeSpreadComparisonRules? ReadPythonZoneVolumeSpreadComparison(IReadOnlyDictionary<string, List<string>> map)
+    {
+        const string section = "entry_rules.intraday_zone.python_volume_spread_comparison";
+        if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(section + ".", StringComparison.OrdinalIgnoreCase))) return null;
+        return new(RequireInt(map, section + ".minimum_pivot_count"), RequireInt(map, section + ".minimum_zone_count"),
+            RequireDecimal(map, section + ".long_touch_dollar_tolerance"), RequireDecimal(map, section + ".minimum_relative_volume"),
+            RequireDecimal(map, section + ".stop_atr_multiple"), RequireInt(map, section + ".entry_cutoff_minutes_before_close"),
+            RequireDecimal(map, section + ".synthetic_spread_bps"), RequireDecimal(map, section + ".maximum_spread_bps"),
+            RequireDecimal(map, section + ".minimum_reward_risk"),
+            OptionalNullableString(map, section + ".long_bounce_volume_mode"), OptionalNullableString(map, section + ".target_policy"),
+            OptionalDecimal(map, section + ".fallback_net_risk_multiple"), OptionalNullableString(map, section + ".long_stop_basis"),
+            OptionalNullableString(map, section + ".long_entry_mode"));
+    }
+
+    private static OpeningRangeBreakoutRules? ReadOpeningRangeBreakout(IReadOnlyDictionary<string, List<string>> map)
+    {
+        const string section = "entry_rules.opening_range_breakout";
+        if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(section + ".", StringComparison.OrdinalIgnoreCase)))
+            return null;
+        return new OpeningRangeBreakoutRules(OptionalString(map, section + ".policy_id", "opening-range-breakout-v1"),
+            OptionalInt(map, section + ".max_filled_parent_trades_per_session", 2));
+    }
+
+    // A present mapping opts in; absent mappings leave all existing strategy behavior unchanged.
+    private static ContinuationProtectionRules? ReadContinuationProtection(IReadOnlyDictionary<string, List<string>> map)
+    {
+        const string section = "exit_rules.continuation_protection";
+        const string prefix = section + ".";
+        if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            return null;
+        return new ContinuationProtectionRules(
+            map.ContainsKey(prefix + "activation_r") ? RequireDecimal(map, prefix + "activation_r") : 2.4m,
+            map.ContainsKey(prefix + "cost_buffer_ticks") ? RequireInt(map, prefix + "cost_buffer_ticks") : 1,
+            map.ContainsKey(prefix + "confirmation_bars") ? RequireInt(map, prefix + "confirmation_bars") : 2,
+            map.ContainsKey(prefix + "target_step_r") ? RequireDecimal(map, prefix + "target_step_r") : 1m);
+    }
+
+    private static DrawdownQualificationRules? ReadDrawdownQualification(IReadOnlyDictionary<string, List<string>> map)
+    {
+        const string prefix = "entry_rules.drawdown_qualification.";
+        if (!map.Keys.Any(key => key.StartsWith(prefix, StringComparison.Ordinal))) return null;
+        var rules = new DrawdownQualificationRules(
+            OptionalString(map, prefix + "mode", "observe"),
+            OptionalNullableString(map, prefix + "metric"),
+            OptionalDecimal(map, prefix + "min_value"), OptionalDecimal(map, prefix + "max_value"),
+            OptionalBool(map, prefix + "require_sector_context", false),
+            OptionalBool(map, prefix + "require_event_context", false),
+            OptionalInt(map, prefix + "minimum_matured_episodes", 0),
+            OptionalBool(map, prefix + "reject_adverse_events", false),
+            OptionalNullableInt(map, prefix + "event_lookback_days"),
+            OptionalNullableInt(map, prefix + "event_max_coverage_age_hours"));
+        rules.Validate();
+        return rules;
     }
 
     private static TechnicalFactorRules? ReadTechnicalFactor(IReadOnlyDictionary<string, List<string>> map)
@@ -874,10 +991,17 @@ public sealed class SimpleYamlReader
         {
             "entry_rules",
             "entry_rules.technical_factor",
+            "entry_rules.previous_session_breakout",
+            "entry_rules.opening_range_breakout",
+            "entry_rules.intraday_zone",
+            "entry_rules.intraday_zone.python_comparison",
+            "entry_rules.intraday_zone.python_volume_spread_comparison",
+            "entry_rules.drawdown_qualification",
             "risk_guards",
             "risk_guards.per_ticker_daily",
             "confluence",
             "exit_rules",
+            "exit_rules.continuation_protection",
             "execution",
             "execution.confirmation",
             "session",

@@ -35,6 +35,7 @@ public sealed record StrategyInitialStopResult(
 /// </summary>
 public sealed class StrategyInitialStopResolver
 {
+    // Resolve the declared structural reference before account sizing; breakout context is B rather than C.
     public StrategyInitialStopResult Resolve(StrategyInitialStopRequest request)
     {
         if (request.EntryPrice <= 0m ||
@@ -52,6 +53,12 @@ public sealed class StrategyInitialStopResolver
 
         switch (mode)
         {
+            case "breakout_candle":
+                stopPrice = isShort ? request.ExecutionBars[request.StopContextIndex].High
+                    : request.ExecutionBars[request.StopContextIndex].Low;
+                stop = PlannedStopRequest.FromStructuralPrice(stopPrice);
+                break;
+
             case "vwap_minus_atr" when !isShort:
                 if (!TryGetVwapAtr(request, out var longVwap, out var longAtr))
                 {

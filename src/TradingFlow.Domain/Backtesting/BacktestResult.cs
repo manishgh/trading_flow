@@ -1,4 +1,4 @@
-﻿using TradingFlow.Domain.Orders;
+using TradingFlow.Domain.Orders;
 
 using TradingFlow.Domain.Persistence;
 
@@ -42,7 +42,23 @@ public sealed record BacktestResult(
     string? PortfolioExecutionAuditPath = null,
     string SummaryScope = "winner_strategy",
     string ExecutionEvidenceScope = "unified_portfolio",
-    bool EconomicResultsComplete = true);
+    bool EconomicResultsComplete = true,
+    PreparedMarketDataSummary? PreparedMarketData = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<BacktestZoneDecisionDetail>? ZoneDecisions { get; init; }
+    public BacktestPortfolioState? PortfolioState { get; init; }
+    public IReadOnlyList<BacktestHistoryEligibility> HistoryEligibility { get; init; } = [];
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public DecisionContextEvidenceProvenance? DecisionContextEvidence { get; init; }
+}
+
+/// <summary>Identifies the verified context graph actually loaded by the runner without exposing server storage paths.</summary>
+public sealed record DecisionContextEvidenceProvenance(string ManifestSha256, string DependencyGraphSha256,
+    string Provider, string Version, IReadOnlyList<string> SourceSha256s,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? DiagnosticPolicyId = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? DiagnosticPolicySha256 = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? StrictCatalystProviderUsed = null);
 
 public sealed record BacktestArtifactReference(
     int SchemaVersion,
@@ -91,7 +107,8 @@ public sealed record BacktestExecutionFailure(
     decimal ExitFilledNotional,
     decimal Fees,
     decimal? LastMarkedPrice,
-    DateTimeOffset? LastMarketTimestampUtc);
+    DateTimeOffset? LastMarketTimestampUtc,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool EvidenceUnavailable = false);
 
 public sealed record BacktestExecutionAuditEvent(
     string Ticker,
@@ -133,7 +150,10 @@ public sealed record UnifiedPortfolioBacktestResult(
     IReadOnlyDictionary<string, int>? AdmissionRejectionCounts = null,
     IReadOnlyDictionary<string, IReadOnlyList<string>>? AdmissionRejectionExamples = null,
     IReadOnlyList<BacktestExecutionFailure>? ExecutionFailures = null,
-    bool EconomicResultsComplete = true);
+    bool EconomicResultsComplete = true)
+{
+    public BacktestPortfolioState? PortfolioState { get; init; }
+}
 
 
 public sealed record MissedMoveAudit(
@@ -165,7 +185,10 @@ public sealed record StrategyBacktestResult(
     int LosingTradeCount,
     IReadOnlyList<BacktestTrade> CompletedTrades,
     IReadOnlyList<BacktestExecutionFailure>? ExecutionFailures = null,
-    bool EconomicResultsComplete = true);
+    bool EconomicResultsComplete = true)
+{
+    public BacktestPortfolioState? PortfolioState { get; init; }
+}
 
 public sealed record TickerBacktestResult(
     string Ticker,
@@ -229,3 +252,33 @@ public sealed record DirectionPnlSummary(
 
 
 
+
+/// <summary>Frozen zone and filter evidence plus observed execution; absent prices remain absent.</summary>
+public sealed record BacktestZoneDecisionDetail(string CandidateId, string StrategyId, string Ticker, string Direction,
+    string Pattern, long ZoneId, int ZoneVersion, string ZoneRole, decimal ZoneBottom, decimal ZoneTop, int PivotCount,
+    DateTimeOffset PivotBarStartUtc, DateTimeOffset PivotCompletedAtUtc, DateTimeOffset PivotConfirmedAtUtc,
+    DateTimeOffset ZoneKnownAtUtc, DateTimeOffset? FlippedAtUtc, DateTimeOffset ConfirmationBarStartUtc,
+    DateTimeOffset ConfirmationCompletedAtUtc, decimal ConfirmationClose, decimal? Vwap, decimal? SlotRelativeVolume,
+    decimal? SlotMedianVolume, int SlotSampleCount, decimal FrozenStopPrice, DateTimeOffset SessionDeadlineUtc,
+    string Status, string ResolutionReason, decimal? ActualEntryPrice, decimal? ActualExitPrice,
+    string? ZonePolicyId = null, DateTimeOffset? EntryCutoffUtc = null, decimal? FixedTargetPrice = null,
+    decimal? Atr = null, long? TargetZoneId = null, decimal? TargetZoneBottom = null, decimal? TargetZoneTop = null,
+    BacktestZoneVolumeSpreadDetail? VolumeSpread = null,
+    IReadOnlyList<BacktestZoneAlternativeDecisionDetail>? AlternativeDecisions = null,
+    TradingFlow.Domain.Strategies.IntradayZoneTargetPlanningEvidence? TargetPlan = null,
+    string? LongBounceVolumeMode = null, string? StopBasis = null, decimal? PreviousLow = null,
+    decimal? ConfirmationLow = null, decimal? RawStopPrice = null, decimal? TickSize = null,
+    TradingFlow.Domain.Strategies.IntradayZoneRetestEvidence? Retest = null, int? TargetZoneVersion = null,
+    DateTimeOffset? TargetZoneKnownAtUtc = null);
+
+/// <summary>Synthetic quote assumptions and the selected alternative's quantity-dependent ticket-fee estimate.</summary>
+public sealed record BacktestZoneVolumeSpreadDetail(decimal BidPrice, decimal AskPrice, decimal FullSpreadBps,
+    decimal MaximumSpreadBps, decimal MinimumRewardRisk, int OrderedAlternativeIndex, decimal? PlannedQuantity,
+    decimal? EstimatedRoundTripTicketFees, decimal? EstimatedNetRiskDollars, decimal? EstimatedNetRewardDollars,
+    decimal? SelectedRewardRisk);
+
+/// <summary>Chronological admission's observed alternative checks; absence of a ratio means it was not calculated.</summary>
+public sealed record BacktestZoneAlternativeDecisionDetail(int AlternativeIndex, string Direction, long ZoneId,
+    decimal? PlannedQuantity, decimal? EstimatedNetRiskDollars, decimal? EstimatedNetRewardDollars,
+    decimal? RewardRisk, bool Selected, string Reason,
+    TradingFlow.Domain.Strategies.IntradayZoneTargetPlanningEvidence? TargetPlan = null);

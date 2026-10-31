@@ -39,9 +39,11 @@ public static class PromotionEvaluator
         var failed = new List<string>();
         var passed = new List<string>();
 
+        // Pending admissions and open holdings do not supply completed outcomes for promotion's sample gate.
+        var completedSample = strategy.PortfolioState?.ClosedTradeCount ?? strategy.AcceptedTradeCount;
         Check(
-            strategy.AcceptedTradeCount >= criteria.MinAcceptedTrades,
-            $"sample_size ({strategy.AcceptedTradeCount} accepted, need >= {criteria.MinAcceptedTrades})");
+            completedSample >= criteria.MinAcceptedTrades,
+            $"sample_size ({completedSample} completed, need >= {criteria.MinAcceptedTrades})");
 
         Check(
             strategy.TotalReturnPct > criteria.MinTotalReturnPct,

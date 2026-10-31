@@ -261,7 +261,9 @@ public sealed record PortfolioRiskReservationRequest(
     decimal MaxPortfolioRisk,
     int MaxPositions,
     DateTimeOffset AccountSnapshotRequestedAtUtc,
-    DateTimeOffset AccountSnapshotObservedAtUtc);
+    DateTimeOffset AccountSnapshotObservedAtUtc,
+    TradingFlow.Domain.Execution.BrokerFillHistorySnapshot? FillHistory = null,
+    int? FillHistoryMaxAgeSeconds = null);
 
 public sealed class PortfolioRiskReservationRejectedException(
     Guid intentId,

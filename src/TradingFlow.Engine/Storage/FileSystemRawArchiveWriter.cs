@@ -105,48 +105,15 @@ public sealed class FileSystemRawArchiveWriter : IRawArchiveWriter
         return new RawArchiveReceipt(payloadPath, manifestPath, manifest);
     }
 
+    // Refuse automatic expiry of original provider evidence; cancellation still takes precedence.
     public Task<RawArchiveRetentionResult> EnforceRetentionAsync(
         DateTimeOffset nowUtc,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var deleteBeforeDate = DateOnly.FromDateTime(nowUtc.UtcDateTime.Date.AddDays(-options.RetentionDays));
-        if (!Directory.Exists(options.RootPath))
-        {
-            return Task.FromResult(new RawArchiveRetentionResult(0, 0, deleteBeforeDate));
-        }
-
-        var examined = 0;
-        var deleted = 0;
-        foreach (var sourcePath in Directory.EnumerateDirectories(options.RootPath))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (IsReparsePoint(sourcePath))
-            {
-                continue;
-            }
-
-            foreach (var datePath in Directory.EnumerateDirectories(sourcePath))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (IsReparsePoint(datePath) || !TryParseDateDirectory(datePath, out var archiveDate))
-                {
-                    continue;
-                }
-
-                examined++;
-                if (archiveDate >= deleteBeforeDate)
-                {
-                    continue;
-                }
-
-                EnsureInsideRoot(datePath);
-                Directory.Delete(datePath, recursive: true);
-                deleted++;
-            }
-        }
-
-        return Task.FromResult(new RawArchiveRetentionResult(examined, deleted, deleteBeforeDate));
+        throw new NotSupportedException(
+            "Automatic expiry of original provider archives is disabled. "
+            + "Dataset-specific deletion requires separate explicit approval.");
     }
 
     private async Task WriteAndPublishExclusiveAsync(
@@ -325,20 +292,6 @@ public sealed class FileSystemRawArchiveWriter : IRawArchiveWriter
                || normalized.EndsWith("token", StringComparison.Ordinal)
                || normalized.Equals("auth", StringComparison.Ordinal);
     }
-
-    private static bool TryParseDateDirectory(string path, out DateOnly date)
-    {
-        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
-        return DateOnly.TryParseExact(
-            name,
-            "yyyy-MM-dd",
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.None,
-            out date);
-    }
-
-    private static bool IsReparsePoint(string path) =>
-        (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
 
     private static bool IsSafeSegmentCharacter(char character) =>
         IsAsciiLetterOrDigit(character) || character is '-' or '_';

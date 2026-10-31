@@ -6,6 +6,16 @@ namespace TradingFlow.Engine.Execution;
 
 public sealed class TechnicalExecutionEngine
 {
+    /// <summary>Rejects policies whose paired stop/target lifecycle is not supported by the caller.</summary>
+    public static void RequireSupportedExitPolicy(StrategyDefinition strategy)
+    {
+        ArgumentNullException.ThrowIfNull(strategy);
+        if (strategy.ExitRules.ContinuationProtection is not null)
+            throw new NotSupportedException(
+                "Continuation protection requires the day-trading order lifecycle; this execution path cannot apply its stop and target updates yet.");
+    }
+
+    /// <summary>Evaluates supported long exits with existing protection before technical or time exits.</summary>
     public (decimal? ExitPrice, string? ExitReason) EvaluateBarForExit(
         StrategyDefinition strategy,
         OhlcvBar bar,
@@ -22,6 +32,7 @@ public sealed class TechnicalExecutionEngine
         decimal? volumeLogSlope = null,
         IndicatorSnapshot? previousSnapshot = null)
     {
+        RequireSupportedExitPolicy(strategy);
         // Update Effective Stop Loss
         currentStopLossPrice = CalculateEffectiveStopLoss(
             strategy,
@@ -45,28 +56,9 @@ public sealed class TechnicalExecutionEngine
             return (takeProfitPrice, "take_profit");
         }
 
-        // Check Technical Exits (e.g. crossing below EMA/VWAP)
-        var technicalExitReason = GetTechnicalExitReason(strategy, snapshot, barsHeld, priceLogSlope, volumeLogSlope, previousSnapshot);
-        if (technicalExitReason is not null)
-        {
-            // We usually can't execute at the EXACT bar close easily in real life, but for standard technical exits we signal it here.
-            // In a real execution, we'd exit at the next open, but we return the signal now.
-            return (bar.Close, technicalExitReason);
-        }
-
-        if (strategy.ExitRules.MaxHoldBars is { } maxHoldBars &&
-            maxHoldBars > 0 &&
-            barsHeld >= maxHoldBars)
-        {
-            return (bar.Close, "max_hold_bars");
-        }
-
-        // Calendar-hour timeout remains available for sub-daily swing execution and as a fallback.
-        var maxExitTimestamp = entryTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours);
-        if (bar.Timestamp >= maxExitTimestamp)
-        {
-            return (bar.Close, "max_hold");
-        }
+        var scheduledReason = GetTechnicalOrTimeExitReason(strategy, snapshot, barsHeld,
+            bar.Timestamp, entryTimestamp, priceLogSlope, volumeLogSlope, previousSnapshot);
+        if (scheduledReason is not null) return (bar.Close, scheduledReason);
 
         // Update High Watermark for next iteration
         highestHighSinceEntry = Math.Max(highestHighSinceEntry, bar.High);
@@ -74,6 +66,21 @@ public sealed class TechnicalExecutionEngine
         return (null, null);
     }
 
+    public string? GetTechnicalOrTimeExitReason(StrategyDefinition strategy,
+        IndicatorSnapshot snapshot, int barsHeld, DateTimeOffset sourceTimestamp,
+        DateTimeOffset entrySourceTimestamp, decimal? priceLogSlope = null,
+        decimal? volumeLogSlope = null, IndicatorSnapshot? previousSnapshot = null)
+    {
+        var technical = GetTechnicalExitReason(strategy, snapshot, barsHeld,
+            priceLogSlope, volumeLogSlope, previousSnapshot);
+        if (technical is not null) return technical;
+        if (strategy.ExitRules.MaxHoldBars is { } maximum && maximum > 0 && barsHeld >= maximum)
+            return "max_hold_bars";
+        return sourceTimestamp >= entrySourceTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours)
+            ? "max_hold" : null;
+    }
+
+    /// <summary>Calculates the existing ATR stop; continuation protection needs its own stateful lifecycle.</summary>
     public decimal CalculateEffectiveStopLoss(
         StrategyDefinition strategy,
         IndicatorSnapshot snapshot,
@@ -83,6 +90,7 @@ public sealed class TechnicalExecutionEngine
         decimal currentStopLossPrice,
         decimal highestHighSinceEntry)
     {
+        RequireSupportedExitPolicy(strategy);
         if (!strategy.ExitRules.EnableAtrTrailingStop ||
             snapshot.Atr is null ||
             snapshot.Atr.Value <= 0)

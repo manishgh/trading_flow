@@ -100,7 +100,7 @@ public sealed record RawArchiveRetentionResult(
     DateOnly DeleteBeforeDate);
 
 /// <summary>
-/// Appends byte-exact provider payloads before parsing and enforces the configured retention floor.
+/// Appends byte-exact provider payloads before parsing; original archives cannot expire automatically.
 /// </summary>
 public interface IRawArchiveWriter
 {
@@ -109,6 +109,10 @@ public interface IRawArchiveWriter
         ReadOnlyMemory<byte> payload,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Rejects automatic expiry with NotSupportedException. Original archive deletion requires
+    /// separate dataset-specific approval; the configured retention floor does not authorize it.
+    /// </summary>
     Task<RawArchiveRetentionResult> EnforceRetentionAsync(
         DateTimeOffset nowUtc,
         CancellationToken cancellationToken = default);

@@ -61,7 +61,8 @@ public sealed class UniversePromotionEvidence
 
 public sealed record UniversePromotionEligibility
 {
-    public UniversePromotionEligibility(bool isEligible, IEnumerable<string> failures)
+    /// <summary>Retains validated, immutable promotion reasons and binds their exact list type when saved results are reopened.</summary>
+    public UniversePromotionEligibility(bool isEligible, IReadOnlyList<string> failures)
     {
         var failureArray = (failures ?? throw new ArgumentNullException(nameof(failures)))
             .Select(failure =>

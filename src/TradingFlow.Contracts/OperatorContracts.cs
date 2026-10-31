@@ -5,7 +5,16 @@ public sealed record MobileCatalogResponse(
     IReadOnlyList<MobileRunConfigOption> PaperConfigs,
     IReadOnlyList<MobileStrategyOption> Strategies,
     IReadOnlyList<MobileStrategyOption> PaperExperimentStrategies,
-    IReadOnlyList<MobileStrategyOption> PaperShadowStrategies);
+    IReadOnlyList<MobileStrategyOption> PaperShadowStrategies,
+    IReadOnlyList<TradingFlow.Contracts.V1.DecisionContextEvidenceChoice>? EvidenceChoices = null,
+    IReadOnlyList<BacktestExecutionReplayChoice>? ExecutionReplayChoices = null);
+
+/// <summary>A server-supported research execution assumption; it does not authorize trading.</summary>
+public sealed record BacktestExecutionReplayChoice(string PolicyId, string Name, string Horizon)
+{
+    /// <summary>Shows the declared fill assumption in the existing native picker.</summary>
+    public override string ToString() => Name;
+}
 
 public sealed record MobileRunConfigOption(
     string Path,
@@ -14,8 +23,10 @@ public sealed record MobileRunConfigOption(
     string Mode,
     string Provider,
     IReadOnlyList<string> Tickers,
-    IReadOnlyList<string> Intervals)
+    IReadOnlyList<string> Intervals,
+    RunProfileSettings? Settings = null)
 {
+    /// <summary>Identifies the server profile's mode, provider and timeframes.</summary>
     public override string ToString()
     {
         var mode = string.IsNullOrWhiteSpace(Mode) ? "run" : Mode;
@@ -24,6 +35,10 @@ public sealed record MobileRunConfigOption(
         return $"{mode} / {provider} / {intervals}";
     }
 }
+
+/// <summary>Server-resolved profile values; clients may edit choices but do not supply their own fallback defaults.</summary>
+public sealed record RunProfileSettings(int LookbackDays, decimal StartingCapital, decimal AccountRiskBudgetPct,
+    decimal MaxPositionNotionalPct, int MaxConcurrentPositions, string CachePolicy, string? ExecutionReplayPolicyId);
 
 public sealed record MobileStrategyOption(
     string Path,
@@ -45,16 +60,24 @@ public sealed record MobileStrategyOption(
     int? LastAuditedTrades = null,
     decimal? LastAuditedWinRatePct = null,
     string? LastAuditedAverageHold = null,
-    string? LastAuditedResultPath = null)
+    string? LastAuditedResultPath = null,
+    TradingFlow.Contracts.V1.StrategyReference? DerivedFromIdentity = null,
+    StrategyAdmissionProfileResponse? AdmissionProfile = null,
+    string Horizon = "swing")
 {
+    /// <summary>Describes a strategy without presenting an accumulated-period audit return as a monthly result.</summary>
     public override string ToString()
     {
         var audit = LastAuditedReturnPct is null
             ? "not audited"
-            : $"{LastAuditedReturnPct:0.##}% / DD {LastAuditedMaxDrawdownPct:0.##}% / {LastAuditedAverageHold}";
+            : $"monthly audit report required / {LastAuditedTrades} trades";
         return $"{StrategyName} {SemanticVersion} [{Lifecycle}] ({Timeframe}->{ExecutionTimeframe}) - {audit}";
     }
 }
+
+/// <summary>The registered strategy's server-owned admission identity and native execution policy.</summary>
+public sealed record StrategyAdmissionProfileResponse(string ProfileId, string ProfileVersion,
+    string ExecutionTimingPolicy, string RiskPolicy);
 
 public sealed record MobileAutomationStartRequest(
     string ConfigPath,
