@@ -120,6 +120,9 @@ test.describe("incremental live-list membership", () => {
       if (url.pathname === "/api/v1/running-trades") {
         return route.fulfill({
           json: {
+            available: true,
+            detail: "Broker account read.",
+            readAtUtc: "2026-11-02T15:00:00Z",
             trades,
             totalUnrealizedPl: trades.reduce((sum, item) => sum + item.unrealizedPl, 0),
             count: trades.length

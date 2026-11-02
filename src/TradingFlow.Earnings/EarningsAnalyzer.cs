@@ -176,11 +176,16 @@ public sealed class EarningsAnalyzer
                 ? $"same-slot relative volume is {latest.SlotRelativeVolume:F2}x across {latest.SlotRelativeVolumeSampleCount} prior sessions"
                 : $"same-slot relative volume is below {options.MinimumSlotRelativeVolume:F2}x ({latest.SlotRelativeVolume:F2}x across {latest.SlotRelativeVolumeSampleCount} prior sessions)");
 
-        var possible = result == EarningsResultAssessment.Positive &&
-            priceConfirmed && emaConfirmed && macdConfirmed && volumeConfirmed;
-        var assessment = possible
-            ? EarningsBreakoutAssessment.Possible
-            : EarningsBreakoutAssessment.NotConfirmed;
+        var otherChecksPass = result == EarningsResultAssessment.Positive &&
+            priceConfirmed && emaConfirmed && macdConfirmed;
+        // A cold same-slot baseline means volume was not measured, which is not the same as a failed check.
+        var assessment = !otherChecksPass
+            ? EarningsBreakoutAssessment.NotConfirmed
+            : !volumeBaselineReady
+                ? EarningsBreakoutAssessment.InsufficientData
+                : volumeConfirmed
+                    ? EarningsBreakoutAssessment.Possible
+                    : EarningsBreakoutAssessment.NotConfirmed;
         var resultText = result switch
         {
             EarningsResultAssessment.Positive => "Earnings result is positive",

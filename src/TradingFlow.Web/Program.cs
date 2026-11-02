@@ -275,6 +275,10 @@ builder.Services.AddHttpClient<OfficialMarketNewsProvider>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);
     client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "TradingFlow/1.0");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    // UN News sends gzip even when the request does not ask for it.
+    AutomaticDecompression = System.Net.DecompressionMethods.All
 });
 builder.Services.AddSingleton<NewsFeedService>();
 builder.Services.AddScoped<NewsQueryService>();

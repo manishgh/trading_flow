@@ -31,7 +31,7 @@ async function openFixture(page, saved = []) {
     window.tradingFlowFetch = async (url, options = {}) => {
       const body = options.body ? JSON.parse(options.body) : null;
       let value;
-      if (url.endsWith('/catalog')) value = { strategies: [{ path: 'fixture.yaml', artifactStrategyId: 'fixture', semanticVersion: '1.0.0', contentSha256: 'd'.repeat(64) }],
+      if (url.endsWith('/catalog')) value = { strategies: [{ path: 'fixture.yaml', horizon: 'swing', artifactStrategyId: 'fixture', semanticVersion: '1.0.0', contentSha256: 'd'.repeat(64) }],
         evidenceChoices: [{ reference, name: 'Approved fixture', available: true, unavailableReason: null, summary },
           { reference: null, name: 'Missing strict archive', available: false, unavailableReason: 'Original receipts absent', summary: null }] };
       else if (url.endsWith('/universes/preview')) value = { universeSnapshotId: '11111111-1111-1111-1111-111111111111' };

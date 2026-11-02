@@ -8,7 +8,7 @@ const candidate={candidateId,version:3,symbol:"MSFT",strategy:identity,state:"tr
 const snapshot=sequence=>({candidateRunId:runId,provenance:{mode:"paper_shadow",universeSnapshotId:universeId,strategies:[identity]},status:"running",latestEventSequence:sequence,candidates:[candidate]});
 const json=(route,value,status=200)=>route.fulfill({status,contentType:"application/json",body:JSON.stringify(value)});
 // Mirrors the plan API without starting jobs or mutating the isolated host's source lists.
-const planPreview=run=>({planId:0,run,configurationSha256:'b'.repeat(64),executionCount:1,membershipDescription:'Reviewed source stocks.',
+const planPreview=run=>({planId:0,run:{...run,configurationSha256:'b'.repeat(64)},configurationSha256:'b'.repeat(64),executionCount:1,membershipDescription:'Reviewed source stocks.',
  cohorts:[{name:'Group 1',symbols:['MSFT'],startingCapital:run.startingCapital}]});
 // Each case creates its own source in the harness-owned database; teardown deletes that database and all related files.
 async function openBacktestFixture(page){
@@ -84,7 +84,7 @@ for(const exactWindow of [false,true]) test("backtest retry preserves the "+(exa
  const strategy=page.locator('input[name="StrategyPaths"]').first();await strategy.check();
  const selectedPath=await strategy.inputValue();
  let captures=0;const requests=[];
- await page.route("**/api/v1/catalog",route=>json(route,{strategies:[{path:selectedPath,artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
+ await page.route("**/api/v1/catalog",route=>json(route,{strategies:[{path:selectedPath,horizon:"swing",artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
  await page.route("**/api/v1/universes/preview",route=>{captures++;return json(route,{universeSnapshotId:universeId});});
  await page.locator('[name="GroupSize"]').fill('5');
  await page.route("**/api/v1/backtests/plans/preview",route=>{
@@ -115,7 +115,7 @@ test.describe('research validation in a non-UTC device timezone',()=>{
   await signIn(page);await openBacktestFixture(page);
   const strategy=page.locator('input[name="StrategyPaths"]').first();await strategy.check();const selectedPath=await strategy.inputValue();
   let captures=0,request;
-  await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
+  await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,horizon:"swing",artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
   await page.route('**/api/v1/universes/preview',route=>{captures++;return json(route,{universeSnapshotId:universeId});});
   await page.locator('[name="GroupSize"]').fill('5');
   await page.route('**/api/v1/backtests/plans/preview',route=>{request=route.request().postDataJSON().run;return json(route,planPreview(request));});
@@ -153,7 +153,7 @@ test('saving groups starts nothing and retrying start retains its command',async
  await openBacktestFixture(page);
  const strategy=page.locator('input[name="StrategyPaths"]').first();await strategy.check();
  const selectedPath=await strategy.inputValue();
- await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
+ await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,horizon:"swing",artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
  await page.route('**/api/v1/universes/preview',route=>json(route,{universeSnapshotId:universeId}));
  await page.route('**/api/v1/backtests/plans/preview',route=>json(route,planPreview(route.request().postDataJSON().run)));
  await page.route('**/api/v1/backtests/plans/17/start',route=>{
@@ -186,7 +186,7 @@ test('excluded stocks retain retry identity and reopen with the effective groups
  await openBacktestFixture(page);
  const strategy=page.locator('input[name="StrategyPaths"]').first();await strategy.check();
  const selectedPath=await strategy.inputValue();
- await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
+ await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,horizon:"swing",artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
  await page.route('**/api/v1/universes/preview',route=>{captures++;return json(route,{universeSnapshotId:universeId});});
  await page.route('**/api/v1/backtests/plans/preview',route=>{
   const request=route.request().postDataJSON();previews.push(request);
@@ -237,7 +237,7 @@ test('saved Finviz selection captures its filters and retains the reviewed profi
  const option=page.locator('#StockSource option').filter({hasText:'Source fixture'}).last();
  const source=await option.getAttribute('value');await page.locator('#StockSource').selectOption(source);
  const strategy=page.locator('input[name="StrategyPaths"]').first();await strategy.check();const selectedPath=await strategy.inputValue();
- await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
+ await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,horizon:"swing",artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
  let capture,save;
  await page.route('**/api/v1/universes/preview',route=>{capture=route.request().postDataJSON();return json(route,{universeSnapshotId:universeId});});
  await page.route('**/api/v1/backtests/plans/preview',route=>json(route,planPreview(route.request().postDataJSON().run)));

@@ -126,7 +126,7 @@ public sealed class EarningsAnalyzerTests
     }
 
     [Fact]
-    public void Analyze_DoesNotConfirmVolumeUntilSameSlotBaselineIsFullyWarm()
+    public void Analyze_ReportsInsufficientDataWhileSameSlotBaselineIsCold()
     {
         var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
@@ -145,8 +145,31 @@ public sealed class EarningsAnalyzerTests
             }],
             DateTimeOffset.Parse("2026-07-31T14:35:00Z"));
 
-        Assert.Equal(EarningsBreakoutAssessment.NotConfirmed, result.BreakoutAssessment);
+        Assert.Equal(EarningsBreakoutAssessment.InsufficientData, result.BreakoutAssessment);
         Assert.Contains("required prior sessions", result.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Analyze_ColdBaselineStillReportsNotConfirmedWhenAnotherCheckFails()
+    {
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
+        var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
+
+        var result = analyzer.Analyze(
+            CreateEvent(eventTime, epsSurprise: -8m, revenueSurprise: -4m),
+            CreateBars(eventTime, historyDays: 20),
+            [new PersistedNewsItem
+            {
+                Id = "cold-negative-result",
+                Ticker = "TEST",
+                Timestamp = eventTime,
+                Headline = "TEST reports earnings results",
+                Provider = "alpaca"
+            }],
+            DateTimeOffset.Parse("2026-07-31T14:35:00Z"));
+
+        Assert.Equal(EarningsResultAssessment.Negative, result.ResultAssessment);
+        Assert.Equal(EarningsBreakoutAssessment.NotConfirmed, result.BreakoutAssessment);
     }
 
     [Fact]
