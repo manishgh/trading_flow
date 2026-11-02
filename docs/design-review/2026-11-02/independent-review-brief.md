@@ -1,54 +1,125 @@
-# Brief for an independent research and verification reviewer
+# Brief for an independent research and validation reviewer
 
-Use this brief with a separate model session (for example Fable). The reviewer reads and checks;
-it does not change code or data. Report findings with file:line evidence, separate what was
-verified from what is inferred, and use plain language.
+Use this brief in a separate model session (for example Fable). The reviewer researches, designs
+on paper and checks; it does not edit code, change data, run backtests or place orders. Report
+with file:line or document evidence, mark each finding as verified or inferred, and use plain
+language (explain any technical term where it first appears).
 
-## Context
+## 1. Context
 
-TradingFlow is a C#/.NET research and paper-trading system at `C:\project\trading_flow_swing`
-(branch `approved-execution-and-signal-study`). Strategies must be C# recipes built from reusable
-TradingFlow components, run through one decision path for backtest, paper and live. Machine
-learning lives in a separate project and is advisory only. Rules: `AGENTS.md`,
-`docs/operating-boundaries.md`, `docs/research/non-ml-strategy-research-program.md`.
+- Repository: `C:\project\trading_flow_swing`, branch `approved-execution-and-signal-study`;
+  GitHub `main` is at commit `67da84c`. C#/.NET research and paper-trading system.
+- Binding rules: `AGENTS.md`, `docs/operating-boundaries.md`,
+  `docs/research/non-ml-strategy-research-program.md`.
+- Strategies must be C# recipes (name plus parameters) built from reusable TradingFlow
+  components, run through one decision path for backtest, paper and live. No Python in
+  TradingFlow except the FinBERT sentiment service. Machine learning lives in the separate
+  Market Predictor project and is advisory only in the UI.
+- Why this work exists: after 200+ unsuccessful iterations the diagnosis was hand-picked stock
+  lists, one six-month rising-market window, look-ahead in screening (split-adjusted prices),
+  added stop and target overlays that removed the edge, and results without statistical tests.
 
-After 200+ unsuccessful strategy iterations, the diagnosis was: hand-picked stock lists, one
-six-month rising-market window, look-ahead in screening, and results without statistical tests.
+## 2. Data windows (user decision, 2 November 2026)
 
-## Part 1: research (can start now)
+| Use | Bars | Window |
+|---|---|---|
+| Swing setup | Daily | 1 year of decisions (Nov 2025 - Oct 2026); daily bars stored from 1 Sep 2024 for warm-up |
+| Swing entry timing | 1 hour | Same year, only for selected stocks (not yet collected) |
+| Day trading | 5 minute | 6 months (1 May - 30 Oct 2026) plus 14 earlier sessions for baselines |
 
-Day trading:
+Already collected (evidence catalog `C:\project\trading_flow\data\research\evidence\catalog.db`):
 
-1. Opening-range breakout on stocks in play (Zarattini, Barbon and Aziz 2024, SSRN 4729284).
-   Check the rules recorded in `docs/design-review/2026-11-02/orb-stocks-in-play-design.md`
-   against the paper. Find independent replications on US single stocks and any evidence of
-   decay after publication. What costs, slippage on stop orders, short-sale limits and data
-   choices change the result most?
-2. Intraday momentum "noise area" on SPY (Zarattini, Aziz and Barbon 2024, Swiss Finance
-   Institute paper 24-97). Same questions.
+- Security master as of 30 Oct 2026: 33,556 Alpaca US equities, active and inactive
+  (dataset `6720a7d9...`), and 387,945 corporate actions 2016-2026 (`864016f2...`). Alpaca's
+  inactive list missed 39 of 60 known delisted companies when tested on 31 Oct 2026.
+- Daily as-traded SIP bars, 1 Sep 2024 - 30 Oct 2026: 5,841,142 bars, 15,189 listed equities
+  (`5fdf1ee3...`). Excluded and recorded: 242 symbols held by two companies, 431 non-ticker names.
+- Daily stocks-in-play screen 1 Apr - 30 Oct 2026:
+  `C:\project\trading_flow\data\research\screens\orb-stocks-in-play-20260401-20261030`.
+  On 30 Oct it gave 1,259 stocks against 1,270 from the equivalent Finviz Elite screen, 1,166 in
+  both. Funds excluded with a dated Finviz fund list (`finviz-funds-20261102.txt`, 5,802 funds).
+- Dated S&P 500 membership from May 2018 exists in Market Predictor
+  (`C:\project\market-predictor\data\canonical\index_membership`); importing it into TradingFlow
+  is approved but not built.
 
-Swing:
+## 3. The four strategies
 
-3. Short-term reversal and Connors RSI(2) on liquid large caps. Is there evidence it survives
-   costs after 2011? Which exit and stop choices matter? Our own check found a 2xATR stop removed
-   most of the edge on 75 large caps; is that consistent with the literature?
-4. Cross-sectional momentum (12-month return skipping the last month, monthly rebalance), with
-   volatility scaling against crashes. Current evidence and realistic costs.
+For each strategy: (a) check the published rules against the primary source and list every
+detail that is easy to get wrong; (b) summarise the best independent evidence for and against,
+including decay after publication and cost sensitivity; (c) say whether our data window can test
+it meaningfully and what it cannot show; (d) propose the recipe as building blocks (stock
+selection, levels or bands, filters, trigger, entry order, stop, target, exit, sizing) and name
+which TradingFlow components exist and which are missing; (e) propose pass and fail rules to
+freeze before results are read, sized to the window; (f) list the point-in-time and look-ahead
+traps specific to it.
 
-For each: the best evidence for and against, what must be true of the data (delisted stocks,
-as-traded prices, point-in-time membership), and pre-registered pass and fail rules you would set.
+### Day trading 1: opening-range breakout on stocks in play
 
-## Part 2: verification (after results exist)
+- Source: Zarattini, Barbon and Aziz (2024), SSRN 4729284.
+- Our design: `docs/design-review/2026-11-02/orb-stocks-in-play-design.md` (rules checked against
+  the paper, frozen choices where it is silent, cost model, pass rules for six months).
+- Existing code: `src/TradingFlow.Engine/Strategies/OpeningRangeBreakoutEvaluator.cs`
+  (15-minute range, fixed to earlier approved baselines), `src/TradingFlow.Engine/Universe/DailyScreen.cs`.
+- Our earlier ORB on 8 fixed stocks: -0.36R per trade net, +0.14R gross, costs 0.50R because
+  stops were about 0.6% from entry. The paper reports Sharpe 0.48 without stock selection.
 
-1. Read `src/TradingFlow.Research/Signals/SignalStudyAnalyzer.cs` and its tests. Are the
-   statistics and decision rules sound?
-2. Read the opening-gap change (`git log` commit "Keep opening gaps through the stop") and say
-   whether planning from the prior close and exiting at the next open is unbiased.
-3. When ORB results exist: the planned 2016-2023 replication against the paper's gross figures
-   no longer applies: the user chose a six-month window (1 May to 30 October 2026), so judge that
-   window against the frozen pass rules in the design document and say what six months cannot show.
+### Day trading 2: intraday momentum "noise area" on SPY
 
-## What not to do
+- Source: Zarattini, Aziz and Barbon (2024), "Beat the Market: An Effective Intraday Momentum
+  Strategy for S&P500 ETF (SPY)", Swiss Finance Institute paper 24-97.
+- Questions: the exact band formula, decision times, VWAP trailing stop, sizing and costs; whether
+  five-minute bars and six months are enough when the paper uses finer bars over 2007-2024; what
+  a single ETF needs (no stock selection) and which components are missing (band from average
+  intraday move by time of day, VWAP-based trailing exit).
 
-Do not edit files, run backtests, place orders, or treat any result as proof without checking
-the code and data behind it.
+### Swing 1: short-term reversal / Connors RSI(2)
+
+- Sources: Connors and Alvarez (2009); academic short-term reversal (Jegadeesh 1990, Lehmann
+  1990; de Groot, Huij and Zhou 2012; Medhat and Schmeling 2022 on costs and recent decay).
+- Our state: `configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml`
+  (version 7.0.0 keeps opening gaps instead of deleting them; still carries a 2xATR stop, 2.5R
+  target and five-session limit). On 75 current large caps, April 2020 - July 2026, the published
+  rules gave +0.37% per trade (date-clustered t 2.38, 1.77 in a stricter one-position run), while
+  the project's overlays gave +0.19% (t 0.34). Those numbers come from a survivor list.
+- Questions: published exits and whether any stop is defensible; which universe (dated S&P 500
+  versus a liquidity screen); whether one year of decisions can give enough trades; how the
+  one-hour entry bars should be used without look-ahead.
+
+### Swing 2: cross-sectional momentum
+
+- Sources: Jegadeesh and Titman (1993); Daniel and Moskowitz on crashes; volatility scaling
+  (Barroso and Santa-Clara 2015).
+- Existing code: `src/TradingFlow.Research/Momentum/CrossSectionalMomentumResearchAnalyzer.cs`,
+  `src/TradingFlow.Research/Universe/PointInTimeUniverseBuilder.cs`. An earlier diagnostic on 75
+  current large caps was positive only in one year and its holdout is already used.
+- Questions: with daily bars from Sep 2024 the 12-month look-back allows about one year of
+  monthly decisions, which is about 12 rebalances. Is that enough to say anything? What is the
+  honest minimum, and what can a one-year test still rule out?
+
+## 4. Validate our shared setup
+
+Check each against the code and report defects with a concrete failing case:
+
+1. Point-in-time selection: `src/TradingFlow.Engine/Universe/DailyScreen.cs`
+   (`SplitBasis`, price on the session open, 14 prior sessions) and
+   `src/TradingFlow.Cli/DailyScreenCommand.cs`. Any use of later data? Split handling right?
+2. Data collection: `src/TradingFlow.Cli/IdentityEvidenceCollectionCommand.cs`,
+   `src/TradingFlow.Cli/DailyBarsCollectionPlanCommand.cs`. Are the exclusions (reused symbols,
+   non-ticker names, over-the-counter, funds) reasonable and fully disclosed? What survivorship
+   bias remains and how should it be bounded?
+3. Signal study: `src/TradingFlow.Research/Signals/SignalStudyAnalyzer.cs` and
+   `src/TradingFlow.Tests/SignalStudyAnalyzerTests.cs`. Are the statistics (Newey-West daily
+   series with zero-filled days, 20-day block bootstrap, unviewed-data test, frozen worst case
+   for missing outcomes, market sensitivity) and decision rules sound?
+4. Execution: the opening-gap policy (commit "Keep opening gaps through the stop"), stops being
+   active only from the next bar on daily paths, and the code-review list of gaps in
+   `orb-stocks-in-play-design.md` (fixed 3R target, stop from signal not fill, no per-share
+   commission, exposure cap at 100%, exit five minutes before the close).
+5. One decision path: does anything in research or backtest decide differently from paper/live?
+
+## 5. Output wanted
+
+One report with: per strategy (a)-(f) above; a ranked recommendation of which two to build first
+and why; the missing reusable components across all four, deduplicated; and the setup defects in
+order of how much they would mislead a result. Keep it under 2,500 words; put long evidence in
+an appendix.
