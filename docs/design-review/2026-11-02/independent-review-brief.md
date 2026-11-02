@@ -42,18 +42,44 @@ Already collected (evidence catalog `C:\project\trading_flow\data\research\evide
   (`C:\project\market-predictor\data\canonical\index_membership`); importing it into TradingFlow
   is approved but not built.
 
-## 3. The four strategies
+## 3. Choose the strategies: two for day trading, two for swing
 
-For each strategy: (a) check the published rules against the primary source and list every
-detail that is easy to get wrong; (b) summarise the best independent evidence for and against,
-including decay after publication and cost sensitivity; (c) say whether our data window can test
-it meaningfully and what it cannot show; (d) propose the recipe as building blocks (stock
-selection, levels or bands, filters, trigger, entry order, stop, target, exit, sizing) and name
-which TradingFlow components exist and which are missing; (e) propose pass and fail rules to
-freeze before results are read, sized to the window; (f) list the point-in-time and look-ahead
-traps specific to it.
+The main task is to find the best two day-trading and two swing strategies for this system,
+not to polish ours. Section 4 lists the four we have looked at so far. Treat them as
+candidates to challenge, not as the answer: keep, replace or reject each one with reasons,
+and do not prefer them because some code already exists.
 
-### Day trading 1: opening-range breakout on stocks in play
+Limits every candidate must respect (from `docs/operating-boundaries.md`):
+
+- US-listed stocks and exchange-traded funds; long or short; no options, futures, crypto or
+  high-speed trading; regular session unless the source needs extended hours (say so).
+- Rules fixed in advance, with no machine learning. Point-in-time news and earnings dates may
+  be used where the source uses them.
+- Data from Alpaca (consolidated SIP bars, trades, quotes, news, corporate actions); Finviz only
+  for today's screening, never as past membership.
+- The data windows in section 2. If a strategy cannot be tested honestly in those windows, say
+  what extra history it needs instead of dropping it silently.
+
+How to choose:
+
+1. Build a long list of five to eight published candidates per category, each with its source,
+   one-line rule and the reason it is kept or dropped.
+2. Rank on: evidence that survives costs in independent replications and after publication;
+   enough trades in our window to judge it; simple rules with few settings; data we can obtain
+   without look-ahead; and capacity at our size. Prefer a pair whose returns do not depend on
+   the same market conditions (for example one trend-following and one mean-reverting).
+3. Pick two per category. For each pick: (a) check the published rules against the primary
+   source and list every detail that is easy to get wrong; (b) summarise the best evidence for
+   and against, including decay after publication and cost sensitivity; (c) say what our data
+   window can and cannot show; (d) write the recipe as building blocks (stock selection, levels
+   or bands, filters, trigger, entry order, stop, target, exit, sizing) and name which
+   TradingFlow components exist and which are missing; (e) propose pass and fail rules to freeze
+   before results are read, sized to the window; (f) list the look-ahead and point-in-time traps
+   specific to it.
+
+## 4. Our current shortlist (to challenge, not to adopt)
+
+### Day trading: opening-range breakout on stocks in play
 
 - Source: Zarattini, Barbon and Aziz (2024), SSRN 4729284.
 - Our design: `docs/design-review/2026-11-02/orb-stocks-in-play-design.md` (rules checked against
@@ -63,7 +89,7 @@ traps specific to it.
 - Our earlier ORB on 8 fixed stocks: -0.36R per trade net, +0.14R gross, costs 0.50R because
   stops were about 0.6% from entry. The paper reports Sharpe 0.48 without stock selection.
 
-### Day trading 2: intraday momentum "noise area" on SPY
+### Day trading: intraday momentum "noise area" on SPY
 
 - Source: Zarattini, Aziz and Barbon (2024), "Beat the Market: An Effective Intraday Momentum
   Strategy for S&P500 ETF (SPY)", Swiss Finance Institute paper 24-97.
@@ -72,7 +98,7 @@ traps specific to it.
   a single ETF needs (no stock selection) and which components are missing (band from average
   intraday move by time of day, VWAP-based trailing exit).
 
-### Swing 1: short-term reversal / Connors RSI(2)
+### Swing: short-term reversal / Connors RSI(2)
 
 - Sources: Connors and Alvarez (2009); academic short-term reversal (Jegadeesh 1990, Lehmann
   1990; de Groot, Huij and Zhou 2012; Medhat and Schmeling 2022 on costs and recent decay).
@@ -85,7 +111,7 @@ traps specific to it.
   versus a liquidity screen); whether one year of decisions can give enough trades; how the
   one-hour entry bars should be used without look-ahead.
 
-### Swing 2: cross-sectional momentum
+### Swing: cross-sectional momentum
 
 - Sources: Jegadeesh and Titman (1993); Daniel and Moskowitz on crashes; volatility scaling
   (Barroso and Santa-Clara 2015).
@@ -96,7 +122,7 @@ traps specific to it.
   monthly decisions, which is about 12 rebalances. Is that enough to say anything? What is the
   honest minimum, and what can a one-year test still rule out?
 
-## 4. Validate our shared setup
+## 5. Validate our shared setup
 
 Check each against the code and report defects with a concrete failing case:
 
@@ -117,9 +143,15 @@ Check each against the code and report defects with a concrete failing case:
    commission, exposure cap at 100%, exit five minutes before the close).
 5. One decision path: does anything in research or backtest decide differently from paper/live?
 
-## 5. Output wanted
+## 6. Output wanted
 
-One report with: per strategy (a)-(f) above; a ranked recommendation of which two to build first
-and why; the missing reusable components across all four, deduplicated; and the setup defects in
-order of how much they would mislead a result. Keep it under 2,500 words; put long evidence in
-an appendix.
+One report with:
+
+1. The long lists from section 3, one table per category.
+2. The two chosen day-trading and two chosen swing strategies, each with (a)-(f).
+3. For each strategy in section 4, whether it was kept, replaced or rejected, and why.
+4. Which one to build first and why.
+5. The missing reusable components across the four chosen strategies, without duplicates.
+6. The setup defects from section 5, ordered by how much they would mislead a result.
+
+Keep it under 3,500 words; put long evidence in an appendix.
