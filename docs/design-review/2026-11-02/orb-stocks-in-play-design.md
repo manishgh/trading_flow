@@ -36,9 +36,18 @@ Zarattini, Barbon and Aziz, "A Profitable Day Trading Strategy for the U.S. Equi
 
 ## Periods
 
-- Replication, 2016 to 2023: must come close to the paper's gross result, otherwise it is treated
-  as an implementation defect before any conclusion.
-- Test, 1 January 2024 onward: never seen by the authors; reported separately and decisive.
+User decision, 2 November 2026: day-trading research uses six months of five-minute bars, and
+swing research one year of daily setup bars with one-hour entry bars.
+
+- Study window: 1 May 2026 to 30 October 2026 (about 125 sessions), plus 14 earlier sessions
+  for the relative-volume and ATR baselines. Daily bars are collected from 1 September 2024 so
+  daily indicators are warmed before any decision.
+- This window is after the paper and never seen by its authors, so it is a genuine test period.
+  There is no 2016-2023 replication, so an implementation defect cannot be told apart from decay
+  of the edge by comparing with the paper; the paper's own published figures remain the only
+  reference.
+- Six months is one market period. A pass here can retain the strategy for further research or
+  extend the window; it cannot advance it to paper trading.
 
 ## Stock selection
 
@@ -86,19 +95,20 @@ easy-to-borrow flag is current only, so the long-only result is reported as the 
 
 ## Pass and fail rules (frozen before results are read)
 
-- Test period: at least 2,000 trades, 250 sessions and 2 years.
-- t statistic of the daily summed-R series (equivalent to clustering by date): at least 3.0 in
-  replication and 2.0 in the test period.
+- Study window: at least 1,500 trades and 120 sessions. The earlier 250-session and two-year
+  rules cannot be met by six months; until the window is extended, the best possible decision is
+  RETAIN_RESEARCH.
+- t statistic of the daily summed-R series (equivalent to clustering by date): at least 3.0.
 - Net expectancy at measured cost at least +0.10R per trade, and above zero at 2x cost.
 - After the leverage cap: net Sharpe at least 1.0 and positive money return.
-- Positive after removing the best 1% of trades; no year above 40% of profit.
+- Positive after removing the best 1% of trades; no month above 40% of profit.
 - Top-20 selection beats no selection by a statistically significant margin.
 - Stop the strategy if test-period net expectancy is zero or below, if the 2x cost case is
   negative, or if break-even cost is below the measured median spread plus slippage.
 
 ## Order of work
 
-1. Collect the asset list (active and inactive) and daily raw bars plus corporate actions.
+1. Collect the asset list (active and inactive) and daily raw bars plus corporate actions (done for the list; daily bars from 1 September 2024).
 2. Extend the screener; publish daily eligible counts. Sanity check: 31 October 2026 near 1,262.
 3. Collect first five-minute bars; publish the ranked daily list.
 4. Collect one-minute bars for selected stocks; run the recipe evaluator.
