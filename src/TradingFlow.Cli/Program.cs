@@ -41,6 +41,22 @@ if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.BacktestInputCleanupComman
     return;
 }
 
+// Identity evidence: the full active and inactive equity list and corporate actions, published through the shared identity coordinator.
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.IdentityEvidenceCollectionCommand.Name, StringComparison.Ordinal))
+{
+    using var identityCancellation = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, eventArgs) => { eventArgs.Cancel = true; identityCancellation.Cancel(); };
+    Environment.ExitCode = await TradingFlow.Cli.IdentityEvidenceCollectionCommand.RunAsync(args[1..], Console.Out, identityCancellation.Token);
+    return;
+}
+
+// Daily as-traded bar collection request, built from a published security master.
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.DailyBarsCollectionPlanCommand.Name, StringComparison.Ordinal))
+{
+    Environment.ExitCode = await TradingFlow.Cli.DailyBarsCollectionPlanCommand.RunAsync(args[1..], Console.Out, CancellationToken.None);
+    return;
+}
+
 // Diagnostic inputs are explicit and read-only; never discover or create an operator database by machine path.
 if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.DataInspectionCommand.Name, StringComparison.Ordinal))
 {

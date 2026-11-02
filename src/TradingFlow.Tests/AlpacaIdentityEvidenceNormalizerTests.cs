@@ -41,15 +41,15 @@ public sealed class AlpacaIdentityEvidenceNormalizerTests
         { "unit_splits", CorporateActionEvidenceType.UnitSplit, "\"old_symbol\":\"AAPL\",\"old_cusip\":\"037833100\",\"old_rate\":1,\"new_rate\":2" },
         { "cash_dividends", CorporateActionEvidenceType.CashDividend, "\"symbol\":\"AAPL\",\"cusip\":\"037833100\",\"rate\":0.25,\"foreign\":false,\"special\":false" },
         { "stock_dividends", CorporateActionEvidenceType.StockDividend, "\"symbol\":\"AAPL\",\"cusip\":\"037833100\",\"rate\":0.1" },
-        { "spin_offs", CorporateActionEvidenceType.SpinOff, "\"source_symbol\":\"AAPL\",\"source_cusip\":\"037833100\",\"new_symbol\":\"NEWC\",\"new_cusip\":\"123456789\",\"source_rate\":1,\"new_rate\":0.2" },
-        { "cash_mergers", CorporateActionEvidenceType.CashMerger, "\"acquiree_symbol\":\"AAPL\",\"acquiree_cusip\":\"037833100\",\"rate\":250" },
+        { "spin_offs", CorporateActionEvidenceType.SpinOff, "\"source_symbol\":\"AAPL\",\"source_cusip\":\"037833100\",\"new_symbol\":\"NEWC\",\"new_cusip\":\"123456789\",\"source_rate\":1,\"new_rate\":0.2,\"due_bill_redemption_date\":\"2026-06-16\"" },
+        { "cash_mergers", CorporateActionEvidenceType.CashMerger, "\"acquiree_symbol\":\"AAPL\",\"acquiree_cusip\":\"037833100\",\"acquirer_symbol\":\"MSFT\",\"acquirer_cusip\":\"594918104\",\"rate\":250" },
         { "stock_mergers", CorporateActionEvidenceType.StockMerger, "\"acquiree_symbol\":\"AAPL\",\"acquiree_cusip\":\"037833100\",\"acquirer_symbol\":\"MSFT\",\"acquirer_cusip\":\"594918104\",\"acquiree_rate\":1,\"acquirer_rate\":0.5" },
         { "stock_and_cash_mergers", CorporateActionEvidenceType.StockAndCashMerger, "\"acquiree_symbol\":\"AAPL\",\"acquiree_cusip\":\"037833100\",\"acquirer_symbol\":\"MSFT\",\"acquirer_cusip\":\"594918104\",\"acquiree_rate\":1,\"acquirer_rate\":0.5,\"cash_rate\":10" },
         { "redemptions", CorporateActionEvidenceType.Redemption, "\"symbol\":\"AAPL\",\"cusip\":\"037833100\",\"rate\":100" },
         { "name_changes", CorporateActionEvidenceType.NameChange, "\"old_symbol\":\"AAPL\",\"old_cusip\":\"037833100\",\"new_symbol\":\"APPL\",\"new_cusip\":\"037833100\"" },
         { "worthless_removals", CorporateActionEvidenceType.WorthlessRemoval, "\"symbol\":\"AAPL\",\"cusip\":\"037833100\"" },
         { "rights_distributions", CorporateActionEvidenceType.RightsDistribution, "\"source_symbol\":\"AAPL\",\"source_cusip\":\"037833100\",\"new_symbol\":\"AAPL.R\",\"new_cusip\":\"123456789\",\"rate\":1" },
-        { "partial_calls", CorporateActionEvidenceType.PartialCall, "\"symbol\":\"AAPL\",\"cusip\":\"037833100\",\"price\":20,\"lottery_type\":\"random\"" },
+        { "partial_calls", CorporateActionEvidenceType.PartialCall, "\"symbol\":\"AAPL\",\"cusip\":\"037833100\",\"price\":20,\"dividend_rate\":0.1,\"results_publication_date\":\"2026-06-15\",\"lottery_type\":\"random\"" },
         { "reorganizations", CorporateActionEvidenceType.Reorganization, "\"symbol\":\"AAPL\",\"cusip\":\"037833100\",\"cash_rate\":2,\"stock_movements\":[]" }
     };
 
@@ -105,6 +105,54 @@ public sealed class AlpacaIdentityEvidenceNormalizerTests
         Assert.Equal(observation.ObservationId, security.Sources[0].ObservationId);
         Assert.Equal(observation.Artifact.Content.Sha256, security.Sources[0].ObservationSha256);
         Assert.Equal(["has_options", "overnight_tradable"], security.Attributes);
+    }
+
+    [Theory]
+    [InlineData("\"30\"", true)]
+    [InlineData("30", true)]
+    [InlineData("\"thirty\"", false)]
+    [InlineData("true", false)]
+    public void Assets_MarginRequirementAcceptsOnlyExactNumbersQuotedOrNot(string margin, bool accepted)
+    {
+        var payload = Bytes($$"""
+            [
+              {
+                "id":"b0b6dd9d-8b9b-48a9-ba46-b9d54906e415","class":"us_equity",
+                "exchange":"NASDAQ","symbol":"TEST","name":"First","status":"active",
+                "tradable":true,"marginable":true,"shortable":true,
+                "easy_to_borrow":true,"fractionable":true,"attributes":[],
+                "margin_requirement_long":{{margin}}
+              }
+            ]
+            """);
+
+        var normalize = () => new AlpacaAssetEvidenceNormalizer().Normalize(
+            Observation(payload, "/v2/assets", "alpaca-trading", [], null, null), payload, 1);
+
+        if (accepted) Assert.Single(normalize().Securities);
+        else Assert.ThrowsAny<Exception>(normalize);
+    }
+
+    [Fact]
+    public void Assets_RenamedInactiveListingWithEmptyNameIsKeptAsSent()
+    {
+        var payload = Bytes("""
+            [
+              {
+                "id":"b0b6dd9d-8b9b-48a9-ba46-b9d54906e415","class":"us_equity",
+                "exchange":"NYSE","symbol":"GONE_DELISTED","name":"","status":"inactive",
+                "tradable":false,"marginable":false,"shortable":false,
+                "easy_to_borrow":false,"fractionable":false,"attributes":[]
+              }
+            ]
+            """);
+
+        var security = Assert.Single(new AlpacaAssetEvidenceNormalizer().Normalize(
+            Observation(payload, "/v2/assets", "alpaca-trading", [], null, null), payload, 1).Securities);
+
+        Assert.Equal("GONE_DELISTED", security.Symbol);
+        Assert.Equal("", security.Name);
+        Assert.Equal("inactive", security.Status);
     }
 
     [Fact]
@@ -212,6 +260,32 @@ public sealed class AlpacaIdentityEvidenceNormalizerTests
             }]},"next_page_token":null}
             """,
             EvidenceNormalizationFailureCode.MissingRequiredField);
+        // An empty symbol and an empty CUSIP are both missing, so the action still has no reference.
+        AssertFailure(
+            """
+            {"corporate_actions":{"cash_dividends":[{
+              "id":"1dbc7685-9517-4a77-a236-8527d49cefdc",
+              "process_date":"2026-06-15","symbol":"","cusip":"","rate":0.2
+            }]},"next_page_token":null}
+            """,
+            EvidenceNormalizationFailureCode.MissingRequiredField);
+    }
+
+    [Fact]
+    public void CorporateActions_EmptyCusipIsMissingNotMalformed()
+    {
+        var payload = Bytes("""
+            {"corporate_actions":{"cash_dividends":[{
+              "id":"1dbc7685-9517-4a77-a236-8527d49cefdc",
+              "process_date":"2026-06-15","symbol":"AAPL","cusip":"","rate":0.2
+            }]},"next_page_token":null}
+            """);
+
+        var row = Assert.Single(new AlpacaCorporateActionEvidenceNormalizer().Normalize(
+            Observation(payload, "/v1/corporate-actions", "alpaca-market-data", [], RangeStart, RangeEnd), payload, 1));
+
+        Assert.Equal("AAPL", row.PrimarySymbol);
+        Assert.Null(row.PrimaryCusip);
     }
 
     [Fact]

@@ -72,7 +72,8 @@ public sealed record SecurityMasterSnapshotEvidenceRow : INormalizedEvidenceRow
         SecurityId = EvidenceRowContract.NormalizeRequired(securityId, nameof(securityId));
         IssuerId = String.IsNullOrWhiteSpace(issuerId) ? null : issuerId.Trim();
         Symbol = EvidenceRowContract.NormalizeRequired(symbol, nameof(symbol)).ToUpperInvariant();
-        Name = EvidenceRowContract.NormalizeRequired(name, nameof(name));
+        // Required but may be empty: the provider omits names for some delisted securities.
+        Name = (name ?? throw new ArgumentNullException(nameof(name))).Trim();
         Exchange = EvidenceRowContract.NormalizeRequired(exchange, nameof(exchange)).ToUpperInvariant();
         AssetClass = EvidenceRowContract.NormalizeRequired(assetClass, nameof(assetClass)).ToLowerInvariant();
         Currency = EvidenceRowContract.NormalizeRequired(currency, nameof(currency)).ToUpperInvariant();

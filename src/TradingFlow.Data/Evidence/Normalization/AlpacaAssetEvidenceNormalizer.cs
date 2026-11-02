@@ -30,7 +30,7 @@ public sealed partial class AlpacaAssetEvidenceNormalizer
 
     private static readonly IReadOnlySet<string> SupportedExchanges =
         new HashSet<string>(
-            ["AMEX", "ARCA", "BATS", "NYSE", "NASDAQ", "NYSEARCA", "OTC"],
+            ["AMEX", "ARCA", "BATS", "NYSE", "NASDAQ", "NYSEARCA", "OTC", "TXSE"],
             StringComparer.Ordinal);
 
     public SecurityMasterSnapshotNormalizationResult Normalize(
@@ -156,7 +156,8 @@ public sealed partial class AlpacaAssetEvidenceNormalizer
                 parsed.Add(new ParsedAsset(
                     securityId,
                     symbol,
-                    EvidenceNormalizationGuard.RequireString(asset, "name", observation),
+                    // Alpaca reports an empty name for some inactive listings; keep the security and record the name as sent.
+                    EvidenceNormalizationGuard.RequireProperty(asset, "name", JsonValueKind.String, observation).GetString()!.Trim(),
                     exchange,
                     assetClass,
                     status,
@@ -304,7 +305,8 @@ public sealed partial class AlpacaAssetEvidenceNormalizer
         return attributes.OrderBy(value => value, StringComparer.Ordinal).ToArray();
     }
 
-    [GeneratedRegex("^[A-Z0-9][A-Z0-9./-]{0,31}$", RegexOptions.CultureInvariant)]
+    // Underscore allowed: Alpaca renames some delisted listings, for example BRAC_DELISTED.
+    [GeneratedRegex("^[A-Z0-9][A-Z0-9._/-]{0,31}$", RegexOptions.CultureInvariant)]
     private static partial Regex SymbolPattern();
 
     private sealed record ParsedAsset(

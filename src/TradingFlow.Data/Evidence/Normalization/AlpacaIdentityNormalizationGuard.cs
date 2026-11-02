@@ -167,8 +167,16 @@ internal static class AlpacaIdentityNormalizationGuard
             return null;
         }
 
+        // Alpaca's asset API sends margin requirements as quoted numbers such as "30"; accept only exact invariant decimals.
         decimal parsed = default;
-        if (value.ValueKind != JsonValueKind.Number || !value.TryGetDecimal(out parsed))
+        var valid = value.ValueKind switch
+        {
+            JsonValueKind.Number => value.TryGetDecimal(out parsed),
+            JsonValueKind.String => decimal.TryParse(value.GetString(), System.Globalization.NumberStyles.AllowDecimalPoint,
+                System.Globalization.CultureInfo.InvariantCulture, out parsed),
+            _ => false
+        };
+        if (!valid)
         {
             EvidenceNormalizationGuard.Fail(
                 EvidenceNormalizationFailureCode.InvalidField,

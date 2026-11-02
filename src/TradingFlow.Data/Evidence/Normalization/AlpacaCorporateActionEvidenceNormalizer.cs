@@ -178,7 +178,9 @@ public sealed class AlpacaCorporateActionEvidenceNormalizer
 
         foreach (var field in schema.StringProperties)
         {
-            _ = AlpacaIdentityNormalizationGuard.OptionalString(action, field, observation);
+            _ = schema.SymbolProperties.Contains(field) || schema.CusipProperties.Contains(field)
+                ? OptionalIdentityReference(action, field, observation)
+                : AlpacaIdentityNormalizationGuard.OptionalString(action, field, observation);
         }
 
         if (action.TryGetProperty("stock_movements", out var stockMovements) &&
@@ -191,6 +193,12 @@ public sealed class AlpacaCorporateActionEvidenceNormalizer
         }
     }
 
+    // Alpaca sends an empty string when a symbol or CUSIP is not known; that is a missing reference, not a malformed one.
+    private static string? OptionalIdentityReference(JsonElement action, string name, EvidenceSourceObservation observation) =>
+        action.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String && String.IsNullOrWhiteSpace(value.GetString())
+            ? null
+            : AlpacaIdentityNormalizationGuard.OptionalString(action, name, observation);
+
     private static (string? PrimarySymbol, string? PrimaryCusip, IReadOnlyList<string> Symbols)
         ResolvePrimaryIdentity(
             JsonElement action,
@@ -198,19 +206,13 @@ public sealed class AlpacaCorporateActionEvidenceNormalizer
             EvidenceSourceObservation observation)
     {
         var symbols = schema.SymbolProperties
-            .Select(name => AlpacaIdentityNormalizationGuard.OptionalString(
-                action,
-                name,
-                observation))
+            .Select(name => OptionalIdentityReference(action, name, observation))
             .Where(value => value is not null)
             .Select(value => value!.ToUpperInvariant())
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var cusips = schema.CusipProperties
-            .Select(name => AlpacaIdentityNormalizationGuard.OptionalString(
-                action,
-                name,
-                observation))
+            .Select(name => OptionalIdentityReference(action, name, observation))
             .Where(value => value is not null)
             .Select(value => value!.ToUpperInvariant())
             .Distinct(StringComparer.Ordinal)
@@ -344,11 +346,11 @@ public sealed class AlpacaCorporateActionEvidenceNormalizer
                 ["id", "symbol", "cusip", "process_date", "effective_date", "ex_date", "record_date", "payable_date", "rate", "isin", "currency"]),
             ["spin_offs"] = Schema(CorporateActionEvidenceType.SpinOff,
                 ["source_symbol", "new_symbol"], ["source_cusip", "new_cusip"],
-                commonDates, ["source_rate", "new_rate"], [],
-                ["id", "source_symbol", "new_symbol", "source_cusip", "new_cusip", "process_date", "effective_date", "ex_date", "record_date", "payable_date", "source_rate", "new_rate", "isin", "currency"]),
+                [.. commonDates, "due_bill_redemption_date"], ["source_rate", "new_rate"], [],
+                ["id", "source_symbol", "new_symbol", "source_cusip", "new_cusip", "process_date", "effective_date", "ex_date", "record_date", "payable_date", "due_bill_redemption_date", "source_rate", "new_rate", "isin", "currency"]),
             ["cash_mergers"] = Schema(CorporateActionEvidenceType.CashMerger,
-                ["acquiree_symbol"], ["acquiree_cusip"], commonDates, ["rate"], [],
-                ["id", "acquiree_symbol", "acquiree_cusip", "process_date", "effective_date", "ex_date", "record_date", "payable_date", "rate", "isin", "currency"]),
+                ["acquiree_symbol", "acquirer_symbol"], ["acquiree_cusip", "acquirer_cusip"], commonDates, ["rate"], [],
+                ["id", "acquiree_symbol", "acquirer_symbol", "acquiree_cusip", "acquirer_cusip", "process_date", "effective_date", "ex_date", "record_date", "payable_date", "rate", "isin", "currency"]),
             ["stock_mergers"] = Schema(CorporateActionEvidenceType.StockMerger,
                 ["acquiree_symbol", "acquirer_symbol"], ["acquiree_cusip", "acquirer_cusip"],
                 commonDates, ["acquiree_rate", "acquirer_rate"], [],
@@ -372,8 +374,8 @@ public sealed class AlpacaCorporateActionEvidenceNormalizer
                 [.. commonDates, "expiration_date"], ["rate"], [],
                 ["id", "source_symbol", "new_symbol", "source_cusip", "new_cusip", "process_date", "effective_date", "ex_date", "record_date", "payable_date", "expiration_date", "rate", "isin", "currency"]),
             ["partial_calls"] = Schema(CorporateActionEvidenceType.PartialCall,
-                ["symbol"], ["cusip"], [.. commonDates, "lottery_date"], ["price"], [],
-                ["id", "symbol", "cusip", "process_date", "effective_date", "ex_date", "record_date", "payable_date", "lottery_date", "price", "lottery_type", "isin", "currency"]),
+                ["symbol"], ["cusip"], [.. commonDates, "lottery_date", "results_publication_date"], ["price", "dividend_rate"], [],
+                ["id", "symbol", "cusip", "process_date", "effective_date", "ex_date", "record_date", "payable_date", "lottery_date", "results_publication_date", "price", "dividend_rate", "lottery_type", "isin", "currency"]),
             ["reorganizations"] = Schema(CorporateActionEvidenceType.Reorganization,
                 ["symbol"], ["cusip"], commonDates, ["cash_rate"], [],
                 ["id", "symbol", "cusip", "process_date", "effective_date", "ex_date", "record_date", "payable_date", "cash_rate", "stock_movements", "isin", "currency"])
