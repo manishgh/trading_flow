@@ -57,6 +57,13 @@ if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.DailyBarsCollectionPlanCom
     return;
 }
 
+// Point-in-time daily screen over a published as-traded bar dataset.
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.DailyScreenCommand.Name, StringComparison.Ordinal))
+{
+    Environment.ExitCode = await TradingFlow.Cli.DailyScreenCommand.RunAsync(args[1..], Console.Out, CancellationToken.None);
+    return;
+}
+
 // Diagnostic inputs are explicit and read-only; never discover or create an operator database by machine path.
 if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.DataInspectionCommand.Name, StringComparison.Ordinal))
 {

@@ -159,27 +159,8 @@ public sealed class ParquetEvidencePartitionDataReader(
         var logicalKeys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var partition in manifest.Partitions)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            ValidatePartitionEnvelope(manifest, partition);
-
-            var verification = await artifactStore.VerifyAsync(
-                partition.Artifact,
-                cancellationToken);
-            if (!verification.IsValid)
-            {
-                throw new InvalidDataException(
-                    $"Evidence partition '{partition.PartitionId}' failed immutable-artifact verification: " +
-                    $"{verification.FailureReason ?? "unknown verification failure"}.");
-            }
-
-            var content = await ReadVerifiedArtifactAsync(
-                partition.Artifact,
-                cancellationToken);
-            var document = await decode(content, cancellationToken);
-            ValidateDocumentMetadata(manifest, partition, document);
-            ValidateRows(manifest, partition, document.Rows, validateTypeSpecific);
-
-            foreach (var row in document.Rows)
+            var rows = await ReadPartitionAsync(manifest, partition, decode, validateTypeSpecific, cancellationToken);
+            foreach (var row in rows)
             {
                 var key = logicalKey(row);
                 if (!logicalKeys.Add(key))
@@ -193,6 +174,67 @@ public sealed class ParquetEvidencePartitionDataReader(
         }
 
         return result.OrderBy(logicalKey, StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>
+    /// Yields verified market bars one partition at a time, so large datasets need not be held in
+    /// memory. Partitions must not share a symbol; with that, per-partition duplicate checks equal
+    /// the whole-dataset check in <see cref="ReadMarketBarsAsync"/>.
+    /// </summary>
+    public async IAsyncEnumerable<IReadOnlyList<MarketBarEvidenceRow>> ReadMarketBarPartitionsAsync(
+        EvidenceDatasetManifest manifest,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        Func<ReadOnlyMemory<byte>, CancellationToken, Task<EvidenceParquetDocument<MarketBarEvidenceRow>>> decode = manifest.Kind switch
+        {
+            EvidenceDatasetKind.MarketBarsAsTraded => codec.ReadMarketBarsAsTradedAsync,
+            EvidenceDatasetKind.MarketBarsResearchAdjusted => codec.ReadResearchAdjustedMarketBarsAsync,
+            _ => throw WrongKind(manifest.Kind, "market bars")
+        };
+        var seenSymbols = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var partition in manifest.Partitions)
+        {
+            var rows = await ReadPartitionAsync(manifest, partition, decode, ValidateMarketBar, cancellationToken);
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var row in rows)
+            {
+                if (!keys.Add(MarketBarKey(row)))
+                    throw new InvalidDataException($"Dataset '{manifest.DatasetId}' contains duplicate logical row key '{MarketBarKey(row)}'.");
+            }
+            foreach (var symbol in rows.Select(row => row.Symbol).Distinct(StringComparer.Ordinal))
+            {
+                if (!seenSymbols.Add(symbol))
+                    throw new InvalidDataException($"Dataset '{manifest.DatasetId}' places symbol '{symbol}' in more than one partition.");
+            }
+            yield return rows.OrderBy(MarketBarKey, StringComparer.Ordinal).ToArray();
+        }
+    }
+
+    // Verify the immutable artifact, decode it and apply envelope, metadata and row checks for one partition.
+    private async Task<IReadOnlyList<T>> ReadPartitionAsync<T>(
+        EvidenceDatasetManifest manifest,
+        EvidenceDatasetPartitionManifest partition,
+        Func<ReadOnlyMemory<byte>, CancellationToken, Task<EvidenceParquetDocument<T>>> decode,
+        Action<T, EvidenceDatasetPartitionManifest> validateTypeSpecific,
+        CancellationToken cancellationToken)
+        where T : INormalizedEvidenceRow
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidatePartitionEnvelope(manifest, partition);
+        var verification = await artifactStore.VerifyAsync(partition.Artifact, cancellationToken);
+        if (!verification.IsValid)
+        {
+            throw new InvalidDataException(
+                $"Evidence partition '{partition.PartitionId}' failed immutable-artifact verification: " +
+                $"{verification.FailureReason ?? "unknown verification failure"}.");
+        }
+
+        var content = await ReadVerifiedArtifactAsync(partition.Artifact, cancellationToken);
+        var document = await decode(content, cancellationToken);
+        ValidateDocumentMetadata(manifest, partition, document);
+        ValidateRows(manifest, partition, document.Rows, validateTypeSpecific);
+        return document.Rows;
     }
 
     private async Task<byte[]> ReadVerifiedArtifactAsync(

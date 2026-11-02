@@ -185,28 +185,21 @@ public sealed class HistoricalScreenerUniverseProvider(IMarketDataProvider provi
         IReadOnlyList<OhlcvBar> priorBars,
         UniverseConfig universe)
     {
-        if (priorBars.Count == 0)
+        var lookback = Math.Max(universe.LookbackDays, 1);
+        var screen = DailyScreen.Evaluate(ticker, priorBars, sessionOpen: null,
+            new DailyScreenRules(universe.MinPrice, DailyScreenPriceBasis.PriorClose, lookback,
+                MinAverageDollarVolume: universe.MinAvgDollarVolume));
+        if (!screen.Eligible)
         {
-            return (false, null, $"{ticker}: no_prior_daily_data");
+            return (false, null, screen.Rejection);
         }
 
-        var lookback = Math.Max(universe.LookbackDays, 1);
         var window = priorBars.Count <= lookback ? priorBars : priorBars.Skip(priorBars.Count - lookback).ToList();
         var lastClose = priorBars[^1].Close;
-        var averageDollarVolume = window.Average(bar => bar.Close * bar.Volume);
+        var averageDollarVolume = screen.Values!.AverageDollarVolume;
         decimal? priorReturnPct = window.Count >= 2 && window[0].Close > 0m
             ? (window[^1].Close - window[0].Close) / window[0].Close * 100m
             : null;
-
-        if (lastClose < universe.MinPrice)
-        {
-            return (false, null, $"{ticker}: price {lastClose:F2} < min {universe.MinPrice:F2}");
-        }
-
-        if (averageDollarVolume < universe.MinAvgDollarVolume)
-        {
-            return (false, null, $"{ticker}: adv {averageDollarVolume:F0} < min {universe.MinAvgDollarVolume:F0}");
-        }
 
         if (universe.MinPriorReturnPct is { } minReturn &&
             (priorReturnPct is null || priorReturnPct.Value < minReturn))
