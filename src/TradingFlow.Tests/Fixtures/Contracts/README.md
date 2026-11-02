@@ -1,9 +1,9 @@
 # Swing prediction golden fixture
 
 Source: `C:\project\market-predictor\tests\fixtures\contracts\swing_prediction_response.json`
-SHA-256: `96cbcd133b8e96253b034fabba10624be79b0d80550f043f3869905251bec522`
-Accepted change log: September 28 API v4. Wire field: `contract_version`.
-Contract: `market_predictor.prediction.v4`; five scored/abstaining outcomes including `sector_peer_floor`.
+SHA-256: `59288471c249b0422443f0a68ce7623f4b03956826877ad1158dc79ebf1fea51`
+Accepted change log: 1 November 2026, the user chose the canonical V1 contract kept by Market Predictor commit af9e9b4. Wire field: `contract_version`.
+Contract: `market_predictor.prediction.v1`; five scored/abstaining outcomes including `sector_peer_floor`.
 
 Copied byte-for-byte. Client tests verify the hash and require byte equality with
 the producer fixture whenever its checkout exists locally. A missing source file

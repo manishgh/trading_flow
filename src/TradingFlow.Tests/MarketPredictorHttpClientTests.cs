@@ -195,7 +195,7 @@ public sealed class MarketPredictorHttpClientTests
 
     private const string FixtureSourceRoot = @"C:\project\market-predictor";
     private const string FixtureRelativePath = "tests/fixtures/contracts/swing_prediction_response.json";
-    private const string FixtureSha256 = "96cbcd133b8e96253b034fabba10624be79b0d80550f043f3869905251bec522";
+    private const string FixtureSha256 = "59288471c249b0422443f0a68ce7623f4b03956826877ad1158dc79ebf1fea51";
     private static readonly DateTimeOffset FixtureTime = new(2026, 7, 8, 22, 5, 5, TimeSpan.Zero);
 
     private static string FixturePath => Path.Combine(
@@ -254,14 +254,14 @@ public sealed class MarketPredictorHttpClientTests
         MarketPredictorResult result, string ticker, string signal, string? reason, string? displayReason)
     {
         Assert.Equal("available", result.AvailabilityStatus);
-        Assert.Equal("market_predictor.prediction.v4", result.Contract);
+        Assert.Equal("market_predictor.prediction.v1", result.Contract);
         Assert.Equal(ticker, result.Ticker);
         Assert.Equal("10b", result.ResolvedHorizon);
         Assert.Equal(signal, result.FinalSignal);
         var swing = Assert.IsType<PredictorSwingPrediction>(result.Swing);
         Assert.Equal(signal, swing.Signal);
         Assert.NotNull(result.Model);
-        Assert.Null(result.Model.TrainingDataEnd);
+        Assert.Equal("2026-01-05", result.Model.TrainingDataEnd);
         if (reason is null)
         {
             Assert.True(result.IsValidPromotedEvidence);
@@ -295,7 +295,7 @@ public sealed class MarketPredictorHttpClientTests
     [InlineData("")]
     [InlineData("market_predictor.other")]
     [InlineData("market_predictor.prediction")]
-    [InlineData("market_predictor.prediction.v1")]
+    [InlineData("market_predictor.prediction.v4")]
     [InlineData("market_predictor.prediction.v3")]
     [InlineData("MARKET_PREDICTOR.PREDICTION.V4")]
     [InlineData("MARKET_PREDICTOR.PREDICTION")]
@@ -345,7 +345,7 @@ public sealed class MarketPredictorHttpClientTests
     {
         var payload = System.Text.Json.Nodes.JsonNode.Parse(ValidSwingPayload(Now))!.AsObject();
         Assert.True(payload.Remove("contract_version"));
-        payload["contract"] = "market_predictor.prediction.v4";
+        payload["contract"] = "market_predictor.prediction.v1";
         await AssertIncompatibleContractAsync(payload.ToJsonString());
     }
 
@@ -368,7 +368,7 @@ public sealed class MarketPredictorHttpClientTests
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
         using var document = System.Text.Json.JsonDocument.Parse(json);
         var root = document.RootElement;
-        Assert.Equal("market_predictor.prediction.v4", root.GetProperty("contract").GetString());
+        Assert.Equal("market_predictor.prediction.v1", root.GetProperty("contract").GetString());
         Assert.False(root.TryGetProperty("contractVersion", out _));
         Assert.Equal("available", root.GetProperty("availabilityStatus").GetString());
         Assert.Equal("abstain", root.GetProperty("finalSignal").GetString());
@@ -445,7 +445,7 @@ public sealed class MarketPredictorHttpClientTests
         var predictions = String.Join(",", (tickers.Length == 0 ? ["MU"] : tickers).Select(PredictionFor));
         return $$$"""
         {
-          "contract_version": "market_predictor.prediction.v4",
+          "contract_version": "market_predictor.prediction.v1",
           "request_id": "req-1",
           "generated_at_utc": "{{{generatedAtUtc:O}}}",
           "mode": "swing",

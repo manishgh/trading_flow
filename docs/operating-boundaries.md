@@ -148,6 +148,9 @@ as viewed for later strategies on overlapping stocks and dates.
 - Confirmation uses a later completed bar; execution occurs no earlier than the
   next eligible executable bar.
 - Initial stops use only information completed before the fill.
+- On 1 November 2026 the user decided that a strategy with a protective stop is judged on
+  five-minute execution from the fill, because a daily bar cannot show whether the fill
+  or the stop came first. Daily-only results for such a strategy are diagnostic.
 - Derived candles are built chronologically from already available lower-timeframe
   bars.
 - News availability is the latest defensible trading-time timestamp, including

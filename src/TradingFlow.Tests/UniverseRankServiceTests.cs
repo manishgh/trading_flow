@@ -358,7 +358,7 @@ public sealed class UniverseRankServiceTests : IDisposable
 
     private static string Payload(IReadOnlyList<string> predictions) => $$$"""
     {
-      "contract_version": "market_predictor.prediction.v4",
+      "contract_version": "market_predictor.prediction.v1",
       "request_id": "req-rank",
       "generated_at_utc": "{{{Now.AddSeconds(-5):O}}}",
       "mode": "swing",

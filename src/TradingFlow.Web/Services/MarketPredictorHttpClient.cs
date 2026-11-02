@@ -23,7 +23,7 @@ public sealed class MarketPredictorHttpClient
     /// contract allows; exceeding it is a 422, not a truncation.
     /// </summary>
     internal const int MaximumTickersPerRequest = 100;
-    internal const string SupportedContract = "market_predictor.prediction.v4";
+    internal const string SupportedContract = "market_predictor.prediction.v1";
 
     private readonly HttpClient httpClient;
     private readonly MarketPredictorOptions options;
