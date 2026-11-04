@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
 
@@ -14,6 +17,7 @@ public sealed class EarningsMarketStateLoader
     private readonly Lazy<IMarketDataProvider> marketData;
     private readonly ICandleStore candleStore;
     private readonly EarningsMonitorOptions options;
+    private readonly ILogger<EarningsMarketStateLoader> logger;
     private readonly SemaphoreSlim loadLock = new(1, 1);
     private readonly SemaphoreSlim calendarLock = new(1, 1);
     private readonly Dictionary<string, SortedDictionary<DateTimeOffset, OhlcvBar>> state =
@@ -25,11 +29,13 @@ public sealed class EarningsMarketStateLoader
     public EarningsMarketStateLoader(
         Lazy<IMarketDataProvider> marketData,
         ICandleStore candleStore,
-        EarningsMonitorOptions options)
+        EarningsMonitorOptions options,
+        ILogger<EarningsMarketStateLoader>? logger = null)
     {
         this.marketData = marketData;
         this.candleStore = candleStore;
         this.options = options;
+        this.logger = logger ?? NullLogger<EarningsMarketStateLoader>.Instance;
     }
 
     public async Task<IReadOnlyDictionary<DateOnly, TradingFlow.Engine.Indicators.MarketSessionSchedule>>
@@ -68,6 +74,12 @@ public sealed class EarningsMarketStateLoader
         }
     }
 
+    /// <summary>
+    /// Returns the last <see cref="EarningsMonitorOptions.SubDailyLookbackDays"/> days of 5-minute bars for
+    /// each ticker. Tickers not yet in memory are first read from the local candle store; tickers with no
+    /// stored bars download the whole window, and the rest download only from just before their newest bar.
+    /// Logs how long each stage took so a slow pass shows where its time went.
+    /// </summary>
     public async Task<IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>>> LoadAsync(
         IReadOnlyCollection<string> tickers,
         DateTimeOffset nowUtc,
@@ -88,32 +100,56 @@ public sealed class EarningsMarketStateLoader
         {
             var end = nowUtc.ToUniversalTime();
             var windowStart = end.AddDays(-options.SubDailyLookbackDays);
-            await HydrateMissingSymbolsAsync(normalized, windowStart, end, cancellationToken);
+            var stage = Stopwatch.StartNew();
+            var hydratedCount = await HydrateMissingSymbolsAsync(normalized, windowStart, end, cancellationToken);
+            var hydrateTime = stage.Elapsed;
 
             var cold = normalized.Where(ticker => state[ticker].Count == 0).ToArray();
             var warm = normalized.Where(ticker => state[ticker].Count > 0).ToArray();
-            if (cold.Length > 0)
+            stage.Restart();
+            var coldBars = cold.Length == 0
+                ? []
+                : await DownloadAndMergeAsync(cold, windowStart, end, cancellationToken);
+            var coldTime = stage.Elapsed;
+            stage.Restart();
+            await PersistAsync(coldBars, cancellationToken);
+            var persistTime = stage.Elapsed;
+
+            // Each window is saved before the next one downloads. Bars held only in memory would be skipped
+            // by the next pass's window and leave a permanent gap in the files if a later window failed.
+            var warmWindows = GroupByIncrementalStart(warm, end);
+            var warmBars = new List<OhlcvBar>();
+            var warmTime = TimeSpan.Zero;
+            foreach (var window in warmWindows)
             {
-                await FetchMergeAndPersistAsync(cold, windowStart, end, cancellationToken);
+                stage.Restart();
+                var windowBars = await DownloadAndMergeAsync(window.Tickers, window.Start, end, cancellationToken);
+                warmTime += stage.Elapsed;
+                stage.Restart();
+                await PersistAsync(windowBars, cancellationToken);
+                persistTime += stage.Elapsed;
+                warmBars.AddRange(windowBars);
             }
 
-            if (warm.Length > 0)
-            {
-                var incrementalStart = warm
-                    .Select(ticker => state[ticker].Keys.Last())
-                    .Min()
-                    .AddMinutes(-5);
-                await FetchMergeAndPersistAsync(warm, incrementalStart, end, cancellationToken);
-            }
-
-            foreach (var ticker in normalized)
-            {
-                var expired = state[ticker].Keys.Where(timestamp => timestamp < windowStart).ToArray();
-                foreach (var timestamp in expired)
-                {
-                    state[ticker].Remove(timestamp);
-                }
-            }
+            DropBarsBefore(normalized, windowStart);
+            logger.LogInformation(
+                "Earnings bar load for {TickerCount} stocks: read {HydratedCount} stocks from local candle files in {HydrateMs} ms; " +
+                "downloaded {ColdBarCount} bars for {ColdCount} stocks without stored bars in {ColdMs} ms; " +
+                "downloaded {WarmBarCount} bars for {WarmCount} stocks in {WarmWindowCount} windows, earliest from {EarliestWarmStartUtc}, in {WarmMs} ms; " +
+                "wrote {SavedBarCount} bars to local candle files in {PersistMs} ms.",
+                normalized.Length,
+                hydratedCount,
+                (long)hydrateTime.TotalMilliseconds,
+                coldBars.Count,
+                cold.Length,
+                (long)coldTime.TotalMilliseconds,
+                warmBars.Count,
+                warm.Length,
+                warmWindows.Count,
+                warmWindows.Count == 0 ? null : warmWindows[0].Start,
+                (long)warmTime.TotalMilliseconds,
+                coldBars.Count + warmBars.Count,
+                (long)persistTime.TotalMilliseconds);
 
             return normalized.ToDictionary(
                 ticker => ticker,
@@ -126,30 +162,77 @@ public sealed class EarningsMarketStateLoader
         }
     }
 
-    private async Task HydrateMissingSymbolsAsync(
+    /// <summary>
+    /// Reads stored bars for the tickers not yet held in memory and returns how many it read. Several
+    /// tickers are read at once: on 4 Nov 2026 a restart spent 18 minutes reading about 65,000 day files
+    /// for 900 stocks one ticker at a time, nearly all of it waiting on each file to open. Only this
+    /// method's own result array is written in parallel; the shared state is filled in afterwards.
+    /// </summary>
+    private async Task<int> HydrateMissingSymbolsAsync(
         IReadOnlyCollection<string> tickers,
         DateTimeOffset start,
         DateTimeOffset end,
         CancellationToken cancellationToken)
     {
-        foreach (var ticker in tickers.Where(ticker => !state.ContainsKey(ticker)))
-        {
-            var persisted = await candleStore.ReadBarsAsync(
+        var missing = tickers.Where(ticker => !state.ContainsKey(ticker)).ToArray();
+        var persisted = new IReadOnlyList<OhlcvBar>[missing.Length];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, missing.Length),
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = options.MaximumParallelBarFileReads,
+                CancellationToken = cancellationToken
+            },
+            async (index, token) => persisted[index] = await candleStore.ReadBarsAsync(
                 new CandleStoreReadRequest(
                     StoreContext.Scope,
                     StoreContext.RunName,
                     StoreContext.ProviderName,
-                    ticker,
+                    missing[index],
                     "5m",
                     start,
                     end),
-                cancellationToken);
-            state[ticker] = new SortedDictionary<DateTimeOffset, OhlcvBar>(
-                persisted.ToDictionary(bar => bar.Timestamp, bar => bar));
+                token));
+
+        for (var index = 0; index < missing.Length; index++)
+        {
+            state[missing[index]] = new SortedDictionary<DateTimeOffset, OhlcvBar>(
+                persisted[index].ToDictionary(bar => bar.Timestamp, bar => bar));
         }
+
+        return missing.Length;
     }
 
-    private async Task FetchMergeAndPersistAsync(
+    /// <summary>
+    /// Splits the tickers that already have bars into download windows: tickers whose newest bar falls in the
+    /// same UTC hour (newest bar under a day old) or UTC day (older) share one window, which starts 5 minutes
+    /// before the oldest newest-bar in that group. One window for every ticker used to start at the oldest
+    /// newest-bar of any of them: on 4 Nov 2026 a stock that last traded at 19:10 UTC made every pass
+    /// re-download from 19:05 for all 900 stocks, and that start only moves once the quiet stock trades
+    /// again. The overlap still re-reads each member's newest bar so provider corrections are picked up;
+    /// hour and day groups keep the request count small.
+    /// </summary>
+    private List<(DateTimeOffset Start, string[] Tickers)> GroupByIncrementalStart(
+        IReadOnlyCollection<string> warm,
+        DateTimeOffset end) =>
+        warm
+            .Select(ticker => (Ticker: ticker, LastBarUtc: state[ticker].Keys.Last().ToUniversalTime()))
+            .GroupBy(item => FloorToHourOrDay(item.LastBarUtc, end))
+            .OrderBy(group => group.Key)
+            .Select(group => (
+                group.Min(item => item.LastBarUtc).AddMinutes(-5),
+                group.Select(item => item.Ticker).ToArray()))
+            .ToList();
+
+    /// <summary>Rounds a UTC bar time down to its hour when it is under a day older than the end, else to its UTC day.</summary>
+    private static DateTimeOffset FloorToHourOrDay(DateTimeOffset lastBarUtc, DateTimeOffset end)
+    {
+        var bucket = end - lastBarUtc < TimeSpan.FromDays(1) ? TimeSpan.FromHours(1) : TimeSpan.FromDays(1);
+        return new DateTimeOffset(lastBarUtc.UtcTicks - lastBarUtc.UtcTicks % bucket.Ticks, TimeSpan.Zero);
+    }
+
+    /// <summary>Downloads 5-minute bars for the tickers and writes them into the in-memory state; returns the bars received.</summary>
+    private async Task<List<OhlcvBar>> DownloadAndMergeAsync(
         IReadOnlyCollection<string> tickers,
         DateTimeOffset start,
         DateTimeOffset end,
@@ -168,11 +251,30 @@ public sealed class EarningsMarketStateLoader
             downloaded.Add(bar);
         }
 
-        if (downloaded.Count > 0)
+        return downloaded;
+    }
+
+    /// <summary>Writes downloaded bars to the local candle store so a restart reads them back instead of downloading again.</summary>
+    private async Task PersistAsync(IReadOnlyList<OhlcvBar> bars, CancellationToken cancellationToken)
+    {
+        if (bars.Count > 0)
         {
             await candleStore.UpsertBarsAsync(
-                new CandleStoreWriteRequest(StoreContext, "provider", downloaded),
+                new CandleStoreWriteRequest(StoreContext, "provider", bars),
                 cancellationToken);
+        }
+    }
+
+    /// <summary>Removes in-memory bars older than the lookback window so memory stays bounded.</summary>
+    private void DropBarsBefore(IEnumerable<string> tickers, DateTimeOffset windowStart)
+    {
+        foreach (var ticker in tickers)
+        {
+            var expired = state[ticker].Keys.Where(timestamp => timestamp < windowStart).ToArray();
+            foreach (var timestamp in expired)
+            {
+                state[ticker].Remove(timestamp);
+            }
         }
     }
 }

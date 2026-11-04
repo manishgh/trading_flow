@@ -88,6 +88,11 @@ public sealed class EarningsMonitor
         }
     }
 
+    /// <summary>
+    /// One monitor pass: refreshes the Finviz calendar when due, loads 5-minute bars for every tracked
+    /// stock, runs the shared analyzer on completed bars and news, and saves analyses that changed.
+    /// Logs each stage's duration so a slow pass shows whether bars, news, analysis or saving cost the time.
+    /// </summary>
     public async Task RefreshAsync(bool forceCalendarRefresh, CancellationToken cancellationToken)
     {
         await refreshLock.WaitAsync(cancellationToken);
@@ -151,13 +156,16 @@ public sealed class EarningsMonitor
                 .Select(item => item.Ticker)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            var stage = System.Diagnostics.Stopwatch.StartNew();
             var barsByTicker = await marketState.LoadAsync(symbols, nowUtc, cancellationToken);
+            var loadTime = stage.Elapsed;
 
             // The time limit covers each stage, not the whole pass. Loading bars after a restart can take
             // longer than the limit on its own (14 minutes for about 900 stocks on 4 Nov 2026); sharing one
             // limit then cancelled the news read and every analysis of that pass was lost.
             using var analysisTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             analysisTimeout.CancelAfter(options.RequestTimeout);
+            stage.Restart();
             var recentNews = await news.GetRecentForTickersAsync(
                 nowUtc.AddDays(-3),
                 5000,
@@ -166,6 +174,8 @@ public sealed class EarningsMonitor
             var latest = await earnings.GetLatestAnalysesAsync(
                 trackedEvents.Select(item => item.Id).ToArray(),
                 analysisTimeout.Token);
+            var newsTime = stage.Elapsed;
+            stage.Restart();
             using var concurrency = new SemaphoreSlim(options.MaximumParallelAnalyses);
             var analyses = await Task.WhenAll(trackedEvents.Select(async calendarEvent =>
             {
@@ -183,16 +193,30 @@ public sealed class EarningsMonitor
                     concurrency.Release();
                 }
             }));
+            var analysisTime = stage.Elapsed;
+            stage.Restart();
 
+            var savedCount = 0;
             foreach (var snapshot in analyses)
             {
                 if (!latest.TryGetValue(snapshot.EarningsEventId, out var previous) ||
                     ShouldPersist(previous, snapshot, options.AnalysisSnapshotHeartbeat))
                 {
                     await earnings.UpsertAnalysisAsync(snapshot, analysisTimeout.Token);
+                    savedCount++;
                 }
             }
 
+            logger.LogInformation(
+                "Earnings pass for {EventCount} events and {TickerCount} stocks: bar load {LoadMs} ms, news read {NewsMs} ms, " +
+                "analysis {AnalysisMs} ms, saved {SavedCount} changed analyses in {SaveMs} ms.",
+                trackedEvents.Count,
+                symbols.Length,
+                (long)loadTime.TotalMilliseconds,
+                (long)newsTime.TotalMilliseconds,
+                (long)analysisTime.TotalMilliseconds,
+                savedCount,
+                (long)stage.Elapsed.TotalMilliseconds);
             lastAnalysisUtc = nowUtc;
             lastError = null;
         }

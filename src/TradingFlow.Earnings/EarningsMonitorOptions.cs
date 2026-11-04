@@ -12,7 +12,8 @@ public sealed record EarningsMonitorOptions(
     int PriorResultMaximumDaysAgo,
     int SubDailyLookbackDays,
     int ReferenceBarCount,
-    int MaximumParallelAnalyses)
+    int MaximumParallelAnalyses,
+    int MaximumParallelBarFileReads)
 {
     public static EarningsMonitorOptions Default { get; } = new(
         CalendarRefreshInterval: TimeSpan.FromMinutes(15),
@@ -30,5 +31,9 @@ public sealed record EarningsMonitorOptions(
         // 100 calendar days reliably covers the 63 prior US trading sessions behind the RVOL shown on each card.
         SubDailyLookbackDays: 100,
         ReferenceBarCount: 78,
-        MaximumParallelAnalyses: 8);
+        MaximumParallelAnalyses: 8,
+        // After a restart each tracked stock's stored bars are read back from about 70 day files. On
+        // 4 Nov 2026, files not yet in the Windows file cache took 1.2 s per stock read one at a time and
+        // 141 ms per stock read eight at a time, so 900 stocks take about 2 minutes instead of 18.
+        MaximumParallelBarFileReads: 8);
 }
