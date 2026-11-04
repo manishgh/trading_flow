@@ -1,5 +1,5 @@
 <section class="prep-page" data-preparation-owner="@User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value">
-  <div class="page-head"><div><span class="eyebrow">Daily workspace</span>@if (ViewData["EmbeddedPreparation"] is true) { <h2>Preparation review</h2> } else { <h1>Daily review</h1> }<p>Review the latest preparation, then open candidates or a paper-run review.</p></div><a class="btn btn-secondary" asp-page="/TradeDesk">Open candidates</a></div>
+  <div class="page-head"><div><span class="eyebrow">Daily workspace</span>@if (ViewData["EmbeddedPreparation"] is true) { <h2>Preparation review</h2> } else { <h1>Daily review</h1> }<p>Review the latest preparation, then open candidates or a paper-run review.</p></div><a class="btn btn-secondary" asp-page="/Desk">Open the Desk</a></div>
   <p id="prep-status" role="status" aria-live="polite">Loading workflows…</p>
   <button id="prep-retry" type="button" hidden>Retry loading preparation</button>
   <div id="prep-setup" class="prep-card" hidden><h3>Set up your first preparation workflow</h3><p>Choose a wishlist or Finviz screen, save the workflow paused, then review its exchange-session schedule. Collection results appear here after a run completes.</p><button id="prep-setup-new" type="button" disabled>Configure preparation</button></div>

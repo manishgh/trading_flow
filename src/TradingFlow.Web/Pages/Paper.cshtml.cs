@@ -204,6 +204,8 @@ public sealed class PaperModel : PageModel
         PaperExecutionMode = "experiment";
         await LoadAsync(ConfigPath, SelectedStrategyPath, cancellationToken);
         await LoadWishlistsAsync(WishlistId, cancellationToken);
+        // Registering creates the first paper strategy, so the run form's strategy choice cannot be required here.
+        ModelState.Remove(nameof(SelectedStrategyPath));
         if (!ModelState.IsValid)
         {
             ResetExperimentRegistrationCommandIfMissing();
