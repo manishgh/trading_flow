@@ -2,6 +2,8 @@ using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using TradingFlow.Data.Context;
+using TradingFlow.Domain.Earnings;
+using TradingFlow.Earnings;
 using TradingFlow.Domain.Wishlists;
 using TradingFlow.Web.Services.Wishlists;
 
@@ -21,8 +23,15 @@ public sealed record DeskSelection(DeskSource Source, IReadOnlyList<DeskMembersh
 /// <summary>Resolves observational membership without creating universes, candidates or orders.</summary>
 public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactory,
     IWishlistRepository wishlists, ScreenerPresetService presets, IScreenerSnapshotSource screener,
-    IMemoryCache cache)
+    IMemoryCache cache, EarningsMonitor? earnings = null)
 {
+    // Earnings groups come from the live earnings monitor. Membership is advisory: reporting is not an entry signal.
+    public static readonly IReadOnlyList<DeskSource> EarningsSources = [
+        new("earnings:today", "Earnings today", "Earnings", "Reporting today, plus last session's after-close reports that trade today. Membership is not an entry signal."),
+        new("earnings:today-positive", "Earnings today · positive results", "Earnings", "Today's earnings group with a positive EPS and revenue result. Membership is not an entry signal."),
+        new("earnings:next", "Earnings next reporting day", "Earnings", "Companies scheduled to report on the next reporting day.")
+    ];
+
     private readonly SemaphoreSlim screenReadGate = new(1, 1);
     public const int DisplayLimit = 50;
     public static readonly IReadOnlyList<DeskSource> BuiltIns = [
@@ -47,6 +56,7 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
         var saved = await presets.ListAsync(ScreenerScope.Swing, ct);
         return new[] { new DeskSource("all", "All wishlist stocks", "", "All active stocks across your wishlists, without duplicates.") }
             .Concat(lists.Select(x => new DeskSource("wishlist:" + x.Id, x.Name, "My wishlists", "Wishlist stocks. Select a strategy to collect and evaluate its conditions.")))
+            .Concat(earnings is null ? [] : EarningsSources)
             .Concat(BuiltIns)
             .Concat(TradingFlow.Finviz.FinvizSignalCatalog.All.Select(x => new DeskSource("signal:" + x.Code, x.Label, "Finviz lists", "Finviz discovery only; normal strategy admission is still required.", x.Query)))
             .Concat(saved.Select(x => new DeskSource("saved:" + x.Id, x.Name, "Finviz lists", "Locally saved/imported filters; not automatically synced with Finviz.", x.FilterQuery)))
@@ -76,6 +86,11 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
             ?? throw new ArgumentException("This source no longer exists. Select another source.");
         var lists = await FollowedListsAsync(ct);
         var all = Merge(lists);
+        if (key.StartsWith("earnings:", StringComparison.Ordinal))
+        {
+            var reporting = await EarningsMembersAsync(key, all, ct);
+            return Window(source, reporting, reporting.Count, null, null, page, search);
+        }
         if (source.Query is null)
         {
             var members = key == "all" ? all : Merge(lists.Where(x => "wishlist:" + x.Id == key));
@@ -88,6 +103,59 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
             .Select(x => bySymbol.GetValueOrDefault(x) ?? new DeskMembership(x, null, [])).ToArray();
         return Window(source, membersForScreen, screen.TotalCount, screen.SyncedAtUtc,
             screen.Error is null ? null : "Finviz is unavailable. Check the provider connection or saved filters, then retry.", page, search);
+    }
+
+    /// <summary>
+    /// Today's group follows the session that trades the report: today's releases and last session's
+    /// after-close releases. Each member is labelled with its release time and result.
+    /// </summary>
+    /// <summary>Every member of one earnings group, for screens that need the whole group rather than a page.</summary>
+    public async Task<IReadOnlyList<DeskMembership>> EarningsGroupAsync(string key, CancellationToken ct) =>
+        await EarningsMembersAsync(key, Merge(await FollowedListsAsync(ct)), ct);
+
+    private async Task<IReadOnlyList<DeskMembership>> EarningsMembersAsync(string key, IReadOnlyList<DeskMembership> followed, CancellationToken ct)
+    {
+        var today = EarningsCalendarDates.ExchangeDate(DateTimeOffset.UtcNow);
+        var next = EarningsCalendarDates.NextWeekday(today);
+        var snapshot = await earnings!.GetCalendarAsync(EarningsCalendarDates.PreviousWeekday(today), next, ct);
+        return EarningsMembers(snapshot.Items, key, today, followed);
+    }
+
+    public static IReadOnlyList<DeskMembership> EarningsMembers(IEnumerable<EarningsCalendarSnapshotItem> items, string key,
+        DateOnly today, IReadOnlyList<DeskMembership> followed)
+    {
+        var next = EarningsCalendarDates.NextWeekday(today);
+        var bySymbol = followed.ToDictionary(member => member.Symbol, StringComparer.OrdinalIgnoreCase);
+        return items
+            .Where(item => key == "earnings:next"
+                ? item.Event.ReportDateExchange == next
+                : EarningsCalendarDates.IsTradingSession(item.Event.ReportDateExchange, item.Event.ReleaseWindow, today))
+            .Where(item => key != "earnings:today-positive" || item.Analysis?.ResultAssessment == EarningsResultAssessment.Positive)
+            .GroupBy(item => item.Event.Ticker.ToUpperInvariant())
+            .Select(group => group.OrderByDescending(item => item.Event.ScheduledAtUtc).First())
+            .OrderBy(item => item.Event.ScheduledAtUtc).ThenBy(item => item.Event.Ticker, StringComparer.Ordinal)
+            .Select(item => new DeskMembership(item.Event.Ticker.ToUpperInvariant(), EarningsLabel(item),
+                bySymbol.GetValueOrDefault(item.Event.Ticker)?.Wishlists ?? []))
+            .ToArray();
+    }
+
+    private static string EarningsLabel(EarningsCalendarSnapshotItem item)
+    {
+        var window = item.Event.ReleaseWindow switch
+        {
+            EarningsReleaseWindow.BeforeMarketOpen => "before open",
+            EarningsReleaseWindow.AfterMarketClose => "after close",
+            EarningsReleaseWindow.DuringMarket => "during market",
+            _ => "time unconfirmed"
+        };
+        var result = item.Analysis?.ResultAssessment switch
+        {
+            EarningsResultAssessment.Positive => "positive",
+            EarningsResultAssessment.Mixed => "mixed",
+            EarningsResultAssessment.Negative => "negative",
+            _ => "result pending"
+        };
+        return $"{item.Event.CompanyName} · {window} {item.Event.ReportDateExchange:d MMM} · {result}";
     }
 
     /// <summary>One bounded provider observation shared by desk and news, including full returned membership.</summary>

@@ -26,7 +26,7 @@ for(const viewport of [{width:1440,height:900},{width:412,height:915}]) {
   await page.route("**/api/v1/candidate-runs/"+runId,route=>json(route,snapshot(++reads===1?1:2)));
   await page.route("**/api/v1/candidate-runs/"+runId+"/events?*",route=>route.fulfill({status:200,contentType:"text/event-stream",
     body:"id: 3\nevent: candidate.changed\ndata: "+JSON.stringify({eventSequence:3,payload:{candidateRunId:runId,candidate:consumed}})+"\n\n"}));
-  await page.goto("/TradeDesk?runId="+runId);
+  await page.goto("/Desk?runId="+runId);
   await expect(page.locator("[data-candidate-rows] strong")).toContainText("consumed");
   await page.getByText("Capture or open a candidate run",{exact:true}).click();
   const input=page.locator('[data-candidate-open] input');await input.fill("unsaved run selection");await input.focus();

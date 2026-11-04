@@ -50,7 +50,7 @@ public sealed class OrderReplacementReviewService(IOrderWorkflowService workflow
         RequireNoFill(final);
         if (final!.State != OrderState.Canceled) return new(false,final.State.ToString(),"The order changed during the account refresh; review stopped.",null);
         var symbol = Uri.EscapeDataString(intent.Symbol);
-        var url = intent.Side == "sell" ? $"/OrderTicket?env=paper&ticker={symbol}&side=sell" : $"/TradeDesk?env=paper&ticker={symbol}&ticket=true";
+        var url = intent.Side == "sell" ? $"/OrderTicket?env=paper&ticker={symbol}&side=sell" : $"/Desk?search={symbol}&order=buy";
         return new(true,"Canceled","Cancellation acknowledged with zero fills; account and position refreshed. Review new evidence and prices. A consumed candidate cannot be reused. Nothing has been submitted.",url,true);
     }
 

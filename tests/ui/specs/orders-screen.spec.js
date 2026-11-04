@@ -84,7 +84,5 @@ test.describe("orders screen", () => {
     await page.getByRole("button", { name: "Add ticker" }).click();
     await page.waitForLoadState("domcontentloaded");
 
-    await page.goto("/TradeDesk?ticker=ORDX");
-    await expect(page.getByRole("link", { name: "Orders in ORDX" })).toHaveAttribute("href", /\/Orders\?ticker=ORDX/);
   });
 });

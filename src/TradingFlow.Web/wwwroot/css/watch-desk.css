@@ -64,3 +64,14 @@
 .watch-tech dt{font-size:10px;color:var(--watch-muted);letter-spacing:.4px}
 .watch-tech dd{margin:0;font-weight:600;font-size:12px}
 @media(max-width:650px){.watch-tech{grid-template-columns:repeat(3,minmax(0,1fr))}}
+/* Strategy runs and the view switch sit between the toolbar and the table. */
+.watch-runs{border:1px solid var(--watch-line);border-radius:8px;margin:18px 0 0;background:var(--watch-panel)}
+.watch-runs>summary{display:flex;gap:16px;align-items:center;padding:14px 20px;cursor:pointer}
+.watch-runs .candidate-workflow{border:0;margin:0;padding:0 20px 18px}
+.watch-view-switch{display:flex;gap:0;margin:18px 0 0;border:1px solid var(--watch-line);border-radius:6px;width:max-content;max-width:100%;overflow:hidden}
+.watch-view-switch button{border:0;border-right:1px solid var(--watch-line);background:var(--watch-panel);padding:9px 16px;min-height:40px;cursor:pointer;font-weight:600;color:var(--color-text)}
+.watch-view-switch button:last-child{border-right:0}
+.watch-view-switch button[aria-pressed=true]{background:var(--color-text);color:var(--color-bg)}
+.watch-view-switch span{font-weight:400;opacity:.8}
+/* On a phone every Desk control is a full 44px touch target. */
+@media(max-width:650px){.watch-desk .btn,.watch-desk button,.watch-desk select,.watch-desk input:not([type=checkbox]),.watch-desk a.btn,.watch-desk .watch-table button,.watch-desk .watch-view-switch button,.watch-desk .watch-table .watch-trade-buttons button{min-height:44px}}

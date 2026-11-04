@@ -27,5 +27,5 @@ test('audit return keeps its candidate run',async({page})=>{
  const run='11111111-1111-1111-1111-111111111111';
  await page.goto('/CandidateAudit?candidateId=22222222-2222-2222-2222-222222222222&runId='+run+'&env=paper');
  const link=page.getByRole('link',{name:'Return to candidates'});
- await expect(link).toHaveAttribute('href','/TradeDesk?runId='+run+'&env=paper');
+ await expect(link).toHaveAttribute('href','/Desk?runId='+run+'&env=paper');
 });

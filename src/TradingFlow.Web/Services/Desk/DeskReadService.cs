@@ -16,7 +16,7 @@ public sealed record DeskSnapshot(DeskSelection Selection, IReadOnlyList<DeskRow
     IReadOnlyList<DeskArticle> News, string NewsCoverage, string Session, DateTimeOffset ReadAtUtc, string Feed);
 
 public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReader account,
-    IDailyObservationService daily, SqliteNewsFeedRepository news, OperationalStatusService operations,
+    IDailyObservationService daily, NewsFeedService newsFeed, OperationalStatusService operations,
     IMemoryCache cache, TimeProvider clock, ILogger<DeskReadService> logger)
 {
     /// <summary>Joins current observations and account facts without treating the former generic daily checks as strategy evidence.</summary>
@@ -56,15 +56,16 @@ public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReade
             entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(15);
             try
             {
-                var items = await news.GetRecentForTickersAsync(clock.GetUtcNow().AddHours(-72), 1000, symbols, ct);
-                return new NewsResult(AggregateNews(items), "Matched stored news · last 72h · up to 1,000 symbol records. Refreshes while connected; historical coverage may be incomplete.");
+                var stories = await newsFeed.GetStoriesAsync(new NewsStoryQuery(symbols, clock.GetUtcNow().AddHours(-72), 1000), ct);
+                return new NewsResult(ToArticles(stories), "Matched stored news · last 72h · up to 1,000 symbol records. Refreshes while connected; historical coverage may be incomplete.");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             { logger.LogWarning(ex, "Desk news read failed."); return new NewsResult([], "News is unavailable. Retry when the connection recovers."); }
         }))!;
-    public static IReadOnlyList<DeskArticle> AggregateNews(IEnumerable<PersistedNewsItem> items) => items
-        .GroupBy(x => String.IsNullOrWhiteSpace(x.Url) ? x.Provider + ":" + x.Headline : x.Url, StringComparer.OrdinalIgnoreCase)
-        .Select(group => { var latest = group.MaxBy(x => x.Timestamp)!; return new DeskArticle(latest.Headline, latest.Url,
-            latest.Provider, latest.Timestamp, group.Select(x => x.Ticker).Distinct().Order().ToArray(), latest.Source, latest.Summary, latest.SentimentScore, NewsEvidenceClassification.Classify(latest)); })
-        .OrderByDescending(x => x.PublishedAtUtc).ToArray();
+    public static IReadOnlyList<DeskArticle> AggregateNews(IEnumerable<PersistedNewsItem> items) => ToArticles(NewsStories.Combine(items));
+
+    private static IReadOnlyList<DeskArticle> ToArticles(IEnumerable<NewsStory> stories) => stories
+        .Select(story => new DeskArticle(story.Lead.Headline, story.Lead.Url, story.Lead.Provider, story.Lead.Timestamp, story.Tickers,
+            story.Lead.Source, story.Lead.Summary, story.Lead.SentimentScore, NewsEvidenceClassification.Classify(story.Lead)))
+        .OrderByDescending(article => article.PublishedAtUtc).ToArray();
 }

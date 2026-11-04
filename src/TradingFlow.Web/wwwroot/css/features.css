@@ -247,3 +247,9 @@
     transition: none !important;
   }
 }
+
+/* Earnings news: a story that arrives while the page is open flashes once and carries a NEW mark. */
+@keyframes earnings-news-arrival { 0% { background: var(--color-accent-200); } 100% { background: transparent; } }
+.earnings-news-flash { animation: earnings-news-arrival 6s ease-out 1; box-shadow: inset 3px 0 0 var(--color-accent); }
+.earnings-news-new { display: inline-block; margin-right: 8px; padding: 2px 6px; font-size: 10px; font-weight: 800; letter-spacing: .08em; background: var(--color-accent); color: #ffffff; }
+@media (prefers-reduced-motion: reduce) { .earnings-news-flash { animation: none; background: var(--color-accent-100); } }

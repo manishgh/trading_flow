@@ -29,8 +29,9 @@ for(const width of [412,1280,1600])test('stock desk is readable and focused at '
  await expect(page.locator('#watch-strategy-block')).toBeHidden();await expect(page.locator('#watch-strategy-checks')).toBeEmpty();
  await expect(page.locator('#watch-prev-close')).toHaveText('Prev close $198.00 · +1.01%');
  await expect(page.locator('#watch-quantity')).toHaveText('10');await expect(page.locator('#watch-pl')).toContainText('200.00');
- await expect(page.locator('#watch-buy')).toHaveAttribute('href',new RegExp('wishlistId='+id));
- expect((await page.locator('#watch-buy').boundingBox()).height).toBeLessThan(80);
+ // Without a strategy signal a non-administrator has no buy; the Desk says how to get one.
+ await expect(page.locator('#watch-buy')).toBeHidden();await expect(page.locator('#watch-order-help')).toContainText('Start a paper strategy run');
+ expect((await page.locator('#watch-sell').boundingBox()).height).toBeLessThan(80);
  await expect(page.locator('#watch-news-title')).toHaveText('AAPL news');await expect(page.locator('#watch-preparation')).not.toHaveAttribute('open','');
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBeTruthy();
  await page.screenshot({path:testInfo.outputPath('stock-desk-'+width+'.png'),fullPage:true});
@@ -158,5 +159,34 @@ test('a non-administrator gets no override buy on the Desk',async({page})=>{
  await fixture(page);await signIn(page);await page.goto('/Desk');
  await expect(page.locator('.watch-desk')).toHaveAttribute('data-administrator','false');
  await page.locator('#watch-rows button').filter({hasText:'AAPL'}).click();
- await expect(page.locator('#watch-buy')).toHaveText('Review candidates');await expect(page.locator('#watch-buy')).not.toHaveAttribute('href',/OrderTicket/);
+ await expect(page.locator('#watch-buy')).toBeHidden();await expect(page.locator('#watch-order-help')).toContainText('Start a paper strategy run');
+});
+
+// Signals from a recorded paper run: the Signals view lists stocks whose checks all passed, and a
+// non-administrator buys a signal through the reviewed entry bound to its exact candidate.
+test('signals view lists passed stocks and a signal buys through its exact candidate',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+ addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{const value=JSON.parse(event.data);
+  const strategy={strategyId:'swing.fixture',semanticVersion:'1.0.0',contentSha256:'a'.repeat(64)};
+  const check=(passed)=>({gateName:'strategy:entry_trigger',passed,rejectionCode:passed?null:'close_above_trigger',inputs:{}});
+  for(const row of value.rows){if(row.membership.symbol==='AAPL')row.strategyAssessment={symbol:'AAPL',strategy,candidateRunId:'33333333-3333-3333-3333-333333333333',candidateId:'44444444-4444-4444-4444-444444444444',state:'recorded',detail:'Recorded run',expired:false,checks:[check(true)]};
+   if(row.membership.symbol==='MSFT')row.strategyAssessment={symbol:'MSFT',strategy,candidateRunId:'33333333-3333-3333-3333-333333333333',candidateId:null,state:'recorded',detail:'Recorded run',expired:false,checks:[check(false)]};}
+  listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));}:listener,options);}};});
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(3);
+ await expect(page.locator('[data-view-count=signals]')).toHaveText('1');await expect(page.locator('[data-view-count=rejected]')).toHaveText('1');await expect(page.locator('[data-view-count=held]')).toHaveText('1');
+ await page.locator('[data-view=signals]').click();await expect(page.locator('#watch-rows tr')).toHaveCount(1);await expect(page.locator('#watch-rows tr')).toHaveAttribute('data-symbol','AAPL');
+ await page.locator('[data-view=rejected]').click();await expect(page.locator('#watch-rows tr')).toHaveAttribute('data-symbol','MSFT');
+ await page.locator('[data-view=signals]').click();await page.locator('#watch-rows .watch-symbol-button').click();
+ await expect(page.locator('#watch-buy')).toHaveText('Buy signal $200.05');
+ await expect(page.locator('#watch-buy')).toHaveAttribute('href',/candidateId=44444444-4444-4444-4444-444444444444/);await expect(page.locator('#watch-buy')).toHaveAttribute('href',/runId=33333333/);
+ await page.locator('#watch-buy').click();await expect(page).toHaveURL(/\/Desk/);await expect(page.locator('#watch-order-frame')).toHaveAttribute('src',/candidateId=44444444/);
+ // A stock without a signal offers a non-administrator no buy, and says how to get one.
+ await page.locator('[data-view=all]').click();await page.locator('#watch-rows .watch-symbol-button').filter({hasText:'NVDA'}).click();
+ await expect(page.locator('#watch-buy')).toBeHidden();await expect(page.locator('#watch-order-help')).toContainText('Start a paper strategy run');
+});
+
+test('a locked live environment shows the lock and no order controls on the Desk',async({page})=>{
+ await signIn(page);await page.goto('/Desk?env=live');
+ await expect(page.locator('.environment-lock')).toBeVisible();await expect(page.locator('#watch-rows')).toHaveCount(0);await expect(page.locator('.watch-buy, #watch-buy')).toHaveCount(0);
 });

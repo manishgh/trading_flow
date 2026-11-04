@@ -99,7 +99,7 @@
             const label=document.createElement('label');label.textContent='Include in reviewed membership';const check=document.createElement('input');check.type='checkbox';check.checked=selected.has(row.symbol);check.disabled=row.readiness!=='complete';check.onchange=()=>{reviewDirty=true;check.checked?selected.add(row.symbol):selected.delete(row.symbol);pendingHandoff=null;pendingCandidate=null;pendingCuration=null;el('handoff').disabled=el('paper').disabled=selected.size===0||selectedOccurrence.slot.phase!=='morning'||snap.readiness==='unavailable'||Date.now()>=Date.parse(snap.expiresAtUtc);};label.append(check);card.append(label);
             line(card,'Daily close '+(row.close??'unavailable')+' · '+row.historyCount+' sessions · '+row.feed+' / '+row.adjustment+' · gap '+(row.gapPercent??'unavailable')+'% · same-time RVOL '+(row.sameTimeRelativeVolume??'unavailable'));
             [...row.reasons,...row.context].forEach(x=>line(card,x));row.news.forEach(x=>{line(card,x.publishedAtUtc+' · '+x.headline);try{const url=new URL(x.url);if(['https:','http:'].includes(url.protocol)){const a=document.createElement('a');a.href=url.href;a.textContent='Open captured article';a.target='_blank';a.rel='noopener noreferrer';card.append(a);}else line(card,'Article link unavailable.');}catch{line(card,'Article link unavailable.');}});
-            const market=document.createElement('a');market.href='/TradeDesk?ticker='+encodeURIComponent(row.symbol);market.textContent='Open market detail';card.append(market);
+            const market=document.createElement('a');market.href='/Desk?search='+encodeURIComponent(row.symbol);market.textContent='Open market detail';card.append(market);
             const audit=document.createElement('a');audit.href=`/api/v1/preparation/${definition.workflowId}/occurrences/${selectedOccurrence.id}/evidence/${encodeURIComponent(row.symbol)}`;audit.textContent=' Open captured evidence';audit.target='_blank';audit.rel='noopener';card.append(audit);line(card,'Evidence hash: '+row.evidenceSha256);el('members').append(card);});
         el('more').hidden=shown>=snap.symbols.length;el('handoff').disabled=selectedOccurrence.slot.phase!=='morning'||snap.readiness==='unavailable'||selected.size===0||Date.now()>=Date.parse(snap.expiresAtUtc);el('paper').disabled=el('handoff').disabled;
     }
@@ -124,7 +124,7 @@
         const handoff=await api(`preparation/${definition.workflowId}/occurrences/${selectedOccurrence.id}/handoff`,pendingHandoff);
         pendingCandidate??={contractVersion:'1.0',idempotencyKey:crypto.randomUUID(),mode:'backtest',universeSnapshotId:handoff.universeSnapshotId,strategies:[strategy.identity],asOfUtc:selectedOccurrence.snapshot.cutoffUtc};
         const run=await api('candidate-runs',pendingCandidate);pendingCandidate=null;
-        pendingHandoff=null;status('Research candidate run created: '+run.candidateRunId);location.href='/TradeDesk?runId='+encodeURIComponent(run.candidateRunId);
+        pendingHandoff=null;status('Research candidate run created: '+run.candidateRunId);location.href='/Desk?runId='+encodeURIComponent(run.candidateRunId);
     });
     el('reason').oninput=()=>{reviewDirty=true;pendingHandoff=null;pendingCandidate=null;pendingCuration=null;};
     el('strategy').onchange=()=>{reviewDirty=true;pendingCandidate=null;};

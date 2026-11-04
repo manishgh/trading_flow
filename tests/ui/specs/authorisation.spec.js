@@ -12,7 +12,7 @@ import { expect, test } from "@playwright/test";
 // Everything an operator can reach must require a session. The order and
 // paper-run endpoints matter most: they can move money in the paper account.
 const protectedPages = [
-  "/TradeDesk",
+  "/Desk",
   "/RunningTrades",
   "/Orders",
   "/Backtests",
@@ -38,7 +38,6 @@ const protectedApis = [
 // The deliberate exceptions, and the reason each one is open.
 const publicRoutes = [
   ["/Login", "an operator has to be able to reach the sign-in form"],
-  ["/Workspace", "a public hub for market news and earnings"],
   ["/News", "stored market articles without private wishlist data"],
   ["/api/v1/news/feed", "backs the public News screen"],
   ["/Earnings", "an advisory monitor that cannot route an order"],

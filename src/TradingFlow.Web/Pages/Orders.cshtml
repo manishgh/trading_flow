@@ -85,7 +85,7 @@
         </p>
     </div>
     <div class="orders-head-actions">
-        <a class="btn btn-secondary btn-md" asp-page="/TradeDesk" asp-route-env="@Model.Env">Open the desk</a>
+        <a class="btn btn-secondary btn-md" asp-page="/Desk" asp-route-env="@Model.Env">Open the desk</a>
         <a class="btn btn-secondary btn-md" asp-page="/RunningTrades" asp-route-env="@Model.Env">Open positions</a>
     </div>
 </div>
@@ -206,7 +206,7 @@
         }
         else
         {
-            <a class="btn btn-secondary btn-md orders-empty-action" asp-page="/TradeDesk" asp-route-env="@Model.Env">Open the desk</a>
+            <a class="btn btn-secondary btn-md orders-empty-action" asp-page="/Desk" asp-route-env="@Model.Env">Open the desk</a>
         }
     }
     else
@@ -363,7 +363,7 @@
             {
                 <p class="note">No tracked strategy position in @row.Ticker. Account positions are shown on the stock desk.</p>
             }
-            <a class="btn btn-secondary btn-sm orders-rail-desk" asp-page="/TradeDesk"
+            <a class="btn btn-secondary btn-sm orders-rail-desk" asp-page="/Desk"
                asp-route-ticker="@row.Ticker" asp-route-env="@Model.Env">Evidence on the desk</a>
         </section>
 

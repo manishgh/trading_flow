@@ -102,7 +102,6 @@ builder.Services.AddRazorPages(razor =>
     razor.Conventions.AllowAnonymousToPage("/AccessDenied");
     razor.Conventions.AllowAnonymousToPage("/Earnings");
     razor.Conventions.AllowAnonymousToPage("/News");
-    razor.Conventions.AllowAnonymousToPage("/Workspace");
     razor.Conventions.AllowAnonymousToPage("/Index");
 });
 var repositoryRoot = ResolveRepositoryRoot(builder.Environment.ContentRootPath);

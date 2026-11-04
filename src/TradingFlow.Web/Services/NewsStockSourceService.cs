@@ -34,6 +34,12 @@ public sealed class NewsStockSourceService(DeskSources desk)
             ? lists.Where(x => "wishlist:" + x.Id == key) : lists).Select(x => x.Symbol).ToArray();
         if (key == "wishlists" || key.StartsWith("wishlist:", StringComparison.Ordinal))
             return Selection(symbols, $"{source.Name}: {symbols.Length} active wishlist stocks. News filtered by these stocks.");
+        // An earnings group is the earnings monitor's reporting list, never a Finviz screen.
+        if (key.StartsWith("earnings:", StringComparison.Ordinal))
+        {
+            var reporting = (await desk.EarningsGroupAsync(key, token)).Select(x => x.Symbol).ToArray();
+            return Selection(reporting, $"{source.Name}: {reporting.Length} stocks. News filtered by these stocks.");
+        }
         var screen = await desk.ReadScreenAsync(source.Query ?? "ind_stocksonly", token);
         if (!screen.Succeeded) return new([], "Finviz stock source unavailable. Check the provider configuration or connection and retry; the selected scope has not been replaced.", false);
         var returned = (screen.AllSymbols.Count > 0 ? screen.AllSymbols : screen.Symbols)

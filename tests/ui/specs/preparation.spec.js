@@ -57,7 +57,7 @@ test('paper review survives mode change, refresh and environment navigation',asy
 });
 test('daily workspace opens latest evidence and keeps new workflow separate',async({page})=>{
  await fixture(page);await expect(page.locator('#prep-review')).toBeVisible();await expect(page.locator('#prep-editor')).not.toBeVisible();
- await page.getByText('MSFT · new · complete',{exact:true}).click();await expect(page.getByRole('link',{name:'Open market detail'})).toHaveAttribute('href','/TradeDesk?ticker=MSFT');
+ await page.getByText('MSFT · new · complete',{exact:true}).click();await expect(page.getByRole('link',{name:'Open market detail'})).toHaveAttribute('href','/Desk?search=MSFT');
  await page.locator('#prep-new').click();await expect(page.locator('#prep-editor')).toBeVisible();await expect(page.locator('#prep-review')).not.toBeVisible();
  await page.getByRole('button',{name:'Latest review',exact:true}).click();await expect(page.locator('#prep-empty')).toBeVisible();
 });
@@ -123,7 +123,7 @@ for(const target of ['handoff','paper'])test('pending '+target+' retains its exa
  await page.locator('#prep-'+target).click();await expect.poll(()=>started).toBe(true);
  const newer={...row,id:'33333333-3333-3333-3333-333333333333',snapshot:{...row.snapshot,revisionId:'33333333-3333-3333-3333-333333333333',cutoffUtc:new Date(Date.now()+10000).toISOString()}};
  await page.route('**/api/v1/preparation/'+workflow,r=>json(r,{definition,history:[newer,row],upcoming:[]}));await page.clock.fastForward(10000);await expect(page.locator('#prep-audit')).toContainText(revision);release();
- if(target==='handoff'){await expect(page).toHaveURL(/TradeDesk\?runId=/);expect(candidate.asOfUtc).toBe(row.snapshot.cutoffUtc);expect(candidate.universeSnapshotId).toBe(occurrence);}else await expect(page).toHaveURL(/Paper\?preparationKey=/);
+ if(target==='handoff'){await expect(page).toHaveURL(/Desk\?runId=/);expect(candidate.asOfUtc).toBe(row.snapshot.cutoffUtc);expect(candidate.universeSnapshotId).toBe(occurrence);}else await expect(page).toHaveURL(/Paper\?preparationKey=/);
 });
 
 test('real API saves and reopens a paused preparation workflow',async({page})=>{

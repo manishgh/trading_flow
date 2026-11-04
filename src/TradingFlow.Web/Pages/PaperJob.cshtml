@@ -7,7 +7,7 @@
 
 @if (Model.Job is { } candidateJob)
 {
-    <p class="panel"><a href="/TradeDesk?runId=@candidateJob.JobId">Open this run's strategy candidates and audit</a></p>
+    <p class="panel"><a href="/Desk?runId=@candidateJob.JobId">Open this run's signals on the Desk</a></p>
 }
 @section Scripts {
     <script>

@@ -112,11 +112,11 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
             number = lastPage;
             page = await news.QueryAsync(filter with { Skip = (number - 1) * size }, token);
         }
-        var items = page.Records.GroupBy(x => NewsFeedService.NormalizeHeadlineIdentity(x.Headline), StringComparer.Ordinal)
-            .Select(group => {
-                var item = group.First();
-                var topics = group.Select(NewsDisplayTaxonomy.Describe).ToArray();
-                return new MobileNewsItem(NewsFeedService.FormatRelatedTickers(group.Select(x => x.Ticker)), item.Timestamp,
+        var items = NewsStories.Combine(page.Records)
+            .Select(story => {
+                var item = story.Lead;
+                var topics = story.Records.Select(NewsDisplayTaxonomy.Describe).ToArray();
+                return new MobileNewsItem(NewsFeedService.FormatRelatedTickers(story.Tickers), item.Timestamp,
                     item.Headline, item.SentimentScore, item.Provider, item.Source, item.Url, item.Summary,
                     NewsEvidenceClassification.Classify(item),
                     topics.SelectMany(x => x.Categories).Distinct(StringComparer.Ordinal).ToArray(),

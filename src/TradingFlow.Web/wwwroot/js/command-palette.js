@@ -15,7 +15,7 @@
   // Static screen registry. Labels match the primary navigation so what an
   // operator reads in the top bar is what they can type.
   var SCREENS = [
-    { label: "Candidates", hint: "Watchlist, quotes and decisions", path: "/TradeDesk" },
+    { label: "Desk", hint: "Live quotes, signals, holdings and news", path: "/Desk" },
     { label: "Positions", hint: "Running trades and open risk", path: "/RunningTrades" },
     { label: "Orders", hint: "Working and completed orders", path: "/Orders" },
     { label: "News", hint: "Catalyst feed", path: "/News" },
@@ -97,8 +97,8 @@
         next.set(key, value);
       }
     });
-    next.set("ticker", symbol);
-    return "/TradeDesk?" + next.toString();
+    next.set("search", symbol);
+    return "/Desk?" + next.toString();
   }
 
   // Symbols come from rows the server already rendered; the palette issues no

@@ -87,6 +87,7 @@
             text('description',snapshot.selection.source.description+screened);
             if(selected&&!snapshot.rows.some(x=>x.membership.symbol===selected)) selected=null;
             applyCurrentAssessments();render();observeCurrentStrategy(version);
+            if(pendingOrder&&snapshot.rows.some(x=>x.membership.symbol===pendingOrder.symbol)){selected=pendingOrder.symbol;newsForAll=false;render();openOrder(pendingOrder.side);pendingOrder=null;}
         });
         const unavailable=()=>{if(version!==generation)return;connected=false;el('retry').hidden=false;text('connection','Disconnected · reconnecting; displayed observations may be stale');if(!snapshot){el('empty').querySelector('strong').textContent='Market view unavailable';el('empty').querySelector('p').textContent='Check your connection or select another source. Reconnecting automatically.';}ageRows();renderFocus();};
         stream.onerror=unavailable;stream.addEventListener('unavailable',unavailable);
@@ -168,12 +169,28 @@
         const link=el(side==='buy'?'buy':'sell');
         el('detail').scrollIntoView({behavior:'smooth',block:'nearest'});
         if(!link||link.hidden||!link.getAttribute('href'))return;
-        const url=new URL(link.getAttribute('href'),location.origin);
+        openOrderUrl(link.getAttribute('href'),(side==='buy'?'Buy ':'Sell ')+(selected||''));
+    }
+    function openOrderUrl(href,title){
+        const url=new URL(href,location.origin);
         if(url.pathname!=='/OrderTicket'){location.href=url;return;}
         url.searchParams.set('embedded','1');
-        text('order-title',(side==='buy'?'Buy ':'Sell ')+(url.searchParams.get('ticker')||''));
+        text('order-title',title);
         el('order-frame').src=url.pathname+url.search;el('order').hidden=false;el('order-frame').focus();
     }
+    // Strategy-run cards link to the same reviewed order; keep it inside the Desk.
+    document.getElementById('watch-runs')?.addEventListener('click',event=>{
+        const link=event.target.closest('a[href^="/OrderTicket"]');if(!link)return;
+        event.preventDefault();el('detail').scrollIntoView({behavior:'smooth',block:'nearest'});openOrderUrl(link.getAttribute('href'),link.textContent.trim()||'Strategy entry');
+    });
+    // View switch: all stocks, signals ready for entry, held positions, or stocks the strategy rejected.
+    let view='all';
+    const orderQuery=new URLSearchParams(location.search);
+    let pendingOrder=['buy','sell'].includes(orderQuery.get('order'))&&orderQuery.get('search')?{symbol:orderQuery.get('search').toUpperCase(),side:orderQuery.get('order')}:null;
+    for(const button of document.querySelectorAll('[data-view]'))button.onclick=()=>{view=button.dataset.view;for(const b of document.querySelectorAll('[data-view]'))b.setAttribute('aria-pressed',String(b===button));render();};
+    function isSignal(row){const a=row.strategyAssessment;return !!a&&['recorded','evaluated'].includes(a.state)&&!a.expired&&a.checks.length>0&&a.checks.every(c=>c.passed);}
+    function isRejected(row){const a=row.strategyAssessment;return !!a&&['recorded','evaluated'].includes(a.state)&&a.checks.some(c=>!c.passed);}
+    const inView=row=>view==='signals'?isSignal(row):view==='held'?!!row.holding:view==='rejected'?isRejected(row):true;
     el('order-close').onclick=()=>{el('order').hidden=true;el('order-frame').removeAttribute('src');};
     for(const side of ['buy','sell'])el(side).addEventListener('click',event=>{event.preventDefault();openOrder(side);});
     // The embedded review reports its height so the panel grows with the form.
@@ -183,7 +200,8 @@
     function render() {
         if(!snapshot)return;
         const filter=el('search').value.toUpperCase().trim();
-        let rows=snapshot.rows.filter(x=>(x.membership.symbol+' '+(x.membership.name||'')).toUpperCase().includes(filter));
+        for(const [name,test] of [['signals',isSignal],['held',r=>!!r.holding],['rejected',isRejected]]){const count=document.querySelector('[data-view-count="'+name+'"]');if(count)count.textContent=String(snapshot.rows.filter(test).length);}
+        let rows=snapshot.rows.filter(x=>inView(x)&&(x.membership.symbol+' '+(x.membership.name||'')).toUpperCase().includes(filter));
         rows.sort((a,b)=>el('sort').value==='held'?(Number(!!b.holding)-Number(!!a.holding)||a.membership.symbol.localeCompare(b.membership.symbol)):el('sort').value==='news'?(Date.parse(b.news[0]?.publishedAtUtc||0)-Date.parse(a.news[0]?.publishedAtUtc||0)||a.membership.symbol.localeCompare(b.membership.symbol)):a.membership.symbol.localeCompare(b.membership.symbol));
         text('count',`${snapshot.selection.matchedCount??snapshot.selection.totalCount} stocks · ${rows.length} on this page`);
         const visible=new Set(rows.map(x=>x.membership.symbol));
@@ -199,7 +217,7 @@
                     el('symbol').tabIndex=-1;el('symbol').focus({preventScroll:true});el('detail').scrollIntoView({behavior:'smooth',block:'nearest'});};rowNodes.set(symbol,tr);
             }
             const cells=tr.children;tr.dataset.selected=String(symbol===selected);tr.querySelector('.watch-symbol-button').setAttribute('aria-pressed',String(symbol===selected));
-            const lists=row.membership.wishlists.map(x=>x.name).join(', ');cells[0].querySelector('small').textContent=lists||(row.membership.name==='Held position'?'Held position':'Screener discovery');cells[0].querySelector('small').title=lists;
+            const lists=row.membership.wishlists.map(x=>x.name).join(', ');cells[0].querySelector('small').textContent=(snapshot.selection.source.key.startsWith('earnings:')?row.membership.name:'')||lists||(row.membership.name==='Held position'?'Held position':'Screener discovery');cells[0].querySelector('small').title=lists;
             // Current price with yesterday's close directly under it, so the two can never be confused.
             const bid=row.quote?.bidPrice,ask=row.quote?.askPrice;
             const change = row.previousClose?.close > 0 && row.quote?.midPrice != null ? (row.quote.midPrice / row.previousClose.close - 1) * 100 : null;
@@ -239,7 +257,10 @@
         const query=new URLSearchParams({ticker:row.membership.symbol,side,env:'paper'});
         if(row.membership.wishlists.length)query.set('wishlistId',row.membership.wishlists[0].id);
         const price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;if(price>0)query.set('limitPrice',price);
-        if(side==='buy'&&!isAdministrator){link.textContent='Review candidates';link.href='/TradeDesk?wishlistId='+encodeURIComponent(row.membership.wishlists[0].id);}else {link.textContent=(side==='buy'?'Buy ':'Sell ')+money(price);link.href='/OrderTicket?'+query;}
+        const a=row.strategyAssessment;
+        if(side==='buy'&&isSignal(row)&&a.candidateId&&a.candidateRunId){link.textContent='Buy signal '+money(price);link.href='/OrderTicket?'+new URLSearchParams({candidateId:a.candidateId,runId:a.candidateRunId,env:'paper'});return;}
+        if(side==='buy'&&!isAdministrator){link.hidden=true;link.removeAttribute('href');return;}
+        link.textContent=(side==='buy'?(isAdministrator?'Override buy ':'Buy '):'Sell ')+money(price);link.href='/OrderTicket?'+query;
     }
     // Keep quote/account rendering separate from the selected strategy's recorded evidence.
     function renderFocus(){
@@ -252,7 +273,9 @@
         text('quote-detail',quoteAge(row)+' · spread '+(row.quote?.askPrice>0&&row.quote?.bidPrice>0?money(row.quote.askPrice-row.quote.bidPrice):'—'));el('quote-detail').title=when(row.quote?.timestamp);
         reviewLink('buy',row.membership.wishlists.length>0,row,'buy');reviewLink('sell',connected&&row.holdingsKnown&&Date.now()-Date.parse(snapshot.account.readAtUtc)<30000&&row.holding?.quantity>0&&Number.isInteger(row.holding.quantity),row,'sell');
         // Only explain when buying is unavailable; the buttons speak for themselves otherwise.
-        text('order-help',row.membership.wishlists.length?'':'Follow this stock in a wishlist before buying. Screener membership does not authorize an order.');el('order-help').hidden=row.membership.wishlists.length>0;
+        const help=!row.membership.wishlists.length?'Follow this stock in a wishlist before buying. Screener membership does not authorize an order.':
+            !isSignal(row)&&!isAdministrator?'No signal for this stock. Start a paper strategy run under Strategy runs to get entry signals.':'';
+        text('order-help',help);el('order-help').hidden=!help;
         el('follow').hidden=row.membership.wishlists.length>0||!el('follow-list').options.length;
         const accountStale=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;
         // Holding appears only for a held stock; account provenance moves into the tooltip.
@@ -317,6 +340,10 @@
     window.addEventListener('pageshow',event=>{if(event.persisted)connect();});
     setInterval(()=>{ageRows();updateHealth();if(snapshot&&selected)renderFocus();},1000);
     // Load both catalogs before connecting; a strategy-list error must not hide otherwise available quotes.
+    // A link to a recorded strategy run opens the Strategy runs section with that run loaded.
+    if(new URLSearchParams(location.search).get('runId')&&document.getElementById('watch-runs'))document.getElementById('watch-runs').open=true;
+    // A link can name the stock to show, e.g. /Desk?search=MSFT&order=buy from an order replacement.
+    el('search').value=new URLSearchParams(location.search).get('search')||'';
     async function start(){try{await sources(new URLSearchParams(location.search).get('source')||'all');try{await loadStrategies();}catch(error){strategyLoadError=error.message;strategyChoices=[];el('strategy').replaceChildren(new Option('Select a strategy',''));}connect();}catch(e){text('connection',e.message);el('empty').querySelector('strong').textContent='Sources unavailable';el('retry').hidden=false;}}
     el('retry').onclick=start;start();
     document.addEventListener('preparation-changed',event=>{const count=event.detail.count;text('prep-summary',count?count+' workflow'+(count===1?'':'s')+' · open review →':'Set up your workflow →');});

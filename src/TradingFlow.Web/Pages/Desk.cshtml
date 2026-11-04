@@ -1,6 +1,15 @@
 @page
 @inject Microsoft.AspNetCore.Mvc.ViewFeatures.IFileVersionProvider FileVersions
-@{ ViewData["Title"] = "Desk"; ViewData["MainClass"] = "watch-desk-shell"; ViewData["ShowOperatorClock"] = true; ViewData["EmbeddedPreparation"] = true; }
+@inject TradingFlow.Web.Services.TradingEnvironmentService Environments
+@{ ViewData["Title"] = "Desk"; ViewData["MainClass"] = "watch-desk-shell"; ViewData["ShowOperatorClock"] = true; ViewData["EmbeddedPreparation"] = true;
+   var environment = Environments.GetState(Environments.Parse(Request.Query["env"])); }
+@* A locked environment shows why it is locked and renders no order control at all. *@
+@if (!environment.IsEnabled)
+{
+    <h1 class="visually-hidden">Desk</h1>
+    <partial name="_EnvironmentLock" model="environment" />
+    return;
+}
 <link rel="stylesheet" href="~/css/watch-desk.css" asp-append-version="true" />
 <section class="watch-desk" aria-label="Stock desk" data-administrator="@User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator).ToString().ToLowerInvariant()">
   <header class="watch-head">
@@ -25,6 +34,9 @@
     <div><strong>Add a saved Elite screen</strong><p>Copy its Finviz URL here. Only the filters are saved locally; private Elite presets are not automatically synced.</p></div>
     <label>Screen name<input name="name" required maxlength="120" placeholder="My momentum screen" /></label><label>Finviz URL or filters<input name="url" required maxlength="4000" placeholder="https://elite.finviz.com/screener.ashx?f=…" /></label><button class="btn btn-primary" type="submit">Save screen</button><button class="btn btn-secondary" type="button" id="watch-import-close">Close</button><p role="status" id="watch-import-status"></p>
   </form>
+  @* Paper strategy runs record which stocks qualify and trigger; their signals authorize strategy entries. *@
+  <details class="watch-runs" id="watch-runs"><summary><span class="watch-kicker">STRATEGY RUNS</span><strong>Start or open a paper strategy run</strong></summary><partial name="_CandidateWorkflow" /></details>
+  <div class="watch-view-switch" role="group" aria-label="Show stocks"><button type="button" data-view="all" aria-pressed="true">All</button><button type="button" data-view="signals" aria-pressed="false">Signals <span data-view-count="signals"></span></button><button type="button" data-view="held" aria-pressed="false">Held <span data-view-count="held"></span></button><button type="button" data-view="rejected" aria-pressed="false">Rejected <span data-view-count="rejected"></span></button></div>
   <div class="watch-view-head"><div><h2 id="watch-title">All followed stocks</h2><p id="watch-description">Active stocks across all your wishlists.</p></div><span id="watch-count">— stocks</span></div>
   <p id="watch-warning" class="watch-warning" role="status" hidden></p>
   <div class="watch-grid">
@@ -52,6 +64,6 @@
     </aside>
     <section class="watch-news" aria-label="Relevant news"><div class="watch-news-head"><div><span class="watch-kicker">NEWS THAT MATTERS HERE</span><h2 id="watch-news-title">News for this view</h2></div><button id="watch-news-all" class="btn btn-secondary" type="button">All stocks in view</button></div><p id="watch-news-coverage" class="watch-fine"></p><div id="watch-news-list"></div></section>
   </div>
-  <p class="watch-footer">Discovery and preparation are advisory. Pre- and post-market monitoring does not enable extended-hours orders. <a asp-page="/TradeDesk">Open candidate review ↗</a></p>
+  <p class="watch-footer">Discovery and preparation are advisory. Pre- and post-market monitoring does not enable extended-hours orders.</p>
 </section>
-@section Scripts { <script src="~/js/watch-desk.js" asp-append-version="true"></script> }
+@section Scripts { <script src="~/js/watch-desk.js" asp-append-version="true"></script><script src="~/js/candidate-workflow.js" asp-append-version="true" defer></script> }

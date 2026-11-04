@@ -2,6 +2,7 @@ using TradingFlow.Domain.Earnings;
 using TradingFlow.Earnings;
 using TradingFlow.Web;
 using TradingFlow.Web.Models;
+using TradingFlow.Web.Services.Desk;
 
 namespace TradingFlow.Tests;
 
@@ -87,4 +88,36 @@ public sealed class EarningsExchangeDateTests
         SourceArtifactSha256 = new('a', 64), ProviderReceivedAtUtc = DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
         FirstSeenAtUtc = DateTimeOffset.Parse("2026-01-01T00:00:00Z"), LastSeenAtUtc = DateTimeOffset.Parse("2026-01-01T00:00:00Z")
     };
+}
+
+public sealed class DeskEarningsSourceTests
+{
+    private static EarningsCalendarSnapshotItem Item(string ticker, DateOnly date, EarningsReleaseWindow window, EarningsResultAssessment? result) =>
+        new(new EarningsCalendarEvent { Id = ticker, Ticker = ticker, CompanyName = ticker + " Inc", ReportDateExchange = date, ReleaseWindow = window,
+            ScheduledAtUtc = new DateTimeOffset(date.ToDateTime(new TimeOnly(window == EarningsReleaseWindow.AfterMarketClose ? 21 : 12, 0)), TimeSpan.Zero),
+            Provider = "fixture", SourceUrl = "https://example.invalid", SourceArtifactSha256 = new('a', 64) },
+            result is null ? null : new EarningsAnalysisSnapshot { ResultAssessment = result.Value }, null);
+
+    [Fact]
+    public void TodayGroupFollowsTheTradingSessionAndCarriesReleaseAndResult()
+    {
+        // Monday 2026-10-19: Friday's after-close report trades today; Friday's morning report does not.
+        var monday = new DateOnly(2026, 10, 19);
+        var items = new[]
+        {
+            Item("PM", new(2026, 10, 16), EarningsReleaseWindow.AfterMarketClose, EarningsResultAssessment.Positive),
+            Item("AM", new(2026, 10, 16), EarningsReleaseWindow.BeforeMarketOpen, EarningsResultAssessment.Positive),
+            Item("TODAY", monday, EarningsReleaseWindow.BeforeMarketOpen, EarningsResultAssessment.Negative),
+            Item("NEXT", new(2026, 10, 20), EarningsReleaseWindow.BeforeMarketOpen, null)
+        };
+        var followed = new[] { new DeskMembership("PM", null, [new DeskWishlist(Guid.Empty, "Core", true)]) };
+
+        var today = DeskSources.EarningsMembers(items, "earnings:today", monday, followed);
+        Assert.Equal(["PM", "TODAY"], today.Select(member => member.Symbol));
+        Assert.Equal("PM Inc · after close 16 Oct · positive", today[0].Name);
+        Assert.Equal("Core", Assert.Single(today[0].Wishlists).Name);
+
+        Assert.Equal(["PM"], DeskSources.EarningsMembers(items, "earnings:today-positive", monday, followed).Select(member => member.Symbol));
+        Assert.Equal(["NEXT"], DeskSources.EarningsMembers(items, "earnings:next", monday, followed).Select(member => member.Symbol));
+    }
 }

@@ -17,7 +17,7 @@
         </p>
     </div>
     @* The whole point of this page is to feed the desk, so that is the primary. *@
-    <a class="btn btn-primary btn-md" asp-page="/TradeDesk" asp-route-id="@selected?.Id">Open desk</a>
+    <a class="btn btn-primary btn-md" asp-page="/Desk" asp-route-source="@(selected is null ? "all" : "wishlist:" + selected.Id)">Open desk</a>
 </div>
 
 @if (!String.IsNullOrWhiteSpace(Model.StatusMessage))

@@ -63,9 +63,9 @@ for(const width of [390,1440])test('News stock-source dropdown and exact stock f
  try {
   await page.goto('/News?groupId='+list.id+'&hours=24&view=ticker&source=wire&provider=wire&sentiment=positive&search=earnings&ticker=AAPL');
   const dropdown=page.getByLabel('Stock source',{exact:true});
-  expect(await dropdown.locator('optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My wishlists','Finviz lists']);
+  expect(await dropdown.locator('optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My wishlists','Earnings','Finviz lists']);
   await expect(dropdown).toHaveValue('wishlist:'+list.id);
-  for(const label of ['All news / all stocks','All wishlist stocks','All Finviz stocks','All wishlist + Finviz stocks',list.name,'Top Gainers'])
+  for(const label of ['All news / all stocks','All wishlist stocks','All Finviz stocks','All wishlist + Finviz stocks',list.name,'Top Gainers','Earnings today','Earnings next reporting day'])
    await expect(dropdown.getByRole('option',{name:label,exact:true})).toHaveCount(1);
   await dropdown.selectOption('wishlists');
   await page.getByRole('button',{name:'Apply',exact:true}).click();

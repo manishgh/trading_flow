@@ -29,7 +29,7 @@
       el('Cancel').textContent = 'Retry the same cancellation';
       if(result.canReview && result.reviewUrl) {
         const target = new URL(result.reviewUrl,location.origin);
-        if(target.origin !== location.origin || !['/TradeDesk','/OrderTicket'].includes(target.pathname)) throw new Error('Review link is unavailable.');
+        if(target.origin !== location.origin || !['/Desk','/OrderTicket'].includes(target.pathname)) throw new Error('Review link is unavailable.');
         el('Review').href = target.pathname + target.search; el('Review').hidden = false; el('Cancel').disabled = true;
       }
     } catch(error) { el('Status').textContent = error.message; el('Cancel').textContent = 'Retry the same cancellation'; }

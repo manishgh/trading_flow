@@ -32,7 +32,7 @@ public sealed class OrderReplacementReviewTests
     public async Task CanceledEntryRefreshesAccountButOnlyOpensCandidateReview() {
         events.Setup(x => x.GetCurrentAsync("original",It.IsAny<CancellationToken>())).ReturnsAsync(State(OrderState.Canceled));
         var result=await Service.ReviewAsync("original",default);
-        Assert.True(result.CanReview); Assert.StartsWith("/TradeDesk?",result.ReviewUrl);
+        Assert.True(result.CanReview); Assert.StartsWith("/Desk?search=",result.ReviewUrl);
         Assert.Contains("consumed candidate cannot be reused",result.Detail);
         broker.Verify(x => x.GetBrokerContextAsync("AAA",It.IsAny<CancellationToken>()),Times.Once);
         Assert.Single(broker.Invocations); Assert.Empty(workflow.Invocations);

@@ -193,6 +193,26 @@ public sealed class NewsFeedService : BackgroundService
         }
     }
 
+/// <summary>
+    /// Stories for the given stocks since a time, merged across stocks and providers. Each screen states its
+    /// own filters; market-wide context is included only when asked for and only when it bears on stocks.
+    /// </summary>
+    public async Task<IReadOnlyList<NewsStory>> GetStoriesAsync(NewsStoryQuery query, CancellationToken cancellationToken)
+    {
+        var symbols = query.Symbols
+            .Select(symbol => symbol.Trim().ToUpperInvariant())
+            .Where(symbol => symbol.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (query.IncludeMarketContext) symbols.Add("MARKET");
+        if (symbols.Count == 0) return [];
+        var records = await repository.GetRecentForTickersAsync(query.SinceUtc, query.Limit, symbols, cancellationToken);
+        return NewsStories.Combine(
+            records.Where(item => !item.Ticker.Equals("MARKET", StringComparison.OrdinalIgnoreCase) || IsRelevantMarketEvidence(item)),
+            query.PreferredProvider);
+    }
+
+    /// <summary>Earnings news leads with Alpaca's copy of a story, because its stream carries results first.</summary>
     public async Task<IReadOnlyList<EarningsNewsEvidenceResponse>> GetEarningsTimelineAsync(
         IReadOnlyCollection<string> tickers,
         DateTimeOffset nowUtc,
@@ -203,12 +223,11 @@ public sealed class NewsFeedService : BackgroundService
             .Where(ticker => ticker.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var window = EarningsNewsWindowPolicy.Resolve(nowUtc);
-        var stored = await repository.GetRecentAsync(window.StartUtc, 500, null, cancellationToken);
+        var stories = await GetStoriesAsync(new NewsStoryQuery(normalizedTickers, window.StartUtc, 5000,
+            IncludeMarketContext: true, PreferredProvider: NewsStories.RealTimeProvider), cancellationToken);
 
-        return stored
-            .Where(item => normalizedTickers.Contains(item.Ticker) ||
-                (item.Ticker.Equals("MARKET", StringComparison.OrdinalIgnoreCase) && IsRelevantMarketEvidence(item)))
-            .Select(item => ToEarningsEvidence(item, normalizedTickers))
+        return stories
+            .Select(story => ToEarningsEvidence(story.Lead, story.Tickers, normalizedTickers))
             .OrderByDescending(item => item.PublishedAtUtc)
             .ThenBy(item => item.Headline, StringComparer.OrdinalIgnoreCase)
             .Take(120)
@@ -573,9 +592,10 @@ public sealed class NewsFeedService : BackgroundService
 
     private static EarningsNewsEvidenceResponse ToEarningsEvidence(
         PersistedNewsItem first,
+        IReadOnlyList<string> storyTickers,
         IReadOnlySet<string> earningsTickers)
     {
-        var relatedTickers = new[] { first.Ticker }
+        var relatedTickers = storyTickers
             .Where(ticker => earningsTickers.Contains(ticker))
             .ToArray();
         var category = ClassifyEvidence(first);

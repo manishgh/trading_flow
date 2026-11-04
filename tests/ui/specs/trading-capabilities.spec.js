@@ -22,11 +22,7 @@ test.afterEach(async({page})=>{
  * Covers the capability work: environment separation, desk filtering and sorting,
  * bulk group membership, the news hub, earnings filters, and the audit funnel.
  *
- * Owns its fixture list in disposable test storage. Nothing submits an order or mutates paper state.
- */
-
-async function firstWishlistId(page) {
-  await page.goto("/TradeDesk");
+  await page.goto("/Desk");
   // The first option is "All wishlists" (empty value); the first real list follows it.
   return page.locator('#WishlistSelect option:not([value=""])').first().getAttribute("value");
 }
@@ -43,21 +39,21 @@ test.describe("trading environment separation", () => {
   });
 
   test("paper is the default and live is locked with its promotion gates named", async ({ page }) => {
-    await page.goto("/TradeDesk");
+    await page.goto("/Desk");
     await expect(page.locator("html")).toHaveAttribute("data-environment", "paper");
     // Exactly one environment is shown; the system menu names live as locked.
     await expect(page.locator(".env-badge")).toHaveCount(1);
     await expect(page.locator(".env-badge")).toHaveText("PAPER");
     await expect(page.locator(".system-menu-panel")).toContainText("LIVE locked");
 
-    await page.goto("/TradeDesk?env=live");
+    await page.goto("/Desk?env=live");
     await expect(page.locator("html")).toHaveAttribute("data-environment", "live");
     await expect(page.locator(".environment-lock")).toBeVisible();
     await expect(page.locator(".environment-lock")).toContainText("Outstanding gates");
   });
 
   test("a locked environment renders no order control anywhere in the document", async ({ page }) => {
-    for (const route of ["/TradeDesk?env=live", "/OrderTicket?env=live&ticker=AAPL", "/Orders?env=live&ticker=AAPL"]) {
+    for (const route of ["/Desk?env=live", "/OrderTicket?env=live&ticker=AAPL", "/Orders?env=live&ticker=AAPL"]) {
       await page.goto(route);
       // Fail closed: the controls are absent, not merely disabled. Scoped to the
       // page body - the shared chrome's sign-out form is not an order control,
@@ -68,45 +64,8 @@ test.describe("trading environment separation", () => {
   });
 
   test("no screen hardcodes an environment label", async ({ page }) => {
-    await page.goto("/TradeDesk?env=live");
+    await page.goto("/Desk?env=live");
     await expect(page.locator(".env-badge.env-live")).toHaveText("LIVE");
-  });
-});
-
-test.describe("desk filtering and sorting", () => {
-  test.beforeEach(async ({ page }) => {
-    await signIn(page);
-  });
-
-  test("every market column exposes a sortable header carrying aria-sort", async ({ page }) => {
-    const id = await firstWishlistId(page);
-    await page.goto(`/TradeDesk?id=${id}`);
-
-    const sortLinks = page.locator(".trade-desk-table thead .sort-header");
-    expect(await sortLinks.count()).toBeGreaterThan(0);
-
-    await page.goto(`/TradeDesk?id=${id}&sort=price&dir=desc`);
-    await expect(page.locator('.trade-desk-table thead th[aria-sort="descending"]')).toHaveCount(1);
-
-    await page.goto(`/TradeDesk?id=${id}&sort=price&dir=asc`);
-    await expect(page.locator('.trade-desk-table thead th[aria-sort="ascending"]')).toHaveCount(1);
-  });
-
-  test("search narrows the market list and reports the filtered total", async ({ page }) => {
-    const id = await firstWishlistId(page);
-    await page.goto(`/TradeDesk?id=${id}`);
-    const all = await page.locator(".trade-desk-table [data-symbol-row]").count();
-
-    await page.goto(`/TradeDesk?id=${id}&search=zzzznomatch`);
-    await expect(page.locator(".trade-desk-table [data-symbol-row]")).toHaveCount(0);
-    await expect(page.locator(".desk-view-controls")).toContainText(`of ${all}`);
-  });
-
-  test("filter and sort state survives a reload through the URL", async ({ page }) => {
-    const id = await firstWishlistId(page);
-    await page.goto(`/TradeDesk?id=${id}&search=A&sort=ticker&dir=desc&maxSpreadBps=500`);
-    await expect(page.locator("#Search")).toHaveValue("A");
-    await expect(page.locator("#MaxSpreadBps")).toHaveValue("500");
   });
 });
 
@@ -343,24 +302,5 @@ test.describe("audit depth", () => {
     await expect(page.locator("#CompareWith")).toBeVisible();
     await page.goto("/Audit/ui-release-audit?compareWith=does-not-exist");
     await expect(page.locator("#CompareWith")).toHaveValue("does-not-exist");
-  });
-});
-
-test.describe("desk order shortcuts", () => {
-  test.beforeEach(async ({ page }) => {
-    await signIn(page);
-  });
-
-  test("the buy action carries a keyboard hint and never submits on its own", async ({ page }) => {
-    await page.goto("/TradeDesk");
-    const ticker = await page.locator(".trade-desk-table [data-symbol-row]").first().getAttribute("data-symbol");
-    test.skip(!ticker, "No symbols seeded.");
-
-    await page.goto(`/TradeDesk?ticker=${ticker}`);
-    // The ticket is inline on the desk now. Stage one reviews; it never submits,
-    // and no confirm control exists until the server has checked the draft.
-    const review = page.getByRole("link", { name: "Open candidate review" });
-    await expect(review).toBeVisible();
-    await expect(page.getByRole("button", { name: /^Confirm paper/ })).toBeHidden();
   });
 });

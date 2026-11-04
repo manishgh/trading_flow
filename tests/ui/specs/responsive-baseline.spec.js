@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { signIn } from "./sign-in.js";
 
 const coreRoutes = [
-  "/TradeDesk",
+  "/Desk",
   "/RunningTrades",
   "/Orders",
   "/Earnings",
@@ -87,7 +87,7 @@ test.describe("approved UI baseline", () => {
 
   test("mobile shell actions meet the 44px target", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/TradeDesk");
+    await page.goto("/Desk");
 
     // Only what a thumb can actually reach counts. On a phone the desktop
     // primary nav is replaced by the fixed tab bar, so its links are display:none

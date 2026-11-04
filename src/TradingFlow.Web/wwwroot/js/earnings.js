@@ -367,14 +367,14 @@
         actions.className = "earnings-actions";
 
         const inspect = text("a", "Inspect on desk", "btn btn-secondary btn-md");
-        inspect.href = `/TradeDesk?ticker=${encodeURIComponent(item.ticker)}`;
+        inspect.href = `/Desk?search=${encodeURIComponent(item.ticker)}`;
         actions.append(inspect);
         if (document.getElementById('groupActionDialog')) {
             const add = text('button', 'Add to group', 'btn btn-secondary btn-sm');
             add.type = 'button'; add.dataset.groupAction = 'add'; add.dataset.tickers = item.ticker;
             actions.append(add);
             const order = text('a', 'Review trade setup', 'btn btn-secondary btn-sm');
-            order.href = `/TradeDesk?ticker=${encodeURIComponent(item.ticker)}&ticket=true`;
+            order.href = `/Desk?search=${encodeURIComponent(item.ticker)}&order=buy`;
             actions.append(order);
         }
 
@@ -455,12 +455,23 @@
             return;
         }
 
+        // A story that arrives after the page first loaded flashes once; changing filters never re-flashes old ones.
+        const fresh = seenNews ? new Set(scoped.filter(item => !seenNews.has(newsKey(item))).map(newsKey)) : new Set();
+        seenNews ??= new Set();
+        for (const item of items) seenNews.add(newsKey(item));
+
         for (const item of scoped) {
             const article = window.TradingFlowNews.create(item);
             article.classList.add('earnings-news-item');
+            if (fresh.has(newsKey(item))) {
+                article.classList.add('earnings-news-flash');
+                article.prepend(text('span', 'NEW', 'earnings-news-new'));
+            }
             newsFeed.append(article);
         }
     }
+    let seenNews = null;
+    function newsKey(item) { return (item.headline || '') + '|' + item.publishedAtUtc; }
 
     /* --- filtering --------------------------------------------------------- */
 
