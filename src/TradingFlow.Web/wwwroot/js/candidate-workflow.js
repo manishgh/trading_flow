@@ -7,6 +7,8 @@
     const rows = root.querySelector("[data-candidate-rows]");
     let runId, runMode, cursor = 0, stream, poll, generation = 0, pending, busy = false;
     const nodes = new Map();
+    // Read before any await: the Desk script rewrites the address bar while loading and drops runId when no strategy is chosen.
+    const initialQuery = new URLSearchParams(location.search);
     async function api(path, body) {
         const response = await window.tradingFlowFetch("/api/v1/" + path, body ? { method: "POST",
             headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : { cache: "no-store" });
@@ -100,7 +102,7 @@
             const lists = await api("wishlists");
             create.elements.wishlist.replaceChildren(...lists.map(item => new Option(item.name, item.id)));
             await catalog();
-            const query = new URLSearchParams(location.search);
+            const query = initialQuery;
             const requestedWishlist = query.get("wishlistId");
             if (requestedWishlist && lists.some(item => item.id === requestedWishlist)) {
                 create.elements.wishlist.value = requestedWishlist;

@@ -22,6 +22,8 @@ for(const viewport of [{width:1440,height:900},{width:412,height:915}]) {
  test("candidate replay preserves editing at "+viewport.width,async({page},testInfo)=>{
   await page.setViewportSize(viewport);await signIn(page);
   let reads=0;const consumed={...candidate,state:"consumed",readiness:"consumed"};
+  // A slow wishlist read lets the Desk rewrite the address bar first; the run must still open from the original link.
+  await page.route("**/api/v1/wishlists",async route=>{await new Promise(resolve=>setTimeout(resolve,1500));await route.continue();});
   await page.route("**/api/v1/strategies?*",route=>json(route,{strategies:[{identity,name:"Swing fixture"}]}));
   await page.route("**/api/v1/candidate-runs/"+runId,route=>json(route,snapshot(++reads===1?1:2)));
   await page.route("**/api/v1/candidate-runs/"+runId+"/events?*",route=>route.fulfill({status:200,contentType:"text/event-stream",
@@ -234,8 +236,8 @@ test('saved Finviz selection captures its filters and retains the reviewed profi
   if(!response.ok)throw new Error('Could not save isolated screen');return response.json();
  });
  await page.goto('/Backtests');
- const option=page.locator('#StockSource option').filter({hasText:'Source fixture'}).last();
- const source=await option.getAttribute('value');await page.locator('#StockSource').selectOption(source);
+ // Earlier runs leave other Source fixture screens in the same database; choose this run's screen by its key.
+ await page.locator('#StockSource').selectOption(screen.key);
  const strategy=page.locator('input[name="StrategyPaths"]').first();await strategy.check();const selectedPath=await strategy.inputValue();
  await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,horizon:"swing",artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
  let capture,save;

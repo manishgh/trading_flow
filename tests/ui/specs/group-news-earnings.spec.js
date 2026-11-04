@@ -129,6 +129,41 @@ test('Earnings calendar uses New York dates and filter URLs survive reload', asy
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+// Today holds the previous session's after-close reports too; the heading still names today, and a refresh patches cards in place.
+test('Earnings updates cards in place without dimming the list, under today’s New York date', async ({ page }) => {
+  const payload = appActual => ({ generatedAtUtc:'2026-11-04T18:00:00Z', monitoringActive:true, monitoringIntervalSeconds:60,
+    nextBusinessDateLabel:'Thursday, November 5', newsWindowLabel:'Stored evidence', filters:{session:'all',marketCap:'all'}, news:[], totalMatching:2,
+    items:[{...item('amd','AMD','2026-11-03T21:30:00Z'), dayGroup:'today', epsEstimate:1.95, epsActual:2.09},
+      {...item('app','APP','2026-11-04T21:30:00Z'), dayGroup:'today', epsEstimate:4.03, epsActual:appActual}] });
+  let calls = 0, release; const gate = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/earnings/today-next-business-day?*', async route => {
+    if (++calls === 1) return route.fulfill({ json:payload(null) });
+    await gate; await route.fulfill({ json:payload(4.3) }).catch(() => {});
+  });
+  await page.goto('/Earnings');
+  const heading = page.locator('.earnings-day-head h2');
+  await expect(heading).toHaveCount(1);
+  await expect(heading).toContainText('Nov 04, 2026');
+  await expect(page.locator('.earnings-day-summary')).toContainText('1 reported after the previous close');
+  const card = ticker => page.locator('.earnings-event').filter({ has:page.getByRole('heading', { name:ticker, exact:true }) });
+  await card('APP').getByText('Provenance and previous quarter').click();
+  await card('AMD').evaluate(node => { node.dataset.sameNode = 'yes'; });
+
+  await page.locator('#earnings-refresh').click();
+  await expect(page.locator('#earnings-spinner')).toBeVisible();
+  expect(await page.locator('.earnings-body').evaluate(node => [getComputedStyle(node).opacity, getComputedStyle(node).pointerEvents])).toEqual(['1', 'auto']);
+  await card('AMD').getByText('Provenance and previous quarter').click();
+  await expect(card('AMD').locator('details')).toHaveAttribute('open', '');
+
+  release();
+  await expect(card('APP')).toContainText('4.30');
+  await expect(page.locator('#earnings-spinner')).toBeHidden();
+  await expect(card('AMD')).toHaveAttribute('data-same-node', 'yes');
+  await expect(card('AMD').locator('details')).toHaveAttribute('open', '');
+  await expect(card('APP').locator('details')).toHaveAttribute('open', '');
+  await expect(heading).toContainText('Nov 04, 2026');
+});
+
 test('shared News preserves safe provenance and Earnings scopes exact symbols',async({page})=>{
   await signIn(page);
   await page.route('**/api/earnings/calendar?*',route=>route.fulfill({json:{generatedAtUtc:'2026-11-01T12:00:00Z',monitoringActive:false,monitoringIntervalSeconds:60,filters:{session:'all',marketCap:'all'},

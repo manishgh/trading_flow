@@ -41,7 +41,7 @@
     let activeLane = null;
     let newsScopeTicker = null;
     let latestPayload = null;
-    let loading = false, pendingLoad = false;
+    let loadSequence = 0, inFlight = null;
     const advanced = document.getElementById('earnings-advanced');
     const initial = new URLSearchParams(location.search);
     for (const key of ['session','marketCap']) if (initial.has(key)) serverFilters[key] = initial.get(key);
@@ -82,7 +82,7 @@
         return `${part('year')}-${part('month')}-${part('day')}`;
     }
     function renderCalendar(items) {
-        feed.replaceChildren(); feed.classList.add('earnings-week');
+        feed.classList.add('earnings-week');
         const start = fromInput.value || exchangeDate(latestPayload.generatedAtUtc);
         const finish = toInput.value || start;
         const grouped = new Map();
@@ -94,14 +94,47 @@
         // Include boundary dates after timezone conversion, even when the API used an operator date window.
         const keys = new Set(grouped.keys());
         for (let day = new Date(`${start}T12:00:00Z`), end = new Date(`${finish}T12:00:00Z`); day <= end; day.setUTCDate(day.getUTCDate()+1)) keys.add(day.toISOString().slice(0,10));
-        for (const date of [...keys].sort()) {
-            const section = text('section', undefined, 'earnings-day');
-            section.append(text('h2', `${date} · New York`, 'section-heading'));
+        const used = [];
+        syncChildren(feed, [...keys].sort().map(date => {
+            const day = daySection('w:' + date, `${date} · New York`, ''); used.push('w:' + date);
             const matches = grouped.get(date) || [];
-            if (!matches.length) section.append(text('p', 'No matching events', 'muted'));
-            for (const item of matches) section.append(eventCard(item));
-            feed.append(section);
+            day.none ??= text('p', 'No matching events', 'muted');
+            syncChildren(day.section, [day.header, ...(matches.length ? matches.map(eventCard) : [day.none])]);
+            return day.section;
+        }));
+        return used;
+    }
+
+    /* --- in-place updates --------------------------------------------------
+       Every refresh, filter change and ten-second poll patches the existing
+       list: unchanged cards stay in the page, so open disclosures, focus,
+       selection and scroll position survive, and the list never goes dim. */
+
+    function syncChildren(parent, nodes) {
+        nodes.forEach((node, index) => { if (parent.childNodes[index] !== node) parent.insertBefore(node, parent.childNodes[index] ?? null); });
+        while (parent.childNodes.length > nodes.length) parent.lastChild.remove();
+    }
+
+    const emptyNotes = new Map();
+    function emptyNote(container) {
+        if (!emptyNotes.has(container)) emptyNotes.set(container, emptyTemplate.content.firstElementChild.cloneNode(true));
+        return emptyNotes.get(container);
+    }
+
+    const daySections = new Map();
+    function daySection(key, title, summary) {
+        let day = daySections.get(key);
+        if (!day) {
+            const section = text('section', undefined, 'earnings-day');
+            const header = text('header', undefined, 'earnings-day-head');
+            day = { section, header, heading: text('h2'), note: text('span', undefined, 'earnings-day-summary') };
+            header.append(day.heading, day.note); section.append(header);
+            daySections.set(key, day);
         }
+        if (day.heading.textContent !== title) day.heading.textContent = title;
+        if (day.note.textContent !== summary) day.note.textContent = summary;
+        day.note.hidden = !summary;
+        return day;
     }
 
     /* --- formatting ------------------------------------------------------- */
@@ -273,7 +306,11 @@
         badges.className = "earnings-badges";
         if (isHeldLane(item)) badges.append(badge("HELD", "tag-accent"));
         const minutes = minutesUntil(item.scheduledAtUtc);
-        if (isImminentLane(item)) badges.append(badge(`IN ${Math.max(1, Math.round(minutes))} MIN`, "tag-accent"));
+        if (isImminentLane(item)) {
+            const countdown = badge(`IN ${Math.max(1, Math.round(minutes))} MIN`, "tag-accent");
+            countdown.dataset.countdownFor = item.scheduledAtUtc;
+            badges.append(countdown);
+        }
         badges.append(badge(item.releaseWindowLabel, "tag-neutral"));
         badges.append(badge(item.epsOutcomeLabel || "AWAITING",
             String(item.epsOutcome || "").toLowerCase() === "beat" ? "tag-accent" : "tag-neutral"));
@@ -392,44 +429,44 @@
 
     /* --- timeline ---------------------------------------------------------- */
 
-    function dayTitle(item, payload) {
-        if (item.dayGroup === "today") {
-            return `Today · ${new Date(item.scheduledAtUtc).toLocaleDateString(undefined, { timeZone: "America/New_York", weekday: "short", day: "2-digit", month: "short", year: "numeric" })}`;
-        }
-        if (item.dayGroup === "nextBusinessDay") {
-            return `Next reporting day · ${payload.nextBusinessDateLabel}`;
-        }
-        return new Date(item.scheduledAtUtc).toLocaleDateString(undefined, { timeZone: "America/New_York", weekday: "long", month: "long", day: "numeric" });
+    // Today's group also holds the previous session's after-close reports, which trade today,
+    // so its heading takes today's New York date from the response rather than from a card.
+    function dayKey(item) {
+        return item.dayGroup === 'today' || item.dayGroup === 'nextBusinessDay' ? item.dayGroup : exchangeDate(item.scheduledAtUtc);
+    }
+
+    function exchangeDateLabel(date, options) {
+        return new Date(`${date}T12:00:00Z`).toLocaleDateString(undefined, { timeZone: 'UTC', ...options });
+    }
+
+    function dayTitle(key, payload) {
+        if (key === "today") return `Today · ${exchangeDateLabel(exchangeDate(payload.generatedAtUtc), { weekday: "short", day: "2-digit", month: "short", year: "numeric" })}`;
+        if (key === "nextBusinessDay") return `Next reporting day · ${payload.nextBusinessDateLabel}`;
+        return exchangeDateLabel(key, { weekday: "long", month: "long", day: "numeric" });
     }
 
     function renderTimeline(items, payload, totalForGroup) {
-        feed.replaceChildren(); feed.classList.remove('earnings-week');
-        if (!items.length) {
-            feed.append(emptyTemplate.content.cloneNode(true));
-            return;
-        }
+        feed.classList.remove('earnings-week');
+        if (!items.length) { syncChildren(feed, [emptyNote(feed)]); return []; }
 
         const groups = new Map();
         for (const item of items) {
-            const key = item.dayGroup || new Date(item.scheduledAtUtc).toDateString();
+            const key = dayKey(item);
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key).push(item);
         }
 
-        for (const [key, groupItems] of groups) {
-            const section = document.createElement("section");
-            section.className = "earnings-day";
-            const header = document.createElement("header");
-            header.className = "earnings-day-head";
-            header.append(text("h2", dayTitle(groupItems[0], payload)));
+        const today = exchangeDate(payload.generatedAtUtc), used = [];
+        syncChildren(feed, [...groups].map(([key, groupItems]) => {
             const reported = groupItems.filter(item => item.epsActual !== null && item.epsActual !== undefined).length;
-            header.append(text("span",
-                `${groupItems.length} of ${totalForGroup.get(key) ?? groupItems.length} events · ${reported} reported`,
-                "earnings-day-summary"));
-            section.append(header);
-            for (const item of groupItems) section.append(eventCard(item));
-            feed.append(section);
-        }
+            const carried = key === 'today' ? groupItems.filter(item => exchangeDate(item.scheduledAtUtc) < today).length : 0;
+            const summary = `${groupItems.length} of ${totalForGroup.get(key) ?? groupItems.length} events · ${reported} reported`
+                + (carried ? ` · ${carried} reported after the previous close` : '');
+            const day = daySection('t:' + key, dayTitle(key, payload), summary); used.push('t:' + key);
+            syncChildren(day.section, [day.header, ...groupItems.map(eventCard)]);
+            return day.section;
+        }));
+        return used;
     }
 
     /* --- evidence rail ------------------------------------------------------ */
@@ -447,29 +484,36 @@
             });
         }
 
-        newsFeed.replaceChildren();
         newsCount.textContent = String(scoped.length);
         newsScopeClear.hidden = !newsScopeTicker;
-        if (!scoped.length) {
-            newsFeed.append(emptyTemplate.content.cloneNode(true));
-            return;
-        }
+        if (!scoped.length) { syncChildren(newsFeed, [emptyNote(newsFeed)]); return; }
 
-        // A story that arrives after the page first loaded flashes once; changing filters never re-flashes old ones.
-        const fresh = seenNews ? new Set(scoped.filter(item => !seenNews.has(newsKey(item))).map(newsKey)) : new Set();
+        // A story that arrives after the page first loaded flashes and says NEW for a minute; changing filters never re-flashes old ones.
+        const firstLoad = seenNews === null, wanted = new Set();
         seenNews ??= new Set();
-        for (const item of items) seenNews.add(newsKey(item));
-
-        for (const item of scoped) {
-            const article = window.TradingFlowNews.create(item);
-            article.classList.add('earnings-news-item');
-            if (fresh.has(newsKey(item))) {
-                article.classList.add('earnings-news-flash');
-                article.prepend(text('span', 'NEW', 'earnings-news-new'));
+        const articles = scoped.map(item => {
+            const key = newsKey(item), signature = JSON.stringify(item);
+            wanted.add(key);
+            let entry = newsCards.get(key);
+            if (entry?.signature !== signature) {
+                const article = window.TradingFlowNews.create(item);
+                article.classList.add('earnings-news-item');
+                if (!firstLoad && !seenNews.has(key)) {
+                    const marker = text('span', 'NEW', 'earnings-news-new');
+                    article.classList.add('earnings-news-flash');
+                    article.prepend(marker);
+                    setTimeout(() => { marker.remove(); article.classList.remove('earnings-news-flash'); }, 60000);
+                }
+                entry = { signature, article };
+                newsCards.set(key, entry);
             }
-            newsFeed.append(article);
-        }
+            return entry.article;
+        });
+        for (const item of items) seenNews.add(newsKey(item));
+        for (const key of newsCards.keys()) if (!wanted.has(key)) newsCards.delete(key);
+        syncChildren(newsFeed, articles);
     }
+    const newsCards = new Map();
     let seenNews = null;
     function newsKey(item) { return (item.headline || '') + '|' + item.publishedAtUtc; }
 
@@ -485,33 +529,19 @@
         if (!latestPayload) return;
         const all = latestPayload.items || [];
         const filtered = applyClientFilters(all);
-
-        // Client-side fade transition
-        const bodyContainer = document.querySelector(".earnings-body");
-        if (bodyContainer) bodyContainer.classList.add("is-rendering");
-        const spinner = document.getElementById("earnings-spinner");
-        if (spinner) spinner.hidden = false;
-
         const focused = feed.contains(document.activeElement) ? document.activeElement : null;
-        setTimeout(() => {
-            const totals = new Map();
-            for (const item of all) {
-                const key = item.dayGroup || new Date(item.scheduledAtUtc).toDateString();
-                totals.set(key, (totals.get(key) ?? 0) + 1);
-            }
 
-            renderLanes(all);
-            if (advanced.elements.view.value === 'week') renderCalendar(filtered);
-            else renderTimeline(filtered, latestPayload, totals);
-            if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll:true });
-            const visible = new Set(filtered.map(item => item.id));
-            for (const id of eventCache.keys()) if (!visible.has(id)) eventCache.delete(id);
-            renderNews(latestPayload.news || [], filtered);
-            countLabel.textContent = `${filtered.length} of ${latestPayload.totalMatching ?? all.length} matching events${latestPayload.truncated ? " · first 2000 shown" : ""}`;
-            
-            if (bodyContainer) bodyContainer.classList.remove("is-rendering");
-            if (spinner && !loading) spinner.hidden = true;
-        }, 150);
+        const totals = new Map();
+        for (const item of all) totals.set(dayKey(item), (totals.get(dayKey(item)) ?? 0) + 1);
+
+        renderLanes(all);
+        const used = new Set(advanced.elements.view.value === 'week' ? renderCalendar(filtered) : renderTimeline(filtered, latestPayload, totals));
+        for (const key of daySections.keys()) if (!used.has(key)) daySections.delete(key);
+        if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+        const visible = new Set(filtered.map(item => item.id));
+        for (const id of eventCache.keys()) if (!visible.has(id)) eventCache.delete(id);
+        renderNews(latestPayload.news || [], filtered);
+        countLabel.textContent = `${filtered.length} of ${latestPayload.totalMatching ?? all.length} matching events${latestPayload.truncated ? " · first 2000 shown" : ""}`;
     }
 
     function markStrip(container, attribute, value) {
@@ -557,18 +587,18 @@
         }
     }
 
-    async function loadCalendar(forceRefresh = false) {
-        if (loading) { pendingLoad = true; return; }
-        loading = true;
-        const bodyContainer = document.querySelector(".earnings-body");
-        if (bodyContainer) bodyContainer.classList.add("is-loading");
+    // The ten-second poll is silent and never interrupts a load the operator started. An operator
+    // change cancels the request it replaces, so the newest choice always wins, and the list stays
+    // usable throughout: only the small "Updating" marker shows while a request is out.
+    async function loadCalendar(forceRefresh = false, { background = false } = {}) {
+        if (background && inFlight) return;
+        inFlight?.abort();
+        const controller = inFlight = new AbortController(), sequence = ++loadSequence;
         const spinner = document.getElementById("earnings-spinner");
-        if (spinner) spinner.hidden = false;
-        refreshButton.disabled = true;
-        status.classList.remove("accent-note");
+        if (!background && spinner) spinner.hidden = false;
         try {
             if (forceRefresh) {
-                const refreshResponse = await window.tradingFlowFetch("/api/earnings/refresh", { method: "POST" });
+                const refreshResponse = await window.tradingFlowFetch("/api/earnings/refresh", { method: "POST", signal: controller.signal });
                 if (!refreshResponse.ok) throw new Error(await readError(refreshResponse, `Refresh failed (${refreshResponse.status}).`));
             }
 
@@ -579,11 +609,14 @@
             const endpoint = useRange ? "calendar" : "today-next-business-day";
             const response = await window.tradingFlowFetch(`/api/earnings/${endpoint}?${query}`, {
                 headers: { Accept: "application/json" },
-                cache: "no-store"
+                cache: "no-store",
+                signal: controller.signal
             });
             if (!response.ok) throw new Error(await readError(response, `Calendar request failed (${response.status}).`));
+            const payload = await response.json();
+            if (sequence !== loadSequence) return;
 
-            latestPayload = await response.json();
+            latestPayload = payload;
             updateCounts(sessionFilters, latestPayload.filters?.sessions);
             markStrip(sessionFilters, "data-filter-value", serverFilters.session);
             updateCounts(capFilters, latestPayload.filters?.marketCaps);
@@ -593,7 +626,7 @@
             const seconds = latestPayload.monitoringIntervalSeconds;
             const cadence = seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;
             status.textContent = latestPayload.monitoringActive ? `Running · every ${cadence}` : "Offline";
-            if (!latestPayload.monitoringActive) status.classList.add("accent-note");
+            status.classList.toggle("accent-note", !latestPayload.monitoringActive);
             updated.textContent = latestPayload.lastAnalysisUtc ? localDateTime(latestPayload.lastAnalysisUtc, true) : "never";
             newsCaption.textContent = `${latestPayload.newsWindowLabel}. Times display in your device timezone; stored timestamps remain UTC.`;
             document.getElementById("earnings-news-window").textContent = latestPayload.newsWindowLabel;
@@ -601,16 +634,14 @@
 
             render();
         } catch (error) {
+            if (controller.signal.aborted || sequence !== loadSequence) return;
             status.textContent = error instanceof Error ? error.message : "Unable to load earnings data.";
             status.classList.add("accent-note");
         } finally {
-            loading = false;
-            const bodyContainer = document.querySelector(".earnings-body");
-            if (bodyContainer) bodyContainer.classList.remove("is-loading");
-            refreshButton.disabled = false;
-            const spinner = document.getElementById("earnings-spinner");
-            if (spinner) spinner.hidden = true;
-            if (pendingLoad) { pendingLoad = false; queueMicrotask(() => loadCalendar(false)); }
+            if (sequence === loadSequence) {
+                inFlight = null;
+                if (spinner) spinner.hidden = true;
+            }
         }
     }
 
@@ -735,5 +766,5 @@
     });
     loadCalendar();
     window.setInterval(tick, 1000);
-    window.setInterval(() => loadCalendar(false), 10000);
+    window.setInterval(() => loadCalendar(false, { background: true }), 10000);
 })();

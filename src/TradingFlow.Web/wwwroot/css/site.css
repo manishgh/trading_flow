@@ -4317,8 +4317,6 @@ td.select-column {
                 @keyframes spin { 100% { transform: rotate(360deg); } }
 
 
-    .earnings-body { transition: opacity 0.1s ease; }
-    .earnings-body.is-loading { opacity: 0.3 !important; pointer-events: none; }
 
 
 .candidate-workflow { margin:12px; min-width:0; }
@@ -4340,7 +4338,6 @@ td.select-column {
 .earnings-week .earnings-day { min-width: 0; }
 #groupActionDialog { max-width: min(40rem, calc(100vw - 2rem)); color: var(--ink); background: var(--panel); border: 1px solid var(--line); padding: var(--space-4); }
 
-.earnings-body.is-rendering { opacity: .3; }
 .audit-equity-chart { width: 100%; height: auto; max-height: 24rem; }
 .audit-equity-line { fill: none; stroke: currentColor; stroke-width: 2; }
 .series-0 { color: var(--accent); }
