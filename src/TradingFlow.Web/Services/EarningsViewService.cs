@@ -42,11 +42,14 @@ public sealed class EarningsViewQuery
     public bool? OnlyGroups { get; set; }
     public bool? OnlyHeld { get; set; }
     public bool? HasNews { get; set; }
+    public string? Sector { get; set; }
     public string? Sort { get; set; }
 }
 
 public sealed class EarningsViewService(IWishlistRepository groups, IDeskAccountReader account)
 {
+    public const string UnknownSector = "unknown";
+
     public async Task<EarningsCalendarResponse> FilterAsync(EarningsCalendarResponse response, EarningsViewQuery query,
         ClaimsPrincipal user, CancellationToken token)
     {
@@ -89,7 +92,12 @@ public sealed class EarningsViewService(IWishlistRepository groups, IDeskAccount
                 if (symbols is null) symbols = held; else symbols.IntersectWith(held);
             }
         }
+        // News evidence is the result headline or any article in the response's news panel naming the stock.
+        var newsTickers = (response.News ?? []).SelectMany(item => item.Tickers.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var rows = response.Items.Where(x => symbols is null || symbols.Contains(x.Ticker))
+            .Where(x => String.IsNullOrWhiteSpace(query.Sector) || query.Sector == "all" ||
+                String.Equals(x.Sector ?? UnknownSector, query.Sector.Trim(), StringComparison.OrdinalIgnoreCase))
             .Where(x => String.IsNullOrWhiteSpace(query.Search) || x.Ticker.Contains(query.Search.Trim(),StringComparison.OrdinalIgnoreCase) || (x.CompanyName ?? "").Contains(query.Search.Trim(),StringComparison.OrdinalIgnoreCase))
             .Where(x => query.Schedule is null or "" or "all" || (query.Schedule == "estimated" ? x.IsScheduleEstimate : !x.IsScheduleEstimate))
             .Where(x => query.Result is null or "" or "all" || (query.Result == "observed" ? HasObservedResult(x) : !HasObservedResult(x)))
@@ -100,7 +108,7 @@ public sealed class EarningsViewService(IWishlistRepository groups, IDeskAccount
             .Where(x => Matches(query.Provider, x.Provider) && Matches(query.NewsProvider, x.NewsProvider))
             .Where(x => Matches(query.Day, x.DayGroup) && Matches(query.Breakout, x.BreakoutAssessment))
             .Where(x => query.Assessment == "pending" ? x.EpsActual is null : Matches(query.Assessment == "inline" ? "Met" : query.Assessment, x.EpsOutcome))
-            .Where(x => query.HasNews != true || !String.IsNullOrWhiteSpace(x.NewsHeadline))
+            .Where(x => query.HasNews != true || !String.IsNullOrWhiteSpace(x.NewsHeadline) || newsTickers.Contains(x.Ticker))
             .Where(x => Range(x.EpsSurprisePercent, query.MinEpsSurprise, query.MaxEpsSurprise) &&
                 Range(x.RevenueSurprisePercent, query.MinRevenueSurprise, query.MaxRevenueSurprise) &&
                 Range(x.SlotRelativeVolume, query.MinRvol, query.MaxRvol) && Range(x.NewsSentiment, query.MinSentiment, query.MaxSentiment))

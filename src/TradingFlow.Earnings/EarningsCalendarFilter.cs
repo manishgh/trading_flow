@@ -2,12 +2,14 @@ using TradingFlow.Domain.Earnings;
 
 namespace TradingFlow.Earnings;
 
+/// <summary>Market-cap choices: one small-cap range and cumulative "at least" thresholds.</summary>
 public enum EarningsMarketCapBand
 {
     All,
-    Under10B,
-    From10BTo50B,
-    From50BTo100B,
+    Under2B,
+    AtLeast2B,
+    AtLeast10B,
+    AtLeast50B,
     AtLeast100B,
     Unknown
 }
@@ -42,7 +44,7 @@ public sealed record EarningsCalendarFilter(
         if (!TryParseMarketCap(marketCap, out var marketCapBand))
         {
             filter = All;
-            error = "marketCap must be all, under10b, 10bTo50b, 50bTo100b, 100bPlus, or unknown.";
+            error = "marketCap must be all, under2b, 2bPlus, 10bPlus, 50bPlus, 100bPlus, or unknown.";
             return false;
         }
 
@@ -63,9 +65,10 @@ public sealed record EarningsCalendarFilter(
     public static string MarketCapValue(EarningsMarketCapBand band) => band switch
     {
         EarningsMarketCapBand.All => "all",
-        EarningsMarketCapBand.Under10B => "under10b",
-        EarningsMarketCapBand.From10BTo50B => "10bTo50b",
-        EarningsMarketCapBand.From50BTo100B => "50bTo100b",
+        EarningsMarketCapBand.Under2B => "under2b",
+        EarningsMarketCapBand.AtLeast2B => "2bPlus",
+        EarningsMarketCapBand.AtLeast10B => "10bPlus",
+        EarningsMarketCapBand.AtLeast50B => "50bPlus",
         EarningsMarketCapBand.AtLeast100B => "100bPlus",
         EarningsMarketCapBand.Unknown => "unknown",
         _ => throw new ArgumentOutOfRangeException(nameof(band), band, null)
@@ -75,9 +78,10 @@ public sealed record EarningsCalendarFilter(
     {
         EarningsMarketCapBand.All => true,
         EarningsMarketCapBand.Unknown => marketCapMillions is null,
-        EarningsMarketCapBand.Under10B => marketCapMillions is >= 0m and < 10_000m,
-        EarningsMarketCapBand.From10BTo50B => marketCapMillions is >= 10_000m and < 50_000m,
-        EarningsMarketCapBand.From50BTo100B => marketCapMillions is >= 50_000m and < 100_000m,
+        EarningsMarketCapBand.Under2B => marketCapMillions is >= 0m and < 2_000m,
+        EarningsMarketCapBand.AtLeast2B => marketCapMillions is >= 2_000m,
+        EarningsMarketCapBand.AtLeast10B => marketCapMillions is >= 10_000m,
+        EarningsMarketCapBand.AtLeast50B => marketCapMillions is >= 50_000m,
         EarningsMarketCapBand.AtLeast100B => marketCapMillions is >= 100_000m,
         _ => throw new ArgumentOutOfRangeException(nameof(band), band, null)
     };
@@ -109,9 +113,10 @@ public sealed record EarningsCalendarFilter(
         switch (Normalize(value))
         {
             case "all": band = EarningsMarketCapBand.All; return true;
-            case "under10b": band = EarningsMarketCapBand.Under10B; return true;
-            case "10bto50b": band = EarningsMarketCapBand.From10BTo50B; return true;
-            case "50bto100b": band = EarningsMarketCapBand.From50BTo100B; return true;
+            case "under2b": band = EarningsMarketCapBand.Under2B; return true;
+            case "2bplus": band = EarningsMarketCapBand.AtLeast2B; return true;
+            case "10bplus": band = EarningsMarketCapBand.AtLeast10B; return true;
+            case "50bplus": band = EarningsMarketCapBand.AtLeast50B; return true;
             case "100bplus": band = EarningsMarketCapBand.AtLeast100B; return true;
             case "unknown": band = EarningsMarketCapBand.Unknown; return true;
             default: band = EarningsMarketCapBand.All; return false;

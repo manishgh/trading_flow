@@ -319,6 +319,7 @@ builder.Services.AddSingleton(serviceProvider => new FinvizClient(
         AuthToken = finvizApiKey
     },
     serviceProvider.GetRequiredService<IRawArchiveWriter>()));
+builder.Services.AddSingleton<FinvizSectorDirectory>();
 builder.Services.AddSingleton<EarningsMonitor>();
 var predictorBaseUrlText = builder.Configuration["MarketPredictor:BaseUrl"]
     ?? Environment.GetEnvironmentVariable("TRADINGFLOW_MARKET_PREDICTOR_URL");

@@ -52,6 +52,10 @@
     fromInput.value = initial.get('from') || ''; toInput.value = initial.get('to') || '';
     if (minSurpriseInput) minSurpriseInput.value = initial.get('minSurprise') || '';
     if (sortInput) sortInput.value = clientFilters.sort;
+    const searchInput = document.getElementById('earnings-search');
+    const sectorInput = document.getElementById('earnings-sector');
+    // Sector choices arrive with each response; keep the requested one until its option exists.
+    let requestedSector = initial.get('sector') || '';
     for (const input of advanced.elements) if (input.name && initial.has(input.name)) {
         if (input.type === 'checkbox') input.checked = initial.get(input.name) === 'true'; else input.value = initial.get(input.name);
     }
@@ -63,6 +67,7 @@
         const query = new URLSearchParams({ session: serverFilters.session, marketCap: serverFilters.marketCap, scope: serverFilters.dateScope });
         for (const [key,value] of Object.entries(clientFilters)) if (value !== null) query.set(key, String(value));
         for (const [key,value] of new FormData(advanced)) if (value !== '') query.set(key, value);
+        if (requestedSector) query.set('sector', requestedSector);
         if (fromInput.value) query.set('from', fromInput.value);
         if (toInput.value) query.set('to', toInput.value);
         const visibleQuery = new URLSearchParams(query);
@@ -509,6 +514,17 @@
         }
     }
 
+    function renderSectorOptions(options) {
+        if (!sectorInput || !options) return;
+        const selected = requestedSector || sectorInput.value;
+        const choices = options.filter(option => option.value !== 'all');
+        if (selected && !choices.some(option => option.value === selected)) choices.push({ value: selected, label: selected, count: 0 });
+        sectorInput.replaceChildren(new Option(`All sectors (${options.find(option => option.value === 'all')?.count ?? 0})`, ''),
+            ...choices.map(option => new Option(`${option.label} (${option.count})`, option.value)));
+        sectorInput.value = selected;
+        requestedSector = '';
+    }
+
     function updateCounts(container, options) {
         const byValue = new Map((options || []).map(option => [option.value, option]));
         for (const button of container.querySelectorAll("button[data-filter-value]")) {
@@ -560,6 +576,7 @@
             updateCounts(sessionFilters, latestPayload.filters?.sessions);
             markStrip(sessionFilters, "data-filter-value", serverFilters.session);
             updateCounts(capFilters, latestPayload.filters?.marketCaps);
+            renderSectorOptions(latestPayload.filters?.sectors);
             markStrip(capFilters, "data-filter-value", serverFilters.marketCap);
 
             const seconds = latestPayload.monitoringIntervalSeconds;
@@ -686,6 +703,9 @@
     }
 
     advanced.addEventListener('submit', event => { event.preventDefault(); loadCalendar(false); });
+    sectorInput?.addEventListener('change', () => loadCalendar(false));
+    let searchTimer = null;
+    searchInput?.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadCalendar(false), 300); });
     document.getElementById('earnings-this-week').addEventListener('click', () => {
         const now = new Date(`${exchangeDate(Date.now())}T12:00:00Z`);
         now.setUTCDate(now.getUTCDate() - (now.getUTCDay()+6)%7);

@@ -36,6 +36,25 @@ No.,Ticker,Company,Sector,Market Cap
     }
 
     [Fact]
+    public async Task SectorDirectory_ReadsTheAllStocksExportAndRejectsAnEmptyOne()
+    {
+        using var client = new FinvizClient(new HttpClient(new CsvHandler("""
+No.,Ticker,Company,Sector,Market Cap
+1,AAA,Alpha,Technology,4858.69
+2,BBB,Beta,-,3.9B
+""")), new FinvizOptions(new Uri("https://finviz.com"), "test"), CreateArchiveWriter());
+        var directory = new FinvizSectorDirectory(client, TimeProvider.System);
+
+        await directory.RefreshIfStaleAsync(default);
+
+        Assert.Equal("Technology", directory.Find("aaa"));
+        Assert.Null(directory.Find("BBB"));
+        using var empty = new FinvizClient(new HttpClient(new CsvHandler("No.,Ticker,Company,Sector\n")),
+            new FinvizOptions(new Uri("https://finviz.com"), "test"), CreateArchiveWriter());
+        await Assert.ThrowsAsync<InvalidDataException>(() => new FinvizSectorDirectory(empty, TimeProvider.System).RefreshIfStaleAsync(default));
+    }
+
+    [Fact]
     public async Task GetScreenerRowsAsync_ParsesTickerAndRelativeVolume()
     {
         using var client = new FinvizClient(

@@ -61,7 +61,7 @@ public sealed class EarningsExchangeDateTests
     private static EarningsCalendarResponse Map(DateTimeOffset now, EarningsCalendarEvent[] rows, bool shortHorizon, string scope) =>
         EarningsApiEndpoints.MapSnapshot(
             new(now, new(2026, 1, 1), new(2026, 12, 31), rows.Select(x => new EarningsCalendarSnapshotItem(x, null, null)).ToArray()),
-            new(true, TimeSpan.FromMinutes(1), now, now, rows.Length, null), now, [], shortHorizon, EarningsCalendarFilter.All, scope);
+            new(true, TimeSpan.FromMinutes(1), now, now, rows.Length, null), now, [], shortHorizon, EarningsCalendarFilter.All, scope, _ => null);
 
     private static EarningsCalendarEvent Event(string ticker, DateOnly reportDate, string scheduled) => new()
     {

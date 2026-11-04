@@ -128,11 +128,29 @@
         <span class="micro-label">Market cap</span>
         <div class="tab-strip" id="earnings-cap-filters" role="group" aria-label="Market capitalization">
             <button type="button" data-filter-value="all" aria-current="page">All caps</button>
-            <button type="button" data-filter-value="under10b">Under $10B</button>
-            <button type="button" data-filter-value="10bTo50b">$10B-$50B</button>
-            <button type="button" data-filter-value="50bTo100b">$50B-$100B</button>
+            <button type="button" data-filter-value="under2b">Under $2B</button>
+            <button type="button" data-filter-value="2bPlus">$2B+</button>
+            <button type="button" data-filter-value="10bPlus">$10B+</button>
+            <button type="button" data-filter-value="50bPlus">$50B+</button>
             <button type="button" data-filter-value="100bPlus">$100B+</button>
             <button type="button" data-filter-value="unknown">Cap unknown</button>
+        </div>
+    </div>
+
+    @* Ticker and sector live in the main rail but submit with the advanced form's fields. *@
+    <div class="earnings-filter-row">
+        <span class="micro-label">Find</span>
+        <div class="earnings-refine">
+            <label class="earnings-inline-field">
+                <span>Ticker</span>
+                <input class="input" type="search" id="earnings-search" name="search" form="earnings-advanced" maxlength="200" placeholder="Ticker or company" autocomplete="off" />
+            </label>
+            <label class="earnings-inline-field">
+                <span>Sector</span>
+                <select class="input" id="earnings-sector" name="sector" form="earnings-advanced">
+                    <option value="">All sectors</option>
+                </select>
+            </label>
         </div>
     </div>
 
@@ -186,7 +204,6 @@
     <summary>More earnings filters and views</summary>
     <form id="earnings-advanced" class="news-filter-bar">
         <div><label for="earnings-view">View</label><select id="earnings-view" name="view"><option value="timeline">Timeline</option><option value="week">Calendar by New York date</option></select></div>
-        <div><label for="earnings-search">Ticker or company</label><input id="earnings-search" name="search" maxlength="200" /></div>
         <div><label for="earnings-schedule">Schedule certainty</label><select id="earnings-schedule" name="schedule"><option value="">All schedules</option><option value="estimated">Estimated schedule</option><option value="reported">Provider-reported schedule</option></select></div>
         <div><label for="earnings-result">Observed result data</label><select id="earnings-result" name="result"><option value="">All results</option><option value="observed">Actuals or first-seen result</option><option value="pending">No observed result</option></select></div>
         <div><label for="earnings-minMarketCap">Minimum cap · USD millions</label><input id="earnings-minMarketCap" name="minMarketCap" type="number" step="any" min="0" /></div>

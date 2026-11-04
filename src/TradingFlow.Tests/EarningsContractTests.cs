@@ -62,15 +62,17 @@ public sealed class EarningsContractTests
 
     [Theory]
     [InlineData(null, "all", true)]
-    [InlineData("9999.99", "under10b", true)]
-    [InlineData("10000", "under10b", false)]
-    [InlineData("10000", "10bTo50b", true)]
-    [InlineData("50000", "10bTo50b", false)]
-    [InlineData("50000", "50bTo100b", true)]
-    [InlineData("100000", "50bTo100b", false)]
+    [InlineData("1999.99", "under2b", true)]
+    [InlineData("2000", "under2b", false)]
+    [InlineData("2000", "2bPlus", true)]
+    [InlineData("9999.99", "10bPlus", false)]
+    [InlineData("10000", "10bPlus", true)]
+    [InlineData("500000", "10bPlus", true)]
+    [InlineData("50000", "50bPlus", true)]
     [InlineData("100000", "100bPlus", true)]
+    [InlineData(null, "10bPlus", false)]
     [InlineData(null, "unknown", true)]
-    public void MarketCapBands_HaveNonOverlappingBoundaries(
+    public void MarketCapThresholds_IncludeEveryLargerCompany(
         string? marketCapMillions,
         string marketCap,
         bool expected)
@@ -88,7 +90,7 @@ public sealed class EarningsContractTests
     {
         Assert.True(EarningsCalendarFilter.TryParse(
             "afterMarketClose",
-            "10bTo50b",
+            "10bPlus",
             out var filter,
             out var error));
         var calendarEvent = CreateEvent(1m, null, null);

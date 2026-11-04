@@ -1,6 +1,7 @@
 using System.Globalization;
 using TradingFlow.Domain.Earnings;
 using TradingFlow.Earnings;
+using TradingFlow.Finviz;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
 
@@ -30,6 +31,7 @@ public static class EarningsApiEndpoints
             string? marketCap,
             string? scope,
             EarningsMonitor monitor,
+            FinvizSectorDirectory sectors,
             NewsFeedService newsFeed,
             TimeProvider clock,
             [Microsoft.AspNetCore.Http.AsParameters] EarningsViewQuery viewQuery,
@@ -64,7 +66,8 @@ public static class EarningsApiEndpoints
                 news,
                 onlyShortHorizon: true,
                 filter,
-                dateScope), viewQuery, user, views, cancellationToken);
+                dateScope,
+                sectors.Find), viewQuery, user, views, cancellationToken);
         }).AllowAnonymous();
 
         group.MapGet("/calendar", async (
@@ -73,6 +76,7 @@ public static class EarningsApiEndpoints
             string? session,
             string? marketCap,
             EarningsMonitor monitor,
+            FinvizSectorDirectory sectors,
             NewsFeedService newsFeed,
             TimeProvider clock,
             [Microsoft.AspNetCore.Http.AsParameters] EarningsViewQuery viewQuery,
@@ -105,7 +109,8 @@ public static class EarningsApiEndpoints
                 news,
                 onlyShortHorizon: false,
                 filter,
-                "custom"), viewQuery, user, views, cancellationToken);
+                "custom",
+                sectors.Find), viewQuery, user, views, cancellationToken);
         }).AllowAnonymous();
 
         group.MapGet("/status", (EarningsMonitor monitor) => Results.Ok(monitor.GetStatus()))
@@ -130,12 +135,13 @@ public static class EarningsApiEndpoints
         IReadOnlyList<EarningsNewsEvidenceResponse> news,
         bool onlyShortHorizon,
         EarningsCalendarFilter filter,
-        string dateScope)
+        string dateScope,
+        Func<string, string?> sectorOf)
     {
         var exchangeToday = EarningsCalendarDates.ExchangeDate(requestAtUtc);
         var nextBusinessDate = EarningsCalendarDates.NextWeekday(exchangeToday);
         var mapped = snapshot.Items
-            .Select(item => MapItem(item, exchangeToday, nextBusinessDate))
+            .Select(item => MapItem(item, exchangeToday, nextBusinessDate, sectorOf(item.Event.Ticker)))
             .Where(item => !onlyShortHorizon || MatchesDateScope(item, dateScope))
             .ToArray();
         var filtered = mapped.Where(item => MatchesFilter(item, filter)).ToArray();
@@ -170,7 +176,8 @@ public static class EarningsApiEndpoints
     private static EarningsCalendarItemResponse MapItem(
         EarningsCalendarSnapshotItem item,
         DateOnly exchangeToday,
-        DateOnly nextBusinessDate)
+        DateOnly nextBusinessDate,
+        string? sector)
     {
         var calendarEvent = item.Event;
         var analysis = item.Analysis;
@@ -239,7 +246,8 @@ public static class EarningsApiEndpoints
             analysis?.Ema20,
             analysis?.MacdHistogram,
             analysis?.SlotRelativeVolume,
-            MapPreviousEarnings(item.PreviousReportedEvent));
+            MapPreviousEarnings(item.PreviousReportedEvent),
+            sector);
     }
 
     private static bool TryParseDateScope(string? value, out string scope, out string? error)
@@ -334,9 +342,10 @@ public static class EarningsApiEndpoints
         var caps = new[]
         {
             new EarningsFilterOptionResponse("all", "All caps", itemsForCaps.Length),
-            MarketCapOption(itemsForCaps, EarningsMarketCapBand.Under10B, "Under $10B"),
-            MarketCapOption(itemsForCaps, EarningsMarketCapBand.From10BTo50B, "$10B-$50B"),
-            MarketCapOption(itemsForCaps, EarningsMarketCapBand.From50BTo100B, "$50B-$100B"),
+            MarketCapOption(itemsForCaps, EarningsMarketCapBand.Under2B, "Under $2B"),
+            MarketCapOption(itemsForCaps, EarningsMarketCapBand.AtLeast2B, "$2B+"),
+            MarketCapOption(itemsForCaps, EarningsMarketCapBand.AtLeast10B, "$10B+"),
+            MarketCapOption(itemsForCaps, EarningsMarketCapBand.AtLeast50B, "$50B+"),
             MarketCapOption(itemsForCaps, EarningsMarketCapBand.AtLeast100B, "$100B+"),
             MarketCapOption(itemsForCaps, EarningsMarketCapBand.Unknown, "Cap unknown")
         };
@@ -344,7 +353,8 @@ public static class EarningsApiEndpoints
             EarningsCalendarFilter.SessionValue(filter.ReleaseWindow),
             EarningsCalendarFilter.MarketCapValue(filter.MarketCapBand),
             sessions,
-            caps);
+            caps,
+            SectorOptions(items.Where(item => MatchesFilter(item, filter)).ToArray()));
     }
 
     private static EarningsFilterOptionResponse SessionOption(
@@ -363,18 +373,20 @@ public static class EarningsApiEndpoints
             label,
             items.Count(item => EarningsCalendarFilter.MatchesMarketCap(item.MarketCapMillions, band)));
 
-    private static EarningsMarketCapBand ResolveMarketCapBand(decimal? marketCapMillions)
-    {
-        foreach (var band in Enum.GetValues<EarningsMarketCapBand>().Where(value => value != EarningsMarketCapBand.All))
-        {
-            if (EarningsCalendarFilter.MatchesMarketCap(marketCapMillions, band))
-            {
-                return band;
-            }
-        }
+    // Thresholds overlap, so a row is labelled with the largest one it reaches.
+    private static EarningsMarketCapBand ResolveMarketCapBand(decimal? marketCapMillions) =>
+        new[] { EarningsMarketCapBand.AtLeast100B, EarningsMarketCapBand.AtLeast50B, EarningsMarketCapBand.AtLeast10B,
+                EarningsMarketCapBand.AtLeast2B, EarningsMarketCapBand.Under2B }
+            .FirstOrDefault(band => EarningsCalendarFilter.MatchesMarketCap(marketCapMillions, band), EarningsMarketCapBand.Unknown);
 
-        return EarningsMarketCapBand.Unknown;
-    }
+    // Sector counts follow the session and market-cap filters; rows without a Finviz sector count as unknown.
+    private static IReadOnlyList<EarningsFilterOptionResponse> SectorOptions(IReadOnlyList<EarningsCalendarItemResponse> items) =>
+        new[] { new EarningsFilterOptionResponse("all", "All sectors", items.Count) }
+            .Concat(items.GroupBy(item => item.Sector ?? EarningsViewService.UnknownSector, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(group => group.Key == EarningsViewService.UnknownSector).ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new EarningsFilterOptionResponse(group.Key,
+                    group.Key == EarningsViewService.UnknownSector ? "Sector unknown" : group.Key, group.Count())))
+            .ToArray();
 
     private static string FormatReleaseWindow(EarningsReleaseWindow window) => window switch
     {

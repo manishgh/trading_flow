@@ -12,6 +12,7 @@ namespace TradingFlow.Earnings;
 public sealed class EarningsMonitor
 {
     private readonly FinvizClient finviz;
+    private readonly FinvizSectorDirectory sectors;
     private readonly IEarningsRepository earnings;
     private readonly INewsFeedRepository news;
     private readonly EarningsMarketStateLoader marketState;
@@ -29,6 +30,7 @@ public sealed class EarningsMonitor
 
     public EarningsMonitor(
         FinvizClient finviz,
+        FinvizSectorDirectory sectors,
         IEarningsRepository earnings,
         INewsFeedRepository news,
         EarningsMarketStateLoader marketState,
@@ -38,6 +40,7 @@ public sealed class EarningsMonitor
         ILogger<EarningsMonitor> logger)
     {
         this.finviz = finviz;
+        this.sectors = sectors;
         this.earnings = earnings;
         this.news = news;
         this.marketState = marketState;
@@ -113,6 +116,15 @@ public sealed class EarningsMonitor
                 var providerEvents = await finviz.GetEarningsCalendarAsync(calendarFrom, to, timeout.Token);
                 await earnings.ReplaceProviderWindowAsync("finviz", calendarFrom, to, providerEvents, timeout.Token);
                 lastCalendarRefreshUtc = nowUtc;
+                try
+                {
+                    await sectors.RefreshIfStaleAsync(timeout.Token);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    // Sector labels are display-only; the calendar and analysis continue without them.
+                    logger.LogWarning(exception, "Finviz sector directory refresh failed; previous sectors stay in use.");
+                }
                 logger.LogInformation(
                     "Refreshed {EventCount} Finviz earnings events for {FromDate} through {ToDate}.",
                     providerEvents.Count,

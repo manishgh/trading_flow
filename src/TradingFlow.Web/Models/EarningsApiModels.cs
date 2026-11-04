@@ -22,7 +22,8 @@ public sealed record EarningsFilterStateResponse(
     string Session,
     string MarketCap,
     IReadOnlyList<EarningsFilterOptionResponse> Sessions,
-    IReadOnlyList<EarningsFilterOptionResponse> MarketCaps);
+    IReadOnlyList<EarningsFilterOptionResponse> MarketCaps,
+    IReadOnlyList<EarningsFilterOptionResponse> Sectors);
 
 public sealed record EarningsFilterOptionResponse(
     string Value,
@@ -88,7 +89,8 @@ public sealed record EarningsCalendarItemResponse(
     decimal? Ema20,
     decimal? MacdHistogram,
     decimal? SlotRelativeVolume,
-    PreviousEarningsResultResponse? PreviousEarnings);
+    PreviousEarningsResultResponse? PreviousEarnings,
+    string? Sector);
 
 public sealed record PreviousEarningsResultResponse(
     DateOnly ReportDateExchange,

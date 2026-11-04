@@ -786,7 +786,8 @@ public sealed record MobileEarningsFilterStateResponse(
     string Session,
     string MarketCap,
     IReadOnlyList<MobileEarningsFilterOptionResponse> Sessions,
-    IReadOnlyList<MobileEarningsFilterOptionResponse> MarketCaps);
+    IReadOnlyList<MobileEarningsFilterOptionResponse> MarketCaps,
+    IReadOnlyList<MobileEarningsFilterOptionResponse>? Sectors = null);
 
 public sealed record MobileEarningsFilterOptionResponse(string Value, string Label, int Count);
 

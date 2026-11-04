@@ -41,6 +41,23 @@ public sealed class EarningsViewTests
     }
 
     [Fact]
+    public async Task SectorAndNewsEvidenceFiltersUseRowSectorsAndTheNewsPanel()
+    {
+        var service = new EarningsViewService(Mock.Of<IWishlistRepository>(), Mock.Of<IDeskAccountReader>());
+        var user = new ClaimsPrincipal(new ClaimsIdentity());
+        var response = Response with
+        {
+            Items = [Response.Items[0], Response.Items[1] with { Sector = "Technology" }, Response.Items[2] with { Sector = "Energy" }],
+            News = [new(DateTimeOffset.Parse("2026-11-01T09:00:00Z"), "BBB, ZZZ", "Company", 0.2m, "Positive", "Beta wins contract", "", "news", "wire", "https://example.invalid", "")]
+        };
+
+        Assert.Equal("BBB", Assert.Single((await service.FilterAsync(response, new() { Sector = "energy" }, user, default)).Items).Ticker);
+        Assert.Equal("UNKNOWN", Assert.Single((await service.FilterAsync(response, new() { Sector = EarningsViewService.UnknownSector }, user, default)).Items).Ticker);
+        // AAA has a result headline; BBB has no headline but appears in the news panel; UNKNOWN has neither.
+        Assert.Equal(new[] { "AAA", "BBB" }, (await service.FilterAsync(response, new() { HasNews = true }, user, default)).Items.Select(x => x.Ticker));
+    }
+
+    [Fact]
     public async Task PrivateFiltersRejectAnonymousRequestsAndIntersectMemberships()
     {
         var groups = new Mock<IWishlistRepository>(); var account = new Mock<IDeskAccountReader>(MockBehavior.Strict);

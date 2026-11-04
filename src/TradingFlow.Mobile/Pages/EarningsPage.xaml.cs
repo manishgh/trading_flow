@@ -20,10 +20,12 @@ public partial class EarningsPage : ContentPage
     {
         InitializeComponent();
         SessionPicker.ItemsSource = new[] { new EarningsFilterChoice("all", "All sessions"), new("beforeMarketOpen", "Pre-market"), new("duringMarket", "Market hours"), new("afterMarketClose", "Post-market") };
-        MarketCapPicker.ItemsSource = new[] { new EarningsFilterChoice("all", "All caps"), new("under10b", "Under $10B"), new("10bTo50b", "$10B-$50B"), new("50bTo100b", "$50B-$100B"), new("100bPlus", "$100B+"), new("unknown", "Cap unknown") };
+        MarketCapPicker.ItemsSource = new[] { new EarningsFilterChoice("all", "All caps"), new("under2b", "Under $2B"), new("2bPlus", "$2B+"), new("10bPlus", "$10B+"), new("50bPlus", "$50B+"), new("100bPlus", "$100B+"), new("unknown", "Cap unknown") };
         SessionPicker.SelectedIndex = MarketCapPicker.SelectedIndex = 0;
         EarningsView.ItemsSource = groups;
         FilterHost.Children.Add(filters);
+        filters.EntryField("search", "Ticker or company");
+        filters.EntryField("sector", "Sector (Finviz name)");
         filters.EntryField("provider", "Earnings provider");
         filters.EntryField("newsProvider", "News provider");
         filters.Choice("day", "Reporting day", [new("all", "All days"), new("today", "Today"), new("nextbusinessday", "Next business day"), new("other", "Other dates")]);
