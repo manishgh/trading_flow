@@ -73,7 +73,7 @@ public sealed class AlpacaManualOrderMarketGateway(
         string feed,
         CancellationToken cancellationToken)
     {
-        var results = await quotes.GetLatestQuotesAsync([ticker], feed, cancellationToken);
+        var results = await quotes.GetLatestQuotesAsync([ticker], feed, cancellationToken, allowStreamed: false);
         return results.GetValueOrDefault(ticker) ?? new AlpacaLatestQuote(ticker, null, null, null, null, null);
     }
 

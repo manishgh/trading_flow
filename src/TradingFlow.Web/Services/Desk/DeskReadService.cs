@@ -23,7 +23,7 @@ public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReade
     public async Task<DeskSnapshot> ReadAsync(DeskSelection selection, CancellationToken ct)
     {
         var symbols = selection.Members.Select(x => x.Symbol).ToArray();
-        var quoteTask = quotes.GetLatestQuotesAsync(symbols, "sip", ct);
+        var quoteTask = quotes.GetNewestQuotesAsync(symbols, ct);
         var accountTask = account.ReadAsync(ct);
         var closeTask = quotes.GetPreviousClosesAsync(symbols, "sip", clock.GetUtcNow(), ct);
         var sessionTask = operations.GetTradingSessionAsync(ct);

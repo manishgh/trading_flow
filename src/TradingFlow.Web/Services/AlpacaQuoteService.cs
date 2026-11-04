@@ -15,6 +15,9 @@ public sealed record AlpacaLatestQuote(
     decimal? AskSize,
     DateTimeOffset? Timestamp)
 {
+    /// <summary>The Alpaca feed that supplied the quote: <c>sip</c>, or <c>overnight</c> (Blue Ocean ATS, 8pm-4am New York).</summary>
+    public string Feed { get; init; } = "sip";
+
     public decimal? MidPrice => BidPrice is { } bid && AskPrice is { } ask ? (bid + ask) / 2m : AskPrice ?? BidPrice;
 
     public string DisplayPrice => Format(MidPrice);
@@ -89,10 +92,15 @@ public sealed class AlpacaQuoteService
         this.clock = clock ?? TimeProvider.System;
     }
 
+    /// <summary>
+    /// Latest quotes for display. Order review and planning pass <paramref name="allowStreamed"/> false so a
+    /// price that decides an order always comes from a fresh REST read.
+    /// </summary>
     public async Task<IReadOnlyDictionary<string, AlpacaLatestQuote>> GetLatestQuotesAsync(
         IReadOnlyCollection<string> tickers,
         string feed,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowStreamed = true)
     {
         var symbols = tickers
             .Select(ticker => ticker.Trim().ToUpperInvariant())
@@ -102,9 +110,10 @@ public sealed class AlpacaQuoteService
         // The shared SIP WebSocket is the source; REST covers only symbols it has not quoted recently.
         var now = clock.GetUtcNow();
         var result = new Dictionary<string, AlpacaLatestQuote>(StringComparer.OrdinalIgnoreCase);
+        var useStream = allowStreamed && NormalizeFeed(feed) == "sip";
         foreach (var symbol in symbols)
         {
-            if (streamed.Find(symbol) is { Timestamp: { } at } quote && now - at <= StreamedQuoteMaximumAge)
+            if (useStream && streamed.Find(symbol) is { Timestamp: { } at } quote && now - at <= StreamedQuoteMaximumAge)
             {
                 result[symbol] = quote;
             }
@@ -125,9 +134,10 @@ public sealed class AlpacaQuoteService
         try
         {
             var client = httpClientFactory.CreateClient(HttpClientName);
-            foreach (var (symbol, quote) in await GetLatestQuotesBatchAsync(client, fallback, NormalizeFeed(feed), cancellationToken))
+            var normalizedFeed = NormalizeFeed(feed);
+            foreach (var (symbol, quote) in await GetLatestQuotesBatchAsync(client, fallback, normalizedFeed, cancellationToken))
             {
-                result[symbol] = quote;
+                result[symbol] = quote with { Feed = normalizedFeed };
             }
 
             return result;
@@ -138,6 +148,42 @@ public sealed class AlpacaQuoteService
             foreach (var symbol in fallback) result.TryAdd(symbol, Empty(symbol));
             return result;
         }
+    }
+
+    /// <summary>
+    /// The newest quote per symbol across feeds: consolidated SIP (streamed first) during pre-market,
+    /// regular and after-hours sessions, and Alpaca's overnight feed (Blue Ocean ATS) when SIP has been
+    /// silent for 15 minutes, as it is from 8pm to 4am New York time. Each quote carries its feed.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, AlpacaLatestQuote>> GetNewestQuotesAsync(
+        IReadOnlyCollection<string> tickers,
+        CancellationToken cancellationToken,
+        bool allowStreamed = true)
+    {
+        var primary = await GetLatestQuotesAsync(tickers, "sip", cancellationToken, allowStreamed);
+        var staleCutoff = clock.GetUtcNow().AddMinutes(-15);
+        var silent = primary.Values
+            .Where(quote => quote.MidPrice is null || quote.Timestamp is null || quote.Timestamp < staleCutoff)
+            .Select(quote => quote.Ticker)
+            .ToArray();
+        if (silent.Length == 0)
+        {
+            return primary;
+        }
+
+        var overnight = await GetLatestQuotesAsync(silent, "overnight", cancellationToken, allowStreamed: false);
+        var merged = new Dictionary<string, AlpacaLatestQuote>(primary, StringComparer.OrdinalIgnoreCase);
+        foreach (var (symbol, fallback) in overnight)
+        {
+            var current = merged.GetValueOrDefault(symbol);
+            if (fallback.MidPrice is not null &&
+                (current?.MidPrice is null || (fallback.Timestamp ?? DateTimeOffset.MinValue) > (current.Timestamp ?? DateTimeOffset.MinValue)))
+            {
+                merged[symbol] = fallback;
+            }
+        }
+
+        return merged;
     }
 
     /// <summary>
@@ -206,10 +252,11 @@ public sealed class AlpacaQuoteService
         foreach (var quoteProperty in quotes.EnumerateObject())
         {
             var quote = quoteProperty.Value;
+            // An empty side of the book is reported as 0; that is no price, not a price of zero.
             results[quoteProperty.Name.ToUpperInvariant()] = new AlpacaLatestQuote(
                 quoteProperty.Name.ToUpperInvariant(),
-                ReadDecimal(quote, "bp"),
-                ReadDecimal(quote, "ap"),
+                ReadDecimal(quote, "bp") is > 0m and var bid ? bid : null,
+                ReadDecimal(quote, "ap") is > 0m and var ask ? ask : null,
                 ReadDecimal(quote, "bs"),
                 ReadDecimal(quote, "as"),
                 ReadTimestamp(quote, "t"));

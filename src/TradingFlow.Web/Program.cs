@@ -451,6 +451,8 @@ builder.Services.AddSingleton<TradingFlow.Web.Services.LiveQuoteBook>();
 builder.Services.AddSingleton<AlpacaMarketStateStreamService>();
 builder.Services.AddSingleton<IDiscoverySubscriptionSink>(serviceProvider =>
     serviceProvider.GetRequiredService<AlpacaMarketStateStreamService>());
+builder.Services.AddSingleton<TradingFlow.Web.Services.IDisplayQuoteSubscriptions>(serviceProvider =>
+    serviceProvider.GetRequiredService<AlpacaMarketStateStreamService>());
 builder.Services.AddSingleton<IPaperDiscoverySessionFactory, PaperDiscoverySessionFactory>();
 builder.Services.AddSingleton<TradingFlow.Data.Orders.SqliteOrderIntentRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderIntentRepository>(serviceProvider =>
@@ -771,6 +773,33 @@ if (uiTestMode)
                 String.Join("; ", seedResult.Errors.Select(error => error.Description)));
         }
     }
+
+    // A second, administrator test login covers the operator-override screens real administrators use.
+    var testAdminName = Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_ADMIN") ?? "ui-admin";
+    if (await userManager.FindByNameAsync(testAdminName) is null)
+    {
+        var roleManager = seedScope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+        if (!await roleManager.RoleExistsAsync(TradingFlowRoles.Administrator))
+        {
+            await roleManager.CreateAsync(new IdentityRole<Guid>(TradingFlowRoles.Administrator));
+        }
+
+        var admin = new TradingFlowUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = testAdminName,
+            DisplayName = "UI test administrator",
+            CreatedAtUtc = DateTimeOffset.UtcNow
+        };
+        var adminResult = await userManager.CreateAsync(admin, testPassword);
+        if (adminResult.Succeeded) adminResult = await userManager.AddToRoleAsync(admin, TradingFlowRoles.Administrator);
+        if (!adminResult.Succeeded)
+        {
+            throw new InvalidOperationException(
+                "The UI test administrator could not be seeded: " +
+                String.Join("; ", adminResult.Errors.Select(error => error.Description)));
+        }
+    }
 }
 
 if (runtimeEnabled)
@@ -1025,34 +1054,10 @@ static async Task<IReadOnlyDictionary<string, AlpacaLatestQuote>> GetLiveQuotesW
     AlpacaQuoteService quoteService,
     IReadOnlyCollection<string> tickers,
     string feed,
-    CancellationToken cancellationToken)
-{
-    var primary = await quoteService.GetLatestQuotesAsync(tickers, feed, cancellationToken);
-    var staleCutoff = DateTimeOffset.UtcNow.AddMinutes(-15);
-    var needsFallback = primary.Values.Any(quote => quote.MidPrice is null || quote.Timestamp is null || quote.Timestamp < staleCutoff);
-    if (!needsFallback || feed.Equals("overnight", StringComparison.OrdinalIgnoreCase))
-    {
-        return primary;
-    }
-
-    var overnight = await quoteService.GetLatestQuotesAsync(tickers, "overnight", cancellationToken);
-    return primary.ToDictionary(
-        pair => pair.Key,
-        pair =>
-        {
-            if (!overnight.TryGetValue(pair.Key, out var fallback))
-            {
-                return pair.Value;
-            }
-
-            var primaryTimestamp = pair.Value.Timestamp ?? DateTimeOffset.MinValue;
-            var fallbackTimestamp = fallback.Timestamp ?? DateTimeOffset.MinValue;
-            return (pair.Value.MidPrice is null && fallback.MidPrice is not null) || fallbackTimestamp > primaryTimestamp
-                ? fallback
-                : pair.Value;
-        },
-        StringComparer.OrdinalIgnoreCase);
-}
+    CancellationToken cancellationToken) =>
+    feed.Equals("sip", StringComparison.OrdinalIgnoreCase)
+        ? await quoteService.GetNewestQuotesAsync(tickers, cancellationToken)
+        : await quoteService.GetLatestQuotesAsync(tickers, feed, cancellationToken);
 
 static string ResolveDefaultQuoteFeed(ConfigCatalogService catalog) => catalog.DefaultQuoteFeed();
 
@@ -1073,10 +1078,10 @@ static async Task WriteQuoteStreamAsync(
 {
     PrepareEventStream(httpContext);
     // The streamed symbols join the shared Alpaca SIP connection for as long as this view is open.
-    var subscriptions = httpContext.RequestServices.GetRequiredService<IDiscoverySubscriptionSink>();
+    var subscriptions = httpContext.RequestServices.GetRequiredService<TradingFlow.Web.Services.IDisplayQuoteSubscriptions>();
     var streamed = httpContext.RequestServices.GetRequiredService<TradingFlow.Web.Services.LiveQuoteBook>();
     var scope = Guid.NewGuid();
-    await subscriptions.ReplaceScopeAsync(scope, tickers, cancellationToken);
+    await subscriptions.ReplaceDisplayQuotesAsync(scope, tickers, cancellationToken);
     try
     {
         IReadOnlyDictionary<string, AlpacaLatestQuote> quotes = new Dictionary<string, AlpacaLatestQuote>(StringComparer.OrdinalIgnoreCase);
@@ -1094,7 +1099,7 @@ static async Task WriteQuoteStreamAsync(
     }
     finally
     {
-        await subscriptions.RemoveScopeAsync(scope, CancellationToken.None);
+        await subscriptions.RemoveDisplayQuotesAsync(scope, CancellationToken.None);
     }
 }
 

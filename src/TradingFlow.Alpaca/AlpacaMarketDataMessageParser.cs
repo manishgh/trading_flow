@@ -98,7 +98,7 @@ public static class AlpacaMarketDataMessageParser
             return false;
         }
 
-        quote = new AlpacaStreamQuote(symbol!.Trim().ToUpperInvariant(), bid, ask, bidSize, askSize, timestamp.ToUniversalTime());
+        quote = new AlpacaStreamQuote(symbol!.Trim().ToUpperInvariant(), bid > 0m ? bid : null, ask > 0m ? ask : null, bidSize, askSize, timestamp.ToUniversalTime());
         return true;
     }
 
@@ -135,8 +135,8 @@ public sealed record AlpacaBarParseFailure(
 /// <summary>One streamed best bid and offer for a symbol, as Alpaca reported it.</summary>
 public sealed record AlpacaStreamQuote(
     string Symbol,
-    decimal BidPrice,
-    decimal AskPrice,
+    decimal? BidPrice,
+    decimal? AskPrice,
     decimal BidSize,
     decimal AskSize,
     DateTimeOffset Timestamp);

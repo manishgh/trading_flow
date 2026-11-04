@@ -4,9 +4,10 @@ using TradingFlow.Alpaca;
 namespace TradingFlow.Web.Services;
 
 /// <summary>
-/// Latest streamed best bid and offer per symbol from the shared Alpaca SIP connection.
+/// Latest streamed best bid and offer per displayed symbol from the shared Alpaca SIP connection.
 /// Writes come from the stream's read loop and must stay cheap; screens read the newest quote.
-/// An older frame never replaces a newer one, so reconnect replays cannot move a price backwards.
+/// An older frame never replaces a newer one, an unsubscribed symbol loses its entry, and a lost
+/// connection clears the book, so a price shown from here is from a live subscription.
 /// </summary>
 public sealed class LiveQuoteBook
 {
@@ -19,6 +20,10 @@ public sealed class LiveQuoteBook
     }
 
     public AlpacaLatestQuote? Find(string symbol) => quotes.GetValueOrDefault(symbol);
+
+    public void Remove(string symbol) => quotes.TryRemove(symbol, out _);
+
+    public void Clear() => quotes.Clear();
 
     /// <summary>The newer of a streamed quote and a polled one; either may be missing.</summary>
     public AlpacaLatestQuote? Newest(string symbol, AlpacaLatestQuote? polled) =>

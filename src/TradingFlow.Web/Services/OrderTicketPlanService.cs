@@ -29,7 +29,7 @@ public sealed class OrderTicketPlanService(ConfigCatalogService catalog, AlpacaQ
                 x.Identity.ContentSha256.Equals(identity.ContentSha256, StringComparison.OrdinalIgnoreCase))?.Definition
                 ?? throw new InvalidOperationException("The exact strategy is no longer available. Select it again.");
         }
-        var quote = (await quotes.GetLatestQuotesAsync([symbol], "sip", ct)).GetValueOrDefault(symbol);
+        var quote = (await quotes.GetLatestQuotesAsync([symbol], "sip", ct, allowStreamed: false)).GetValueOrDefault(symbol);
         var profile = catalog.DefaultPaperConfig();
         var operational = await status.GetAsync("sip", [quote?.Timestamp], ct);
         var plan = await planner.PlanAsync(definition, symbol, quote?.AskPrice, quote?.MidPrice,

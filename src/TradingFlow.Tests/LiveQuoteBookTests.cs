@@ -16,6 +16,11 @@ public sealed class LiveQuoteBookTests
         Assert.Equal(new AlpacaStreamQuote("OUST", 31.03m, 31.15m, 2m, 3m, DateTimeOffset.Parse("2026-11-04T14:30:01.5Z")), quote);
 
         Assert.False(AlpacaMarketDataMessageParser.TryParseQuote(Parse("""{"T":"q","S":"OUST","bp":31.03,"t":"2026-11-04T14:30:01Z"}"""), out _));
+        // An empty side of the book (0) is no price rather than a price of zero.
+        Assert.True(AlpacaMarketDataMessageParser.TryParseQuote(
+            Parse("""{"T":"q","S":"OUST","bp":0,"bs":0,"ap":31.15,"as":3,"t":"2026-11-04T14:30:01Z"}"""), out var oneSided));
+        Assert.Null(oneSided!.BidPrice);
+        Assert.Equal(31.15m, oneSided.AskPrice);
         Assert.False(AlpacaMarketDataMessageParser.TryParseQuote(Parse("""{"T":"t","S":"OUST","p":31.1,"s":5,"t":"2026-11-04T14:30:01Z"}"""), out _));
     }
 
@@ -32,5 +37,12 @@ public sealed class LiveQuoteBookTests
         Assert.Equal(31.10m, book.Newest("OUST", polled)!.AskPrice);
         Assert.Equal(31.30m, book.Newest("OUST", polled with { Timestamp = at.AddSeconds(5) })!.AskPrice);
         Assert.Same(polled, book.Newest("MSFT", polled));
+
+        // An unsubscribed symbol or a lost connection removes the streamed price.
+        book.Remove("OUST");
+        Assert.Null(book.Find("OUST"));
+        book.Update(new AlpacaStreamQuote("CVS", 90m, 90.1m, 1m, 1m, at));
+        book.Clear();
+        Assert.Null(book.Find("CVS"));
     }
 }

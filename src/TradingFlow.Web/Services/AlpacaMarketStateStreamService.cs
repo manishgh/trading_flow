@@ -41,8 +41,15 @@ public sealed record AlpacaMarketStateStreamOptions(
 /// </summary>
 public sealed class AlpacaMarketStateStreamService : BackgroundService,
     ISecurityTradingStatusProvider,
-    IDiscoverySubscriptionSink
+    IDiscoverySubscriptionSink,
+    IDisplayQuoteSubscriptions
 {
+    // A symbol a screen stopped showing keeps its quote subscription this long, so page changes do not churn it.
+    private static readonly TimeSpan DisplayQuoteLinger = TimeSpan.FromMinutes(2);
+    private readonly Dictionary<Guid, HashSet<string>> displayScopes = [];
+    private readonly Dictionary<string, DateTimeOffset> displayLinger = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Channel<bool> displayChanges = Channel.CreateBounded<bool>(
+        new BoundedChannelOptions(1) { SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.DropOldest });
     private static readonly Guid StatusObservationScope =
         Guid.Parse("76077cd8-c02d-498b-a189-06bc8a11861f");
     private readonly AlpacaCredentialProvider credentials;
@@ -205,6 +212,92 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
     }
 
+    public async Task ReplaceDisplayQuotesAsync(Guid scopeId, IReadOnlyCollection<string> symbols, CancellationToken cancellationToken)
+    {
+        var next = symbols.Where(symbol => !String.IsNullOrWhiteSpace(symbol)).Select(Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        await scopeGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (displayScopes.TryGetValue(scopeId, out var previous))
+            {
+                foreach (var symbol in previous.Except(next, StringComparer.OrdinalIgnoreCase)) displayLinger[symbol] = timeProvider.GetUtcNow() + DisplayQuoteLinger;
+            }
+
+            displayScopes[scopeId] = next;
+        }
+        finally
+        {
+            scopeGate.Release();
+        }
+
+        displayChanges.Writer.TryWrite(true);
+    }
+
+    public async Task RemoveDisplayQuotesAsync(Guid scopeId, CancellationToken cancellationToken)
+    {
+        await scopeGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (displayScopes.Remove(scopeId, out var previous))
+            {
+                foreach (var symbol in previous) displayLinger[symbol] = timeProvider.GetUtcNow() + DisplayQuoteLinger;
+            }
+        }
+        finally
+        {
+            scopeGate.Release();
+        }
+
+        displayChanges.Writer.TryWrite(true);
+    }
+
+    /// <summary>Symbols currently shown on a screen plus those still inside their linger window.</summary>
+    internal async Task<IReadOnlySet<string>> GetDesiredDisplayQuotesAsync(CancellationToken cancellationToken)
+    {
+        await scopeGate.WaitAsync(cancellationToken);
+        try
+        {
+            var now = timeProvider.GetUtcNow();
+            foreach (var expired in displayLinger.Where(item => item.Value <= now).Select(item => item.Key).ToArray()) displayLinger.Remove(expired);
+            var desired = displayScopes.Values.SelectMany(symbols => symbols).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            desired.UnionWith(displayLinger.Keys);
+            return desired;
+        }
+        finally
+        {
+            scopeGate.Release();
+        }
+    }
+
+    // Quote-only subscriptions for displayed symbols. Failures are logged and retried on the next change;
+    // they never fault the connection, and symbols dropped here lose their book entry so no stale price lingers.
+    private async Task ForwardDisplayQuotesAsync(IAlpacaMarketStateStreamClient stream, CancellationToken cancellationToken)
+    {
+        var subscribed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var desired = await GetDesiredDisplayQuotesAsync(cancellationToken);
+                var additions = desired.Except(subscribed, StringComparer.OrdinalIgnoreCase).ToArray();
+                var removals = subscribed.Except(desired, StringComparer.OrdinalIgnoreCase).ToArray();
+                if (additions.Length > 0) await stream.SubscribeQuotesAsync(additions, cancellationToken);
+                if (removals.Length > 0) await stream.UnsubscribeQuotesAsync(removals, cancellationToken);
+                foreach (var removal in removals) quotes.Remove(removal);
+                subscribed = desired.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogWarning(exception, "Display quote subscription update failed; screens fall back to REST quotes.");
+            }
+
+            // Wake on the next screen change, or after the linger window to drop expired symbols.
+            await Task.WhenAny(displayChanges.Reader.WaitToReadAsync(cancellationToken).AsTask(),
+                Task.Delay(TimeSpan.FromSeconds(30), timeProvider, cancellationToken));
+            while (displayChanges.Reader.TryRead(out _)) { }
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!credentials.IsConfigured)
@@ -316,6 +409,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         var calendarRefresh = RefreshMarketCalendarLoopAsync(connectionCts.Token);
         Task receive = Task.CompletedTask;
         Task subscriptions = Task.CompletedTask;
+        Task displayQuotes = Task.CompletedTask;
         var drained = false;
         var transportDisposed = false;
         var leaseReleased = false;
@@ -362,6 +456,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             }
 
             marketState.MarkSnapshotsReady(leaseState.Current.FencingToken);
+            displayQuotes = ForwardDisplayQuotesAsync(stream, connectionCts.Token);
 
             subscriptions = ForwardSubscriptionChangesAsync(
                 stream,
@@ -378,12 +473,15 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             marketState.InvalidateOwnership(leaseState.Current.FencingToken);
             Volatile.Write(ref runtimeStage, "cleanup_connection_tasks");
             activeSubscriptions.Clear();
+            // Streamed prices are only trusted while this connection is alive.
+            quotes.Clear();
             workTracker.StopAccepting();
             connectionCts.Cancel();
             var connectionTasks = Task.WhenAll(
                 ObserveConnectionTaskAsync(receive, "receive"),
                 ObserveConnectionTaskAsync(renewal, "lease-renewal"),
                 ObserveConnectionTaskAsync(subscriptions, "subscription-forwarding"),
+                ObserveConnectionTaskAsync(displayQuotes, "display-quote-forwarding"),
                 ObserveConnectionTaskAsync(calendarRefresh, "market-calendar-refresh"));
             try
             {
@@ -644,15 +742,16 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
     {
         await foreach (var message in stream.ReadMessagesAsync(cancellationToken))
         {
-            // Quotes are display data: record the newest and move on without touching bar or status state.
+            var observedAt = timeProvider.GetUtcNow();
+            var fencingToken = leaseState.GetValidFence(observedAt);
+            // Quotes are display data from a connection that still holds the lease: record the newest
+            // and move on without touching bar or status state.
             if (AlpacaMarketDataMessageParser.TryParseQuote(message, out var quote))
             {
                 quotes.Update(quote!);
                 continue;
             }
 
-            var observedAt = timeProvider.GetUtcNow();
-            var fencingToken = leaseState.GetValidFence(observedAt);
             if (AlpacaMarketDataMessageParser.TryParseBar(
                     message,
                     observedAt,

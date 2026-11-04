@@ -65,10 +65,14 @@
                    lives in the system menu so the badge can never read as two at once. *@
                 <div class="account-strip" data-account-strip>
                     <span class="env-badge env-@environment.Slug" title="@environment.Label environment">@environment.Label</span>
-                    <span class="account-figures">
-                        <span>Invested <strong data-account-invested>—</strong></span>
-                        <span>Cash <strong data-account-cash>—</strong></span>
-                    </span>
+                    @* The figures come from the paper account, so they only appear beside the PAPER badge. *@
+                    @if (environment.Environment == TradingFlow.Web.Services.TradingEnvironment.Paper)
+                    {
+                        <span class="account-figures">
+                            <span>Invested <strong data-account-invested>—</strong></span>
+                            <span>Cash <strong data-account-cash>—</strong></span>
+                        </span>
+                    }
                 </div>
             }
 

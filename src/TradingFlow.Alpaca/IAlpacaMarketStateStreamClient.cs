@@ -24,4 +24,9 @@ public interface IAlpacaMarketStateStreamClient : IDisposable
         CancellationToken cancellationToken);
 
     IAsyncEnumerable<JsonElement> ReadMessagesAsync(CancellationToken cancellationToken);
+
+    /// <summary>Display-only quote subscriptions, outside the market-state acknowledgement.</summary>
+    Task SubscribeQuotesAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    Task UnsubscribeQuotesAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken) => Task.CompletedTask;
 }

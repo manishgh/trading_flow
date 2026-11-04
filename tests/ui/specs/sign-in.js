@@ -20,3 +20,17 @@ export async function signIn(page) {
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForLoadState("domcontentloaded");
 }
+
+export const testAdmin = process.env.TRADINGFLOW_UI_TEST_ADMIN ?? "ui-admin";
+
+/** Signs in as the seeded administrator, the role a real operator uses for override orders. */
+export async function signInAsAdmin(page) {
+  await page.goto("/Login");
+  if (await page.locator("#Input_UserName").count() === 0) {
+    return;
+  }
+  await page.locator("#Input_UserName").fill(testAdmin);
+  await page.locator("#Input_Password").fill(testPassword);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForLoadState("domcontentloaded");
+}

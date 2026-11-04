@@ -93,10 +93,29 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
                 bars = symbols,
                 updatedBars = symbols,
                 trades = symbols,
-                quotes = symbols,
                 statuses = symbols
             },
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Adds display-only quote subscriptions. They never take part in the market-state acknowledgement,
+    /// so a rejected or slow quote subscription cannot reset the execution connection.
+    /// </summary>
+    public Task SubscribeQuotesAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken) =>
+        SendChannelAsync("subscribe", tickers, cancellationToken);
+
+    public Task UnsubscribeQuotesAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken) =>
+        SendChannelAsync("unsubscribe", tickers, cancellationToken);
+
+    private Task SendChannelAsync(string action, IReadOnlyCollection<string> tickers, CancellationToken cancellationToken)
+    {
+        var symbols = tickers
+            .Select(symbol => symbol.Trim().ToUpperInvariant())
+            .Where(symbol => symbol.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return symbols.Length == 0 ? Task.CompletedTask : SendMessageAsync(new { action, quotes = symbols }, cancellationToken);
     }
 
     /// <summary>
@@ -124,7 +143,6 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
                 bars = symbols,
                 updatedBars = symbols,
                 trades = symbols,
-                quotes = symbols,
                 statuses = symbols
             },
             cancellationToken);
@@ -297,7 +315,6 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
         acknowledgement.Bars.SetEquals(expected) &&
         acknowledgement.UpdatedBars.SetEquals(expected) &&
         acknowledgement.Trades.SetEquals(expected) &&
-        acknowledgement.Quotes.SetEquals(expected) &&
         acknowledgement.Statuses.SetEquals(expected);
 
     private static IReadOnlySet<string> ReadSymbolSet(JsonElement element, string propertyName)

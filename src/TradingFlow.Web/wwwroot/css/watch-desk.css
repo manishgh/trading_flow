@@ -37,3 +37,30 @@
 .watch-table td.watch-news-cell strong{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-weight:500;line-height:1.4}
 .watch-table td.watch-news-cell small{max-width:none;white-space:normal}
 @media(min-width:1151px){.watch-grid{grid-template-columns:minmax(0,1fr) 420px}.watch-news{max-height:860px}}
+/* In-row trade buttons: the buy price is the ask, the sell price the bid; spread and quote age sit under them. */
+.watch-trade{white-space:nowrap}
+.watch-trade-buttons{display:flex;gap:6px}
+.watch-table .watch-trade-buttons button{font-size:12px;font-weight:600;padding:6px 10px;border:1px solid var(--watch-line);border-radius:4px;background:var(--watch-panel);min-height:32px}
+.watch-table .watch-trade-buttons .watch-buy{border-color:#1d5fa8;color:#1d5fa8}
+.watch-table .watch-trade-buttons .watch-sell{border-color:#c2410c;color:#c2410c}
+.watch-table .watch-trade-buttons button:disabled{opacity:.45;cursor:not-allowed}
+.watch-table td.watch-trade small{max-width:none}
+/* The reviewed order workflow opens inside the detail panel, sized by the embedded page. */
+.watch-order{border-top:1px solid var(--watch-line);margin-top:18px;padding-top:14px}
+.watch-order-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px}
+.watch-order iframe{width:100%;height:520px;border:0;background:transparent}
+/* With no strategy chosen at the top there is no signal to show, so the column is hidden. */
+.watch-table.watch-no-strategy .watch-signal-col{display:none}
+/* Stock focus: symbol and price on one line, the two trade buttons, then only the blocks that apply. */
+.watch-focus-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.watch-focus-head h2{margin-top:0}
+.watch-focus-price{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-variant-numeric:tabular-nums}
+.watch-focus-price strong{font-size:26px;letter-spacing:-.5px}
+.watch-focus-price small{font-size:12px;color:var(--watch-muted)}
+.watch-focus-trade{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0 6px}
+.watch-focus-trade .btn{min-height:44px;font-variant-numeric:tabular-nums}
+.watch-tech{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:0;font-variant-numeric:tabular-nums}
+.watch-tech div{display:flex;flex-direction:column;gap:4px}
+.watch-tech dt{font-size:10px;color:var(--watch-muted);letter-spacing:.4px}
+.watch-tech dd{margin:0;font-weight:600;font-size:12px}
+@media(max-width:650px){.watch-tech{grid-template-columns:repeat(3,minmax(0,1fr))}}

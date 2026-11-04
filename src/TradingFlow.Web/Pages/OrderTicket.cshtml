@@ -3,15 +3,18 @@
 @{
     ViewData["Title"] = "Review order";
     var environment = Environments.GetState(Environments.Parse(Request.Query["env"]));
+    // Embedded inside the Desk's detail panel: the same reviewed workflow without the site chrome.
+    var embedded = Request.Query["embedded"] == "1";
+    if (embedded) Layout = "_EmbeddedLayout";
 }
 @if (!environment.IsEnabled)
 {
     <partial name="_EnvironmentLock" model="environment" />
     return;
 }
-<section class="panel">
-    <h1>Review paper order</h1>
+<section class="@(embedded ? "order-embedded" : "panel")">
+    @if (!embedded) { <h1>Review paper order</h1> }
     <partial name="_OrderWorkflow" />
-    <a asp-page="/TradeDesk" asp-route-runId="@Request.Query["runId"]" asp-route-env="@Request.Query["env"]">Return to candidates</a>
+    @if (!embedded) { <a asp-page="/TradeDesk" asp-route-runId="@Request.Query["runId"]" asp-route-env="@Request.Query["env"]">Return to candidates</a> }
 </section>
 @section Scripts { <script src="~/js/order-workflow.js" asp-append-version="true" defer></script> }

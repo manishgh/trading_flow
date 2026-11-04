@@ -37,7 +37,7 @@ public static class DeskEndpoints
 
     /// <summary>Streams bounded observation pages and the selected run's recorded strategy checks; never starts an evaluation.</summary>
     private static async Task StreamAsync(HttpContext context, DeskSources sources, DeskReadService reader,
-        DeskStrategyAssessmentService assessments, IDiscoverySubscriptionSink subscriptions, TradingFlow.Web.Services.LiveQuoteBook quoteBook,
+        DeskStrategyAssessmentService assessments, TradingFlow.Web.Services.IDisplayQuoteSubscriptions subscriptions, TradingFlow.Web.Services.LiveQuoteBook quoteBook,
         ILoggerFactory logs)
     {
         var key = context.Request.Query["source"].FirstOrDefault() ?? "all";
@@ -83,7 +83,7 @@ public static class DeskEndpoints
                         StrategyAssessment = bySymbol.GetValueOrDefault(row.Membership.Symbol) }).ToArray() };
                 }
                 var symbols = snapshot.Rows.Select(row => row.Membership.Symbol).ToArray();
-                await subscriptions.ReplaceScopeAsync(quoteScope, symbols, ct);
+                await subscriptions.ReplaceDisplayQuotesAsync(quoteScope, symbols, ct);
                 snapshot = snapshot with { Rows = snapshot.Rows.Select(row => row with {
                     Quote = quoteBook.Newest(row.Membership.Symbol, row.Quote) }).ToArray() };
                 await context.Response.WriteAsync("event: snapshot\ndata: " + JsonSerializer.Serialize(snapshot, json) + "\n\n", ct);
@@ -93,7 +93,7 @@ public static class DeskEndpoints
                 {
                     await Task.Delay(TimeSpan.FromSeconds(1), ct);
                     var changed = symbols.Select(quoteBook.Find)
-                        .Where(quote => quote is not null && quote.Timestamp > sent.GetValueOrDefault(quote.Ticker))
+                        .Where(quote => quote is not null && (sent.GetValueOrDefault(quote.Ticker) is not { } last || quote.Timestamp > last))
                         .Select(quote => quote!).ToArray();
                     if (changed.Length == 0) continue;
                     foreach (var quote in changed) sent[quote.Ticker] = quote.Timestamp;
@@ -117,7 +117,7 @@ public static class DeskEndpoints
         }
         finally
         {
-            await subscriptions.RemoveScopeAsync(quoteScope, CancellationToken.None);
+            await subscriptions.RemoveDisplayQuotesAsync(quoteScope, CancellationToken.None);
         }
     }
 }

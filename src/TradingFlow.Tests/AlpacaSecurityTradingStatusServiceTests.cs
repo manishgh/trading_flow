@@ -31,6 +31,23 @@ public sealed class AlpacaMarketStateStreamServiceTests
     }
 
     [Fact]
+    public async Task DisplayQuotes_StayOutOfExecutionSymbolsAndLingerAfterRemoval()
+    {
+        var service = CreateService();
+        var screen = Guid.NewGuid();
+
+        await service.ReplaceDisplayQuotesAsync(screen, ["oust", "CVS"], default);
+        Assert.True((await service.GetDesiredDisplayQuotesAsync(default)).SetEquals(["OUST", "CVS"]));
+        // A screen showing prices never adds execution market-state work.
+        Assert.Empty(await service.GetDesiredSymbolsAsync(default));
+
+        await service.ReplaceDisplayQuotesAsync(screen, ["CVS"], default);
+        await service.RemoveDisplayQuotesAsync(screen, default);
+        // Dropped symbols keep their quote subscription for the linger window, so page changes do not churn it.
+        Assert.True((await service.GetDesiredDisplayQuotesAsync(default)).SetEquals(["OUST", "CVS"]));
+    }
+
+    [Fact]
     public async Task EntryStatusObservation_IsReleasedAfterGateSnapshot()
     {
         var service = CreateService();
