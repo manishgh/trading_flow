@@ -1,3 +1,5 @@
+using TradingFlow.Domain.Earnings;
+
 namespace TradingFlow.Earnings;
 
 /// <summary>
@@ -19,4 +21,23 @@ public static class EarningsCalendarDates
 
         return candidate;
     }
+
+    public static DateOnly PreviousWeekday(DateOnly date)
+    {
+        var candidate = date.AddDays(-1);
+        while (candidate.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+        {
+            candidate = candidate.AddDays(-1);
+        }
+
+        return candidate;
+    }
+
+    /// <summary>
+    /// The session that trades the report: the report date itself, or the next weekday for a release
+    /// after the close. An after-close report stays live through that following session.
+    /// </summary>
+    public static bool IsTradingSession(DateOnly reportDate, EarningsReleaseWindow releaseWindow, DateOnly exchangeDate) =>
+        reportDate == exchangeDate ||
+        releaseWindow == EarningsReleaseWindow.AfterMarketClose && NextWeekday(reportDate) == exchangeDate;
 }

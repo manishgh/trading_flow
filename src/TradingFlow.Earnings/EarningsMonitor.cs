@@ -98,7 +98,8 @@ public sealed class EarningsMonitor
             var nowUtc = clock.GetUtcNow();
             var exchangeToday = DateOnly.FromDateTime(
                 TimeZoneInfo.ConvertTime(nowUtc, EarningsTimeZones.NewYork).DateTime);
-            var from = exchangeToday;
+            // Start a weekday back so last session's after-close reports stay analysed through today's session.
+            var from = EarningsCalendarDates.PreviousWeekday(exchangeToday);
             var to = EarningsCalendarDates.NextWeekday(exchangeToday);
             // Fetch wider than we analyze. The provider posts after-close actuals well after the
             // report date has passed, so a window that starts at today would never collect them.
@@ -132,7 +133,10 @@ public sealed class EarningsMonitor
                     to);
             }
 
-            var trackedEvents = await earnings.GetCalendarAsync(from, to, tickers: null, timeout.Token);
+            var trackedEvents = (await earnings.GetCalendarAsync(from, to, tickers: null, timeout.Token))
+                .Where(item => item.ReportDateExchange >= exchangeToday ||
+                    EarningsCalendarDates.IsTradingSession(item.ReportDateExchange, item.ReleaseWindow, exchangeToday))
+                .ToList();
             trackedEventCount = trackedEvents.Count;
             if (trackedEvents.Count == 0)
             {
@@ -191,6 +195,38 @@ public sealed class EarningsMonitor
         {
             refreshLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Re-runs the shared analyzer for one stored event at fixed steps. Each step sees only completed
+    /// bars and news available at that time, so it shows what the live monitor would have reported.
+    /// A separate analyzer keeps the live monitor's session calendar untouched.
+    /// </summary>
+    public async Task<IReadOnlyList<EarningsAnalysisSnapshot>> ReplayAsync(
+        string ticker,
+        DateOnly reportDateExchange,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        TimeSpan step,
+        CancellationToken cancellationToken)
+    {
+        var calendarEvent = (await earnings.GetCalendarAsync(reportDateExchange, reportDateExchange, [ticker], cancellationToken))
+            .FirstOrDefault() ?? throw new KeyNotFoundException($"No stored {ticker} earnings event on {reportDateExchange:yyyy-MM-dd}.");
+        var replay = new EarningsAnalyzer(new TradingFlow.Engine.Indicators.IndicatorEngine(), options);
+        replay.UpdateMarketSessionSchedules(await marketState.LoadMarketSessionSchedulesAsync(
+            EarningsCalendarDates.ExchangeDate(fromUtc).AddDays(-options.SubDailyLookbackDays - 10),
+            EarningsCalendarDates.ExchangeDate(toUtc).AddDays(1),
+            cancellationToken));
+        var bars = (await marketState.LoadAsync([calendarEvent.Ticker], toUtc, cancellationToken))
+            .GetValueOrDefault(calendarEvent.Ticker) ?? [];
+        var tickerNews = await news.GetRecentForTickersAsync(fromUtc.AddDays(-3), 5000, [calendarEvent.Ticker], cancellationToken);
+        var snapshots = new List<EarningsAnalysisSnapshot>();
+        for (var at = fromUtc; at <= toUtc; at += step)
+        {
+            snapshots.Add(replay.Analyze(calendarEvent, bars, tickerNews, at));
+        }
+
+        return snapshots;
     }
 
     public async Task<EarningsCalendarSnapshot> GetCalendarAsync(

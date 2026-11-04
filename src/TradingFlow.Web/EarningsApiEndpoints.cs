@@ -52,7 +52,7 @@ public static class EarningsApiEndpoints
             var exchangeToday = EarningsCalendarDates.ExchangeDate(nowUtc);
             var nextBusinessDate = EarningsCalendarDates.NextWeekday(exchangeToday);
             var snapshot = await monitor.GetCalendarAsync(
-                exchangeToday.AddDays(-1),
+                EarningsCalendarDates.PreviousWeekday(exchangeToday),
                 nextBusinessDate.AddDays(1),
                 cancellationToken);
             var news = await newsFeed.GetEarningsTimelineAsync(
@@ -115,6 +115,47 @@ public static class EarningsApiEndpoints
 
         group.MapGet("/status", (EarningsMonitor monitor) => Results.Ok(monitor.GetStatus()))
             .AllowAnonymous();
+
+        // Read-only diagnostic: what the live monitor would have shown for one stored event over a past window.
+        group.MapGet("/replay", async (
+            string ticker,
+            string date,
+            DateTimeOffset fromUtc,
+            DateTimeOffset toUtc,
+            int? stepMinutes,
+            EarningsMonitor monitor,
+            TimeProvider clock,
+            CancellationToken cancellationToken) =>
+        {
+            var step = stepMinutes ?? 5;
+            if (String.IsNullOrWhiteSpace(ticker) ||
+                !DateOnly.TryParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var reportDate) ||
+                toUtc <= fromUtc || toUtc - fromUtc > TimeSpan.FromDays(3) || toUtc > clock.GetUtcNow() || step is < 5 or > 60)
+            {
+                return Results.BadRequest("Give a ticker, its yyyy-MM-dd report date, and a past window of at most 3 days with a 5-60 minute step.");
+            }
+
+            try
+            {
+                var snapshots = await monitor.ReplayAsync(ticker.Trim().ToUpperInvariant(), reportDate, fromUtc, toUtc,
+                    TimeSpan.FromMinutes(step), cancellationToken);
+                return Results.Ok(snapshots.Select(item => new
+                {
+                    item.AnalyzedAtUtc,
+                    Label = EarningsAssessmentLabel.Format(item.ResultAssessment, item.BreakoutAssessment),
+                    item.LatestCompletedBarAtUtc,
+                    item.LatestClose,
+                    item.PreReleaseReferenceHigh,
+                    item.EventReturnPercent,
+                    item.SlotRelativeVolume,
+                    item.Reason
+                }));
+            }
+            catch (KeyNotFoundException error)
+            {
+                return Results.NotFound(error.Message);
+            }
+        }).AllowAnonymous();
 
         group.MapPost("/refresh", async (
             EarningsMonitor monitor,
@@ -193,7 +234,8 @@ public static class EarningsApiEndpoints
         var revenueSurprise = analysis?.EffectiveRevenueSurprisePercent ?? calendarEvent.RevenueSurprisePercent;
         var newYork = TimeZoneInfo.ConvertTime(calendarEvent.ScheduledAtUtc, EarningsTimeZones.NewYork);
         var reportDate = calendarEvent.ReportDateExchange;
-        var dayGroup = reportDate == exchangeToday
+        // Last session's after-close reports trade today, so they belong with today's events.
+        var dayGroup = EarningsCalendarDates.IsTradingSession(reportDate, calendarEvent.ReleaseWindow, exchangeToday)
             ? "today"
             : reportDate == nextBusinessDate
                 ? "nextBusinessDay"
