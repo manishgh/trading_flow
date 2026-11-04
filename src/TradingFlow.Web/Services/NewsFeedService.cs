@@ -226,7 +226,8 @@ public sealed class NewsFeedService : BackgroundService
         var window = EarningsNewsWindowPolicy.Resolve(nowUtc);
         // Only stories about a stock reporting earnings, never market-wide context. Each stock keeps its newest
         // stories rather than the whole page sharing one newest-N cap: on a busy evening a shared cap pushed a
-        // result headline off the page within the hour.
+        // result headline off the page within the hour. A result headline ("EPS $4.30 Beats $4.07 Estimate")
+        // always stays, however many newer stories follow it.
         var stories = await GetStoriesAsync(new NewsStoryQuery(normalizedTickers, window.StartUtc, 5000,
             IncludeMarketContext: false, PreferredProvider: NewsStories.RealTimeProvider), cancellationToken);
         var keptPerTicker = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -237,7 +238,8 @@ public sealed class NewsFeedService : BackgroundService
             .Where(story =>
             {
                 var related = story.Tickers.Where(normalizedTickers.Contains).ToArray();
-                if (related.All(ticker => keptPerTicker.GetValueOrDefault(ticker) >= EarningsStoriesPerStock)) return false;
+                if (related.All(ticker => keptPerTicker.GetValueOrDefault(ticker) >= EarningsStoriesPerStock) &&
+                    !TradingFlow.Earnings.EarningsNewsResultExtractor.TryExtract(story.Lead.Headline, out _)) return false;
                 foreach (var ticker in related) keptPerTicker[ticker] = keptPerTicker.GetValueOrDefault(ticker) + 1;
                 return true;
             })

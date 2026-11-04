@@ -153,18 +153,23 @@ public sealed class EarningsMonitor
                 .ToArray();
             var barsByTicker = await marketState.LoadAsync(symbols, nowUtc, cancellationToken);
 
+            // The time limit covers each stage, not the whole pass. Loading bars after a restart can take
+            // longer than the limit on its own (14 minutes for about 900 stocks on 4 Nov 2026); sharing one
+            // limit then cancelled the news read and every analysis of that pass was lost.
+            using var analysisTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            analysisTimeout.CancelAfter(options.RequestTimeout);
             var recentNews = await news.GetRecentForTickersAsync(
                 nowUtc.AddDays(-3),
                 5000,
                 symbols,
-                timeout.Token);
+                analysisTimeout.Token);
             var latest = await earnings.GetLatestAnalysesAsync(
                 trackedEvents.Select(item => item.Id).ToArray(),
-                timeout.Token);
+                analysisTimeout.Token);
             using var concurrency = new SemaphoreSlim(options.MaximumParallelAnalyses);
             var analyses = await Task.WhenAll(trackedEvents.Select(async calendarEvent =>
             {
-                await concurrency.WaitAsync(timeout.Token);
+                await concurrency.WaitAsync(analysisTimeout.Token);
                 try
                 {
                     return analyzer.Analyze(
@@ -184,7 +189,7 @@ public sealed class EarningsMonitor
                 if (!latest.TryGetValue(snapshot.EarningsEventId, out var previous) ||
                     ShouldPersist(previous, snapshot, options.AnalysisSnapshotHeartbeat))
                 {
-                    await earnings.UpsertAnalysisAsync(snapshot, timeout.Token);
+                    await earnings.UpsertAnalysisAsync(snapshot, analysisTimeout.Token);
                 }
             }
 
