@@ -69,6 +69,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             SingleWriter = false,
             FullMode = BoundedChannelFullMode.DropOldest
         });
+    private readonly LiveQuoteBook quotes;
     private long subscriptionGeneration;
     private string runtimeStage = "created";
 
@@ -80,8 +81,10 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         StreamingMarketStateProcessor marketState,
         Lazy<TradingFlow.Engine.Abstractions.IMarketDataProvider> marketDataProvider,
         AlpacaMarketStateStreamOptions options,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        LiveQuoteBook? quotes = null)
     {
+        this.quotes = quotes ?? new LiveQuoteBook();
         this.credentials = credentials;
         this.streamClientFactory = streamClientFactory;
         this.logger = logger;
@@ -641,6 +644,13 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
     {
         await foreach (var message in stream.ReadMessagesAsync(cancellationToken))
         {
+            // Quotes are display data: record the newest and move on without touching bar or status state.
+            if (AlpacaMarketDataMessageParser.TryParseQuote(message, out var quote))
+            {
+                quotes.Update(quote!);
+                continue;
+            }
+
             var observedAt = timeProvider.GetUtcNow();
             var fencingToken = leaseState.GetValidFence(observedAt);
             if (AlpacaMarketDataMessageParser.TryParseBar(

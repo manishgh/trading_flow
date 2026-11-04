@@ -6,7 +6,7 @@
     let currentJob = null, currentStocks = new Map(), currentSignature = '', currentSubmitting = false, currentFailure = '';
     const assessmentSubmissions = new Map();
     const isAdministrator = document.querySelector(".watch-desk").dataset.administrator === "true";
-    let stream, generation = 0, snapshot, selected, newsForAll = true, catalog = [], newsSignature = '', connected = false;
+    let stream, generation = 0, lastStreamedQuoteAt = 0, snapshot, selected, newsForAll = true, catalog = [], newsSignature = '', connected = false;
     const rowNodes = new Map();
     const money = value => value == null ? '—' : new Intl.NumberFormat(undefined, {style:'currency', currency:'USD', maximumFractionDigits:2}).format(value);
     const number = value => value == null ? '—' : new Intl.NumberFormat(undefined, {maximumFractionDigits:2}).format(value);
@@ -67,7 +67,7 @@
         currentJob=null;currentStocks=new Map();currentSignature='';currentSubmitting=false;currentFailure='';el('strategy-refresh').disabled=false;
         stream?.close();const version=++generation;connected=false;snapshot=null;selected=null;newsForAll=true;newsSignature='';strategyCheckSignature='';rowNodes.clear();el('rows').replaceChildren();
         el('focus-content').hidden=true;text('symbol','Choose a stock');text('name','Select a row to inspect its news, technicals and holding.');
-        el('retry').hidden=true;text('connection','Connecting · quotes refresh every 5 seconds');el('warning').hidden=true;el('empty').hidden=false;el('empty').querySelector('strong').textContent='Loading stocks…';
+        el('retry').hidden=true;text('connection','Connecting · live quotes');el('warning').hidden=true;el('empty').hidden=false;el('empty').querySelector('strong').textContent='Loading stocks…';
         text('count','— stocks');el('news-list').replaceChildren();
         const source=catalog.find(x=>x.key===el('source').value);text('title',source?.name||'All followed stocks');text('description',source?.description||'');
         const url=new URL(location.href);url.searchParams.set('source',el('source').value);strategyQuery(url.searchParams);history.replaceState(null,'',url);
@@ -89,6 +89,13 @@
         });
         const unavailable=()=>{if(version!==generation)return;connected=false;el('retry').hidden=false;text('connection','Disconnected · reconnecting; displayed observations may be stale');if(!snapshot){el('empty').querySelector('strong').textContent='Market view unavailable';el('empty').querySelector('p').textContent='Check your connection or select another source. Reconnecting automatically.';}ageRows();renderFocus();};
         stream.onerror=unavailable;stream.addEventListener('unavailable',unavailable);
+        // Streamed SIP quotes arrive between snapshots; apply them to the rows already shown.
+        stream.addEventListener('quotes',event=>{
+            if(version!==generation||!snapshot)return;
+            const bySymbol=new Map(JSON.parse(event.data).map(quote=>[quote.symbol,quote]));
+            for(const row of snapshot.rows){const quote=bySymbol.get(row.membership.symbol);if(quote){row.quote={...row.quote,ticker:quote.symbol,bidPrice:quote.bidPrice,askPrice:quote.askPrice,midPrice:quote.midPrice,bidSize:quote.bidSize,askSize:quote.askSize,timestamp:quote.timestamp};row.quoteFreshness='current';}}
+            lastStreamedQuoteAt=Date.now();render();
+        });
     }
     // Keep API errors and durable progress explicit; all decision calculations stay on the server.
     async function assessmentApi(path, body) {
@@ -161,24 +168,26 @@
         for(const row of rows){
             const symbol=row.membership.symbol;let tr=rowNodes.get(symbol);
             if(!tr){tr=document.createElement('tr');tr.dataset.symbol=symbol;
-                tr.innerHTML='<td><button type="button"></button><small></small></td><td><strong></strong><small></small></td><td><span></span></td><td><strong></strong><small></small></td><td><strong></strong><small></small></td><td><strong></strong><small></small></td><td><strong></strong><small></small></td>';
-                tr.querySelector('button').textContent=symbol;tr.querySelector('button').onclick=()=>{selected=symbol;newsForAll=false;render();{el('symbol').tabIndex=-1;el('symbol').focus({preventScroll:true});el('detail').scrollIntoView({behavior:'smooth',block:'start'});}};rowNodes.set(symbol,tr);
+                tr.innerHTML='<td><button type="button"></button><small></small></td><td class="watch-num"><strong></strong></td><td class="watch-num"><strong></strong></td><td class="watch-num"><strong></strong><small></small></td><td class="watch-num"><strong></strong><small></small></td><td><strong></strong><small></small></td><td class="watch-num"><strong></strong><small></small></td><td class="watch-news-cell"><strong></strong><small></small></td>';
+                tr.querySelector('button').textContent=symbol;
+                // Any click on the row selects it; links inside keep their own behaviour.
+                tr.onclick=event=>{if(event.target.closest('a'))return;selected=symbol;newsForAll=false;render();el('symbol').tabIndex=-1;el('symbol').focus({preventScroll:true});el('detail').scrollIntoView({behavior:'smooth',block:'nearest'});};rowNodes.set(symbol,tr);
             }
             const cells=tr.children;tr.dataset.selected=String(symbol===selected);tr.querySelector('button').setAttribute('aria-pressed',String(symbol===selected));
             const lists=row.membership.wishlists.map(x=>x.name).join(', ');cells[0].querySelector('small').textContent=lists||(row.membership.name==='Held position'?'Held position':'Screener discovery');cells[0].querySelector('small').title=lists;
-            cells[1].querySelector('strong').textContent=money(row.quote?.midPrice);const change = row.previousClose?.close > 0 && row.quote?.midPrice != null ? (row.quote.midPrice / row.previousClose.close - 1) * 100 : null;
-            cells[1].querySelector('small').textContent=money(row.quote?.bidPrice)+' · '+money(row.quote?.askPrice)+' · '+(change == null ? 'Change unavailable' : (change > 0 ? '+' : '')+number(change)+'%');
-            cells[1].title=row.previousClose ? 'Previous close '+money(row.previousClose.close)+' · '+row.previousClose.sessionDate : 'Previous close unavailable';
-            cells[2].querySelector('span').textContent=quoteAge(row);cells[2].title=when(row.quote?.timestamp);
-            cells[3].querySelector('strong').textContent=row.technical?'RSI '+number(row.technical.rsi):row.observation?.state==='loading'?'Loading daily history':'Daily history unavailable';
-            cells[3].querySelector('small').textContent=row.technical?'EMA20 '+money(row.technical.ema20):row.observation?.detail||'Completed bars required';cells[3].title=when(row.technical?.timestamp);
-            cells[4].querySelector('strong').textContent=!row.holdingsKnown?'Unknown':row.holding?number(row.holding.quantity)+' shares':'Not held';
-            cells[4].querySelector('small').textContent=row.holding?money(row.holding.marketValue)+' value':'';
-            const pl=cells[5].querySelector('strong');pl.textContent=money(row.holding?.unrealizedPl);tone(pl,row.holding?.unrealizedPl);
-            cells[5].querySelector('small').textContent=row.news.length?row.news.length+' recent '+(row.news.length===1?'story':'stories'):'';
-            cells[6].querySelector('strong').textContent=observationLabel(row);
-            cells[6].querySelector('small').textContent=row.news[0]?.headline||'No matched news in 72h';
-            cells[6].title=(row.strategyAssessment?.detail||'Select a strategy')+' · '+(row.news[0]?.headline||'No matched news');
+            // Buy fills at the ask and sell at the bid; the spread is the cost of crossing between them.
+            const bid=row.quote?.bidPrice,ask=row.quote?.askPrice;
+            cells[1].querySelector('strong').textContent=money(ask);cells[2].querySelector('strong').textContent=money(bid);
+            cells[3].querySelector('strong').textContent=ask>0&&bid>0?money(ask-bid):'—';
+            cells[3].querySelector('small').textContent=spreadDetail(row);cells[3].title=when(row.quote?.timestamp);
+            const change = row.previousClose?.close > 0 && row.quote?.midPrice != null ? (row.quote.midPrice / row.previousClose.close - 1) * 100 : null;
+            const day=cells[4].querySelector('strong');day.textContent=change == null ? '—' : (change > 0 ? '+' : '')+number(change)+'%';tone(day,change);
+            cells[4].querySelector('small').textContent=row.previousClose ? 'Prev '+money(row.previousClose.close) : 'Prev close unavailable';
+            cells[5].querySelector('strong').textContent=signalLabel(row);cells[5].querySelector('small').textContent=signalReason(row);cells[5].title=row.strategyAssessment?.detail||'Select a strategy at the top';
+            cells[6].querySelector('strong').textContent=!row.holdingsKnown?'Unknown':row.holding?number(row.holding.quantity)+' sh':'—';
+            const pl=cells[6].querySelector('small');pl.textContent=row.holding?money(row.holding.unrealizedPl):'';tone(pl,row.holding?.unrealizedPl);
+            const latest=row.news[0];cells[7].querySelector('strong').textContent=latest?.headline||'No matched news in 72h';
+            cells[7].querySelector('small').textContent=latest?[latest.sentimentLabel,latest.source||latest.provider,when(latest.publishedAtUtc)].filter(Boolean).join(' · ')+(row.news.length>1?' · +'+(row.news.length-1)+' more':''):'';
         }
         // Move only rows whose position changed, preserving keyboard focus during price updates.
         rows.forEach((row,index)=>{const node=rowNodes.get(row.membership.symbol),at=el('rows').children[index];if(at!==node)el('rows').insertBefore(node,at||null);});
@@ -188,11 +197,15 @@
     }
     // Summarize only checks actually recorded by the shared engine; missing and expired evidence stays explicit.
     function observationLabel(row){const assessment=row.strategyAssessment;if(!assessment)return 'Select a strategy';if(assessment.state==='missing')return 'Missing strategy data';if(!['recorded','evaluated'].includes(assessment.state))return assessment.state==='failed'?'Evaluation failed':assessment.state==='cancelled'?'Evaluation cancelled':'Collecting strategy data';return assessment.expired?'Evaluation expired':assessment.checks.some(check=>!check.passed)?'Strategy conditions failed':'Evaluated checks passed';}
+    // Short outcome of the selected strategy for a row and the first failed check behind it.
+    function signalLabel(row){const a=row.strategyAssessment;if(!a)return '—';if(!['recorded','evaluated'].includes(a.state))return a.state==='missing'?'No data':a.state==='failed'?'Failed':a.state==='cancelled'?'Cancelled':'Warming';return a.expired?'Expired':a.checks.some(c=>!c.passed)?'Rejected':'Passed';}
+    function signalReason(row){const a=row.strategyAssessment;if(!a)return 'Choose a strategy at the top';const failed=a.checks?.find(c=>!c.passed);return failed?(failed.rejectionCode||failed.gateName.replace(/^strategy:/,'').replaceAll('_',' ')):a.detail||'';}
+    function spreadDetail(row){const bid=row.quote?.bidPrice,ask=row.quote?.askPrice;return (ask>0&&bid>0?number((ask-bid)/((ask+bid)/2)*100)+'% · ':'')+quoteAge(row);}
     function updateHealth(){
         if(!snapshot||!connected)return;
         const current=snapshot.rows.filter(r=>r.quote?.timestamp&&Date.now()-Date.parse(r.quote.timestamp)<=20000&&Date.parse(r.quote.timestamp)<=Date.now()+5000).length;
         const available=snapshot.rows.filter(r=>r.quote?.timestamp).length;
-        text('connection',snapshot.rows.length?`${current}/${snapshot.rows.length} current quotes · ${snapshot.rows.length-available} unavailable · refresh every 5s`:'Connected · no stocks in this view');
+        text('connection',snapshot.rows.length?`${current}/${snapshot.rows.length} current quotes · ${snapshot.rows.length-available} unavailable · ${Date.now()-lastStreamedQuoteAt<10000?'live SIP stream':'polled every 5s'}`:'Connected · no stocks in this view');
     }
     function reviewLink(id, enabled, row, side){
         const link=el(id);link.hidden=!enabled;
@@ -252,7 +265,7 @@
         if(!articles.length){const p=document.createElement('p');p.className='watch-fine';p.textContent='No matched stories in the stored 72-hour window. This does not establish complete news coverage.';el('news-list').append(p);return;}
         for(const article of articles) el('news-list').append(window.TradingFlowNews.create(article,{allowGroup:false}));
     }
-    function ageRows(){if(!snapshot)return;for(const row of snapshot.rows){const node=rowNodes.get(row.membership.symbol)?.children[2];if(node){node.querySelector('span').textContent=quoteAge(row);const staleAccount=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;const cells=node.parentElement.children;if(staleAccount){cells[4].querySelector('strong').textContent='Stale holding';cells[5].querySelector('small').textContent='Last observed P&L';}node.classList.toggle('watch-stale',!connected||row.quoteFreshness!=='current'||Date.now()-Date.parse(row.quote?.timestamp)>20000);}}if(selected){const row=snapshot.rows.find(x=>x.membership.symbol===selected);if(row)text('quote-detail',quoteAge(row)+' · '+when(row.quote?.timestamp));}}
+    function ageRows(){if(!snapshot)return;for(const row of snapshot.rows){const node=rowNodes.get(row.membership.symbol)?.children[3];if(node){node.querySelector('small').textContent=spreadDetail(row);const staleAccount=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;const cells=node.parentElement.children;if(staleAccount&&row.holding){cells[6].querySelector('strong').textContent='Stale holding';cells[6].querySelector('small').textContent='Last observed P&L';}node.classList.toggle('watch-stale',!connected||row.quoteFreshness!=='current'||Date.now()-Date.parse(row.quote?.timestamp)>20000);}}if(selected){const row=snapshot.rows.find(x=>x.membership.symbol===selected);if(row)text('quote-detail',quoteAge(row)+' · '+when(row.quote?.timestamp));}}
     el('source').onchange=()=>{page=0;el('search').value='';connect();};el('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{page=0;connect();},300);};
     el('strategy').onchange=connect;
     // A refresh requests new evidence explicitly; completed observations do not silently become continuous background trading jobs.

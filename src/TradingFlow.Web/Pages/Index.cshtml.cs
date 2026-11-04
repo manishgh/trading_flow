@@ -3,5 +3,6 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 namespace TradingFlow.Web.Pages;
 public sealed class IndexModel : PageModel
 {
-    public IActionResult OnGet() => RedirectToPage(User.Identity?.IsAuthenticated == true ? "/Desk" : "/Workspace");
+    // The Trading Desk is the landing page; signing in is required and handled by the Desk's authorization.
+    public IActionResult OnGet() => RedirectToPage("/Desk");
 }

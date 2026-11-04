@@ -45,7 +45,10 @@ test.describe("trading environment separation", () => {
   test("paper is the default and live is locked with its promotion gates named", async ({ page }) => {
     await page.goto("/TradeDesk");
     await expect(page.locator("html")).toHaveAttribute("data-environment", "paper");
-    await expect(page.locator(".environment-switch .seg-opt")).toHaveCount(2);
+    // Exactly one environment is shown; the system menu names live as locked.
+    await expect(page.locator(".env-badge")).toHaveCount(1);
+    await expect(page.locator(".env-badge")).toHaveText("PAPER");
+    await expect(page.locator(".system-menu-panel")).toContainText("LIVE locked");
 
     await page.goto("/TradeDesk?env=live");
     await expect(page.locator("html")).toHaveAttribute("data-environment", "live");
@@ -66,7 +69,7 @@ test.describe("trading environment separation", () => {
 
   test("no screen hardcodes an environment label", async ({ page }) => {
     await page.goto("/TradeDesk?env=live");
-    await expect(page.locator('.environment-switch .seg-opt.env-live')).toBeVisible();
+    await expect(page.locator(".env-badge.env-live")).toHaveText("LIVE");
   });
 });
 

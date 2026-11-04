@@ -200,8 +200,8 @@ test.describe("UI2 web trading workstation", () => {
     await expect(page).toHaveURL(new RegExp(`ticker=${testTicker}`));
     await expect(page.locator(`[data-selected-symbol="${testTicker}"]`)).toBeVisible();
 
-    await page.locator(".primary-nav").getByRole("link", { name: "Orders", exact: true }).click();
-    await page.locator(".section-nav").getByRole("link", { name: "Positions", exact: true }).click();
+    await page.locator(".section-nav").getByRole("link", { name: "Orders", exact: true }).click();
+    await page.locator(".section-nav-secondary").getByRole("link", { name: "Positions", exact: true }).click();
     await expect(page).toHaveURL(/\/RunningTrades/);
     await expect(page.getByRole("heading", { name: "Positions", level: 1 })).toBeVisible();
   });

@@ -1,21 +1,25 @@
 import {expect,test} from '@playwright/test';
 import {signIn} from './sign-in.js';
-for(const width of [412,1280,1440]) test('workspace navigation stays available at '+width,async({page},testInfo)=>{
+// Three top tabs; the signed-in Trading Desk is the landing page and owns the Desk, wishlist, order and research pages.
+for(const width of [412,1280,1440]) test('trading desk navigation stays available at '+width,async({page},testInfo)=>{
  await page.setViewportSize({width,height:915});await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
  await expect(page.locator('#watch-source')).toContainText('All wishlist stocks');await page.screenshot({path:testInfo.outputPath('workspace-'+width+'.png'),fullPage:true});
- const nav=page.getByRole('navigation',{name:'Primary navigation'});
- await expect(nav.getByRole('link')).toHaveText(['Desk','Orders','Research','System']);
- for(const name of ['Desk','Orders','Research','System']){
-  const link=nav.getByRole('link',{name,exact:true});await expect(link).toBeInViewport();await link.click();
-  await expect(nav.getByRole('link',{name,exact:true})).toHaveAttribute('aria-current','true');
+ const tabs=()=>page.getByRole('navigation',{name:'Primary navigation'});
+ const sections=()=>page.getByRole('navigation',{name:'Trading Desk pages'});
+ await expect(tabs().getByRole('link')).toHaveText(['News','Earnings','Trading Desk']);
+ await expect(tabs().getByRole('link',{name:'Trading Desk',exact:true})).toHaveAttribute('aria-current','page');
+ await expect(sections().getByRole('link')).toHaveText(['Desk','Manage wishlists','Orders','Research']);
+ for(const name of ['Desk','Manage wishlists','Orders','Research']){
+  const link=sections().getByRole('link',{name,exact:true});await expect(link).toBeInViewport();await link.click();
+  await expect(sections().getByRole('link',{name,exact:true})).toHaveAttribute('aria-current','page');
   await expect(page.getByRole('heading',{level:1})).toHaveCount(1);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBeTruthy();
  }
- await nav.getByRole('link',{name:'Desk',exact:true}).click();
- await page.getByRole('link',{name:'Open candidate review ↗'}).click();
- await expect(page.locator('[data-candidate-workflow]')).toBeVisible();await expect(page.locator('#DeskFilterForm')).not.toBeVisible();
- await page.getByRole('button',{name:'Market explorer',exact:true}).click();await expect(page.locator('#DeskFilterForm')).toBeVisible();
- await page.goto('/TradeDesk?ticker=MSFT');await expect(page.getByRole('button',{name:'Market explorer',exact:true})).toHaveAttribute('aria-pressed','true');
+ for(const name of ['News','Earnings']){
+  await tabs().getByRole('link',{name,exact:true}).click();
+  await expect(tabs().getByRole('link',{name,exact:true})).toHaveAttribute('aria-current','page');
+  await expect(sections()).toHaveCount(0);
+ }
 });
 
 test('audit return keeps its candidate run',async({page})=>{

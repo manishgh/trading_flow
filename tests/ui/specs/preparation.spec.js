@@ -51,7 +51,8 @@ test('paper review survives mode change, refresh and environment navigation',asy
  expect(new URL(page.url()).searchParams.get('preparationKey')).toBe(key);
  await page.getByRole('link',{name:'Refresh',exact:true}).click();await expect(page.getByText(/Accepted preparation snapshot/)).toContainText(occurrence);
  expect(new URL(page.url()).searchParams.get('preparationKey')).toBe(key);
- await page.getByRole('link',{name:'PAPER',exact:true}).click();await expect(page.getByText(/Accepted preparation snapshot/)).toContainText(occurrence);
+ // Reloading on the current environment keeps the accepted preparation; only one environment badge is shown.
+ await expect(page.locator('.env-badge')).toHaveText('PAPER');await page.reload();await expect(page.getByText(/Accepted preparation snapshot/)).toContainText(occurrence);
  expect(new URL(page.url()).searchParams.get('preparationKey')).toBe(key);expect(jobs).toBe(0);
 });
 test('daily workspace opens latest evidence and keeps new workflow separate',async({page})=>{

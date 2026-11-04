@@ -10,18 +10,18 @@
     var envSlug = Context.Request.Query["env"].ToString();
     var environment = Environments.GetState(Environments.Parse(envSlug));
     var signedIn = User.Identity?.IsAuthenticated == true;
+    // Three top tabs: two public market screens and the signed-in Trading Desk, which is the landing page.
+    var tab = IsCurrent("/News") ? "News" : IsCurrent("/Earnings") ? "Earnings" : "Trading Desk";
+    var tabs = new[] { ("News", "/News"), ("Earnings", "/Earnings"), ("Trading Desk", "/Desk") };
     var area = IsCurrent("/RunningTrades", "/Orders", "/OrderTicket", "/Paper", "/PaperJob") ? "Orders"
         : IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "Research"
+        : IsCurrent("/Wishlists") ? "Manage wishlists"
         : IsCurrent("/Operations", "/Warmup", "/Users") ? "System" : "Desk";
-    var areas = new[] { ("Desk", "/Desk"), ("Orders", "/Orders"), ("Research", "/Backtests"), ("System", "/Operations") };
-    var sections = area switch {
-        "Orders" => new[] { ("Positions", "/RunningTrades"), ("Orders", "/Orders"), ("Paper runs", "/Paper") },
-        "Research" => new[] { ("Backtests", "/Backtests") },
-        "System" => User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator)
-            ? new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup"), ("Users", "/Users") }
-            : new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup") },
-        _ => new[] { ("Stock desk", "/Desk"), ("Candidate review", "/TradeDesk"), ("Manage wishlists", "/Wishlists"), ("Workspace", "/Workspace"), ("News", "/News"), ("Earnings", "/Earnings") }
-    };
+    var deskSections = new[] { ("Desk", "/Desk"), ("Manage wishlists", "/Wishlists"), ("Orders", "/Orders"), ("Research", "/Backtests") };
+    var orderPages = new[] { ("Orders", "/Orders"), ("Positions", "/RunningTrades"), ("Paper runs", "/Paper") };
+    var systemPages = User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator)
+        ? new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup"), ("Users", "/Users") }
+        : new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup") };
     string EnvironmentUrl(string slug) {
         var query = Context.Request.Query.ToDictionary(x => x.Key, x => (string?)x.Value.ToString(), StringComparer.OrdinalIgnoreCase);
         query["env"] = slug;
@@ -50,44 +50,25 @@
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <div class="environment-rail" aria-hidden="true"></div>
     <header class="topbar">
-        <a class="brand" asp-page="@(signedIn ? "/Desk" : "/Workspace")"
-           aria-label="TradingFlow">TRADINGFLOW</a>
+        <a class="brand" asp-page="/Desk" aria-label="TradingFlow">TRADINGFLOW</a>
 
         <nav class="primary-nav" aria-label="Primary navigation">
-            @if (signedIn) {
-                @foreach (var item in areas) {
-                    <a asp-page="@item.Item2" class="@(area == item.Item1 ? "active" : null)" aria-current="@(area == item.Item1 ? "true" : null)">@item.Item1</a>
-                }
-            } else {
-                <a asp-page="/Workspace" aria-current="@(IsCurrent("/Workspace") ? "page" : null)">Workspace</a>
-                <a asp-page="/News" aria-current="@(IsCurrent("/News") ? "page" : null)">News</a>
-                <a asp-page="/Earnings" aria-current="@(IsCurrent("/Earnings") ? "page" : null)">Earnings</a>
+            @foreach (var item in tabs) {
+                <a asp-page="@item.Item2" class="@(tab == item.Item1 ? "active" : null)" aria-current="@(tab == item.Item1 ? "page" : null)">@item.Item1</a>
             }
         </nav>
 
         <div class="topbar-tail">
             @if (signedIn)
             {
-                @* A locked environment renders as a locked option rather than
-                   disappearing: the operator has to see that live exists, and why
-                   it is unavailable, without being able to select it. *@
-                <div class="seg environment-switch" role="group" aria-label="Trading environment">
-                    @foreach (var candidate in Environments.All)
-                    {
-                        var isCurrent = candidate.Environment == environment.Environment;
-                        if (candidate.IsEnabled)
-                        {
-                            <a class="seg-opt env-@candidate.Slug"
-                               href="@EnvironmentUrl(candidate.Slug)"
-                               aria-current="@(isCurrent ? "true" : null)"
-                               title="@candidate.Label environment">@candidate.Label.ToUpperInvariant()</a>
-                        }
-                        else
-                        {
-                            <span class="seg-opt env-@candidate.Slug" data-locked
-                                  title="@candidate.LockReason">@(candidate.Label.ToUpperInvariant() + " \U0001F512")</span>
-                        }
-                    }
+                @* Exactly one environment is shown: the one this screen operates against. Switching
+                   lives in the system menu so the badge can never read as two at once. *@
+                <div class="account-strip" data-account-strip>
+                    <span class="env-badge env-@environment.Slug" title="@environment.Label environment">@environment.Label</span>
+                    <span class="account-figures">
+                        <span>Invested <strong data-account-invested>—</strong></span>
+                        <span>Cash <strong data-account-cash>—</strong></span>
+                    </span>
                 </div>
             }
 
@@ -124,6 +105,37 @@
                 </select>
             </div>
 
+            @if (signedIn)
+            {
+                <details class="system-menu">
+                    <summary class="btn btn-secondary btn-md" aria-label="System menu" title="System">
+                        <partial name="_Icon" model='new IconModel("settings", 16)' />
+                    </summary>
+                    <div class="system-menu-panel">
+                        @foreach (var item in systemPages)
+                        {
+                            <a asp-page="@item.Item2" aria-current="@(IsCurrent(item.Item2) ? "page" : null)">@item.Item1</a>
+                        }
+                        <span class="system-menu-label">Environment</span>
+                        @foreach (var candidate in Environments.All)
+                        {
+                            if (candidate.Environment == environment.Environment)
+                            {
+                                <span class="system-menu-locked" aria-current="true">@candidate.Label · current</span>
+                            }
+                            else if (candidate.IsEnabled)
+                            {
+                                <a href="@EnvironmentUrl(candidate.Slug)">Switch to @candidate.Label</a>
+                            }
+                            else
+                            {
+                                <span class="system-menu-locked" title="@candidate.LockReason">@candidate.Label locked</span>
+                            }
+                        }
+                    </div>
+                </details>
+            }
+
             <div class="identity-control">
                 @if (signedIn)
                 {
@@ -139,12 +151,19 @@
             </div>
         </div>
     </header>
-    @if (signedIn && currentPage != "/Desk") {
-        <nav class="section-nav" aria-label="@area pages">
-            @foreach (var item in sections) {
-                <a asp-page="@item.Item2" aria-current="@(IsCurrent(item.Item2) ? "page" : null)">@item.Item1</a>
+    @if (signedIn && tab == "Trading Desk") {
+        <nav class="section-nav" aria-label="Trading Desk pages">
+            @foreach (var item in deskSections) {
+                <a asp-page="@item.Item2" aria-current="@(area == item.Item1 ? "page" : null)">@item.Item1</a>
             }
         </nav>
+        @if (area == "Orders") {
+            <nav class="section-nav section-nav-secondary" aria-label="Orders pages">
+                @foreach (var item in orderPages) {
+                    <a asp-page="@item.Item2" aria-current="@(IsCurrent(item.Item2) ? "page" : null)">@item.Item1</a>
+                }
+            </nav>
+        }
     }
     <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
         @RenderBody()
@@ -160,6 +179,10 @@
     <script src="~/js/site.js" asp-append-version="true"></script>
     <script src="~/js/command-palette.js" asp-append-version="true" defer></script>
     <script src="~/js/desk-presets.js" asp-append-version="true" defer></script>
+    @if (signedIn)
+    {
+        <script src="~/js/account-strip.js" asp-append-version="true" defer></script>
+    }
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

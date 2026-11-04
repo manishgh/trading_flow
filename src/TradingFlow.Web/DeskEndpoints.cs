@@ -37,7 +37,7 @@ public static class DeskEndpoints
 
     /// <summary>Streams bounded observation pages and the selected run's recorded strategy checks; never starts an evaluation.</summary>
     private static async Task StreamAsync(HttpContext context, DeskSources sources, DeskReadService reader,
-        DeskStrategyAssessmentService assessments,
+        DeskStrategyAssessmentService assessments, IDiscoverySubscriptionSink subscriptions, TradingFlow.Web.Services.LiveQuoteBook quoteBook,
         ILoggerFactory logs)
     {
         var key = context.Request.Query["source"].FirstOrDefault() ?? "all";
@@ -63,9 +63,12 @@ public static class DeskEndpoints
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers["X-Accel-Buffering"] = "no";
         var ct = context.RequestAborted;
+        // The page's stocks join the one shared Alpaca SIP connection while this view is open.
+        var quoteScope = Guid.NewGuid();
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         try
         {
-            // Read-only REST observations do not subscribe the execution candle stream.
+            // A full snapshot every 5 seconds; streamed quotes in between, once a second.
             // Reconnect bounds lifetime and refreshes authentication.
             for (var i = 0; i < 60 && !ct.IsCancellationRequested; i++)
             {
@@ -79,9 +82,27 @@ public static class DeskEndpoints
                     snapshot = snapshot with { Rows = snapshot.Rows.Select(row => row with {
                         StrategyAssessment = bySymbol.GetValueOrDefault(row.Membership.Symbol) }).ToArray() };
                 }
-                await context.Response.WriteAsync("event: snapshot\ndata: " + JsonSerializer.Serialize(snapshot, new JsonSerializerOptions(JsonSerializerDefaults.Web)) + "\n\n", ct);
+                var symbols = snapshot.Rows.Select(row => row.Membership.Symbol).ToArray();
+                await subscriptions.ReplaceScopeAsync(quoteScope, symbols, ct);
+                snapshot = snapshot with { Rows = snapshot.Rows.Select(row => row with {
+                    Quote = quoteBook.Newest(row.Membership.Symbol, row.Quote) }).ToArray() };
+                await context.Response.WriteAsync("event: snapshot\ndata: " + JsonSerializer.Serialize(snapshot, json) + "\n\n", ct);
                 await context.Response.Body.FlushAsync(ct);
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
+                var sent = snapshot.Rows.ToDictionary(row => row.Membership.Symbol, row => row.Quote?.Timestamp, StringComparer.OrdinalIgnoreCase);
+                for (var tick = 0; tick < 5; tick++)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                    var changed = symbols.Select(quoteBook.Find)
+                        .Where(quote => quote is not null && quote.Timestamp > sent.GetValueOrDefault(quote.Ticker))
+                        .Select(quote => quote!).ToArray();
+                    if (changed.Length == 0) continue;
+                    foreach (var quote in changed) sent[quote.Ticker] = quote.Timestamp;
+                    await context.Response.WriteAsync("event: quotes\ndata: " + JsonSerializer.Serialize(changed.Select(quote => new
+                    {
+                        symbol = quote.Ticker, quote.BidPrice, quote.AskPrice, quote.MidPrice, quote.BidSize, quote.AskSize, quote.Timestamp
+                    }), json) + "\n\n", ct);
+                    await context.Response.Body.FlushAsync(ct);
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
@@ -94,6 +115,9 @@ public static class DeskEndpoints
                 await context.Response.Body.FlushAsync(ct);
             }
         }
-
+        finally
+        {
+            await subscriptions.RemoveScopeAsync(quoteScope, CancellationToken.None);
+        }
     }
 }

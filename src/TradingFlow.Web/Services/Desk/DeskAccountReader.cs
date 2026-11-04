@@ -8,7 +8,10 @@ namespace TradingFlow.Web.Services.Desk;
 
 public sealed record DeskHolding(string Symbol, decimal Quantity, decimal? AverageEntry, decimal? CostBasis,
     decimal? MarketValue, decimal? UnrealizedPl);
-public sealed record DeskAccount(bool Available, string Detail, DateTimeOffset ReadAtUtc, IReadOnlyList<DeskHolding> Holdings);
+/// <param name="Cash">Broker cash balance.</param>
+/// <param name="Invested">Market value of open positions, long plus the absolute short value.</param>
+public sealed record DeskAccount(bool Available, string Detail, DateTimeOffset ReadAtUtc, IReadOnlyList<DeskHolding> Holdings,
+    decimal? Cash = null, decimal? Invested = null);
 public interface IDeskAccountReader { Task<DeskAccount> ReadAsync(CancellationToken ct); }
 
 /// <summary>Account-level, GET-only broker projection, including positions without a running job.</summary>
@@ -41,7 +44,11 @@ public sealed class DeskAccountReader(AlpacaCredentialProvider credentials, ICon
                 var response = await client.SendAsync(request, "desk_positions", cancellationToken: ct);
                 if (!response.IsSuccessStatusCode) throw new InvalidOperationException("Positions read failed.");
                 using var json = JsonDocument.Parse(response.Payload);
-                return cached = new(true, "Alpaca paper account · broker unrealized P&L", now, ParsePositions(json.RootElement));
+                var brokerAccount = accountJson.RootElement;
+                var invested = Number(brokerAccount, "long_market_value") is { } longValue
+                    ? longValue + Math.Abs(Number(brokerAccount, "short_market_value") ?? 0m) : (decimal?)null;
+                return cached = new(true, "Alpaca paper account · broker unrealized P&L", now, ParsePositions(json.RootElement),
+                    Number(brokerAccount, "cash"), invested);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

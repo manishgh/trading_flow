@@ -14,7 +14,7 @@ public static class OrderWorkflowEndpoints
             var account = await reader.ReadAsync(ct);
             return Results.Ok(new PortfolioResponse(ContractVersions.VersionOne, account.Available, account.Detail,
                 account.ReadAtUtc, account.Holdings.Select(x => new PortfolioPositionResponse(x.Symbol, x.Quantity,
-                    x.AverageEntry, x.CostBasis, x.MarketValue, x.UnrealizedPl)).ToArray()));
+                    x.AverageEntry, x.CostBasis, x.MarketValue, x.UnrealizedPl)).ToArray(), account.Cash, account.Invested));
         });
         group.MapGet("/orders/journal", async ([FromServices] IOrderActivityQuery journal, [FromServices] IOrderIntentRepository intents,
             [FromServices] TradingFlow.Engine.Execution.BrokerAccountBindingOptions binding, CancellationToken ct) =>

@@ -70,14 +70,23 @@ public sealed class AlpacaQuoteService
 
     private const int SnapshotBatchSize = 100;
 
+    // A streamed quote younger than this is used as is; only symbols without one fall back to a REST read.
+    private static readonly TimeSpan StreamedQuoteMaximumAge = TimeSpan.FromSeconds(60);
+    private readonly LiveQuoteBook streamed;
+    private readonly TimeProvider clock;
+
     public AlpacaQuoteService(
         AlpacaCredentialProvider credentials,
         IHttpClientFactory httpClientFactory,
-        ILogger<AlpacaQuoteService> logger)
+        ILogger<AlpacaQuoteService> logger,
+        LiveQuoteBook? streamed = null,
+        TimeProvider? clock = null)
     {
         this.credentials = credentials;
         this.httpClientFactory = httpClientFactory;
         this.logger = logger;
+        this.streamed = streamed ?? new LiveQuoteBook();
+        this.clock = clock ?? TimeProvider.System;
     }
 
     public async Task<IReadOnlyDictionary<string, AlpacaLatestQuote>> GetLatestQuotesAsync(
@@ -90,20 +99,44 @@ public sealed class AlpacaQuoteService
             .Where(ticker => ticker.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        if (symbols.Length == 0 || !credentials.IsConfigured)
+        // The shared SIP WebSocket is the source; REST covers only symbols it has not quoted recently.
+        var now = clock.GetUtcNow();
+        var result = new Dictionary<string, AlpacaLatestQuote>(StringComparer.OrdinalIgnoreCase);
+        foreach (var symbol in symbols)
         {
-            return symbols.ToDictionary(ticker => ticker, ticker => Empty(ticker), StringComparer.OrdinalIgnoreCase);
+            if (streamed.Find(symbol) is { Timestamp: { } at } quote && now - at <= StreamedQuoteMaximumAge)
+            {
+                result[symbol] = quote;
+            }
+        }
+
+        var fallback = symbols.Where(symbol => !result.ContainsKey(symbol)).ToArray();
+        if (fallback.Length == 0)
+        {
+            return result;
+        }
+
+        if (!credentials.IsConfigured)
+        {
+            foreach (var symbol in fallback) result[symbol] = Empty(symbol);
+            return result;
         }
 
         try
         {
             var client = httpClientFactory.CreateClient(HttpClientName);
-            return await GetLatestQuotesBatchAsync(client, symbols, NormalizeFeed(feed), cancellationToken);
+            foreach (var (symbol, quote) in await GetLatestQuotesBatchAsync(client, fallback, NormalizeFeed(feed), cancellationToken))
+            {
+                result[symbol] = quote;
+            }
+
+            return result;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Alpaca latest quotes request failed.");
-            return symbols.ToDictionary(ticker => ticker, ticker => Empty(ticker), StringComparer.OrdinalIgnoreCase);
+            foreach (var symbol in fallback) result.TryAdd(symbol, Empty(symbol));
+            return result;
         }
     }
 

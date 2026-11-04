@@ -18,7 +18,10 @@ async function fixture(page){paused=false;await page.route('**/api/desk/sources'
 for(const width of [412,1280,1600])test('stock desk is readable and focused at '+width,async({page},testInfo)=>{
  await page.setViewportSize({width,height:1000});await fixture(page);await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
  await expect(page.locator('#watch-rows tr')).toHaveCount(3);await expect(page.getByRole('heading',{level:1})).toHaveText('Desk');
- await expect(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link')).toHaveText(['Desk','Orders','Research','System']);
+ await expect(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link')).toHaveText(['News','Earnings','Trading Desk']);
+ await expect(page.locator('#watch-rows tr[data-symbol=AAPL]')).toContainText('$200.05');await expect(page.locator('#watch-rows tr[data-symbol=AAPL]')).toContainText('$199.95');
+ // Any cell selects its row, not only the symbol button.
+ await page.locator('#watch-rows tr[data-symbol=NVDA] td').nth(4).click();await expect(page.locator('#watch-symbol')).toHaveText('NVDA');
  expect(await page.locator('#watch-source optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My wishlists','Finviz lists']);
  await expect(page.locator('#watch-rows tr[data-symbol=MSFT]')).toContainText('Stale');
  await page.locator('#watch-rows button').filter({hasText:'AAPL'}).click();await expect(page.locator('#watch-symbol')).toHaveText('AAPL');
@@ -120,7 +123,7 @@ test('news stays alongside a long wishlist and unavailable quotes are explicit',
  };});
  await page.setViewportSize({width:1600,height:1000});await page.goto('/Desk');
  await expect(page.locator('#watch-rows tr')).toHaveCount(32);await expect(page.locator('#watch-connection')).toContainText('0/32 current quotes · 32 unavailable');
- await expect(page.locator('#watch-rows tr').first()).toContainText('Select a strategy');
+ await expect(page.locator('#watch-rows tr').first()).toContainText('Choose a strategy at the top');
  const news=await page.locator('.watch-news').boundingBox(),stocks=await page.locator('.watch-stocks').boundingBox();
  expect(Math.abs(news.y-stocks.y)).toBeLessThan(5);expect(news.y).toBeLessThan(850);
  expect(await page.locator('.watch-table-scroll').evaluate(x=>x.scrollHeight>x.clientHeight)).toBe(true);

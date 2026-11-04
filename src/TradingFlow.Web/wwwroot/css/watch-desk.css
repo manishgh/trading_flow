@@ -29,3 +29,11 @@
 #watch-strategy-checks details{margin-top:8px;overflow-wrap:anywhere}
 #watch-strategy-checks summary{cursor:pointer;font-size:12px}
 #watch-strategy-checks pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;font-size:11px}
+/* Row layout: numbers right-aligned, the whole row is a selection target, and the news cell and side panel get more room. */
+.watch-table th.watch-num,.watch-table td.watch-num{text-align:right}
+.watch-table td.watch-num small{margin-left:auto}
+.watch-table tbody tr{cursor:pointer}
+.watch-table td.watch-news-cell{white-space:normal;min-width:260px;max-width:420px}
+.watch-table td.watch-news-cell strong{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-weight:500;line-height:1.4}
+.watch-table td.watch-news-cell small{max-width:none;white-space:normal}
+@media(min-width:1151px){.watch-grid{grid-template-columns:minmax(0,1fr) 420px}.watch-news{max-height:860px}}

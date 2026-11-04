@@ -76,6 +76,32 @@ public static class AlpacaMarketDataMessageParser
         return true;
     }
 
+    /// <summary>
+    /// Reads one streamed quote ("T":"q") with its bid, ask, sizes and exchange timestamp.
+    /// A quote frame missing any of those is ignored rather than shown as a price.
+    /// </summary>
+    public static bool TryParseQuote(JsonElement message, out AlpacaStreamQuote? quote)
+    {
+        quote = null;
+        if (message.ValueKind != JsonValueKind.Object ||
+            !message.TryGetProperty("T", out var typeElement) ||
+            typeElement.ValueKind != JsonValueKind.String ||
+            typeElement.GetString() != "q" ||
+            !TryReadString(message, "S", out var symbol) ||
+            !message.TryGetProperty("t", out var timestampElement) ||
+            !timestampElement.TryGetDateTimeOffset(out var timestamp) ||
+            !TryReadDecimal(message, "bp", out var bid) ||
+            !TryReadDecimal(message, "ap", out var ask) ||
+            !TryReadDecimal(message, "bs", out var bidSize) ||
+            !TryReadDecimal(message, "as", out var askSize))
+        {
+            return false;
+        }
+
+        quote = new AlpacaStreamQuote(symbol!.Trim().ToUpperInvariant(), bid, ask, bidSize, askSize, timestamp.ToUniversalTime());
+        return true;
+    }
+
     private static string NormalizeFeed(string dataFeed)
     {
         if (String.IsNullOrWhiteSpace(dataFeed))
@@ -105,3 +131,12 @@ public sealed record AlpacaBarParseFailure(
     string MessageType,
     string? Symbol,
     string Detail);
+
+/// <summary>One streamed best bid and offer for a symbol, as Alpaca reported it.</summary>
+public sealed record AlpacaStreamQuote(
+    string Symbol,
+    decimal BidPrice,
+    decimal AskPrice,
+    decimal BidSize,
+    decimal AskSize,
+    DateTimeOffset Timestamp);

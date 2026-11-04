@@ -93,6 +93,7 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
                 bars = symbols,
                 updatedBars = symbols,
                 trades = symbols,
+                quotes = symbols,
                 statuses = symbols
             },
             cancellationToken);
@@ -123,6 +124,7 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
                 bars = symbols,
                 updatedBars = symbols,
                 trades = symbols,
+                quotes = symbols,
                 statuses = symbols
             },
             cancellationToken);
@@ -284,6 +286,7 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             ReadSymbolSet(element, "bars"),
             ReadSymbolSet(element, "updatedBars"),
             ReadSymbolSet(element, "trades"),
+            ReadSymbolSet(element, "quotes"),
             ReadSymbolSet(element, "statuses"));
         return true;
     }
@@ -294,6 +297,7 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
         acknowledgement.Bars.SetEquals(expected) &&
         acknowledgement.UpdatedBars.SetEquals(expected) &&
         acknowledgement.Trades.SetEquals(expected) &&
+        acknowledgement.Quotes.SetEquals(expected) &&
         acknowledgement.Statuses.SetEquals(expected);
 
     private static IReadOnlySet<string> ReadSymbolSet(JsonElement element, string propertyName)
@@ -317,6 +321,7 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
         IReadOnlySet<string> Bars,
         IReadOnlySet<string> UpdatedBars,
         IReadOnlySet<string> Trades,
+        IReadOnlySet<string> Quotes,
         IReadOnlySet<string> Statuses);
 
     public void Dispose()

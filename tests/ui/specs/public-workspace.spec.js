@@ -1,18 +1,18 @@
 import { expect, test } from '@playwright/test';
 
+// Signed out, the landing page asks for sign-in and the two public tabs stay reachable.
 for (const width of [320, 412, 1280]) {
-  test(`public Workspace opens News and Earnings at ${width}px`, async ({ page }) => {
+  test(`public News and Earnings tabs open without signing in at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 915 });
     await page.goto('/');
-    await expect(page).toHaveURL(/\/Workspace$/);
-    await expect(page.getByRole('heading', { name: 'Workspace', exact: true })).toBeVisible();
-    const hub = page.getByRole('region', { name: 'Market overview' });
+    await expect(page).toHaveURL(/\/Login\?ReturnUrl=%2FDesk$/);
+    const tabs = page.getByRole('navigation', { name: 'Primary navigation' });
+    await expect(tabs.getByRole('link')).toHaveText(['News', 'Earnings', 'Trading Desk']);
     for (const name of ['News', 'Earnings']) {
-      await hub.getByRole('link', { name, exact: true }).click();
+      await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name, exact: true }).click();
       await expect(page).toHaveURL(new RegExp('/' + name + '$'));
       await expect(page.getByRole('heading', { name: name === 'Earnings' ? 'Earnings monitor' : name, level: 1, exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
-      await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Workspace', exact: true }).click();
     }
   });
 }

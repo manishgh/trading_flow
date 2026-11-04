@@ -165,13 +165,14 @@ public class AlpacaMarketDataProviderTests : IDisposable
     public void TryParseSubscriptionAcknowledgement_PreservesAcceptedChannels()
     {
         var message = JsonSerializer.Deserialize<JsonElement>(
-            """{"T":"subscription","bars":["AAPL"],"updatedBars":["AAPL"],"trades":["AAPL"],"statuses":["AAPL"]}""");
+            """{"T":"subscription","bars":["AAPL"],"updatedBars":["AAPL"],"trades":["AAPL"],"quotes":["AAPL"],"statuses":["AAPL"]}""");
 
         Assert.True(AlpacaStreamClient.TryParseSubscriptionAcknowledgement(message, out var acknowledgement));
         Assert.NotNull(acknowledgement);
         Assert.Contains("AAPL", acknowledgement.Bars);
         Assert.Contains("AAPL", acknowledgement.UpdatedBars);
         Assert.Contains("AAPL", acknowledgement.Trades);
+        Assert.Contains("AAPL", acknowledgement.Quotes);
         Assert.Contains("AAPL", acknowledgement.Statuses);
     }
 
@@ -179,15 +180,20 @@ public class AlpacaMarketDataProviderTests : IDisposable
     public void SubscriptionAcknowledgement_RequiresCompleteExpectedStateOnEveryChannel()
     {
         var complete = JsonSerializer.Deserialize<JsonElement>(
-            """{"T":"subscription","bars":["AAPL","MSFT"],"updatedBars":["AAPL","MSFT"],"trades":["AAPL","MSFT"],"statuses":["AAPL","MSFT"]}""");
+            """{"T":"subscription","bars":["AAPL","MSFT"],"updatedBars":["AAPL","MSFT"],"trades":["AAPL","MSFT"],"quotes":["AAPL","MSFT"],"statuses":["AAPL","MSFT"]}""");
         var missingExistingSymbol = JsonSerializer.Deserialize<JsonElement>(
-            """{"T":"subscription","bars":["MSFT"],"updatedBars":["MSFT"],"trades":["MSFT"],"statuses":["MSFT"]}""");
+            """{"T":"subscription","bars":["MSFT"],"updatedBars":["MSFT"],"trades":["MSFT"],"quotes":["MSFT"],"statuses":["MSFT"]}""");
         var expected = new HashSet<string>(["AAPL", "MSFT"], StringComparer.OrdinalIgnoreCase);
 
         Assert.True(AlpacaStreamClient.TryParseSubscriptionAcknowledgement(complete, out var accepted));
         Assert.True(AlpacaStreamClient.SubscriptionAcknowledgementMatchesExpected(accepted!, expected));
         Assert.True(AlpacaStreamClient.TryParseSubscriptionAcknowledgement(missingExistingSymbol, out var incomplete));
         Assert.False(AlpacaStreamClient.SubscriptionAcknowledgementMatchesExpected(incomplete!, expected));
+        // The quote channel is part of the confirmed state: an acknowledgement without it is incomplete.
+        var withoutQuotes = JsonSerializer.Deserialize<JsonElement>(
+            """{"T":"subscription","bars":["AAPL","MSFT"],"updatedBars":["AAPL","MSFT"],"trades":["AAPL","MSFT"],"statuses":["AAPL","MSFT"]}""");
+        Assert.True(AlpacaStreamClient.TryParseSubscriptionAcknowledgement(withoutQuotes, out var noQuotes));
+        Assert.False(AlpacaStreamClient.SubscriptionAcknowledgementMatchesExpected(noQuotes!, expected));
     }
 
     /// <summary>Reads every archived page while preserving query and bar provenance.</summary>

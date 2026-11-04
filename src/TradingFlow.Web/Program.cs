@@ -447,6 +447,7 @@ builder.Services.AddSingleton(serviceProvider => new TradingFlow.Engine.Pipeline
 builder.Services.AddSingleton<TradingFlow.Engine.Pipeline.IMarketStateSnapshotProvider>(serviceProvider =>
     serviceProvider.GetRequiredService<TradingFlow.Engine.Pipeline.StreamingMarketStateProcessor>());
 builder.Services.AddSingleton<IAlpacaMarketStateStreamClientFactory, AlpacaMarketStateStreamClientFactory>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.LiveQuoteBook>();
 builder.Services.AddSingleton<AlpacaMarketStateStreamService>();
 builder.Services.AddSingleton<IDiscoverySubscriptionSink>(serviceProvider =>
     serviceProvider.GetRequiredService<AlpacaMarketStateStreamService>());
@@ -1071,30 +1072,56 @@ static async Task WriteQuoteStreamAsync(
     CancellationToken cancellationToken)
 {
     PrepareEventStream(httpContext);
-    while (!cancellationToken.IsCancellationRequested)
+    // The streamed symbols join the shared Alpaca SIP connection for as long as this view is open.
+    var subscriptions = httpContext.RequestServices.GetRequiredService<IDiscoverySubscriptionSink>();
+    var streamed = httpContext.RequestServices.GetRequiredService<TradingFlow.Web.Services.LiveQuoteBook>();
+    var scope = Guid.NewGuid();
+    await subscriptions.ReplaceScopeAsync(scope, tickers, cancellationToken);
+    try
     {
-        var quotes = await GetLiveQuotesWithExtendedFallbackAsync(quoteService, tickers, feed, cancellationToken);
-        var payload = quotes.Values
-            .OrderBy(quote => quote.Ticker)
-            .Select(quote => new
-            {
-                ticker = quote.Ticker,
-                bidPrice = quote.BidPrice,
-                askPrice = quote.AskPrice,
-                midPrice = quote.MidPrice,
-                bidText = quote.DisplayBid,
-                askText = quote.DisplayAsk,
-                midText = quote.DisplayPrice,
-                buyCaption = quote.BuyCaption,
-                sellCaption = quote.SellCaption,
-                timestamp = quote.Timestamp
-            });
-
-        await httpContext.Response.WriteAsync("event: quotes\n", cancellationToken);
-        await httpContext.Response.WriteAsync($"data: {JsonSerializer.Serialize(payload)}\n\n", cancellationToken);
-        await httpContext.Response.Body.FlushAsync(cancellationToken);
-        await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+        IReadOnlyDictionary<string, AlpacaLatestQuote> quotes = new Dictionary<string, AlpacaLatestQuote>(StringComparer.OrdinalIgnoreCase);
+        for (var tick = 0; !cancellationToken.IsCancellationRequested; tick++)
+        {
+            // Every second from the stream; every fifth second the shared service also fills,
+            // over REST, only the symbols the stream has not quoted.
+            quotes = tick % 5 == 0
+                ? await GetLiveQuotesWithExtendedFallbackAsync(quoteService, tickers, feed, cancellationToken)
+                : quotes.Values.Select(quote => streamed.Newest(quote.Ticker, quote)!)
+                    .ToDictionary(quote => quote.Ticker, StringComparer.OrdinalIgnoreCase);
+            await WriteQuotesEventAsync(quotes, httpContext, cancellationToken);
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
     }
+    finally
+    {
+        await subscriptions.RemoveScopeAsync(scope, CancellationToken.None);
+    }
+}
+
+static async Task WriteQuotesEventAsync(
+    IReadOnlyDictionary<string, AlpacaLatestQuote> quotes,
+    HttpContext httpContext,
+    CancellationToken cancellationToken)
+{
+    var payload = quotes.Values
+        .OrderBy(quote => quote.Ticker)
+        .Select(quote => new
+        {
+            ticker = quote.Ticker,
+            bidPrice = quote.BidPrice,
+            askPrice = quote.AskPrice,
+            midPrice = quote.MidPrice,
+            bidText = quote.DisplayBid,
+            askText = quote.DisplayAsk,
+            midText = quote.DisplayPrice,
+            buyCaption = quote.BuyCaption,
+            sellCaption = quote.SellCaption,
+            timestamp = quote.Timestamp
+        });
+
+    await httpContext.Response.WriteAsync("event: quotes\n", cancellationToken);
+    await httpContext.Response.WriteAsync($"data: {JsonSerializer.Serialize(payload)}\n\n", cancellationToken);
+    await httpContext.Response.Body.FlushAsync(cancellationToken);
 }
 
 // Signals are read for the one wishlist when there is one, otherwise across all
