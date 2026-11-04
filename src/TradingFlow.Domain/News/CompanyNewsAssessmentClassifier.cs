@@ -123,7 +123,7 @@ public static class CompanyNewsAssessmentClassifier
 
     /// <summary>Recognizes the supported literal ticker syntax without rewriting unsupported provider symbol identities.</summary>
     private static bool IsSupportedLiteralSymbol(string symbol) =>
-        Regex.IsMatch(symbol, @"^[A-Z][A-Z0-9.-]{0,15}$", Options, TimeSpan.FromMilliseconds(100));
+        Regex.IsMatch(symbol, @"^[A-Z][A-Z0-9.-]{0,15}$", Options, NewsPatterns.MatchTimeout);
 
     /// <summary>Keeps every supplied field intact, making original offsets and contradictory context reviewable.</summary>
     internal static ImmutableArray<CompanyNewsEvidenceSpan> OriginalFields(CompanyNewsRevisionInput revision)
@@ -147,13 +147,13 @@ public static class CompanyNewsAssessmentClassifier
                 reasons.Add($"supporting_{span.Field}_exceeds_32000_character_assertion_limit");
                 continue;
             }
-            if (Regex.IsMatch(span.Text, @"<[^>]*>|&(?:#\w+|[A-Za-z]+);", Options, TimeSpan.FromMilliseconds(100)))
+            if (Regex.IsMatch(span.Text, @"<[^>]*>|&(?:#\w+|[A-Za-z]+);", Options, NewsPatterns.MatchTimeout))
                 reasons.Add("markup_requires_reviewed_original_span_mapping");
             if (Regex.IsMatch(span.Text, @"\b(?:rival|competitor|versus|vs\.?|compared|whereas|while|unlike)\b",
-                Options | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                Options | RegexOptions.IgnoreCase, NewsPatterns.MatchTimeout))
                 reasons.Add("multi_company_or_comparative_context_requires_review");
             if (Regex.IsMatch(span.Text, @"\b(?:not|never|denies|denied|rumou?rs?|might|could|reportedly|speculat\w*)\b",
-                Options | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+                Options | RegexOptions.IgnoreCase, NewsPatterns.MatchTimeout))
                 reasons.Add("negated_or_speculative_surrounding_context");
             if (span.Field == "headline") continue;
             if (!ContainsTicker(span.Text, symbol)) reasons.Add("supporting_field_issuer_not_explicit");
@@ -184,7 +184,7 @@ public static class CompanyNewsAssessmentClassifier
         if (assertion is null) return false;
         var pattern = @"^\s*\$?" + Regex.Escape(symbol) + @"\s+" + assertion +
             @"(?:\s+(?:to|by)\s+\$?\d+(?:\.\d+)?(?:%|\s+per\s+share)?)?\s*\.?\s*$";
-        return Regex.IsMatch(text, pattern, Options | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
+        return Regex.IsMatch(text, pattern, Options | RegexOptions.IgnoreCase, NewsPatterns.MatchTimeout);
     }
 
     /// <summary>
@@ -207,13 +207,13 @@ public static class CompanyNewsAssessmentClassifier
 
     /// <summary>Matches a literal uppercase ticker token, never a provider tag or an inferred company-name alias.</summary>
     private static bool ContainsTicker(string text, string symbol) => Regex.IsMatch(text,
-        @"(?:^|[^A-Za-z0-9.-])\$?" + Regex.Escape(symbol) + @"(?:$|[^A-Za-z0-9.-])", Options, TimeSpan.FromMilliseconds(100));
+        @"(?:^|[^A-Za-z0-9.-])\$?" + Regex.Escape(symbol) + @"(?:$|[^A-Za-z0-9.-])", Options, NewsPatterns.MatchTimeout);
 
     /// <summary>Only an explicit unchanged guidance assertion can provide neutral economic direction in this version.</summary>
     private static bool IsExplicitReaffirmation(EconomicNewsRuleResult rules) => rules.Scope == EconomicNewsScope.Company &&
         rules.Category == CatalystNewsCategory.Guidance && !rules.DirectionIsClear &&
         rules.MatchedCues.Where(cue => cue.Field == "headline").All(cue => !cue.AssertionUncertain &&
-            Regex.IsMatch(cue.MatchedText, @"^reaffirm(?:s|ed)?\b", Options | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100))) &&
+            Regex.IsMatch(cue.MatchedText, @"^reaffirm(?:s|ed)?\b", Options | RegexOptions.IgnoreCase, NewsPatterns.MatchTimeout)) &&
         rules.MatchedCues.Any(cue => cue.Field == "headline");
 
     /// <summary>Confirms explicit macro context is outside issuer direction; ambiguous company text never becomes irrelevant.</summary>
@@ -247,7 +247,7 @@ public static class CompanyNewsAssessmentClassifier
         ArgumentException.ThrowIfNullOrWhiteSpace(model.Model);
         ArgumentException.ThrowIfNullOrWhiteSpace(model.Version);
         ArgumentException.ThrowIfNullOrWhiteSpace(model.TrainingDataProvenance);
-        if (model.ArtifactSha256 is null || !Regex.IsMatch(model.ArtifactSha256, "^[a-f0-9]{64}$", Options, TimeSpan.FromMilliseconds(100)))
+        if (model.ArtifactSha256 is null || !Regex.IsMatch(model.ArtifactSha256, "^[a-f0-9]{64}$", Options, NewsPatterns.MatchTimeout))
             throw new ArgumentException("Pin a canonical SHA-256 model artifact.", nameof(model));
         if (model.TrainingDataCutoffUtc.HasValue) RequireUtc(model.TrainingDataCutoffUtc.Value, nameof(model));
     }

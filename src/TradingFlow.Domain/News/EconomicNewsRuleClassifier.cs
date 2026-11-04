@@ -30,7 +30,7 @@ public static class EconomicNewsRuleClassifier
 {
     public const string Version = "economic-news-research-rules-v1";
     private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
-    private static Regex Pattern(string value) => new(value, Options, TimeSpan.FromMilliseconds(100));
+    private static Regex Pattern(string value) => new(value, Options, NewsPatterns.MatchTimeout);
     private sealed record Rule(string Id, CatalystNewsCategory Category, Regex Pattern);
     private static Rule R(string id, CatalystNewsCategory category, string pattern) => new(id, category, Pattern(pattern));
 
@@ -142,7 +142,7 @@ public static class EconomicNewsRuleClassifier
     {
         // Sentence windows keep unrelated historical/background paragraphs from lending
         // verbs to a bare headline noun. All matches remain visible to the reviewer.
-        foreach (var sentence in Regex.Split(text, @"(?<=[.!?])\s+", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100))) {
+        foreach (var sentence in Regex.Split(text, @"(?<=[.!?])\s+", RegexOptions.CultureInvariant, NewsPatterns.MatchTimeout)) {
             if (sentence.Length == 0) continue;
             foreach (var rule in Rules) {
                 foreach (Match match in rule.Pattern.Matches(sentence)) cues.Add(new(rule.Id, rule.Category, field, match.Value,
@@ -155,13 +155,13 @@ public static class EconomicNewsRuleClassifier
 
     private static bool SubjectBound(EconomicNewsRuleCue cue, string symbol) =>
         Regex.IsMatch(cue.AssertionPrefix, @"(?:^|[\s(,$])" + Regex.Escape(symbol) + @"\s*$",
-            RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromMilliseconds(100)) &&
+            RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, NewsPatterns.MatchTimeout) &&
         // In an active analyst sentence the ticker before "upgrades" can identify
         // the bank making the recommendation, not the security being rated.
         (cue.Category != CatalystNewsCategory.AnalystAction ||
             Pattern(@"^(?:upgraded|downgraded)\s+(?:to|from)\b").IsMatch(cue.MatchedText));
 
     private static string Text(string? raw) => String.IsNullOrWhiteSpace(raw) ? "" :
-        Regex.Replace(WebUtility.HtmlDecode(Regex.Replace(raw, "<[^>]*>", " ", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100))),
-            @"\s+", " ", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)).Trim();
+        Regex.Replace(WebUtility.HtmlDecode(Regex.Replace(raw, "<[^>]*>", " ", RegexOptions.CultureInvariant, NewsPatterns.MatchTimeout)),
+            @"\s+", " ", RegexOptions.CultureInvariant, NewsPatterns.MatchTimeout).Trim();
 }

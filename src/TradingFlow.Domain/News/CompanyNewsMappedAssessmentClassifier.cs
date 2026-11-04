@@ -54,7 +54,7 @@ internal static class CompanyNewsMappedAssessmentClassifier
         var official = mapping.OfficialName;
         var trimmed = Regex.Replace(official,
             @"(?:,\s*|\s+)(?:Inc\.?|Incorporated|Corp\.?|Corporation|Ltd\.?|Limited|PLC)\s*$", "", Options,
-            TimeSpan.FromMilliseconds(100)).TrimEnd();
+            NewsPatterns.MatchTimeout).TrimEnd();
         return new[] { official, trimmed }.Where(value => !String.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.OrdinalIgnoreCase).OrderByDescending(value => value.Length).ToImmutableArray();
     }
@@ -73,7 +73,7 @@ internal static class CompanyNewsMappedAssessmentClassifier
             mapping.OfficialName.Any(Char.IsControl))
             throw new ArgumentException("Preserve a bounded canonical official name from the verified source row.", nameof(mapping));
         if (mapping.SourceContentSha256 is null || !Regex.IsMatch(mapping.SourceContentSha256, "^[a-f0-9]{64}$", Options,
-            TimeSpan.FromMilliseconds(100)) || mapping.SourceContentSha256 != mapping.SourceContentSha256.ToLowerInvariant())
+            NewsPatterns.MatchTimeout) || mapping.SourceContentSha256 != mapping.SourceContentSha256.ToLowerInvariant())
             throw new ArgumentException("Mapping source requires its canonical payload SHA-256.", nameof(mapping));
         if (mapping.ObservedAtUtc == default || mapping.ObservedAtUtc.Offset != TimeSpan.Zero)
             throw new ArgumentException("Mapping observation must retain the actual non-default UTC capture time.", nameof(mapping));
@@ -104,7 +104,7 @@ internal static class CompanyNewsMappedAssessmentClassifier
             .Select(CompanyNewsAssessmentClassifier.SupportedAssertionPattern);
         var pattern = @"^\s*\$?(?:" + subjects + @")\s+(?<assertion>" + String.Join('|', assertions) +
             @")(?<numeric>" + NumericSuffix + @")\s*\.?\s*$";
-        var match = Regex.Match(original, pattern, Options, TimeSpan.FromMilliseconds(100));
+        var match = Regex.Match(original, pattern, Options, NewsPatterns.MatchTimeout);
         return match.Success ? symbol + " " + match.Groups["assertion"].Value + match.Groups["numeric"].Value : null;
     }
 
@@ -115,7 +115,7 @@ internal static class CompanyNewsMappedAssessmentClassifier
         var pattern = @"^\s*" + actor + @"\s+(?<action>Upgrades|Downgrades)\s+(?:" + subjects +
             @")\s+to\s+(?<rating>" + Ratings + @")" +
             @"(?:,\s*(?:Announces|Sets)\s+\$?\d+(?:\.\d+)?\s+Price\s+Target)?\s*\.?\s*$";
-        var match = Regex.Match(original, pattern, Options, TimeSpan.FromMilliseconds(100));
+        var match = Regex.Match(original, pattern, Options, NewsPatterns.MatchTimeout);
         if (!match.Success || HasUnresolvedActorContext(match.Groups["actor"].Value, atUtc)) return null;
         var action = match.Groups["action"].Value.Equals("Upgrades", StringComparison.OrdinalIgnoreCase) ? "upgraded" : "downgraded";
         return symbol + " " + action + " to " + match.Groups["rating"].Value;
@@ -131,7 +131,7 @@ internal static class CompanyNewsMappedAssessmentClassifier
         @"rumou?rs?|may|might|could|reportedly|expected|expects?|speculat\w*|rival|competitor|" +
         @"raises?|raised|cuts?|cut|lowers?|lowered|boosts?|boosted|upgrades?|upgraded|downgrades?|downgraded|" +
         @"beats?|beat|misses?|missed|earnings|revenue|profit|sales|shares|stock|guidance|outlook|" +
-        @"falls?|fell|slumps?|slumped|surges?|surged|drops?|dropped|loses?|lost|unchanged)\b", Options, TimeSpan.FromMilliseconds(100));
+        @"falls?|fell|slumps?|slumped|surges?|surged|drops?|dropped|loses?|lost|unchanged)\b", Options, NewsPatterns.MatchTimeout);
     }
 
     /// <summary>Conservatively withholds a finite set of reporting and invalidation language; this is not general language understanding.</summary>
@@ -142,5 +142,5 @@ internal static class CompanyNewsMappedAssessmentClassifier
         @"misleadingly|misleading|untrue|denies|denied|denying|refutes?|refuted|refuting|" +
         @"disputes?|disputed|rejects?|rejected|retracts?|retracted|recants?|recanted|debunks?|debunked|" +
         @"fabricated|fabricates?|fake|baseless|unfounded|unsubstantiated|unconfirmed|unverified|mistakenly|mistaken)\b",
-        Options, TimeSpan.FromMilliseconds(100));
+        Options, NewsPatterns.MatchTimeout);
 }
