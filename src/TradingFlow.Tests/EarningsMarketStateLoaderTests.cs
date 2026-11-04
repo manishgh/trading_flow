@@ -42,9 +42,6 @@ public sealed class EarningsMarketStateLoaderTests
     public void DefaultLookback_CoversTheFullSameSlotRelativeVolumeBaseline()
     {
         Assert.True(EarningsMonitorOptions.Default.SubDailyLookbackDays >= 90);
-        Assert.Equal(
-            TradingFlow.Engine.Indicators.IndicatorEngine.RelativeVolumeLookbackSessions,
-            EarningsMonitorOptions.Default.MinimumSlotRelativeVolumeSamples);
     }
 
     private sealed class RecordingMarketDataProvider(IReadOnlyList<OhlcvBar> source) : IMarketDataProvider

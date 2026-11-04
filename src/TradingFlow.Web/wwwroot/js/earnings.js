@@ -37,7 +37,7 @@
     const serverFilters = { session: "all", marketCap: "all", dateScope: "today" };
     // The rest are applied here because the payload is already fully
     // materialised for the chosen date range.
-    const clientFilters = { assessment: "all", onlyHeld: false, hasNews: false, minSurprise: null, sort: "time" };
+    const clientFilters = { assessment: "all", onlyHeld: false, hasNews: false, minSurprise: null, sort: "breakout" };
     let activeLane = null;
     let newsScopeTicker = null;
     let latestPayload = null;
@@ -71,7 +71,7 @@
         if (fromInput.value) query.set('from', fromInput.value);
         if (toInput.value) query.set('to', toInput.value);
         const visibleQuery = new URLSearchParams(query);
-        for (const [key,value] of Object.entries({session:'all',marketCap:'all',scope:'today',assessment:'all',onlyHeld:'false',hasNews:'false',sort:'time',view:'timeline'}))
+        for (const [key,value] of Object.entries({session:'all',marketCap:'all',scope:'today',assessment:'all',onlyHeld:'false',hasNews:'false',sort:'breakout',view:'timeline'}))
             if (visibleQuery.get(key) === value) visibleQuery.delete(key);
         const url = new URL(location.href); url.search = visibleQuery.toString(); history.replaceState(null, '', url);
         return query;
@@ -429,10 +429,10 @@
 
     /* --- timeline ---------------------------------------------------------- */
 
-    // Today's group also holds the previous session's after-close reports, which trade today,
-    // so its heading takes today's New York date from the response rather than from a card.
+    // Each reporting day is its own list. Headings take their dates from the response, never from a card.
+    const namedDays = new Set(['today', 'nextBusinessDay']);
     function dayKey(item) {
-        return item.dayGroup === 'today' || item.dayGroup === 'nextBusinessDay' ? item.dayGroup : exchangeDate(item.scheduledAtUtc);
+        return namedDays.has(item.dayGroup) ? item.dayGroup : exchangeDate(item.scheduledAtUtc);
     }
 
     function exchangeDateLabel(date, options) {
@@ -456,12 +456,10 @@
             groups.get(key).push(item);
         }
 
-        const today = exchangeDate(payload.generatedAtUtc), used = [];
+        const used = [];
         syncChildren(feed, [...groups].map(([key, groupItems]) => {
             const reported = groupItems.filter(item => item.epsActual !== null && item.epsActual !== undefined).length;
-            const carried = key === 'today' ? groupItems.filter(item => exchangeDate(item.scheduledAtUtc) < today).length : 0;
-            const summary = `${groupItems.length} of ${totalForGroup.get(key) ?? groupItems.length} events · ${reported} reported`
-                + (carried ? ` · ${carried} reported after the previous close` : '');
+            const summary = `${groupItems.length} of ${totalForGroup.get(key) ?? groupItems.length} events · ${reported} reported`;
             const day = daySection('t:' + key, dayTitle(key, payload), summary); used.push('t:' + key);
             syncChildren(day.section, [day.header, ...groupItems.map(eventCard)]);
             return day.section;

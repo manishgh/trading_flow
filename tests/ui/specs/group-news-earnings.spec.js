@@ -129,11 +129,11 @@ test('Earnings calendar uses New York dates and filter URLs survive reload', asy
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-// Today holds the previous session's after-close reports too; the heading still names today, and a refresh patches cards in place.
+// The Today heading names today's New York date from the response, and a refresh patches cards in place.
 test('Earnings updates cards in place without dimming the list, under today’s New York date', async ({ page }) => {
   const payload = appActual => ({ generatedAtUtc:'2026-11-04T18:00:00Z', monitoringActive:true, monitoringIntervalSeconds:60,
     nextBusinessDateLabel:'Thursday, November 5', newsWindowLabel:'Stored evidence', filters:{session:'all',marketCap:'all'}, news:[], totalMatching:2,
-    items:[{...item('amd','AMD','2026-11-03T21:30:00Z'), dayGroup:'today', epsEstimate:1.95, epsActual:2.09},
+    items:[{...item('amd','AMD','2026-11-04T12:30:00Z'), dayGroup:'today', epsEstimate:1.95, epsActual:2.09},
       {...item('app','APP','2026-11-04T21:30:00Z'), dayGroup:'today', epsEstimate:4.03, epsActual:appActual}] });
   let calls = 0, release; const gate = new Promise(resolve => { release = resolve; });
   await page.route('**/api/earnings/today-next-business-day?*', async route => {
@@ -144,7 +144,7 @@ test('Earnings updates cards in place without dimming the list, under today’s 
   const heading = page.locator('.earnings-day-head h2');
   await expect(heading).toHaveCount(1);
   await expect(heading).toContainText('Nov 04, 2026');
-  await expect(page.locator('.earnings-day-summary')).toContainText('1 reported after the previous close');
+  await expect(page.locator('.earnings-day-summary')).toHaveText('2 of 2 events · 1 reported');
   const card = ticker => page.locator('.earnings-event').filter({ has:page.getByRole('heading', { name:ticker, exact:true }) });
   await card('APP').getByText('Provenance and previous quarter').click();
   await card('AMD').evaluate(node => { node.dataset.sameNode = 'yes'; });

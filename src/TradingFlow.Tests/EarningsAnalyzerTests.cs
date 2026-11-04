@@ -92,11 +92,7 @@ public sealed class EarningsAnalyzerTests
     [Fact]
     public void Analyze_FlagsPositiveBreakoutFromCompletedBarsOnly()
     {
-        var options = EarningsMonitorOptions.Default with
-        {
-            MinimumSlotRelativeVolume = 1.5m,
-            ReferenceBarCount = 40
-        };
+        var options = EarningsMonitorOptions.Default with { ReferenceBarCount = 40 };
         var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), options);
         var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
         var now = DateTimeOffset.Parse("2026-07-31T14:35:00Z");
@@ -121,12 +117,11 @@ public sealed class EarningsAnalyzerTests
         Assert.NotEqual(999m, result.LatestClose);
         Assert.True(result.Ema10 > result.Ema20);
         Assert.True(result.MacdHistogram > 0m);
-        Assert.True(result.SlotRelativeVolume >= 1.5m);
         Assert.Equal(eventTime, result.ResultNewsPublishedAtUtc);
     }
 
     [Fact]
-    public void Analyze_ReportsInsufficientDataWhileSameSlotBaselineIsCold()
+    public void Analyze_BreakoutDoesNotWaitForASameTimeVolumeBaseline()
     {
         var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
@@ -145,12 +140,14 @@ public sealed class EarningsAnalyzerTests
             }],
             DateTimeOffset.Parse("2026-07-31T14:35:00Z"));
 
-        Assert.Equal(EarningsBreakoutAssessment.InsufficientData, result.BreakoutAssessment);
-        Assert.Contains("required prior sessions", result.Reason, StringComparison.Ordinal);
+        // Only 20 days of history: too few for a same-time volume baseline, which no longer matters.
+        Assert.Equal(EarningsBreakoutAssessment.Possible, result.BreakoutAssessment);
+        Assert.DoesNotContain("volume", result.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("EPS beat by 8.0%; revenue beat by 4.0%; close", result.Reason, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Analyze_ColdBaselineStillReportsNotConfirmedWhenAnotherCheckFails()
+    public void Analyze_NegativeResultIsNotABreakout()
     {
         var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
         var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
@@ -180,11 +177,27 @@ public sealed class EarningsAnalyzerTests
         var result = analyzer.Analyze(
             CreateEvent(eventTime, epsSurprise: 8m, revenueSurprise: -4m),
             CreateBars(eventTime),
-            [],
+            [new PersistedNewsItem { Id = "mixed", Ticker = "TEST", Timestamp = eventTime, Headline = "TEST reports earnings results", Provider = "alpaca" }],
             DateTimeOffset.Parse("2026-07-31T14:35:00Z"));
 
         Assert.Equal(EarningsResultAssessment.Mixed, result.ResultAssessment);
-        Assert.NotEqual(EarningsBreakoutAssessment.Possible, result.BreakoutAssessment);
+        Assert.Equal(EarningsBreakoutAssessment.NotConfirmed, result.BreakoutAssessment);
+        Assert.Contains("revenue did not beat (-4.0%)", result.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Analyze_WaitsForTheRevenueResultBeforeCallingABreakout()
+    {
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
+        var eventTime = DateTimeOffset.Parse("2026-07-31T12:30:00Z");
+        var result = analyzer.Analyze(
+            CreateEvent(eventTime, epsSurprise: 8m, revenueSurprise: null),
+            CreateBars(eventTime),
+            [new PersistedNewsItem { Id = "eps-only", Ticker = "TEST", Timestamp = eventTime, Headline = "TEST reports earnings results", Provider = "alpaca" }],
+            DateTimeOffset.Parse("2026-07-31T14:35:00Z"));
+
+        Assert.Equal(EarningsBreakoutAssessment.InsufficientData, result.BreakoutAssessment);
+        Assert.Contains("revenue result not yet reported", result.Reason, StringComparison.Ordinal);
     }
 
     [Fact]

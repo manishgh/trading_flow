@@ -52,7 +52,7 @@ public static class EarningsApiEndpoints
             var exchangeToday = EarningsCalendarDates.ExchangeDate(nowUtc);
             var nextBusinessDate = EarningsCalendarDates.NextWeekday(exchangeToday);
             var snapshot = await monitor.GetCalendarAsync(
-                EarningsCalendarDates.PreviousWeekday(exchangeToday),
+                exchangeToday,
                 nextBusinessDate.AddDays(1),
                 cancellationToken);
             var news = await newsFeed.GetEarningsTimelineAsync(
@@ -234,12 +234,11 @@ public static class EarningsApiEndpoints
         var revenueSurprise = analysis?.EffectiveRevenueSurprisePercent ?? calendarEvent.RevenueSurprisePercent;
         var newYork = TimeZoneInfo.ConvertTime(calendarEvent.ScheduledAtUtc, EarningsTimeZones.NewYork);
         var reportDate = calendarEvent.ReportDateExchange;
-        // Last session's after-close reports trade today, so they belong with today's events.
-        var dayGroup = EarningsCalendarDates.IsTradingSession(reportDate, calendarEvent.ReleaseWindow, exchangeToday)
-            ? "today"
-            : reportDate == nextBusinessDate
-                ? "nextBusinessDay"
-                : "other";
+        // The Earnings page lists each reporting day on its own: the previous day's after-close reports stay on
+        // that day even though they trade today. The Desk's earnings source and the monitor keep the trading-session rule.
+        var dayGroup = reportDate == exchangeToday ? "today"
+            : reportDate == nextBusinessDate ? "nextBusinessDay"
+            : "other";
         return new EarningsCalendarItemResponse(
             calendarEvent.Id,
             calendarEvent.Ticker,
@@ -318,7 +317,6 @@ public static class EarningsApiEndpoints
     {
         var tickers = items.Select(item => item.Ticker).ToHashSet(StringComparer.OrdinalIgnoreCase);
         return news.Where(item =>
-                item.Tickers.Equals("MARKET", StringComparison.OrdinalIgnoreCase) ||
                 item.Tickers.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
                     .Any(tickers.Contains))
             .ToArray();

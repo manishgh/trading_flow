@@ -23,6 +23,7 @@ public sealed class NewsFeedService : BackgroundService
 {
     private static readonly TimeSpan RetentionWindow = TimeSpan.FromHours(72);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
+    private const int EarningsStoriesPerStock = 5;
     // Bounded so the per-ticker REST sweep stays cheap at the poll cadence. This only has to
     // outlast a websocket outage, not the full retention window.
     private static readonly TimeSpan AlpacaGapFillWindow = TimeSpan.FromHours(6);
@@ -223,14 +224,24 @@ public sealed class NewsFeedService : BackgroundService
             .Where(ticker => ticker.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var window = EarningsNewsWindowPolicy.Resolve(nowUtc);
+        // Only stories about a stock reporting earnings, never market-wide context. Each stock keeps its newest
+        // stories rather than the whole page sharing one newest-N cap: on a busy evening a shared cap pushed a
+        // result headline off the page within the hour.
         var stories = await GetStoriesAsync(new NewsStoryQuery(normalizedTickers, window.StartUtc, 5000,
-            IncludeMarketContext: true, PreferredProvider: NewsStories.RealTimeProvider), cancellationToken);
-
+            IncludeMarketContext: false, PreferredProvider: NewsStories.RealTimeProvider), cancellationToken);
+        var keptPerTicker = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         return stories
+            .Where(story => story.Tickers.Any(normalizedTickers.Contains))
+            .OrderByDescending(story => story.Lead.Timestamp)
+            .ThenBy(story => story.Lead.Headline, StringComparer.OrdinalIgnoreCase)
+            .Where(story =>
+            {
+                var related = story.Tickers.Where(normalizedTickers.Contains).ToArray();
+                if (related.All(ticker => keptPerTicker.GetValueOrDefault(ticker) >= EarningsStoriesPerStock)) return false;
+                foreach (var ticker in related) keptPerTicker[ticker] = keptPerTicker.GetValueOrDefault(ticker) + 1;
+                return true;
+            })
             .Select(story => ToEarningsEvidence(story.Lead, story.Tickers, normalizedTickers))
-            .OrderByDescending(item => item.PublishedAtUtc)
-            .ThenBy(item => item.Headline, StringComparer.OrdinalIgnoreCase)
-            .Take(120)
             .ToArray();
     }
 

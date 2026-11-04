@@ -153,39 +153,29 @@ public sealed class EarningsAnalyzer
         decimal? eventReturn = referenceClose == 0m
             ? null
             : (latest.CurrentPrice - referenceClose) / referenceClose * 100m;
-        var evidence = new List<string>();
+        // A breakout is a beat on both EPS and revenue with the price above the pre-release high. Volume is not a
+        // condition: after-hours 5-minute slots often have no trades, so a same-time volume baseline is rarely
+        // complete when results land. EMA and MACD are reported for context and do not decide the breakout.
+        var epsSurprise = resolvedResult.EpsSurprisePercent;
+        var revenueSurprise = resolvedResult.RevenueSurprisePercent;
         var priceConfirmed = latest.CurrentPrice > referenceHigh;
-        var emaConfirmed = latest.Ema10.HasValue && latest.Ema20.HasValue && latest.Ema10 > latest.Ema20;
-        var macdConfirmed = latest.MacdHistogram > 0m;
-        var volumeBaselineReady = latest.SlotRelativeVolumeSampleCount >= options.MinimumSlotRelativeVolumeSamples;
-        var volumeConfirmed = volumeBaselineReady &&
-            latest.SlotRelativeVolume >= options.MinimumSlotRelativeVolume;
-
-        evidence.Add(priceConfirmed
-            ? $"close {latest.CurrentPrice:F2} is above pre-release high {referenceHigh:F2}"
-            : $"close {latest.CurrentPrice:F2} is not above pre-release high {referenceHigh:F2}");
-        evidence.Add(emaConfirmed
-            ? $"EMA10 {latest.Ema10:F2} is above EMA20 {latest.Ema20:F2}"
-            : $"EMA10/EMA20 trend is not bullish ({latest.Ema10:F2}/{latest.Ema20:F2})");
-        evidence.Add(macdConfirmed
-            ? $"MACD histogram is bullish at {latest.MacdHistogram:F4}"
-            : $"MACD histogram is not bullish ({latest.MacdHistogram:F4})");
-        evidence.Add(!volumeBaselineReady
-            ? $"same-slot volume baseline has {latest.SlotRelativeVolumeSampleCount} of {options.MinimumSlotRelativeVolumeSamples} required prior sessions"
-            : volumeConfirmed
-                ? $"same-slot relative volume is {latest.SlotRelativeVolume:F2}x across {latest.SlotRelativeVolumeSampleCount} prior sessions"
-                : $"same-slot relative volume is below {options.MinimumSlotRelativeVolume:F2}x ({latest.SlotRelativeVolume:F2}x across {latest.SlotRelativeVolumeSampleCount} prior sessions)");
-
-        var otherChecksPass = result == EarningsResultAssessment.Positive &&
-            priceConfirmed && emaConfirmed && macdConfirmed;
-        // A cold same-slot baseline means volume was not measured, which is not the same as a failed check.
-        var assessment = !otherChecksPass
+        var evidence = new List<string>
+        {
+            epsSurprise is null ? "EPS result not yet reported"
+                : epsSurprise > 0m ? $"EPS beat by {epsSurprise:F1}%" : $"EPS did not beat ({epsSurprise:F1}%)",
+            revenueSurprise is null ? "revenue result not yet reported"
+                : revenueSurprise > 0m ? $"revenue beat by {revenueSurprise:F1}%" : $"revenue did not beat ({revenueSurprise:F1}%)",
+            priceConfirmed
+                ? $"close {latest.CurrentPrice:F2} is above pre-release high {referenceHigh:F2}"
+                : $"close {latest.CurrentPrice:F2} is not above pre-release high {referenceHigh:F2}",
+            $"for context: EMA10 {latest.Ema10:F2}, EMA20 {latest.Ema20:F2}, MACD histogram {latest.MacdHistogram:F4}"
+        };
+        var failed = epsSurprise <= 0m || revenueSurprise <= 0m || !priceConfirmed;
+        var assessment = failed
             ? EarningsBreakoutAssessment.NotConfirmed
-            : !volumeBaselineReady
+            : epsSurprise is null || revenueSurprise is null
                 ? EarningsBreakoutAssessment.InsufficientData
-                : volumeConfirmed
-                    ? EarningsBreakoutAssessment.Possible
-                    : EarningsBreakoutAssessment.NotConfirmed;
+                : EarningsBreakoutAssessment.Possible;
         var resultText = result switch
         {
             EarningsResultAssessment.Positive => "Earnings result is positive",

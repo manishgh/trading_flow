@@ -64,7 +64,7 @@ public sealed class EarningsViewService(IWishlistRepository groups, IDeskAccount
         if (query.Assessment is not (null or "" or "all" or "beat" or "miss" or "inline" or "met" or "pending") ||
             query.Day is not (null or "" or "all" or "today" or "nextbusinessday" or "other") ||
             query.Breakout is not (null or "" or "all" or "awaitingearningsrelease" or "breakoutdatainsufficient" or "possiblebreakout" or "breakoutnotconfirmed") ||
-            query.Sort is not (null or "" or "time" or "cap" or "surprise" or "move" or "rvol" or "revenue"))
+            query.Sort is not (null or "" or "breakout" or "time" or "cap" or "surprise" or "move" or "rvol" or "revenue"))
             throw new InvalidOperationException("Choose supported earnings filters and sort order.");
         foreach (var pair in new[] { (query.MinEpsSurprise, query.MaxEpsSurprise), (query.MinRevenueSurprise, query.MaxRevenueSurprise),
                      (query.MinRvol, query.MaxRvol), (query.MinSentiment, query.MaxSentiment),
@@ -114,6 +114,10 @@ public sealed class EarningsViewService(IWishlistRepository groups, IDeskAccount
                 Range(x.SlotRelativeVolume, query.MinRvol, query.MaxRvol) && Range(x.NewsSentiment, query.MinSentiment, query.MaxSentiment))
             .Where(x => query.MinSurprise is null || x.EpsSurprisePercent is { } surprise && Math.Abs(surprise) >= query.MinSurprise);
         rows = query.Sort switch {
+            // Possible breakouts lead, biggest move first; everything else follows in scheduled-time order.
+            "breakout" => rows.OrderByDescending(x => x.BreakoutAssessment == "PossibleBreakout")
+                .ThenByDescending(x => x.BreakoutAssessment == "PossibleBreakout" ? x.EventReturnPercent : null)
+                .ThenBy(x => x.ScheduledAtUtc),
             "cap" => rows.OrderByDescending(x => x.MarketCapMillions),
             "surprise" => rows.OrderByDescending(x => x.EpsSurprisePercent is { } surprise ? Math.Abs(surprise) : (decimal?)null),
             "move" => rows.OrderByDescending(x => x.EventReturnPercent),

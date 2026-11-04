@@ -1,5 +1,3 @@
-using TradingFlow.Engine.Indicators;
-
 namespace TradingFlow.Earnings;
 
 public sealed record EarningsMonitorOptions(
@@ -14,8 +12,6 @@ public sealed record EarningsMonitorOptions(
     int PriorResultMaximumDaysAgo,
     int SubDailyLookbackDays,
     int ReferenceBarCount,
-    decimal MinimumSlotRelativeVolume,
-    int MinimumSlotRelativeVolumeSamples,
     int MaximumParallelAnalyses)
 {
     public static EarningsMonitorOptions Default { get; } = new(
@@ -31,10 +27,8 @@ public sealed record EarningsMonitorOptions(
         RecentResultLookbackDays: 7,
         PriorResultMinimumDaysAgo: 70,
         PriorResultMaximumDaysAgo: 112,
-        // 100 calendar days reliably covers the 63 prior US trading sessions used by RVOL.
+        // 100 calendar days reliably covers the 63 prior US trading sessions behind the RVOL shown on each card.
         SubDailyLookbackDays: 100,
         ReferenceBarCount: 78,
-        MinimumSlotRelativeVolume: 1.5m,
-        MinimumSlotRelativeVolumeSamples: IndicatorEngine.RelativeVolumeLookbackSessions,
         MaximumParallelAnalyses: 8);
 }

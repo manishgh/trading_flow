@@ -47,19 +47,20 @@ public sealed class EarningsExchangeDateTests
     }
 
     [Fact]
-    public void LastSessionsAfterCloseReportTradesTodayButItsBeforeOpenReportDoesNot()
+    public void PreviousDaysAfterCloseReportStaysOnItsOwnDayOnTheEarningsPage()
     {
-        // Monday 2026-10-19 in New York: Friday's after-close report trades today; Friday's morning report is done.
+        // Monday 2026-10-19 in New York: Friday's after-close report trades today, but the Earnings page lists it
+        // under Friday, never under Today. The Desk's earnings source keeps the trading-session rule (below).
         var fridayEvening = Event("PM", new(2026, 10, 16), "2026-10-16T20:30:00Z");
         fridayEvening.ReleaseWindow = EarningsReleaseWindow.AfterMarketClose;
-        var fridayMorning = Event("AM", new(2026, 10, 16), "2026-10-16T12:30:00Z");
-        fridayMorning.ReleaseWindow = EarningsReleaseWindow.BeforeMarketOpen;
+        var mondayMorning = Event("TODAY", new(2026, 10, 19), "2026-10-19T12:30:00Z");
+        var now = DateTimeOffset.Parse("2026-10-19T13:00:00Z");
 
-        var response = Map(DateTimeOffset.Parse("2026-10-19T13:00:00Z"), [fridayEvening, fridayMorning], true, "today");
-
-        Assert.Equal("PM", Assert.Single(response.Items).Ticker);
-        Assert.Equal("today", response.Items[0].DayGroup);
-        Assert.Equal(new DateOnly(2026, 10, 16), EarningsCalendarDates.PreviousWeekday(new DateOnly(2026, 10, 19)));
+        Assert.Equal("TODAY", Assert.Single(Map(now, [fridayEvening, mondayMorning], true, "today").Items).Ticker);
+        var custom = Map(now, [fridayEvening, mondayMorning], false, "custom");
+        Assert.Equal("other", custom.Items.Single(x => x.Ticker == "PM").DayGroup);
+        Assert.Equal("today", custom.Items.Single(x => x.Ticker == "TODAY").DayGroup);
+        Assert.True(EarningsCalendarDates.IsTradingSession(new(2026, 10, 16), EarningsReleaseWindow.AfterMarketClose, new(2026, 10, 19)));
         Assert.False(EarningsCalendarDates.IsTradingSession(new(2026, 10, 15), EarningsReleaseWindow.AfterMarketClose, new(2026, 10, 19)));
     }
 
