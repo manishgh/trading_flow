@@ -58,12 +58,68 @@ public sealed class EarningsMonitorTimeLimitTests : IDisposable
         Assert.NotNull(monitor.GetStatus().LastAnalysisUtc);
     }
 
+    /// <summary>
+    /// Analyses now run several at a time. Each released event must still be analysed with its own stock's
+    /// bars and its own news (stored under a lower-case ticker), whatever order the parallel workers finish in.
+    /// </summary>
+    [Fact]
+    public async Task Parallel_analyses_use_each_events_own_bars_and_news()
+    {
+        var options = EarningsMonitorOptions.Default with { MaximumParallelAnalyses = 4 };
+        var now = DateTimeOffset.UtcNow;
+        var today = EarningsCalendarDates.ExchangeDate(now);
+        var lastBar = new DateTimeOffset(now.UtcTicks - now.UtcTicks % TimeSpan.FromMinutes(5).Ticks, TimeSpan.Zero).AddMinutes(-10);
+        var events = Enumerable.Range(0, 20).Select(index => new EarningsCalendarEvent
+        {
+            Id = $"finviz:{index}", Ticker = $"T{index:00}", CompanyName = $"Company {index}", ReportDateExchange = today,
+            ScheduledAtUtc = now.AddHours(-1), ReleaseWindow = EarningsReleaseWindow.DuringMarket,
+            Provider = "finviz", SourceUrl = "https://example.invalid/calendar", SourceArtifactSha256 = new('a', 64),
+            ProviderReceivedAtUtc = now.AddHours(-1), FirstSeenAtUtc = now.AddDays(-2), LastSeenAtUtc = now
+        }).ToArray();
+        // 48 hours of bars at a price unique to each stock, so pre- and post-release bars exist at any time of day.
+        static decimal Price(string ticker) => 10m + Int32.Parse(ticker[1..]);
+        IEnumerable<OhlcvBar> Bars(string ticker) => Enumerable.Range(0, 576)
+            .Select(step => new OhlcvBar(ticker, lastBar.AddMinutes(-5 * step), "5m", Price(ticker), Price(ticker), Price(ticker), Price(ticker), 1000m));
+        var news = events.Select(item => new PersistedNewsItem
+        {
+            Id = $"news:{item.Ticker}", Ticker = item.Ticker.ToLowerInvariant(), Timestamp = now.AddMinutes(-30),
+            Headline = $"{item.Ticker} quarterly results released", Provider = "test"
+        }).ToArray();
+        var repository = new EarningsRepository(events);
+        var finviz = new FinvizClient(new HttpClient(new EmptyFinvizHandler()),
+            new FinvizOptions(new Uri("https://elite.finviz.com"), "test-token"),
+            new FileSystemRawArchiveWriter(new RawArchiveOptions(archiveRoot)));
+        var provider = new SlowMarketDataProvider(TimeSpan.Zero, Bars);
+        var monitor = new EarningsMonitor(
+            finviz,
+            new FinvizSectorDirectory(finviz, TimeProvider.System),
+            repository,
+            new CancellationHonouringNewsRepository(news),
+            new EarningsMarketStateLoader(new Lazy<IMarketDataProvider>(() => provider), NullCandleStore.Instance, options),
+            new EarningsAnalyzer(new IndicatorEngine(), options),
+            options,
+            TimeProvider.System,
+            NullLogger<EarningsMonitor>.Instance);
+
+        await monitor.RefreshAsync(forceCalendarRefresh: false, CancellationToken.None);
+
+        Assert.Equal(events.Length, repository.Saved.Count);
+        foreach (var calendarEvent in events)
+        {
+            var snapshot = Assert.Single(repository.Saved, item => item.EarningsEventId == calendarEvent.Id);
+            Assert.Equal(calendarEvent.Ticker, snapshot.Ticker);
+            Assert.Equal($"{calendarEvent.Ticker} quarterly results released", snapshot.NewsHeadline);
+            Assert.Equal(Price(calendarEvent.Ticker), snapshot.LatestClose);
+            Assert.Equal(Price(calendarEvent.Ticker), snapshot.Ema10);
+        }
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(archiveRoot)) Directory.Delete(archiveRoot, recursive: true);
     }
 
-    private sealed class EarningsRepository(EarningsCalendarEvent calendarEvent) : IEarningsRepository
+    private sealed class EarningsRepository(params EarningsCalendarEvent[] calendarEvents) : IEarningsRepository
     {
         public List<EarningsAnalysisSnapshot> Saved { get; } = [];
 
@@ -75,7 +131,7 @@ public sealed class EarningsMonitorTimeLimitTests : IDisposable
 
         public Task<IReadOnlyList<EarningsCalendarEvent>> GetCalendarAsync(DateOnly fromExchangeDate, DateOnly toExchangeDate,
             IReadOnlyCollection<string>? tickers, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<EarningsCalendarEvent>>([calendarEvent]);
+            Task.FromResult<IReadOnlyList<EarningsCalendarEvent>>(calendarEvents);
 
         public Task UpsertAnalysisAsync(EarningsAnalysisSnapshot snapshot, CancellationToken cancellationToken)
         {
@@ -93,7 +149,7 @@ public sealed class EarningsMonitorTimeLimitTests : IDisposable
     }
 
     /// <summary>Like the SQLite repository, a read with an expired time limit throws instead of returning.</summary>
-    private sealed class CancellationHonouringNewsRepository : INewsFeedRepository
+    private sealed class CancellationHonouringNewsRepository(IReadOnlyList<PersistedNewsItem>? items = null) : INewsFeedRepository
     {
         public Task UpsertAsync(IReadOnlyCollection<CatalystEvent> items, CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -108,14 +164,16 @@ public sealed class EarningsMonitorTimeLimitTests : IDisposable
 
         public Task PruneOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken) => Task.CompletedTask;
 
-        private static Task<IReadOnlyList<PersistedNewsItem>> Read(CancellationToken cancellationToken)
+        private Task<IReadOnlyList<PersistedNewsItem>> Read(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<PersistedNewsItem>>([]);
+            return Task.FromResult(items ?? []);
         }
     }
 
-    private sealed class SlowMarketDataProvider(TimeSpan delay) : IMarketDataProvider, IMarketSessionScheduleProvider
+    /// <summary>Waits before answering; returns the bars <paramref name="barsFor"/> builds for each requested stock, or none.</summary>
+    private sealed class SlowMarketDataProvider(TimeSpan delay, Func<string, IEnumerable<OhlcvBar>>? barsFor = null)
+        : IMarketDataProvider, IMarketSessionScheduleProvider
     {
         public TimeSpan LoadTook { get; private set; }
 
@@ -125,7 +183,13 @@ public sealed class EarningsMonitorTimeLimitTests : IDisposable
             var started = DateTimeOffset.UtcNow;
             await Task.Delay(delay, cancellationToken);
             LoadTook = DateTimeOffset.UtcNow - started;
-            yield break;
+            foreach (var bar in tickers.SelectMany(ticker => barsFor?.Invoke(ticker) ?? []))
+            {
+                if (bar.Timestamp >= start && bar.Timestamp <= end)
+                {
+                    yield return bar;
+                }
+            }
         }
 
         public Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadMarketSessionSchedulesAsync(
