@@ -22,7 +22,7 @@
     { label: "Earnings", hint: "Reporting calendar and surprises", path: "/Earnings" },
     { label: "Research", hint: "Backtests and optimisation runs", path: "/Backtests" },
     { label: "System health", hint: "Connections and entry restrictions", path: "/Operations" },
-    { label: "Daily review", hint: "Workspace preparation results", path: "/Preparation" },
+    { label: "Morning preparation", hint: "Ready list collected before the open", path: "/Preparation" },
     { label: "Paper runs", hint: "Trading run setup and monitoring", path: "/Paper" },
     { label: "Sources", hint: "Symbol groups and universes", path: "/Wishlists" },
     { label: "Warmup", hint: "Indicator warm-up service", path: "/Warmup" }

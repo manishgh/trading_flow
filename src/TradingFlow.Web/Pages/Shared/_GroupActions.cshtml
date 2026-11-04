@@ -1,29 +1,28 @@
 @if (User.Identity?.IsAuthenticated == true)
 {
-    <button id="groupActionResume" type="button" class="button secondary" hidden>Resume pending group change</button>
-    <dialog id="groupActionDialog" aria-labelledby="groupActionTitle" data-operator-id="@User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value">
+    <button id="groupActionResume" type="button" class="button secondary" hidden>Finish the unconfirmed wishlist change</button>
+    <dialog id="groupActionDialog" class="group-action-dialog" aria-labelledby="groupActionTitle" data-operator-id="@User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value">
         <form method="dialog" class="stack">
-            <h2 id="groupActionTitle">Review group change</h2>
+            <h2 id="groupActionTitle">Change wishlists</h2>
             <p id="groupActionSummary"></p>
-            <label id="groupActionTargetLabel" for="groupActionTarget">Destination group</label>
-            <select id="groupActionTarget"></select>
-            <fieldset id="groupActionCreatePanel" hidden>
-                <legend>Create a destination group</legend>
-                <label for="groupActionCreateName">New group name</label>
-                <input id="groupActionCreateName" maxlength="120" autocomplete="off" />
-                <button id="groupActionCreate" type="button">Create empty group</button>
-                <button id="groupActionCreateUndo" type="button" hidden>Undo empty group creation</button>
-                <p class="muted">Creation does not add symbols. Review and apply membership separately.</p>
-            </fieldset>
-            <label id="groupActionSourceLabel" for="groupActionSource">Source group</label>
+            <label id="groupActionSourceLabel" for="groupActionSource">From wishlist</label>
             <select id="groupActionSource"></select>
-            <label id="groupActionTagLabel" for="groupActionTag">Tag</label>
-            <input id="groupActionTag" maxlength="40" pattern="[A-Za-z0-9_-]+" />
+            <label id="groupActionTargetLabel" for="groupActionTarget">To wishlist</label>
+            <select id="groupActionTarget"></select>
+            <details id="groupActionCreatePanel" hidden>
+                <summary>New wishlist</summary>
+                <label for="groupActionCreateName">Name</label>
+                <input id="groupActionCreateName" maxlength="120" autocomplete="off" />
+                <div class="actions">
+                    <button id="groupActionCreate" type="button" class="button secondary">Create wishlist</button>
+                    <button id="groupActionCreateUndo" type="button" class="button secondary" hidden>Remove the new wishlist</button>
+                </div>
+            </details>
             <p id="groupActionStatus" role="status"></p>
             <div class="actions">
-                <button id="groupActionApply" type="button">Apply reviewed change</button>
-                <button id="groupActionUndo" type="button" hidden>Undo this change</button>
-                <button id="groupActionClose" type="submit">Close</button>
+                <button id="groupActionApply" type="button">Apply</button>
+                <button id="groupActionUndo" type="button" class="button secondary" hidden>Undo</button>
+                <button id="groupActionClose" type="submit" class="button secondary">Close</button>
             </div>
         </form>
     </dialog>

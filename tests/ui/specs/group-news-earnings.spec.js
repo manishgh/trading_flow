@@ -23,15 +23,17 @@ test('uncertain empty creation retains its identity over reload without applying
     else {retry=body; await route.fulfill({json:{id:body.commandId,name:body.name,receipt:{commandId:body.commandId,affected:1,undone:false}}});}
   });
   await page.getByRole('button',{name:'Create fixture destination'}).click();
-  await expect(page.locator('#groupActionStatus')).not.toHaveText('Loading groups…');
+  await expect(page.locator('#groupActionStatus')).not.toHaveText('Loading wishlists…');
+  // With no other wishlist the dialog opens New wishlist itself; open it only when it is still closed.
+  if (!(await page.locator('#groupActionCreatePanel').evaluate(panel => panel.open))) await page.locator('#groupActionCreatePanel > summary').click();
   await page.locator('#groupActionCreateName').fill('Uncertain destination');
   await page.locator('#groupActionCreate').click();
-  await expect(page.locator('#groupActionCreate')).toHaveText('Retry exact empty group creation');
+  await expect(page.locator('#groupActionCreate')).toHaveText('Retry creating this wishlist');
   await page.locator('#groupActionClose').click(); await page.reload();
   await page.locator('#groupActionResume').click();
   await expect(page.locator('#groupActionApply')).toBeDisabled();
   await page.locator('#groupActionCreate').click();
-  await expect(page.locator('#groupActionStatus')).toContainText('No symbols added');
+  await expect(page.locator('#groupActionStatus')).toContainText('No stocks added');
   expect(retry).toEqual(first);
 });
 
@@ -45,11 +47,16 @@ test('25-symbol copy uses one reviewed command and can undo', async ({ page }) =
   await expect(page.locator('#editMembershipForm')).toHaveCount(1);
   await expect(page.locator('form[id^=edit_]')).toHaveCount(0);
   await page.locator('[data-bulk-toggle-all]').check();
-  await page.getByRole('button', {name:'Copy to group', exact:true}).click();
-  await expect(page.locator('#groupActionApply')).toBeEnabled();
+  await page.getByRole('button', {name:'Copy to…', exact:true}).click();
+  // Apply stays unavailable until a destination wishlist is chosen, and the source list is never offered as one.
+  await expect(page.locator('#groupActionTarget option')).not.toHaveCount(0);
+  await expect(page.locator('#groupActionApply')).toBeDisabled();
+  await expect(page.locator('#groupActionSource')).toBeHidden();
+  await expect(page.locator(`#groupActionTarget option[value="${source.id}"]`)).toHaveCount(0);
   await page.locator('#groupActionTarget').selectOption(target.id);
+  await expect(page.locator('#groupActionApply')).toBeEnabled();
   await page.locator('#groupActionApply').click();
-  await expect(page.locator('#groupActionStatus')).toContainText('25 membership changes saved');
+  await expect(page.locator('#groupActionStatus')).toContainText('Saved: 25 stocks changed');
   await page.locator('#groupActionUndo').click();
   await expect(page.locator('#groupActionStatus')).toContainText('Change undone');
   const result = await page.evaluate(async id => (await window.tradingFlowFetch(`/api/v1/wishlists/${id}`)).json(), target.id);
@@ -73,8 +80,9 @@ test('uncertain group changes retain command identity across close and reload', 
     else { retry = request; await route.fulfill({json:{commandId:request.commandId, affected:1, undone:false}}); }
   });
   await page.getByRole('button',{name:'Fixture group change'}).click();
-  await expect(page.locator('#groupActionApply')).toBeEnabled();
+  await expect(page.locator('#groupActionTarget option')).toHaveCount(2);
   await page.locator('#groupActionTarget').selectOption('11111111-1111-1111-1111-111111111111');
+  await expect(page.locator('#groupActionApply')).toBeEnabled();
   await page.locator('#groupActionApply').click();
   await expect.poll(() => Boolean(first)).toBe(true);
   await page.keyboard.press('Escape'); await expect(page.locator('#groupActionDialog')).toBeVisible();
@@ -83,7 +91,7 @@ test('uncertain group changes retain command identity across close and reload', 
   await page.reload();
   await page.locator('#groupActionResume').click();
   await page.locator('#groupActionApply').click();
-  await expect(page.locator('#groupActionStatus')).toContainText('1 membership changes saved');
+  await expect(page.locator('#groupActionStatus')).toContainText('Saved: 1 stock changed');
   expect(retry).toEqual(first);
 });
 

@@ -702,6 +702,11 @@ button, .button {
   font-weight: 600;
   cursor: pointer;
 }
+/* A disabled control must look unavailable, not merely ignore the click. */
+button:disabled, .button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 .button.secondary, button.secondary {
   color: var(--accent-strong);
   background: var(--panel);
@@ -976,74 +981,6 @@ pre {
 .desk-controls {
   margin-bottom: 0;
 }
-.wishlist-toolbar {
-  align-items: end;
-  display: grid;
-  gap: 10px;
-  grid-template-columns: minmax(220px, 1fr) auto auto;
-}
-.wishlist-management-layout {
-  align-items: start;
-  display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(0, 1fr) 280px;
-}
-.wishlist-management-main {
-  display: grid;
-  gap: 16px;
-}
-.wishlist-settings-grid,
-.add-ticker-strip,
-.finviz-import-strip {
-  align-items: end;
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-}
-.wishlist-settings-grid {
-  grid-template-columns: minmax(160px, .8fr) minmax(220px, 1.4fr) auto auto auto;
-}
-.add-ticker-strip {
-  grid-template-columns: minmax(100px, .5fr) minmax(160px, .8fr) minmax(220px, 1fr) auto;
-}
-.finviz-import-strip {
-  grid-template-columns: minmax(260px, 1fr) auto;
-}
-.finviz-import-strip small {
-  color: var(--muted);
-  display: block;
-  margin-top: 4px;
-}
-.management-table input {
-  min-width: 160px;
-  width: 100%;
-}
-.management-actions {
-  display: flex;
-  gap: 8px;
-}
-.management-actions form {
-  margin: 0;
-}
-.wishlist-safety-panel {
-  position: sticky;
-  top: 76px;
-}
-.wishlist-safety-panel dl {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  margin: 16px 0;
-}
-.wishlist-safety-panel dt,
-.wishlist-safety-panel dd {
-  border-bottom: 1px solid var(--line);
-  margin: 0;
-  padding: 8px 0;
-}
-.wishlist-safety-panel dd {
-  font-weight: 700;
-  text-align: right;
-}
 .desk-summary {
   align-items: center;
   border-top: 1px solid var(--line);
@@ -1165,32 +1102,6 @@ pre {
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-}
-.wishlist-news-list {
-  display: grid;
-  max-height: 480px;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-}
-.wishlist-news-list article {
-  border-top: 1px solid var(--line);
-  display: grid;
-  gap: 4px;
-  padding: 11px 0;
-}
-.wishlist-news-list article:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-.wishlist-news-list article > strong,
-.wishlist-news-list article > p,
-.wishlist-news-list article > span {
-  margin: 0;
-}
-.wishlist-news-list article > p,
-.wishlist-news-list article > span {
-  color: var(--muted);
-  font-size: 12px;
 }
 .news-timeline-meta {
   align-items: center;
@@ -1983,8 +1894,7 @@ button.danger, .button.danger {
   }
   .workstation-hero { display: grid; }
   .hero-actions { justify-content: flex-start; }
-  .dashboard-tiles, .news-strip, .trade-summary-grid, .trade-desk-layout, .trade-desk-toolbar, .trade-desk-add-row, .trade-desk-finviz-row,
-  .wishlist-management-layout, .wishlist-settings-grid, .add-ticker-strip, .finviz-import-strip { grid-template-columns: 1fr; }
+  .dashboard-tiles, .news-strip, .trade-summary-grid, .trade-desk-layout, .trade-desk-toolbar, .trade-desk-add-row, .trade-desk-finviz-row { grid-template-columns: 1fr; }
   .intelligence-rail,
   .symbol-detail-rail {
     max-height: none;
@@ -1992,13 +1902,6 @@ button.danger, .button.danger {
   }
   .rail-scroll {
     max-height: 320px;
-  }
-  .wishlist-safety-panel {
-    position: static;
-  }
-  .wishlist-news-list {
-    max-height: none;
-    overflow: visible;
   }
   .backtest-operator-grid,
   .backtest-result-visuals {
@@ -2130,9 +2033,6 @@ button.danger, .button.danger {
   }
   .backtest-config-path {
     max-width: calc(100vw - 44px);
-  }
-  .wishlist-toolbar {
-    grid-template-columns: 1fr;
   }
   h1 {
     font-size: 22px;
@@ -2381,8 +2281,6 @@ td.num,
    Ported from per-page inline <style> blocks so every theme applies.
    --------------------------------------------------------------------------- */
 
-.highlight-border { border: 2px solid var(--accent); }
-
 .strategy-card-grid {
   display: grid;
   gap: 0.75rem;
@@ -2419,62 +2317,169 @@ td.num,
 .compact-table td,
 .compact-table th { font-size: 0.85rem; }
 
-.paper-page .tf-help {
+/* Paper runs: one start card laid out as numbered steps (label column, fields
+   column, at most two controls per row) beside the run list and experiments. */
+.paper-page .paper-head {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.paper-page .paper-head h1 { margin: 0; }
+.paper-page .paper-head p { margin: 6px 0 0; }
+.paper-page .paper-limits {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  max-width: 100%;
+  padding: 10px 14px;
+  width: 420px;
+}
+.paper-page .paper-limits > summary { cursor: pointer; font-weight: 600; min-height: 24px; }
+.paper-page .paper-limits[open] .paper-edit { display: none; }
+.paper-page .paper-limits .paper-edit { color: var(--accent-strong); margin-left: 6px; text-decoration: underline; }
+.paper-page .paper-limits-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 8px;
+}
+.paper-page .paper-limits-form label { margin: 0; }
+.paper-page .paper-limits-form button { grid-column: 1 / -1; justify-self: start; }
+.paper-page .paper-note { font-size: 0.85rem; margin: 6px 0 0; }
+.paper-page .paper-note:empty { display: none; }
+.paper-page .paper-layout {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+.paper-page .paper-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  min-width: 0;
+  padding: 18px 20px;
+}
+.paper-page .paper-card h2 { font-size: 1.15rem; margin: 0 0 12px; }
+.paper-page .paper-card-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.paper-page .paper-card-head h2 { margin: 0; }
+.paper-page .paper-start { flex: 999 1 560px; padding: 0; }
+.paper-page .paper-start > h2 { border-bottom: 1px solid var(--line); margin: 0; padding: 16px 20px; }
+.paper-page .paper-side {
+  display: flex;
+  flex: 1 1 340px;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.paper-page .paper-steps {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+}
+.paper-page .paper-step-label,
+.paper-page .paper-step-fields {
+  border-bottom: 1px solid var(--line);
+  padding: 16px 20px;
+}
+.paper-page .paper-step-label { color: var(--muted); font-weight: 700; }
+.paper-page .paper-step-fields { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.paper-page .paper-step-fields > label:first-child,
+.paper-page .paper-step-fields label[for] { margin-top: 8px; }
+.paper-page .paper-step-fields > label:first-child { margin-top: 0; }
+.paper-page .paper-pair {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.paper-page .paper-pair label { margin-top: 0; }
+.paper-page .paper-pair > label { display: flex; flex-direction: column; gap: 5px; }
+.paper-page .paper-check { font-weight: 500; margin: 6px 0 0; }
+.paper-page .paper-segmented {
+  border: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 0 0 4px;
+  padding: 0;
+}
+.paper-page .paper-segmented legend {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+  padding: 0;
+}
+.paper-page .paper-segmented label { margin: 0; }
+.paper-page .paper-segmented input {
+  height: 1px;
+  opacity: 0;
+  position: absolute;
+  width: 1px;
+}
+.paper-page .paper-segmented span {
   align-items: center;
   border: 1px solid var(--line-control);
-  border-radius: 50%;
-  color: var(--accent-strong);
-  cursor: help;
-  display: inline-flex;
-  font-size: 11px;
-  height: 16px;
-  justify-content: center;
-  line-height: 1;
-  margin-left: 4px;
-  vertical-align: middle;
-  width: 16px;
-}
-.paper-page .paper-toggle { margin-bottom: 1rem; }
-.paper-page .paper-toggle label {
-  align-items: center;
   cursor: pointer;
   display: inline-flex;
-  gap: 0.5rem;
-  line-height: 1.3;
+  font-weight: 600;
+  margin-left: -1px;
+  min-height: 44px;
+  padding: 0 16px;
 }
-.paper-page .paper-toggle input:disabled + span { opacity: 0.65; }
-.paper-page .small-help {
-  font-size: 0.82rem;
-  margin-top: 0.25rem;
+.paper-page .paper-segmented label:first-of-type span { margin-left: 0; }
+.paper-page .paper-segmented input:checked + span {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--bg);
 }
+.paper-page .paper-segmented input:focus-visible + span {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.paper-page .paper-start-bar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.paper-page .paper-start-bar p { flex: 1 1 260px; margin: 0; }
+.paper-page .paper-start > [data-run-workflow-status] { margin: 0; padding: 0 20px 16px; }
+.paper-page .paper-start > [data-run-workflow-status]:empty { display: none; }
+.paper-page .paper-start-bar button { min-width: 180px; }
+.paper-page .paper-experiment-registration > summary,
+.paper-page .paper-broker-check > summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+.paper-page .paper-overrides { margin-top: 8px; }
+.paper-page .paper-overrides[hidden] { display: none; }
+.paper-page .paper-actions-end { display: flex; justify-content: flex-end; margin-top: 12px; }
+.paper-page .paper-broker-result { font-size: 0.8rem; max-height: 280px; overflow: auto; }
 .paper-page .paper-validation.validation-summary-valid { display: none; }
 .paper-page .paper-validation.validation-summary-errors {
   background: var(--bad-surface);
   border: 1px solid var(--bad-border);
   border-left: 4px solid var(--bad);
-  border-radius: 0;
   color: var(--bad);
   margin: 0 0 1rem;
   padding: 0.75rem 1rem;
 }
-.paper-page .paper-validation ul {
-  margin: 0;
-  padding-left: 1.25rem;
-}
-.paper-page .ticker-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.35rem;
-}
-.paper-page .ticker-chip {
-  background: var(--accent-surface);
-  border: 1px solid var(--line-control);
-  border-radius: 0;
-  color: var(--accent-strong);
-  display: inline-flex;
-  font-weight: 700;
-  padding: 0.35rem 0.7rem;
+.paper-page .paper-validation ul { margin: 0; padding-left: 1.25rem; }
+@media (max-width: 620px) {
+  .paper-page .paper-steps { grid-template-columns: minmax(0, 1fr); }
+  .paper-page .paper-step-label { border-bottom: 0; padding-bottom: 0; }
+  .paper-page .paper-pair { grid-template-columns: minmax(0, 1fr); }
+  .paper-page .paper-card:not(.paper-start) { padding: 16px; }
+  .paper-page .paper-start > h2 { padding: 14px 16px; }
+  .paper-page .paper-start > [data-run-workflow-status] { padding: 0 16px 16px; }
+  .paper-page .paper-step-label, .paper-page .paper-step-fields, .paper-page .paper-start-bar { padding-left: 16px; padding-right: 16px; }
+  .paper-page .paper-start-bar button { width: 100%; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -3838,8 +3843,7 @@ td.select-column {
 .positions-summary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .orders-summary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .positions-body,
-.orders-body,
-.wishlists-body { padding: 0 20px 28px; }
+.orders-body { padding: 0 20px 28px; }
 .positions-sources,
 .orders-controls { margin: 14px 0 10px; }
 .orders-controls { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
@@ -3858,100 +3862,15 @@ td.select-column {
 .orders-table .order-actions form { margin: 0; }
 .orders-terminal { color: var(--color-neutral-500); font-size: 11px; }
 
-/* Wishlist group tabs. A full-width strip with 2px rules above and below; one
-   button per wishlist, left-aligned, name over the active count and observer
-   state. Three or four tabs say how many groups exist and which is observed;
-   a datalist said neither. */
-.wishlist-groups {
-  display: flex;
-  align-items: stretch;
-  gap: 16px;
-  border-top: var(--rule-section);
-  border-bottom: var(--rule-section);
-}
-.wishlist-group-tabs { display: flex; flex-wrap: wrap; min-width: 0; }
-.wishlist-group-tabs a {
-  display: grid;
-  gap: 1px;
-  padding: 11px 18px;
-  border-right: var(--rule-row);
-  color: inherit;
-  text-decoration: none;
-}
-.wishlist-group-tabs a strong { font-size: 13px; }
-.wishlist-group-tabs a span { font-size: 11px; opacity: 0.7; }
-.wishlist-group-tabs a:hover { background: var(--color-neutral-200); }
-.wishlist-group-tabs a[aria-current] { background: var(--color-text); color: var(--color-bg); }
-.wishlist-create { display: flex; align-items: center; gap: 8px; margin-left: auto; padding: 8px 20px; }
-.wishlist-create .input { width: 200px; }
-
-.wishlists-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  align-items: start;
-  padding: 0;
-}
-.wishlists-body > * { min-width: 0; }
-.wishlists-main { border-right: var(--rule-section); }
-.wishlist-block { padding: 14px 20px; border-bottom: var(--rule-section); }
-.wishlist-block-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.wishlist-block-head form { margin: 0; }
-
-.wishlist-settings { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 10px; align-items: end; }
-.wishlist-settings .check-strip,
-.wishlist-settings > button { grid-column: 1 / -1; justify-self: start; }
-
-.wishlist-add-single {
-  display: grid;
-  grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1.4fr) auto;
-  gap: 10px;
-  align-items: end;
-}
-.wishlist-add-bulk,
-.wishlist-import { display: grid; gap: 10px; align-items: end; margin-top: 12px; }
-.wishlist-add-bulk { grid-template-columns: minmax(0, 1fr) auto; }
-.wishlist-import {
-  grid-template-columns: 132px minmax(0, 1fr) auto;
-  padding-top: 12px;
-  border-top: var(--rule-row);
-}
-
-.wishlist-bulk-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 10px;
-  background: var(--color-accent-100);
-  color: var(--color-accent-900);
-  font-size: 12px;
-}
-.management-table .select-column { width: 34px; }
-.management-table .input { min-height: 28px; }
-.management-table .management-actions { white-space: nowrap; }
-
-.wishlists-rail { position: sticky; top: 0; padding: 14px 18px 28px; display: grid; gap: 12px; align-content: start; }
-.wishlists-rail form { margin: 0; }
-
 @media (max-width: 1100px) {
   .positions-summary,
   .orders-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .wishlists-body { grid-template-columns: minmax(0, 1fr); }
-  .wishlists-main { border-right: 0; }
-  .wishlists-rail { position: static; border-top: var(--rule-section); }
 }
 @media (max-width: 768px) {
   .positions-summary,
   .orders-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .wishlist-groups { display: block; }
-  .wishlist-create { margin-left: 0; }
-  .wishlist-create .input { width: auto; flex: 1; }
-  .wishlist-settings,
-  .wishlist-add-single,
-  .wishlist-add-bulk,
-  .wishlist-import { grid-template-columns: minmax(0, 1fr); }
   .positions-body,
   .orders-body { padding: 0 16px 24px; }
-  .wishlist-block { padding: 14px 16px; }
 }
 
 /* ===========================================================================
@@ -4393,18 +4312,6 @@ td.select-column {
   .lab-panel { padding: 14px 16px; }
 }
 
-/* Saved-screen form on the wishlist screen. Name, horizon and query on one
-   line, because a screen is only meaningful as all three together. */
-.wishlist-preset-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px minmax(0, 1.6fr) auto;
-  gap: 10px;
-  align-items: end;
-  margin-bottom: 12px;
-}
-@media (max-width: 768px) {
-  .wishlist-preset-form { grid-template-columns: minmax(0, 1fr); }
-}
 
 
                 @keyframes spin { 100% { transform: rotate(360deg); } }
@@ -4449,3 +4356,142 @@ progress.tf-progress::-webkit-progress-bar { background: transparent; }
 progress.tf-progress::-webkit-progress-value { background: var(--progress-color, var(--color-accent)); }
 progress.tf-progress::-moz-progress-bar { background: var(--progress-color, var(--color-accent)); }
 progress.tf-progress.is-complete { --progress-color: var(--color-neutral-600); }
+
+/* Manage wishlists: the lists on the left, the chosen list on the right with a
+   Stocks / Saved Finviz screens tab. One add box, a selection bar, and every
+   message printed beside the action that produced it. */
+.wishlists-page .wl-layout {
+  align-items: start;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: 240px minmax(0, 1fr);
+  padding: 24px 0;
+}
+.wishlists-page .wl-lists {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 16px;
+}
+.wishlists-page .wl-lists h2 { font-size: 1rem; margin: 0 0 10px; }
+.wishlists-page .wl-lists nav { display: grid; margin: 0 -16px; }
+.wishlists-page .wl-lists nav a {
+  align-items: center;
+  border-left: 3px solid transparent;
+  color: inherit;
+  display: flex;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0 16px 0 13px;
+  text-decoration: none;
+}
+.wishlists-page .wl-lists nav a:hover { background: var(--panel-subtle); }
+.wishlists-page .wl-lists nav a[aria-current] { background: var(--panel-inset); border-left-color: var(--accent); font-weight: 700; }
+.wishlists-page .wl-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+.wishlists-page .wl-create { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 4px; }
+.wishlists-page .wl-inline { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.wishlists-page .wl-inline > input { flex: 1 1 160px; }
+.wishlists-page .wl-end { justify-content: flex-end; margin-top: 12px; }
+.wishlists-page .wl-main {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  min-width: 0;
+  padding: 20px 24px;
+}
+.wishlists-page .wl-head {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  justify-content: space-between;
+}
+.wishlists-page .wl-head h1 { margin: 0; }
+.wishlists-page .wl-head p { margin: 4px 0 0; }
+.wishlists-page .wl-head-actions { align-items: flex-start; display: flex; gap: 8px; position: relative; }
+.wishlists-page .wl-settings > summary { list-style: none; }
+.wishlists-page .wl-settings > summary::-webkit-details-marker { display: none; }
+.wishlists-page .wl-settings-panel {
+  background: var(--panel-raised);
+  border: 1px solid var(--line-control);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 18%, transparent);
+  padding: 4px 16px 16px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: min(360px, calc(100vw - 32px));
+  z-index: 20;
+}
+.wishlists-page .wl-delete { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 4px; }
+.wishlists-page .wl-danger { border-color: var(--bad); color: var(--bad); }
+.wishlists-page .wl-tabs {
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 4px;
+  margin: 20px 0 16px;
+}
+.wishlists-page .wl-tabs a {
+  border-bottom: 3px solid transparent;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: -1px;
+  padding: 10px 14px;
+  text-decoration: none;
+}
+.wishlists-page .wl-tabs a[aria-current] { border-bottom-color: var(--ink); color: var(--ink); }
+.wishlists-page .wl-add {
+  align-items: end;
+  display: grid;
+  gap: 8px 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.wishlists-page .wl-add-form label,
+.wishlists-page .wl-create label { margin-top: 0; }
+.wishlists-page .wl-import > summary { list-style: none; }
+.wishlists-page .wl-import > summary::-webkit-details-marker { display: none; }
+.wishlists-page .wl-import[open] { grid-column: 1 / -1; }
+.wishlists-page .wl-import[open] > summary { display: none; }
+.wishlists-page .wl-import-form label { margin-top: 0; }
+.wishlists-page .wl-message { font-size: 0.9rem; margin: 10px 0 0; }
+.wishlists-page .wl-message.error { color: var(--bad); font-weight: 600; }
+.wishlists-page .wl-note { font-size: 0.85rem; margin: 8px 0 0; }
+.wishlists-page .wl-empty { margin: 20px 0 0; }
+.wishlists-page .wl-stocks { margin-top: 16px; }
+.wishlists-page .wl-bulk-bar {
+  align-items: center;
+  background: var(--accent-surface);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  justify-content: space-between;
+  padding: 8px 12px;
+}
+.wishlists-page .wl-bulk-bar[hidden] { display: none; }
+.wishlists-page .wl-table td { vertical-align: middle; }
+.wishlists-page .wl-table tr.is-selected td { background: var(--accent-surface); }
+.wishlists-page input.wl-cell-input {
+  background: transparent;
+  border-color: transparent;
+  min-height: 36px;
+}
+.wishlists-page input.wl-cell-input:hover { border-color: var(--line); }
+.wishlists-page input.wl-cell-input:focus { background: var(--panel); border-color: var(--line-control); }
+.wishlists-page .wl-preset-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
+  margin-bottom: 4px;
+}
+.wishlists-page .wl-preset-form label { margin-top: 0; }
+.wishlists-page .wl-filter { overflow-wrap: anywhere; }
+.wishlists-page .wl-row-action { text-align: right; width: 1%; }
+.wishlists-page .wl-row-action form { margin: 0; }
+.group-action-dialog { max-width: min(480px, calc(100vw - 32px)); }
+.group-action-dialog details > summary { cursor: pointer; font-weight: 600; margin-top: 12px; }
+@media (max-width: 860px) {
+  .wishlists-page .wl-layout { grid-template-columns: minmax(0, 1fr); padding: 16px 0; }
+  .wishlists-page .wl-main { padding: 16px; }
+  .wishlists-page .wl-add,
+  .wishlists-page .wl-preset-form { grid-template-columns: minmax(0, 1fr); }
+  .wishlists-page .wl-head-actions { width: 100%; }
+  .wishlists-page .wl-settings-panel { left: 0; right: auto; }
+}

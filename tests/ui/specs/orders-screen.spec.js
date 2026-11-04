@@ -80,8 +80,8 @@ test.describe("orders screen", () => {
     await page.locator("#CreateWishlistName").fill("Orders Link");
     await page.getByRole("button", { name: "Add new" }).click();
     await page.waitForLoadState("domcontentloaded");
-    await page.locator("#TickerTop").fill("ORDX");
-    await page.getByRole("button", { name: "Add ticker" }).click();
+    await page.locator("#BulkTickers").fill("ORDX");
+    await page.getByRole("button", { name: "Add", exact: true }).click();
     await page.waitForLoadState("domcontentloaded");
 
   });

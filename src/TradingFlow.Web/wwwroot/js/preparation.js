@@ -8,9 +8,10 @@
     function showView(view) {
         document.querySelectorAll('[data-prep-panel]').forEach(x=>x.hidden=x.dataset.prepPanel!==view);
         document.querySelectorAll('[data-prep-view]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.prepView===view)));
+        if(view==='settings')el('setup').hidden=true;
     }
     document.querySelectorAll('[data-prep-view]').forEach(x=>x.onclick=()=>showView(x.dataset.prepView));
-    function clearReview() { followingLatest=true;reviewDirty=false;el('update').textContent='';el('latest').hidden=true; selectedOccurrence=null; pendingRun=null; pendingHandoff=null;pendingCandidate=null;pendingCuration=null;el('review').hidden=true;el('empty').hidden=false; }
+    function clearReview() { followingLatest=true;reviewDirty=false;el('update').textContent='';el('handoff-reason').textContent='';el('latest').hidden=true; selectedOccurrence=null; pendingRun=null; pendingHandoff=null;pendingCandidate=null;pendingCuration=null;el('review').hidden=true;el('empty').hidden=false; }
     const selected = new Set(); let pendingHandoff, pendingRun, pendingCandidate, pendingCuration;
     async function api(path = '', body) {
         const options=body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)};options.signal=AbortSignal.timeout(30000);
@@ -22,18 +23,42 @@
     async function action(fn) { if(commandInFlight)return;commandInFlight=true;root.inert=true;root.setAttribute('aria-busy','true');try { await fn(); } catch (e) { status(e.name==='TimeoutError'?'Request timed out. Retry; the same collection or handoff key will be retained.':e.message); } finally {commandInFlight=false;root.inert=false;root.removeAttribute('aria-busy');syncControls();} }
     function button(label, fn) { const b=document.createElement('button'); b.textContent=label; b.type='button'; b.onclick=()=>action(fn); return b; }
     function line(parent, text) { const p=document.createElement('p'); p.textContent=text; parent.append(p); }
-    function when(value) { const d=new Date(value); return d.toLocaleString(undefined,{timeZone:'America/New_York'})+' New York · '+d.toLocaleString()+' local · '+d.toISOString(); }
+    function when(value) { return new Date(value).toLocaleString(undefined,{timeZone:'America/New_York',weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+' New York'; }
+    const phaseName = phase => phase==='nightly'?'evening':phase;
+    // Four everyday settings stay in view; the rest sit under Advanced settings.
+    const basicKeys=['nightlyAfterCloseMinutes','morningStartBeforeOpenMinutes','filters.minimumPrice','filters.minimumAverageShares'];
+    function renderTiles() {
+        el('tiles').hidden=!definition||!detail||detail.definition.workflowId!==definition.workflowId;if(el('tiles').hidden)return;
+        const enabled=detail.definition.settings.enabled;
+        for(const phase of ['nightly','morning']){const next=detail.upcoming.find(x=>x.phase===phase);el('tile-'+phase).textContent=next?when(next.scheduledAtUtc):'Not scheduled';el('tile-'+phase+'-note').textContent=(next?'for '+next.targetDate+' · ':'')+(enabled?'schedule on':'paused');}
+        const latest=detail.history[0];
+        if(!latest){el('tile-latest').textContent='None yet';el('tile-latest-note').textContent='A result appears after the first collection.';return;}
+        const snap=latest.snapshot,ready=snap?snap.symbols.filter(x=>x.readiness==='complete').length:0;
+        el('tile-latest').textContent=snap?(snap.readiness==='complete'?'Ready':snap.readiness[0].toUpperCase()+snap.readiness.slice(1))+' · '+ready+' stock'+(ready===1?'':'s'):latest.status[0].toUpperCase()+latest.status.slice(1);
+        el('tile-latest-note').textContent=phaseName(latest.slot.phase)+' · '+when(latest.slot.scheduledAtUtc)+(snap&&snap.symbols.length>ready?' · '+(snap.symbols.length-ready)+' not ready':'');
+    }
+    // Explains, beside the buttons, exactly why the list cannot be handed on yet.
+    function syncHandoff() {
+        if(!selectedOccurrence){el('handoff-reason').textContent='';return;}
+        const snap=selectedOccurrence.snapshot;
+        const reason=snap.readiness==='unavailable'?'This result has no usable stocks. Collect a new result.'
+            :selectedOccurrence.slot.phase!=='morning'?'This is the evening result. Collect and review the morning result before continuing.'
+            :Date.now()>=Date.parse(snap.expiresAtUtc)?'This result has expired. Collect a fresh morning result to continue.'
+            :selected.size===0?'Tick at least one ready stock to continue.':'';
+        el('handoff').disabled=el('paper').disabled=!!reason;el('handoff-reason').textContent=reason;
+    }
     function value(key) { return key.split('.').reduce((x,k)=>x[k],settings); }
     function set(key,v) { const parts=key.split('.'); let target=settings; for(const part of parts.slice(0,-1)) target=target[part]; target[parts.at(-1)]=v; }
     function retain(dirty=true) { editorDirty=dirty;try{sessionStorage.setItem(draftKey,JSON.stringify({settings,definition,editorDirty}));}catch{} }
     function renderEditor() {
-        el('name').value=settings.name; el('merge').value=settings.merge; el('fields').replaceChildren();
+        el('name').value=settings.name; el('merge').value=settings.merge; el('fields').replaceChildren(); el('basic-fields').replaceChildren();
         for(const field of metadata.fields) {
             const label=document.createElement('label'); label.textContent=field.label; const input=document.createElement('input'); input.dataset.key=field.key;
             input.type=field.kind==='boolean'?'checkbox':'number'; input.step=field.kind==='optional'?'any':'1';
             if(field.kind==='boolean') input.checked=value(field.key); else input.value=value(field.key)??'';
             input.oninput=()=>{set(field.key,field.kind==='boolean'?input.checked:input.value===''?null:Number(input.value));retain();};
-            label.append(input); el('fields').append(label);
+            if(field.kind==='boolean'){label.className='checkbox-field';label.prepend(input);}else label.append(input);
+            (basicKeys.includes(field.key)?el('basic-fields'):el('fields')).append(label);
         }
         renderSources(); el('toggle').disabled=!definition; el('toggle').textContent=settings.enabled?'Pause workflow':'Enable workflow';
         el('revision').textContent=definition?'Saved revision '+definition.revision+' · '+definition.contentSha256:'';
@@ -41,15 +66,18 @@
     }
     function renderSources() {
         el('sources').replaceChildren(); settings.sources.forEach((source,index)=>{
-            const card=document.createElement('div');card.className='prep-card';const title=source.kind==='wishlist'?[...el('wishlist').options].find(x=>x.value===(source.wishlistId||source.key))?.textContent:source.query;line(card,(source.kind==='wishlist'?'Wishlist: ':'Finviz: ')+(title||source.key));
-            const label=document.createElement('label');label.textContent='Required source';const required=document.createElement('input');required.type='checkbox';required.checked=source.required;
-            required.onchange=()=>{source.required=required.checked;retain();};label.append(required);card.append(label,button('Remove source',()=>{settings.sources.splice(index,1);renderSources();retain();}));el('sources').append(card);
-        });el('source-status').textContent=settings.sources.length?settings.sources.length+' selected source'+(settings.sources.length===1?'':'s'):'Add at least one wishlist or Finviz filter before saving.';
+            const card=document.createElement('div');card.className='prep-card prep-source';const title=source.kind==='wishlist'?[...el('wishlist').options].find(x=>x.value===(source.wishlistId||source.key))?.textContent:source.query;
+            const name=document.createElement('strong');name.textContent=(source.kind==='wishlist'?'Wishlist: ':'Finviz: ')+(title||source.key);
+            const label=document.createElement('label');label.className='checkbox-field';const required=document.createElement('input');required.type='checkbox';required.checked=source.required;
+            required.onchange=()=>{source.required=required.checked;retain();};label.append(required,'Required');const remove=button('Remove',()=>{settings.sources.splice(index,1);renderSources();retain();});remove.className='button secondary';remove.setAttribute('aria-label','Remove source '+(title||source.key));card.append(name,label,remove);el('sources').append(card);
+        });el('source-status').textContent=settings.sources.length?'':'Add at least one wishlist or Finviz filter before saving.';
     }
     function syncControls(){
         el('new').disabled=el('setup-new').disabled=!initialized;el('list').disabled=el('open').disabled=!initialized||!available.length;el('refresh').disabled=!initialized||!definition;
         root.querySelector('[data-prep-view="history"]').disabled=!definition;root.querySelector('[data-prep-view="settings"]').disabled=!initialized;root.querySelector('[data-prep-view="alerts"]').disabled=!initialized;
-        el('schedule').hidden=!definition;el('setup').hidden=!!definition||available.length>0;syncCollection();
+        el('schedule').hidden=!definition;el('setup').hidden=!!definition||available.length>0||!root.querySelector('[data-prep-panel="settings"]').hidden;
+        // Until a workflow exists the setup card is the only way in, so the workflow picker and tabs stay out of the way.
+        for(const part of root.querySelectorAll('.prep-toolbar,.prep-tabs'))part.hidden=!definition&&!available.length;syncCollection();renderTiles();
     }
     function syncCollection(){
         const current=definition&&detail?.definition.workflowId===definition.workflowId;
@@ -69,8 +97,8 @@
         if(replaceEditor){clearReview();definition=detail.definition;settings=structuredClone(definition.settings);renderEditor();retain(false);}
         syncControls();
         el('upcoming').replaceChildren();if(detail.planningError)line(el('upcoming'),detail.planningError);
-        detail.upcoming.forEach(x=>line(el('upcoming'),x.phase+' for '+x.targetDate+' · '+when(x.scheduledAtUtc)));
-        el('history').replaceChildren();detail.history.forEach(row=>{const card=document.createElement('div');card.className='prep-card';line(card,row.slot.phase+' · '+row.slot.targetDate+' · '+row.status+' · '+when(row.slot.scheduledAtUtc));if(row.error)line(card,row.error);
+        detail.upcoming.slice(0,6).forEach(x=>line(el('upcoming'),phaseName(x.phase)+' collection for '+x.targetDate+' · '+when(x.scheduledAtUtc)));if(detail.upcoming.length>6)line(el('upcoming'),'and '+(detail.upcoming.length-6)+' more scheduled collections');renderTiles();
+        el('history').replaceChildren();detail.history.forEach(row=>{const card=document.createElement('div');card.className='prep-card';line(card,phaseName(row.slot.phase)+' · '+row.slot.targetDate+' · '+row.status+' · '+when(row.slot.scheduledAtUtc));if(row.error)line(card,row.error);
             if(row.snapshot)card.append(button('Review snapshot',()=>review(row)));else if(['queued','running','cancelling'].includes(row.status))card.append(button('Cancel occurrence',async()=>{await api(`preparation/${id}/occurrences/${row.id}/cancel`,{});await load(id,false);}));el('history').append(card);});
         if(selectLatest) {
             const latest=detail.history.find(x=>x.snapshot);
@@ -88,20 +116,38 @@
         if(navigate)showView('daily');el('empty').hidden=true;
         selectedOccurrence=row;el('reason').value='';el('additions').value='';selected.clear();pendingHandoff=null;pendingCandidate=null;pendingCuration=null;shown=30;const snap=row.snapshot;
         snap.symbols.filter(x=>x.readiness==='complete').forEach(x=>selected.add(x.symbol));el('review').hidden=false;el('audit').replaceChildren();
-        line(el('audit'),row.slot.phase+' · '+row.slot.targetDate+' · '+snap.readiness+(Date.now()>=Date.parse(snap.expiresAtUtc)?' · Expired — collect a fresh result to continue.':''));line(el('audit'),'Observation cutoff: '+when(snap.cutoffUtc));line(el('audit'),'Handoff expires: '+when(snap.expiresAtUtc));
+        line(el('audit'),phaseName(row.slot.phase)+' result for '+row.slot.targetDate+' · '+snap.readiness+(Date.now()>=Date.parse(snap.expiresAtUtc)?' · Expired — collect a fresh result to continue.':''));line(el('audit'),'Data up to '+when(snap.cutoffUtc)+' · usable until '+when(snap.expiresAtUtc));
         snap.reasons.forEach(x=>line(el('audit'),x));const provenance=document.createElement('details'),provenanceTitle=document.createElement('summary');provenanceTitle.textContent='Source provenance and revision';provenance.append(provenanceTitle);line(provenance,'Revision '+snap.revisionId);el('audit').append(provenance);snap.sources.forEach(x=>line(provenance,x.source.kind+' '+x.source.key+' · '+x.status+' · observed '+(x.observedAtUtc?when(x.observedAtUtc):'unavailable')+' · '+(x.reason||x.contentSha256||'')));
-        if(row.slot.phase!=='morning')line(el('audit'),'Nightly evidence is prepared. Collect and review a fresh morning result before continuing.');
-        line(el('audit'),'Removed since nightly: '+(snap.removedSymbols.join(', ')||'none'));renderMembers();if(navigate)el('review').scrollIntoView({block:'start'});
+        if(row.slot.phase!=='morning')line(el('audit'),'This is the evening result. Collect and review the morning result before continuing.');
+        if(snap.removedSymbols.length)line(el('audit'),'Dropped since the evening result: '+snap.removedSymbols.join(', '));renderMembers();if(navigate)el('review').scrollIntoView({block:'start'});
     }
     function renderMembers() {
         const snap=selectedOccurrence.snapshot;el('members').replaceChildren();
-        snap.symbols.slice(0,shown).forEach(row=>{const card=document.createElement('details');card.className='prep-card';const summary=document.createElement('summary');summary.textContent=row.symbol+' · '+row.change+' · '+row.readiness;card.append(summary);
-            const label=document.createElement('label');label.textContent='Include in reviewed membership';const check=document.createElement('input');check.type='checkbox';check.checked=selected.has(row.symbol);check.disabled=row.readiness!=='complete';check.onchange=()=>{reviewDirty=true;check.checked?selected.add(row.symbol):selected.delete(row.symbol);pendingHandoff=null;pendingCandidate=null;pendingCuration=null;el('handoff').disabled=el('paper').disabled=selected.size===0||selectedOccurrence.slot.phase!=='morning'||snap.readiness==='unavailable'||Date.now()>=Date.parse(snap.expiresAtUtc);};label.append(check);card.append(label);
-            line(card,'Daily close '+(row.close??'unavailable')+' · '+row.historyCount+' sessions · '+row.feed+' / '+row.adjustment+' · gap '+(row.gapPercent??'unavailable')+'% · same-time RVOL '+(row.sameTimeRelativeVolume??'unavailable'));
-            [...row.reasons,...row.context].forEach(x=>line(card,x));row.news.forEach(x=>{line(card,x.publishedAtUtc+' · '+x.headline);try{const url=new URL(x.url);if(['https:','http:'].includes(url.protocol)){const a=document.createElement('a');a.href=url.href;a.textContent='Open captured article';a.target='_blank';a.rel='noopener noreferrer';card.append(a);}else line(card,'Article link unavailable.');}catch{line(card,'Article link unavailable.');}});
-            const market=document.createElement('a');market.href='/Desk?search='+encodeURIComponent(row.symbol);market.textContent='Open market detail';card.append(market);
-            const audit=document.createElement('a');audit.href=`/api/v1/preparation/${definition.workflowId}/occurrences/${selectedOccurrence.id}/evidence/${encodeURIComponent(row.symbol)}`;audit.textContent=' Open captured evidence';audit.target='_blank';audit.rel='noopener';card.append(audit);line(card,'Evidence hash: '+row.evidenceSha256);el('members').append(card);});
-        el('more').hidden=shown>=snap.symbols.length;el('handoff').disabled=selectedOccurrence.slot.phase!=='morning'||snap.readiness==='unavailable'||selected.size===0||Date.now()>=Date.parse(snap.expiresAtUtc);el('paper').disabled=el('handoff').disabled;
+        const scroll=document.createElement('div');scroll.className='table-scroll';const table=document.createElement('table');table.className='prep-members';
+        const head=table.createTHead().insertRow();
+        for(const [text,cls] of [['Include','select-column'],['Stock',''],['Close','num'],['Gap','num'],['Same-time RVOL','num'],['Status','']]){const th=document.createElement('th');th.scope='col';th.textContent=text;if(cls)th.className=cls;head.append(th);}
+        const body=table.createTBody();
+        const number=(value,suffix='')=>value===null||value===undefined?'–':value+suffix;
+        snap.symbols.slice(0,shown).forEach(row=>{
+            const tr=body.insertRow();const cell=()=>tr.insertCell();
+            const check=document.createElement('input');check.type='checkbox';check.checked=selected.has(row.symbol);check.disabled=row.readiness!=='complete';check.setAttribute('aria-label','Include '+row.symbol);
+            check.onchange=()=>{reviewDirty=true;check.checked?selected.add(row.symbol):selected.delete(row.symbol);pendingHandoff=null;pendingCandidate=null;pendingCuration=null;syncHandoff();};
+            const select=cell();select.className='select-column';select.append(check);
+            const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent=row.symbol;details.append(summary);
+            line(details,row.historyCount+' daily sessions · '+row.feed+' feed · '+row.adjustment+' adjustment');
+            [...row.reasons,...row.context].forEach(x=>line(details,x));
+            row.news.forEach(x=>{line(details,when(x.publishedAtUtc)+' · '+x.headline);try{const url=new URL(x.url);if(['https:','http:'].includes(url.protocol)){const a=document.createElement('a');a.href=url.href;a.textContent='Open captured article';a.target='_blank';a.rel='noopener noreferrer';details.append(a);}else line(details,'Article link unavailable.');}catch{line(details,'Article link unavailable.');}});
+            const links=document.createElement('p');const market=document.createElement('a');market.href='/Desk?search='+encodeURIComponent(row.symbol);market.textContent='Open market detail';
+            const audit=document.createElement('a');audit.href=`/api/v1/preparation/${definition.workflowId}/occurrences/${selectedOccurrence.id}/evidence/${encodeURIComponent(row.symbol)}`;audit.textContent='Open captured evidence';audit.target='_blank';audit.rel='noopener';
+            links.append(market,' · ',audit);details.append(links);line(details,'Evidence hash '+row.evidenceSha256);
+            cell().append(details);
+            const close=cell();close.className='num';close.textContent=row.close===null||row.close===undefined?'–':'$'+row.close;
+            const gap=cell();gap.className='num';gap.textContent=number(row.gapPercent,'%');
+            const rvol=cell();rvol.className='num';rvol.textContent=number(row.sameTimeRelativeVolume);
+            cell().textContent=row.change+' · '+row.readiness;
+        });
+        scroll.append(table);el('members').append(scroll);
+        el('more').hidden=shown>=snap.symbols.length;syncHandoff();
     }
     async function alerts() {
         const rows=await api('preparation/events');el('notifications').replaceChildren();if(!rows.length)line(el('notifications'),'No preparation alerts yet. Alerts appear after a configured collection completes.');rows.reverse().forEach(row=>{const alert=JSON.parse(row.payloadJson);el('notifications').append(button(when(row.occurredAtUtc)+' · '+alert.readiness,async()=>{await load(alert.workflowId,true,false);const occurrence=detail.history.find(x=>x.id===alert.occurrenceId&&x.snapshot?.revisionId===alert.revisionId);if(occurrence)review(occurrence);else {clearReview();showView('daily');status('Requested revision unavailable. No other result was substituted.');}}));});
@@ -140,7 +186,7 @@
         pendingCuration??={parentRevisionId:selectedOccurrence.snapshot.revisionId,addSymbols:el('additions').value.split(/[\s,]+/).filter(Boolean).map(x=>x.toUpperCase()),removeSymbols:selectedOccurrence.snapshot.symbols.filter(x=>!selected.has(x.symbol)).map(x=>x.symbol),reason:el('reason').value,idempotencyKey:crypto.randomUUID()};
         await api(`preparation/${definition.workflowId}/occurrences/${selectedOccurrence.id}/curate`,pendingCuration);pendingCuration=null;await load(definition.workflowId,false);
     });
-    setInterval(()=>{syncCollection();if(selectedOccurrence&&Date.now()>=Date.parse(selectedOccurrence.snapshot.expiresAtUtc)){el('handoff').disabled=true;el('paper').disabled=true;}},1000);
+    setInterval(()=>{syncCollection();if(selectedOccurrence&&Date.now()>=Date.parse(selectedOccurrence.snapshot.expiresAtUtc))syncHandoff();},1000);
     async function initialize(){
         initialized=false;el('retry').hidden=true;syncControls();status('Loading workflows…');
         try{
@@ -160,7 +206,7 @@
             }else if(definition){await load(definition.workflowId,false);if(editorDirty)showView('settings');}
             else if(draft){showView('settings');status(missing?'Saved workflow is no longer available. Your settings are kept as an unsaved draft.':'Unsaved workflow restored. Choose sources and save paused.');retain();}
             else if(available.length)await load(available[0].workflowId);
-            else{showView('daily');el('empty').textContent='No saved preparation workflows for this account. Configure your first workflow above.';status('Preparation is not configured yet.');}
+            else{showView('daily');el('empty').textContent='';status('Preparation is not configured yet.');}
             try{await alerts();}catch{line(el('notifications'),'Alerts could not be loaded. Use Refresh alerts to retry.');}
         }catch(e){status(e.message);el('retry').hidden=false;syncControls();}
     }

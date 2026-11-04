@@ -5,6 +5,8 @@
     const form = panel.querySelector('form');
     const status = panel.querySelector('[data-trading-limits-status]');
     const rule = panel.querySelector('[data-trading-limits-rule]');
+    const summary = panel.querySelector('[data-trading-limits-summary]');
+    const show = () => { if (summary) summary.textContent = profile.maxNewStocksPerDay + ' new stocks a day · ' + profile.maxOpenPositions + ' open positions'; };
     let profile;
     // Loads server values and preserves a revision for simultaneous-editor protection.
     async function read() {
@@ -12,7 +14,7 @@
         profile = await result(response);
         form.elements.maxNewStocksPerDay.value = profile.maxNewStocksPerDay;
         form.elements.maxOpenPositions.value = profile.maxOpenPositions;
-        rule.textContent = profile.countingRule;
+        rule.textContent = profile.countingRule; show();
         status.textContent = 'Loaded account limits. Saving does not start a run.';
     }
     // Shows the concrete API error rather than silently selecting default values.
@@ -33,7 +35,7 @@
                     maxOpenPositions: Number(form.elements.maxOpenPositions.value)
                 })
             }));
-            rule.textContent = profile.countingRule;
+            rule.textContent = profile.countingRule; show();
             status.textContent = 'Account limits saved. No run has started.';
         } catch (error) { status.textContent = error.message; }
         finally { button.disabled = false; }

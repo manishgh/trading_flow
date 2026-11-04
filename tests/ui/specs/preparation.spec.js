@@ -21,7 +21,7 @@ for(const width of [1440,412])test('preparation configuration and exact alert re
  await page.getByRole('button',{name:'Workflow settings',exact:true}).click();await expect(page.locator('#prep-name')).toHaveValue('Morning fixture');await page.locator('#prep-name').fill('Unsaved draft');await page.locator('#prep-refresh').click();await expect(page.locator('#prep-name')).toHaveValue('Unsaved draft');
  await page.reload();await page.getByRole('button',{name:'Workflow settings',exact:true}).click();await expect(page.locator('#prep-name')).toHaveValue('Unsaved draft');
  await page.getByRole('button',{name:'History',exact:true}).click();await page.getByRole('button',{name:'Review snapshot',exact:true}).click();await expect(page.locator('#prep-audit')).toContainText(revision);
- await page.getByText('MSFT · new · complete',{exact:true}).click();await expect(page.getByRole('link',{name:'Open captured article'})).toHaveAttribute('href','https://example.com/captured');
+ await page.locator('#prep-members summary',{hasText:'MSFT'}).click();await expect(page.getByRole('link',{name:'Open captured article'})).toHaveAttribute('href','https://example.com/captured');
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBeTruthy();
 });
 test('preparation handoff retry preserves exact candidate command',async({page})=>{
@@ -57,7 +57,7 @@ test('paper review survives mode change, refresh and environment navigation',asy
 });
 test('daily workspace opens latest evidence and keeps new workflow separate',async({page})=>{
  await fixture(page);await expect(page.locator('#prep-review')).toBeVisible();await expect(page.locator('#prep-editor')).not.toBeVisible();
- await page.getByText('MSFT · new · complete',{exact:true}).click();await expect(page.getByRole('link',{name:'Open market detail'})).toHaveAttribute('href','/Desk?search=MSFT');
+ await page.locator('#prep-members summary',{hasText:'MSFT'}).click();await expect(page.getByRole('link',{name:'Open market detail'})).toHaveAttribute('href','/Desk?search=MSFT');
  await page.locator('#prep-new').click();await expect(page.locator('#prep-editor')).toBeVisible();await expect(page.locator('#prep-review')).not.toBeVisible();
  await page.getByRole('button',{name:'Latest review',exact:true}).click();await expect(page.locator('#prep-empty')).toBeVisible();
 });
@@ -88,7 +88,7 @@ test('empty setup guides a paused save, prevents duplicate sources and explains 
  await expect(page.locator('#prep-open')).toBeDisabled();await expect(page.locator('#prep-refresh')).toBeDisabled();await expect(page.locator('#prep-schedule')).toBeHidden();
  await page.locator('#prep-setup-new').click();await expect(page.locator('#prep-editor')).toBeVisible();await page.locator('#prep-save').click();await expect(page.locator('#prep-status')).toContainText('at least one');
  await page.locator('#prep-add-wishlist').click();await page.locator('#prep-add-wishlist').click();await expect(page.locator('#prep-status')).toContainText('already selected');await expect(page.locator('#prep-sources .prep-card')).toHaveCount(1);await expect(page.locator('#prep-sources')).toContainText('Core wishlist');
- await page.locator('#prep-save').click();await expect(page.locator('#prep-empty')).toContainText('Workflow saved');await expect(page.locator('#prep-collection-status')).toContainText('outside');await expect(page.locator('#prep-nightly')).toBeDisabled();await expect(page.locator('#prep-upcoming')).toContainText('nightly');await expect(page.locator('#watch-prep-summary')).toContainText('1 workflow');
+ await page.locator('#prep-save').click();await expect(page.locator('#prep-empty')).toContainText('Workflow saved');await expect(page.locator('#prep-collection-status')).toContainText('outside');await expect(page.locator('#prep-nightly')).toBeDisabled();await expect(page.locator('#prep-upcoming')).toContainText('evening collection');await expect(page.locator('#watch-prep-summary')).toContainText('1 workflow');
  await page.reload();await page.locator('#watch-preparation>summary').click();await expect(page.locator('#prep-empty')).toContainText('Workflow saved');await expect(page.locator('#prep-editor')).toBeHidden();
 });
 
@@ -129,7 +129,9 @@ for(const target of ['handoff','paper'])test('pending '+target+' retains its exa
 test('real API saves and reopens a paused preparation workflow',async({page})=>{
  await signIn(page);await page.goto('/Preparation');await expect(page.locator('#prep-new')).toBeEnabled();
  const wishlist=await page.evaluate(async()=>{const csrf=await fetch('/api/auth/csrf').then(r=>r.json());const r=await fetch('/api/v1/wishlists',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrf.requestToken},body:JSON.stringify({name:'Preparation API '+crypto.randomUUID(),isObserved:false})});if(!r.ok)throw new Error('Wishlist setup failed');return r.json();});
- await page.reload();await expect(page.locator('#prep-new')).toBeEnabled();await page.locator('#prep-new').click();const name='Paused preparation '+Date.now();await page.locator('#prep-name').fill(name);await page.locator('#prep-wishlist').selectOption(wishlist.id);await page.locator('#prep-add-wishlist').click();await page.locator('#prep-save').click();await expect(page.locator('#prep-status')).toContainText('Workflow paused');await expect(page.locator('#prep-list')).toContainText(name);
+ await page.reload();await expect(page.locator('#prep-new')).toBeEnabled();
+ // With no saved workflow the setup card is the way in; once one exists the toolbar offers New workflow.
+ await page.locator(await page.locator('#prep-new').isVisible()?'#prep-new':'#prep-setup-new').click();const name='Paused preparation '+Date.now();await page.locator('#prep-name').fill(name);await page.locator('#prep-wishlist').selectOption(wishlist.id);await page.locator('#prep-add-wishlist').click();await page.locator('#prep-save').click();await expect(page.locator('#prep-status')).toContainText('Workflow paused');await expect(page.locator('#prep-list')).toContainText(name);
  const definitions=await(await page.request.get('/api/v1/preparation')).json();const stored=definitions.find(x=>x.settings.name===name);expect(stored.settings.enabled).toBe(false);expect(stored.settings.sources[0].wishlistId).toBe(wishlist.id);
  await page.reload();await expect(page.locator('#prep-empty')).toContainText('Workflow saved');await expect(page.locator('#prep-editor')).toBeHidden();
 });
@@ -147,4 +149,17 @@ test('embedded preparation uses a versioned script and recovers a failed script 
  await signIn(page);let failed=false;await page.route('**/js/preparation.js*',r=>{if(!failed){failed=true;return r.abort('failed');}return r.continue();});
  await page.goto('/Desk');await expect(page.locator('#watch-preparation')).toHaveAttribute('data-script-url',/preparation\.js\?v=/);
  await page.locator('#watch-preparation>summary').click();await expect(page.locator('#prep-retry')).toBeVisible();await expect(page.locator('#prep-status')).toContainText('could not load');await page.locator('#prep-retry').click();await expect(page.locator('#prep-new')).toBeEnabled();await expect(page.locator('#prep-status')).not.toContainText('could not load');
+});
+
+test('the page explains itself: status tiles, one time format, and why continuing is unavailable',async({page})=>{
+ await fixture(page);
+ await expect(page.getByRole('heading',{name:'Morning preparation'})).toBeVisible();
+ await expect(page.locator('#prep-tiles')).toBeVisible();await expect(page.locator('#prep-tile-latest')).toHaveText('Ready · 1 stock');
+ await expect(page.locator('#prep-audit')).toContainText('New York');await expect(page.locator('#prep-audit')).not.toContainText(' local');
+ await expect(page.locator('#prep-handoff')).toBeEnabled();await expect(page.locator('#prep-handoff-reason')).toBeHidden();
+ await page.getByRole('checkbox',{name:'Include MSFT'}).uncheck();
+ await expect(page.locator('#prep-handoff')).toBeDisabled();await expect(page.locator('#prep-handoff-reason')).toHaveText('Tick at least one ready stock to continue.');
+ await page.getByRole('button',{name:'Workflow settings',exact:true}).click();
+ await expect(page.locator('#prep-basic-fields input')).toHaveCount(4);await expect(page.locator('#prep-fields input').first()).toBeHidden();
+ await page.getByText('Advanced settings',{exact:true}).click();await expect(page.locator('#prep-fields input').first()).toBeVisible();
 });

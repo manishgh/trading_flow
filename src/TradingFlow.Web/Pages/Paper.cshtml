@@ -4,6 +4,15 @@
     ViewData["Title"] = "Paper runs";
     var selectedConfig = Model.Configs.FirstOrDefault(c => c.Path == Model.ConfigPath);
     var selectedStrategy = Model.Strategies.FirstOrDefault(s => s.Path == Model.SelectedStrategyPath);
+    var wishlistTickers = String.IsNullOrWhiteSpace(Model.WishlistTickersCsv)
+        ? Array.Empty<string>()
+        : Model.WishlistTickersCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var experimentMode = Model.PaperExecutionMode == "experiment";
+    var startBlockedReason = Model.Strategies.Count == 0
+        ? experimentMode
+            ? "No paper experiment is registered yet. Register one under Experiments, then start the run."
+            : "No strategy is authorized for paper shadow runs yet. Choose Paper experiment under Authorization, or authorize a reviewed strategy first."
+        : null;
     var researchParameterDefaultsJson = System.Text.Json.JsonSerializer.Serialize(
         Model.ResearchStrategies.Select(strategy => new
         {
@@ -15,403 +24,314 @@
     {
         var audit = strategy.Audit;
         return audit is null
-            ? "Audit: not available"
-            : $"Audit: {audit.ReturnPct:+0.##;-0.##;0}% / DD {audit.MaxDrawdownPct:0.##}% / {audit.Trades} trades / win {audit.WinRatePct:0.#}% / avg hold {audit.AverageHold}";
+            ? "No backtest summary recorded"
+            : $"Backtest: {audit.ReturnPct:+0.##;-0.##;0}% return · {audit.MaxDrawdownPct:0.##}% worst drawdown · {audit.Trades} trades · {audit.WinRatePct:0.#}% winners · average hold {audit.AverageHold}";
     }
 }
 
 <div class="paper-page">
-<div class="section-title">
+<div class="paper-head">
     <div>
         <h1>Paper runs</h1>
-        <div class="muted">Test strategies live against real-time market data in paper mode.</div>
+        <p class="muted">Run an authorized strategy on your stocks with paper money. Nothing here uses the live account.</p>
     </div>
+    <details class="paper-limits" data-trading-limits data-mode="paper">
+        <summary>Account limits: <span data-trading-limits-summary>loading…</span> <span class="paper-edit">Edit</span></summary>
+        <form data-trading-limits-form class="paper-limits-form">
+            <label for="DailyNewStockLimit">New stocks a day
+                <input class="input" id="DailyNewStockLimit" name="maxNewStocksPerDay" type="number" min="1" step="1" required />
+            </label>
+            <label for="AccountOpenPositionLimit">Open positions at once
+                <input class="input" id="AccountOpenPositionLimit" name="maxOpenPositions" type="number" min="1" step="1" required />
+            </label>
+            <button class="button secondary" type="submit">Save limits</button>
+        </form>
+        <p class="muted paper-note" data-trading-limits-rule></p>
+        <p class="muted paper-note" role="status" data-trading-limits-status>Loading account limits…</p>
+    </details>
 </div>
 
 <div asp-validation-summary="All" class="paper-validation" role="alert"></div>
 
-<section class="panel" data-trading-limits data-mode="paper">
-    <h2>Account trading limits</h2>
-    <form data-trading-limits-form>
-        <label for="DailyNewStockLimit">New stocks per New York trading day</label>
-        <input class="input" id="DailyNewStockLimit" name="maxNewStocksPerDay" type="number" min="1" step="1" required />
-        <label for="AccountOpenPositionLimit">Open stock positions at once</label>
-        <input class="input" id="AccountOpenPositionLimit" name="maxOpenPositions" type="number" min="1" step="1" required />
-        <button class="btn btn-secondary" type="submit">Save trading limits</button>
-    </form>
-    <p class="note" data-trading-limits-rule></p>
-    <p role="status" data-trading-limits-status>Loading account limits…</p>
-</section>
+<div class="paper-layout">
+<form method="post" data-run-workflow class="paper-card paper-start" aria-labelledby="paper-start-title">
+    <h2 id="paper-start-title">Start a paper run</h2>
+    <input type="hidden" name="BaseConfigPath" id="BaseConfigPath" value="@Model.ConfigPath" />
+    <input type="hidden" asp-for="ConfigPath" />
 
-<form method="post" data-run-workflow>
-<div class="grid two">
-    <!-- LEFT COLUMN: Environment & Strategy -->
-    <div>
-        <div class="panel">
-            <h2>Wishlist + Finviz</h2>
-            <div class="muted mb-md">Paper trading universe is the selected wishlist plus optional Finviz screener results.</div>
-            <input type="hidden" name="BaseConfigPath" id="BaseConfigPath" value="@Model.ConfigPath" />
-            <input type="hidden" asp-for="ConfigPath" />
-
-            <label for="WishlistId">Wishlist <span class="tf-help" title="Named ticker group stored in the database. This replaces the old paper-config ticker list.">?</span></label>
-            <select name="WishlistId" id="WishlistId" onchange="window.location='?wishlistId=' + encodeURIComponent(this.value) + '&paperExecutionMode=' + encodeURIComponent(document.getElementById('PaperExecutionMode')?.value || 'shadow') + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '')">
-                @foreach (var wishlist in Model.Wishlists)
-                {
-                    <option value="@wishlist.Id" selected="@(Model.SelectedWishlist?.Id == wishlist.Id)">@wishlist.Name</option>
-                }
-            </select>
-
-            <div class="mt-md">
-                <label>Active Tickers</label>
-                <div class="ticker-chip-row">
-                    @if (Model.SelectedWishlist is null || String.IsNullOrWhiteSpace(Model.WishlistTickersCsv))
+    <div class="paper-steps">
+        <div class="paper-step-label">1 · Stocks</div>
+        <div class="paper-step-fields">
+            @* Finviz screen alone trades exactly what the screen returns and ignores the wishlist. *@
+            <fieldset class="paper-segmented" id="UniverseSource">
+                <legend>Stocks from</legend>
+                <label><input type="radio" name="UniverseSource" value="wishlist" checked="@(Model.UniverseSource == "wishlist")" /><span>Wishlist</span></label>
+                <label><input type="radio" name="UniverseSource" value="screener" checked="@(Model.UniverseSource == "screener")" /><span>Finviz screen</span></label>
+                <label><input type="radio" name="UniverseSource" value="both" checked="@(Model.UniverseSource == "both")" /><span>Both</span></label>
+            </fieldset>
+            <div data-source-part="wishlist">
+                <label for="WishlistId">Wishlist</label>
+                <select name="WishlistId" id="WishlistId" onchange="window.location='?wishlistId=' + encodeURIComponent(this.value) + '&paperExecutionMode=' + encodeURIComponent(document.getElementById('PaperExecutionMode')?.value || 'shadow') + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '')">
+                    @foreach (var wishlist in Model.Wishlists)
                     {
-                        <span class="muted">No active tickers. Add them from Wishlists.</span>
+                        <option value="@wishlist.Id" selected="@(Model.SelectedWishlist?.Id == wishlist.Id)">@wishlist.Name</option>
+                    }
+                </select>
+                <p class="muted paper-note" data-wishlist-tickers data-count="@wishlistTickers.Length">
+                    @if (wishlistTickers.Length == 0)
+                    {
+                        <span>This wishlist has no stocks. <a asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Add stocks in Manage wishlists</a>.</span>
                     }
                     else
                     {
-                        @foreach (var ticker in Model.WishlistTickersCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                        {
-                            <span class="ticker-chip">@ticker</span>
-                        }
+                        <span>@wishlistTickers.Length stocks: @String.Join(" · ", wishlistTickers)</span>
                     }
-                </div>
+                </p>
             </div>
-
-            @* A screener is a universe in its own right, not an addition to a
-               wishlist. Choosing Screener runs against exactly what the screen
-               returns and ignores the wishlist, so a screen can be traded without
-               promoting its symbols into a curated list first. *@
-            <label class="mt-md" for="UniverseSource">Universe source</label>
-            <select name="UniverseSource" id="UniverseSource">
-                <option value="wishlist" selected="@(Model.UniverseSource == "wishlist")">Wishlist only</option>
-                <option value="screener" selected="@(Model.UniverseSource == "screener")">Screener only</option>
-                <option value="both" selected="@(Model.UniverseSource == "both")">Wishlist and screener</option>
-            </select>
-            <div class="muted mt-xs">
-                Screener only ignores the wishlist entirely and trades exactly what the screen returns.
-            </div>
-
-            <label class="mt-md" for="ScreenerFilter">Finviz screen <span class="tf-help" title="A saved screen name, or a Finviz Elite query or URL.">?</span></label>
-            @* Saved screens are offered by name: Finviz has no endpoint that
-               lists the screens saved in its own interface. *@
-            <input type="text" name="ScreenerFilter" id="ScreenerFilter" list="PaperSavedScreens"
-                   value="@Model.ScreenerFilter" placeholder="A saved screen name, or v=111&f=cap_smallover,sh_relvol_o2" />
-            <datalist id="PaperSavedScreens">
-                @foreach (var preset in Model.ScreenerPresets)
-                {
-                    <option value="@preset.Name">@preset.Category · @preset.FilterQuery</option>
-                }
-            </datalist>
-            <div class="muted mt-xs">
-                Name a screen on the Wishlists page to pick it here, or paste a Finviz query or URL for a one-off.
-            </div>
-
-            <div class="actions mt-md">
-                <a class="button secondary" asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Manage Wishlist</a>
+            @* Saved screens are offered by name: Finviz has no endpoint that lists the screens saved in its own interface. *@
+            <div data-source-part="screener">
+                <label for="ScreenerFilter">Finviz screen</label>
+                <input type="text" name="ScreenerFilter" id="ScreenerFilter" list="PaperSavedScreens"
+                       value="@Model.ScreenerFilter" placeholder="Saved screen name, or a Finviz query or URL" />
+                <datalist id="PaperSavedScreens">
+                    @foreach (var preset in Model.ScreenerPresets)
+                    {
+                        <option value="@preset.Name">@preset.Category · @preset.FilterQuery</option>
+                    }
+                </datalist>
+                <p class="muted paper-note">Save screens by name in <a asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Manage wishlists</a>, or paste a Finviz query for a one-off run.</p>
             </div>
         </div>
 
-        <div class="panel mt-lg">
-            <h2>Strategy Configuration</h2>
-            <div class="muted mb-md">Choose an explicit authorization mode. Experiment runs never count as promotion evidence.</div>
-
-            <label for="PaperExecutionMode">Paper authorization</label>
-            <select name="PaperExecutionMode" id="PaperExecutionMode" class="mb-md"
-                    data-query-select="paperExecutionMode">
-                <option value="shadow" selected="@(Model.PaperExecutionMode == "shadow")">Paper shadow (evidence-authorized)</option>
-                <option value="experiment" selected="@(Model.PaperExecutionMode == "experiment")">Paper experiment (operator-labelled)</option>
-            </select>
-
-            @if (Model.Strategies.Count == 0)
-            {
-                <div class="paper-validation" role="status">
-                    @(Model.PaperExecutionMode == "experiment"
-                        ? "No registered paper-experiment strategy is available. Create an immutable experiment artifact before starting a run."
-                        : "No paper-shadow strategy is available. Complete research review and authorize an exact version and content hash.")
+        <div class="paper-step-label">2 · Strategy</div>
+        <div class="paper-step-fields">
+            <div class="paper-pair">
+                <div>
+                    <label for="PaperExecutionMode">Authorization</label>
+                    <select name="PaperExecutionMode" id="PaperExecutionMode" data-query-select="paperExecutionMode">
+                        <option value="shadow" selected="@(Model.PaperExecutionMode == "shadow")">Paper shadow</option>
+                        <option value="experiment" selected="@(Model.PaperExecutionMode == "experiment")">Paper experiment</option>
+                    </select>
                 </div>
-            }
-            else
-            {
-                <label for="SelectedStrategyDropdown">Authorized strategy <span class="tf-help" title="The exact authorized version and content hash used by the shared decision engine.">?</span></label>
-                <select name="SelectedStrategyPath" id="SelectedStrategyDropdown" onchange="loadStrategyDetails(this.value)">
-                    @foreach (var strategy in Model.Strategies)
+                <div>
+                    <label for="SelectedStrategyDropdown">Strategy</label>
+                    @if (Model.Strategies.Count == 0)
                     {
-                        <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">
-                            @strategy.Definition.StrategyName · @strategy.Identity.SemanticVersion · @strategy.Lifecycle
-                        </option>
+                        <select id="SelectedStrategyDropdown" disabled><option value="">None available</option></select>
                     }
-                </select>
+                    else
+                    {
+                        <select name="SelectedStrategyPath" id="SelectedStrategyDropdown" onchange="loadStrategyDetails(this.value)">
+                            @foreach (var strategy in Model.Strategies)
+                            {
+                                <option value="@strategy.Path" selected="@(strategy.Path == Model.SelectedStrategyPath)">@strategy.Definition.StrategyName · @strategy.Identity.SemanticVersion</option>
+                            }
+                        </select>
+                    }
+                </div>
+            </div>
+            <p class="muted paper-note">
+                @(experimentMode
+                    ? "Experiment runs are labelled as experiments and never count as evidence for promoting a strategy."
+                    : "Shadow runs use a strategy whose exact version was authorized after research review.")
                 @if (selectedStrategy is not null)
                 {
-                    <div class="muted mt-xs">
-                        @AuditLine(selectedStrategy) · hash @selectedStrategy.Identity.ContentSha256[..12]
-                    </div>
+                    <br /><span>@AuditLine(selectedStrategy) · content hash @selectedStrategy.Identity.ContentSha256[..12]</span>
                 }
-            }
-
-            @if (Model.PaperExecutionMode == "experiment")
-            {
-                <details class="paper-experiment-registration mt-md" open="@Model.ExperimentParameters.ApplyOverrides">
-                    <summary>Register an immutable experiment</summary>
-                    <div class="muted mb-md">
-                        Start from a reviewed research artifact. Leaving the version blank preserves the source version;
-                        changed parameters require a new semantic version.
-                    </div>
-                    <label for="ExperimentSourceStrategyPath">Research source</label>
-                    <select id="ExperimentSourceStrategyPath" name="ExperimentSourceStrategyPath"
-                            onchange="loadExperimentParameterDefaults(this.value)">
-                        @foreach (var strategy in Model.ResearchStrategies)
-                        {
-                            <option value="@strategy.Path" selected="@(strategy.Path == Model.ExperimentSourceStrategyPath)">
-                                @strategy.Definition.StrategyName · @strategy.Identity.SemanticVersion
-                            </option>
-                        }
-                    </select>
-                    <label class="mt-md" for="ExperimentSemanticVersion">Experiment version</label>
-                    <input id="ExperimentSemanticVersion" name="ExperimentSemanticVersion"
-                           value="@Model.ExperimentSemanticVersion"
-                           placeholder="Use source version" />
-                    <label class="checkbox-field mt-md" for="ExperimentParameters_ApplyOverrides">
-                        <input asp-for="ExperimentParameters.ApplyOverrides" type="checkbox"
-                               onchange="toggleExperimentOverrides()" />
-                        <span>Derive with edited parameters</span>
-                    </label>
-                    <details id="ExperimentOverrideDetails" class="mt-md" open="@Model.ExperimentParameters.ApplyOverrides">
-                        <summary>Experiment parameter overrides</summary>
-                        <div class="muted mb-md">
-                            Values begin with the selected source strategy. Enabling overrides requires a new version;
-                            the source remains unchanged and the complete diff is stored with the artifact.
-                        </div>
-                        <div class="compact-form-grid">
-                            <label asp-for="ExperimentParameters.MinVolumeSpike">
-                                Minimum volume ratio
-                                <input asp-for="ExperimentParameters.MinVolumeSpike" type="number" min="0" step="0.01" />
-                            </label>
-                            <label asp-for="ExperimentParameters.MaxVwapExtensionAtr">
-                                Maximum VWAP extension (ATR)
-                                <input asp-for="ExperimentParameters.MaxVwapExtensionAtr" type="number" min="0.01" step="0.01" />
-                            </label>
-                            <label asp-for="ExperimentParameters.MinEntryRsi">
-                                Minimum entry RSI
-                                <input asp-for="ExperimentParameters.MinEntryRsi" type="number" min="0" max="100" step="0.1" />
-                            </label>
-                            <label asp-for="ExperimentParameters.MaxEntryRsi">
-                                Maximum entry RSI
-                                <input asp-for="ExperimentParameters.MaxEntryRsi" type="number" min="0" max="100" step="0.1" />
-                            </label>
-                            <label class="checkbox-field" asp-for="ExperimentParameters.ConfluenceEnabled">
-                                <input asp-for="ExperimentParameters.ConfluenceEnabled" type="checkbox" />
-                                <span>Enable higher-timeframe confluence</span>
-                            </label>
-                            <label asp-for="ExperimentParameters.ConfluenceTimeframe">
-                                Confluence timeframe
-                                <input asp-for="ExperimentParameters.ConfluenceTimeframe" placeholder="15m, 1h, 1d" />
-                            </label>
-                            <label asp-for="ExperimentParameters.ConfluenceEmaPeriod">
-                                Confluence EMA period
-                                <input asp-for="ExperimentParameters.ConfluenceEmaPeriod" type="number" min="1" step="1" />
-                            </label>
-                            <label asp-for="ExperimentParameters.ExecutionTimeframe">
-                                Execution timeframe
-                                <input asp-for="ExperimentParameters.ExecutionTimeframe" placeholder="1m, 5m, 1h" />
-                            </label>
-                            <label asp-for="ExperimentParameters.StopAtrMultiple">
-                                Initial stop (ATR)
-                                <input asp-for="ExperimentParameters.StopAtrMultiple" type="number" min="0.01" step="0.01" />
-                            </label>
-                            <label asp-for="ExperimentParameters.TargetRMultiple">
-                                Profit target (R)
-                                <input asp-for="ExperimentParameters.TargetRMultiple" type="number" min="0.01" step="0.01" />
-                            </label>
-                            <label asp-for="ExperimentParameters.MaxHoldHours">
-                                Maximum hold (hours)
-                                <input asp-for="ExperimentParameters.MaxHoldHours" type="number" min="0.25" step="0.25" />
-                            </label>
-                            <label asp-for="ExperimentParameters.MinHoldBarsBeforeTechnicalExit">
-                                Minimum bars before technical exit
-                                <input asp-for="ExperimentParameters.MinHoldBarsBeforeTechnicalExit" type="number" min="0" step="1" />
-                            </label>
-                            <label class="checkbox-field" asp-for="ExperimentParameters.EnableAtrTrailingStop">
-                                <input asp-for="ExperimentParameters.EnableAtrTrailingStop" type="checkbox" />
-                                <span>Enable ATR trailing stop</span>
-                            </label>
-                            <label asp-for="ExperimentParameters.TrailingStopAtrMultiple">
-                                Trailing distance (ATR)
-                                <input asp-for="ExperimentParameters.TrailingStopAtrMultiple" type="number" min="0.01" step="0.01" />
-                            </label>
-                            <label asp-for="ExperimentParameters.TrailingActivationR">
-                                Trail activation (R)
-                                <input asp-for="ExperimentParameters.TrailingActivationR" type="number" min="0" step="0.01" />
-                            </label>
-                            <label asp-for="ExperimentParameters.SlippageBps">
-                                Slippage (bps)
-                                <input asp-for="ExperimentParameters.SlippageBps" type="number" min="0" step="0.1" />
-                            </label>
-                        </div>
-                    </details>
-                    <input type="hidden" name="ExperimentRegistrationOperationId"
-                           value="@Model.ExperimentRegistrationOperationId" />
-                    <input type="hidden" name="ExperimentRegistrationRequestedAtUtc"
-                           value="@Model.ExperimentRegistrationRequestedAtUtc.ToString("O")" />
-                    <button type="submit" asp-page-handler="CreateExperiment" class="button secondary mt-md"
-                            disabled="@(Model.ResearchStrategies.Count == 0)">
-                        Register experiment
-                    </button>
-                </details>
-            }
+            </p>
+            <label class="checkbox-field paper-check">
+                <input type="checkbox" id="NewsEnabledCheckbox" name="NewsEnabled" value="true" checked="@Model.NewsEnabled" disabled="@(!Model.SelectedStrategyUsesNews)" />
+                <span>Use news catalysts and vetoes</span>
+            </label>
+            <p id="NewsEnabledHint" class="muted paper-note"></p>
         </div>
-    </div>
 
-    <!-- RIGHT COLUMN: Live Runner -->
-    <div>
-        <div class="panel highlight-border">
-            <h2>Paper Runner</h2>
-            <div class="muted mb-md">Run the selected strategy on the wishlist plus optional Finviz screener universe.</div>
-
-            <label for="OrderExpirationDropdown">Order Expiration Strategy <span class="tf-help" title="Controls how long submitted broker orders remain active: GTC, day-only, or active cancellation behavior.">?</span></label>
-            <select class="mb-md" id="OrderExpirationDropdown" name="OrderExpiration">
-                <option value="gtc" selected="@(Model.OrderExpiration == "gtc")">Good 'Til Canceled (GTC)</option>
-                <option value="day" selected="@(Model.OrderExpiration == "day")">Day Orders (Cancel at Market Close)</option>
-                <option value="active_cancel" selected="@(Model.OrderExpiration == "active_cancel")">Active Cancellation (GTC + 30-min Auto-Cancel)</option>
-            </select>
-
-            <label for="EntryOrderTypeDropdown">Entry Order Type <span class="tf-help" title="Limit waits for a controlled fill price; market enters immediately but may slip. Swing entries normally use a validated limit price.">?</span></label>
-            <select class="mb-md" id="EntryOrderTypeDropdown" name="EntryOrderType">
-                <option value="limit" selected="@(Model.EntryOrderType == "limit")">Limit Order (Waits for pullback/discount)</option>
-                <option value="market" selected="@(Model.EntryOrderType == "market")">Market Order (Enters immediately at current price)</option>
-            </select>
-
-            <div class="paper-toggle">
-                <label title="Allows orders and market data decisions during Alpaca-supported pre-market and post-market sessions.">
-                    <input type="checkbox" id="AllowExtendedHoursTradingCheckbox" name="AllowExtendedHoursTrading" value="true" checked="@Model.AllowExtendedHoursTrading" />
-                    <span>Enable Extended Hours (Pre/Post-Market)</span>
-                    <span class="tf-help" title="When checked, paper orders may be submitted in extended hours if the broker and order type support it.">?</span>
-                </label>
-                <div id="ExtendedHoursTradingHint" class="muted small-help">
-                    Extended-hours entries require an explicit limit order with DAY expiration.
+        <div class="paper-step-label">3 · Orders</div>
+        <div class="paper-step-fields">
+            <div class="paper-pair">
+                <div>
+                    <label for="EntryOrderTypeDropdown">Entry order</label>
+                    <select id="EntryOrderTypeDropdown" name="EntryOrderType">
+                        <option value="limit" selected="@(Model.EntryOrderType == "limit")">Limit</option>
+                        <option value="market" selected="@(Model.EntryOrderType == "market")">Market</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="OrderExpirationDropdown">Expires</label>
+                    <select id="OrderExpirationDropdown" name="OrderExpiration">
+                        <option value="gtc" selected="@(Model.OrderExpiration == "gtc")">When cancelled</option>
+                        <option value="day" selected="@(Model.OrderExpiration == "day")">End of day</option>
+                        <option value="active_cancel" selected="@(Model.OrderExpiration == "active_cancel")">After 30 minutes</option>
+                    </select>
                 </div>
             </div>
-
-            <div class="paper-toggle">
-                <label title="Only available when the selected strategy actually uses news/catalyst fields.">
-                    <input type="checkbox" id="NewsEnabledCheckbox" name="NewsEnabled" value="true" checked="@Model.NewsEnabled" disabled="@(!Model.SelectedStrategyUsesNews)" />
-                    <span>Enable News Catalyst / Veto</span>
-                    <span class="tf-help" title="Enables configured news provider and veto/catalyst checks. No-news strategies keep this off.">?</span>
-                </label>
-                <div id="NewsEnabledHint" class="muted small-help"></div>
-            </div>
-
-            <label for="RunName">Run Name <span class="tf-help" title="Unique name for this paper run. It scopes logs, audits, profiler metrics, results, and run-specific broker order tags.">?</span></label>
-            <input name="RunName" id="RunName" value="@Model.SuggestedRunName" />
-
-            <div class="actions mt-md">
-                <button type="submit" asp-page-handler="RunLive" class="button go"
-                        disabled="@(Model.Strategies.Count == 0)"
-                        title="Starts a paper LiveRunner job using the selected exact authorization.">Start Paper Trading</button>
-            </div>
+            <label class="checkbox-field paper-check">
+                <input type="checkbox" id="AllowExtendedHoursTradingCheckbox" name="AllowExtendedHoursTrading" value="true" checked="@Model.AllowExtendedHoursTrading" />
+                <span>Trade pre-market and after hours</span>
+            </label>
+            <p id="ExtendedHoursTradingHint" class="muted paper-note"></p>
         </div>
-        </form>
 
-        <section class="panel mt-md">
-            <div class="section-title">
-                <h2>Paper Jobs</h2>
-                <a class="button secondary" asp-page="/Paper" asp-route-wishlistId="@Model.SelectedWishlist?.Id" asp-route-strategyPath="@Model.SelectedStrategyPath" asp-route-paperExecutionMode="@Model.PaperExecutionMode" asp-route-preparationKey="@Request.Query["preparationKey"]" title="Reloads the paper lab and job list without starting a new run.">Refresh</a>
-            </div>
+        <div class="paper-step-label">4 · Name</div>
+        <div class="paper-step-fields">
+            <label for="RunName">Run name</label>
+            <input name="RunName" id="RunName" value="@Model.SuggestedRunName" />
+            <p class="muted paper-note">Logs, results and broker order tags for this run carry this name.</p>
+        </div>
+    </div>
 
-            @if (Model.LiveJobs.Count == 0)
+    <div class="paper-start-bar">
+        <p class="muted" id="PaperRunSummary" data-blocked="@(startBlockedReason is not null ? "true" : "false")">@(startBlockedReason ?? "")</p>
+        <button type="submit" asp-page-handler="RunLive" class="button go"
+                disabled="@(Model.Strategies.Count == 0)"
+                aria-describedby="PaperRunSummary">Start paper run</button>
+    </div>
+</form>
+
+<div class="paper-side">
+    <section class="paper-card" aria-labelledby="paper-runs-title">
+        <div class="paper-card-head">
+            <h2 id="paper-runs-title">Running and recent</h2>
+            <a class="button secondary" asp-page="/Paper" asp-route-wishlistId="@Model.SelectedWishlist?.Id" asp-route-strategyPath="@Model.SelectedStrategyPath" asp-route-paperExecutionMode="@Model.PaperExecutionMode" asp-route-preparationKey="@Request.Query["preparationKey"]">Refresh</a>
+        </div>
+        @if (Model.LiveJobs.Count == 0)
+        {
+            <p class="muted">No paper runs yet. Started runs appear here with their status.</p>
+        }
+        else
+        {
+            <table class="data-table">
+                <thead>
+                    <tr><th scope="col">Run</th><th scope="col">Status</th><th scope="col">Started</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var job in Model.LiveJobs)
+                    {
+                        <tr>
+                            <td><a asp-page="/PaperJob" asp-route-id="@job.JobId">@job.RunName</a></td>
+                            <td><span class="status @job.Status">@job.Status</span></td>
+                            <td>@(job.StartedAt is null ? "–" : Model.FormatLocalTime(job.StartedAt.Value))</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section class="paper-card" aria-labelledby="paper-experiments-title">
+        <h2 id="paper-experiments-title">Experiments</h2>
+        <p class="muted">Register a research strategy as a labelled paper experiment. The research file itself never changes.</p>
+        <details class="paper-experiment-registration" open="@(experimentMode && (Model.ExperimentParameters.ApplyOverrides || !ViewData.ModelState.IsValid))">
+            <summary>Register an experiment</summary>
+            @if (Model.ResearchStrategies.Count == 0)
             {
-                <div class="muted">No paper jobs running.</div>
+                <p class="muted">No research strategy is available to register.</p>
             }
             else
             {
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Run Name</th>
-                            <th>Status</th>
-                            <th>Started</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var job in Model.LiveJobs)
-                        {
-                            <tr>
-                                <td>@job.RunName</td>
-                                <td><span class="status @job.Status">@job.Status</span></td>
-                                <td>@(job.StartedAt is null ? "-" : Model.FormatLocalTime(job.StartedAt.Value))</td>
-                                <td><a asp-page="/PaperJob" asp-route-id="@job.JobId">View</a></td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
+                <form method="post" asp-page-handler="CreateExperiment">
+                    <input type="hidden" name="ConfigPath" value="@Model.ConfigPath" />
+                    <input type="hidden" name="WishlistId" value="@Model.SelectedWishlist?.Id" />
+                    <input type="hidden" name="ExperimentRegistrationOperationId" value="@Model.ExperimentRegistrationOperationId" />
+                    <input type="hidden" name="ExperimentRegistrationRequestedAtUtc" value="@Model.ExperimentRegistrationRequestedAtUtc.ToString("O")" />
+                    <div class="paper-pair">
+                        <div>
+                            <label for="ExperimentSourceStrategyPath">Research strategy</label>
+                            <select id="ExperimentSourceStrategyPath" name="ExperimentSourceStrategyPath" onchange="loadExperimentParameterDefaults(this.value)">
+                                @foreach (var strategy in Model.ResearchStrategies)
+                                {
+                                    <option value="@strategy.Path" selected="@(strategy.Path == Model.ExperimentSourceStrategyPath)">@strategy.Definition.StrategyName · @strategy.Identity.SemanticVersion</option>
+                                }
+                            </select>
+                        </div>
+                        <div>
+                            <label for="ExperimentSemanticVersion">Version</label>
+                            <input id="ExperimentSemanticVersion" name="ExperimentSemanticVersion" value="@Model.ExperimentSemanticVersion" placeholder="Same as research" />
+                        </div>
+                    </div>
+                    <label class="checkbox-field paper-check" for="ExperimentParameters_ApplyOverrides">
+                        <input asp-for="ExperimentParameters.ApplyOverrides" type="checkbox" onchange="toggleExperimentOverrides()" />
+                        <span>Change settings (needs a new version)</span>
+                    </label>
+                    <div id="ExperimentOverrideDetails" class="paper-overrides" hidden="@(!Model.ExperimentParameters.ApplyOverrides)">
+                        <p class="muted paper-note">Values start from the research strategy. The full list of changes is stored with the experiment.</p>
+                        <div class="paper-pair">
+                            <label asp-for="ExperimentParameters.MinVolumeSpike">Minimum volume ratio<input asp-for="ExperimentParameters.MinVolumeSpike" type="number" min="0" step="0.01" /></label>
+                            <label asp-for="ExperimentParameters.MaxVwapExtensionAtr">Most above VWAP (ATR)<input asp-for="ExperimentParameters.MaxVwapExtensionAtr" type="number" min="0.01" step="0.01" /></label>
+                            <label asp-for="ExperimentParameters.MinEntryRsi">Lowest entry RSI<input asp-for="ExperimentParameters.MinEntryRsi" type="number" min="0" max="100" step="0.1" /></label>
+                            <label asp-for="ExperimentParameters.MaxEntryRsi">Highest entry RSI<input asp-for="ExperimentParameters.MaxEntryRsi" type="number" min="0" max="100" step="0.1" /></label>
+                            <label asp-for="ExperimentParameters.ExecutionTimeframe">Execution timeframe<input asp-for="ExperimentParameters.ExecutionTimeframe" placeholder="1m, 5m, 1h" /></label>
+                            <label asp-for="ExperimentParameters.SlippageBps">Slippage (basis points)<input asp-for="ExperimentParameters.SlippageBps" type="number" min="0" step="0.1" /></label>
+                            <label asp-for="ExperimentParameters.ConfluenceTimeframe">Confirmation timeframe<input asp-for="ExperimentParameters.ConfluenceTimeframe" placeholder="15m, 1h, 1d" /></label>
+                            <label asp-for="ExperimentParameters.ConfluenceEmaPeriod">Confirmation EMA period<input asp-for="ExperimentParameters.ConfluenceEmaPeriod" type="number" min="1" step="1" /></label>
+                            <label asp-for="ExperimentParameters.StopAtrMultiple">Initial stop (ATR)<input asp-for="ExperimentParameters.StopAtrMultiple" type="number" min="0.01" step="0.01" /></label>
+                            <label asp-for="ExperimentParameters.TargetRMultiple">Profit target (R)<input asp-for="ExperimentParameters.TargetRMultiple" type="number" min="0.01" step="0.01" /></label>
+                            <label asp-for="ExperimentParameters.MaxHoldHours">Longest hold (hours)<input asp-for="ExperimentParameters.MaxHoldHours" type="number" min="0.25" step="0.25" /></label>
+                            <label asp-for="ExperimentParameters.MinHoldBarsBeforeTechnicalExit">Bars before a technical exit<input asp-for="ExperimentParameters.MinHoldBarsBeforeTechnicalExit" type="number" min="0" step="1" /></label>
+                            <label asp-for="ExperimentParameters.TrailingStopAtrMultiple">Trailing distance (ATR)<input asp-for="ExperimentParameters.TrailingStopAtrMultiple" type="number" min="0.01" step="0.01" /></label>
+                            <label asp-for="ExperimentParameters.TrailingActivationR">Trail starts at (R)<input asp-for="ExperimentParameters.TrailingActivationR" type="number" min="0" step="0.01" /></label>
+                        </div>
+                        <label class="checkbox-field paper-check"><input asp-for="ExperimentParameters.ConfluenceEnabled" type="checkbox" /><span>Require higher-timeframe confirmation</span></label>
+                        <label class="checkbox-field paper-check"><input asp-for="ExperimentParameters.EnableAtrTrailingStop" type="checkbox" /><span>Use an ATR trailing stop</span></label>
+                    </div>
+                    <div class="paper-actions-end">
+                        <button type="submit" class="button secondary">Register experiment</button>
+                    </div>
+                </form>
             }
-        </section>
-    </div>
-</div>
+        </details>
+    </section>
 
-<details class="panel mt-md" open="@(Model.PaperSnapshot is not null)"><summary>Environment diagnostics</summary>
-    <div class="section-title">
-        <h2>Environment Check <span class="tf-help" title="Validates paper credentials and read-only broker dependencies without placing orders.">?</span></h2>
-        @if (Model.PaperSnapshot is not null)
+    <details class="paper-card paper-broker-check" open="@(Model.PaperSnapshot is not null)">
+        <summary>Check the paper broker connection</summary>
+        @if (Model.PaperSnapshot is null)
         {
-            <span class="status">Checked</span>
+            <p class="muted">Reads the paper account to confirm the Alpaca keys work. No orders are placed.</p>
+            <form method="post" asp-page-handler="">
+                <input type="hidden" id="EnvironmentCheckConfigPath" name="BaseConfigPath" value="@Model.ConfigPath" />
+                <input type="hidden" id="EnvironmentCheckStrategyPath" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
+                <button type="submit" class="button secondary">Check connection</button>
+            </form>
         }
-    </div>
-    @if (Model.PaperSnapshot is null)
-    {
-        <p class="muted">Run validation to check demo keys and read-only paper dependencies for your selected broker. No orders are placed.</p>
-        <form method="post" asp-page-handler="">
-            <input type="hidden" id="EnvironmentCheckConfigPath" name="BaseConfigPath" value="@Model.ConfigPath" />
-            <input type="hidden" id="EnvironmentCheckStrategyPath" name="SelectedStrategyPath" value="@Model.SelectedStrategyPath" />
-            <button type="submit" title="Checks configured paper broker credentials and read-only account dependencies.">Validate Environment</button>
-        </form>
-    }
-    else
-    {
-        @if (Model.Selected.Config.Execution.Broker.Equals("alpaca", StringComparison.OrdinalIgnoreCase))
+        else if (Model.Selected.Config.Execution.Broker.Equals("alpaca", StringComparison.OrdinalIgnoreCase))
         {
-            <table>
-                <tr><th>ALPACA_KEY_ID</th><td>@(Model.PaperSnapshot.AlpacaKeyIdPresent ? "present" : "missing")</td></tr>
-                <tr><th>ALPACA_SECRET_KEY</th><td>@(Model.PaperSnapshot.AlpacaSecretKeyPresent ? "present" : "missing")</td></tr>
-            </table>
+            <p>Alpaca key ID @(Model.PaperSnapshot.AlpacaKeyIdPresent ? "present" : "missing") · secret key @(Model.PaperSnapshot.AlpacaSecretKeyPresent ? "present" : "missing")</p>
             @if (Model.PaperSnapshot.AlpacaReadOnlyCheck is null)
             {
-                <p class="warn">Set Alpaca credentials in appsettings.local.json or ALPACA_KEY_ID / ALPACA_SECRET_KEY to run Alpaca checks.</p>
+                <p class="warn">Set the Alpaca keys in appsettings.local.json, or ALPACA_KEY_ID and ALPACA_SECRET_KEY, to run the check.</p>
             }
             else
             {
-                <pre>@Model.AlpacaCheckJson</pre>
+                <pre class="paper-broker-result">@Model.AlpacaCheckJson</pre>
             }
         }
         else
         {
-            <p class="warn">Unknown broker specified in the configuration: @Model.Selected.Config.Execution.Broker</p>
+            <p class="warn">The configuration names a broker this page cannot check: @Model.Selected.Config.Execution.Broker</p>
         }
-    }
-</details>
+    </details>
+</div>
+</div>
 </div>
 @section Scripts {
     <script src="~/js/trading-limits.js" asp-append-version="true" defer></script>
     <script src="~/js/run-workflow.js" asp-append-version="true" defer></script>
     <script>
         let currentStrategyUsesNews = @Model.SelectedStrategyUsesNews.ToString().ToLowerInvariant();
-        let currentConfigNewsEnabled = @((selectedConfig?.Config.News.Enabled ?? true).ToString().ToLowerInvariant());
+        const currentConfigNewsEnabled = @((selectedConfig?.Config.News.Enabled ?? true).ToString().ToLowerInvariant());
         const researchParameterDefaults = @Html.Raw(researchParameterDefaultsJson);
 
         function toggleExperimentOverrides() {
             const enabled = document.getElementById('ExperimentParameters_ApplyOverrides')?.checked === true;
             const details = document.getElementById('ExperimentOverrideDetails');
-            if (details) {
-                details.open = enabled;
-                details.querySelectorAll('input, select').forEach(control => control.disabled = !enabled);
-            }
+            if (!details) return;
+            details.hidden = !enabled;
+            details.querySelectorAll('input, select').forEach(control => control.disabled = !enabled);
         }
 
         function loadExperimentParameterDefaults(strategyPath) {
             const selected = researchParameterDefaults.find(item => item.path.toLowerCase() === strategyPath.toLowerCase());
             if (!selected) return;
-
             const parameters = selected.parameters;
             const fields = {
                 'ExperimentParameters_MinVolumeSpike': 'minVolumeSpike',
@@ -433,7 +353,6 @@
                 const input = document.getElementById(id);
                 if (input) input.value = parameters[property] ?? '';
             });
-
             document.getElementById('ExperimentParameters_ConfluenceEnabled').checked = Boolean(parameters.confluenceEnabled);
             document.getElementById('ExperimentParameters_EnableAtrTrailingStop').checked = Boolean(parameters.enableAtrTrailingStop);
             document.getElementById('ExperimentParameters_ApplyOverrides').checked = false;
@@ -445,22 +364,18 @@
             const checkbox = document.getElementById('NewsEnabledCheckbox');
             const hint = document.getElementById('NewsEnabledHint');
             if (!checkbox) return;
-
             checkbox.disabled = !currentStrategyUsesNews;
             checkbox.checked = currentStrategyUsesNews && currentConfigNewsEnabled;
             if (hint) {
                 hint.textContent = currentStrategyUsesNews
-                    ? 'News is available for this strategy and will be included when enabled.'
-                    : 'Selected strategy has no news/catalyst rules, so news is disabled for the run.';
+                    ? 'This strategy has news rules; they apply when ticked.'
+                    : 'This strategy has no news rules, so news is off for the run.';
             }
         }
 
         function loadStrategyDetails(strategyPath) {
             const environmentStrategy = document.getElementById('EnvironmentCheckStrategyPath');
-            if (environmentStrategy) {
-                environmentStrategy.value = strategyPath;
-            }
-
+            if (environmentStrategy) environmentStrategy.value = strategyPath;
             const paperMode = document.getElementById('PaperExecutionMode')?.value || 'shadow';
             window.tradingFlowFetch('?handler=StrategyDetails&strategyPath=' + encodeURIComponent(strategyPath) + '&paperExecutionMode=' + encodeURIComponent(paperMode))
                 .then(response => response.json())
@@ -469,64 +384,64 @@
                         currentStrategyUsesNews = Boolean(data.usesNews);
                         updateNewsToggle();
                     }
+                    updateRunSummary();
                 });
         }
 
-        function loadConfigDetails(configPath) {
-            const environmentConfig = document.getElementById('EnvironmentCheckConfigPath');
-            if (environmentConfig) {
-                environmentConfig.value = configPath;
-            }
-
-            window.tradingFlowFetch('?handler=ConfigDetails&configPath=' + encodeURIComponent(configPath))
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        document.getElementById('OrderExpirationDropdown').value = data.orderExpiration || 'gtc';
-                        document.getElementById('EntryOrderTypeDropdown').value = data.entryOrderType || 'limit';
-                        document.getElementById('AllowExtendedHoursTradingCheckbox').checked = Boolean(data.allowExtendedHoursTrading);
-                        updateExtendedHoursExecution();
-                        currentConfigNewsEnabled = Boolean(data.newsEnabled);
-                        updateNewsToggle();
-                        document.getElementById('ScreenerFilter').value = data.screenerFilter || '';
-                    }
-                });
-        }
-
+        // Extended-hours entries must be limit orders that expire at the end of the day, so ticking it switches both fields.
         function updateExtendedHoursExecution() {
             const checkbox = document.getElementById('AllowExtendedHoursTradingCheckbox');
             const expiration = document.getElementById('OrderExpirationDropdown');
             const entryType = document.getElementById('EntryOrderTypeDropdown');
             const hint = document.getElementById('ExtendedHoursTradingHint');
             if (!checkbox || !expiration || !entryType) return;
-
-            if (checkbox.checked) {
+            const constrained = checkbox.checked;
+            if (constrained) {
                 expiration.value = 'day';
                 entryType.value = 'limit';
             }
-
-            const constrained = checkbox.checked;
-            for (const option of expiration.options) {
-                option.disabled = constrained && option.value !== 'day';
-            }
-            for (const option of entryType.options) {
-                option.disabled = constrained && option.value !== 'limit';
-            }
+            for (const option of expiration.options) option.disabled = constrained && option.value !== 'day';
+            for (const option of entryType.options) option.disabled = constrained && option.value !== 'limit';
             if (hint) {
                 hint.textContent = constrained
-                    ? 'Extended-hours enabled: Limit + DAY is required and selected.'
-                    : 'Extended-hours entries require an explicit limit order with DAY expiration.';
+                    ? 'Extended hours needs a limit order that expires at the end of the day, so both fields are set to that.'
+                    : 'Extended hours needs a limit order that expires at the end of the day; ticking it sets both fields.';
             }
         }
 
-        document.getElementById('AllowExtendedHoursTradingCheckbox')
-            ?.addEventListener('change', updateExtendedHoursExecution);
-        document.getElementById('OrderExpirationDropdown')
-            ?.addEventListener('change', updateExtendedHoursExecution);
-        document.getElementById('EntryOrderTypeDropdown')
-            ?.addEventListener('change', updateExtendedHoursExecution);
+        function selectedSource() {
+            return document.querySelector('input[name="UniverseSource"]:checked')?.value || 'wishlist';
+        }
+
+        // Shows only the fields the chosen stock source uses.
+        function updateSourceParts() {
+            const source = selectedSource();
+            document.querySelectorAll('[data-source-part]').forEach(part => {
+                part.hidden = part.dataset.sourcePart === 'wishlist' ? source === 'screener' : source === 'wishlist';
+            });
+            updateRunSummary();
+        }
+
+        function updateRunSummary() {
+            const summary = document.getElementById('PaperRunSummary');
+            if (!summary || summary.dataset.blocked === 'true') return;
+            const source = selectedSource();
+            const count = Number(document.querySelector('[data-wishlist-tickers]')?.dataset.count || 0);
+            const wishlist = document.getElementById('WishlistId')?.selectedOptions[0]?.textContent.trim() || 'the wishlist';
+            const screen = document.getElementById('ScreenerFilter')?.value.trim();
+            const strategy = document.getElementById('SelectedStrategyDropdown')?.selectedOptions[0]?.textContent.trim() || 'the selected strategy';
+            const parts = [];
+            if (source !== 'screener') parts.push(count + ' stocks from ' + wishlist);
+            if (source !== 'wishlist') parts.push(screen ? 'the Finviz screen “' + screen + '”' : 'a Finviz screen (enter one above)');
+            summary.textContent = 'Runs ' + strategy + ' on ' + parts.join(' plus ') + ' · paper account';
+        }
+
+        document.querySelectorAll('input[name="UniverseSource"]').forEach(radio => radio.addEventListener('change', updateSourceParts));
+        document.getElementById('ScreenerFilter')?.addEventListener('input', updateRunSummary);
+        document.getElementById('AllowExtendedHoursTradingCheckbox')?.addEventListener('change', updateExtendedHoursExecution);
         updateExtendedHoursExecution();
         updateNewsToggle();
         toggleExperimentOverrides();
+        updateSourceParts();
     </script>
 }

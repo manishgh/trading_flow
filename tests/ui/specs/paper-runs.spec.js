@@ -6,7 +6,7 @@ import { signIn } from "./sign-in.js";
 test("the first paper experiment can be registered from a research strategy", async ({ page }) => {
   await signIn(page);
   await page.goto("/Paper?paperExecutionMode=experiment");
-  await page.getByText("Register an immutable experiment", { exact: true }).click();
+  await page.getByText("Register an experiment", { exact: true }).click();
   const source = page.locator("#ExperimentSourceStrategyPath");
   const connors = await source.locator("option").filter({ hasText: "7.0.0" }).first().getAttribute("value");
   await source.selectOption(connors);

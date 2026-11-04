@@ -1,29 +1,108 @@
+@{ var embedded = ViewData["EmbeddedPreparation"] is true; }
 <section class="prep-page" data-preparation-owner="@User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value">
-  <div class="page-head"><div><span class="eyebrow">Daily workspace</span>@if (ViewData["EmbeddedPreparation"] is true) { <h2>Preparation review</h2> } else { <h1>Daily review</h1> }<p>Review the latest preparation, then open candidates or a paper-run review.</p></div><a class="btn btn-secondary" asp-page="/Desk">Open the Desk</a></div>
-  <p id="prep-status" role="status" aria-live="polite">Loading workflows…</p>
-  <button id="prep-retry" type="button" hidden>Retry loading preparation</button>
-  <div id="prep-setup" class="prep-card" hidden><h3>Set up your first preparation workflow</h3><p>Choose a wishlist or Finviz screen, save the workflow paused, then review its exchange-session schedule. Collection results appear here after a run completes.</p><button id="prep-setup-new" type="button" disabled>Configure preparation</button></div>
-  <div class="prep-toolbar"><select id="prep-list" disabled aria-label="Workflow"></select><button id="prep-open" disabled>Open workflow</button><button id="prep-new" disabled>New workflow</button><button id="prep-refresh" disabled>Refresh history</button></div>
-  <div class="view-switch" role="group" aria-label="Preparation view">
+  <div class="prep-head">
+    <div>
+      @if (embedded) { <h2>Morning preparation</h2> } else { <h1>Morning preparation</h1> }
+      <p class="muted">Before the open, TradingFlow collects price history and news for the stocks you choose, applies your filters and hands you a reviewed list to research or paper-trade. Nothing is bought or sold here.</p>
+    </div>
+    @if (!embedded) { <a class="button secondary" asp-page="/Desk">Open the Desk</a> }
+  </div>
+  <p id="prep-status" class="muted" role="status" aria-live="polite">Loading workflows…</p>
+  <button id="prep-retry" type="button" class="button secondary" hidden>Retry loading preparation</button>
+
+  <div id="prep-tiles" class="prep-tiles" hidden>
+    <div class="prep-tile"><span>Evening collection</span><strong id="prep-tile-nightly">–</strong><small id="prep-tile-nightly-note"></small></div>
+    <div class="prep-tile"><span>Morning collection</span><strong id="prep-tile-morning">–</strong><small id="prep-tile-morning-note"></small></div>
+    <div class="prep-tile"><span>Latest result</span><strong id="prep-tile-latest">–</strong><small id="prep-tile-latest-note"></small></div>
+  </div>
+
+  <div id="prep-setup" class="prep-card prep-setup" hidden>
+    <h3>Set up your first preparation</h3>
+    <p class="muted">Choose the wishlists or Finviz screens to prepare and save it paused. Then check its schedule and turn it on.</p>
+    <button id="prep-setup-new" type="button" class="button" disabled>Set up preparation</button>
+  </div>
+
+  <div class="prep-toolbar">
+    <label for="prep-list">Workflow</label>
+    <select id="prep-list" disabled></select>
+    <button id="prep-open" type="button" class="button secondary" disabled>Open</button>
+    <button id="prep-new" type="button" class="button secondary" disabled>New workflow</button>
+    <button id="prep-refresh" type="button" class="button secondary" disabled>Refresh</button>
+  </div>
+
+  <div class="prep-tabs" role="group" aria-label="Preparation view">
     <button type="button" data-prep-view="daily" aria-pressed="true">Latest review</button><button type="button" data-prep-view="history" disabled aria-pressed="false">History</button><button type="button" data-prep-view="settings" disabled aria-pressed="false">Workflow settings</button><button type="button" data-prep-view="alerts" disabled aria-pressed="false">Alerts</button>
   </div>
+
   <div data-prep-panel="daily">
-    <p id="prep-update" role="status"></p><button id="prep-latest" hidden>Discard review changes and open latest result</button>
-    <p id="prep-empty">No preparation selected. Open a workflow to see its latest result, or create one to begin.</p>
-    <section id="prep-review" hidden><h2>Snapshot review</h2><div id="prep-audit"></div><div id="prep-members"></div><button id="prep-more" hidden>Show next 30</button>
-      <div class="prep-next"><h2>Continue with this review</h2><label>Review reason <input id="prep-reason" maxlength="1000" placeholder="Reason for this accepted membership" /></label>
-      <label>Research strategy <select id="prep-strategy"></select></label><button id="prep-handoff">Open research candidates with selected snapshot</button>
-      <button id="prep-paper">Review authorized paper run with this snapshot</button><p>Fresh, complete members remain subject to strategy admission and execution authorization.</p></div>
-      <details class="prep-card"><summary>Adjust reviewed membership</summary><label>Add symbols for a new collected revision <input id="prep-additions" placeholder="AAPL, MSFT" /></label><button id="prep-curate">Collect curated revision</button></details>
+    <p id="prep-update" class="prep-note" role="status"></p>
+    <button id="prep-latest" type="button" class="button secondary" hidden>Discard review changes and open latest result</button>
+    <p id="prep-empty" class="muted">No preparation selected. Open a workflow to see its latest result, or create one to begin.</p>
+    <section id="prep-review" class="prep-review" hidden>
+      <div class="prep-ready">
+        <h2>Ready list</h2>
+        <div id="prep-audit" class="prep-audit"></div>
+        <div id="prep-members"></div>
+        <button id="prep-more" type="button" class="button secondary" hidden>Show next 30</button>
+      </div>
+      <div class="prep-next prep-card">
+        <h2>Continue with this list</h2>
+        <label for="prep-reason">Why these stocks</label>
+        <input id="prep-reason" maxlength="1000" placeholder="Reason recorded with the reviewed list" />
+        <label for="prep-strategy">Research strategy</label>
+        <select id="prep-strategy"></select>
+        <p id="prep-handoff-reason" class="prep-note" role="status"></p>
+        <div class="prep-actions">
+          <button id="prep-handoff" type="button" class="button">Research these stocks</button>
+          <button id="prep-paper" type="button" class="button secondary">Start a paper run with them</button>
+        </div>
+        <p class="muted prep-note">Every stock still has to pass the strategy's own checks and the paper-run authorization.</p>
+        <details class="prep-adjust"><summary>Adjust reviewed membership</summary>
+          <label for="prep-additions">Add tickers and collect a new revision</label>
+          <input id="prep-additions" placeholder="AAPL, MSFT" />
+          <button id="prep-curate" type="button" class="button secondary">Collect curated revision</button>
+        </details>
+      </div>
     </section>
-    <details id="prep-schedule" class="prep-card" hidden><summary>Schedule and manual collection</summary><p id="prep-collection-status" role="status"></p><h2>Upcoming exchange sessions</h2><div id="prep-upcoming"></div><div class="prep-toolbar"><button id="prep-nightly" disabled>Run nightly now</button><button id="prep-morning" disabled>Run morning now</button></div></details>
+    <details id="prep-schedule" class="prep-card" hidden><summary>Schedule and manual collection</summary>
+      <p id="prep-collection-status" class="prep-note" role="status"></p>
+      <h3>Upcoming exchange sessions</h3>
+      <div id="prep-upcoming"></div>
+      <div class="prep-actions"><button id="prep-nightly" type="button" class="button secondary" disabled>Run evening collection now</button><button id="prep-morning" type="button" class="button secondary" disabled>Run morning collection now</button></div>
+    </details>
   </div>
-  <div data-prep-panel="history" hidden><h2>Preparation history</h2><div id="prep-history"></div></div>
-  <div data-prep-panel="settings" hidden><form id="prep-editor"><h2>Workflow settings</h2><p id="prep-draft-note">Choose at least one discovery source. Save paused before enabling the schedule.</p>
-    <label>Name <input id="prep-name" required maxlength="120" /></label><label>Membership <select id="prep-merge"><option value="union">Union: any selected source</option><option value="intersection">Intersection: every selected source</option></select></label>
-    <h3>Discovery sources</h3><div id="prep-sources"></div><p id="prep-source-status" role="status"></p><div class="prep-toolbar"><select id="prep-wishlist" aria-label="Add wishlist"></select><button type="button" id="prep-add-wishlist">Add wishlist</button><input id="prep-query" maxlength="500" aria-label="Finviz query" placeholder="Saved Finviz query" /><button type="button" id="prep-add-query">Add Finviz query</button></div>
-    <details class="prep-card"><summary>Schedule, evidence, filters and notifications</summary><p>US equity exchange calendar · America/New_York. Blank filters are disabled. Context thresholds annotate observations only.</p><div id="prep-fields" class="prep-fields"></div></details>
-    <button id="prep-save" type="submit">Save paused workflow</button><button type="button" id="prep-toggle" disabled>Enable workflow</button><details><summary>Saved definition</summary><span id="prep-revision"></span></details>
-  </form></div>
-  <div data-prep-panel="alerts" hidden><h2>Preparation alerts</h2><button id="prep-alerts">Refresh alerts</button><div id="prep-notifications"></div></div>
+
+  <div data-prep-panel="history" hidden><h2>Preparation history</h2><div id="prep-history" class="prep-history"></div></div>
+
+  <div data-prep-panel="settings" hidden>
+    <form id="prep-editor" class="prep-editor prep-card">
+      <h2>Workflow settings</h2>
+      <p id="prep-draft-note" class="muted">Choose at least one source. Save paused before turning the schedule on.</p>
+      <div class="prep-pair">
+        <div><label for="prep-name">Name</label><input id="prep-name" required maxlength="120" /></div>
+        <div><label for="prep-merge">Stocks to keep</label><select id="prep-merge"><option value="union">In any chosen source</option><option value="intersection">In every chosen source</option></select></div>
+      </div>
+      <h3>Stocks from</h3>
+      <div id="prep-sources" class="prep-sources"></div>
+      <p id="prep-source-status" class="prep-note" role="status"></p>
+      <div class="prep-pair">
+        <div><label for="prep-wishlist">Wishlist</label><div class="prep-inline"><select id="prep-wishlist"></select><button type="button" id="prep-add-wishlist" class="button secondary" aria-label="Add wishlist">Add</button></div></div>
+        <div><label for="prep-query">Finviz screen</label><div class="prep-inline"><input id="prep-query" maxlength="500" placeholder="Saved Finviz query" /><button type="button" id="prep-add-query" class="button secondary" aria-label="Add Finviz query">Add</button></div></div>
+      </div>
+      <h3>Schedule and filters</h3>
+      <p class="muted prep-note">Times follow the US exchange calendar in New York time. A blank filter is off.</p>
+      <div id="prep-basic-fields" class="prep-fields"></div>
+      <details class="prep-advanced"><summary>Advanced settings</summary>
+        <p class="muted prep-note">Retries, limits, history depth, how long a list stays valid, notes on the list and alerts. Sensible defaults are already set.</p>
+        <div id="prep-fields" class="prep-fields"></div>
+      </details>
+      <div class="prep-actions">
+        <button id="prep-save" type="submit" class="button">Save paused workflow</button>
+        <button type="button" id="prep-toggle" class="button secondary" disabled>Enable workflow</button>
+      </div>
+      <p class="muted prep-note" id="prep-revision"></p>
+    </form>
+  </div>
+
+  <div data-prep-panel="alerts" hidden><h2>Preparation alerts</h2><button id="prep-alerts" type="button" class="button secondary">Refresh alerts</button><div id="prep-notifications" class="prep-history"></div></div>
 </section>
