@@ -1648,13 +1648,17 @@ public sealed class SqliteStrategyPromotionRegistry :
             await SqliteDurability.ConfigureDatabaseAsync(connection, cancellationToken);
             if (openMode == StrategyPromotionRegistryOpenMode.BootstrapNew)
             {
-                await ExecuteAsync(connection, null, SchemaSql, cancellationToken);
+                // One transaction: a cancelled first request rolls the whole schema back instead of leaving
+                // half-created tables that make every later initialization fail with "table already exists".
+                await using var bootstrap = connection.BeginTransaction(deferred: false);
+                await ExecuteAsync(connection, bootstrap, SchemaSql, cancellationToken);
                 await ExecuteAsync(
                     connection,
-                    null,
+                    bootstrap,
                     "INSERT INTO promotion_registry_metadata(singleton, schema_version) VALUES(1, $version);",
                     cancellationToken,
                     ("$version", SchemaVersion));
+                await bootstrap.CommitAsync(cancellationToken);
             }
             else
             {
