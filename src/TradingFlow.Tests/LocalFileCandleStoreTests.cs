@@ -63,6 +63,110 @@ public sealed class LocalFileCandleStoreTests
         }
     }
 
+    /// <summary>
+    /// One request now updates several candle files at the same time. Every file must still end up with exactly
+    /// its own merged bars, and the archive manifest must list every file, only after all of them were written.
+    /// </summary>
+    [Fact]
+    public async Task UpsertBarsAsync_WritesManyFilesInOneRequestEachWithItsOwnBars()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "trading-flow-candles", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new LocalFileCandleStore(root);
+            var context = new CandleStoreContext("paper", "earnings-monitor", "alpaca");
+            var day = new DateTimeOffset(2026, 11, 4, 14, 30, 0, TimeSpan.Zero);
+            var tickers = Enumerable.Range(0, 40).Select(index => $"T{index:00}").ToArray();
+            await store.UpsertBarsAsync(
+                new CandleStoreWriteRequest(context, "provider", tickers.Select(ticker => CreateBar(ticker, "5m", day, 1m)).ToArray()),
+                CancellationToken.None);
+
+            // Second request: replaces the first bar and adds one on the next UTC day, so each stock touches two files.
+            await store.UpsertBarsAsync(
+                new CandleStoreWriteRequest(
+                    context,
+                    "provider",
+                    tickers.SelectMany(ticker => new[]
+                    {
+                        CreateBar(ticker, "5m", day, Int32.Parse(ticker[1..])),
+                        CreateBar(ticker, "5m", day.AddDays(1), 100m + Int32.Parse(ticker[1..]))
+                    }).ToArray()),
+                CancellationToken.None);
+
+            foreach (var ticker in tickers)
+            {
+                var bars = await store.ReadBarsAsync(
+                    new CandleStoreReadRequest("paper", "earnings-monitor", "alpaca", ticker, "5m", day.AddHours(-1), day.AddDays(2)),
+                    CancellationToken.None);
+                Assert.Equal([Int32.Parse(ticker[1..]), 100m + Int32.Parse(ticker[1..])], bars.Select(bar => bar.Close));
+            }
+
+            var manifests = Directory.EnumerateFiles(Path.Combine(root, "_archive-pending"), "*.json").ToArray();
+            // Manifests are named by the minute they were written, so both requests may share one.
+            var listed = String.Join("\n", manifests.Select(File.ReadAllText)).Replace("\\\\", "/").Replace('\\', '/');
+            Assert.All(tickers, ticker => Assert.Contains($"/{ticker.ToLowerInvariant()}/2026-11-05.jsonl", listed, StringComparison.Ordinal));
+            Assert.Empty(Directory.EnumerateFiles(Path.Combine(root, "_archive-preparing"), "*.json"));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The stream journal appends instead of merging. A fenced write touching many files at once must still
+    /// append each stock's own lines, in time order, to that stock's own day file.
+    /// </summary>
+    [Fact]
+    public async Task UpsertBarsAsync_StreamAppendsToManyFilesInOneRequestEachWithItsOwnLines()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "trading-flow-candles", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new LocalFileCandleStore(root);
+            var context = new CandleStoreContext("paper", "market-state", "alpaca-sip");
+            var day = new DateTimeOffset(2026, 11, 4, 14, 30, 0, TimeSpan.Zero);
+            var tickers = Enumerable.Range(0, 30).Select(index => $"S{index:00}").ToArray();
+            var bars = tickers.SelectMany(ticker => Enumerable.Range(0, 3).SelectMany(minute => new[]
+            {
+                CreateBar(ticker, "1m", day.AddMinutes(minute), Int32.Parse(ticker[1..]) + minute),
+                CreateBar(ticker, "1m", day.AddDays(1).AddMinutes(minute), 100m + Int32.Parse(ticker[1..]) + minute)
+            })).Reverse().ToArray();
+
+            await store.UpsertBarsAsync(new CandleStoreWriteRequest(context, "stream", bars, FencingToken: 1), CancellationToken.None);
+
+            foreach (var ticker in tickers)
+            {
+                foreach (var (date, offset) in new[] { ("2026-11-04", 0m), ("2026-11-05", 100m) })
+                {
+                    var lines = File.ReadAllLines(Path.Combine(root, "paper", "market-state", "alpaca-sip", "stream", "1m", ticker.ToLowerInvariant(), $"{date}.jsonl"));
+                    Assert.Equal(3, lines.Length);
+                    Assert.All(lines, line => Assert.Contains($"\"ticker\":\"{ticker}\"", line, StringComparison.Ordinal));
+                    var read = await store.ReadBarsAsync(
+                        new CandleStoreReadRequest("paper", "market-state", "alpaca-sip", ticker, "1m",
+                            DateTimeOffset.Parse($"{date}T00:00:00Z"), DateTimeOffset.Parse($"{date}T23:59:00Z"), "stream"),
+                        CancellationToken.None);
+                    Assert.Equal(
+                        Enumerable.Range(0, 3).Select(minute => offset + Int32.Parse(ticker[1..]) + minute),
+                        read.Select(bar => bar.Close));
+                }
+            }
+
+            Assert.NotEmpty(Directory.EnumerateFiles(Path.Combine(root, "_archive-pending"), "*.json"));
+            Assert.Empty(Directory.EnumerateFiles(Path.Combine(root, "_archive-preparing"), "*.json"));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public async Task UpsertBarsAsync_RejectsWriterBelowDurableStreamFence()
     {

@@ -112,6 +112,32 @@ public sealed class EarningsMarketStateLoaderTests
         Assert.True(store.Bars.ContainsKey(("QUIET", DateTimeOffset.Parse("2026-11-04T19:15:00Z"))));
     }
 
+    /// <summary>
+    /// Stocks whose earnings window has ended leave memory but keep their files: tracked again, a stock is
+    /// read back from the local store, and the stocks still tracked are not read again.
+    /// </summary>
+    [Fact]
+    public async Task ReleaseUntrackedAsync_DropsOnlyUntrackedStocksAndReadsThemBackFromStore()
+    {
+        var now = DateTimeOffset.Parse("2026-11-04T22:31:00Z");
+        var store = new RecordingCandleStore();
+        store.Seed(Bar("DONE", now.AddMinutes(-10)));
+        store.Seed(Bar("LIVE", now.AddMinutes(-10)));
+        var loader = new EarningsMarketStateLoader(
+            new Lazy<IMarketDataProvider>(() => new RecordingMarketDataProvider([])), store, EarningsMonitorOptions.Default);
+        await loader.LoadAsync(["DONE", "LIVE"], now, CancellationToken.None);
+
+        var released = await loader.ReleaseUntrackedAsync(["live"], CancellationToken.None);
+        var readsBefore = store.ReadCount;
+        var reloaded = await loader.LoadAsync(["DONE", "LIVE"], now, CancellationToken.None);
+
+        Assert.Equal(1, released);
+        Assert.Equal(1, store.ReadCount - readsBefore);
+        Assert.Single(reloaded["DONE"]);
+        Assert.Single(reloaded["LIVE"]);
+        Assert.Equal(2, store.Bars.Count);
+    }
+
     [Fact]
     public void DefaultLookback_CoversTheFullSameSlotRelativeVolumeBaseline()
     {
@@ -158,6 +184,7 @@ public sealed class EarningsMarketStateLoaderTests
         public int WriteCount { get; private set; }
         public TimeSpan ReadDelay { get; init; }
         public int MaximumConcurrentReads { get; private set; }
+        public int ReadCount { get; private set; }
 
         /// <summary>Stores a bar as if a previous run had persisted it, without counting a write.</summary>
         public void Seed(OhlcvBar bar) => Bars[(bar.Ticker, bar.Timestamp)] = bar;
@@ -181,6 +208,7 @@ public sealed class EarningsMarketStateLoaderTests
             lock (gate)
             {
                 activeReads++;
+                ReadCount++;
                 MaximumConcurrentReads = Math.Max(MaximumConcurrentReads, activeReads);
             }
 

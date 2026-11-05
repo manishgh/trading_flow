@@ -22,6 +22,8 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
 
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileLocks = new(StringComparer.OrdinalIgnoreCase);
+    // How many different candle files one write request updates at the same time.
+    private const int MaximumParallelFileWrites = 8;
     private readonly string rootPath;
 
     public LocalFileCandleStore(string rootPath)
@@ -91,18 +93,27 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
         // the archive consumer until CommitArchiveIntentAsync runs after every
         // affected candle file has been flushed.
         var archiveIntent = await WriteArchiveIntentAsync(request, writtenFiles, cancellationToken);
-        foreach (var group in groups)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (request.FencingToken.HasValue)
+        // Each group is a different file, so files are written several at a time; every file write stays
+        // atomic and flushed to disk. One file at a time, the earnings monitor's ~1,000-file write took
+        // 23-36 s per pass on 4-5 Nov 2026, almost all of it waiting on each file's open and flush.
+        await Parallel.ForEachAsync(
+            groups,
+            new ParallelOptions
             {
-                await AppendFileAsync(group.Path, group.Bars, cancellationToken);
-            }
-            else
+                MaxDegreeOfParallelism = MaximumParallelFileWrites,
+                CancellationToken = cancellationToken
+            },
+            async (group, token) =>
             {
-                await UpsertFileAsync(group.Path, group.Bars, cancellationToken);
-            }
-        }
+                if (request.FencingToken.HasValue)
+                {
+                    await AppendFileAsync(group.Path, group.Bars, token);
+                }
+                else
+                {
+                    await UpsertFileAsync(group.Path, group.Bars, token);
+                }
+            });
 
         await CommitArchiveIntentAsync(archiveIntent, cancellationToken);
     }
@@ -492,7 +503,7 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
                 stream.Flush(flushToDisk: true);
             }
 
-            ReplaceOrMove(temporaryPath, path);
+            await ReplaceOrMoveAsync(temporaryPath, path, cancellationToken);
         }
         finally
         {
@@ -633,7 +644,7 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
                 stream.Flush(flushToDisk: true);
             }
 
-            ReplaceOrMove(temporaryPath, path);
+            await ReplaceOrMoveAsync(temporaryPath, path, cancellationToken);
         }
         finally
         {
@@ -707,7 +718,11 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
         return normalized;
     }
 
-    private static void ReplaceOrMove(string temporaryPath, string destinationPath)
+    /// <summary>
+    /// Swaps the flushed temporary file into place, retrying twice when another process briefly holds the
+    /// destination open. The wait does not block a thread, because several files are now written at once.
+    /// </summary>
+    private static async Task ReplaceOrMoveAsync(string temporaryPath, string destinationPath, CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 3; attempt++)
         {
@@ -726,7 +741,7 @@ public sealed class LocalFileCandleStore : IFencedCandleStore
             catch (IOException)
             {
                 if (attempt == 2) throw;
-                Thread.Sleep(50);
+                await Task.Delay(50, cancellationToken);
             }
         }
     }

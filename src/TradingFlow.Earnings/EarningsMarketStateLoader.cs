@@ -163,6 +163,32 @@ public sealed class EarningsMarketStateLoader
     }
 
     /// <summary>
+    /// Drops the in-memory bars of every stock not in <paramref name="tracked"/>, for example once its earnings
+    /// window has ended, and returns how many stocks were dropped. Files on disk are kept: Replay and the next
+    /// quarter's report read them back. Only the monitor calls this, after loading its tracked list, so a
+    /// one-stock Replay never unloads the stocks the monitor is following.
+    /// </summary>
+    public async Task<int> ReleaseUntrackedAsync(IReadOnlyCollection<string> tracked, CancellationToken cancellationToken)
+    {
+        var keep = tracked.Select(ticker => ticker.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        await loadLock.WaitAsync(cancellationToken);
+        try
+        {
+            var released = state.Keys.Where(ticker => !keep.Contains(ticker)).ToArray();
+            foreach (var ticker in released)
+            {
+                state.Remove(ticker);
+            }
+
+            return released.Length;
+        }
+        finally
+        {
+            loadLock.Release();
+        }
+    }
+
+    /// <summary>
     /// Reads stored bars for the tickers not yet held in memory and returns how many it read. Several
     /// tickers are read at once: on 4 Nov 2026 a restart spent 18 minutes reading about 65,000 day files
     /// for 900 stocks one ticker at a time, nearly all of it waiting on each file to open. Only this

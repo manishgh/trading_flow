@@ -145,6 +145,7 @@ public sealed class EarningsMonitor
             trackedEventCount = trackedEvents.Count;
             if (trackedEvents.Count == 0)
             {
+                await marketState.ReleaseUntrackedAsync([], cancellationToken);
                 lastAnalysisUtc = nowUtc;
                 lastError = null;
                 return;
@@ -158,6 +159,8 @@ public sealed class EarningsMonitor
                 .ToArray();
             var stage = System.Diagnostics.Stopwatch.StartNew();
             var barsByTicker = await marketState.LoadAsync(symbols, nowUtc, cancellationToken);
+            // Stocks whose earnings window has ended leave memory; their bar files stay on disk.
+            var releasedCount = await marketState.ReleaseUntrackedAsync(symbols, cancellationToken);
             var loadTime = stage.Elapsed;
 
             // The time limit covers each stage, not the whole pass. Loading bars after a restart can take
@@ -192,11 +195,12 @@ public sealed class EarningsMonitor
             }
 
             logger.LogInformation(
-                "Earnings pass for {EventCount} events and {TickerCount} stocks: bar load {LoadMs} ms, news read {NewsMs} ms, " +
+                "Earnings pass for {EventCount} events and {TickerCount} stocks: bar load {LoadMs} ms (released {ReleasedCount} finished stocks from memory), news read {NewsMs} ms, " +
                 "analysis {AnalysisMs} ms, saved {SavedCount} changed analyses in {SaveMs} ms.",
                 trackedEvents.Count,
                 symbols.Length,
                 (long)loadTime.TotalMilliseconds,
+                releasedCount,
                 (long)newsTime.TotalMilliseconds,
                 (long)analysisTime.TotalMilliseconds,
                 savedCount,
