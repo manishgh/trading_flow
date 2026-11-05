@@ -127,6 +127,42 @@ public sealed class EarningsMonitorTests : IDisposable
         Assert.Equal("q2:abc:late", snapshot.Items.Single(item => item.Event.Id == "same-day:abc").PreviousReportedEvent?.Id);
     }
 
+    /// <summary>
+    /// Live prices are read only for stocks whose results trade in today's session: today's reports and the previous
+    /// weekday's after-close reports, not the next day's. They appear on the calendar. A failed read keeps the
+    /// previous prices, which carry their own trade time; overnight no read is made and the prices are cleared.
+    /// </summary>
+    [Fact]
+    public async Task Latest_trades_cover_todays_session_and_survive_a_failed_read()
+    {
+        var now = DateTimeOffset.Parse("2026-11-05T15:00:00Z");
+        var repository = new EarningsRepository(
+            Event("today", "TODAY", new DateOnly(2026, 11, 5), DateTimeOffset.Parse("2026-11-05T21:30:00Z"), now),
+            Event("yesterday", "LATE", new DateOnly(2026, 11, 4), DateTimeOffset.Parse("2026-11-04T21:30:00Z"), now),
+            Event("tomorrow", "NEXT", new DateOnly(2026, 11, 6), DateTimeOffset.Parse("2026-11-06T21:30:00Z"), now));
+        var options = EarningsMonitorOptions.Default;
+        var provider = new SlowMarketDataProvider(TimeSpan.Zero);
+        var clock = new FixedClock(now);
+        var monitor = CreateMonitor(repository, new CancellationHonouringNewsRepository(), provider, options,
+            new EarningsAnalyzer(new IndicatorEngine(), options), clock);
+
+        await monitor.RefreshAsync(forceCalendarRefresh: false, CancellationToken.None);
+        provider.FailTradeReads = true;
+        await monitor.RefreshAsync(forceCalendarRefresh: false, CancellationToken.None);
+        var calendar = await monitor.GetCalendarAsync(new DateOnly(2026, 11, 4), new DateOnly(2026, 11, 6), CancellationToken.None);
+        clock.Now = DateTimeOffset.Parse("2026-11-06T02:00:00Z");
+        await monitor.RefreshAsync(forceCalendarRefresh: false, CancellationToken.None);
+
+        Assert.Equal(2, provider.TradeRequests.Count);
+        Assert.Equal(["LATE", "TODAY"], provider.TradeRequests[0]);
+        Assert.Equal(SlowMarketDataProvider.TradePrice, calendar.Items.Single(item => item.Event.Id == "today").LatestTrade?.Price);
+        Assert.Equal(SlowMarketDataProvider.TradePrice, calendar.Items.Single(item => item.Event.Id == "yesterday").LatestTrade?.Price);
+        Assert.Null(calendar.Items.Single(item => item.Event.Id == "tomorrow").LatestTrade);
+        // Overnight the prices are cleared, so the previous session's trades are not shown as current.
+        Assert.All((await monitor.GetCalendarAsync(new DateOnly(2026, 11, 4), new DateOnly(2026, 11, 6), CancellationToken.None)).Items,
+            item => Assert.Null(item.LatestTrade));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(archiveRoot)) Directory.Delete(archiveRoot, recursive: true);
@@ -138,7 +174,8 @@ public sealed class EarningsMonitorTests : IDisposable
         INewsFeedRepository news,
         SlowMarketDataProvider provider,
         EarningsMonitorOptions options,
-        EarningsAnalyzer analyzer)
+        EarningsAnalyzer analyzer,
+        TimeProvider? clock = null)
     {
         var finviz = new FinvizClient(new HttpClient(new EmptyFinvizHandler()),
             new FinvizOptions(new Uri("https://elite.finviz.com"), "test-token"),
@@ -151,7 +188,7 @@ public sealed class EarningsMonitorTests : IDisposable
             new EarningsMarketStateLoader(new Lazy<IMarketDataProvider>(() => provider), NullCandleStore.Instance, options),
             analyzer,
             options,
-            TimeProvider.System,
+            clock ?? TimeProvider.System,
             NullLogger<EarningsMonitor>.Instance);
     }
 
@@ -228,9 +265,32 @@ public sealed class EarningsMonitorTests : IDisposable
 
     /// <summary>Waits before answering; returns the bars <paramref name="barsFor"/> builds for each requested stock, or none.</summary>
     private sealed class SlowMarketDataProvider(TimeSpan delay, Func<string, IEnumerable<OhlcvBar>>? barsFor = null)
-        : IMarketDataProvider, IMarketSessionScheduleProvider
+        : IMarketDataProvider, IMarketSessionScheduleProvider, ILatestTradeProvider
     {
+        public const decimal TradePrice = 42.5m;
+
         public TimeSpan LoadTook { get; private set; }
+
+        // The tickers of each latest-trades read, sorted.
+        public List<string[]> TradeRequests { get; } = [];
+
+        public bool FailTradeReads { get; set; }
+
+        /// <summary>Answers every requested ticker with <see cref="TradePrice"/>, or throws when reads are set to fail.</summary>
+        public Task<IReadOnlyDictionary<string, LatestTrade>> GetLatestTradesAsync(
+            IReadOnlyCollection<string> tickers, CancellationToken cancellationToken)
+        {
+            TradeRequests.Add(tickers.Order(StringComparer.Ordinal).ToArray());
+            if (FailTradeReads)
+            {
+                throw new HttpRequestException("Latest trades are unavailable in this test.");
+            }
+
+            return Task.FromResult<IReadOnlyDictionary<string, LatestTrade>>(tickers.ToDictionary(
+                ticker => ticker,
+                ticker => new LatestTrade(ticker, TradePrice, DateTimeOffset.Parse("2026-11-05T14:59:30Z")),
+                StringComparer.OrdinalIgnoreCase));
+        }
 
         public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> intervals,
             DateTimeOffset start, DateTimeOffset end, [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -257,6 +317,14 @@ public sealed class EarningsMonitorTests : IDisposable
                     : MarketSessionSchedule.RegularDay(date);
             return Task.FromResult<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>>(schedules);
         }
+    }
+
+    /// <summary>A clock that shows a set time until the test changes it.</summary>
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     /// <summary>An empty earnings calendar page; every other Finviz request fails, as an unreachable export would.</summary>

@@ -497,6 +497,15 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("TEXT");
 
+                    b.Property<decimal?>("PostReleaseHigh")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("PostReleaseHighAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("PreReleaseReferenceAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal?>("PreReleaseReferenceClose")
                         .HasColumnType("TEXT");
 

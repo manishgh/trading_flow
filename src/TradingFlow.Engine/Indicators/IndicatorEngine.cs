@@ -27,6 +27,24 @@ public sealed class IndicatorEngine : IIndicatorCalculator
         exchangeTimeZone = ResolveExchangeTimeZone(this.marketEvidenceProfile.ExchangeTimeZone);
     }
 
+    /// <summary>
+    /// The regular session's open and close, in UTC, for one exchange date. Returns false when the exchange is
+    /// closed that day or the loaded calendar does not cover it.
+    /// </summary>
+    public bool TryGetRegularSessionUtc(DateOnly tradeDate, out DateTimeOffset openUtc, out DateTimeOffset closeUtc)
+    {
+        if (!marketEvidenceProfile.TryResolveSchedule(tradeDate, out var schedule) || !schedule.IsTradingDay)
+        {
+            openUtc = default;
+            closeUtc = default;
+            return false;
+        }
+
+        openUtc = ToUtc(tradeDate, schedule.RegularOpen);
+        closeUtc = ToUtc(tradeDate, schedule.RegularClose);
+        return true;
+    }
+
     public IReadOnlyList<IndicatorSnapshot> Compute(IReadOnlyList<OhlcvBar> inputBars)
     {
         var bars = inputBars.OrderBy(x => x.Timestamp).ToArray();

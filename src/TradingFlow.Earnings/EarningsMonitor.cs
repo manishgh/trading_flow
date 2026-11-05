@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using TradingFlow.Domain.Earnings;
 using TradingFlow.Domain.News;
+using TradingFlow.Engine.Abstractions;
 using TradingFlow.Finviz;
 
 namespace TradingFlow.Earnings;
@@ -27,6 +28,11 @@ public sealed class EarningsMonitor
     private int trackedEventCount;
     private string? lastError;
     private volatile bool isRunning;
+    private static readonly IReadOnlyDictionary<string, LatestTrade> NoTrades = new Dictionary<string, LatestTrade>();
+    // The latest-trades read has its own short limit, so a slow provider cannot fail a pass that already saved.
+    private static readonly TimeSpan LatestTradeTimeout = TimeSpan.FromSeconds(30);
+    // Replaced whole after each read, so page requests always see one complete set.
+    private volatile IReadOnlyDictionary<string, LatestTrade> latestTrades = NoTrades;
 
     public EarningsMonitor(
         FinvizClient finviz,
@@ -114,6 +120,7 @@ public sealed class EarningsMonitor
             if (trackedEvents.Count == 0)
             {
                 await marketState.ReleaseUntrackedAsync([], cancellationToken);
+                latestTrades = NoTrades;
             }
             else
             {
@@ -240,10 +247,13 @@ public sealed class EarningsMonitor
         var analysisTime = stage.Elapsed;
         stage.Restart();
         var savedCount = await SaveChangedAnalysesAsync(analyses, latest, timeout.Token);
+        var saveTime = stage.Elapsed;
+        stage.Restart();
+        var liveTradeCount = await RefreshLatestTradesAsync(trackedEvents, nowUtc, cancellationToken);
 
         logger.LogInformation(
             "Earnings pass for {EventCount} events and {TickerCount} stocks: bar load {LoadMs} ms (released {ReleasedCount} finished stocks from memory), news read {NewsMs} ms, " +
-            "analysis {AnalysisMs} ms, saved {SavedCount} changed analyses in {SaveMs} ms.",
+            "analysis {AnalysisMs} ms, saved {SavedCount} changed analyses in {SaveMs} ms, latest trades for {LiveTradeCount} stocks in {LiveTradeMs} ms.",
             trackedEvents.Count,
             symbols.Length,
             (long)loadTime.TotalMilliseconds,
@@ -251,7 +261,58 @@ public sealed class EarningsMonitor
             (long)newsTime.TotalMilliseconds,
             (long)analysisTime.TotalMilliseconds,
             savedCount,
+            (long)saveTime.TotalMilliseconds,
+            liveTradeCount,
             (long)stage.Elapsed.TotalMilliseconds);
+    }
+
+    /// <summary>
+    /// Reads the latest trade of each stock whose results trade in today's session, shown on the cards next to
+    /// the completed-bar analysis; returns how many stocks have one. Runs only from 04:00 to 20:00 New York on
+    /// weekdays, the hours the SIP feed trades; outside them, or with no such stock, the prices are cleared so a
+    /// previous session's trade is never shown as current. A failed or slow read (over
+    /// <see cref="LatestTradeTimeout"/>) keeps the previous prices, which show their own trade time, and is logged
+    /// instead of failing the pass. Only cancellation of the whole monitor propagates.
+    /// </summary>
+    private async Task<int> RefreshLatestTradesAsync(
+        IReadOnlyList<EarningsCalendarEvent> trackedEvents,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        if (EarningsTimeZones.ClassifyUsEquitySession(nowUtc) is "Market closed" or "Overnight")
+        {
+            latestTrades = NoTrades;
+            return 0;
+        }
+
+        var exchangeToday = EarningsCalendarDates.ExchangeDate(nowUtc);
+        var symbols = trackedEvents
+            .Where(item => EarningsCalendarDates.IsTradingSession(item.ReportDateExchange, item.ReleaseWindow, exchangeToday))
+            .Select(item => item.Ticker)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (symbols.Length == 0)
+        {
+            latestTrades = NoTrades;
+            return 0;
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(LatestTradeTimeout);
+        try
+        {
+            var trades = await marketState.GetLatestTradesAsync(symbols, timeout.Token);
+            latestTrades = trades;
+            return trades.Count;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                exception,
+                "Latest trades could not be read for {TickerCount} stocks; the cards keep the previous prices.",
+                symbols.Length);
+            return 0;
+        }
     }
 
     /// <summary>
@@ -340,6 +401,7 @@ public sealed class EarningsMonitor
             .OrderByDescending(candidate => candidate.ReportDateExchange)
             .ThenByDescending(candidate => candidate.ScheduledAtUtc)
             .ToLookup(candidate => candidate.Ticker, StringComparer.OrdinalIgnoreCase);
+        var trades = latestTrades;
         return new EarningsCalendarSnapshot(
             clock.GetUtcNow(),
             fromExchangeDate,
@@ -348,7 +410,8 @@ public sealed class EarningsMonitor
                 item,
                 analyses.GetValueOrDefault(item.Id),
                 reportedByTicker[item.Ticker]
-                    .FirstOrDefault(candidate => candidate.ReportDateExchange < item.ReportDateExchange))).ToArray());
+                    .FirstOrDefault(candidate => candidate.ReportDateExchange < item.ReportDateExchange),
+                trades.GetValueOrDefault(item.Ticker))).ToArray());
     }
 
     /// <summary>
@@ -463,6 +526,9 @@ public sealed class EarningsMonitor
             previous.ResultNewsPublishedAtUtc != current.ResultNewsPublishedAtUtc ||
             previous.NewsHeadline != current.NewsHeadline ||
             previous.EventReturnPercent != current.EventReturnPercent ||
+            previous.PreReleaseReferenceAtUtc != current.PreReleaseReferenceAtUtc ||
+            previous.PostReleaseHigh != current.PostReleaseHigh ||
+            previous.PostReleaseHighAtUtc != current.PostReleaseHighAtUtc ||
             previous.Reason != current.Reason ||
             previous.NewsUrl != current.NewsUrl ||
             previous.NewsProvider != current.NewsProvider ||

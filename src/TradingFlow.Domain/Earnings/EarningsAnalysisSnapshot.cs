@@ -28,6 +28,11 @@ public sealed class EarningsAnalysisSnapshot
     public DateTimeOffset? LatestCompletedBarAtUtc { get; set; }
     public decimal? PreReleaseReferenceHigh { get; set; }
     public decimal? PreReleaseReferenceClose { get; set; }
+    // Start of the 5-minute bar whose close is the reference price: the last regular-session close before release.
+    public DateTimeOffset? PreReleaseReferenceAtUtc { get; set; }
+    // Highest price, and the start of its 5-minute bar, among completed bars after the reference bar.
+    public decimal? PostReleaseHigh { get; set; }
+    public DateTimeOffset? PostReleaseHighAtUtc { get; set; }
     public decimal? LatestClose { get; set; }
     public decimal? EventReturnPercent { get; set; }
     public decimal? Ema10 { get; set; }

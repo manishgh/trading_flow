@@ -288,7 +288,29 @@ public static class EarningsApiEndpoints
             analysis?.MacdHistogram,
             analysis?.SlotRelativeVolume,
             MapPreviousEarnings(item.PreviousReportedEvent),
-            sector);
+            sector,
+            analysis?.PreReleaseReferenceAtUtc,
+            analysis?.PostReleaseHigh,
+            analysis?.PostReleaseHighAtUtc,
+            item.LatestTrade?.Price,
+            item.LatestTrade?.TradedAtUtc,
+            PercentChange(analysis?.PreReleaseReferenceClose, item.LatestTrade?.Price),
+            ResultSeenBeforeSlot(calendarEvent, analysis));
+    }
+
+    /// <summary>Percent change from a reference price to a later price, or null when either is missing or the reference is 0.</summary>
+    private static decimal? PercentChange(decimal? reference, decimal? later) =>
+        reference is { } from && from != 0m && later is { } to ? (to - from) / from * 100m : null;
+
+    /// <summary>
+    /// True when the first sign of the result, the provider showing it or its news headline, came before the
+    /// release window the provider's slot names begins, so the result came out in an earlier session. Sony on
+    /// 5 Nov 2026 was listed for after Thursday's close but was out by 03:56 New York that morning.
+    /// </summary>
+    private static bool ResultSeenBeforeSlot(EarningsCalendarEvent calendarEvent, EarningsAnalysisSnapshot? analysis)
+    {
+        var firstSign = new[] { calendarEvent.ResultFirstSeenAtUtc, analysis?.ResultNewsPublishedAtUtc }.Min();
+        return firstSign < EarningsCalendarDates.ReleaseWindowStartUtc(calendarEvent);
     }
 
     private static bool TryParseDateScope(string? value, out string scope, out string? error)

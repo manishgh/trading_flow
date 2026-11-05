@@ -834,13 +834,45 @@ public sealed record MobileEarningsCalendarItem(
     decimal? Ema20,
     decimal? MacdHistogram,
     decimal? SlotRelativeVolume,
-    MobilePreviousEarningsResultResponse? PreviousEarnings)
+    MobilePreviousEarningsResultResponse? PreviousEarnings,
+    DateTimeOffset? PreReleaseReferenceAtUtc = null,
+    decimal? PostReleaseHigh = null,
+    DateTimeOffset? PostReleaseHighAtUtc = null,
+    decimal? LatestTradePrice = null,
+    DateTimeOffset? LatestTradeAtUtc = null,
+    decimal? LatestTradeMovePercent = null,
+    bool ResultSeenBeforeSlot = false)
 {
-    public string ScheduleText => $"{ScheduledAtUtc.ToLocalTime():yyyy-MM-dd HH:mm zzz} | {ReleaseWindowLabel}{(IsScheduleEstimate ? " | est." : String.Empty)}";
+    private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+
+    private string ProviderName => Provider.Equals("finviz", StringComparison.OrdinalIgnoreCase) ? "Finviz" : Provider;
+    public string ScheduleText => $"{ProviderName} slot {NewYorkText(ScheduledAtUtc)} New York ({ScheduledAtUtc.ToLocalTime():HH:mm} your time) | {ReleaseWindowLabel}{(IsScheduleEstimate ? " | est." : String.Empty)}";
     public string ResultText => AssessmentLabel;
-    public string PriceText => $"Pre {FormatPrice(PreReleaseReferenceClose)} | Latest {FormatPrice(LatestClose)}";
+
+    // The earliest sign the result was out: Finviz first showing it, or its news headline.
+    public DateTimeOffset? FirstResultSignUtc => new[] { ResultFirstSeenAtUtc, ResultNewsPublishedAtUtc }.Min();
+    public bool HasReleaseText => FirstResultSignUtc.HasValue;
+    public string ReleaseText => FirstResultSignUtc is { } seen
+        ? $"Results out: first seen {NewYorkText(seen)} New York ({seen.ToLocalTime():HH:mm} your time)"
+        : String.Empty;
+    public string SlotWarningText => ResultSeenBeforeSlot && FirstResultSignUtc is { } seen
+        ? $"Results came out before the {ProviderName} slot, {EarlierText(ScheduledAtUtc - seen)} earlier."
+        : String.Empty;
+    public bool HasSlotWarning => SlotWarningText.Length > 0;
+
+    // The latest trade when the monitor has one, otherwise the last completed bar's close; moves are measured
+    // from the last regular-session close before the release.
+    public string PriceText => LatestTradePrice is { } trade
+        ? $"Now {FormatPrice(trade)} ({FormatPercent(LatestTradeMovePercent)} {MoveBasisText}) | last trade {LatestTradeAtUtc?.ToLocalTime():HH:mm} your time"
+        : $"Now {FormatPrice(LatestClose)} ({FormatPercent(EventReturnPercent)} {MoveBasisText}) | last completed bar";
+    private string MoveBasisText => HasReleaseText ? "since the close before release" : "since the last regular close";
+    public string ReactionText =>
+        $"Close before release {FormatPrice(PreReleaseReferenceClose)}" +
+        (PreReleaseReferenceAtUtc is { } at ? $" ({NewYorkText(at.AddMinutes(5))} New York)" : String.Empty) +
+        (PostReleaseHigh is { } high ? $" | highest since {FormatPrice(high)} ({FormatPercent(PercentFrom(PreReleaseReferenceClose, high))})" : String.Empty);
     public string SurpriseText => $"{EpsOutcomeLabel} {FormatPercent(EpsSurprisePercent)} | Revenue {FormatPercent(RevenueSurprisePercent)}";
-    public string EpsValuesText => $"Estimate {FormatDecimal(EpsEstimate)} | Actual {FormatDecimal(EpsActual)}";
+    public string EpsValuesText =>
+        $"EPS {FormatDecimal(EpsEstimate)} → {FormatDecimal(EpsActual)} | Revenue (millions) {FormatWhole(RevenueEstimateMillions)} → {FormatWhole(RevenueActualMillions)}";
     public string PreviousEpsText => PreviousEarnings is null
         ? "Previous result loading or unavailable"
         : $"Previous {PreviousEarnings.ReportDateExchange:yyyy-MM-dd} | {PreviousEarnings.EpsOutcomeLabel} {FormatPercent(PreviousEarnings.EpsSurprisePercent)} | Est {FormatDecimal(PreviousEarnings.EpsEstimate)} / Act {FormatDecimal(PreviousEarnings.EpsActual)}";
@@ -849,13 +881,20 @@ public sealed record MobileEarningsCalendarItem(
             ? $"${MarketCapMillions.Value / 1000m:0.#}B market cap"
             : $"${MarketCapMillions.Value:0}M market cap"
         : "Market cap unavailable";
-    public string MoveText => EventReturnPercent.HasValue
-        ? $"Move {FormatPercent(EventReturnPercent)} | {LatestMarketSession ?? "session pending"}"
-        : $"Move pending | {LatestMarketSession ?? "session pending"}";
+    public string MoveText => LatestMarketSession ?? "session pending";
     public bool HasNews => !String.IsNullOrWhiteSpace(NewsUrl);
 
+    // "3 h" for an hour or more, otherwise "25 min".
+    private static string EarlierText(TimeSpan gap) => gap.TotalHours >= 1 ? $"{Math.Round(gap.TotalHours):0} h" : $"{Math.Round(gap.TotalMinutes):0} min";
+    // A New York wall-clock time such as "Wed 4 Nov 16:00".
+    private static string NewYorkText(DateTimeOffset utc) => TimeZoneInfo.ConvertTime(utc, NewYork).ToString("ddd d MMM HH:mm");
+    // Percent change from a reference price to a later one, or null without a usable reference.
+    private static decimal? PercentFrom(decimal? reference, decimal later) =>
+        reference is { } from && from != 0m ? (later - from) / from * 100m : null;
     private static string FormatPercent(decimal? value) => value.HasValue ? $"{value.Value:+0.00;-0.00;0.00}%" : "-";
     private static string FormatDecimal(decimal? value) => value.HasValue ? value.Value.ToString("0.00") : "-";
+    // A whole number with thousands separators, such as "21,645".
+    private static string FormatWhole(decimal? value) => value.HasValue ? value.Value.ToString("#,0") : "-";
     private static string FormatPrice(decimal? value) => value.HasValue ? $"${value.Value:0.00}" : "-";
 }
 

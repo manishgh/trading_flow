@@ -112,12 +112,22 @@
                             <Label Text="{Binding Item.MarketCapText}"
                                    FontSize="11"
                                    TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
+                            <Label Text="{Binding Item.ReleaseText}"
+                                   FontSize="13"
+                                   IsVisible="{Binding Item.HasReleaseText}" />
                             <Label Text="{Binding Item.ScheduleText}"
                                    FontSize="13"
                                    TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
+                            <Label Text="{Binding Item.SlotWarningText}"
+                                   FontSize="12"
+                                   TextColor="{AppThemeBinding Light={StaticResource StateWarningLight}, Dark={StaticResource StateWarningDark}}"
+                                   IsVisible="{Binding Item.HasSlotWarning}" />
                             <Label Text="{Binding Item.PriceText}"
                                    FontSize="13"
                                    FontAttributes="Bold" />
+                            <Label Text="{Binding Item.ReactionText}"
+                                   FontSize="12"
+                                   LineBreakMode="WordWrap" />
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                 <Label Text="{Binding Item.SurpriseText}" FontSize="13" />
                                 <Label Grid.Column="1" Text="{Binding Item.MoveText}" FontSize="13" />

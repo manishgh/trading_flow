@@ -67,23 +67,24 @@ public sealed class EarningsAnalyzer
             .Where(bar => bar.Timestamp.AddMinutes(5) <= normalizedNow)
             .OrderBy(bar => bar.Timestamp)
             .ToArray();
+        // Before the release the reference stops at the scheduled time; once the result is out it stops at the
+        // earliest evidence of the release. Every later branch uses this same reference.
         var referenceCutoff = result == EarningsResultAssessment.Unknown && normalizedNow < calendarEvent.ScheduledAtUtc
             ? calendarEvent.ScheduledAtUtc
             : effectivePublicationTime;
-        var availableReferenceBars = completedBars
-            .Where(bar => bar.Timestamp < referenceCutoff)
-            .TakeLast(options.ReferenceBarCount)
-            .ToArray();
+        var engine = Volatile.Read(ref indicators);
+        var referenceIndex = FindReferenceBarIndex(engine, completedBars, referenceCutoff, calendarEvent.ReleaseWindow);
+        var referenceBars = referenceIndex < 0
+            ? []
+            : completedBars[Math.Max(0, referenceIndex - options.ReferenceBarCount + 1)..(referenceIndex + 1)];
+        var referenceBar = referenceBars.LastOrDefault();
+        var referenceHigh = referenceBars.Length > 0 ? referenceBars.Max(bar => bar.High) : (decimal?)null;
         var latestCompletedBar = completedBars.LastOrDefault();
-        var availableReferenceHigh = availableReferenceBars.Length > 0
-            ? availableReferenceBars.Max(bar => bar.High)
-            : (decimal?)null;
-        var availableReferenceClose = availableReferenceBars.LastOrDefault()?.Close;
 
         // A snapshot that stops before the breakout check, with whatever reference prices are already available.
         EarningsAnalysisSnapshot Unassessed(EarningsBreakoutAssessment breakout, string reason, OhlcvBar? latestBar) =>
             CreateSnapshot(calendarEvent, normalizedNow, result, breakout, reason, resultNews, resolvedResult,
-                latestBar, availableReferenceHigh, availableReferenceClose);
+                latestBar, referenceBar, referenceHigh);
 
         if (result == EarningsResultAssessment.Unknown && normalizedNow < calendarEvent.ScheduledAtUtc)
         {
@@ -98,12 +99,8 @@ public sealed class EarningsAnalyzer
                 latestCompletedBar);
         }
 
-        var preReleaseBars = completedBars
-            .Where(bar => bar.Timestamp < effectivePublicationTime)
-            .TakeLast(options.ReferenceBarCount)
-            .ToArray();
         var hasPostReleaseBar = completedBars.Any(bar => bar.Timestamp >= effectivePublicationTime);
-        if (preReleaseBars.Length == 0 || !hasPostReleaseBar)
+        if (referenceBar is null || !hasPostReleaseBar)
         {
             return Unassessed(
                 EarningsBreakoutAssessment.InsufficientData,
@@ -111,13 +108,13 @@ public sealed class EarningsAnalyzer
                 completedBars[^1]);
         }
 
-        var latest = Volatile.Read(ref indicators).Compute(completedBars)[^1];
-        var referenceHigh = preReleaseBars.Max(bar => bar.High);
-        var referenceClose = preReleaseBars[^1].Close;
+        var latest = engine.Compute(completedBars)[^1];
+        var referenceClose = referenceBar.Close;
         decimal? eventReturn = referenceClose == 0m
             ? null
             : (latest.CurrentPrice - referenceClose) / referenceClose * 100m;
-        var (assessment, evidence) = AssessBreakout(resolvedResult, latest, referenceHigh);
+        var (assessment, evidence) = AssessBreakout(resolvedResult, latest, referenceHigh!.Value);
+        var postReleaseHighBar = completedBars[(referenceIndex + 1)..].MaxBy(bar => bar.High);
 
         return CreateSnapshot(
             calendarEvent,
@@ -128,14 +125,60 @@ public sealed class EarningsAnalyzer
             resultNews,
             resolvedResult,
             completedBars[^1],
+            referenceBar,
             referenceHigh,
-            referenceClose,
+            postReleaseHighBar,
             latest.CurrentPrice,
             eventReturn,
             latest.Ema10,
             latest.Ema20,
             latest.MacdHistogram,
             latest.SlotRelativeVolume);
+    }
+
+    /// <summary>
+    /// Index of the bar whose close is the price before the release, or -1 when none is available.
+    /// It is the last completed regular-session 5-minute bar that ends by the cutoff. For a report the provider
+    /// places before the open or after the close, the bar's whole session must also have closed by the cutoff:
+    /// such a company does not publish mid-session, so a result first seen mid-session came out before that
+    /// session opened, and that session's prices already include the reaction. When the calendar covers no
+    /// regular-session bar before the cutoff, the last bar starting before the cutoff is used, as before.
+    /// </summary>
+    private static int FindReferenceBarIndex(
+        IndicatorEngine engine,
+        OhlcvBar[] completedBars,
+        DateTimeOffset cutoff,
+        EarningsReleaseWindow releaseWindow)
+    {
+        var releasedOutsideRegularHours = releaseWindow is
+            EarningsReleaseWindow.BeforeMarketOpen or EarningsReleaseWindow.AfterMarketClose;
+        var fallback = -1;
+        for (var index = completedBars.Length - 1; index >= 0; index--)
+        {
+            var bar = completedBars[index];
+            if (bar.Timestamp >= cutoff)
+            {
+                continue;
+            }
+
+            if (fallback < 0)
+            {
+                fallback = index;
+            }
+
+            var barEnd = bar.Timestamp.AddMinutes(5);
+            if (barEnd > cutoff ||
+                !engine.TryGetRegularSessionUtc(EarningsCalendarDates.ExchangeDate(bar.Timestamp), out var open, out var close) ||
+                bar.Timestamp < open || barEnd > close ||
+                releasedOutsideRegularHours && close > cutoff)
+            {
+                continue;
+            }
+
+            return index;
+        }
+
+        return fallback;
     }
 
     /// <summary>
@@ -331,8 +374,9 @@ public sealed class EarningsAnalyzer
         PersistedNewsItem? news,
         ResolvedEarningsResult resolvedResult,
         OhlcvBar? latestBar,
+        OhlcvBar? referenceBar,
         decimal? referenceHigh,
-        decimal? referenceClose,
+        OhlcvBar? postReleaseHighBar = null,
         decimal? latestClose = null,
         decimal? eventReturn = null,
         decimal? ema10 = null,
@@ -361,7 +405,10 @@ public sealed class EarningsAnalyzer
         EffectiveRevenueSurprisePercent = resolvedResult.RevenueSurprisePercent,
         LatestCompletedBarAtUtc = latestBar?.Timestamp,
         PreReleaseReferenceHigh = referenceHigh,
-        PreReleaseReferenceClose = referenceClose,
+        PreReleaseReferenceClose = referenceBar?.Close,
+        PreReleaseReferenceAtUtc = referenceBar?.Timestamp,
+        PostReleaseHigh = postReleaseHighBar?.High,
+        PostReleaseHighAtUtc = postReleaseHighBar?.Timestamp,
         LatestClose = latestClose ?? latestBar?.Close,
         EventReturnPercent = eventReturn,
         Ema10 = ema10,

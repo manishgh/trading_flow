@@ -4016,15 +4016,23 @@ td.select-column {
   font-variant-numeric: tabular-nums;
 }
 .earnings-badges { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+/* Price block and badges share the right-hand column of the card head. */
+.earnings-head-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.earnings-quote { text-align: right; font-variant-numeric: tabular-nums; }
+.earnings-quote-price { font-size: 19px; font-weight: 700; }
+.earnings-quote-move { font-size: 12px; }
+.earnings-quote-age { font-size: 11px; color: var(--color-neutral-700); }
+.earnings-released { color: var(--color-text); }
+.earnings-slot-warning { color: var(--warn-ink); }
+.earnings-context { margin: 8px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--color-neutral-700); }
 
-.earnings-strip { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.earnings-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .earnings-strip > * { padding: 6px 10px; }
 /* The reaction strip butts onto the result strip: one block of figures, two
    readings, no gap to suggest they are unrelated. */
 .earnings-strip.is-butted { border-top: 0; }
 .earnings-strip .cell-value { font-size: 13px; }
 
-.earnings-analysis { margin: 10px 0 0; font-size: 13px; line-height: 1.45; }
 .earnings-held-note { margin-top: 10px; }
 
 .earnings-provenance { margin-top: 10px; }
@@ -4082,6 +4090,8 @@ td.select-column {
   .earnings-provenance-body { grid-template-columns: minmax(0, 1fr); }
   .earnings-event-head { flex-direction: column; }
   .earnings-badges { justify-content: flex-start; }
+  .earnings-head-side { align-items: flex-start; }
+  .earnings-quote { text-align: left; }
   .earnings-timeline { padding: 0 16px 24px; }
   .earnings-filters { padding: 11px 16px; }
   .earnings-count { margin-left: 0; }

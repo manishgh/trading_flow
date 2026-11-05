@@ -90,7 +90,19 @@ public sealed record EarningsCalendarItemResponse(
     decimal? MacdHistogram,
     decimal? SlotRelativeVolume,
     PreviousEarningsResultResponse? PreviousEarnings,
-    string? Sector);
+    string? Sector,
+    // Start of the 5-minute bar whose close is the price before the release.
+    DateTimeOffset? PreReleaseReferenceAtUtc = null,
+    // Highest price since that bar, and the start of the bar that reached it.
+    decimal? PostReleaseHigh = null,
+    DateTimeOffset? PostReleaseHighAtUtc = null,
+    // The latest trade, for display only: the assessment uses completed bars.
+    decimal? LatestTradePrice = null,
+    DateTimeOffset? LatestTradeAtUtc = null,
+    // Change from the price before the release to the latest trade, in percent.
+    decimal? LatestTradeMovePercent = null,
+    // True when the result was seen before the provider's scheduled slot, so that slot was wrong.
+    bool ResultSeenBeforeSlot = false);
 
 public sealed record PreviousEarningsResultResponse(
     DateOnly ReportDateExchange,

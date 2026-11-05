@@ -186,6 +186,42 @@
         });
     }
 
+    // A New York wall-clock time such as "Wed 4 Nov, 16:00", or "16:00" without the date.
+    function newYorkTime(value, withDay = true) {
+        if (!value) return "—";
+        return new Date(value).toLocaleString("en-GB", {
+            timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+            ...(withDay ? { weekday: "short", day: "numeric", month: "short" } : {})
+        });
+    }
+
+    // One instant on the three clocks the audit screens use: New York with its date, UTC, and this device's time.
+    function threeClocks(value) {
+        if (!value) return "—";
+        const date = new Date(value);
+        const clock = timeZone => date.toLocaleString("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+        const deviceZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+        const deviceName = deviceZone.split("/").pop().replace(/_/g, " ") || "your time";
+        return `${newYorkTime(value)} New York · ${clock("UTC")} UTC · ${clock(undefined)} ${deviceName}`;
+    }
+
+    // "just now", "4 min ago" or "2 h ago" for a past instant; recomputed by the one-second tick.
+    function ago(value) {
+        const minutes = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 60000));
+        return minutes < 1 ? "just now" : minutes < 90 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
+    }
+
+    // The instant a given number of minutes after another, as ISO text. Bars are stamped at their start.
+    function plusMinutes(value, minutes) {
+        return new Date(new Date(value).getTime() + minutes * 60000).toISOString();
+    }
+
+    // Percent change from a reference price to a later one, or null when either is missing.
+    function percentFrom(reference, later) {
+        if (reference === null || reference === undefined || later === null || later === undefined || Number(reference) === 0) return null;
+        return (Number(later) - Number(reference)) / Number(reference) * 100;
+    }
+
     function safeLink(url, label, className) {
         if (!url) return null;
         try {
@@ -295,12 +331,19 @@
         line.append(text("span", item.companyName, "earnings-company"));
         line.append(text("span", marketCap(item.marketCapMillions), "earnings-cap"));
         identity.append(line);
-        identity.append(text("div", [
-            item.releaseWindowLabel,
-            item.scheduledNewYorkText,
-            item.scheduledUtcText,
-            item.isScheduleEstimate ? "Provider-estimated slot" : "Confirmed slot"
-        ].join("   ·   "), "earnings-meta"));
+        const firstSign = firstResultSign(item);
+        if (firstSign) identity.append(text("div", `Results out · first seen ${threeClocks(firstSign)}`, "earnings-meta earnings-released"));
+        const providerName = item.provider === "finviz" ? "Finviz" : item.provider;
+        identity.append(text("div",
+            `${providerName} slot · ${item.releaseWindowLabel} · ${threeClocks(item.scheduledAtUtc)} · ` +
+            (item.isScheduleEstimate ? "estimated by the provider" : "confirmed by the provider"),
+            "earnings-meta"));
+        if (item.resultSeenBeforeSlot && firstSign) {
+            const hours = (new Date(item.scheduledAtUtc) - new Date(firstSign)) / 3600000;
+            identity.append(text("div",
+                `The results came out before this slot: first seen ${hours >= 1 ? `${number(hours, 0)} h` : `${number(hours * 60, 0)} min`} earlier.`,
+                "earnings-meta earnings-slot-warning"));
+        }
 
         const badges = document.createElement("div");
         badges.className = "earnings-badges";
@@ -319,34 +362,52 @@
                 item.breakoutAssessment.replace(/([a-z])([A-Z])/g, "$1 $2").toUpperCase(),
                 isBreakoutLane(item) ? "tag-accent" : "tag-outline"));
         }
-        header.append(identity, badges);
+        const side = document.createElement("div");
+        side.className = "earnings-head-side";
+        side.append(renderQuote(item, Boolean(firstSign)), badges);
+        header.append(identity, side);
 
         // Unreported actuals read "awaiting", never 0 and never a bare dash: the
         // two say different things and only one of them is true here.
         const awaiting = value => (value === null || value === undefined ? "awaiting" : null);
+        // "0.40 → 0.48", or "0.40 → awaiting" before the actual is reported.
+        const estimateToActual = (estimate, actual, digits) =>
+            `${number(estimate, digits)} → ${awaiting(actual) || number(actual, digits)}`;
         const results = cellStrip([
-            ["EPS est", number(item.epsEstimate)],
-            ["EPS actual", awaiting(item.epsActual) || number(item.epsActual), awaiting(item.epsActual) ? "unknown" : null],
-            ["Surprise", signedPercent(item.epsSurprisePercent), signedClass(item.epsSurprisePercent)],
-            ["Rev est", number(item.revenueEstimateMillions, 0)],
-            ["Rev actual", awaiting(item.revenueActualMillions) || number(item.revenueActualMillions, 0), awaiting(item.revenueActualMillions) ? "unknown" : null],
-            ["Rev surprise", signedPercent(item.revenueSurprisePercent), signedClass(item.revenueSurprisePercent)]
+            ["EPS, estimate → actual", estimateToActual(item.epsEstimate, item.epsActual, 2), awaiting(item.epsActual) ? "unknown" : null],
+            ["EPS surprise", signedPercent(item.epsSurprisePercent), signedClass(item.epsSurprisePercent)],
+            ["Revenue in millions, estimate → actual", estimateToActual(item.revenueEstimateMillions, item.revenueActualMillions, 0), awaiting(item.revenueActualMillions) ? "unknown" : null],
+            ["Revenue surprise", signedPercent(item.revenueSurprisePercent), signedClass(item.revenueSurprisePercent)]
         ]);
 
+        // Every move here is measured from the same price: the last regular-session close before the release.
+        const reference = item.preReleaseReferenceClose;
+        const highMove = percentFrom(reference, item.postReleaseHigh);
+        const aboveHigh = item.latestClose != null && item.preReleaseReferenceHigh != null
+            ? (Number(item.latestClose) > Number(item.preReleaseReferenceHigh) ? " · now above" : " · not above")
+            : "";
         const reaction = cellStrip([
-            ["Pre-release high", price(item.preReleaseReferenceHigh)],
-            ["Latest close", price(item.latestClose)],
-            ["Event move", signedPercent(item.eventReturnPercent), signedClass(item.eventReturnPercent)],
-            ["Slot RVOL", item.slotRelativeVolume == null ? "—" : `${number(item.slotRelativeVolume)}x`],
-            ["EMA 10 / 20", `${number(item.ema10)} / ${number(item.ema20)}`],
-            ["MACD hist", number(item.macdHistogram, 4)]
+            [firstSign ? "Close before release" : "Last regular close",
+                item.preReleaseReferenceAtUtc
+                    ? `${price(reference)} · ${newYorkTime(plusMinutes(item.preReleaseReferenceAtUtc, 5))}`
+                    : price(reference)],
+            ["Highest since", item.postReleaseHigh == null ? "—"
+                : `${price(item.postReleaseHigh)} ${signedPercent(highMove)} · ${newYorkTime(item.postReleaseHighAtUtc)}`,
+                item.postReleaseHigh == null ? null : signedClass(highMove)],
+            ["Last completed 5-min bar", `${price(item.latestClose)} ${signedPercent(item.eventReturnPercent)}`, signedClass(item.eventReturnPercent)],
+            ["Pre-release high (breakout line)", `${price(item.preReleaseReferenceHigh)}${aboveHigh}`]
         ]);
         reaction.classList.add("is-butted");
 
-        // The server's own explanation of its assessment. Rendered verbatim.
-        const analysis = text("p", item.analysisReason, "earnings-analysis");
+        // Indicators the assessment reports for context only; none of them decides the breakout.
+        const context = text("p", [
+            `For context: volume ${item.slotRelativeVolume == null ? "—" : `${number(item.slotRelativeVolume)}×`} the usual for this time of day`,
+            `EMA 10 / 20 ${number(item.ema10)} / ${number(item.ema20)}`,
+            `MACD histogram ${number(item.macdHistogram, 4)}`,
+            item.latestCompletedBarAtUtc ? `last completed bar ended ${newYorkTime(plusMinutes(item.latestCompletedBarAtUtc, 5), false)} New York` : "no completed bar yet"
+        ].join(" · "), "earnings-context");
 
-        card.append(header, results, reaction, analysis);
+        card.append(header, results, reaction, context);
 
         if (isHeldLane(item)) {
             card.append(text("p",
@@ -357,6 +418,40 @@
         card.append(renderProvenance(item));
         card.append(renderActions(item));
         return card;
+    }
+
+    // The earliest sign the result was out: the provider first showing it, or its news headline. Null before then.
+    function firstResultSign(item) {
+        const signs = [item.resultFirstSeenAtUtc, item.resultNewsPublishedAtUtc].filter(Boolean);
+        return signs.length ? signs.reduce((a, b) => (new Date(a) <= new Date(b) ? a : b)) : null;
+    }
+
+    /* The price block at the top right: the latest trade when the monitor has one, otherwise the last completed
+       bar's close; its move from the close before the release; and how old that price is. The age line is
+       refreshed by the one-second tick through data-ago-for. */
+    function renderQuote(item, resultOut) {
+        const quote = document.createElement("div");
+        quote.className = "earnings-quote";
+        const hasTrade = item.latestTradePrice !== null && item.latestTradePrice !== undefined;
+        quote.append(text("div", price(hasTrade ? item.latestTradePrice : item.latestClose), "earnings-quote-price"));
+        const move = hasTrade ? item.latestTradeMovePercent : item.eventReturnPercent;
+        if (move !== null && move !== undefined) {
+            quote.append(text("div",
+                `${signedPercent(move)} ${resultOut ? "since the close before release" : "since the last regular close"}`,
+                `earnings-quote-move ${signedClass(move)}`));
+        }
+
+        const priceTime = hasTrade ? item.latestTradeAtUtc : item.latestCompletedBarAtUtc && plusMinutes(item.latestCompletedBarAtUtc, 5);
+        if (priceTime) {
+            const age = text("div", undefined, "earnings-quote-age");
+            age.append(`${hasTrade ? "last trade" : "bar ended"} ${newYorkTime(priceTime, false)} New York · `);
+            const relative = text("span", ago(priceTime));
+            relative.dataset.agoFor = priceTime;
+            age.append(relative);
+            quote.append(age);
+        }
+
+        return quote;
     }
 
     function factList(pairs) {
@@ -377,11 +472,14 @@
         const body = document.createElement("div");
         body.className = "earnings-provenance-body";
         body.append(factList([
-            ["Provider", `${item.provider} · reaction from Alpaca SIP completed bars`],
+            ["Provider", `${item.provider} · reaction from Alpaca SIP completed bars; live price from Alpaca's latest trade`],
             ["Received", localDateTime(item.providerReceivedAtUtc, true)],
-            ["Result first seen", item.resultFirstSeenAtUtc ? localDateTime(item.resultFirstSeenAtUtc, true) : "Not yet observable"],
+            ["Result first seen", item.resultFirstSeenAtUtc ? threeClocks(item.resultFirstSeenAtUtc) : "Not yet observable"],
+            ["Close before release", item.preReleaseReferenceAtUtc ? threeClocks(plusMinutes(item.preReleaseReferenceAtUtc, 5)) : "—"],
+            ["Latest trade", item.latestTradeAtUtc ? threeClocks(item.latestTradeAtUtc) : "None read yet"],
             ["Latest completed bar", localDateTime(item.latestCompletedBarAtUtc, true)],
-            ["Bar session", item.latestMarketSession || "session unknown"]
+            ["Bar session", item.latestMarketSession || "session unknown"],
+            ["How it was assessed", item.analysisReason]
         ]));
 
         const previous = item.previousEarnings;
@@ -585,6 +683,63 @@
         }
     }
 
+    /* --- EPS-beat alerts ----------------------------------------------------
+       Each event alerts once on this device, the first time a poll shows it as an EPS beat. On a device with no
+       alert history the first poll records the beats already on screen without alerting, so opening the page
+       does not raise a burst. After that, a beat whose result was first seen in the last two hours alerts even
+       if it arrived while the page was closed. Alerts follow the page's session, cap and date filters, use the
+       shared Alerts switch, and go to a desktop notification when the tab is hidden or a toast when it is shown. */
+    const BEAT_HISTORY_KEY = "tradingflow.earnings.epsBeatsAlerted";
+    const BEAT_ALERT_WINDOW_MS = 2 * 3600000;
+    let alertedBeats = null;
+    let beatHistoryExisted = false;
+
+    // Reads the ids of events already alerted on this device and notes whether any history was stored.
+    function loadBeatHistory() {
+        try {
+            const raw = window.localStorage.getItem(BEAT_HISTORY_KEY);
+            beatHistoryExisted = raw !== null;
+            return new Set(raw === null ? [] : JSON.parse(raw));
+        } catch {
+            // No storage: remember for this page only, and alert from the second poll on.
+            return new Set();
+        }
+    }
+
+    // "SONY beat EPS: 0.48 vs 0.40 estimate (+20.62%), +6.31% since the close before release."
+    function epsBeatMessage(item) {
+        const move = item.latestTradePrice != null ? item.latestTradeMovePercent : item.eventReturnPercent;
+        return `${item.ticker} beat EPS: ${number(item.epsActual)} vs ${number(item.epsEstimate)} estimate ` +
+            `(${signedPercent(item.epsSurprisePercent)})` +
+            (move === null || move === undefined ? "." : `, ${signedPercent(move)} since the close before release.`);
+    }
+
+    // Records every new EPS beat in the history and alerts the recent ones, as described above.
+    function alertNewEpsBeats(items) {
+        const firstPoll = alertedBeats === null;
+        alertedBeats ??= loadBeatHistory();
+        const silent = firstPoll && !beatHistoryExisted;
+        const fresh = [];
+        for (const item of items) {
+            if (String(item.epsOutcome || "").toLowerCase() !== "beat" || alertedBeats.has(item.id)) continue;
+            alertedBeats.add(item.id);
+            const sign = firstResultSign(item);
+            if (!silent && sign && Date.now() - new Date(sign).getTime() <= BEAT_ALERT_WINDOW_MS) fresh.push(item);
+        }
+        try {
+            window.localStorage.setItem(BEAT_HISTORY_KEY, JSON.stringify([...alertedBeats].slice(-500)));
+            beatHistoryExisted = true;
+        } catch {
+            /* Storage refused: the in-page history still prevents repeats. */
+        }
+        if (!fresh.length || !window.TradingFlow) return;
+        if (document.hidden) {
+            for (const item of fresh) window.TradingFlow.notify(`${item.ticker} beat EPS`, epsBeatMessage(item));
+        } else if (window.TradingFlow.alertsEnabled()) {
+            window.TradingFlow.toast(fresh.length === 1 ? "EPS beat" : `${fresh.length} EPS beats`, fresh.map(epsBeatMessage).join(" "));
+        }
+    }
+
     // The ten-second poll is silent and never interrupts a load the operator started. An operator
     // change cancels the request it replaces, so the newest choice always wins, and the list stays
     // usable throughout: only the small "Updating" marker shows while a request is out.
@@ -631,6 +786,7 @@
             nextDay.textContent = latestPayload.nextBusinessDateLabel;
 
             render();
+            alertNewEpsBeats(latestPayload.items || []);
         } catch (error) {
             if (controller.signal.aborted || sequence !== loadSequence) return;
             status.textContent = error instanceof Error ? error.message : "Unable to load earnings data.";
@@ -739,6 +895,10 @@
             badgeNode.textContent = minutes !== null && minutes > 0
                 ? `IN ${Math.max(1, Math.round(minutes))} MIN`
                 : "REPORTING NOW";
+        }
+        for (const node of feed.querySelectorAll("[data-ago-for]")) {
+            const label = ago(node.dataset.agoFor);
+            if (node.textContent !== label) node.textContent = label;
         }
     }
 

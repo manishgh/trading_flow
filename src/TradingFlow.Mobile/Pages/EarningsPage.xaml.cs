@@ -184,7 +184,7 @@ public partial class EarningsPage : ContentPage
         }
 
         public string TechnicalText =>
-            $"EMA10/20 {Format(Item.Ema10)}/{Format(Item.Ema20)} Â· MACD {Format(Item.MacdHistogram, "0.0000")} Â· slot RVOL {Format(Item.SlotRelativeVolume)}x";
+            $"EMA10/20 {Format(Item.Ema10)}/{Format(Item.Ema20)} · MACD histogram {Format(Item.MacdHistogram, "0.0000")} · volume {Format(Item.SlotRelativeVolume)}x the usual for this time of day";
 
         public bool HasResultObservedTime => Item.ResultFirstSeenAtUtc.HasValue;
 

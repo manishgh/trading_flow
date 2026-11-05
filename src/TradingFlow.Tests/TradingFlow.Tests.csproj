@@ -20,6 +20,7 @@
     <Using Include="Xunit" />
     <Compile Include="..\TradingFlow.Mobile\Services\LatestMarketRead.cs" Link="Mobile\LatestMarketRead.cs" />
     <Compile Include="..\TradingFlow.Mobile\Services\NativeExitReview.cs" Link="Mobile\NativeExitReview.cs" />
+    <Compile Include="..\TradingFlow.Mobile\Services\EarningsBeatAlertRule.cs" Link="Mobile\EarningsBeatAlertRule.cs" />
   </ItemGroup>
 
   <ItemGroup>

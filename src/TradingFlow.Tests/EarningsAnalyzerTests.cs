@@ -20,6 +20,27 @@ public sealed class EarningsAnalyzerTests
         Assert.Equal(DateOnly.Parse(expectedText), result);
     }
 
+    /// <summary>
+    /// A result seen before the window its slot names marks the slot wrong: after-close windows open at that
+    /// day's 16:00 New York close, before-open windows at the previous weekday's close (across a weekend), and
+    /// other windows at the scheduled time. A print just before a default 16:30 slot is still inside its window.
+    /// </summary>
+    [Theory]
+    [InlineData(EarningsReleaseWindow.AfterMarketClose, "2026-11-05", "2026-11-05T21:30:00Z", "2026-11-05T21:00:00Z")]
+    [InlineData(EarningsReleaseWindow.BeforeMarketOpen, "2026-11-09", "2026-11-09T12:30:00Z", "2026-11-06T21:00:00Z")]
+    [InlineData(EarningsReleaseWindow.BeforeMarketOpen, "2026-07-31", "2026-07-31T12:30:00Z", "2026-07-30T20:00:00Z")]
+    [InlineData(EarningsReleaseWindow.DuringMarket, "2026-11-05", "2026-11-05T17:00:00Z", "2026-11-05T17:00:00Z")]
+    public void ReleaseWindowStart_FollowsTheSlotsSession(
+        EarningsReleaseWindow window, string reportDate, string scheduledUtc, string expectedUtc)
+    {
+        var calendarEvent = new EarningsCalendarEvent
+        {
+            ReportDateExchange = DateOnly.Parse(reportDate), ReleaseWindow = window, ScheduledAtUtc = DateTimeOffset.Parse(scheduledUtc)
+        };
+
+        Assert.Equal(DateTimeOffset.Parse(expectedUtc), EarningsCalendarDates.ReleaseWindowStartUtc(calendarEvent));
+    }
+
     [Theory]
     [InlineData("2026-07-31T12:00:00Z", "Premarket")]
     [InlineData("2026-07-31T14:00:00Z", "Regular market")]
@@ -374,10 +395,64 @@ public sealed class EarningsAnalyzerTests
             [],
             now);
 
+        // The latest price is the newest completed bar (an after-hours bar here), while the reference price is the
+        // last regular-session close before the release: the 15:55 New York bar on Friday 31 July.
+        var lastRegularBar = bars.Single(bar => bar.Timestamp == DateTimeOffset.Parse("2026-07-31T19:55:00Z"));
         Assert.Equal(EarningsBreakoutAssessment.AwaitingRelease, result.BreakoutAssessment);
-        Assert.Equal(bars[^1].Close, result.PreReleaseReferenceClose);
+        Assert.Equal(lastRegularBar.Close, result.PreReleaseReferenceClose);
+        Assert.Equal(lastRegularBar.Timestamp, result.PreReleaseReferenceAtUtc);
         Assert.Equal(bars[^1].Close, result.LatestClose);
         Assert.Equal(bars[^1].Timestamp, result.LatestCompletedBarAtUtc);
+    }
+
+    [Fact]
+    public void Analyze_ResultSeenBeforeTheProviderSlotMeasuresFromTheCloseBeforeTheRelease()
+    {
+        // Sony on 4-5 Nov 2026: Finviz placed the report after Thursday's close, but the results came out
+        // overnight. The price jumped from 26.00 on Wednesday evening, and TradingFlow first saw the result at
+        // 03:56 New York on Thursday. The move must be measured from Wednesday's 16:00 close, not from a bar
+        // after the jump.
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
+        var firstSeen = DateTimeOffset.Parse("2026-11-05T08:56:00Z");
+        var calendarEvent = CreateEvent(DateTimeOffset.Parse("2026-11-05T21:30:00Z"), epsSurprise: 20m, revenueSurprise: 7m);
+        calendarEvent.ReportDateExchange = new DateOnly(2026, 11, 5);
+        calendarEvent.ReleaseWindow = EarningsReleaseWindow.AfterMarketClose;
+        calendarEvent.ResultFirstSeenAtUtc = firstSeen;
+        var jump = DateTimeOffset.Parse("2026-11-05T00:05:00Z");
+        var peak = DateTimeOffset.Parse("2026-11-05T14:35:00Z");
+        var bars = CreateSessionBars("2026-10-27", "2026-11-05", timestamp =>
+            timestamp == peak ? 28.27m : timestamp >= jump ? 27.50m : 26.00m);
+
+        var result = analyzer.Analyze(calendarEvent, bars, [], DateTimeOffset.Parse("2026-11-05T18:10:00Z"));
+
+        Assert.Equal(DateTimeOffset.Parse("2026-11-04T20:55:00Z"), result.PreReleaseReferenceAtUtc);
+        Assert.Equal(26.00m, result.PreReleaseReferenceClose);
+        Assert.Equal(27.50m, result.LatestClose);
+        Assert.Equal((27.50m - 26.00m) / 26.00m * 100m, result.EventReturnPercent);
+        Assert.Equal(28.27m + 0.05m, result.PostReleaseHigh);
+        Assert.Equal(peak, result.PostReleaseHighAtUtc);
+        Assert.Equal(EarningsBreakoutAssessment.Possible, result.BreakoutAssessment);
+    }
+
+    [Theory]
+    // A before-open report first seen mid-session came out before that session opened: use the previous close.
+    [InlineData(EarningsReleaseWindow.BeforeMarketOpen, "2026-11-04T20:55:00Z")]
+    // A report the provider places during the session uses the last regular bar that ended by the first sighting.
+    [InlineData(EarningsReleaseWindow.DuringMarket, "2026-11-05T15:25:00Z")]
+    public void Analyze_ResultFirstSeenMidSessionPicksTheReferenceByReleaseWindow(
+        EarningsReleaseWindow releaseWindow,
+        string expectedReferenceText)
+    {
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
+        var calendarEvent = CreateEvent(DateTimeOffset.Parse("2026-11-05T12:00:00Z"), epsSurprise: 5m, revenueSurprise: 2m);
+        calendarEvent.ReportDateExchange = new DateOnly(2026, 11, 5);
+        calendarEvent.ReleaseWindow = releaseWindow;
+        calendarEvent.ResultFirstSeenAtUtc = DateTimeOffset.Parse("2026-11-05T15:30:00Z");
+        var bars = CreateSessionBars("2026-10-27", "2026-11-05", timestamp => 50m + timestamp.Minute / 100m);
+
+        var result = analyzer.Analyze(calendarEvent, bars, [], DateTimeOffset.Parse("2026-11-05T17:00:00Z"));
+
+        Assert.Equal(DateTimeOffset.Parse(expectedReferenceText), result.PreReleaseReferenceAtUtc);
     }
 
     [Theory]
@@ -428,6 +503,32 @@ public sealed class EarningsAnalyzerTests
             MarketEvidenceProfile.DefaultMinimumValidSamples,
             "America/New_York",
             allowStandardWeekdayFallback: true));
+
+    /// <summary>
+    /// Weekday 5-minute bars for TEST from 04:00 to 20:00 New York, from the first date to the last inclusive.
+    /// The close comes from the bar's start time; the high is 0.05 above it.
+    /// </summary>
+    private static List<OhlcvBar> CreateSessionBars(string firstDate, string lastDate, Func<DateTimeOffset, decimal> closeAt)
+    {
+        var bars = new List<OhlcvBar>();
+        for (var date = DateOnly.Parse(firstDate); date <= DateOnly.Parse(lastDate); date = date.AddDays(1))
+        {
+            if (date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            {
+                continue;
+            }
+
+            var start = TimeZoneInfo.ConvertTimeToUtc(date.ToDateTime(new TimeOnly(4, 0)), EarningsTimeZones.NewYork);
+            for (var slot = 0; slot < 16 * 12; slot++)
+            {
+                var timestamp = new DateTimeOffset(start, TimeSpan.Zero).AddMinutes(slot * 5);
+                var close = closeAt(timestamp);
+                bars.Add(new OhlcvBar("TEST", timestamp, "5m", close, close + 0.05m, close - 0.05m, close, 1000m, "sip", "all"));
+            }
+        }
+
+        return bars;
+    }
 
     private static List<OhlcvBar> CreateBars(DateTimeOffset eventTime, int historyDays = 70)
     {

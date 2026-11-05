@@ -20,7 +20,8 @@ public sealed partial class AlpacaMarketDataProvider :
     IMarketDataCompletenessProvider,
     IMarketSessionScheduleProvider,
     IMarketDataProvenanceProvider,
-    IHistoricalMarketDataEvidenceProvider
+    IHistoricalMarketDataEvidenceProvider,
+    ILatestTradeProvider
 {
     private readonly HttpClient _httpClient;
     private readonly AlpacaOptions _options;

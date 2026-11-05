@@ -38,6 +38,17 @@ public sealed class EarningsMarketStateLoader
         this.logger = logger ?? NullLogger<EarningsMarketStateLoader>.Instance;
     }
 
+    /// <summary>
+    /// The latest trade of each stock, for display. Returns an empty result when the market-data provider cannot
+    /// report trades (CSV and test providers); provider errors propagate to the caller.
+    /// </summary>
+    public Task<IReadOnlyDictionary<string, LatestTrade>> GetLatestTradesAsync(
+        IReadOnlyCollection<string> tickers,
+        CancellationToken cancellationToken) =>
+        marketData.Value is ILatestTradeProvider provider
+            ? provider.GetLatestTradesAsync(tickers, cancellationToken)
+            : Task.FromResult<IReadOnlyDictionary<string, LatestTrade>>(new Dictionary<string, LatestTrade>());
+
     public async Task<IReadOnlyDictionary<DateOnly, TradingFlow.Engine.Indicators.MarketSessionSchedule>>
         LoadMarketSessionSchedulesAsync(
             DateOnly startDateInclusive,
