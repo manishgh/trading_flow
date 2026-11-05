@@ -291,12 +291,15 @@ public sealed class EarningsMarketStateLoader
         }
     }
 
-    /// <summary>Removes in-memory bars older than the lookback window so memory stays bounded.</summary>
+    /// <summary>
+    /// Removes in-memory bars older than the lookback window so memory stays bounded. Keys are kept in time
+    /// order, so the scan stops at the first bar inside the window instead of reading every bar each pass.
+    /// </summary>
     private void DropBarsBefore(IEnumerable<string> tickers, DateTimeOffset windowStart)
     {
         foreach (var ticker in tickers)
         {
-            var expired = state[ticker].Keys.Where(timestamp => timestamp < windowStart).ToArray();
+            var expired = state[ticker].Keys.TakeWhile(timestamp => timestamp < windowStart).ToArray();
             foreach (var timestamp in expired)
             {
                 state[ticker].Remove(timestamp);

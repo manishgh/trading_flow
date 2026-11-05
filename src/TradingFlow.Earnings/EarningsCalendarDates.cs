@@ -11,23 +11,17 @@ public static class EarningsCalendarDates
     public static DateOnly ExchangeDate(DateTimeOffset instant) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(instant, EarningsTimeZones.NewYork).DateTime);
 
-    public static DateOnly NextWeekday(DateOnly date)
+    public static DateOnly NextWeekday(DateOnly date) => StepToWeekday(date, 1);
+
+    public static DateOnly PreviousWeekday(DateOnly date) => StepToWeekday(date, -1);
+
+    /// <summary>Moves one day in the given direction (+1 or -1), then keeps going past Saturdays and Sundays.</summary>
+    private static DateOnly StepToWeekday(DateOnly date, int direction)
     {
-        var candidate = date.AddDays(1);
+        var candidate = date.AddDays(direction);
         while (candidate.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
         {
-            candidate = candidate.AddDays(1);
-        }
-
-        return candidate;
-    }
-
-    public static DateOnly PreviousWeekday(DateOnly date)
-    {
-        var candidate = date.AddDays(-1);
-        while (candidate.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
-        {
-            candidate = candidate.AddDays(-1);
+            candidate = candidate.AddDays(direction);
         }
 
         return candidate;

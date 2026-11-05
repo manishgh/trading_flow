@@ -101,110 +101,26 @@ public sealed class EarningsMonitor
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(options.RequestTimeout);
             var nowUtc = clock.GetUtcNow();
-            var exchangeToday = DateOnly.FromDateTime(
-                TimeZoneInfo.ConvertTime(nowUtc, EarningsTimeZones.NewYork).DateTime);
-            // Start a weekday back so last session's after-close reports stay analysed through today's session.
-            var from = EarningsCalendarDates.PreviousWeekday(exchangeToday);
-            var to = EarningsCalendarDates.NextWeekday(exchangeToday);
-            // Fetch wider than we analyze. The provider posts after-close actuals well after the
-            // report date has passed, so a window that starts at today would never collect them.
-            var calendarFrom = from.AddDays(-options.RecentResultLookbackDays);
-            var marketSchedules = await marketState.LoadMarketSessionSchedulesAsync(
-                exchangeToday.AddDays(-options.SubDailyLookbackDays - 10),
-                to.AddDays(1),
-                timeout.Token);
-            analyzer.UpdateMarketSessionSchedules(marketSchedules);
+            var exchangeToday = EarningsCalendarDates.ExchangeDate(nowUtc);
+            // Analysed reports run from the previous weekday, so last session's after-close reports stay analysed
+            // through today's session, to the next weekday.
+            var firstReportDate = EarningsCalendarDates.PreviousWeekday(exchangeToday);
+            var lastReportDate = EarningsCalendarDates.NextWeekday(exchangeToday);
+            analyzer.UpdateMarketSessionSchedules(await LoadSessionSchedulesAsync(exchangeToday, lastReportDate, timeout.Token));
+            await RefreshCalendarIfDueAsync(forceCalendarRefresh, firstReportDate, lastReportDate, nowUtc, timeout.Token);
 
-            if (forceCalendarRefresh ||
-                lastCalendarRefreshUtc is null ||
-                nowUtc - lastCalendarRefreshUtc >= options.CalendarRefreshInterval)
-            {
-                var providerEvents = await finviz.GetEarningsCalendarAsync(calendarFrom, to, timeout.Token);
-                await earnings.ReplaceProviderWindowAsync("finviz", calendarFrom, to, providerEvents, timeout.Token);
-                lastCalendarRefreshUtc = nowUtc;
-                try
-                {
-                    await sectors.RefreshIfStaleAsync(timeout.Token);
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    // Sector labels are display-only; the calendar and analysis continue without them.
-                    logger.LogWarning(exception, "Finviz sector directory refresh failed; previous sectors stay in use.");
-                }
-                logger.LogInformation(
-                    "Refreshed {EventCount} Finviz earnings events for {FromDate} through {ToDate}.",
-                    providerEvents.Count,
-                    calendarFrom,
-                    to);
-            }
-
-            var trackedEvents = (await earnings.GetCalendarAsync(from, to, tickers: null, timeout.Token))
-                .Where(item => item.ReportDateExchange >= exchangeToday ||
-                    EarningsCalendarDates.IsTradingSession(item.ReportDateExchange, item.ReleaseWindow, exchangeToday))
-                .ToList();
+            var trackedEvents = await GetTrackedEventsAsync(firstReportDate, lastReportDate, exchangeToday, timeout.Token);
             trackedEventCount = trackedEvents.Count;
             if (trackedEvents.Count == 0)
             {
                 await marketState.ReleaseUntrackedAsync([], cancellationToken);
-                lastAnalysisUtc = nowUtc;
-                lastError = null;
-                return;
             }
-
-            await TryRefreshPriorResultsAsync(trackedEvents, nowUtc, cancellationToken);
-
-            var symbols = trackedEvents
-                .Select(item => item.Ticker)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            var stage = System.Diagnostics.Stopwatch.StartNew();
-            var barsByTicker = await marketState.LoadAsync(symbols, nowUtc, cancellationToken);
-            // Stocks whose earnings window has ended leave memory; their bar files stay on disk.
-            var releasedCount = await marketState.ReleaseUntrackedAsync(symbols, cancellationToken);
-            var loadTime = stage.Elapsed;
-
-            // The time limit covers each stage, not the whole pass. Loading bars after a restart can take
-            // longer than the limit on its own (14 minutes for about 900 stocks on 4 Nov 2026); sharing one
-            // limit then cancelled the news read and every analysis of that pass was lost.
-            using var analysisTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            analysisTimeout.CancelAfter(options.RequestTimeout);
-            stage.Restart();
-            var recentNews = await news.GetRecentForTickersAsync(
-                nowUtc.AddDays(-3),
-                5000,
-                symbols,
-                analysisTimeout.Token);
-            var latest = await earnings.GetLatestAnalysesAsync(
-                trackedEvents.Select(item => item.Id).ToArray(),
-                analysisTimeout.Token);
-            var newsTime = stage.Elapsed;
-            stage.Restart();
-            var analyses = AnalyzeAll(trackedEvents, barsByTicker, recentNews, nowUtc, analysisTimeout.Token);
-            var analysisTime = stage.Elapsed;
-            stage.Restart();
-
-            var savedCount = 0;
-            foreach (var snapshot in analyses)
+            else
             {
-                if (!latest.TryGetValue(snapshot.EarningsEventId, out var previous) ||
-                    ShouldPersist(previous, snapshot, options.AnalysisSnapshotHeartbeat))
-                {
-                    await earnings.UpsertAnalysisAsync(snapshot, analysisTimeout.Token);
-                    savedCount++;
-                }
+                await TryRefreshPriorResultsAsync(trackedEvents, nowUtc, cancellationToken);
+                await AnalyzeAndSaveAsync(trackedEvents, nowUtc, cancellationToken);
             }
 
-            logger.LogInformation(
-                "Earnings pass for {EventCount} events and {TickerCount} stocks: bar load {LoadMs} ms (released {ReleasedCount} finished stocks from memory), news read {NewsMs} ms, " +
-                "analysis {AnalysisMs} ms, saved {SavedCount} changed analyses in {SaveMs} ms.",
-                trackedEvents.Count,
-                symbols.Length,
-                (long)loadTime.TotalMilliseconds,
-                releasedCount,
-                (long)newsTime.TotalMilliseconds,
-                (long)analysisTime.TotalMilliseconds,
-                savedCount,
-                (long)stage.Elapsed.TotalMilliseconds);
             lastAnalysisUtc = nowUtc;
             lastError = null;
         }
@@ -212,6 +128,153 @@ public sealed class EarningsMonitor
         {
             refreshLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Loads the exchange calendar from the oldest day an analysis can look back to (the bar lookback plus
+    /// ten days of slack) through the day after the last analysed day.
+    /// </summary>
+    private Task<IReadOnlyDictionary<DateOnly, TradingFlow.Engine.Indicators.MarketSessionSchedule>> LoadSessionSchedulesAsync(
+        DateOnly firstAnalysedDate,
+        DateOnly lastAnalysedDate,
+        CancellationToken cancellationToken) =>
+        marketState.LoadMarketSessionSchedulesAsync(
+            firstAnalysedDate.AddDays(-options.SubDailyLookbackDays - 10),
+            lastAnalysedDate.AddDays(1),
+            cancellationToken);
+
+    /// <summary>
+    /// Replaces the stored Finviz calendar when forced or when the refresh interval has passed, then refreshes
+    /// the display-only sector labels. The window starts <see cref="EarningsMonitorOptions.RecentResultLookbackDays"/>
+    /// before the first analysed report date: the provider posts after-close actuals well after the report date.
+    /// </summary>
+    private async Task RefreshCalendarIfDueAsync(
+        bool force,
+        DateOnly firstReportDate,
+        DateOnly lastReportDate,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        if (!force && lastCalendarRefreshUtc is { } lastRefresh && nowUtc - lastRefresh < options.CalendarRefreshInterval)
+        {
+            return;
+        }
+
+        var from = firstReportDate.AddDays(-options.RecentResultLookbackDays);
+        var to = lastReportDate;
+        var eventCount = await ReplaceFinvizWindowAsync(from, to, cancellationToken);
+        lastCalendarRefreshUtc = nowUtc;
+        try
+        {
+            await sectors.RefreshIfStaleAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Sector labels are display-only; the calendar and analysis continue without them.
+            logger.LogWarning(exception, "Finviz sector directory refresh failed; previous sectors stay in use.");
+        }
+
+        logger.LogInformation(
+            "Refreshed {EventCount} Finviz earnings events for {FromDate} through {ToDate}.",
+            eventCount,
+            from,
+            to);
+    }
+
+    /// <summary>Downloads the Finviz earnings calendar for the dates and replaces the stored window; returns the event count.</summary>
+    private async Task<int> ReplaceFinvizWindowAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken)
+    {
+        var providerEvents = await finviz.GetEarningsCalendarAsync(from, to, cancellationToken);
+        await earnings.ReplaceProviderWindowAsync("finviz", from, to, providerEvents, cancellationToken);
+        return providerEvents.Count;
+    }
+
+    /// <summary>
+    /// Returns the events to analyse: stored reports in the analysed dates that are still ahead or whose trading
+    /// session is today, so last session's after-close reports stay analysed today.
+    /// </summary>
+    private async Task<List<EarningsCalendarEvent>> GetTrackedEventsAsync(
+        DateOnly firstReportDate,
+        DateOnly lastReportDate,
+        DateOnly exchangeToday,
+        CancellationToken cancellationToken) =>
+        (await earnings.GetCalendarAsync(
+            firstReportDate,
+            lastReportDate,
+            tickers: null,
+            cancellationToken))
+        .Where(item => item.ReportDateExchange >= exchangeToday ||
+            EarningsCalendarDates.IsTradingSession(item.ReportDateExchange, item.ReleaseWindow, exchangeToday))
+        .ToList();
+
+    /// <summary>
+    /// Loads bars for every tracked stock, releases stocks no longer tracked from memory, reads news and the
+    /// latest saved analyses, runs the analyzer and saves analyses that changed. Logs each stage's duration.
+    /// The bar load has no time limit; one fresh limit then covers the news read, the analyses and the saves
+    /// together. Loading bars after a restart can take longer than the limit on its own (14 minutes for about
+    /// 900 stocks on 4 Nov 2026), and sharing one limit with it cancelled the news read so the pass saved nothing.
+    /// </summary>
+    private async Task AnalyzeAndSaveAsync(
+        IReadOnlyList<EarningsCalendarEvent> trackedEvents,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        var symbols = trackedEvents
+            .Select(item => item.Ticker)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var stage = System.Diagnostics.Stopwatch.StartNew();
+        var barsByTicker = await marketState.LoadAsync(symbols, nowUtc, cancellationToken);
+        // Stocks whose earnings window has ended leave memory; their bar files stay on disk.
+        var releasedCount = await marketState.ReleaseUntrackedAsync(symbols, cancellationToken);
+        var loadTime = stage.Elapsed;
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(options.RequestTimeout);
+        stage.Restart();
+        var recentNews = await news.GetRecentForTickersAsync(nowUtc.AddDays(-3), 5000, symbols, timeout.Token);
+        var latest = await earnings.GetLatestAnalysesAsync(trackedEvents.Select(item => item.Id).ToArray(), timeout.Token);
+        var newsTime = stage.Elapsed;
+        stage.Restart();
+        var analyses = AnalyzeAll(trackedEvents, barsByTicker, recentNews, nowUtc, timeout.Token);
+        var analysisTime = stage.Elapsed;
+        stage.Restart();
+        var savedCount = await SaveChangedAnalysesAsync(analyses, latest, timeout.Token);
+
+        logger.LogInformation(
+            "Earnings pass for {EventCount} events and {TickerCount} stocks: bar load {LoadMs} ms (released {ReleasedCount} finished stocks from memory), news read {NewsMs} ms, " +
+            "analysis {AnalysisMs} ms, saved {SavedCount} changed analyses in {SaveMs} ms.",
+            trackedEvents.Count,
+            symbols.Length,
+            (long)loadTime.TotalMilliseconds,
+            releasedCount,
+            (long)newsTime.TotalMilliseconds,
+            (long)analysisTime.TotalMilliseconds,
+            savedCount,
+            (long)stage.Elapsed.TotalMilliseconds);
+    }
+
+    /// <summary>
+    /// Saves each analysis that is new, differs from the latest saved one in anything shown, or is older than
+    /// the heartbeat; returns how many were saved.
+    /// </summary>
+    private async Task<int> SaveChangedAnalysesAsync(
+        IReadOnlyList<EarningsAnalysisSnapshot> analyses,
+        IReadOnlyDictionary<string, EarningsAnalysisSnapshot> latest,
+        CancellationToken cancellationToken)
+    {
+        var savedCount = 0;
+        foreach (var snapshot in analyses)
+        {
+            if (!latest.TryGetValue(snapshot.EarningsEventId, out var previous) ||
+                ShouldPersist(previous, snapshot, options.AnalysisSnapshotHeartbeat))
+            {
+                await earnings.UpsertAnalysisAsync(snapshot, cancellationToken);
+                savedCount++;
+            }
+        }
+
+        return savedCount;
     }
 
     /// <summary>
@@ -230,9 +293,9 @@ public sealed class EarningsMonitor
         var calendarEvent = (await earnings.GetCalendarAsync(reportDateExchange, reportDateExchange, [ticker], cancellationToken))
             .FirstOrDefault() ?? throw new KeyNotFoundException($"No stored {ticker} earnings event on {reportDateExchange:yyyy-MM-dd}.");
         var replay = new EarningsAnalyzer(new TradingFlow.Engine.Indicators.IndicatorEngine(), options);
-        replay.UpdateMarketSessionSchedules(await marketState.LoadMarketSessionSchedulesAsync(
-            EarningsCalendarDates.ExchangeDate(fromUtc).AddDays(-options.SubDailyLookbackDays - 10),
-            EarningsCalendarDates.ExchangeDate(toUtc).AddDays(1),
+        replay.UpdateMarketSessionSchedules(await LoadSessionSchedulesAsync(
+            EarningsCalendarDates.ExchangeDate(fromUtc),
+            EarningsCalendarDates.ExchangeDate(toUtc),
             cancellationToken));
         var bars = (await marketState.LoadAsync([calendarEvent.Ticker], toUtc, cancellationToken))
             .GetValueOrDefault(calendarEvent.Ticker) ?? [];
@@ -246,6 +309,10 @@ public sealed class EarningsMonitor
         return snapshots;
     }
 
+    /// <summary>
+    /// Returns the stored calendar for the dates with each event's latest analysis and the stock's latest
+    /// earlier report that carries a result, shown as the previous quarter on the Earnings page and the Desk.
+    /// </summary>
     public async Task<EarningsCalendarSnapshot> GetCalendarAsync(
         DateOnly fromExchangeDate,
         DateOnly toExchangeDate,
@@ -266,6 +333,13 @@ public sealed class EarningsMonitor
                 toExchangeDate.AddDays(-1),
                 events.Select(item => item.Ticker).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 cancellationToken);
+        // Newest first per stock, so each event takes the first one dated before it. This used to filter and
+        // sort the whole candidate list again for every event on every page load.
+        var reportedByTicker = priorCandidates
+            .Where(HasReportedResult)
+            .OrderByDescending(candidate => candidate.ReportDateExchange)
+            .ThenByDescending(candidate => candidate.ScheduledAtUtc)
+            .ToLookup(candidate => candidate.Ticker, StringComparer.OrdinalIgnoreCase);
         return new EarningsCalendarSnapshot(
             clock.GetUtcNow(),
             fromExchangeDate,
@@ -273,14 +347,8 @@ public sealed class EarningsMonitor
             events.Select(item => new EarningsCalendarSnapshotItem(
                 item,
                 analyses.GetValueOrDefault(item.Id),
-                priorCandidates
-                    .Where(candidate =>
-                        candidate.Ticker.Equals(item.Ticker, StringComparison.OrdinalIgnoreCase) &&
-                        candidate.ReportDateExchange < item.ReportDateExchange &&
-                        HasReportedResult(candidate))
-                    .OrderByDescending(candidate => candidate.ReportDateExchange)
-                    .ThenByDescending(candidate => candidate.ScheduledAtUtc)
-                    .FirstOrDefault())).ToArray());
+                reportedByTicker[item.Ticker]
+                    .FirstOrDefault(candidate => candidate.ReportDateExchange < item.ReportDateExchange))).ToArray());
     }
 
     /// <summary>
@@ -314,6 +382,11 @@ public sealed class EarningsMonitor
         return analyses;
     }
 
+    /// <summary>
+    /// At most once per <see cref="EarningsMonitorOptions.PriorResultRefreshInterval"/>, downloads the Finviz calendar
+    /// around the previous quarter of the tracked reports so each card can compare with it. A failure or time-out
+    /// is logged and the pass continues.
+    /// </summary>
     private async Task TryRefreshPriorResultsAsync(
         IReadOnlyList<EarningsCalendarEvent> trackedEvents,
         DateTimeOffset nowUtc,
@@ -341,11 +414,10 @@ public sealed class EarningsMonitor
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(options.PriorResultRequestTimeout);
-            var providerEvents = await finviz.GetEarningsCalendarAsync(from, to, timeout.Token);
-            await earnings.ReplaceProviderWindowAsync("finviz", from, to, providerEvents, timeout.Token);
+            var eventCount = await ReplaceFinvizWindowAsync(from, to, timeout.Token);
             logger.LogInformation(
                 "Refreshed {EventCount} historical Finviz earnings events for prior-result comparison from {FromDate} through {ToDate}.",
-                providerEvents.Count,
+                eventCount,
                 from,
                 to);
         }
@@ -363,6 +435,7 @@ public sealed class EarningsMonitor
         }
     }
 
+    /// <summary>True when the event carries any reported EPS or revenue actual or surprise.</summary>
     private static bool HasReportedResult(EarningsCalendarEvent calendarEvent) =>
         calendarEvent.EpsActual.HasValue ||
         calendarEvent.ReportedEpsActual.HasValue ||
@@ -371,6 +444,7 @@ public sealed class EarningsMonitor
         calendarEvent.RevenueActualMillions.HasValue ||
         calendarEvent.RevenueSurprisePercent.HasValue;
 
+    /// <summary>True when the new analysis differs from the saved one in anything shown, or the saved one is older than the heartbeat.</summary>
     private static bool ShouldPersist(
         EarningsAnalysisSnapshot previous,
         EarningsAnalysisSnapshot current,

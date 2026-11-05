@@ -14,42 +14,29 @@ using TradingFlow.Finviz;
 namespace TradingFlow.Tests;
 
 /// <summary>
-/// After a restart the monitor reloads 5-minute bars for every tracked stock, which took 14 minutes for about
-/// 900 stocks on 4 Nov 2026. The pass's time limit used to cover that load too, so the news read after it was
-/// cancelled and the whole pass saved nothing. Each stage now has its own limit.
+/// Monitor pass and calendar behaviour: per-stage time limits, parallel analyses, and the previous reported
+/// quarter shown next to each event.
 /// </summary>
-public sealed class EarningsMonitorTimeLimitTests : IDisposable
+public sealed class EarningsMonitorTests : IDisposable
 {
     private readonly string archiveRoot = Path.Combine(Path.GetTempPath(), "trading-flow-earnings-monitor-tests", Guid.NewGuid().ToString("N"));
 
+    /// <summary>
+    /// After a restart the monitor reloads 5-minute bars for every tracked stock, which took 14 minutes for about
+    /// 900 stocks on 4 Nov 2026. The pass's time limit used to cover that load too, so the news read after it was
+    /// cancelled and the whole pass saved nothing. Each stage now has its own limit.
+    /// </summary>
     [Fact]
     public async Task A_bar_load_longer_than_the_time_limit_still_saves_the_analysis()
     {
         var options = EarningsMonitorOptions.Default with { RequestTimeout = TimeSpan.FromSeconds(2) };
-        var today = EarningsCalendarDates.ExchangeDate(DateTimeOffset.UtcNow);
-        var repository = new EarningsRepository(new EarningsCalendarEvent
-        {
-            Id = "finviz:slow", Ticker = "SLOW", CompanyName = "Slow Load Inc", ReportDateExchange = today,
-            ScheduledAtUtc = DateTimeOffset.UtcNow.AddHours(1), ReleaseWindow = EarningsReleaseWindow.AfterMarketClose,
-            Provider = "finviz", SourceUrl = "https://example.invalid/calendar", SourceArtifactSha256 = new('a', 64),
-            ProviderReceivedAtUtc = DateTimeOffset.UtcNow, FirstSeenAtUtc = DateTimeOffset.UtcNow, LastSeenAtUtc = DateTimeOffset.UtcNow
-        });
-        var finviz = new FinvizClient(new HttpClient(new EmptyFinvizHandler()),
-            new FinvizOptions(new Uri("https://elite.finviz.com"), "test-token"),
-            new FileSystemRawArchiveWriter(new RawArchiveOptions(archiveRoot)));
+        var now = DateTimeOffset.UtcNow;
+        var repository = new EarningsRepository(Event("finviz:slow", "SLOW", EarningsCalendarDates.ExchangeDate(now), now.AddHours(1), now));
         var provider = new SlowMarketDataProvider(TimeSpan.FromSeconds(4));
-        var monitor = new EarningsMonitor(
-            finviz,
-            new FinvizSectorDirectory(finviz, TimeProvider.System),
-            repository,
-            new CancellationHonouringNewsRepository(),
-            new EarningsMarketStateLoader(new Lazy<IMarketDataProvider>(() => provider), NullCandleStore.Instance, options),
+        var monitor = CreateMonitor(repository, new CancellationHonouringNewsRepository(), provider, options,
             new EarningsAnalyzer(new IndicatorEngine(new MarketEvidenceProfile("earnings_monitor_test_calendar_v1",
                 MarketEvidenceProfile.DefaultLookbackSessions, MarketEvidenceProfile.DefaultMinimumValidSamples,
-                "America/New_York", allowStandardWeekdayFallback: true)), options),
-            options,
-            TimeProvider.System,
-            NullLogger<EarningsMonitor>.Instance);
+                "America/New_York", allowStandardWeekdayFallback: true)), options));
 
         await monitor.RefreshAsync(forceCalendarRefresh: false, CancellationToken.None);
 
@@ -69,13 +56,9 @@ public sealed class EarningsMonitorTimeLimitTests : IDisposable
         var now = DateTimeOffset.UtcNow;
         var today = EarningsCalendarDates.ExchangeDate(now);
         var lastBar = new DateTimeOffset(now.UtcTicks - now.UtcTicks % TimeSpan.FromMinutes(5).Ticks, TimeSpan.Zero).AddMinutes(-10);
-        var events = Enumerable.Range(0, 20).Select(index => new EarningsCalendarEvent
-        {
-            Id = $"finviz:{index}", Ticker = $"T{index:00}", CompanyName = $"Company {index}", ReportDateExchange = today,
-            ScheduledAtUtc = now.AddHours(-1), ReleaseWindow = EarningsReleaseWindow.DuringMarket,
-            Provider = "finviz", SourceUrl = "https://example.invalid/calendar", SourceArtifactSha256 = new('a', 64),
-            ProviderReceivedAtUtc = now.AddHours(-1), FirstSeenAtUtc = now.AddDays(-2), LastSeenAtUtc = now
-        }).ToArray();
+        var events = Enumerable.Range(0, 20)
+            .Select(index => Event($"finviz:{index}", $"T{index:00}", today, now.AddHours(-1), now.AddHours(-1), EarningsReleaseWindow.DuringMarket))
+            .ToArray();
         // 48 hours of bars at a price unique to each stock, so pre- and post-release bars exist at any time of day.
         static decimal Price(string ticker) => 10m + Int32.Parse(ticker[1..]);
         IEnumerable<OhlcvBar> Bars(string ticker) => Enumerable.Range(0, 576)
@@ -86,20 +69,8 @@ public sealed class EarningsMonitorTimeLimitTests : IDisposable
             Headline = $"{item.Ticker} quarterly results released", Provider = "test"
         }).ToArray();
         var repository = new EarningsRepository(events);
-        var finviz = new FinvizClient(new HttpClient(new EmptyFinvizHandler()),
-            new FinvizOptions(new Uri("https://elite.finviz.com"), "test-token"),
-            new FileSystemRawArchiveWriter(new RawArchiveOptions(archiveRoot)));
-        var provider = new SlowMarketDataProvider(TimeSpan.Zero, Bars);
-        var monitor = new EarningsMonitor(
-            finviz,
-            new FinvizSectorDirectory(finviz, TimeProvider.System),
-            repository,
-            new CancellationHonouringNewsRepository(news),
-            new EarningsMarketStateLoader(new Lazy<IMarketDataProvider>(() => provider), NullCandleStore.Instance, options),
-            new EarningsAnalyzer(new IndicatorEngine(), options),
-            options,
-            TimeProvider.System,
-            NullLogger<EarningsMonitor>.Instance);
+        var monitor = CreateMonitor(repository, new CancellationHonouringNewsRepository(news),
+            new SlowMarketDataProvider(TimeSpan.Zero, Bars), options, new EarningsAnalyzer(new IndicatorEngine(), options));
 
         await monitor.RefreshAsync(forceCalendarRefresh: false, CancellationToken.None);
 
@@ -114,11 +85,92 @@ public sealed class EarningsMonitorTimeLimitTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Each calendar row shows the stock's latest earlier report that carries a result. Reports without any
+    /// result, reports on or after the row's date, and other stocks are skipped; on the same report date the
+    /// later scheduled time wins, and tickers match regardless of case.
+    /// </summary>
+    [Fact]
+    public async Task Calendar_shows_each_events_latest_earlier_report_with_a_result()
+    {
+        var now = DateTimeOffset.Parse("2026-11-04T12:00:00Z");
+        var reportDate = new DateOnly(2026, 11, 4);
+        DateTimeOffset At(string utc) => DateTimeOffset.Parse(utc);
+        EarningsCalendarEvent Reported(string id, string ticker, DateOnly date, string scheduledUtc)
+        {
+            var item = Event(id, ticker, date, At(scheduledUtc), now);
+            item.EpsActual = 1m;
+            return item;
+        }
+
+        var current = Event("now:abc", "ABC", reportDate, now, now);
+        var noPrior = Event("now:xyz", "XYZ", reportDate, now, now);
+        var expected = Reported("q2:abc:late", "abc", new DateOnly(2026, 8, 5), "2026-08-05T20:30:00Z");
+        var repository = new EarningsRepository(
+            current,
+            noPrior,
+            Reported("q2:abc:early", "ABC", new DateOnly(2026, 8, 5), "2026-08-05T12:00:00Z"),
+            expected,
+            Event("q2:abc:no-result", "ABC", new DateOnly(2026, 8, 6), At("2026-08-06T12:00:00Z"), now),
+            Reported("q1:abc", "ABC", new DateOnly(2026, 5, 6), "2026-05-06T12:00:00Z"),
+            Reported("same-day:abc", "ABC", reportDate, "2026-11-04T08:00:00Z"),
+            Reported("q2:other", "OTHER", new DateOnly(2026, 8, 7), "2026-08-07T12:00:00Z"));
+        var options = EarningsMonitorOptions.Default;
+        var monitor = CreateMonitor(repository, new CancellationHonouringNewsRepository(),
+            new SlowMarketDataProvider(TimeSpan.Zero), options, new EarningsAnalyzer(new IndicatorEngine(), options));
+
+        var snapshot = await monitor.GetCalendarAsync(reportDate, reportDate, CancellationToken.None);
+
+        Assert.Equal(["now:abc", "now:xyz", "same-day:abc"], snapshot.Items.Select(item => item.Event.Id));
+        Assert.Equal("q2:abc:late", snapshot.Items.Single(item => item.Event.Id == "now:abc").PreviousReportedEvent?.Id);
+        Assert.Null(snapshot.Items.Single(item => item.Event.Id == "now:xyz").PreviousReportedEvent);
+        Assert.Equal("q2:abc:late", snapshot.Items.Single(item => item.Event.Id == "same-day:abc").PreviousReportedEvent?.Id);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(archiveRoot)) Directory.Delete(archiveRoot, recursive: true);
     }
 
+    /// <summary>Builds a monitor over the given fakes with a Finviz client whose calendar is always empty.</summary>
+    private EarningsMonitor CreateMonitor(
+        EarningsRepository repository,
+        INewsFeedRepository news,
+        SlowMarketDataProvider provider,
+        EarningsMonitorOptions options,
+        EarningsAnalyzer analyzer)
+    {
+        var finviz = new FinvizClient(new HttpClient(new EmptyFinvizHandler()),
+            new FinvizOptions(new Uri("https://elite.finviz.com"), "test-token"),
+            new FileSystemRawArchiveWriter(new RawArchiveOptions(archiveRoot)));
+        return new EarningsMonitor(
+            finviz,
+            new FinvizSectorDirectory(finviz, TimeProvider.System),
+            repository,
+            news,
+            new EarningsMarketStateLoader(new Lazy<IMarketDataProvider>(() => provider), NullCandleStore.Instance, options),
+            analyzer,
+            options,
+            TimeProvider.System,
+            NullLogger<EarningsMonitor>.Instance);
+    }
+
+    /// <summary>A Finviz calendar event with no reported result.</summary>
+    private static EarningsCalendarEvent Event(
+        string id,
+        string ticker,
+        DateOnly reportDate,
+        DateTimeOffset scheduledAtUtc,
+        DateTimeOffset receivedAtUtc,
+        EarningsReleaseWindow releaseWindow = EarningsReleaseWindow.AfterMarketClose) => new()
+    {
+        Id = id, Ticker = ticker, CompanyName = $"{ticker} Inc", ReportDateExchange = reportDate,
+        ScheduledAtUtc = scheduledAtUtc, ReleaseWindow = releaseWindow,
+        Provider = "finviz", SourceUrl = "https://example.invalid/calendar", SourceArtifactSha256 = new('a', 64),
+        ProviderReceivedAtUtc = receivedAtUtc, FirstSeenAtUtc = receivedAtUtc.AddDays(-2), LastSeenAtUtc = receivedAtUtc
+    };
+
+    /// <summary>In-memory earnings store: calendar reads honour the date range and ticker filter like SQLite.</summary>
     private sealed class EarningsRepository(params EarningsCalendarEvent[] calendarEvents) : IEarningsRepository
     {
         public List<EarningsAnalysisSnapshot> Saved { get; } = [];
@@ -131,7 +183,10 @@ public sealed class EarningsMonitorTimeLimitTests : IDisposable
 
         public Task<IReadOnlyList<EarningsCalendarEvent>> GetCalendarAsync(DateOnly fromExchangeDate, DateOnly toExchangeDate,
             IReadOnlyCollection<string>? tickers, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<EarningsCalendarEvent>>(calendarEvents);
+            Task.FromResult<IReadOnlyList<EarningsCalendarEvent>>(calendarEvents
+                .Where(item => item.ReportDateExchange >= fromExchangeDate && item.ReportDateExchange <= toExchangeDate)
+                .Where(item => tickers is null || tickers.Contains(item.Ticker, StringComparer.OrdinalIgnoreCase))
+                .ToArray());
 
         public Task UpsertAnalysisAsync(EarningsAnalysisSnapshot snapshot, CancellationToken cancellationToken)
         {
