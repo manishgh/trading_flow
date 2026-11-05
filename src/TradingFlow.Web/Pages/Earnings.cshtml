@@ -189,7 +189,6 @@
                     <option value="cap">Market cap</option>
                     <option value="surprise">EPS surprise</option>
                     <option value="move">Event move</option>
-                    <option value="rvol">Slot relative volume</option>
                     <option value="revenue">Revenue surprise</option>
                 </select>
             </label>
@@ -229,8 +228,6 @@
         <div><label for="earnings-maxEpsSurprise">Maximum EPS surprise %</label><input id="earnings-maxEpsSurprise" name="maxEpsSurprise" type="number" step="any" /></div>
         <div><label for="earnings-minRevenueSurprise">Minimum revenue surprise %</label><input id="earnings-minRevenueSurprise" name="minRevenueSurprise" type="number" step="any" /></div>
         <div><label for="earnings-maxRevenueSurprise">Maximum revenue surprise %</label><input id="earnings-maxRevenueSurprise" name="maxRevenueSurprise" type="number" step="any" /></div>
-        <div><label for="earnings-minRvol">Minimum slot RVOL</label><input id="earnings-minRvol" name="minRvol" type="number" step="any" /></div>
-        <div><label for="earnings-maxRvol">Maximum slot RVOL</label><input id="earnings-maxRvol" name="maxRvol" type="number" step="any" /></div>
         <div><label for="earnings-minSentiment">Minimum news sentiment (−1 to 1)</label><input id="earnings-minSentiment" name="minSentiment" type="number" step="any" /></div>
         <div><label for="earnings-maxSentiment">Maximum news sentiment (−1 to 1)</label><input id="earnings-maxSentiment" name="maxSentiment" type="number" step="any" /></div>
         @if (User.Identity?.IsAuthenticated == true) {

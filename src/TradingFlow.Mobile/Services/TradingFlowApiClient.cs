@@ -841,7 +841,8 @@ public sealed record MobileEarningsCalendarItem(
     decimal? LatestTradePrice = null,
     DateTimeOffset? LatestTradeAtUtc = null,
     decimal? LatestTradeMovePercent = null,
-    bool ResultSeenBeforeSlot = false)
+    bool ResultSeenBeforeSlot = false,
+    bool IsReported = false)
 {
     private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
 
@@ -850,7 +851,12 @@ public sealed record MobileEarningsCalendarItem(
     public string ResultText => AssessmentLabel;
 
     // The earliest sign the result was out: Finviz first showing it, or its news headline.
-    public DateTimeOffset? FirstResultSignUtc => new[] { ResultFirstSeenAtUtc, ResultNewsPublishedAtUtc }.Min();
+    public DateTimeOffset? FirstResultSignUtc => new[]
+    {
+        ResultFirstSeenAtUtc,
+        // A headline counts only when a result was found, as on the server: an announcement is not a result.
+        ResultAssessment.Equals("Unknown", StringComparison.OrdinalIgnoreCase) ? null : ResultNewsPublishedAtUtc
+    }.Min();
     public bool HasReleaseText => FirstResultSignUtc.HasValue;
     public string ReleaseText => FirstResultSignUtc is { } seen
         ? $"Results out: first seen {NewYorkText(seen)} New York ({seen.ToLocalTime():HH:mm} your time)"

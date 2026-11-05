@@ -31,12 +31,12 @@ public partial class EarningsPage : ContentPage
         filters.Choice("day", "Reporting day", [new("all", "All days"), new("today", "Today"), new("nextbusinessday", "Next business day"), new("other", "Other dates")]);
         filters.Choice("assessment", "EPS outcome", [new("all", "Any"), new("beat", "Beat"), new("miss", "Miss"), new("inline", "Inline"), new("pending", "Pending")]);
         filters.Choice("breakout", "Analysis state", [new("all", "Any"), new("awaitingearningsrelease", "Awaiting release"), new("breakoutdatainsufficient", "Insufficient bars"), new("possiblebreakout", "Possible breakout"), new("breakoutnotconfirmed", "Breakout not confirmed")]);
-        foreach (var (key, label) in new[] { ("minEpsSurprise", "Minimum EPS surprise %"), ("maxEpsSurprise", "Maximum EPS surprise %"), ("minSurprise", "Minimum absolute EPS surprise %"), ("minRevenueSurprise", "Minimum revenue surprise %"), ("maxRevenueSurprise", "Maximum revenue surprise %"), ("minRvol", "Minimum slot RVOL"), ("maxRvol", "Maximum slot RVOL"), ("minSentiment", "Minimum news sentiment (−1 to 1)"), ("maxSentiment", "Maximum news sentiment (−1 to 1)") }) filters.EntryField(key, label, true);
+        foreach (var (key, label) in new[] { ("minEpsSurprise", "Minimum EPS surprise %"), ("maxEpsSurprise", "Maximum EPS surprise %"), ("minSurprise", "Minimum absolute EPS surprise %"), ("minRevenueSurprise", "Minimum revenue surprise %"), ("maxRevenueSurprise", "Maximum revenue surprise %"), ("minSentiment", "Minimum news sentiment (−1 to 1)"), ("maxSentiment", "Maximum news sentiment (−1 to 1)") }) filters.EntryField(key, label, true);
         filters.Toggle("hasNews", "Has news");
         filters.GroupField();
         filters.Toggle("onlyGroups", "My groups only", true);
         filters.Toggle("onlyHeld", "Held positions only", true);
-        filters.Choice("sort", "Order", [new("", "Server default"), new("time", "Event time"), new("cap", "Market cap"), new("surprise", "Absolute EPS surprise"), new("revenue", "Revenue surprise"), new("move", "Event return"), new("rvol", "Slot RVOL")]);
+        filters.Choice("sort", "Order", [new("", "Server default"), new("time", "Event time"), new("cap", "Market cap"), new("surprise", "Absolute EPS surprise"), new("revenue", "Revenue surprise"), new("move", "Event return")]);
         filters.Changed += async (_, _) => await LoadAsync(false);
         settingDates = true; FromDate.Date = ToDate.Date = MarketToday().ToDateTime(TimeOnly.MinValue); settingDates = false;
         refreshTimer = Dispatcher.CreateTimer(); refreshTimer.Interval = TimeSpan.FromMinutes(1);
@@ -99,9 +99,30 @@ public partial class EarningsPage : ContentPage
         catch (Exception exception) { if (reads.IsCurrent(read)) { groups.Clear(); StatusLabel.Text = $"Earnings unavailable: {exception.Message}"; StatusLabel.TextColor = ThemePalette.Negative; } }
         finally { if (reads.IsCurrent(read)) SetBusy(false); }
     }
+    // Days whose reported section the user opened; kept across reloads so a refresh does not close it.
+    private readonly HashSet<string> expandedReportedDays = new();
+
+    /// <summary>
+    /// Adds a day's group of upcoming and just-released events. Its reported events (an hour past their first
+    /// result sighting) follow in their own group, collapsed unless the user opened it; tapping that group's
+    /// header shows or hides them.
+    /// </summary>
     private void AddGroup(string name, IEnumerable<MobileEarningsCalendarItem> items)
     {
-        var group = new EarningsDayGroup(name); foreach (var item in items) group.Add(new EarningsItemViewModel(item)); groups.Add(group);
+        var rows = items.ToList();
+        var group = new EarningsDayGroup(name);
+        foreach (var item in rows.Where(item => !item.IsReported)) group.Add(new EarningsItemViewModel(item));
+        groups.Add(group);
+        var reported = rows.Where(item => item.IsReported).Select(item => new EarningsItemViewModel(item)).ToList();
+        if (reported.Count > 0) groups.Add(EarningsDayGroup.Reported(name, reported, expandedReportedDays.Contains(name)));
+    }
+
+    /// <summary>Shows or hides a reported group's events when its header is tapped, and remembers the choice.</summary>
+    private void OnGroupHeaderTapped(object? sender, TappedEventArgs e)
+    {
+        if (e.Parameter is not EarningsDayGroup { ReportedDay: { } day } group) return;
+        group.ToggleReported();
+        if (group.IsReportedOpen) expandedReportedDays.Add(day); else expandedReportedDays.Remove(day);
     }
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
     private async void OnFilterChanged(object? sender, EventArgs e) => await LoadAsync(false);
@@ -144,15 +165,49 @@ public partial class EarningsPage : ContentPage
         await Launcher.Default.OpenAsync(uri);
     }
 
+    /// <summary>
+    /// One day's events under a header. A reported group (<see cref="Reported"/>) holds a day's events an hour
+    /// past their first result sighting; it starts collapsed, keeps its events aside, and shows them on a tap.
+    /// </summary>
     public sealed class EarningsDayGroup : ObservableCollection<EarningsItemViewModel>
     {
+        private readonly IReadOnlyList<EarningsItemViewModel> reportedEvents = [];
+
         public EarningsDayGroup(string name)
         {
             Name = name;
         }
 
+        private EarningsDayGroup(string day, IReadOnlyList<EarningsItemViewModel> events, bool open)
+            : this($"{day} | reported")
+        {
+            ReportedDay = day;
+            reportedEvents = events;
+            if (open) ToggleReported();
+        }
+
+        /// <summary>A collapsed group for a day's reported events, opened when the user had opened it before.</summary>
+        public static EarningsDayGroup Reported(string day, IReadOnlyList<EarningsItemViewModel> events, bool open) =>
+            new(day, events, open);
+
         public string Name { get; }
-        public string CountText => $"{Count} event{(Count == 1 ? String.Empty : "s")}";
+
+        // The day this reported group belongs to; null for an ordinary day group.
+        public string? ReportedDay { get; }
+
+        public bool IsReportedOpen => ReportedDay is not null && Count > 0;
+
+        public string CountText => ReportedDay is null
+            ? $"{Count} event{(Count == 1 ? String.Empty : "s")}"
+            : $"{reportedEvents.Count} reported | {(IsReportedOpen ? "tap to hide" : "tap to show")}";
+
+        /// <summary>Shows the reported events when hidden, hides them when shown.</summary>
+        public void ToggleReported()
+        {
+            if (ReportedDay is null) return;
+            if (IsReportedOpen) Clear(); else foreach (var item in reportedEvents) Add(item);
+            OnPropertyChanged(new PropertyChangedEventArgs(nameof(CountText)));
+        }
     }
 
     public sealed record EarningsFilterChoice(string Value, string Label);
@@ -184,7 +239,7 @@ public partial class EarningsPage : ContentPage
         }
 
         public string TechnicalText =>
-            $"EMA10/20 {Format(Item.Ema10)}/{Format(Item.Ema20)} · MACD histogram {Format(Item.MacdHistogram, "0.0000")} · volume {Format(Item.SlotRelativeVolume)}x the usual for this time of day";
+            $"EMA10/20 {Format(Item.Ema10)}/{Format(Item.Ema20)} · MACD histogram {Format(Item.MacdHistogram, "0.0000")}";
 
         public bool HasResultObservedTime => Item.ResultFirstSeenAtUtc.HasValue;
 

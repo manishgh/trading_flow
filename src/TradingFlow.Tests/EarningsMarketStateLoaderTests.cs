@@ -24,7 +24,7 @@ public sealed class EarningsMarketStateLoaderTests
 
         Assert.Equal(100, first["TEST"].Count);
         Assert.Equal(100, second["TEST"].Count);
-        Assert.Equal(now.AddDays(-100), provider.Requests[0].Start);
+        Assert.Equal(now.AddDays(-options.SubDailyLookbackDays), provider.Requests[0].Start);
         // The next download starts 5 minutes before the newest stored bar, so a provider correction to it is picked up.
         Assert.Equal(sourceBars[^1].Timestamp.AddMinutes(-5), provider.Requests[1].Start);
         Assert.Equal(2, store.WriteCount);
@@ -138,10 +138,18 @@ public sealed class EarningsMarketStateLoaderTests
         Assert.Equal(2, store.Bars.Count);
     }
 
+    /// <summary>
+    /// The short lookback must still hold a full regular session before a release in the worst common case: a
+    /// Monday 09:00 New York report after Thanksgiving week, when Thursday is closed and Friday closes at 13:00.
+    /// Wednesday 25 Nov 2026 from its 09:30 open must be inside the window.
+    /// </summary>
     [Fact]
-    public void DefaultLookback_CoversTheFullSameSlotRelativeVolumeBaseline()
+    public void DefaultLookback_HoldsAFullSessionBeforeAMondayAfterThanksgiving()
     {
-        Assert.True(EarningsMonitorOptions.Default.SubDailyLookbackDays >= 90);
+        var mondayNineNewYork = DateTimeOffset.Parse("2026-11-30T14:00:00Z");
+        var windowStart = mondayNineNewYork.AddDays(-EarningsMonitorOptions.Default.SubDailyLookbackDays);
+
+        Assert.True(windowStart <= DateTimeOffset.Parse("2026-11-25T14:30:00Z"));
     }
 
     private static OhlcvBar Bar(string ticker, DateTimeOffset timestamp) =>

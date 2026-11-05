@@ -49,6 +49,20 @@ public sealed class EarningsMarketStateLoader
             ? provider.GetLatestTradesAsync(tickers, cancellationToken)
             : Task.FromResult<IReadOnlyDictionary<string, LatestTrade>>(new Dictionary<string, LatestTrade>());
 
+    /// <summary>
+    /// Reads one stock's stored 5-minute bars between two times straight from the candle store, without touching
+    /// the in-memory state or the provider. Replay uses it because its window can reach further back than the
+    /// live lookback.
+    /// </summary>
+    public Task<IReadOnlyList<OhlcvBar>> ReadStoredBarsAsync(
+        string ticker,
+        DateTimeOffset start,
+        DateTimeOffset end,
+        CancellationToken cancellationToken) =>
+        candleStore.ReadBarsAsync(
+            new CandleStoreReadRequest(StoreContext.Scope, StoreContext.RunName, StoreContext.ProviderName, ticker, "5m", start, end),
+            cancellationToken);
+
     public async Task<IReadOnlyDictionary<DateOnly, TradingFlow.Engine.Indicators.MarketSessionSchedule>>
         LoadMarketSessionSchedulesAsync(
             DateOnly startDateInclusive,
@@ -220,16 +234,7 @@ public sealed class EarningsMarketStateLoader
                 MaxDegreeOfParallelism = options.MaximumParallelBarFileReads,
                 CancellationToken = cancellationToken
             },
-            async (index, token) => persisted[index] = await candleStore.ReadBarsAsync(
-                new CandleStoreReadRequest(
-                    StoreContext.Scope,
-                    StoreContext.RunName,
-                    StoreContext.ProviderName,
-                    missing[index],
-                    "5m",
-                    start,
-                    end),
-                token));
+            async (index, token) => persisted[index] = await ReadStoredBarsAsync(missing[index], start, end, token));
 
         for (var index = 0; index < missing.Length; index++)
         {

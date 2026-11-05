@@ -163,6 +163,47 @@ public sealed class EarningsMonitorTests : IDisposable
             item => Assert.Null(item.LatestTrade));
     }
 
+    /// <summary>
+    /// Only events inside their watch window get bars and an analysis: a slot within the next hour, a result first
+    /// seen within the last hour, or a result seen before its slot (as Sony's was). An event whose slot is hours
+    /// away, and one whose result was seen more than an hour ago, are left alone.
+    /// </summary>
+    [Fact]
+    public async Task Only_events_inside_their_watch_window_are_loaded_and_analysed()
+    {
+        var now = DateTimeOffset.Parse("2026-11-05T15:00:00Z");
+        var today = new DateOnly(2026, 11, 5);
+        EarningsCalendarEvent WithResult(string id, string ticker, string scheduledUtc, string firstSeenUtc)
+        {
+            var item = Event(id, ticker, today, DateTimeOffset.Parse(scheduledUtc), now);
+            item.ResultFirstSeenAtUtc = DateTimeOffset.Parse(firstSeenUtc);
+            item.EpsActual = 1m;
+            return item;
+        }
+
+        var repository = new EarningsRepository(
+            Event("soon", "SOON", today, DateTimeOffset.Parse("2026-11-05T15:30:00Z"), now),
+            Event("later", "LATER", today, DateTimeOffset.Parse("2026-11-05T21:30:00Z"), now),
+            WithResult("fresh", "FRESH", "2026-11-05T14:30:00Z", "2026-11-05T14:35:00Z"),
+            WithResult("done", "DONE", "2026-11-05T12:30:00Z", "2026-11-05T13:00:00Z"),
+            WithResult("early", "EARLY", "2026-11-05T21:30:00Z", "2026-11-05T14:45:00Z"));
+        var options = EarningsMonitorOptions.Default;
+        var provider = new SlowMarketDataProvider(TimeSpan.Zero);
+        // DONE already has a complete analysis from its watch window, so nothing more is needed for it.
+        repository.Saved.Add(new EarningsAnalysisSnapshot
+        {
+            EarningsEventId = "done", Ticker = "DONE", ResultAssessment = EarningsResultAssessment.Positive,
+            BreakoutAssessment = EarningsBreakoutAssessment.Possible, EffectiveEpsActual = 1m
+        });
+        var monitor = CreateMonitor(repository, new CancellationHonouringNewsRepository(), provider, options,
+            new EarningsAnalyzer(new IndicatorEngine(), options), new FixedClock(now));
+
+        await monitor.RefreshAsync(forceCalendarRefresh: false, CancellationToken.None);
+
+        Assert.Equal(["EARLY", "FRESH", "SOON"], provider.BarRequests.SelectMany(tickers => tickers).Order(StringComparer.Ordinal));
+        Assert.Equal(["early", "fresh", "soon"], repository.Saved.Skip(1).Select(item => item.EarningsEventId).Order(StringComparer.Ordinal));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(archiveRoot)) Directory.Delete(archiveRoot, recursive: true);
@@ -236,7 +277,11 @@ public sealed class EarningsMonitorTests : IDisposable
             IReadOnlyCollection<string> eventIds, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyDictionary<string, EarningsAnalysisSnapshot>>(new Dictionary<string, EarningsAnalysisSnapshot>());
+            // Like SQLite: the newest saved analysis of each requested event.
+            return Task.FromResult<IReadOnlyDictionary<string, EarningsAnalysisSnapshot>>(Saved
+                .Where(item => eventIds.Contains(item.EarningsEventId))
+                .GroupBy(item => item.EarningsEventId)
+                .ToDictionary(group => group.Key, group => group.Last()));
         }
     }
 
@@ -271,6 +316,9 @@ public sealed class EarningsMonitorTests : IDisposable
 
         public TimeSpan LoadTook { get; private set; }
 
+        // The tickers of each bar download, as requested.
+        public List<string[]> BarRequests { get; } = [];
+
         // The tickers of each latest-trades read, sorted.
         public List<string[]> TradeRequests { get; } = [];
 
@@ -295,6 +343,7 @@ public sealed class EarningsMonitorTests : IDisposable
         public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> intervals,
             DateTimeOffset start, DateTimeOffset end, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            BarRequests.Add(tickers.ToArray());
             var started = DateTimeOffset.UtcNow;
             await Task.Delay(delay, cancellationToken);
             LoadTook = DateTimeOffset.UtcNow - started;

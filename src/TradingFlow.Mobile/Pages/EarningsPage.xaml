@@ -73,6 +73,9 @@
             <CollectionView.GroupHeaderTemplate>
                 <DataTemplate>
                     <Grid Padding="2,14,2,8" ColumnDefinitions="*,Auto">
+                        <Grid.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnGroupHeaderTapped" CommandParameter="{Binding}" />
+                        </Grid.GestureRecognizers>
                         <Label Text="{Binding Name}" FontSize="18" FontAttributes="Bold" />
                         <Label Grid.Column="1" Text="{Binding CountText}" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                     </Grid>

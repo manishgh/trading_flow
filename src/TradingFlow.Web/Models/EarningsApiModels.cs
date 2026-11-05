@@ -101,8 +101,11 @@ public sealed record EarningsCalendarItemResponse(
     DateTimeOffset? LatestTradeAtUtc = null,
     // Change from the price before the release to the latest trade, in percent.
     decimal? LatestTradeMovePercent = null,
-    // True when the result was seen before the provider's scheduled slot, so that slot was wrong.
-    bool ResultSeenBeforeSlot = false);
+    // True when the result came out in an earlier session than the provider's slot says.
+    bool ResultSeenBeforeSlot = false,
+    // True one hour after the result was first seen (EarningsWatchWindow): analysis has stopped and the page
+    // lists the event in a collapsed section at the end of its day so upcoming reports stay on top.
+    bool IsReported = false);
 
 public sealed record PreviousEarningsResultResponse(
     DateOnly ReportDateExchange,

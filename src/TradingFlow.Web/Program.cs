@@ -54,6 +54,10 @@ builder.Logging.AddJsonConsole(options =>
     options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'";
     options.UseUtcTimestamp = true;
 });
+// No log levels are configured anywhere else, so every category logs from Information. Entity Framework logs
+// each SQL command it runs at Information: on 5 Nov 2026 that was 136 MB of a 141 MB log in 18 minutes
+// (about 74,000 lines). Failed commands are logged at Error and still appear.
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
 var uiTestMode = String.Equals(
     Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_MODE"),
     "true",

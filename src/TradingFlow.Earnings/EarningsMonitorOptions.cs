@@ -28,8 +28,11 @@ public sealed record EarningsMonitorOptions(
         RecentResultLookbackDays: 7,
         PriorResultMinimumDaysAgo: 70,
         PriorResultMaximumDaysAgo: 112,
-        // 100 calendar days reliably covers the 63 prior US trading sessions behind the RVOL shown on each card.
-        SubDailyLookbackDays: 100,
+        // Five calendar days hold at least two full sessions even across a weekend or a one-day holiday: enough
+        // for the 78-bar pre-release window, the 35-bar minimum, EMA 10/20 and MACD. It was 100 days for the
+        // same-time volume ratio, which needs 20 earlier sessions; that ratio was shown for context only and
+        // never decided anything, so it is now always empty and each watched stock reads 5 days, not about 70.
+        SubDailyLookbackDays: 5,
         ReferenceBarCount: 78,
         MaximumParallelAnalyses: 8,
         // After a restart each tracked stock's stored bars are read back from about 70 day files. On

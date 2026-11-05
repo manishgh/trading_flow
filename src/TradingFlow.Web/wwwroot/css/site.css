@@ -4034,6 +4034,15 @@ td.select-column {
 .earnings-strip .cell-value { font-size: 13px; white-space: normal; overflow-wrap: anywhere; }
 
 .earnings-held-note { margin-top: 10px; }
+/* Reported events collapse into one section at the end of each day. */
+.earnings-reported { margin-top: 6px; }
+.earnings-reported-summary {
+  cursor: pointer;
+  padding: 10px 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-neutral-700);
+}
 
 .earnings-provenance { margin-top: 10px; }
 .earnings-provenance > summary {

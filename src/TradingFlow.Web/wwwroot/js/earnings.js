@@ -99,7 +99,7 @@
             const day = daySection('w:' + date, `${date} · New York`, ''); used.push('w:' + date);
             const matches = grouped.get(date) || [];
             day.none ??= text('p', 'No matching events', 'muted');
-            syncChildren(day.section, [day.header, ...(matches.length ? matches.map(eventCard) : [day.none])]);
+            syncChildren(day.section, [day.header, ...(matches.length ? dayCards('w:' + date, matches) : [day.none])]);
             return day.section;
         }));
         return used;
@@ -400,12 +400,14 @@
         reaction.classList.add("is-butted");
 
         // Indicators the assessment reports for context only; none of them decides the breakout.
-        const context = text("p", [
-            `For context: volume ${item.slotRelativeVolume == null ? "—" : `${number(item.slotRelativeVolume)}×`} the usual for this time of day`,
+        // The same-time volume ratio is now always empty (the monitor keeps 5 days of bars); older saved
+        // analyses may still carry one.
+        const context = text("p", "For context: " + [
+            item.slotRelativeVolume == null ? null : `volume ${number(item.slotRelativeVolume)}× the usual for this time of day`,
             `EMA 10 / 20 ${number(item.ema10)} / ${number(item.ema20)}`,
             `MACD histogram ${number(item.macdHistogram, 4)}`,
             item.latestCompletedBarAtUtc ? `last completed bar ended ${newYorkTime(plusMinutes(item.latestCompletedBarAtUtc, 5), false)} New York` : "no completed bar yet"
-        ].join(" · "), "earnings-context");
+        ].filter(Boolean).join(" · "), "earnings-context");
 
         card.append(header, results, reaction, context);
 
@@ -422,7 +424,9 @@
 
     // The earliest sign the result was out: the provider first showing it, or its news headline. Null before then.
     function firstResultSign(item) {
-        const signs = [item.resultFirstSeenAtUtc, item.resultNewsPublishedAtUtc].filter(Boolean);
+        // A headline counts only when a result was found, as on the server: an announcement is not a result.
+        const newsSign = String(item.resultAssessment || "Unknown") === "Unknown" ? null : item.resultNewsPublishedAtUtc;
+        const signs = [item.resultFirstSeenAtUtc, newsSign].filter(Boolean);
         return signs.length ? signs.reduce((a, b) => (new Date(a) <= new Date(b) ? a : b)) : null;
     }
 
@@ -559,10 +563,31 @@
             const reported = groupItems.filter(item => item.epsActual !== null && item.epsActual !== undefined).length;
             const summary = `${groupItems.length} of ${totalForGroup.get(key) ?? groupItems.length} events · ${reported} reported`;
             const day = daySection('t:' + key, dayTitle(key, payload), summary); used.push('t:' + key);
-            syncChildren(day.section, [day.header, ...groupItems.map(eventCard)]);
+            syncChildren(day.section, [day.header, ...dayCards('t:' + key, groupItems)]);
             return day.section;
         }));
         return used;
+    }
+
+    /* Reported events (isReported: an hour past their first result sighting) go into one collapsed section at
+       the end of their day, so upcoming reports stay on top. The section is kept per day, so one the operator
+       opened stays open across the ten-second polls. With a lane chosen every match is shown openly. */
+    const reportedSections = new Map();
+    function dayCards(key, items) {
+        const reported = activeLane ? [] : items.filter(item => item.isReported);
+        const hidden = new Set(reported);
+        const active = items.filter(item => !hidden.has(item)).map(eventCard);
+        if (!reported.length) return active;
+
+        let section = reportedSections.get(key);
+        if (!section) {
+            section = { details: text("details", undefined, "earnings-reported"), summary: text("summary", undefined, "earnings-reported-summary") };
+            reportedSections.set(key, section);
+        }
+        const label = `Reported more than an hour ago · `;
+        if (section.summary.textContent !== label) section.summary.textContent = label;
+        syncChildren(section.details, [section.summary, ...reported.map(eventCard)]);
+        return [...active, section.details];
     }
 
     /* --- evidence rail ------------------------------------------------------ */
@@ -633,6 +658,7 @@
         renderLanes(all);
         const used = new Set(advanced.elements.view.value === 'week' ? renderCalendar(filtered) : renderTimeline(filtered, latestPayload, totals));
         for (const key of daySections.keys()) if (!used.has(key)) daySections.delete(key);
+        for (const key of reportedSections.keys()) if (!used.has(key)) reportedSections.delete(key);
         if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
         const visible = new Set(filtered.map(item => item.id));
         for (const id of eventCache.keys()) if (!visible.has(id)) eventCache.delete(id);

@@ -117,16 +117,12 @@ public sealed class EarningsMonitor
 
             var trackedEvents = await GetTrackedEventsAsync(firstReportDate, lastReportDate, exchangeToday, timeout.Token);
             trackedEventCount = trackedEvents.Count;
-            if (trackedEvents.Count == 0)
-            {
-                await marketState.ReleaseUntrackedAsync([], cancellationToken);
-                latestTrades = NoTrades;
-            }
-            else
+            if (trackedEvents.Count > 0)
             {
                 await TryRefreshPriorResultsAsync(trackedEvents, nowUtc, cancellationToken);
-                await AnalyzeAndSaveAsync(trackedEvents, nowUtc, cancellationToken);
             }
+
+            await AnalyzeAndSaveAsync(trackedEvents, nowUtc, cancellationToken);
 
             lastAnalysisUtc = nowUtc;
             lastError = null;
@@ -215,35 +211,40 @@ public sealed class EarningsMonitor
         .ToList();
 
     /// <summary>
-    /// Loads bars for every tracked stock, releases stocks no longer tracked from memory, reads news and the
-    /// latest saved analyses, runs the analyzer and saves analyses that changed. Logs each stage's duration.
-    /// The bar load has no time limit; one fresh limit then covers the news read, the analyses and the saves
-    /// together. Loading bars after a restart can take longer than the limit on its own (14 minutes for about
-    /// 900 stocks on 4 Nov 2026), and sharing one limit with it cancelled the news read so the pass saved nothing.
+    /// Picks the tracked events inside their watch window (<see cref="EarningsWatchWindow"/>), loads bars for
+    /// those stocks only and releases every other stock from memory, reads news, runs the analyzer and saves
+    /// analyses that changed, then reads latest trades for all of today's session. Reported events keep their
+    /// last saved analysis. Logs each stage's duration. The bar load has no time limit; one fresh limit then
+    /// covers the news read, the analyses and the saves together, because a long bar load after a restart
+    /// (14 minutes for about 900 stocks on 4 Nov 2026) once cancelled the news read so the pass saved nothing.
     /// </summary>
     private async Task AnalyzeAndSaveAsync(
         IReadOnlyList<EarningsCalendarEvent> trackedEvents,
         DateTimeOffset nowUtc,
         CancellationToken cancellationToken)
     {
-        var symbols = trackedEvents
+        var stage = System.Diagnostics.Stopwatch.StartNew();
+        var (watchedEvents, latest) = await SelectWatchedEventsAsync(trackedEvents, nowUtc, cancellationToken);
+        var symbols = watchedEvents
             .Select(item => item.Ticker)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var stage = System.Diagnostics.Stopwatch.StartNew();
-        var barsByTicker = await marketState.LoadAsync(symbols, nowUtc, cancellationToken);
-        // Stocks whose earnings window has ended leave memory; their bar files stay on disk.
+        var barsByTicker = symbols.Length == 0
+            ? new Dictionary<string, IReadOnlyList<TradingFlow.Domain.Market.OhlcvBar>>()
+            : await marketState.LoadAsync(symbols, nowUtc, cancellationToken);
+        // Stocks outside their watch window leave memory; their bar files stay on disk.
         var releasedCount = await marketState.ReleaseUntrackedAsync(symbols, cancellationToken);
         var loadTime = stage.Elapsed;
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(options.RequestTimeout);
         stage.Restart();
-        var recentNews = await news.GetRecentForTickersAsync(nowUtc.AddDays(-3), 5000, symbols, timeout.Token);
-        var latest = await earnings.GetLatestAnalysesAsync(trackedEvents.Select(item => item.Id).ToArray(), timeout.Token);
+        var recentNews = symbols.Length == 0
+            ? []
+            : await news.GetRecentForTickersAsync(nowUtc.AddDays(-3), 5000, symbols, timeout.Token);
         var newsTime = stage.Elapsed;
         stage.Restart();
-        var analyses = AnalyzeAll(trackedEvents, barsByTicker, recentNews, nowUtc, timeout.Token);
+        var analyses = AnalyzeAll(watchedEvents, barsByTicker, recentNews, nowUtc, timeout.Token);
         var analysisTime = stage.Elapsed;
         stage.Restart();
         var savedCount = await SaveChangedAnalysesAsync(analyses, latest, timeout.Token);
@@ -252,8 +253,9 @@ public sealed class EarningsMonitor
         var liveTradeCount = await RefreshLatestTradesAsync(trackedEvents, nowUtc, cancellationToken);
 
         logger.LogInformation(
-            "Earnings pass for {EventCount} events and {TickerCount} stocks: bar load {LoadMs} ms (released {ReleasedCount} finished stocks from memory), news read {NewsMs} ms, " +
+            "Earnings pass watched {EventCount} of {TrackedCount} events ({TickerCount} stocks): bar load {LoadMs} ms (released {ReleasedCount} stocks from memory), news read {NewsMs} ms, " +
             "analysis {AnalysisMs} ms, saved {SavedCount} changed analyses in {SaveMs} ms, latest trades for {LiveTradeCount} stocks in {LiveTradeMs} ms.",
+            watchedEvents.Count,
             trackedEvents.Count,
             symbols.Length,
             (long)loadTime.TotalMilliseconds,
@@ -264,6 +266,25 @@ public sealed class EarningsMonitor
             (long)saveTime.TotalMilliseconds,
             liveTradeCount,
             (long)stage.Elapsed.TotalMilliseconds);
+    }
+
+    /// <summary>
+    /// Returns the tracked events inside their watch window, with the latest saved analysis of every tracked
+    /// event. The analyses supply the result-news time and show whether a card is still incomplete.
+    /// </summary>
+    private async Task<(List<EarningsCalendarEvent> Watched, IReadOnlyDictionary<string, EarningsAnalysisSnapshot> Latest)>
+        SelectWatchedEventsAsync(
+            IReadOnlyList<EarningsCalendarEvent> trackedEvents,
+            DateTimeOffset nowUtc,
+            CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(options.RequestTimeout);
+        var latest = await earnings.GetLatestAnalysesAsync(trackedEvents.Select(item => item.Id).ToArray(), timeout.Token);
+        var watched = trackedEvents
+            .Where(item => EarningsWatchWindow.IsWatched(item, latest.GetValueOrDefault(item.Id), nowUtc))
+            .ToList();
+        return (watched, latest);
     }
 
     /// <summary>
@@ -358,8 +379,13 @@ public sealed class EarningsMonitor
             EarningsCalendarDates.ExchangeDate(fromUtc),
             EarningsCalendarDates.ExchangeDate(toUtc),
             cancellationToken));
-        var bars = (await marketState.LoadAsync([calendarEvent.Ticker], toUtc, cancellationToken))
+        // The live load covers only the lookback before toUtc, and the window can be longer, so stored bars from
+        // the lookback before fromUtc are merged in; that keeps the session before the release.
+        var loaded = (await marketState.LoadAsync([calendarEvent.Ticker], toUtc, cancellationToken))
             .GetValueOrDefault(calendarEvent.Ticker) ?? [];
+        var stored = await marketState.ReadStoredBarsAsync(
+            calendarEvent.Ticker, fromUtc.AddDays(-options.SubDailyLookbackDays), toUtc, cancellationToken);
+        var bars = loaded.Concat(stored).DistinctBy(bar => bar.Timestamp).OrderBy(bar => bar.Timestamp).ToArray();
         var tickerNews = await news.GetRecentForTickersAsync(fromUtc.AddDays(-3), 5000, [calendarEvent.Ticker], cancellationToken);
         var snapshots = new List<EarningsAnalysisSnapshot>();
         for (var at = fromUtc; at <= toUtc; at += step)

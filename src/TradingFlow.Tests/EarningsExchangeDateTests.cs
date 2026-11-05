@@ -77,6 +77,22 @@ public sealed class EarningsExchangeDateTests
         Assert.Equal("other", response.Items.Single(x => x.Ticker == "OTHER").DayGroup);
     }
 
+    /// <summary>
+    /// An event more than an hour from its slot has no analysis yet. It reads as awaiting release, not as
+    /// insufficient data, and is not reported.
+    /// </summary>
+    [Fact]
+    public void AnUpcomingEventWithoutAnAnalysisIsAwaitingRelease()
+    {
+        var response = Map(DateTimeOffset.Parse("2026-11-05T15:00:00Z"),
+            [Event("LATER", new(2026, 11, 5), "2026-11-05T21:30:00Z")], false, "custom");
+
+        var item = Assert.Single(response.Items);
+        Assert.Equal(EarningsAssessmentLabel.Format(EarningsResultAssessment.Unknown, EarningsBreakoutAssessment.AwaitingRelease), item.AssessmentLabel);
+        Assert.StartsWith("Analysis starts an hour before", item.AnalysisReason, StringComparison.Ordinal);
+        Assert.False(item.IsReported);
+    }
+
     private static EarningsCalendarResponse Map(DateTimeOffset now, EarningsCalendarEvent[] rows, bool shortHorizon, string scope) =>
         EarningsApiEndpoints.MapSnapshot(
             new(now, new(2026, 1, 1), new(2026, 12, 31), rows.Select(x => new EarningsCalendarSnapshotItem(x, null, null)).ToArray()),

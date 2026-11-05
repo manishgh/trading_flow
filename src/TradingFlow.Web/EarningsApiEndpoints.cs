@@ -182,7 +182,7 @@ public static class EarningsApiEndpoints
         var exchangeToday = EarningsCalendarDates.ExchangeDate(requestAtUtc);
         var nextBusinessDate = EarningsCalendarDates.NextWeekday(exchangeToday);
         var mapped = snapshot.Items
-            .Select(item => MapItem(item, exchangeToday, nextBusinessDate, sectorOf(item.Event.Ticker)))
+            .Select(item => MapItem(item, exchangeToday, nextBusinessDate, sectorOf(item.Event.Ticker), requestAtUtc))
             .Where(item => !onlyShortHorizon || MatchesDateScope(item, dateScope))
             .ToArray();
         var filtered = mapped.Where(item => MatchesFilter(item, filter)).ToArray();
@@ -218,12 +218,17 @@ public static class EarningsApiEndpoints
         EarningsCalendarSnapshotItem item,
         DateOnly exchangeToday,
         DateOnly nextBusinessDate,
-        string? sector)
+        string? sector,
+        DateTimeOffset requestAtUtc)
     {
         var calendarEvent = item.Event;
         var analysis = item.Analysis;
         var resultAssessment = analysis?.ResultAssessment ?? EarningsResultAssessment.Unknown;
-        var breakoutAssessment = analysis?.BreakoutAssessment ?? EarningsBreakoutAssessment.InsufficientData;
+        // Analysis starts an hour before the slot, so an event further ahead has none yet and is awaiting release.
+        var awaitingFirstAnalysis = analysis is null && calendarEvent.ResultFirstSeenAtUtc is null &&
+            requestAtUtc < calendarEvent.ScheduledAtUtc;
+        var breakoutAssessment = analysis?.BreakoutAssessment ??
+            (awaitingFirstAnalysis ? EarningsBreakoutAssessment.AwaitingRelease : EarningsBreakoutAssessment.InsufficientData);
         var providerEps = EarningsEpsOutcomeClassifier.Classify(calendarEvent);
         var eps = EarningsEpsOutcomeClassifier.Classify(
             analysis?.EffectiveEpsEstimate ?? providerEps.Estimate,
@@ -269,7 +274,9 @@ public static class EarningsApiEndpoints
             resultAssessment.ToString(),
             FormatBreakoutAssessment(breakoutAssessment),
             EarningsAssessmentLabel.Format(resultAssessment, breakoutAssessment),
-            analysis?.Reason ?? "Analysis has not run yet.",
+            analysis?.Reason ?? (awaitingFirstAnalysis
+                ? "Analysis starts an hour before the scheduled slot, or as soon as a result appears."
+                : "No analysis was saved while this event was watched."),
             analysis?.ResultNewsPublishedAtUtc,
             analysis?.NewsHeadline,
             analysis?.NewsUrl,
@@ -295,12 +302,17 @@ public static class EarningsApiEndpoints
             item.LatestTrade?.Price,
             item.LatestTrade?.TradedAtUtc,
             PercentChange(analysis?.PreReleaseReferenceClose, item.LatestTrade?.Price),
-            ResultSeenBeforeSlot(calendarEvent, analysis));
+            ResultSeenBeforeSlot(calendarEvent, analysis),
+            EarningsWatchWindow.IsReported(FirstResultSign(calendarEvent, analysis), requestAtUtc));
     }
 
     /// <summary>Percent change from a reference price to a later price, or null when either is missing or the reference is 0.</summary>
     private static decimal? PercentChange(decimal? reference, decimal? later) =>
         reference is { } from && from != 0m && later is { } to ? (to - from) / from * 100m : null;
+
+    /// <summary>The earliest sign the result was out, by the shared watch-window rule.</summary>
+    private static DateTimeOffset? FirstResultSign(EarningsCalendarEvent calendarEvent, EarningsAnalysisSnapshot? analysis) =>
+        EarningsWatchWindow.FirstResultSign(calendarEvent, analysis);
 
     /// <summary>
     /// True when the first sign of the result, the provider showing it or its news headline, came before the
@@ -309,8 +321,7 @@ public static class EarningsApiEndpoints
     /// </summary>
     private static bool ResultSeenBeforeSlot(EarningsCalendarEvent calendarEvent, EarningsAnalysisSnapshot? analysis)
     {
-        var firstSign = new[] { calendarEvent.ResultFirstSeenAtUtc, analysis?.ResultNewsPublishedAtUtc }.Min();
-        return firstSign < EarningsCalendarDates.ReleaseWindowStartUtc(calendarEvent);
+        return FirstResultSign(calendarEvent, analysis) < EarningsCalendarDates.ReleaseWindowStartUtc(calendarEvent);
     }
 
     private static bool TryParseDateScope(string? value, out string scope, out string? error)

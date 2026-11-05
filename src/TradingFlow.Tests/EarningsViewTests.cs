@@ -28,16 +28,13 @@ public sealed class EarningsViewTests
         var service = new EarningsViewService(Mock.Of<IWishlistRepository>(), Mock.Of<IDeskAccountReader>());
         var user = new ClaimsPrincipal(new ClaimsIdentity());
         var query = new EarningsViewQuery { Provider = "calendar", NewsProvider = "news", MinEpsSurprise = -15,
-            MaxEpsSurprise = -10, MinRevenueSurprise = 5, MinRvol = 2, MinSentiment = 0.5m,
+            MaxEpsSurprise = -10, MinRevenueSurprise = 5, MinSentiment = 0.5m,
             Breakout = "PossibleBreakout", Assessment = "miss", HasNews = true };
         var result = await service.FilterAsync(Response, query, user, default);
         Assert.Equal("AAA", Assert.Single(result.Items).Ticker);
         Assert.Equal(1, result.TotalMatching);
         result = await service.FilterAsync(Response, new() { MinEpsSurprise = 0 }, user, default);
         Assert.Equal("BBB", Assert.Single(result.Items).Ticker);
-        result = await service.FilterAsync(Response, new() { Sort = "rvol" }, user, default);
-        Assert.Equal(new[] { "AAA", "BBB", "UNKNOWN" }, result.Items.Select(x => x.Ticker));
-        Assert.Null(result.Items[^1].SlotRelativeVolume);
     }
 
     [Fact]
@@ -88,12 +85,12 @@ public sealed class EarningsViewTests
     }
 
     [Theory]
-    [InlineData(3, 2)]
-    [InlineData(-1, 2)]
-    public async Task InvalidVolumeBoundsRejectBeforeRendering(decimal minimum, decimal maximum)
+    [InlineData(0.5, 0.2)]
+    [InlineData(-2, 0.2)]
+    public async Task InvalidSentimentBoundsRejectBeforeRendering(decimal minimum, decimal maximum)
     {
         var service = new EarningsViewService(Mock.Of<IWishlistRepository>(), Mock.Of<IDeskAccountReader>());
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.FilterAsync(Response,
-            new() { MinRvol = minimum, MaxRvol = maximum }, new(), default));
+            new() { MinSentiment = minimum, MaxSentiment = maximum }, new(), default));
     }
 }

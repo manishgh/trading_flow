@@ -34,8 +34,6 @@ public sealed class EarningsViewQuery
     public decimal? MinSurprise { get; set; }
     public decimal? MinRevenueSurprise { get; set; }
     public decimal? MaxRevenueSurprise { get; set; }
-    public decimal? MinRvol { get; set; }
-    public decimal? MaxRvol { get; set; }
     public decimal? MinSentiment { get; set; }
     public decimal? MaxSentiment { get; set; }
     public Guid? GroupId { get; set; }
@@ -64,17 +62,17 @@ public sealed class EarningsViewService(IWishlistRepository groups, IDeskAccount
         if (query.Assessment is not (null or "" or "all" or "beat" or "miss" or "inline" or "met" or "pending") ||
             query.Day is not (null or "" or "all" or "today" or "nextbusinessday" or "other") ||
             query.Breakout is not (null or "" or "all" or "awaitingearningsrelease" or "breakoutdatainsufficient" or "possiblebreakout" or "breakoutnotconfirmed") ||
-            query.Sort is not (null or "" or "breakout" or "time" or "cap" or "surprise" or "move" or "rvol" or "revenue"))
+            query.Sort is not (null or "" or "breakout" or "time" or "cap" or "surprise" or "move" or "revenue"))
             throw new InvalidOperationException("Choose supported earnings filters and sort order.");
         foreach (var pair in new[] { (query.MinEpsSurprise, query.MaxEpsSurprise), (query.MinRevenueSurprise, query.MaxRevenueSurprise),
-                     (query.MinRvol, query.MaxRvol), (query.MinSentiment, query.MaxSentiment),
+                     (query.MinSentiment, query.MaxSentiment),
                      (query.MinMarketCap,query.MaxMarketCap),(query.MinEventReturn,query.MaxEventReturn),(query.MinPriceReaction,query.MaxPriceReaction),
                      (query.MinEpsEstimate,query.MaxEpsEstimate),(query.MinEpsActual,query.MaxEpsActual),
                      (query.MinRevenueEstimate,query.MaxRevenueEstimate),(query.MinRevenueActual,query.MaxRevenueActual) })
             if (pair.Item1 > pair.Item2) throw new InvalidOperationException("Minimum filters must not exceed maximum filters.");
-        if (query.MinRvol < 0 || query.MaxRvol < 0 || query.MinSurprise < 0 ||
+        if (query.MinSurprise < 0 ||
             query.MinSentiment < -1 || query.MinSentiment > 1 || query.MaxSentiment < -1 || query.MaxSentiment > 1)
-            throw new InvalidOperationException("Volume and absolute surprise must be nonnegative; sentiment is between −1 and 1.");
+            throw new InvalidOperationException("Absolute surprise must be nonnegative; sentiment is between −1 and 1.");
         if (query.MinMarketCap < 0 || query.MaxMarketCap < 0 || query.MinRevenueEstimate < 0 || query.MaxRevenueEstimate < 0 ||
             query.MinRevenueActual < 0 || query.MaxRevenueActual < 0) throw new InvalidOperationException("Cap and revenue amounts in USD millions cannot be negative.");
         HashSet<string>? symbols = null;
@@ -111,7 +109,7 @@ public sealed class EarningsViewService(IWishlistRepository groups, IDeskAccount
             .Where(x => query.HasNews != true || !String.IsNullOrWhiteSpace(x.NewsHeadline) || newsTickers.Contains(x.Ticker))
             .Where(x => Range(x.EpsSurprisePercent, query.MinEpsSurprise, query.MaxEpsSurprise) &&
                 Range(x.RevenueSurprisePercent, query.MinRevenueSurprise, query.MaxRevenueSurprise) &&
-                Range(x.SlotRelativeVolume, query.MinRvol, query.MaxRvol) && Range(x.NewsSentiment, query.MinSentiment, query.MaxSentiment))
+                Range(x.NewsSentiment, query.MinSentiment, query.MaxSentiment))
             .Where(x => query.MinSurprise is null || x.EpsSurprisePercent is { } surprise && Math.Abs(surprise) >= query.MinSurprise);
         rows = query.Sort switch {
             // Possible breakouts lead, biggest move first; everything else follows in scheduled-time order.
@@ -121,7 +119,6 @@ public sealed class EarningsViewService(IWishlistRepository groups, IDeskAccount
             "cap" => rows.OrderByDescending(x => x.MarketCapMillions),
             "surprise" => rows.OrderByDescending(x => x.EpsSurprisePercent is { } surprise ? Math.Abs(surprise) : (decimal?)null),
             "move" => rows.OrderByDescending(x => x.EventReturnPercent),
-            "rvol" => rows.OrderByDescending(x => x.SlotRelativeVolume),
             "revenue" => rows.OrderByDescending(x => x.RevenueSurprisePercent),
             "time" => rows.OrderBy(x => x.ScheduledAtUtc),
             _ => rows
