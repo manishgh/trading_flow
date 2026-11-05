@@ -4031,7 +4031,7 @@ td.select-column {
 /* The reaction strip butts onto the result strip: one block of figures, two
    readings, no gap to suggest they are unrelated. */
 .earnings-strip.is-butted { border-top: 0; }
-.earnings-strip .cell-value { font-size: 13px; }
+.earnings-strip .cell-value { font-size: 13px; white-space: normal; overflow-wrap: anywhere; }
 
 .earnings-held-note { margin-top: 10px; }
 
