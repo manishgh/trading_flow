@@ -584,7 +584,7 @@
             section = { details: text("details", undefined, "earnings-reported"), summary: text("summary", undefined, "earnings-reported-summary") };
             reportedSections.set(key, section);
         }
-        const label = `Reported more than an hour ago · `;
+        const label = `${reported.length} reported more than an hour ago`;
         if (section.summary.textContent !== label) section.summary.textContent = label;
         syncChildren(section.details, [section.summary, ...reported.map(eventCard)]);
         return [...active, section.details];
