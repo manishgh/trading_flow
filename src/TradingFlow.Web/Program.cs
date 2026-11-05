@@ -715,9 +715,14 @@ if (app.Environment.IsProduction() && !uiTestMode)
 app.UseTrustedProxyTransport(app.Environment);
 
 var apiProfilerLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("TradingFlow.ApiProfiler");
+// Failed provider requests are warnings and slow ones (5 seconds or more) information; ordinary successful
+// requests go to Debug, which is off by default. The earnings monitor alone makes about 190 requests a minute,
+// so logging each success wrote roughly 200 MB a day. The last 100 timings per service stay in memory either way.
 TradingFlow.Domain.Logging.ApiProfiler.ConfigureMetricSink(metric =>
 {
-    var level = metric.IsSuccess ? LogLevel.Information : LogLevel.Warning;
+    var level = !metric.IsSuccess ? LogLevel.Warning
+        : metric.DurationMs >= 5000 ? LogLevel.Information
+        : LogLevel.Debug;
     apiProfilerLogger.Log(
         level,
         "External API request {Service} {Method} {Endpoint} completed in {DurationMs} ms with success={IsSuccess}. Error={ErrorMessage}",
