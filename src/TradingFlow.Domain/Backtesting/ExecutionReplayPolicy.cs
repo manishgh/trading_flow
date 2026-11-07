@@ -11,10 +11,13 @@ public static class ExecutionReplayPolicy
     public const string IntradayRthFiveMinuteV1 = "intraday-rth5m-limit-portfolio-v1";
     public const string IntradayRthFiveMinuteStopMarketV1 = "intraday-rth5m-stop-market-portfolio-v1";
     public const string IntradayRthFiveMinuteNextBarMarketV1 = "intraday-rth5m-next-open-market-portfolio-v1";
-    public const string IntradayRthFiveMinuteQuoteMarketV1 = "intraday-rth5m-sip-market-portfolio-v1";
 
     /// <summary>Identify policies that require verified historical trade/quote execution without candle fallback.</summary>
-    public static bool IsEventPortfolio(string? policy) => policy is DailyRthSipPortfolioV1 or IntradayRthFiveMinuteQuoteMarketV1;
+    public static bool IsEventPortfolio(string? policy) => policy is DailyRthSipPortfolioV1;
+
+    /// <summary>Identify the five-minute OHLC candle replay policies used by intraday (same-day) strategies.</summary>
+    public static bool IsIntradayCandle(string? policy) =>
+        policy is IntradayRthFiveMinuteV1 or IntradayRthFiveMinuteStopMarketV1 or IntradayRthFiveMinuteNextBarMarketV1;
 
     /// <summary>Bind each explicit order contract to its immutable replay assumptions.</summary>
     public static string ForEntryMode(IntradayEntryOrderMode mode) => mode switch
@@ -24,15 +27,6 @@ public static class ExecutionReplayPolicy
         IntradayEntryOrderMode.NextBarMarket => IntradayRthFiveMinuteNextBarMarketV1,
         _ => throw new InvalidOperationException("Unsupported intraday entry order mode.")
     };
-
-    public const string PythonZoneBounceBreakdownV1 = "python-zone-bounce-breakdown-v1";
-    public const string PythonZoneVolumeSpreadV1 = "python-zone-volume-spread-v1";
-
-    /// <summary>Identify candle zone execution without changing legacy entry-mode bindings.</summary>
-    public static bool IsPythonZone(string? policy) => policy is PythonZoneBounceBreakdownV1 or PythonZoneVolumeSpreadV1;
-
-    /// <summary>Identify the ordered, quantity-dependent volume/spread comparison without changing earlier zone rules.</summary>
-    public static bool IsPythonZoneVolumeSpread(string? policy) => policy == PythonZoneVolumeSpreadV1;
 
     public const string Timeframe = "5m";
 }
@@ -44,10 +38,6 @@ public sealed record IntradayExecutionEvidence(decimal LimitPrice, decimal TickS
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? PreviousSessionLow, DateTimeOffset BreakoutTimestampUtc,
     DateTimeOffset ConfirmationTimestampUtc, string EntryPattern)
 {
-    /// <summary>Inclusive last actual entry opening, separate from the later liquidation deadline.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public DateTimeOffset? EntryCutoffUtc { get; init; }
-
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public IntradayEntryOrderMode EntryOrderMode { get; init; } = IntradayEntryOrderMode.NextBarLimit;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

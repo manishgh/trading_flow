@@ -20,9 +20,7 @@ public sealed class BacktestCalendarBoundsTests
     {
         var run = Profile();
         foreach (var mode in new[] { ExecutionReplayPolicy.IntradayRthFiveMinuteV1,
-            ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1, ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1,
-            ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1, ExecutionReplayPolicy.PythonZoneBounceBreakdownV1,
-            ExecutionReplayPolicy.PythonZoneVolumeSpreadV1 })
+            ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1, ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1 })
             Assert.Equal(DateOnly.Parse(expected), BacktestCalendarBounds.IntradayLastRequiredDate(
                 run with { Engine = run.Engine with { ExecutionReplayPolicyId = mode } }, DateTimeOffset.Parse(end), "America/New_York"));
         Assert.Null(BacktestCalendarBounds.IntradayLastRequiredDate(run with {

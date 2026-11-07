@@ -47,8 +47,6 @@ public sealed class BacktestsModel : PageModel
     [BindProperty(SupportsGet = true)] public string? Drill { get; set; }
 
     [BindProperty(SupportsGet = true)] public string? Month { get; set; }
-    [BindProperty(SupportsGet = true)] public long ZoneOffset { get; set; }
-    public TradingFlow.Contracts.V1.RunZoneEvaluationPage? ZoneEvaluations { get; private set; }
 
     public BacktestJobSnapshot? SelectedJob { get; private set; }
 
@@ -118,13 +116,6 @@ public sealed class BacktestsModel : PageModel
     {
         await LoadDataAsync(configPath, strategyPath, wishlistId, cancellationToken);
         SelectedJob = JobId is { } id ? await backtestJobs.GetSnapshotAsync(id, cancellationToken) : null;
-        if (JobId is { } evidenceJob && SelectedJob?.Status == "completed" && SelectedJob.Result?.ZoneDecisions is not null)
-        {
-            try { ZoneEvaluations = await HttpContext.RequestServices.GetRequiredService<TradingFlow.Application.Jobs.RunWorkflowService>()
-                .ZoneEvaluationsAsync(evidenceJob, Math.Max(0, ZoneOffset), 50, cancellationToken); }
-            catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException or InvalidOperationException)
-            { ZoneEvaluations = new(0, Math.Max(0, ZoneOffset), 50, null, [], "Retained zone evidence could not be verified: " + exception.Message); }
-        }
     }
 
     /// <summary>

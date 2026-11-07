@@ -12,8 +12,8 @@ public sealed class HistoricalNewsPresenceDecisionTests
 {
     // Null optional diagnostic fields must not change previously published technical strategy identities.
     [Theory]
-    [InlineData("swing.connors-rsi2", "6.0.0", "f56ef8e2505d7e6118bfb7c534c5c71ad03936da4cbf13b5e13e5566e6876df0")]
-    [InlineData("technical.recovery-sma5-exit", "2.0.0", "ad27d9ed0855760bf17fb4fec8ed9b97938dc3a1f52710097b6c63dc4a64c4a8")]
+    [InlineData("swing.connors-rsi2", "7.0.0", "a16f4e27ae3e85d19f537d57ac0189a5058d8de0b0cffa39ce993c0220a70e8c")]
+    [InlineData("technical.opening-range-breakout", "1.2.0", "bc73189a1c26ae2741402c2ad84a3a3e88aec709d43253590f7c7fb3c6fdbcc4")]
     public void OriginalTechnicalArtifacts_RetainTheirPublishedCanonicalIdentities(string id, string version, string hash)
     {
         var root = TestRepository.FindRoot();

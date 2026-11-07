@@ -74,8 +74,7 @@ internal static class EventMonthlyRunResults
             0, portfolio.ImpactBpsAtMaxParticipation, portfolio.FixedBuyFee, portfolio.FixedSellFee, portfolio.SecFeeRate,
             portfolio.FinraTafPerShare, portfolio.FinraTafCap, MaximumTrackedOrderContracts: portfolio.MaxExecutionOrderHistory);
         if (policy is null || assumptions is null || policy.Costs != costs ||
-            policy.ProtectionActivation != (request.Strategies[0].EntryRules.IntradayZone is null
-                ? ExecutionProtectionActivation.NativeParentFullyFilled : ExecutionProtectionActivation.CustomPerFill) ||
+            policy.ProtectionActivation != ExecutionProtectionActivation.NativeParentFullyFilled ||
             policy.FillReportLatencyNanoseconds != 0 || !policy.RawPriceAndQuantityBasisVerified ||
             policy.PriceFactorToRaw != 1 || policy.QuantityFactorToRaw != 1 || policy.MaximumQuoteAgeNanoseconds <= 0 ||
             policy.ProtectionActivation != assumptions.ProtectionActivation || policy.MaximumQuoteAgeNanoseconds != assumptions.MaximumQuoteAgeNanoseconds ||
@@ -177,21 +176,11 @@ internal static class EventMonthlyRunResults
         return fills;
     }
 
-    /// <summary>Recognizes exact parent orders and positive numbered zone-protection revisions without accepting arbitrary candidate prefixes.</summary>
+    /// <summary>Finds the candidate that owns a fill by its exact order ID; arbitrary candidate prefixes are never accepted.</summary>
     private static bool TryResolveFillOwner(IReadOnlyDictionary<string, BacktestCandidateTrade> owners,
         string orderId, out BacktestCandidateTrade candidate)
     {
-        if (owners.TryGetValue(orderId, out candidate!)) return true;
-        var separator = orderId.LastIndexOf(':');
-        if (separator > 0 && int.TryParse(orderId.AsSpan(separator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var revision) &&
-            revision > 0)
-        {
-            var baseId = orderId[..separator];
-            if ((baseId.EndsWith(":stop", StringComparison.Ordinal) || baseId.EndsWith(":target", StringComparison.Ordinal)) &&
-                owners.TryGetValue(baseId, out candidate!) && candidate.ZoneExecution is not null) return true;
-        }
-        candidate = null!;
-        return false;
+        return owners.TryGetValue(orderId, out candidate!);
     }
 
     /// <summary>Requires the reported closed-parent record to equal its actual buy/sell ledger, including fees and clocks.</summary>

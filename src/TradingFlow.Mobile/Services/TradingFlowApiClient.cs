@@ -171,7 +171,7 @@ public sealed class TradingFlowApiClient
     public Task<BacktestJobSnapshot?> GetPaperJobAsync(Guid jobId, CancellationToken cancellationToken = default) =>
         GetJobDetailAsync(jobId, cancellationToken);
 
-    /// <summary>Consumes shared monthly records, committed candles and frozen zone evidence without reconstructing strategy rules.</summary>
+    /// <summary>Consumes shared monthly records, and committed candles without reconstructing strategy rules.</summary>
     private async Task<BacktestJobSnapshot?> GetJobDetailAsync(Guid id, CancellationToken token)
     {
         var detail = await Workflow.DetailsAsync(id, token);
@@ -184,7 +184,6 @@ public sealed class TradingFlowApiClient
             MonthlyResults = detail.MonthlyResults ?? [],
             MonthlyUnavailableReason = detail.MonthlyUnavailableReason,
             PortfolioState = detail.PortfolioState,
-            ZoneDecisions = detail.ZoneDecisions ?? [],
             HistoryEligibility = detail.HistoryEligibility ?? [],
             PreparedMarketData = detail.PreparedMarketData ?? detail.Job.PreparedMarketData,
             EvidenceSummary = detail.EvidenceSummary ?? detail.Job.EvidenceSummary,
@@ -652,7 +651,6 @@ public sealed record BacktestJobSnapshot(
     public IReadOnlyList<MonthlyRunResult> MonthlyResults { get; init; } = [];
     public string? MonthlyUnavailableReason { get; init; }
     public RunPortfolioStateResponse? PortfolioState { get; init; }
-    public IReadOnlyList<RunZoneDecisionDetail> ZoneDecisions { get; init; } = [];
     public IReadOnlyList<RunHistoryEligibility> HistoryEligibility { get; init; } = [];
     public string ResultSummary => Summary ?? (Result is null
         ? ErrorMessage ?? LatestEvent

@@ -14,7 +14,7 @@ public sealed class OpeningRangeWorkflowIntegrationTests
     [InlineData(2)]
     public void ReviewAssumptionNote_PreservesDeclaredParentTradeLimit(int limit)
     {
-        var strategy = ReadStrategy("opening-range-breakout.bt-v1.yaml");
+        var strategy = ReadStrategy("opening-range-breakout-stop-market.v1.fixture.yaml");
         strategy = strategy with { EntryRules = strategy.EntryRules with {
             OpeningRangeBreakout = strategy.EntryRules.OpeningRangeBreakout! with { MaxFilledParentTradesPerSession = limit }
         }};
@@ -28,27 +28,27 @@ public sealed class OpeningRangeWorkflowIntegrationTests
 
     /// <summary>Normal saved plans select the distinct stop-market contract and preserve ordinary portfolio costs and limits.</summary>
     [Theory]
-    [InlineData("opening-range-breakout.bt-v1.yaml")]
-    [InlineData("opening-range-breakout.bt-v2.yaml")]
-    public void OrdinaryProfile_SelectsStopMarketPolicyAndRejectsLimitMixing(string recipe)
+    [InlineData("opening-range-breakout-stop-market.v1.fixture.yaml")]
+    [InlineData("opening-range-breakout-stop-market.v2.fixture.yaml")]
+    public void OrdinaryProfile_SelectsStopMarketPolicyAndRejectsHorizonMixing(string recipe)
     {
         var profile = ReadProfile();
         var openingRange = ReadStrategy(recipe);
-        var previousDay = ReadStrategy("previous-day-breakout.bt-v1.yaml");
+        var daily = ReadStrategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         var effective = BacktestExecutionProfileResolver.Resolve(profile, [openingRange]);
         Assert.Equal(ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1, effective.Engine.ExecutionReplayPolicyId);
         Assert.Equal(profile.Portfolio, effective.Portfolio);
         Assert.Equal(new[] { "5m" }, effective.Intervals);
         Assert.Equal(0, effective.Engine.IndicatorWarmupBars);
         Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [openingRange], ExecutionReplayPolicy.IntradayRthFiveMinuteV1));
-        Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [previousDay], ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1));
-        Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [openingRange, previousDay]));
+        Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [daily], ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1));
+        Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [openingRange, daily]));
     }
 
     /// <summary>Every normal generated strategy snapshot retains the reviewed ORB rule and the amended two-parent filled-trade limit.</summary>
     [Theory]
-    [InlineData("opening-range-breakout.bt-v1.yaml")]
-    [InlineData("opening-range-breakout.bt-v2.yaml")]
+    [InlineData("opening-range-breakout-stop-market.v1.fixture.yaml")]
+    [InlineData("opening-range-breakout-stop-market.v2.fixture.yaml")]
     [InlineData("opening-range-breakout.bt-v3.yaml")]
     public void OrdinaryStrategySnapshot_RoundTripsOpeningRangeRules(string recipe)
     {
@@ -60,7 +60,6 @@ public sealed class OpeningRangeWorkflowIntegrationTests
             var actual = new SimpleYamlReader().ReadStrategy(path);
             Assert.Equal(original, actual);
             Assert.Equal(2, actual.EntryRules.OpeningRangeBreakout!.MaxFilledParentTradesPerSession);
-            Assert.Null(actual.EntryRules.PreviousSessionBreakout);
         }
         finally
         {
@@ -84,18 +83,12 @@ public sealed class OpeningRangeWorkflowIntegrationTests
                 artifact => artifact.Identity == identity);
     }
 
-    /// <summary>Replaced versions stay parseable evidence, and the rounded recipe differs from its control only by its submitted-price policy.</summary>
+    /// <summary>The preserved stop-market fixtures (retired catalog versions 1.0.0 and 1.1.0) differ only by their submitted-price policy.</summary>
     [Fact]
-    public void OpeningRangeCatalog_ArchivesReplacedVersionsAndKeepsTheirOnlyDifference()
+    public void StopMarketFixtures_DifferOnlyBySubmittedPricePolicy()
     {
-        var root = TestRepository.FindRoot();
-        var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), new SimpleYamlReader());
-        var archived = catalog.GetSnapshot().ArchivedArtifacts
-            .Where(artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout")
-            .Select(artifact => artifact.Identity.SemanticVersion).Order(StringComparer.Ordinal).ToArray();
-        Assert.Equal(new[] { "1.0.0", "1.1.0" }, archived);
-        var control = ReadStrategy("opening-range-breakout.bt-v1.yaml");
-        var rounded = ReadStrategy("opening-range-breakout.bt-v2.yaml");
+        var control = ReadStrategy("opening-range-breakout-stop-market.v1.fixture.yaml");
+        var rounded = ReadStrategy("opening-range-breakout-stop-market.v2.fixture.yaml");
         var expected = control with { Version = 2, StrategyName = rounded.StrategyName,
             EntryRules = control.EntryRules with { OpeningRangeBreakout = new(
                 OpeningRangeBreakoutRules.OutwardOrderRoundingPolicyId, 2) } };
@@ -112,7 +105,7 @@ public sealed class OpeningRangeWorkflowIntegrationTests
         Assert.Equal(ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1, actual.Engine.ExecutionReplayPolicyId);
         Assert.Equal(profile.Portfolio, actual.Portfolio);
         Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [strategy], ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1));
-        Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [strategy, ReadStrategy("opening-range-breakout.bt-v2.yaml")]));
+        Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [strategy, ReadStrategy("opening-range-breakout-stop-market.v2.fixture.yaml")]));
     }
 
     /// <summary>Calendar-day warmup covers twenty actual preceding sessions across the DST weekend and a declared holiday.</summary>
@@ -159,8 +152,9 @@ public sealed class OpeningRangeWorkflowIntegrationTests
     }
 
     /// <summary>Uses immutable ordinary recipes, so the tests exercise the same supported selections as Web and Android.</summary>
-    private static StrategyDefinition ReadStrategy(string name) => new SimpleYamlReader().ReadStrategy(
-        Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", name));
+    private static StrategyDefinition ReadStrategy(string name) => new SimpleYamlReader().ReadStrategy(name.EndsWith(".fixture.yaml", StringComparison.Ordinal)
+        ? Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Tests", "Fixtures", "Strategies", name)
+        : Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", name));
 
     /// <summary>Loads the shared profile without generating a run or requesting market records.</summary>
     private static BacktestRunConfig ReadProfile() => new SimpleYamlReader().ReadBacktestRun(

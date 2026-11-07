@@ -114,12 +114,6 @@ public sealed partial class SignalGenerator
         var previousRegularClose = GetPreviousRegularClose(strategy, bars, snapshots, index);
         decimal? gapUpPct = previousRegularClose is null ? null : ((bar.Open / previousRegularClose.Value) - 1m) * 100m;
         var catalystContext = GetCatalystContext(snapshot.Catalyst, bars, snapshots, index);
-        var stepContext = UsesLongSetup(strategy, "step_breakout") || UsesShortSetup(strategy, "step_breakdown")
-            ? GetStepBreakoutContext(strategy, bars, snapshots, index)
-            : (false, false, null, null, null, null, null, null);
-        var reclaimContext = UsesLongSetup(strategy, "swing_reclaim")
-            ? GetSwingReclaimContext(strategy, bars, snapshots, index)
-            : (false, null, null, null);
         var reversionContext = UsesLongSetup(strategy, "mean_reversion_reclaim")
             ? GetMeanReversionReclaimContext(strategy, bars, snapshots, index)
             : (IsReclaim: false, StretchLow: (decimal?)null);
@@ -131,14 +125,7 @@ public sealed partial class SignalGenerator
                     strategy.EntryRules.MaxReversionRsi2 ?? 5m,
                     strategy.EntryRules.RequirePriceAboveSma200))
             : null;
-        var isCatalystDrift = UsesLongSetup(strategy, "catalyst_drift") &&
-            IsCatalystDriftTrigger(strategy, snapshots, index);
-        var rolloverContext = UsesShortSetup(strategy, "swing_rollover")
-            ? GetSwingRolloverContext(strategy, bars, snapshots, index)
-            : (false, null, null, null);
         var bollingerContext = GetBollingerContext(snapshot);
-        var avwapBounceContext = GetAnchoredVwapBounceContext(strategy, bars, index, anchoredVwap);
-        var vcpContext = GetVcpContext(strategy, bars, index);
         var price52WeekContext = Get52WeekPriceContext(bars, index);
         var volumeSmaTrend = GetVolumeSmaTrend(
             strategy,
@@ -154,9 +141,6 @@ public sealed partial class SignalGenerator
             index,
             strategy.EntryRules.ObvRisingLookbackBars,
             snapshot => snapshot.Obv);
-        var isEpisodicPivotGap = strategy.EntryRules.MinGapUpPct is { } minGap &&
-            gapUpPct is not null &&
-            gapUpPct.Value >= minGap;
         var priorEntryGainPct = ComputePriorEntryGainPct(
             bars,
             index,
@@ -207,38 +191,11 @@ public sealed partial class SignalGenerator
             ShortAnchoredVwap: shortAnchoredVwap,
             ShortAnchoredVwapExtensionAtr: shortAnchoredVwapExtensionAtr,
             IsBelowShortAnchoredVwap: isBelowShortAnchoredVwap,
-            IsStepBreakout: stepContext.IsBreakout,
-            IsStepBreakdown: stepContext.IsBreakdown,
-            StepPriorMovePct: stepContext.PriorMovePct,
-            StepPriorDeclinePct: stepContext.PriorDeclinePct,
-            StepBaseDepthPct: stepContext.BaseDepthPct,
-            StepBaseVolumeRatio: stepContext.BaseVolumeRatio,
-            StepBreakoutVolumeRatio: stepContext.BreakoutVolumeRatio,
-            StepBollingerWidthRatio: stepContext.BollingerWidthRatio,
-            IsSwingReclaim: reclaimContext.IsReclaim,
-            ReclaimPullbackDepthPct: reclaimContext.PullbackDepthPct,
-            ReclaimRecentHigh: reclaimContext.RecentHigh,
-            ReclaimPullbackLow: reclaimContext.PullbackLow,
-            IsSwingRollover: rolloverContext.IsRollover,
-            RolloverAdvancePct: rolloverContext.AdvancePct,
-            RolloverDropFromHighPct: rolloverContext.DropFromHighPct,
-            RolloverRecentHigh: rolloverContext.RecentHigh,
             IsPriceAboveEma10: isPriceAboveEma10,
             IsEma10AboveEma20: isEma10AboveEma20,
-            IsAnchoredVwapBounce: avwapBounceContext.IsBounce,
-            AnchoredVwapProximityPct: avwapBounceContext.ProximityPct,
-            IsPullbackVolumeDryup: avwapBounceContext.IsPullbackVolumeDryup,
-            BounceVolumeRatio: avwapBounceContext.BounceVolumeRatio,
-            IsEpisodicPivotGap: isEpisodicPivotGap,
             GapUpPct: gapUpPct,
-            IsVcpBreakout: vcpContext.IsBreakout,
-            VcpStructureRejectionReason: vcpContext.DiagnosticRejectionReason,
             PriceVs52WeekLowPct: price52WeekContext.PriceVsLowPct,
             PriceVs52WeekHighPct: price52WeekContext.PriceVsHighPct,
-            VolatilityContractions: vcpContext.Contractions,
-            IsVolatilityHalving: vcpContext.IsVolatilityHalving,
-            IsVolumeDryUp: vcpContext.IsVolumeDryUp,
-            BreakoutVolumeRatio: vcpContext.BreakoutVolumeRatio,
             IsPriceAboveSma150: isPriceAboveSma150,
             IsPriceAboveSma200: isPriceAboveSma200,
             IsSma50AboveSma150: isSma50AboveSma150,
@@ -261,10 +218,8 @@ public sealed partial class SignalGenerator
             PriorEntryGainPct: priorEntryGainPct,
             IsMeanReversionReclaim: reversionContext.IsReclaim,
             ReversionStretchLow: reversionContext.StretchLow,
-            IsCatalystDrift: isCatalystDrift,
             IsConnorsRsi2Oversold: connorsRsi2Context?.IsSignal ?? false,
             CurrentRsi2: snapshot.Rsi2,
-            SetupStructuralStopPrice: vcpContext.StructuralStopPrice,
             IsSma200Rising: isSma200Rising,
             BreakoutVolumeVs50DayAverage: breakoutVolume50,
             TechnicalFactor: strategy.EntryRules.TechnicalFactor is { } factor
@@ -385,13 +340,6 @@ public sealed partial class SignalGenerator
         return strategy.EntryRules.SetupType.Equals(setupType, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool UsesShortSetup(StrategyDefinition strategy, string setupType)
-    {
-        return strategy.EntryRules.EnableShort &&
-            strategy.EntryRules.ShortSetupType.Equals(setupType, StringComparison.OrdinalIgnoreCase);
-    }
-
-
     private static (decimal? Position, decimal? WidthPct) GetBollingerContext(IndicatorSnapshot snapshot)
     {
         if (snapshot.BollingerLower is null ||
@@ -410,45 +358,4 @@ public sealed partial class SignalGenerator
 
         return (position, widthPct);
     }
-
-    private static (
-        bool IsBounce,
-        decimal? ProximityPct,
-        bool IsPullbackVolumeDryup,
-        decimal? BounceVolumeRatio) GetAnchoredVwapBounceContext(
-            StrategyDefinition strategy,
-            IReadOnlyList<OhlcvBar> bars,
-            int index,
-            decimal? anchoredVwap)
-    {
-        if (anchoredVwap is null || anchoredVwap.Value <= 0m)
-        {
-            return (false, null, false, null);
-        }
-
-        var bar = bars[index];
-        var proximityPct = Math.Abs((bar.Close / anchoredVwap.Value) - 1m) * 100m;
-        var maxProximityPct = strategy.EntryRules.AvwapProximityPct ?? 1.5m;
-        var touchedAnchor = bar.Low <= anchoredVwap.Value * (1m + (maxProximityPct / 100m));
-        var closedAboveAnchor = bar.Close >= anchoredVwap.Value;
-        var lookbackStart = Math.Max(0, index - 20);
-        var priorVolumes = bars.Skip(lookbackStart).Take(index - lookbackStart).Select(x => x.Volume).Where(x => x > 0m).ToArray();
-        var averagePriorVolume = priorVolumes.Length == 0 ? 0m : priorVolumes.Average();
-        var bounceVolumeRatio = averagePriorVolume <= 0m ? (decimal?)null : bar.Volume / averagePriorVolume;
-        var pullbackStart = Math.Max(0, index - 3);
-        var pullbackVolumes = bars.Skip(pullbackStart).Take(index - pullbackStart).Select(x => x.Volume).Where(x => x > 0m).ToArray();
-        var isPullbackDryup = averagePriorVolume > 0m &&
-            pullbackVolumes.Length > 0 &&
-            pullbackVolumes.Average() <= averagePriorVolume * 0.80m;
-        var minBounceVolumeRatio = strategy.EntryRules.MinBounceVolumeRatio ?? 0m;
-        var isBounce = touchedAnchor &&
-            closedAboveAnchor &&
-            proximityPct <= maxProximityPct &&
-            (!strategy.EntryRules.RequirePullbackVolumeDryup || isPullbackDryup) &&
-            (bounceVolumeRatio is null || bounceVolumeRatio.Value >= minBounceVolumeRatio);
-
-        return (isBounce, proximityPct, isPullbackDryup, bounceVolumeRatio);
-    }
-
-
 }

@@ -144,7 +144,7 @@ public sealed class TechnicalFactorTests
     public void ConfigRoundTrip_PreservesOptionalRulesAndExistingCanonicalIdentity()
     {
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs/strategy-catalog.json"),reader);
-        var path=Path.Combine(root,"configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml");
+        var path=Path.Combine(root,"configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         var runtime=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(path,StrategySelectionMode.Backtest);
         Assert.Equal(runtime.Identity.ContentSha256,EvidenceCanonicalJson.ComputeSha256(new CanonicalStrategyDocument(runtime.Identity.StrategyId,runtime.Identity.SemanticVersion,runtime.Definition,runtime.AdmissionProfile)));
         Assert.DoesNotContain("TechnicalFactor",JsonSerializer.Serialize(runtime.Definition));
@@ -162,7 +162,7 @@ public sealed class TechnicalFactorTests
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
         var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs/strategy-catalog.json"),reader);
         var baseline=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(
-            Path.Combine(root,"configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml"),StrategySelectionMode.Backtest);
+            Path.Combine(root,"configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),StrategySelectionMode.Backtest);
         var definition=baseline.Definition with {EntryRules=baseline.Definition.EntryRules with {SetupType="momentum",
             TechnicalFactor=new(TechnicalFactorRules.RelativeRoc,20,MinValue:5)}};
         var profile=baseline.AdmissionProfile with {ProfileId="technical-factor-test",ProfileVersion="6.0.0",
@@ -221,7 +221,7 @@ public sealed class TechnicalFactorTests
     {
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
         var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs/strategy-catalog.json"),reader);
-        var path=Path.Combine(root,"configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml");
+        var path=Path.Combine(root,"configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         var runtime=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(path,StrategySelectionMode.Backtest);
         var bars=Bars();var asOf=bars[300].Timestamp.AddHours(12);
         var config=reader.ReadBacktestRun(Path.Combine(root,"configs/backtest/swing-backtest-profile.yaml")) with {

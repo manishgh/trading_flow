@@ -61,20 +61,13 @@ public static partial class EventPortfolioExecution
         public string? LastExitOrderId { get; set; }
         public bool Long => Candidate.Direction == "long";
         public int OpenQuantity => EntryQuantity - ExitQuantity;
-        public decimal MaximumNotional { get; set; }
-        public decimal OriginalTarget { get; set; }
-        public ContinuationProtectionState? Protection { get; set; }
-        public int ProtectionRevision { get; set; }
-        public string? CurrentStopId { get; set; }
-        public string? CurrentTargetId { get; set; }
-        public string? ExitReason { get; set; }
         public string EntryId => Candidate.CandidateId + ":entry";
         public string StopId => Candidate.CandidateId + ":stop";
         public string TargetId => Candidate.CandidateId + ":target";
         public string ExitId => Candidate.CandidateId + ":liquidation";
     }
 
-    private sealed partial class Controller
+    private sealed class Controller
     {
         private const long EntryWindow = 300_000_000_000L;
         private readonly EventPortfolioReplayRequest request;
@@ -102,14 +95,15 @@ public static partial class EventPortfolioExecution
         private long nextUnsubmittedExpiry = Int64.MaxValue;
         private long nextBrokerExpiry = Int64.MaxValue;
 
+        /// <summary>Each daily SIP candidate's entry order stays valid for the fixed entry window after its decision.</summary>
+        private long EntryExpiry(BacktestCandidateTrade candidate) => checked(Ns(candidate.EntryTimestamp) + EntryWindow);
+
         /// <summary>Validate the bounded zero-delay policy and freeze deterministic pre-capital ordering.</summary>
         public Controller(EventPortfolioReplayRequest request, ExecutionEventSimulationPolicy policy)
         {
             this.request = request;
             this.policy = policy;
-            intraday = request.Strategies.Count == 1 && request.Strategies[0].EntryRules.IntradayZone is not null;
-            if (intraday) ValidateIntradayRequest();
-            else if (request.Strategies.Count != 1 ||
+            if (request.Strategies.Count != 1 ||
                 request.Candidates.Any(x => x.Direction != "long" ||
                     x.ExecutionReplay?.PolicyId != ExecutionReplayPolicy.DailyRthSipPortfolioV1 ||
                     x.ExecutionReplay.EventExecutionEndUtc is not { } end || end <= x.ExitTimestamp) ||
@@ -128,7 +122,6 @@ public static partial class EventPortfolioExecution
                 throw new InvalidDataException("Candidate IDs must be unique within a portfolio.");
             cash = request.Portfolio.StartingCapital;
             realizedEquity = request.Portfolio.StartingCapital;
-            InitializeIntradayClocks();
         }
 
         /// <summary>Preserve nanosecond clocks when converting completed-data decision timestamps.</summary>
@@ -152,7 +145,6 @@ public static partial class EventPortfolioExecution
                 frame.Batches.Any(x => x.Market.EventTimeNanoseconds != frame.EventTimeNanoseconds ||
                     x.Market.KnownAtNanoseconds != frame.KnownAtNanoseconds))
                 throw new InvalidDataException("Portfolio event v1 supports coherent frames in the declared zero source-delay scenario.");
-            if (intraday) AdvanceIntradayClocks(frame.EventTimeNanoseconds, inclusive: false);
             AdvanceDueTimers(frame.EventTimeNanoseconds);
             if (failedAt is not null) return;
             if (frame.EventTimeNanoseconds >= nextUnsubmittedExpiry)
@@ -172,19 +164,18 @@ public static partial class EventPortfolioExecution
             if (failedAt is not null) return;
             AdmitDueCandidates(frame.EventTimeNanoseconds);
             if (failedAt is not null) return;
-            if (!intraday && frame.EventTimeNanoseconds >= nextDueExit) ScheduleDailyExits(frame);
+            if (frame.EventTimeNanoseconds >= nextDueExit) ScheduleDailyExits(frame);
             foreach (var batch in frame.Batches)
             {
                 ProcessBatch(batch);
                 if (failedAt is not null) return;
             }
-            if (intraday) AdvanceIntradayClocks(frame.EventTimeNanoseconds, inclusive: true);
         }
 
         /// <summary>Apply price-free precommitted broker expiries before admissions, even when that symbol has no observation.</summary>
         private void AdvanceDueTimers(long clock)
         {
-            while (nextBrokerExpiry != Int64.MaxValue && (nextBrokerExpiry < clock || !intraday && nextBrokerExpiry == clock))
+            while (nextBrokerExpiry != Int64.MaxValue && nextBrokerExpiry <= clock)
             {
                 var next = state.Book.WorkingOrders.Values
                     .Where(order => state.OrderExpiries is { } expiries && expiries.ContainsKey(order.Command.ClientOrderId))
@@ -222,7 +213,6 @@ public static partial class EventPortfolioExecution
                 Fail(ready, "entry_route_window_has_no_observed_source:" + candidate.CandidateId);
                 return;
             }
-            if (intraday && !AdmitIntradayEntry(candidate, clock)) return;
             if (request.Portfolio.PreventOverlappingTickerPositions &&
                 live.Values.Any(x => x.Candidate.Ticker.Equals(candidate.Ticker, StringComparison.OrdinalIgnoreCase)))
             {
@@ -235,13 +225,13 @@ public static partial class EventPortfolioExecution
                 return;
             }
             var reserved = live.Values.Sum(x => Math.Max(0, x.Quantity - x.EntryQuantity) * x.Candidate.EntryPrice);
-            var available = intraday ? IntradayAvailableCapital() : Math.Max(0m, cash - reserved);
+            var available = Math.Max(0m, cash - reserved);
             var requested = Math.Min(realizedEquity / request.Portfolio.MaxConcurrentPositions, available);
             var plan = new SharedOrderRiskPlanner().Plan(new(candidate.Ticker,
                 candidate.Direction == "long" ? PlannedOrderSide.Long : PlannedOrderSide.Short, realizedEquity,
                 candidate.EntryPrice, PlannedStopRequest.FromResolvedPrice(PlannedStopKind.Structural, candidate.StopLossPrice),
                 new(request.Portfolio.AccountRiskBudgetPct, request.Portfolio.MaxPositionNotionalPct),
-                new(intraday ? policy.Costs.BaseSlippageBps + policy.Costs.ImpactBpsAtMaxParticipation : 0,
+                new(0,
                     request.Portfolio.FixedBuyFee, request.Portfolio.FixedSellFee), requested));
             if (!plan.IsAccepted || plan.Order is null)
             {
@@ -254,7 +244,6 @@ public static partial class EventPortfolioExecution
         /// <summary>Reserve the parent immediately and queue immutable native legs before any equal-open fill.</summary>
         private void CommitEntry(BacktestCandidateTrade candidate, int quantity, long ready)
         {
-            if (intraday) { CommitIntradayEntry(candidate, quantity, ready); return; }
             var intent = new PositionIntent(candidate, quantity);
             admitted.Add(intent);
             live.Add(candidate.CandidateId, intent);
@@ -369,7 +358,6 @@ public static partial class EventPortfolioExecution
             events.AddRange(step.Events);
             pending.Remove(batch.Symbol);
             foreach (var emitted in step.Events) AccountFill(emitted);
-            if (intraday) RefreshIntradayProtection(batch, step.Events);
             foreach (var intent in live.Values.Where(x =>
                 x.Candidate.Ticker.Equals(batch.Symbol, StringComparison.OrdinalIgnoreCase)).ToArray())
             {
@@ -406,7 +394,6 @@ public static partial class EventPortfolioExecution
             intent.Fees += fill.Fees;
             if (!fill.IsRiskReducing)
             {
-                if (intraday && intent.EntryQuantity == 0) CountIntradayEntry(intent);
                 intent.EntryQuantity = checked(intent.EntryQuantity + fill.LastFillQuantity);
                 intent.EntryNotional += notional;
                 intent.FirstEntryAt ??= emitted.OccurredAtNanoseconds;
@@ -466,11 +453,11 @@ public static partial class EventPortfolioExecution
             var entry = intent.EntryNotional / quantity;
             var exit = intent.ExitNotional / quantity;
             var gross = (intent.ExitNotional - intent.EntryNotional) * (intent.Long ? 1 : -1);
-            var reason = intent.ExitReason ?? (intent.LastExitOrderId == (intent.CurrentStopId ?? intent.StopId) ? "stop_loss" :
-                intent.LastExitOrderId == (intent.CurrentTargetId ?? intent.TargetId) ? "take_profit" : c.ExitReason);
+            var reason = intent.LastExitOrderId == intent.StopId ? "stop_loss" :
+                intent.LastExitOrderId == intent.TargetId ? "take_profit" : c.ExitReason;
             return new(c.Ticker, c.StrategyName, c.Direction,
                 ExecutionEventTime.ToUtc(intent.FirstEntryAt!.Value), ExecutionEventTime.ToUtc(intent.LastExitAt!.Value),
-                quantity, entry, exit, c.StopLossPrice, intent.OriginalTarget > 0 ? intent.OriginalTarget : c.TakeProfitPrice, reason, gross, intent.Fees,
+                quantity, entry, exit, c.StopLossPrice, c.TakeProfitPrice, reason, gross, intent.Fees,
                 gross - intent.Fees, intent.Quantity, quantity < intent.Quantity ? "partial_fill" : "filled",
                 StrategyId: c.StrategyId, CandidateId: c.CandidateId);
         }

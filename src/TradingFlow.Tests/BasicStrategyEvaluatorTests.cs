@@ -6,28 +6,6 @@ namespace TradingFlow.Tests;
 public sealed class BasicStrategyEvaluatorTests
 {
     [Fact]
-    public void GetLongEntryRejection_SwingReclaimWithRequiredEvidence_IsAccepted()
-    {
-        var strategy = CreateStrategy("swing_reclaim");
-        var signal = CreateSignal() with { IsSwingReclaim = true };
-
-        var rejection = new BasicStrategyEvaluator().GetLongEntryRejection(strategy, signal, 1.5m);
-
-        Assert.Null(rejection);
-    }
-
-    [Fact]
-    public void GetLongEntryRejection_SwingReclaimWithoutSetupEvidence_IsRejected()
-    {
-        var rejection = new BasicStrategyEvaluator().GetLongEntryRejection(
-            CreateStrategy("swing_reclaim"),
-            CreateSignal(),
-            1.5m);
-
-        Assert.Equal("setup_swing_reclaim_not_triggered", rejection);
-    }
-
-    [Fact]
     public void GetLongEntryRejection_Rsi2Setup_UsesDedicatedCompletedDailySignal()
     {
         var signal = CreateSignal() with { IsConnorsRsi2Oversold = true, CurrentRsi2 = 3m };
@@ -40,25 +18,18 @@ public sealed class BasicStrategyEvaluatorTests
         Assert.Null(rejection);
     }
 
+    // No swing short setup remains, so a daily strategy that enables shorts fails closed instead of silently trading.
     [Fact]
-    public void GetShortEntryRejection_SwingRolloverWithBearishEvidence_IsAccepted()
+    public void GetShortEntryRejection_RemovedSwingShortSetup_FailsClosed()
     {
         var strategy = CreateStrategy("momentum") with
         {
             Direction = "short",
-            EntryRules = CreateEntryRules("momentum") with
-            {
-                EnableShort = true,
-                ShortSetupType = "swing_rollover",
-                RequirePriceBelowVwapForShort = false,
-                RequireMacdBearishForShort = true
-            }
+            EntryRules = CreateEntryRules("momentum") with { EnableShort = true, ShortSetupType = "swing_rollover" }
         };
-        var signal = CreateSignal() with { IsSwingRollover = true, IsMacdNotBearish = false };
 
-        var rejection = new BasicStrategyEvaluator().GetShortEntryRejection(strategy, signal, 1m);
-
-        Assert.Null(rejection);
+        Assert.Throws<NotSupportedException>(() =>
+            new BasicStrategyEvaluator().GetShortEntryRejection(strategy, CreateSignal(), 1m));
     }
 
     [Fact]

@@ -24,13 +24,7 @@ public sealed record IntradayPortfolioReplayOutcome(IReadOnlyList<BacktestTrade>
     IReadOnlyList<IntradayReplayEvent> Events, BacktestPortfolioState PortfolioState)
 {
     public IReadOnlyList<IntradayExecutionFill> FillEvents { get; init; } = [];
-    public IReadOnlyList<BacktestCandidateTrade> SelectedCandidates { get; init; } = [];
-    public IReadOnlyList<IntradayZoneAlternativeDecision> AlternativeDecisions { get; init; } = [];
 }
-public sealed record IntradayZoneAlternativeDecision(string CandidateId, int AlternativeIndex, string Direction,
-    long ZoneId, int? PlannedQuantity, decimal? EstimatedNetRiskDollars, decimal? EstimatedNetRewardDollars,
-    decimal? RewardRisk, bool Selected, string Reason,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayZoneTargetPlanningEvidence? TargetPlan = null);
 public sealed record IntradayExecutionFill(string CandidateId, SimulatedExecutionEvent Event)
 {
     public DateTimeOffset SourceIntervalStartUtc { get; init; }
@@ -46,17 +40,13 @@ public static partial class IntradayPortfolioExecution
     public static IntradayPortfolioReplayOutcome Replay(IntradayPortfolioReplayRequest request,
         CancellationToken cancellationToken = default) => new Book(request).Run(cancellationToken);
 
-    private sealed class Intent(BacktestCandidateTrade candidate, StrategyDefinition strategy, int requested, decimal maximumNotional,
-        decimal? reservationPrice = null, decimal plannerLossDollars = 0m, decimal plannerRiskBudgetDollars = 0m)
+    private sealed class Intent(BacktestCandidateTrade candidate, StrategyDefinition strategy, int requested, decimal maximumNotional)
     {
         public BacktestCandidateTrade Candidate { get; } = candidate;
         public StrategyDefinition Strategy { get; } = strategy;
         public IntradayExecutionEvidence Evidence => Candidate.IntradayExecution!;
         public int Requested { get; } = requested;
         public decimal MaximumNotional { get; } = maximumNotional;
-        public decimal ReservationPrice { get; } = reservationPrice ?? candidate.EntryPrice;
-        public decimal PlannerLossDollars { get; } = plannerLossDollars;
-        public decimal PlannerRiskBudgetDollars { get; } = plannerRiskBudgetDollars;
         public int Entered { get; set; }
         public int Exited { get; set; }
         public int Open => Entered - Exited;
@@ -70,7 +60,6 @@ public static partial class IntradayPortfolioExecution
         public bool EntryTriggered { get; set; }
         public bool StopMarket => Evidence.EntryOrderMode == IntradayEntryOrderMode.StopMarket;
         public bool NextBarMarket => Evidence.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket;
-        public bool PythonZone => ExecutionReplayPolicy.IsPythonZone(Candidate.ExecutionReplay?.PolicyId);
         public bool MarketEntry => StopMarket || NextBarMarket;
         public string? ExitReason { get; set; }
         public DateTimeOffset? EntryAt { get; set; }
@@ -82,8 +71,7 @@ public static partial class IntradayPortfolioExecution
         public bool Long => Candidate.Direction == "long";
         public decimal Entry => Entered == 0 ? Candidate.EntryPrice : EntryNotional / Entered;
         public decimal Stop => Protection?.StopPrice ?? Candidate.StopLossPrice;
-        public decimal Target => PythonZone ? Candidate.TakeProfitPrice
-            : Protection?.TargetPrice ?? (Entered > 0 ? InitialTarget : Candidate.TakeProfitPrice);
+        public decimal Target => Protection?.TargetPrice ?? (Entered > 0 ? InitialTarget : Candidate.TakeProfitPrice);
         public bool Failed { get; set; }
         public decimal EntryTaf { get; set; }
         public decimal ExitTaf { get; set; }
@@ -108,8 +96,6 @@ public static partial class IntradayPortfolioExecution
         private readonly List<IntradayReplayEvent> events = [];
         private readonly List<BacktestPortfolioFill> fills = [];
         private readonly List<IntradayExecutionFill> fillEvents = [];
-        private readonly List<BacktestCandidateTrade> selectedCandidates = [];
-        private readonly List<IntradayZoneAlternativeDecision> alternativeDecisions = [];
         private readonly List<BacktestSessionObservation> observations = [];
         private readonly List<BacktestSessionPositionMark> marks = [];
         private readonly Dictionary<string, DateTimeOffset> resolved = new(StringComparer.OrdinalIgnoreCase);
@@ -168,8 +154,7 @@ public static partial class IntradayPortfolioExecution
                 Fail(intent, intent.Evidence.SessionDeadlineUtc, "execution_window_ends_with_unresolved_order_or_exposure");
             return new(trades.OrderBy(x => x.EntryTimestamp).ThenBy(x => x.CandidateId, StringComparer.Ordinal).ToArray(),
                 failures, dispositions, events.OrderBy(x => x.TimestampUtc).ToArray(), BuildState())
-                { FillEvents = fillEvents.OrderBy(x => x.Event.OccurredAtUtc).ToArray(),
-                    SelectedCandidates = selectedCandidates, AlternativeDecisions = alternativeDecisions };
+                { FillEvents = fillEvents.OrderBy(x => x.Event.OccurredAtUtc).ToArray() };
         }
 
         /// <summary>Check policy boundaries once; unsupported session or cost settings must never silently change the experiment.</summary>
@@ -178,23 +163,15 @@ public static partial class IntradayPortfolioExecution
             if (request.Strategies.Count == 0 || request.Portfolio.StartingCapital <= 0 ||
                 request.Portfolio.MaxConcurrentPositions <= 0 || request.StartUtc >= request.EndUtc ||
                 !request.Portfolio.PreventOverlappingTickerPositions || request.Portfolio.MaxBarParticipationPct is < 0 or > 100 ||
-                request.Strategies.Any(x => !ValidStrategyClock(x) || x.Execution.Timeframe != "5m" ||
+                request.Strategies.Any(x => x.Timeframe != "5m" || x.Execution.Timeframe != "5m" ||
                     x.Session.IsContinuousMarket || x.Session.UseExtendedHours) ||
                 request.Candidates.Any(x => x.Direction is not ("long" or "short") || x.IntradayExecution is null ||
-                    !(ExecutionReplayPolicy.IsPythonZone(x.ExecutionReplay?.PolicyId)
-                        ? x.IntradayExecution.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket && x.ZoneExecution is not null
-                        : x.ExecutionReplay?.PolicyId == ExecutionReplayPolicy.ForEntryMode(x.IntradayExecution.EntryOrderMode))))
+                    x.ExecutionReplay?.PolicyId != ExecutionReplayPolicy.ForEntryMode(x.IntradayExecution.EntryOrderMode)))
                 throw new InvalidDataException("Intraday OHLC replay requires five-minute regular sessions, versioned entry evidence, positive capital/slots and overlapping-ticker prevention.");
             if (request.Candidates.Select(x => x.CandidateId).Distinct(StringComparer.Ordinal).Count() != request.Candidates.Count)
                 throw new InvalidDataException("Intraday candidate identities must be unique.");
             if (request.Candidates.Any(x => !request.Strategies.Any(s => s.StrategyId == x.StrategyId)))
                 throw new InvalidDataException("Every intraday candidate must identify a selected strategy.");
-            if (request.Candidates.Any(x => ExecutionReplayPolicy.IsPythonZone(x.ExecutionReplay?.PolicyId) !=
-                request.Strategies.Any(s => s.StrategyId == x.StrategyId && s.EntryRules.IntradayZone?.IsPythonFixedTargetComparison == true)))
-                throw new InvalidDataException("Python zone strategies and candidates must use the same candle execution policy.");
-            if (request.Candidates.Any(x => ExecutionReplayPolicy.IsPythonZone(x.ExecutionReplay?.PolicyId) &&
-                request.Strategies.Single(s => s.StrategyId == x.StrategyId).EntryRules.IntradayZone!.PolicyId != x.ExecutionReplay!.PolicyId))
-                throw new InvalidDataException("Each fixed-zone candidate must retain its strategy's exact execution policy.");
         }
 
         /// <summary>Dequeue due completed decisions in frozen priority order, reserving capital before inspecting their execution bar.</summary>
@@ -209,22 +186,18 @@ public static partial class IntradayPortfolioExecution
         {
             var evidence = candidate.IntradayExecution!;
             var marketEntry = evidence.EntryOrderMode is IntradayEntryOrderMode.StopMarket or IntradayEntryOrderMode.NextBarMarket;
-            var pythonZone = ExecutionReplayPolicy.IsPythonZone(candidate.ExecutionReplay?.PolicyId);
-            if (!(pythonZone ? ValidZoneOrderClock(candidate, clock, deadline)
-                : ValidOrderClock(evidence, clock, deadline, marketEntry)))
+            if (!ValidOrderClock(evidence, clock, deadline, marketEntry))
             { Reject(candidate, "invalid_or_stale_intraday_order_clock"); return; }
             if (marketEntry && !CanAdmitMarketParent(candidate, clock)) return;
             if (live.Any(x => x.Candidate.Ticker.Equals(candidate.Ticker, StringComparison.OrdinalIgnoreCase)) ||
                 !marketEntry && resolved.TryGetValue(candidate.Ticker, out var last) && evidence.BreakoutTimestampUtc < last)
             { Reject(candidate, "crossing_occurred_before_previous_order_resolved"); return; }
             if (!TryConsumeMarketSignal(candidate, clock)) return;
-            if (live.Count >= request.Portfolio.MaxConcurrentPositions ||
-                pythonZone && live.Count > 0 || live.Any(x => x.PythonZone))
+            if (live.Count >= request.Portfolio.MaxConcurrentPositions)
             { Reject(candidate, "max_concurrent_positions_reached"); return; }
             if (unavailableDate is not null)
             { Reject(candidate, "portfolio_economics_unavailable_after_missing_execution"); return; }
-            var intent = ExecutionReplayPolicy.IsPythonZoneVolumeSpread(candidate.ExecutionReplay?.PolicyId)
-                ? PlanVolumeSpreadGroup(candidate) : PlanIntent(candidate);
+            var intent = PlanIntent(candidate);
             if (intent is null) return;
             ReserveIntent(intent, clock);
         }
@@ -232,13 +205,6 @@ public static partial class IntradayPortfolioExecution
         /// <summary>Validate completed intent before capital admission; legacy market signals also consume their inside-range rearm.</summary>
         private bool TryConsumeMarketSignal(BacktestCandidateTrade candidate, DateTimeOffset clock)
         {
-            if (ExecutionReplayPolicy.IsPythonZone(candidate.ExecutionReplay?.PolicyId))
-            {
-                if (ExecutionReplayPolicy.IsPythonZoneVolumeSpread(candidate.ExecutionReplay?.PolicyId)
-                    ? ValidVolumeSpreadGroup(candidate, clock) : ValidCompletedZoneSignal(candidate, clock)) return true;
-                Reject(candidate, "completed_zone_signal_evidence_invalid");
-                return false;
-            }
             if (candidate.IntradayExecution!.EntryOrderMode != IntradayEntryOrderMode.NextBarMarket) return true;
             if (!ValidCompletedMarketSignal(candidate, clock))
             { Reject(candidate, "completed_market_signal_evidence_invalid"); return false; }
@@ -249,15 +215,14 @@ public static partial class IntradayPortfolioExecution
         }
 
         /// <summary>Size from completed evidence with the shared risk planner and frozen capital caps; no future execution price is inspected.</summary>
-        private Intent? PlanIntent(BacktestCandidateTrade candidate, bool recordDisposition = true)
+        private Intent? PlanIntent(BacktestCandidateTrade candidate)
         {
             var evidence = candidate.IntradayExecution!;
             var strategy = strategies[candidate.StrategyId];
             var plannedRisk = candidate.Direction == "long" ? evidence.LimitPrice - candidate.StopLossPrice
                 : candidate.StopLossPrice - evidence.LimitPrice;
-            if (!ExecutionReplayPolicy.IsPythonZone(candidate.ExecutionReplay?.PolicyId) &&
-                evidence.LimitPrice + (candidate.Direction == "long" ? 1 : -1) * 3 * plannedRisk <= 0)
-            { RejectPlan(candidate, "initial_three_r_target_not_positive", recordDisposition); return null; }
+            if (evidence.LimitPrice + (candidate.Direction == "long" ? 1 : -1) * 3 * plannedRisk <= 0)
+            { Reject(candidate, "initial_three_r_target_not_positive"); return null; }
             var equity = Equity();
             var available = Math.Max(0, equity - live.Sum(ReservedNotional));
             var notional = Math.Min(equity / request.Portfolio.MaxConcurrentPositions,
@@ -268,18 +233,15 @@ public static partial class IntradayPortfolioExecution
             var plan = new SharedOrderRiskPlanner().Plan(new(candidate.Ticker, side, equity,
                 evidence.LimitPrice, PlannedStopRequest.FromResolvedPrice(PlannedStopKind.Structural, candidate.StopLossPrice),
                 new(request.Portfolio.AccountRiskBudgetPct, request.Portfolio.MaxPositionNotionalPct),
-                new(PlanningAdverseCostBps(candidate, strategy), entryFee, exitFee), notional));
+                new(strategy.Execution.SlippageBps, entryFee, exitFee), notional));
             if (!plan.IsAccepted || plan.Order is null)
-            { RejectPlan(candidate, "order_plan:" + plan.Rejection?.Code, recordDisposition); return null; }
+            { Reject(candidate, "order_plan:" + plan.Rejection?.Code); return null; }
             var maximumNotional = Math.Min(notional, equity * request.Portfolio.MaxPositionNotionalPct / 100);
             // A sell limit cannot fill below its limit even when the risk planner estimates adverse short slippage below it.
-            var volumeSpread = ExecutionReplayPolicy.IsPythonZoneVolumeSpread(candidate.ExecutionReplay?.PolicyId);
-            var capPrice = volumeSpread ? plan.Order.EstimatedEntryPrice : evidence.LimitPrice;
-            var quantityAtLimit = (int)Math.Min(Int32.MaxValue, Math.Floor(maximumNotional / capPrice));
+            var quantityAtLimit = (int)Math.Min(Int32.MaxValue, Math.Floor(maximumNotional / evidence.LimitPrice));
             var quantity = Math.Min(plan.Order.Quantity, quantityAtLimit);
-            if (quantity <= 0) { RejectPlan(candidate, "limit_price_exceeds_frozen_notional_cap", recordDisposition); return null; }
-            return new Intent(candidate, strategy, quantity, maximumNotional, volumeSpread ? capPrice : null,
-                quantity * plan.Order.EstimatedPriceLossPerShare + plan.Order.EstimatedFixedFees, plan.Order.AccountRiskBudget);
+            if (quantity <= 0) { Reject(candidate, "limit_price_exceeds_frozen_notional_cap"); return null; }
+            return new Intent(candidate, strategy, quantity, maximumNotional);
         }
 
         /// <summary>Reserve a planned parent once and publish its explicit matching contract before any market execution.</summary>
@@ -289,7 +251,6 @@ public static partial class IntradayPortfolioExecution
             var evidence = intent.Evidence;
             intents.Add(intent);
             live.Add(intent);
-            if (ExecutionReplayPolicy.IsPythonZoneVolumeSpread(candidate.ExecutionReplay?.PolicyId)) selectedCandidates.Add(candidate);
             var pendingReason = evidence.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket ? "pending_next_open_market_reserved"
                 : intent.MarketEntry ? "pending_stop_market_reserved" : "pending_limit_reserved";
             dispositions.Add(new(candidate.CandidateId, true, pendingReason, intent.Requested));
@@ -336,12 +297,11 @@ public static partial class IntradayPortfolioExecution
         {
             var e = candidate.IntradayExecution!;
             var count = filledParents.GetValueOrDefault((candidate.Ticker.ToUpperInvariant(), Date(clock)));
-            var pythonZone = ExecutionReplayPolicy.IsPythonZone(candidate.ExecutionReplay?.PolicyId);
             if (count >= e.MaxFilledParentTradesPerSession)
             { Reject(candidate, "filled_parent_session_limit_reached"); return false; }
             var resolvedMarketSignal = e.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket &&
                 resolved.TryGetValue(candidate.Ticker, out var priorResolution) && Date(priorResolution) == Date(clock);
-            if (!pythonZone && (count > 0 || resolvedMarketSignal) && e.RequireRangeReturnBeforeReentry &&
+            if ((count > 0 || resolvedMarketSignal) && e.RequireRangeReturnBeforeReentry &&
                 (!rangeReturns.TryGetValue(candidate.Ticker, out var returned) || Date(returned) != Date(clock) ||
                  returned > clock || e.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket && e.BreakoutTimestampUtc < returned))
             { Reject(candidate, "completed_return_inside_opening_range_required"); return false; }
@@ -353,9 +313,7 @@ public static partial class IntradayPortfolioExecution
 
         /// <summary>Reserve all admitted parent shares at their fixed reference, including still-unfilled quantities.</summary>
         private static decimal ReservedNotional(Intent intent) =>
-            (intent.Pending ? intent.Requested : intent.Open) * Math.Max(
-                ExecutionReplayPolicy.IsPythonZoneVolumeSpread(intent.Candidate.ExecutionReplay?.PolicyId)
-                    ? intent.ReservationPrice : intent.Evidence.LimitPrice, intent.Entry);
+            (intent.Pending ? intent.Requested : intent.Open) * Math.Max(intent.Evidence.LimitPrice, intent.Entry);
 
         /// <summary>Resolve only active work against its exact interval; missing bars preserve unknown exposure instead of shifting fills.</summary>
         private void CompleteInterval(DateTimeOffset start, DateTimeOffset end)
@@ -412,16 +370,12 @@ public static partial class IntradayPortfolioExecution
         /// <summary>Resolve known opening protection, then a triggered market remainder, before unknown later OHLC extremes.</summary>
         private void ProcessMarketEntryInterval(Intent intent, OhlcvBar bar, DateTimeOffset end)
         {
-            if (intent.PythonZone && intent.Pending && bar.Timestamp > intent.Evidence.EntryCutoffUtc)
-                CancelRemainder(intent, bar.Timestamp, "inclusive_entry_cutoff_elapsed");
             var opening = bar with { High = bar.Open, Low = bar.Open, Close = bar.Open };
             var used = intent.Open > 0 ? Protect(intent, opening, end, 0, openingOnly: true) : 0;
             if (intent.Failed || intent.Open == 0 && !intent.Pending) return;
             if (intent.Pending && !intent.StopTriggered)
                 used += intent.NextBarMarket ? FillNextBarMarketEntry(intent, bar, used) : FillStopMarketEntry(intent, bar, used);
             if (intent.Failed) return;
-            if (intent.PythonZone && intent.Pending && bar.Timestamp >= intent.Evidence.EntryCutoffUtc)
-                CancelRemainder(intent, bar.Timestamp, "inclusive_entry_cutoff_remainder_canceled");
             if (intent.Open > 0) Protect(intent, bar, end, used, intent.LastFillAt <= bar.Timestamp);
         }
 
@@ -489,11 +443,6 @@ public static partial class IntradayPortfolioExecution
         {
             var e = intent.Evidence;
             if (intent.Entered == intent.Requested) intent.Pending = false;
-            if (intent.PythonZone)
-            {
-                InitializeFixedZoneProtection(intent, at);
-                return;
-            }
             var risk = intent.Long ? intent.Entry - intent.Candidate.StopLossPrice : intent.Candidate.StopLossPrice - intent.Entry;
             if (risk <= 0)
             {
@@ -558,7 +507,7 @@ public static partial class IntradayPortfolioExecution
             if (stop && !intent.StopTriggered) intent.StopTriggeredAt = opening ? bar.Timestamp : end;
             intent.StopTriggered |= stop;
             if (stop && intent.ExitReason is not ("gap_fill_through_structural_stop" or "actual_fill_notional_limit_breach" or
-                "actual_fill_three_r_target_not_positive" or "actual_fill_management_target_not_positive" or "actual_fill_zone_target_not_favorable"))
+                "actual_fill_three_r_target_not_positive" or "actual_fill_management_target_not_positive"))
                 intent.ExitReason = "stop_loss";
             else if (target) intent.ExitReason = "take_profit";
             CancelRemainder(intent, opening ? bar.Timestamp : end,
@@ -632,7 +581,7 @@ public static partial class IntradayPortfolioExecution
             var tafCharged = entry ? intent.EntryTaf : intent.ExitTaf;
             var remainingTaf = request.Portfolio.FinraTafCap > 0 ? Math.Max(0, request.Portfolio.FinraTafCap - tafCharged) : 0;
             var policy = new ExecutionSimulationPolicy(request.Portfolio.MaxBarParticipationPct,
-                intent.Strategy.Execution.SlippageBps, SyntheticSpreadBps(intent.Candidate, intent.Strategy), request.Portfolio.ImpactBpsAtMaxParticipation,
+                intent.Strategy.Execution.SlippageBps, 0m, request.Portfolio.ImpactBpsAtMaxParticipation,
                 feesCharged ? 0 : request.Portfolio.FixedBuyFee, feesCharged ? 0 : request.Portfolio.FixedSellFee,
                 request.Portfolio.SecFeeRate, request.Portfolio.FinraTafCap > 0 && remainingTaf == 0 ? 0 : request.Portfolio.FinraTafPerShare,
                 remainingTaf);
@@ -771,7 +720,7 @@ public static partial class IntradayPortfolioExecution
             if (intent.Pending || intent.Open > 0) return;
             live.Remove(intent);
             resolved[intent.Candidate.Ticker] = intent.ExitAt ?? at;
-            if (!intent.PythonZone && (intent.StopMarket && intent.Entered > 0 || intent.NextBarMarket))
+            if ((intent.StopMarket && intent.Entered > 0 || intent.NextBarMarket))
             {
                 rangeReturns.Remove(intent.Candidate.Ticker);
                 rearmEvidence[intent.Candidate.Ticker] = intent.Evidence;

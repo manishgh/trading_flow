@@ -21,7 +21,7 @@
 
 ## Current Catalog
 
-`configs/strategy-catalog.json` contains 21 research artifacts and 20 archived artifacts. None is authorized for a new paper-shadow or live run. Archived
+`configs/strategy-catalog.json` contains 3 research artifacts and no archived artifacts (see `docs/research/retired-strategy-artifacts-2026-11-07.md`). None is authorized for a new paper-shadow or live run. Archived
 artifacts remain parseable evidence but are hidden from normal operation.
 
 ## Removed Scope

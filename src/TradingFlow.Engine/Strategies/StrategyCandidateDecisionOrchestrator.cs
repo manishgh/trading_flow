@@ -136,23 +136,11 @@ public sealed class StrategyCandidateDecisionOrchestrator(
     private static void RequireSupportedStrategy(StrategyDecisionRequest request)
     {
         var strategy = request.Strategy;
-        if (strategy.EntryRules.IntradayZone is { } intradayZone)
-        {
-            intradayZone.Validate(strategy);
-            if (request.SelectionMode == StrategySelectionMode.Backtest) return;
-            throw new InvalidOperationException("Intraday zone strategies are supported only in research backtests.");
-        }
         if (strategy.EntryRules.OpeningRangeBreakout is { } openingRange)
         {
             openingRange.Validate(strategy);
             if (request.SelectionMode == StrategySelectionMode.Backtest) return;
             throw new InvalidOperationException("Opening-range day strategies are supported only in research backtests.");
-        }
-        if (strategy.EntryRules.PreviousSessionBreakout is not null)
-        {
-            strategy.EntryRules.PreviousSessionBreakout.Validate(strategy);
-            if (request.SelectionMode == StrategySelectionMode.Backtest) return;
-            throw new InvalidOperationException("Previous-session day strategies are supported only in research backtests.");
         }
         if (!strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
         {

@@ -107,7 +107,7 @@ public sealed class ContinuationProtectionConfigurationTests
 
     // Reuse an existing deterministic recipe without changing or registering a catalog artifact.
     private static StrategyDefinition ReadBaseline() => new SimpleYamlReader().ReadStrategy(Path.Combine(
-        TestRepository.FindRoot(), "configs", "strategies", "minervini-trend-template-vcp.v4-trend-rider.yaml"));
+        TestRepository.FindRoot(), "src", "TradingFlow.Tests", "Fixtures", "Strategies", "daily-trailing-swing.fixture.yaml"));
 
     // Only isolated in-memory tests opt in to the approved optional exit settings.
     private static StrategyDefinition ValidStrategy(ContinuationProtectionRules? policy = null)

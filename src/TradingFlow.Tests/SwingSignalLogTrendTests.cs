@@ -46,8 +46,8 @@ public sealed class SwingSignalLogTrendTests
         List<IndicatorSnapshot> Snapshots) Fixture()
     {
         var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(
-            TestRepository.FindRoot(), "configs", "strategies",
-            "minervini-trend-template-vcp.v4-trend-rider.yaml"));
+            TestRepository.FindRoot(), "src", "TradingFlow.Tests", "Fixtures", "Strategies",
+            "daily-trailing-swing.fixture.yaml"));
         var start = new DateTimeOffset(2025, 11, 3, 5, 0, 0, TimeSpan.Zero);
         var bars = new List<OhlcvBar>();
         var snapshots = new List<IndicatorSnapshot>();

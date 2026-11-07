@@ -188,9 +188,7 @@ public sealed record EntryRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireOrderedReclaimPullback = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DrawdownQualificationRules? DrawdownQualification = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? HistoricalNewsDiagnostic = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] PreviousSessionBreakoutRules? PreviousSessionBreakout = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] OpeningRangeBreakoutRules? OpeningRangeBreakout = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayZoneRules? IntradayZone = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] OpeningRangeBreakoutRules? OpeningRangeBreakout = null);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,
@@ -248,6 +246,9 @@ public sealed record ExecutionRules(
 {
     /// <summary>Plan from the prior close, keep a trade that opens beyond its stop, and exit it at the next eligible open.</summary>
     public const string KeepAndExitNextOpen = "keep_and_exit_next_open";
+
+    /// <summary>Admission timing for daily strategies that keep opening gaps; otherwise identical to the next-slice market-exit timing.</summary>
+    public const string KeptGapTimingPolicy = "prior-close-plan-next-open-fill-kept-gap-exits-v4";
 
     public ExecutionConfirmationRules EffectiveConfirmation =>
         Confirmation ?? ExecutionConfirmationRules.Disabled;

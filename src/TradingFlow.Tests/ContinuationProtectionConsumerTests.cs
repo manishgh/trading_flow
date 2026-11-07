@@ -43,7 +43,7 @@ public sealed class ContinuationProtectionConsumerTests
 
     // Reuse the checked-in source recipe; no catalog or operator configuration is changed.
     private static StrategyDefinition ReadBaseline() => new SimpleYamlReader().ReadStrategy(Path.Combine(
-        TestRepository.FindRoot(), "configs", "strategies", "minervini-trend-template-vcp.v4-trend-rider.yaml"));
+        TestRepository.FindRoot(), "src", "TradingFlow.Tests", "Fixtures", "Strategies", "daily-trailing-swing.fixture.yaml"));
 
     // Enable the policy only in this isolated test object's exit rules.
     private static StrategyDefinition WithContinuation()

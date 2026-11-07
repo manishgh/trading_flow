@@ -22,11 +22,6 @@ public static class RunWorkflowEndpoints
             await workflow.GetAsync(id, token) is { } job ? Results.Ok(job) : Results.NotFound());
         group.MapGet("/workflow/jobs/{id:guid}/details", async (Guid id, RunWorkflowService workflow, CancellationToken token) =>
             await workflow.DetailsAsync(id, token) is { } detail ? Results.Ok(detail) : Results.NotFound());
-        group.MapGet("/workflow/jobs/{id:guid}/zone-evaluations", async (Guid id, long? offset, int? limit, RunWorkflowService workflow, CancellationToken token) =>
-        {
-            try { return await workflow.ZoneEvaluationsAsync(id, offset ?? 0, limit ?? 50, token) is { } page ? Results.Ok(page) : Results.NotFound(); }
-            catch (Exception exception) when (exception is InvalidOperationException or IOException or System.Text.Json.JsonException) { return Error(exception); }
-        });
         group.MapPost("/workflow/jobs/{id:guid}/cancel", async (Guid id, CancelJobRequest request, RunWorkflowService workflow, CancellationToken token) =>
         {
             try { return await workflow.CancelAsync(id, request, token) is { } job ? Results.Accepted($"/api/v1/workflow/jobs/{id}", job) : Results.NotFound(); }

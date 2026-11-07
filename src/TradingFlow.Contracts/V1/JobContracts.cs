@@ -74,8 +74,7 @@ public sealed record RunJobDetailsResponse(RunJobResponse Job, IReadOnlyList<str
     IReadOnlyList<RunStrategyProgress> Strategies, IReadOnlyList<MonthlyRunResult>? MonthlyResults = null,
     string? MonthlyUnavailableReason = null, PreparedMarketDataSummaryResponse? PreparedMarketData = null,
     RunPortfolioStateResponse? PortfolioState = null, IReadOnlyList<RunHistoryEligibility>? HistoryEligibility = null,
-    DecisionContextEvidenceSummary? EvidenceSummary = null,
-    IReadOnlyList<RunZoneDecisionDetail>? ZoneDecisions = null, int ZoneDecisionCount = 0);
+    DecisionContextEvidenceSummary? EvidenceSummary = null);
 
 /// <summary>The actual terminal book; reservations remain separate from cash and marked holdings.</summary>
 public sealed record RunPortfolioStateResponse(string ValuationBasis, DateTimeOffset CutoffUtc,
@@ -119,44 +118,3 @@ public sealed record RunResultSummary(decimal? StartingCapital, decimal? EndingC
 public sealed record RunStrategyProgress(string StrategyName, string Status, int CompletedTickerCount,
     int TotalTickerCount, string? CurrentTicker, IReadOnlyList<string> RecentEvents);
 
-/// <summary>Server-calculated zone intent and observed execution, shared by Web and Android.</summary>
-public sealed record RunZoneDecisionDetail(string CandidateId, string StrategyId, string Ticker, string Direction,
-    string Pattern, long ZoneId, int ZoneVersion, string ZoneRole, decimal ZoneBottom, decimal ZoneTop, int PivotCount,
-    DateTimeOffset PivotBarStartUtc, DateTimeOffset PivotCompletedAtUtc, DateTimeOffset PivotConfirmedAtUtc,
-    DateTimeOffset ZoneKnownAtUtc, DateTimeOffset? FlippedAtUtc, DateTimeOffset ConfirmationBarStartUtc,
-    DateTimeOffset ConfirmationCompletedAtUtc, decimal ConfirmationClose, decimal? Vwap, decimal? SlotRelativeVolume,
-    decimal? SlotMedianVolume, int SlotSampleCount, decimal FrozenStopPrice, DateTimeOffset SessionDeadlineUtc,
-    string Status, string ResolutionReason, decimal? ActualEntryPrice, decimal? ActualExitPrice,
-    string? ZonePolicyId = null, DateTimeOffset? EntryCutoffUtc = null, decimal? FixedTargetPrice = null,
-    decimal? Atr = null, long? TargetZoneId = null, decimal? TargetZoneBottom = null, decimal? TargetZoneTop = null,
-    RunZoneVolumeSpreadDetail? VolumeSpread = null,
-    IReadOnlyList<RunZoneAlternativeDecisionDetail>? AlternativeDecisions = null,
-    RunZoneTargetPlanningDetail? TargetPlan = null, string? LongBounceVolumeMode = null,
-    string? StopBasis = null, decimal? PreviousLow = null, decimal? ConfirmationLow = null,
-    decimal? RawStopPrice = null, decimal? TickSize = null,
-    RunZoneRetestDetail? Retest = null, int? TargetZoneVersion = null, DateTimeOffset? TargetZoneKnownAtUtc = null);
-
-/// <summary>Server-owned arm and active-source versions; clients display these without reconstructing the entry.</summary>
-public sealed record RunZoneRetestDetail(int ResistanceVersion, decimal ResistanceBottom, decimal ResistanceTop,
-    DateTimeOffset ResistanceKnownAtUtc, DateTimeOffset FlippedAtUtc, decimal FlipAtr, bool CanArmRetest,
-    int ActiveSourceVersion, decimal ActiveSourceBottom, decimal ActiveSourceTop,
-    DateTimeOffset ActiveSourceKnownAtUtc, DateTimeOffset ConfirmationSnapshotAsOfUtc);
-
-/// <summary>Frozen prospective cost estimate; the fallback multiple does not guarantee realized reward/risk.</summary>
-public sealed record RunZoneTargetPlanningDetail(string TargetOrigin, decimal? FallbackNetRiskMultiple,
-    int? PlannedQuantity = null, decimal? PlannerLossDollars = null, decimal? PlannerRiskBudgetDollars = null,
-    decimal? EstimatedEntryFillPrice = null, decimal? EstimatedStopFillPrice = null,
-    decimal? EstimatedEntryFees = null, decimal? EstimatedStopExitFees = null, decimal? EstimatedTargetFees = null,
-    decimal? EstimatedNetStopRisk = null, decimal? EstimatedNetReward = null, decimal? EstimatedNetRewardRisk = null,
-    decimal? AdverseCostBps = null, decimal? ResolvedTargetPrice = null);
-
-/// <summary>Server-frozen synthetic quote and ratio audit; MinimumRewardRisk zero means the minimum reward/risk filter is disabled.</summary>
-public sealed record RunZoneVolumeSpreadDetail(decimal BidPrice, decimal AskPrice, decimal FullSpreadBps,
-    decimal MaximumSpreadBps, decimal MinimumRewardRisk, int OrderedAlternativeIndex, decimal? PlannedQuantity,
-    decimal? EstimatedRoundTripTicketFees, decimal? EstimatedNetRiskDollars, decimal? EstimatedNetRewardDollars,
-    decimal? SelectedRewardRisk);
-
-/// <summary>Observed ordered admission checks copied from the server without client-side strategy decisions.</summary>
-public sealed record RunZoneAlternativeDecisionDetail(int AlternativeIndex, string Direction, long ZoneId,
-    decimal? PlannedQuantity, decimal? EstimatedNetRiskDollars, decimal? EstimatedNetRewardDollars,
-    decimal? RewardRisk, bool Selected, string Reason, RunZoneTargetPlanningDetail? TargetPlan = null);

@@ -872,7 +872,6 @@ public static class SwingResearchPromotionEvaluator
             .ToArray();
 
     private static bool RequiresAdditiveTradeEvidence(string cell) =>
-        cell == MomentumResearchCell.MomentumStockTrendVcpV7 ||
         MomentumResearchCell.RequiresCatalyst(cell);
 
     private static T? UniqueOrNull<T>(

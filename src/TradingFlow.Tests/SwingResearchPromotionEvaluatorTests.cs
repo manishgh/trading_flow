@@ -119,7 +119,7 @@ public sealed class SwingResearchPromotionEvaluatorTests
     public void Evaluate_BlocksA3A4WithoutIndependentTradeAndIssuerEvidence()
     {
         var fixture = PassingFixture(
-            MomentumResearchCell.MomentumStockTrendVcpV7,
+            MomentumResearchCell.MomentumStockTrendClassifiedCatalyst,
             parentCell: MomentumResearchCell.MomentumStockTrend);
         var supplemental = fixture.SupplementalEvidence with
         {

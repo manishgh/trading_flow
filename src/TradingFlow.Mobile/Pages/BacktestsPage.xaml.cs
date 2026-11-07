@@ -552,8 +552,6 @@ public partial class BacktestsPage : ContentPage
         if (!String.IsNullOrWhiteSpace(selectedJob.MonthlyUnavailableReason))
             ResultLabel.Text += "\n" + selectedJob.MonthlyUnavailableReason;
         RenderPortfolioState(selectedJob.PortfolioState);
-        RenderZoneDecisions(selectedJob.ZoneDecisions);
-        if (selectedJob.Status == "completed") RenderZoneEvaluationControls(selectedJob.JobId);
         foreach (var history in selectedJob.HistoryEligibility)
         {
             var historyLabel = history.Status switch
@@ -611,51 +609,6 @@ public partial class BacktestsPage : ContentPage
         await LoadAsync();
     }
 
-    /// <summary>Displays shared server evidence for zone hypotheses without adding mobile entry or execution rules.</summary>
-    private void RenderZoneDecisions(IReadOnlyList<RunZoneDecisionDetail>? decisions)
-    {
-        if (decisions is null || decisions.Count == 0) return;
-        StrategyGroupsStack.Add(new Label { Text = "Zone entry and SIP execution evidence · latest hypotheses; complete journals retain every event.", FontSize = 12 });
-        foreach (var decision in decisions)
-            StrategyGroupsStack.Add(new Label { Text = String.Join("\n", IntradayZoneDecisionPresentation.Lines(decision)),
-                FontSize = 12, LineBreakMode = LineBreakMode.WordWrap });
-    }
-
-    /// <summary>Formats server-calculated terminal holdings and working actions without client accounting.</summary>
-    // Fetch fifty source rows per page; rejected candles remain accessible without a candidate.
-    private void RenderZoneEvaluationControls(Guid jobId)
-    {
-        var rows = new VerticalStackLayout { Spacing = 6 };
-        var load = new Button { Text = "Show evaluated zone candles" };
-        var previous = new Button { Text = "Previous candles", IsVisible = false };
-        long offset = 0;
-        async Task ShowPage(long requestedOffset)
-        {
-            load.IsEnabled = previous.IsEnabled = false;
-            try
-            {
-                var page = await api.Workflow.ZoneEvaluationsAsync(jobId, requestedOffset, 50);
-                rows.Clear();
-                rows.Add(new Label { Text = $"{page.TotalCount} retained candle evaluations - offset {page.Offset}" +
-                    (page.UnavailableReason is null ? "" : "\n" + page.UnavailableReason), FontSize = 12 });
-                foreach (var row in page.Rows)
-                    rows.Add(new Label { Text = String.Join("\n", ZoneEvaluationPresentation.Lines(row)), FontSize = 12,
-                        LineBreakMode = LineBreakMode.WordWrap });
-                offset = page.Offset;
-                previous.IsVisible = offset > 0;
-                load.IsVisible = page.NextOffset is not null;
-                load.Text = "Next candles";
-            }
-            catch (Exception exception) when (exception is HttpRequestException or InvalidDataException)
-            { rows.Clear(); rows.Add(new Label { Text = exception.Message, FontSize = 12 }); }
-            finally { load.IsEnabled = previous.IsEnabled = true; }
-        }
-        load.Clicked += async (_, _) => await ShowPage(load.Text == "Next candles" ? offset + 50 : 0);
-        previous.Clicked += async (_, _) => await ShowPage(Math.Max(0, offset - 50));
-        StrategyGroupsStack.Add(rows);
-        StrategyGroupsStack.Add(previous);
-        StrategyGroupsStack.Add(load);
-    }
     /// <summary>Formats server-calculated terminal holdings and working actions without client accounting.</summary>
     private void RenderPortfolioState(RunPortfolioStateResponse? state)
     {

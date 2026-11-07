@@ -19,7 +19,6 @@ public sealed record OpeningRangeBreakoutRules(
     public void Validate(StrategyDefinition strategy)
     {
         if (PolicyId is not ("opening-range-breakout-v1" or OutwardOrderRoundingPolicyId or CompletedBreakoutPolicyId) || MaxFilledParentTradesPerSession <= 0 ||
-            strategy.EntryRules.PreviousSessionBreakout is not null ||
             strategy.Direction != "long_short" || !strategy.EntryRules.EnableShort ||
             strategy.EntryRules.ShortSetupType != SetupType)
             throw new InvalidOperationException("Opening-range breakout requires its exclusive long/short research policy and a positive filled-parent session limit.");

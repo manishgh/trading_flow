@@ -24,7 +24,7 @@ public sealed class HistoricalNewsCatalogTests
         var choice = Assert.Single(catalog.GetDecisionContextEvidenceChoices());
         Assert.True(choice.Available);
         var selected = (await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest))
-            .Single(item => item.Identity.StrategyId == "technical.recovery-sma5-news-evidence");
+            .Single(item => item.Identity.StrategyId == "technical.recovery-sma5-news-avoidance");
         var request = Request(selected.Identity, choice.Reference);
         Assert.True(TradingFlow.Web.TradingApiV1Endpoints.UsesNews(selected.Definition));
         var original = new EngineConfig("channels", 7, 99, 260, 120, true);
@@ -70,7 +70,7 @@ public sealed class HistoricalNewsCatalogTests
         var catalog = Catalog(fixture);
         var choice = Assert.Single(catalog.GetDecisionContextEvidenceChoices());
         var price = (await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest))
-            .Single(item => item.Identity.StrategyId == "technical.recovery-sma5-exit");
+            .Single(item => item.Identity.StrategyId == "swing.connors-rsi2");
         var strict = price with { Definition = price.Definition with { EntryRules = price.Definition.EntryRules with { RequirePositiveNews = true } } };
         Assert.False(TradingFlow.Web.TradingApiV1Endpoints.UsesNews(price.Definition));
         Assert.True(TradingFlow.Web.TradingApiV1Endpoints.UsesNews(strict.Definition));
@@ -79,7 +79,6 @@ public sealed class HistoricalNewsCatalogTests
     }
 
     [Theory]
-    [InlineData("recovery-sma5-news-evidence.bt-v1.yaml", "evidence_checked")]
     [InlineData("recovery-sma5-news-avoidance.bt-v1.yaml", "avoid_recent_company_news")]
     // Generated durable strategy snapshots retain the registered treatment through the normal YAML writer/parser.
     public void StrategySnapshotRoundTripRetainsDiagnosticTreatment(string name, string treatment)

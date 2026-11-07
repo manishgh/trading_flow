@@ -12,7 +12,7 @@ public sealed record EventPortfolioExecutionAssumptions(ExecutionProtectionActiv
     long MaximumQuoteAgeNanoseconds, long FillReportLatencyNanoseconds, bool RawPriceAndQuantityBasisVerified,
     decimal PriceFactorToRaw, decimal QuantityFactorToRaw, string EvidenceVersion)
 {
-    /// <summary>The shared entry spread ceiling, frozen for intraday quote execution.</summary>
+    /// <summary>Entry spread ceiling recorded in older manifests; the daily SIP portfolio does not apply it.</summary>
     public decimal? MaxEntrySpreadBps { get; init; }
 }
 
@@ -30,7 +30,6 @@ public static class EventPortfolioSourceBinding
     public static EventPortfolioReplayBinding? FromConfig(BacktestRunConfig run, string resultPath)
     {
         if (!ExecutionReplayPolicy.IsEventPortfolio(run.Engine.ExecutionReplayPolicyId)) return null;
-        var intraday = run.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1;
         var path = run.Engine.ExecutionSourceManifestPath;
         var expected = run.Engine.ExecutionSourceManifestSha256;
         if (String.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path) || expected is not { Length: 64 } || expected.Any(character => !Uri.IsHexDigit(character)))
@@ -39,11 +38,10 @@ public static class EventPortfolioSourceBinding
         var calendar = FrozenExchangeCalendar.Read(manifest.CalendarReceiptPath, manifest.CalendarReceiptSha256);
         if (manifest.SourcePolicy.SourceAvailabilityDelayNanoseconds != 0 ||
             manifest.Assumptions.FillReportLatencyNanoseconds != 0 ||
-            manifest.Assumptions.ProtectionActivation != (intraday ? ExecutionProtectionActivation.CustomPerFill : ExecutionProtectionActivation.NativeParentFullyFilled) ||
-            intraday && manifest.Assumptions.MaxEntrySpreadBps is not > 0 ||
+            manifest.Assumptions.ProtectionActivation != ExecutionProtectionActivation.NativeParentFullyFilled ||
             !manifest.Assumptions.RawPriceAndQuantityBasisVerified || manifest.Assumptions.PriceFactorToRaw != 1 ||
             manifest.Assumptions.QuantityFactorToRaw != 1 || manifest.Assumptions.MaximumQuoteAgeNanoseconds <= 0)
-            throw new InvalidDataException("SIP execution requires zero source/report delay, the selected protection workflow, verified raw units and positive quote-age/spread limits.");
+            throw new InvalidDataException("SIP execution requires zero source/report delay, the selected protection workflow, verified raw units and a positive quote-age limit.");
         var selected = run.Tickers.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var sessions = manifest.Sessions.Where(session => selected.Contains(session.RegularQuotesRequest.Symbol)).ToArray();
         if (selected.Any(symbol => !sessions.Any(session => session.RegularQuotesRequest.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))))

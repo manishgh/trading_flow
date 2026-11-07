@@ -170,9 +170,7 @@ public sealed class SimpleYamlReader
                 RequireOrderedReclaimPullback: OptionalBool(map, "entry_rules.require_ordered_reclaim_pullback", false),
                 DrawdownQualification: ReadDrawdownQualification(map),
                 HistoricalNewsDiagnostic: ReadHistoricalNewsDiagnostic(map),
-                PreviousSessionBreakout: ReadPreviousSessionBreakout(map),
-                OpeningRangeBreakout: ReadOpeningRangeBreakout(map),
-                IntradayZone: ReadIntradayZone(map)),
+                OpeningRangeBreakout: ReadOpeningRangeBreakout(map)),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -243,9 +241,8 @@ public sealed class SimpleYamlReader
             !strategy.Execution.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException($"Opening gap policy '{gapPolicy}' requires '{ExecutionRules.KeepAndExitNextOpen}' on a daily strategy.");
         strategy.ExitRules.ContinuationProtection?.Validate(strategy.ExitRules);
-        strategy.EntryRules.PreviousSessionBreakout?.Validate(strategy);
         strategy.EntryRules.OpeningRangeBreakout?.Validate(strategy);
-        strategy.EntryRules.IntradayZone?.Validate(strategy);
+        RejectRemovedSetupRules(strategy);
         map.ThrowIfUnknownKeys(path);
         return strategy;
     }
@@ -663,54 +660,25 @@ public sealed class SimpleYamlReader
             ? treatment : throw new InvalidOperationException("Unsupported historical_news_diagnostic treatment.");
     }
 
-    // An explicit mapping selects the fixed baseline; omission preserves existing canonical strategy bytes.
-    private static PreviousSessionBreakoutRules? ReadPreviousSessionBreakout(IReadOnlyDictionary<string, List<string>> map)
+    // Thresholds of the removed VCP, anchored-VWAP bounce and swing-reclaim setups (and daily short setups) have no
+    // evaluator rule any more. Reject them when the file is loaded; silently ignoring them would let a copied
+    // config trade without the filter its author set. The parameter fields stay because kept configs list them at
+    // their defaults and they are part of each strategy's identity hash.
+    private static void RejectRemovedSetupRules(StrategyDefinition strategy)
     {
-        const string section = "entry_rules.previous_session_breakout";
-        if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(section + ".", StringComparison.OrdinalIgnoreCase)))
-            return null;
-        return new PreviousSessionBreakoutRules(OptionalString(map, section + ".policy_id", "previous-session-breakout-v1"));
+        var rules = strategy.EntryRules;
+        if (rules.MinContractions is not null || rules.MaxContractions is not null ||
+            rules.RequireVolatilityHalvingLeftToRight || rules.RequireVolumeDryUpPreBreakout ||
+            rules.MinBreakoutVolumeRatio is not null || rules.AvwapProximityPct is not null ||
+            rules.RequirePullbackVolumeDryup || rules.MinBounceVolumeRatio is not null ||
+            rules.RequireOrderedReclaimPullback)
+            throw new InvalidOperationException(
+                "This strategy sets a threshold of a removed setup (VCP, anchored-VWAP bounce or swing reclaim); no rule enforces it.");
+        if (rules.EnableShort && rules.OpeningRangeBreakout is null)
+            throw new InvalidOperationException("No daily short setup remains; enable_short is supported only by the opening-range breakout.");
     }
+
     // An explicit mapping selects the reviewed ORB policy; omission preserves historical strategy identities.
-    // Resolve the approved immutable zone recipe; unsupported keys remain strict parser errors.
-    private static IntradayZoneRules? ReadIntradayZone(IReadOnlyDictionary<string, List<string>> map)
-    {
-        const string section = "entry_rules.intraday_zone";
-        if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(section + ".", StringComparison.OrdinalIgnoreCase))) return null;
-        return new IntradayZoneRules(OptionalString(map, section + ".policy_id", "intraday-close-pivot-zones-v1"),
-            OptionalInt(map, section + ".max_filled_parent_trades_per_session", 2),
-            OptionalInt(map, section + ".pivot_strength", 3), OptionalInt(map, section + ".prior_session_count", 5),
-            OptionalDecimal(map, section + ".merge_atr_multiple") ?? .35m,
-            OptionalDecimal(map, section + ".flip_atr_multiple") ?? .2m,
-            ReadPythonZoneComparison(map), ReadPythonZoneVolumeSpreadComparison(map));
-    }
-
-    // Comparison inputs are explicit rather than silently borrowing base engine constants.
-    private static PythonZoneComparisonRules? ReadPythonZoneComparison(IReadOnlyDictionary<string, List<string>> map)
-    {
-        const string section = "entry_rules.intraday_zone.python_comparison";
-        if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(section + ".", StringComparison.OrdinalIgnoreCase))) return null;
-        return new(RequireInt(map, section + ".minimum_pivot_count"), RequireInt(map, section + ".minimum_zone_count"),
-            RequireDecimal(map, section + ".long_touch_dollar_tolerance"), RequireDecimal(map, section + ".long_vwap_allowance_atr_multiple"),
-            RequireDecimal(map, section + ".maximum_vwap_distance_atr_multiple"), RequireDecimal(map, section + ".minimum_short_relative_volume"),
-            RequireDecimal(map, section + ".stop_atr_multiple"), RequireInt(map, section + ".entry_cutoff_minutes_before_close"));
-    }
-
-    // A separate explicit section freezes the new recipe without changing the original comparison's serialized identity.
-    private static PythonZoneVolumeSpreadComparisonRules? ReadPythonZoneVolumeSpreadComparison(IReadOnlyDictionary<string, List<string>> map)
-    {
-        const string section = "entry_rules.intraday_zone.python_volume_spread_comparison";
-        if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(section + ".", StringComparison.OrdinalIgnoreCase))) return null;
-        return new(RequireInt(map, section + ".minimum_pivot_count"), RequireInt(map, section + ".minimum_zone_count"),
-            RequireDecimal(map, section + ".long_touch_dollar_tolerance"), RequireDecimal(map, section + ".minimum_relative_volume"),
-            RequireDecimal(map, section + ".stop_atr_multiple"), RequireInt(map, section + ".entry_cutoff_minutes_before_close"),
-            RequireDecimal(map, section + ".synthetic_spread_bps"), RequireDecimal(map, section + ".maximum_spread_bps"),
-            RequireDecimal(map, section + ".minimum_reward_risk"),
-            OptionalNullableString(map, section + ".long_bounce_volume_mode"), OptionalNullableString(map, section + ".target_policy"),
-            OptionalDecimal(map, section + ".fallback_net_risk_multiple"), OptionalNullableString(map, section + ".long_stop_basis"),
-            OptionalNullableString(map, section + ".long_entry_mode"));
-    }
-
     private static OpeningRangeBreakoutRules? ReadOpeningRangeBreakout(IReadOnlyDictionary<string, List<string>> map)
     {
         const string section = "entry_rules.opening_range_breakout";
@@ -996,11 +964,7 @@ public sealed class SimpleYamlReader
         {
             "entry_rules",
             "entry_rules.technical_factor",
-            "entry_rules.previous_session_breakout",
             "entry_rules.opening_range_breakout",
-            "entry_rules.intraday_zone",
-            "entry_rules.intraday_zone.python_comparison",
-            "entry_rules.intraday_zone.python_volume_spread_comparison",
             "entry_rules.drawdown_qualification",
             "risk_guards",
             "risk_guards.per_ticker_daily",

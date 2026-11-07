@@ -680,22 +680,6 @@ public sealed class CrossSectionalMomentumResearchAnalyzerTests
     }
 
     [Fact]
-    public void FrozenV7VcpContract_MatchesAuditedDefinition()
-    {
-        var options = MomentumFrozenV7Vcp.Definition;
-
-        Assert.Equal(60, options.LookbackBars);
-        Assert.Equal(2, options.PivotStrengthBars);
-        Assert.Equal(2, options.MinimumContractions);
-        Assert.Equal(4, options.MaximumContractions);
-        Assert.Equal(0.90m, options.MaximumDepthRatioToPrevious);
-        Assert.Equal(0.85m, options.MaximumContractionToAdvanceVolumeRatio);
-        Assert.False(options.RequireProgressiveContractionVolume);
-        Assert.Equal(3, options.MinimumVolumeReferenceBars);
-        Assert.Equal(1m, MomentumFrozenV7Vcp.MinimumBreakoutVolumeRatio);
-    }
-
-    [Fact]
     public void Analyze_ClassifiedCatalystCellFailsClosedWithoutEvidence()
     {
         var bars = new Dictionary<string, IReadOnlyList<OhlcvBar>>(
@@ -716,7 +700,6 @@ public sealed class CrossSectionalMomentumResearchAnalyzerTests
                 [
                     MomentumResearchCell.MomentumOnly,
                     MomentumResearchCell.MomentumStockTrend,
-                    MomentumResearchCell.MomentumStockTrendVcpV7,
                     MomentumResearchCell.MomentumStockTrendClassifiedCatalyst
                 ]
             }
@@ -745,8 +728,6 @@ public sealed class CrossSectionalMomentumResearchAnalyzerTests
             MomentumResearchCell.MomentumOnly,
             MomentumResearchCell.ParentOf(
                 MomentumResearchCell.MomentumClassifiedCatalyst));
-        Assert.False(MomentumResearchCell.RequiresVcp(
-            MomentumResearchCell.MomentumStockTrendClassifiedCatalyst));
     }
 
     [Fact]
@@ -845,14 +826,6 @@ public sealed class CrossSectionalMomentumResearchAnalyzerTests
             MomentumResearchCell.MomentumStockTrend,
             MomentumResearchCell.ParentOf(
                 MomentumResearchCell.MomentumStockTrendClassifiedCatalyst));
-        Assert.NotEqual(
-            MomentumResearchCell.MomentumStockTrendVcpV7,
-            MomentumResearchCell.ParentOf(
-                MomentumResearchCell.MomentumStockTrendClassifiedCatalyst));
-        Assert.False(MomentumResearchCell.RequiresVcp(
-            MomentumResearchCell.MomentumClassifiedCatalyst));
-        Assert.False(MomentumResearchCell.RequiresVcp(
-            MomentumResearchCell.MomentumStockTrendClassifiedCatalyst));
     }
 
     private static CrossSectionalMomentumStudyDefinition Definition() =>

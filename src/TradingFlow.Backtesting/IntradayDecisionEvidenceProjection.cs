@@ -16,7 +16,7 @@ public static class IntradayDecisionEvidenceProjection
         var fills = state.Fills.Where(fill => fill.IsEntry).ToLookup(fill => fill.CandidateId, StringComparer.Ordinal);
         var trades = replay.Trades.ToDictionary(trade => trade.CandidateId, StringComparer.Ordinal);
         var details = new List<BacktestIntradayDecisionDetail>();
-        foreach (var candidate in candidates.Where(candidate => candidate.IntradayExecution is not null && candidate.ZoneExecution is null)
+        foreach (var candidate in candidates.Where(candidate => candidate.IntradayExecution is not null)
             .OrderByDescending(candidate => candidate.EntryTimestamp).ThenBy(candidate => candidate.CandidateId, StringComparer.Ordinal)
             .Take(MaximumDisplayDecisions))
         {
@@ -50,6 +50,6 @@ public static class IntradayDecisionEvidenceProjection
                 intent.OpeningRangeCompletedAtUtc, intent.OpeningRelativeVolume, intent.OpeningVolumeBaselineSampleCount,
                 intent.MaxFilledParentTradesPerSession, intent.RequireRangeReturnBeforeReentry));
         }
-        return state with { IntradayDecisions = details, IntradayDecisionCount = candidates.Count(candidate => candidate.IntradayExecution is not null && candidate.ZoneExecution is null) };
+        return state with { IntradayDecisions = details, IntradayDecisionCount = candidates.Count(candidate => candidate.IntradayExecution is not null) };
     }
 }

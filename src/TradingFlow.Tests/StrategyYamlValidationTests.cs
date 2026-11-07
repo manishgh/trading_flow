@@ -8,8 +8,8 @@ public sealed class StrategyYamlValidationTests
     public void ReadStrategy_RejectsUnknownRuleInsteadOfSilentlyIgnoringIt()
     {
         var path = CopyCanonicalStrategy(content => content.Replace(
-            "  setup_type: volatility_contraction_pattern",
-            "  setup_type: volatility_contraction_pattern" + Environment.NewLine +
+            "  setup_type: momentum",
+            "  setup_type: momentum" + Environment.NewLine +
             "  misspelled_risk_gate: true",
             StringComparison.Ordinal));
         try
@@ -63,9 +63,9 @@ public sealed class StrategyYamlValidationTests
     {
         var source = Path.Combine(
             TestRepository.FindRoot(),
-            "configs",
-            "strategies",
-            "minervini-trend-template-vcp.v4-trend-rider.yaml");
+            "src",
+            "TradingFlow.Tests", "Fixtures", "Strategies",
+            "daily-trailing-swing.fixture.yaml");
         var target = Path.Combine(Path.GetTempPath(), $"strategy-validation-{Guid.NewGuid():N}.yaml");
         File.WriteAllText(target, transform(File.ReadAllText(source)));
         return target;

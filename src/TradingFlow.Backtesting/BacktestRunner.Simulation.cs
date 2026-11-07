@@ -804,7 +804,6 @@ public sealed partial class BacktestRunner
         {
             "none" => 0m,
             "rsi2_ascending" => signal.CurrentRsi2 is { } rsi2 ? 100m - rsi2 : 0m,
-            "breakout_volume_descending" => signal.BreakoutVolumeRatio ?? 0m,
             _ => throw new NotSupportedException(
                 $"Unsupported portfolio_rank_mode: {strategy.EntryRules.PortfolioRankMode}.")
         };

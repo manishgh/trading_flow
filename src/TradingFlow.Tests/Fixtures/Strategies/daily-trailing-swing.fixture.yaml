@@ -1,11 +1,14 @@
-strategy_id: research.minervini-trend-template-vcp.v4-trend-rider
-strategy_name: Minervini Trend Template & VCP Breakout V4 - Trend Rider
-source: mark_minervini_trade_like_a_stock_market_wizard
+# Test-only daily swing fixture (not a catalog strategy). Copied on 7 Nov 2026 from the retired
+# swing.minervini-vcp@4.0.0 file at commit a3e7de5 with a neutral momentum setup, so tests that need an
+# ordinary daily strategy with an ATR trailing stop keep their inputs after that artifact was removed.
+strategy_id: test.daily-trailing-swing
+strategy_name: TEST FIXTURE Daily Trailing Swing
+source: test_fixture
 version: 4
 timeframe: 1d
 direction: long
 entry_rules:
-  setup_type: volatility_contraction_pattern
+  setup_type: momentum
   min_volume_spike: 0.0
   min_entry_rsi: 45.0
   max_entry_rsi: 85.0
@@ -47,8 +50,6 @@ entry_rules:
   max_news_age_hours: 72
   min_catalyst_price_move_pct:
   max_catalyst_price_move_pct:
-# L2 regime (doctrine §6A): only take new long entries while SPY's prior close is above its
-# 50-day SMA, so the trend-continuation edge isn't just long-only sector beta in any tape.
 regime:
   benchmark: SPY
   rule: price_above_sma

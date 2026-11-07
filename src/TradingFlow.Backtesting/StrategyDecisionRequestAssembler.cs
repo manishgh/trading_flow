@@ -40,8 +40,7 @@ public static class StrategyDecisionRequestAssembler
         IReadOnlyList<DateOnly>? expectedReferenceSessions = null,
         DrawdownDecisionContext? drawdownContext = null,
         HistoricalNewsPresenceContext? historicalNewsPresence = null,
-        PreviousSessionBreakoutContext? previousSessionContext = null,
-        IntradayZoneDecisionContext? zoneContext = null)
+        IntradayBreakoutContext? previousSessionContext = null)
     {
         ArgumentNullException.ThrowIfNull(runtimeStrategy);
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
@@ -156,8 +155,7 @@ public static class StrategyDecisionRequestAssembler
             drawdownContext,
             historicalNewsPresence,
             runtimeStrategy.SelectionMode,
-            previousSessionContext,
-            zoneContext);
+            previousSessionContext);
     }
 
     // A snapshot can depend on an earlier unavailable bar; timestamp filtering cannot reconstruct those indicator dependencies.

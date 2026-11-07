@@ -1,23 +1,9 @@
 namespace TradingFlow.Domain.Strategies;
 
-/// <summary>Versioned fixed research baseline for completed five-minute previous-session crossings.</summary>
-public sealed record PreviousSessionBreakoutRules(string PolicyId = "previous-session-breakout-v1")
-{
-    public const string SetupType = "previous_session_breakout";
-
-    // Reject competing strategy clocks rather than silently ignoring them in the baseline.
-    public void Validate(StrategyDefinition strategy)
-    {
-        if (PolicyId != "previous-session-breakout-v1" || strategy.EntryRules.OpeningRangeBreakout is not null)
-            throw new InvalidOperationException("Previous-session breakout requires its exclusive versioned policy.");
-        FixedIntradayBreakoutBaseline.Validate(strategy, SetupType, "breakout_candle");
-    }
-}
-
-// Share only fixed session/filter/exit constraints; each strategy retains its own signal and stop geometry.
+// Fixed session/filter/exit constraints for the approved opening-range breakout baseline; the strategy keeps its own signal and stop geometry.
 internal static class FixedIntradayBreakoutBaseline
 {
-    // Reject clocks and extra filters that would change either approved intraday baseline.
+    // Reject clocks and extra filters that would change the approved intraday baseline.
     internal static void Validate(StrategyDefinition strategy, string setupType, string initialStopMode, string primaryTimeframe = "5m")
     {
         if (strategy.EntryRules.SetupType != setupType ||
@@ -64,5 +50,5 @@ public static class StrategyHorizonResolver
 {
     // Derive the day horizon from the strategy rather than from a caller's swing default.
     public static string Resolve(StrategyDefinition strategy) =>
-        strategy.EntryRules.IntradayZone is not null || strategy.EntryRules.PreviousSessionBreakout is not null || strategy.EntryRules.OpeningRangeBreakout is not null ? "day" : "swing";
+        strategy.EntryRules.OpeningRangeBreakout is not null ? "day" : "swing";
 }

@@ -257,8 +257,6 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
                     index,
                     options.FastTrendSmaBars,
                     options.SlowTrendSmaBars),
-                options.Cells.Any(MomentumResearchCell.RequiresVcp) &&
-                IsFrozenV7VcpBreakout(tickerSeries.Bars, index),
                 outcomes));
         }
 
@@ -276,8 +274,6 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
             MomentumResearchCell.MomentumOnly => true,
             MomentumResearchCell.MomentumStockTrend =>
                 candidate.StockTrendPassed,
-            MomentumResearchCell.MomentumStockTrendVcpV7 =>
-                candidate.StockTrendPassed && candidate.FrozenV7VcpPassed,
             MomentumResearchCell.MomentumClassifiedCatalyst =>
                 HasPositiveClassifiedCatalyst(
                     evidence,
@@ -298,19 +294,6 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
         evidence?.PositiveClassifiedCatalystSymbolsByFormationDate
             .TryGetValue(decisionDate, out var symbols) == true &&
         symbols.Contains(ticker);
-
-    private static bool IsFrozenV7VcpBreakout(
-        IReadOnlyList<OhlcvBar> bars,
-        int completedBarIndex)
-    {
-        var analysis = new VcpSwingPivotAnalyzer().AnalyzeCompletedBar(
-            bars,
-            completedBarIndex,
-            MomentumFrozenV7Vcp.Definition);
-        return analysis.HasValidStructure &&
-               analysis.IsBreakout &&
-               analysis.BreakoutVolumeRatio is >= MomentumFrozenV7Vcp.MinimumBreakoutVolumeRatio;
-    }
 
     private static IEnumerable<int> DecisionIndices(
         Series benchmark,
@@ -1226,7 +1209,6 @@ public sealed class CrossSectionalMomentumResearchAnalyzer
         decimal MomentumReturnPct,
         decimal AverageDollarVolume,
         bool StockTrendPassed,
-        bool FrozenV7VcpPassed,
         IReadOnlyDictionary<int, ForwardOutcome> ForwardOutcomes);
 
     private sealed record FormationRankedMomentumCandidate(
@@ -1594,7 +1576,6 @@ public static class MomentumResearchCell
     public const string MomentumOnly = "momentum_only";
     public const string MomentumStockTrend = "momentum_stock_trend";
     public const string MomentumStockAndMarketTrend = "momentum_stock_market_trend";
-    public const string MomentumStockTrendVcpV7 = "momentum_stock_trend_vcp_v7";
     public const string MomentumClassifiedCatalyst =
         "momentum_classified_catalyst";
     public const string MomentumStockTrendClassifiedCatalyst =
@@ -1604,7 +1585,6 @@ public static class MomentumResearchCell
         [
             MomentumOnly,
             MomentumStockTrend,
-            MomentumStockTrendVcpV7,
             MomentumClassifiedCatalyst,
             MomentumStockTrendClassifiedCatalyst,
             MomentumStockAndMarketTrend
@@ -1616,16 +1596,12 @@ public static class MomentumResearchCell
         {
             MomentumOnly => null,
             MomentumStockTrend => MomentumOnly,
-            MomentumStockTrendVcpV7 => MomentumStockTrend,
             MomentumClassifiedCatalyst => MomentumOnly,
             MomentumStockTrendClassifiedCatalyst => MomentumStockTrend,
             MomentumStockAndMarketTrend => MomentumStockTrend,
             _ => throw new InvalidOperationException(
                 $"Unsupported momentum research cell: {cell}.")
         };
-
-    public static bool RequiresVcp(string cell) =>
-        cell == MomentumStockTrendVcpV7;
 
     public static bool RequiresCatalyst(string cell) =>
         cell is MomentumClassifiedCatalyst or
@@ -1638,20 +1614,3 @@ public static class MomentumSlotReturnSource
     public const string Cash = "cash";
 }
 
-public static class MomentumFrozenV7Vcp
-{
-    public const decimal MinimumBreakoutVolumeRatio = 1m;
-
-    public static VcpSwingPivotOptions Definition { get; } = new(
-        LookbackBars: 60,
-        PivotStrengthBars: 2,
-        MinimumContractions: 2,
-        MaximumContractions: 4,
-        MaximumDepthRatioToPrevious: 0.90m,
-        MinimumLowRisePct: 0m,
-        MaximumContractionToAdvanceVolumeRatio: 0.85m,
-        RequireProgressiveContractionVolume: false,
-        MaximumVolumeRatioToPreviousContraction: 1m,
-        MinimumVolumeReferenceBars: 3,
-        BreakoutBufferPct: 0m);
-}

@@ -437,12 +437,8 @@ namespace TradingFlow.Web.Pages
                 AddBoolChip(chips, root, "IsPriceAboveSma20", "Above SMA20");
                 AddBoolChip(chips, root, "IsMacdNotBearish", "MACD not bearish");
                 AddBoolChip(chips, root, "IsMacdHistogramPositive", "MACD histogram positive");
-                AddTrueBoolChip(chips, root, "IsSwingReclaim", "Swing reclaim");
-                AddTrueBoolChip(chips, root, "IsSwingRollover", "Swing rollover");
                 AddDecimalChip(chips, root, "CloseLocationValue", "Close location", "F2");
                 AddDecimalChip(chips, root, "VwapExtensionAtr", "VWAP ext ATR", "F2");
-                AddDecimalChip(chips, root, "ReclaimPullbackDepthPct", "Reclaim pullback %", "F2");
-                AddDecimalChip(chips, root, "RolloverAdvancePct", "Rollover advance %", "F2");
             }
             catch
             {
@@ -459,16 +455,6 @@ namespace TradingFlow.Web.Pages
             {
                 var passed = property.GetBoolean();
                 chips.Add(new AuditChip(label, passed ? "true" : "false", passed));
-            }
-        }
-
-        private static void AddTrueBoolChip(List<AuditChip> chips, JsonElement root, string propertyName, string label)
-        {
-            if (TryGetProperty(root, propertyName, out var property) &&
-                property.ValueKind is JsonValueKind.True &&
-                property.GetBoolean())
-            {
-                chips.Add(new AuditChip(label, "true", true));
             }
         }
 

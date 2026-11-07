@@ -14,7 +14,7 @@ public sealed class BacktestExecutionProfileResolverTests
     {
         var profile = Profile();
         var result = BacktestExecutionProfileResolver.Resolve(profile, [DayStrategy()]);
-        Assert.Equal(ExecutionReplayPolicy.IntradayRthFiveMinuteV1, result.Engine.ExecutionReplayPolicyId);
+        Assert.Equal(ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1, result.Engine.ExecutionReplayPolicyId);
         Assert.Equal(new[] { "5m" }, result.Intervals);
         Assert.Equal("5m", result.DerivedTimeframes.Source);
         Assert.Equal(0, result.Engine.IndicatorWarmupBars);
@@ -32,7 +32,7 @@ public sealed class BacktestExecutionProfileResolverTests
     public void SwingProfile_PreservesExistingSettings()
     {
         var profile = Profile();
-        var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml"));
+        var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
         Assert.Equal(profile, BacktestExecutionProfileResolver.Resolve(profile, [strategy]));
         Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [strategy, DayStrategy()]));
         Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [strategy], ExecutionReplayPolicy.IntradayRthFiveMinuteV1));
@@ -75,5 +75,5 @@ public sealed class BacktestExecutionProfileResolverTests
 
     /// <summary>Uses the same registered day recipe the normal catalog presents to both clients.</summary>
     private static StrategyDefinition DayStrategy() => new SimpleYamlReader().ReadStrategy(
-        Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", "previous-day-breakout.bt-v1.yaml"));
+        Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", "opening-range-breakout.bt-v3.yaml"));
 }

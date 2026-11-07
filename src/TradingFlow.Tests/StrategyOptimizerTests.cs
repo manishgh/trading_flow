@@ -19,9 +19,9 @@ public class StrategyOptimizerTests
 
         var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(
             FindRepositoryRoot(),
-            "configs",
-            "strategies",
-            "minervini-trend-template-vcp.v4-trend-rider.yaml"));
+            "src",
+            "TradingFlow.Tests", "Fixtures", "Strategies",
+            "daily-trailing-swing.fixture.yaml"));
 
         strategy = (TradingFlow.Domain.Strategies.StrategyDefinition)method.Invoke(
             optimizer,

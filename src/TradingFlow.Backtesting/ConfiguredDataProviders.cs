@@ -53,8 +53,7 @@ public sealed class ConfiguredDataProviders
             "csv" => new CsvMarketDataProvider(csvRoot ?? run.NormalizedRoot),
             "alpaca" => new AlpacaMarketDataProvider(createHttpClient(), AlpacaOptionsFor(run), rawArchiveWriter,
                 adjustmentPolicy: run.Engine.ExecutionReplayPolicyId is ExecutionReplayPolicy.DailyRthFiveMinuteV1 or
-                    ExecutionReplayPolicy.DailyRthSipPortfolioV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1 or
-                    ExecutionReplayPolicy.PythonZoneBounceBreakdownV1 or ExecutionReplayPolicy.PythonZoneVolumeSpreadV1 ? "raw" : "all"),
+                    ExecutionReplayPolicy.DailyRthSipPortfolioV1 ? "raw" : "all"),
             "finviz" => new FinvizMarketDataProvider(new FinvizClient(createHttpClient(), finvizOptions(), rawArchiveWriter)),
             _ => throw new NotSupportedException($"Unsupported market data provider: {run.Provider}")
         };

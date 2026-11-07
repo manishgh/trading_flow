@@ -56,9 +56,7 @@ public sealed class StrategyArtifactCatalog
             .ToHashSet(StringComparer.Ordinal);
         var artifacts = GetSnapshot().ExecutableArtifacts.Where(artifact => mode == StrategySelectionMode.Backtest ||
             artifact.ResolvedStrategy.EntryRules.HistoricalNewsDiagnostic is null &&
-            artifact.ResolvedStrategy.EntryRules.PreviousSessionBreakout is null &&
             artifact.ResolvedStrategy.EntryRules.OpeningRangeBreakout is null &&
-            artifact.ResolvedStrategy.EntryRules.IntradayZone is null &&
             artifact.AdmissionProfile.HistoricalNewsDiagnosticPolicyId is null).ToArray();
         return mode switch
         {

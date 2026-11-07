@@ -19,10 +19,10 @@ public sealed partial class IntradayBacktestIntegrationTests
 {
     /// <summary>The ordinary prepared runner retains all ORB versions, fractional source evidence, actual-fill 3R and monthly identity.</summary>
     [Theory]
-    [InlineData(false, false, false)]
-    [InlineData(true, true, false)]
-    [InlineData(true, true, true)]
-    public async Task PreparedRunner_PublishesVerifiedIntradayArtifactsAndMonthlyResults(bool openingRange, bool outwardRounding, bool completedBreakout)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task PreparedRunner_PublishesVerifiedIntradayArtifactsAndMonthlyResults(bool outwardRounding, bool completedBreakout)
     {
         var root = Path.Combine(Path.GetTempPath(), "tf-intraday-integration-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -31,11 +31,11 @@ public sealed partial class IntradayBacktestIntegrationTests
             var repo = TestRepository.FindRoot();
             var reader = new SimpleYamlReader();
             var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
-            var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", openingRange
-                ? completedBreakout ? "opening-range-breakout.bt-v3.yaml" : outwardRounding ? "opening-range-breakout.bt-v2.yaml" : "opening-range-breakout.bt-v1.yaml"
-                : "previous-day-breakout.bt-v1.yaml");
-            var runtime = openingRange && !completedBreakout
-                ? StrategyRunArtifactValidator.CreateDiagnosticRuntimeStrategy(reader.ReadStrategy(strategyPath)) // Only the archived 1.1.0 uses the stop-market path.
+            var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", "opening-range-breakout.bt-v3.yaml");
+            if (!completedBreakout) strategyPath = Path.Combine(repo, "src", "TradingFlow.Tests", "Fixtures", "Strategies",
+                outwardRounding ? "opening-range-breakout-stop-market.v2.fixture.yaml" : "opening-range-breakout-stop-market.v1.fixture.yaml");
+            var runtime = !completedBreakout
+                ? StrategyRunArtifactValidator.CreateDiagnosticRuntimeStrategy(reader.ReadStrategy(strategyPath)) // The stop-market path has no catalog identity.
                 : new StrategyRunArtifactValidator(reader, artifacts).ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
             var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "swing-backtest-profile.yaml"));
             var start = DateTimeOffset.Parse("2026-10-01T13:30:00Z");
@@ -54,10 +54,10 @@ public sealed partial class IntradayBacktestIntegrationTests
                 Portfolio = profile.Portfolio with { MaxConcurrentPositions = 1, PreventOverlappingTickerPositions = true },
                 Artifacts = new("full")
             };
-            var provider = new SyntheticIntradayProvider(run.RawRoot, openingRange, outwardRounding);
+            var provider = new SyntheticIntradayProvider(run.RawRoot, outwardRounding);
             var calendar = await provider.LoadMarketSessionSchedulesAsync(new(2026, 8, 1), new(2026, 10, 1), default);
             run = BacktestSessionContextResolver.IncludeCompletedSessions(run, start, calendar,
-                TimeZoneInfo.FindSystemTimeZoneById("America/New_York"), openingRange ? 20 : 1);
+                TimeZoneInfo.FindSystemTimeZoneById("America/New_York"), 20);
             var request = new PreparedMarketDataRequest(1, "synthetic-intraday-integration", end,
                 [new(run.RunName, run with { Strategies = [] }, [runtime.Definition])]);
             var reference = await PreparedMarketDataService.WriteRequestAsync(request, Path.Combine(root, "admission", "request.json"), default);
@@ -68,7 +68,7 @@ public sealed partial class IntradayBacktestIntegrationTests
             Assert.NotNull(result.PreparedMarketData);
             Assert.Equal(new[] { "all" }, result.PreparedMarketData.PriceAdjustments);
             var trade = Assert.Single(result.CompletedTrades);
-            Assert.Equal(start.AddMinutes(completedBreakout ? 20 : openingRange ? 15 : 10), trade.EntryTimestamp);
+            Assert.Equal(start.AddMinutes(completedBreakout ? 20 : 15), trade.EntryTimestamp);
             Assert.Equal(start.AddHours(6).AddMinutes(25), trade.ExitTimestamp);
             Assert.Equal("session_deadline", trade.ExitReason);
             Assert.True(trade.ShareQuantity > 0);
@@ -81,12 +81,12 @@ public sealed partial class IntradayBacktestIntegrationTests
             Assert.Equal(2, state.Fills.Count);
             Assert.All(state.Fills, fill => Assert.Equal(new DateOnly(2026, 10, 1), fill.SourceSessionDate));
             Assert.Equal(1, provider.BarCaptures);
-            Assert.Equal((openingRange ? 21 : 2) * 78, provider.CapturedBars);
+            Assert.Equal(21 * 78, provider.CapturedBars);
             Assert.All(provider.RequestedTimeframes, timeframe => Assert.Equal("5m", timeframe));
             await BacktestArtifactIntegrity.VerifyManifestAsync(result.ArtifactManifestPath!);
-            if (openingRange) await AssertOpeningRangeArtifactsAsync(result, state, start, outwardRounding, completedBreakout);
-            // Monthly publication requires a selectable catalog identity, which the archived stop-market version no longer has.
-            if (openingRange && !completedBreakout) return;
+            await AssertOpeningRangeArtifactsAsync(result, state, start, outwardRounding, completedBreakout);
+            // Monthly publication requires a selectable catalog identity, which the stop-market variant does not have.
+            if (!completedBreakout) return;
             var saved = JsonSerializer.Deserialize<BacktestResult>(await File.ReadAllTextAsync(result.ResultPath),
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
             var identity = new StrategyReference(runtime.Identity.StrategyId, runtime.Identity.SemanticVersion, runtime.Identity.ContentSha256);
@@ -104,117 +104,6 @@ public sealed partial class IntradayBacktestIntegrationTests
         finally
         {
             // These files are isolated synthetic fixtures; verify ownership before recursive cleanup.
-            Assert.Equal(Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar), Path.GetDirectoryName(root), ignoreCase: true);
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    /// <summary>Zone policies retain raw warm-up sessions; unavailable required RVOL withholds economics rather than reporting a healthy empty result.</summary>
-    [Theory]
-    [InlineData(false, false, false, null)]
-    [InlineData(true, false, false, null)]
-    [InlineData(true, true, false, null)]
-    [InlineData(true, true, true, null)]
-    [InlineData(true, true, false, "python-zone-volume-spread-no-rr.bt-v1.yaml")]
-    [InlineData(true, true, false, "zone-bounce-volume.bt-v1.yaml")]
-    [InlineData(true, true, false, "zone-risk-target.bt-v1.yaml")]
-    [InlineData(true, true, false, "zone-bounce-volume-risk-target.bt-v1.yaml")]
-    [InlineData(true, true, true, "zone-bounce-volume-risk-target.bt-v1.yaml")]
-    [InlineData(true, true, false, "zone-two-candle-stop.bt-v1.yaml")]
-    [InlineData(true, true, true, "zone-two-candle-stop.bt-v1.yaml")]
-    public async Task ZoneRunner_DoesNotCountWarmupSessionsAsEvaluationTradingDays(bool comparison, bool volumeSpread, bool missingBaselineVolume, string? selectedRecipe)
-    {
-        var root = Path.Combine(Path.GetTempPath(), "tf-zone-reporting-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            var repo = TestRepository.FindRoot();
-            var reader = new SimpleYamlReader();
-            var catalog = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
-            var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", selectedRecipe ?? (volumeSpread
-                ? "python-zone-volume-spread-comparison.bt-v1.yaml" : comparison
-                ? "python-zone-comparison.bt-v1.yaml" : "intraday-zone.bt-v1.yaml"));
-            var runtime = new StrategyRunArtifactValidator(reader, catalog).ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
-            var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "swing-backtest-profile.yaml"));
-            var start = DateTimeOffset.Parse("2026-10-01T13:30:00Z");
-            var end = DateTimeOffset.Parse("2026-10-01T20:00:00Z");
-            var run = BacktestExecutionProfileResolver.Resolve(profile, [runtime.Definition]) with
-            {
-                RunName = "synthetic-zone-reporting", Provider = "synthetic-intraday", Tickers = ["ABC"], Strategies = [strategyPath],
-                TimeWindow = new("fixed", 1, start, end, 40),
-                RawRoot = Path.Combine(root, "raw"), NormalizedRoot = Path.Combine(root, "normalized"), ResultsRoot = Path.Combine(root, "results"),
-                CachePolicy = "use_cache", Portfolio = profile.Portfolio with { MaxConcurrentPositions = 1 }, Artifacts = new("full"),
-                Universe = UniverseConfig.StaticUniverse with { Mode = UniverseConfig.ResolvedSnapshotMode,
-                    ResolvedSource = "synthetic_fixture", SelectedSourceTickers = ["ABC"], ResolvedAtUtc = start }
-            };
-            var provider = new SyntheticIntradayProvider(run.RawRoot, true, false, "raw", missingBaselineVolume);
-            var executionReceivedBars = 0;
-            var binding = new EventPortfolioReplayBinding((request, token) =>
-            {
-                executionReceivedBars = request.MarketBars.Count;
-                Assert.Contains(request.MarketBars, bar => bar.Timestamp < start);
-                return Task.FromResult(new EventPortfolioReplayOutcome([], [],
-                    request.Candidates.Select(candidate => new EventPortfolioDisposition(candidate.CandidateId, false, "synthetic_no_fill")).ToArray(), [], null, []));
-            });
-            var request = new PreparedMarketDataRequest(1, "synthetic-zone-reporting", end,
-                [new(run.RunName, run with { Strategies = [] }, [runtime.Definition])]);
-            var reference = await PreparedMarketDataService.WriteRequestAsync(request, Path.Combine(root, "admission", "request.json"), default);
-            var runner = new BacktestRunner(reader, catalog, marketDataProviderFactory: _ => provider, eventPortfolioReplay: binding);
-            var result = await runner.RunAsync(run, [runtime.Definition], DateTimeOffset.UtcNow,
-                Path.Combine(run.ResultsRoot, "result.json"), default, preparedDataReference: reference);
-            Assert.Equal(!missingBaselineVolume, result.EconomicResultsComplete);
-            if (volumeSpread)
-            {
-                // Every evaluated candle, including unavailable-volume rejections, survives the ordinary hashed publication.
-                var trace = Assert.Single(result.ArtifactReferences!, item => item.Kind == "zone_evaluations");
-                Assert.Equal(78, trace.RecordCount);
-                var rows = await File.ReadAllLinesAsync(Path.Combine(Path.GetDirectoryName(result.ResultPath)!, trace.Path));
-                Assert.Equal(78, rows.Length);
-                using var firstTrace = JsonDocument.Parse(rows[0]);
-                Assert.Equal("ABC", firstTrace.RootElement.GetProperty("Ticker").GetString());
-                var evidence = firstTrace.RootElement.GetProperty("Evidence");
-                Assert.Equal(start.AddMinutes(5), evidence.GetProperty("AsOfUtc").GetDateTimeOffset());
-                Assert.Equal(start, evidence.GetProperty("ConfirmationBar").GetProperty("Timestamp").GetDateTimeOffset());
-                await BacktestArtifactIntegrity.VerifyManifestAsync(result.ArtifactManifestPath!);
-            }
-            if (missingBaselineVolume)
-            {
-                Assert.NotNull(result.PortfolioState!.UnavailableFromSession);
-                Assert.Contains(result.Diagnostics, diagnostic => diagnostic.RejectionCounts.ContainsKey("python_zone_volume_unavailable"));
-                var unavailableReport = new MonthlyRunResultWriter(new StrategyRunArtifactValidator(reader, catalog))
-                    .Create(run, result, end, "synthetic-cohort");
-                Assert.NotEmpty(unavailableReport.Results);
-                Assert.All(unavailableReport.Results, month =>
-                {
-                    Assert.Null(month.ReturnPct);
-                    Assert.NotNull(month.UnavailableReason);
-                });
-                return;
-            }
-            Assert.Equal(comparison ? 0 : 21 * 78, executionReceivedBars);
-            Assert.Equal(1, result.TradingDayCount);
-            Assert.Equal(1, Assert.Single(result.StrategyResults).TradingDayCount);
-            Assert.Equal(1, Assert.Single(result.Diagnostics).DailyPnl.TradingDayCount);
-            Assert.Equal(78, result.ProcessedBarCount);
-            Assert.Equal(78, Assert.Single(result.TickerResults).ProcessedBarCount);
-            Assert.Equal(21 * 78, provider.CapturedBars);
-            Assert.Equal(new[] { "raw" }, result.PreparedMarketData!.PriceAdjustments);
-            if (comparison)
-            {
-                Assert.NotNull(result.ZoneDecisions);
-                Assert.Empty(result.PortfolioState!.IntradayDecisions);
-                Assert.Equal(IntradayPortfolioExecution.ValuationBasis, result.PortfolioState.ValuationBasis);
-                await BacktestArtifactIntegrity.VerifyManifestAsync(result.ArtifactManifestPath!);
-                var identity = new StrategyReference(runtime.Identity.StrategyId, runtime.Identity.SemanticVersion, runtime.Identity.ContentSha256);
-                var monthly = new MonthlyRunResultWriter(new StrategyRunArtifactValidator(reader, catalog))
-                    .Create(run, result, end, "synthetic-cohort", [identity]);
-                Assert.Null(monthly.UnavailableReason);
-                Assert.Equal("2026-10", Assert.Single(monthly.Results).Month);
-            }
-        }
-        finally
-        {
-            // Only this test's uniquely named synthetic workspace is disposable; original archives and run results are untouched.
             Assert.Equal(Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar), Path.GetDirectoryName(root), ignoreCase: true);
             Directory.Delete(root, recursive: true);
         }
@@ -259,13 +148,12 @@ public sealed partial class IntradayBacktestIntegrationTests
         Assert.Contains("opening_range_breakout", decisions.RootElement.GetRawText(), StringComparison.Ordinal);
     }
 
-    /// <summary>Archives complete synthetic sessions with optional zero-volume baselines to exercise missing required volume evidence.</summary>
-    private sealed class SyntheticIntradayProvider(string rawRoot, bool openingRange, bool outwardRounding, string adjustmentPolicy = "all",
-        bool missingBaselineVolume = false, bool retestEntry = false) : IMarketDataProvider, IMarketSessionScheduleProvider,
+    /// <summary>Archives complete synthetic sessions: twenty prior regular sessions plus the current opening-range session.</summary>
+    private sealed class SyntheticIntradayProvider(string rawRoot, bool outwardRounding, string adjustmentPolicy = "all") : IMarketDataProvider, IMarketSessionScheduleProvider,
         IMarketDataProvenanceProvider, IMarketDataCacheSourceDescriptorProvider, IHistoricalMarketDataEvidenceProvider
     {
         private readonly IRawArchiveWriter archive = new FileSystemRawArchiveWriter(new(rawRoot));
-        private readonly IReadOnlyList<DateOnly> sessionDates = SessionDates(openingRange);
+        private readonly IReadOnlyList<DateOnly> sessionDates = SessionDates();
         public int BarCaptures { get; private set; }
         public int CapturedBars { get; private set; }
         public List<string> RequestedTimeframes { get; } = [];
@@ -273,8 +161,7 @@ public sealed partial class IntradayBacktestIntegrationTests
         public MarketDataCacheSourceDescriptor CacheSourceDescriptor => new("synthetic-intraday-v1", "sip", adjustmentPolicy, "synthetic-v1");
         public string HistoricalEndpointIdentity => "synthetic://intraday-bars-v1";
         public string HistoricalParserVersion => "synthetic-intraday-v1";
-        public string HistoricalCalendarIdentity => openingRange
-            ? "synthetic://twenty-prior-plus-current-sessions-v1" : "synthetic://two-regular-sessions-v1";
+        public string HistoricalCalendarIdentity => "synthetic://twenty-prior-plus-current-sessions-v1";
 
         /// <summary>Captures exactly the requested bars and retains a real fixture receipt, with no historical-receipt claim.</summary>
         public async Task<HistoricalBarsCapture> CaptureHistoricalBarsAsync(string ticker, string timeframe,
@@ -301,7 +188,7 @@ public sealed partial class IntradayBacktestIntegrationTests
             return new(sessions, await ArchiveAsync("calendar", sessions, started, cancellationToken));
         }
 
-        /// <summary>Provides full session bars; optional zero prior volumes preserve candle coverage while preventing a usable RVOL median.</summary>
+        /// <summary>Provides full session bars with a high-volume opening range on the current session.</summary>
         public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> timeframes,
             DateTimeOffset start, DateTimeOffset end, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
@@ -318,22 +205,12 @@ public sealed partial class IntradayBacktestIntegrationTests
                     var at = new DateTimeOffset(date.ToDateTime(new TimeOnly(13, 30), DateTimeKind.Utc)).AddMinutes(slot * 5);
                     if (at < start || at >= end) continue;
                     var current = date == new DateOnly(2026, 10, 1);
-                    var (open, high, low, close) = !current ? (99m, 100m, 95m, 99m) : retestEntry ? slot switch {
-                        < 3 => (99m, 100m, 98m, 99.5m),
-                        < 6 => (102.8m, 103.2m, 102.8m, 103m),
-                        6 => (103m, 103.2m, 99.8m, 101m),
-                        _ => (101m, 101.2m, 100.8m, 101m)
-                    } : openingRange ? slot switch {
+                    var (open, high, low, close) = !current ? (99m, 100m, 95m, 99m) : slot switch {
                         < 3 => (99m, outwardRounding ? 100.0051m : 100m, outwardRounding ? 97.9976m : 98m, 99.5m),
                         3 => (100.05m, 100.2m, 99.5m, 100.1m),
                         _ => (100.1m, 100.2m, 99.8m, 100.1m)
-                    } : slot switch {
-                        0 => (99m, 102m, 97m, 101m),
-                        1 => (101m, 103m, 98m, 102m),
-                        2 => (97.8m, 100m, 97.5m, 99m),
-                        _ => (99m, 100m, 98m, 99m)
                     };
-                    var volume = missingBaselineVolume && !current ? 0m : openingRange && current && slot < 3 ? 200000m : 100000m;
+                    var volume = current && slot < 3 ? 200000m : 100000m;
                     yield return new(ticker, at, timeframe, open, high, low, close, volume, "sip", adjustmentPolicy, at.AddMinutes(5), end);
                 }
             }
@@ -347,11 +224,10 @@ public sealed partial class IntradayBacktestIntegrationTests
                         sessionDates.Contains(date)
                             ? MarketSessionSchedule.RegularDay(date) : MarketSessionSchedule.Closed(date)));
 
-        /// <summary>Declares exactly twenty completed prior sessions for ORB, retaining the original two-session legacy fixture.</summary>
-        private static IReadOnlyList<DateOnly> SessionDates(bool openingRange)
+        /// <summary>Declares exactly twenty completed prior sessions for the ORB volume baseline.</summary>
+        private static IReadOnlyList<DateOnly> SessionDates()
         {
             var current = new DateOnly(2026, 10, 1);
-            if (!openingRange) return [current.AddDays(-1), current];
             var dates = new List<DateOnly> { current };
             for (var date = current.AddDays(-1); dates.Count < 21; date = date.AddDays(-1))
                 if (date.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday)) dates.Add(date);

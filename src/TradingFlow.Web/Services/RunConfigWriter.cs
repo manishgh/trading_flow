@@ -778,9 +778,7 @@ public sealed class RunConfigWriter
     public static string SerializeStrategyYaml(TradingFlow.Domain.Strategies.StrategyDefinition strategy)
     {
         strategy.ExitRules.ContinuationProtection?.Validate(strategy.ExitRules);
-        strategy.EntryRules.PreviousSessionBreakout?.Validate(strategy);
         strategy.EntryRules.OpeningRangeBreakout?.Validate(strategy);
-        strategy.EntryRules.IntradayZone?.Validate(strategy);
         var yaml = new StringBuilder();
         yaml.AppendLine($"strategy_id: {strategy.StrategyId}");
         yaml.AppendLine($"strategy_name: {strategy.StrategyName}");
@@ -790,57 +788,11 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"direction: {strategy.Direction}");
         yaml.AppendLine("entry_rules:");
         yaml.AppendLine($"  setup_type: {strategy.EntryRules.SetupType}");
-        if (strategy.EntryRules.PreviousSessionBreakout is { } previousSession)
-        {
-            yaml.AppendLine("  previous_session_breakout:");
-            yaml.AppendLine($"    policy_id: {previousSession.PolicyId}");
-        }
         if (strategy.EntryRules.OpeningRangeBreakout is { } openingRange)
         {
             yaml.AppendLine("  opening_range_breakout:");
             yaml.AppendLine($"    policy_id: {openingRange.PolicyId}");
             yaml.AppendLine($"    max_filled_parent_trades_per_session: {openingRange.MaxFilledParentTradesPerSession}");
-        }
-        if (strategy.EntryRules.IntradayZone is { } intradayZone)
-        {
-            yaml.AppendLine("  intraday_zone:");
-            yaml.AppendLine($"    policy_id: {intradayZone.PolicyId}");
-            yaml.AppendLine($"    max_filled_parent_trades_per_session: {intradayZone.MaxFilledParentTradesPerSession}");
-            yaml.AppendLine($"    pivot_strength: {intradayZone.PivotStrength}");
-            yaml.AppendLine($"    prior_session_count: {intradayZone.PriorSessionCount}");
-            yaml.AppendLine($"    merge_atr_multiple: {intradayZone.MergeAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
-            yaml.AppendLine($"    flip_atr_multiple: {intradayZone.FlipAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
-            if (intradayZone.PythonComparison is { } python)
-            {
-                yaml.AppendLine("    python_comparison:");
-                yaml.AppendLine($"      minimum_pivot_count: {python.MinimumPivotCount}");
-                yaml.AppendLine($"      minimum_zone_count: {python.MinimumZoneCount}");
-                yaml.AppendLine($"      long_touch_dollar_tolerance: {python.LongTouchDollarTolerance.ToString(CultureInfo.InvariantCulture)}");
-                yaml.AppendLine($"      long_vwap_allowance_atr_multiple: {python.LongVwapAllowanceAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
-                yaml.AppendLine($"      maximum_vwap_distance_atr_multiple: {python.MaximumVwapDistanceAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
-                yaml.AppendLine($"      minimum_short_relative_volume: {python.MinimumShortRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
-                yaml.AppendLine($"      stop_atr_multiple: {python.StopAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
-                yaml.AppendLine($"      entry_cutoff_minutes_before_close: {python.EntryCutoffMinutesBeforeClose}");
-            }
-            if (intradayZone.PythonVolumeSpreadComparison is { } volumeSpread)
-            {
-                yaml.AppendLine("    python_volume_spread_comparison:");
-                yaml.AppendLine($"      minimum_pivot_count: {volumeSpread.MinimumPivotCount}");
-                yaml.AppendLine($"      minimum_zone_count: {volumeSpread.MinimumZoneCount}");
-                yaml.AppendLine($"      long_touch_dollar_tolerance: {volumeSpread.LongTouchDollarTolerance.ToString(CultureInfo.InvariantCulture)}");
-                yaml.AppendLine($"      minimum_relative_volume: {volumeSpread.MinimumRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
-                yaml.AppendLine($"      stop_atr_multiple: {volumeSpread.StopAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
-                yaml.AppendLine($"      entry_cutoff_minutes_before_close: {volumeSpread.EntryCutoffMinutesBeforeClose}");
-                yaml.AppendLine($"      synthetic_spread_bps: {volumeSpread.SyntheticSpreadBps.ToString(CultureInfo.InvariantCulture)}");
-                yaml.AppendLine($"      maximum_spread_bps: {volumeSpread.MaximumSpreadBps.ToString(CultureInfo.InvariantCulture)}");
-                yaml.AppendLine($"      minimum_reward_risk: {volumeSpread.MinimumRewardRisk.ToString(CultureInfo.InvariantCulture)}");
-                if (volumeSpread.LongBounceVolumeMode is { } volumeMode) yaml.AppendLine($"      long_bounce_volume_mode: {volumeMode}");
-                if (volumeSpread.TargetPolicy is { } targetPolicy) yaml.AppendLine($"      target_policy: {targetPolicy}");
-                if (volumeSpread.FallbackNetRiskMultiple is { } fallbackMultiple)
-                    yaml.AppendLine($"      fallback_net_risk_multiple: {fallbackMultiple.ToString(CultureInfo.InvariantCulture)}");
-                if (volumeSpread.LongStopBasis is { } longStopBasis) yaml.AppendLine($"      long_stop_basis: {longStopBasis}");
-                if (volumeSpread.LongEntryMode is { } longEntryMode) yaml.AppendLine($"      long_entry_mode: {longEntryMode}");
-            }
         }
         if (strategy.EntryRules.DrawdownQualification is { } drawdown)
         {
@@ -1106,7 +1058,7 @@ public sealed class RunConfigWriter
             throw new InvalidOperationException("Choose a positive rolling lookback or a fixed start and later end date.");
         if (request.StrategyPaths.Count == 0 || request.Tickers.Count == 0)
             throw new InvalidOperationException("Select at least one strategy and one stock for the backtest.");
-        if (profile.Engine.ExecutionReplayPolicyId is not (null or ExecutionReplayPolicy.DailyRthFiveMinuteV1 or ExecutionReplayPolicy.DailyRthSipPortfolioV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1 or ExecutionReplayPolicy.PythonZoneBounceBreakdownV1 or ExecutionReplayPolicy.PythonZoneVolumeSpreadV1))
+        if (profile.Engine.ExecutionReplayPolicyId is not (null or ExecutionReplayPolicy.DailyRthFiveMinuteV1 or ExecutionReplayPolicy.DailyRthSipPortfolioV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1))
             throw new InvalidOperationException($"Unsupported execution replay policy: {profile.Engine.ExecutionReplayPolicyId}.");
         if (profile.Engine.MaxRetainedReplayBars <= 0 || profile.Engine.MaxStrategyWorkItems <= 0 ||
             profile.Engine.MaxRetainedCandidates <= 0 || profile.Portfolio.MaxExecutionOrderHistory <= 0)

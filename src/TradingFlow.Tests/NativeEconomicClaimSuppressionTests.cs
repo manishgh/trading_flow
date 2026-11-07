@@ -14,7 +14,7 @@ public sealed class NativeEconomicClaimSuppressionTests
     {
         var time=DateTimeOffset.Parse("2026-06-01T04:00:00Z");
         var strategy=new SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(),"configs","backtest","strategies",
-            "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml"));
+            "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
         var first=new BacktestCandidateTrade("ABC",strategy.StrategyName,"long",time,100,90,120,time.AddDays(1),110,"time_exit",10,
             SelectionScore:2,StrategyId:strategy.StrategyId,CandidateId:"one");
         var second=first with {Ticker="DEF",CandidateId="two",SelectionScore=1};

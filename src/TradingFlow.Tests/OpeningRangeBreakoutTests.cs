@@ -214,7 +214,7 @@ public sealed class OpeningRangeBreakoutTests
     [InlineData("  opening_range_breakout:\n    - opening-range-breakout-v1")]
     public void Yaml_RejectsScalarOrListOpeningRangePolicy(string replacement)
     {
-        var source = File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", "opening-range-breakout.bt-v1.yaml"));
+        var source = File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Tests", "Fixtures", "Strategies", "opening-range-breakout-stop-market.v1.fixture.yaml"));
         var malformed = System.Text.RegularExpressions.Regex.Replace(source,
             @"(?m)^  opening_range_breakout:\r?\n    policy_id: [^\r\n]+\r?\n    max_filled_parent_trades_per_session: [^\r\n]+", replacement);
         Assert.NotEqual(source, malformed);
@@ -274,8 +274,8 @@ public sealed class OpeningRangeBreakoutTests
         Assert.True(planned.Order.DeployedNotional <= 2500m);
         Assert.Equal(3m, result.OrderPlan.TargetRMultiple);
         Assert.Equal("day", StrategyHorizonResolver.Resolve(strategy));
-        var old = new SimpleYamlReader().ReadStrategy(Path.Combine(root, "configs", "backtest", "strategies", "previous-day-breakout.bt-v1.yaml"));
-        Assert.DoesNotContain("openingRangeBreakout", JsonSerializer.Serialize(old, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var swing = new SimpleYamlReader().ReadStrategy(Path.Combine(root, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        Assert.DoesNotContain("openingRangeBreakout", JsonSerializer.Serialize(swing, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         var pending = result.OrderPlan.PendingEntry with { EntryOrderMode = IntradayEntryOrderMode.NextBarLimit,
             OpeningRangeHigh = null, OpeningRangeLow = null, OpeningRangeOpen = null, OpeningRangeClose = null,
             OpeningRangeCompletedAtUtc = null, OpeningRelativeVolume = null, OpeningVolumeBaselineSampleCount = null,
@@ -327,7 +327,7 @@ public sealed class OpeningRangeBreakoutTests
             shortSide ? 93m : 99.8765m, shortSide ? 94m : 101m, 1000);
         fixture.Bars.Add(candle);
         var result = new OpeningRangeBreakoutEvaluator().Evaluate(strategy, fixture.Bars, Compute(fixture.Bars, fixture.Context), fixture.Context, fixture.AsOf.AddMinutes(5));
-        var signal = Assert.IsType<PreviousSessionBreakoutSignal>(result.Signal);
+        var signal = Assert.IsType<IntradayBreakoutSignal>(result.Signal);
         Assert.Equal(IntradayEntryOrderMode.NextBarMarket, signal.EntryOrderMode);
         Assert.Equal(shortSide ? 95.13m : 99.87m, signal.InitialStopPrice);
         Assert.Equal(candle.Close, signal.LimitPrice);
@@ -340,13 +340,13 @@ public sealed class OpeningRangeBreakoutTests
     }
 
     // Keep evaluator calls on the same ordinary recipe used by saved-plan research selections.
-    private static PreviousSessionBreakoutEvaluation Evaluate(OpeningFixture fixture, bool outwardRounding = false) => new OpeningRangeBreakoutEvaluator().Evaluate(
+    private static IntradayBreakoutEvaluation Evaluate(OpeningFixture fixture, bool outwardRounding = false) => new OpeningRangeBreakoutEvaluator().Evaluate(
         ReadStrategy(outwardRounding), fixture.Bars, fixture.Snapshots, fixture.Context, fixture.AsOf);
 
-    // Read the registered immutable recipe rather than maintaining a separate strategy definition inside tests.
+    // Read the stop-market recipe preserved as a test fixture (retired catalog versions 1.0.0 and 1.1.0).
     private static StrategyDefinition ReadStrategy(bool outwardRounding = false) => new SimpleYamlReader().ReadStrategy(Path.Combine(
-        TestRepository.FindRoot(), "configs", "backtest", "strategies", outwardRounding
-            ? "opening-range-breakout.bt-v2.yaml" : "opening-range-breakout.bt-v1.yaml"));
+        TestRepository.FindRoot(), "src", "TradingFlow.Tests", "Fixtures", "Strategies", outwardRounding
+            ? "opening-range-breakout-stop-market.v2.fixture.yaml" : "opening-range-breakout-stop-market.v1.fixture.yaml"));
 
     // Build twenty contiguous calendar-selected sessions and a completed opening range, all isolated synthetic SIP evidence.
     private static OpeningFixture Fixture(bool shortSide = false, DateOnly? date = null, bool earlyClose = false, bool fractional = false)
@@ -371,13 +371,13 @@ public sealed class OpeningRangeBreakoutTests
         var open = ExchangeOpen(current, zone);
         for (var index = 0; index < 3; index++) bars.Add(Bar(open.AddMinutes(index * 5), 98m,
             fractional ? 100.0051m : 100m, fractional ? 94.9976m : 95m, shortSide ? 97m : 99m, 2000m));
-        var context = new PreviousSessionBreakoutContext(calendar, 0.01m, bars[0].Timestamp.AddDays(-1),
+        var context = new IntradayBreakoutContext(calendar, 0.01m, bars[0].Timestamp.AddDays(-1),
             OpeningRangeBaselineBars: OpeningBaseline(bars, calendar, current));
         return new(bars, Compute(bars, context), context, open.AddMinutes(15));
     }
 
     // Use the production median implementation so missing-session and denominator tests exercise the real evidence calculation.
-    private static IReadOnlyList<IndicatorSnapshot> Compute(IReadOnlyList<OhlcvBar> bars, PreviousSessionBreakoutContext context) =>
+    private static IReadOnlyList<IndicatorSnapshot> Compute(IReadOnlyList<OhlcvBar> bars, IntradayBreakoutContext context) =>
         new IndicatorEngine(MarketEvidenceProfile.ProductionDefault.WithSessionSchedules(context.SessionSchedules)).Compute(bars);
 
     // Select actual bars in prior opening windows without filling a missing opening slot from a later candle.
@@ -401,5 +401,5 @@ public sealed class OpeningRangeBreakoutTests
         new("SPY", time, "5m", open, high, low, close, volume, "sip", "all", time.AddMinutes(5), time.AddMinutes(5));
 
     private sealed record OpeningFixture(List<OhlcvBar> Bars, IReadOnlyList<IndicatorSnapshot> Snapshots,
-        PreviousSessionBreakoutContext Context, DateTimeOffset AsOf);
+        IntradayBreakoutContext Context, DateTimeOffset AsOf);
 }

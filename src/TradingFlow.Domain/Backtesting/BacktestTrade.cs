@@ -30,10 +30,6 @@ public sealed record BacktestCandidateTrade(
     public string DecisionStrategyId { get; init; } = "";
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public IntradayExecutionEvidence? IntradayExecution { get; init; }
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    public TradingFlow.Domain.Strategies.IntradayZoneSignal? ZoneExecution { get; init; }
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<TradingFlow.Domain.Strategies.IntradayZoneSignal>? ZoneAlternatives { get; init; }
 }
 
 public sealed record BacktestPendingExitDecision(DateTimeOffset KnownAtUtc, string Reason);

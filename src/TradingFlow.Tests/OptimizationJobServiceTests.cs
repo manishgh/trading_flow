@@ -34,7 +34,7 @@ public sealed class OptimizationJobServiceTests : IAsyncLifetime
         optimizationPath = Path.Combine(copiedConfigs, "optimization.yaml");
         await File.WriteAllTextAsync(optimizationPath, """
 run_name: durable-optimization-test
-base_strategy: strategies/minervini-trend-template-vcp.v4-trend-rider.yaml
+base_strategy: backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml
 backtest_config: backtest/swing-backtest-profile.yaml
 metric: TotalReturnPct
 top_n_results: 1

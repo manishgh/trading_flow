@@ -56,22 +56,22 @@ public sealed class StrategyExperimentArtifactStoreTests
                 registry);
             var operationId = Guid.NewGuid();
             var registered = writer.RegisterPaperExperiment(
-                Path.Combine(repositoryRoot, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml"),
-                "6.0.0",
+                Path.Combine(repositoryRoot, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),
+                "7.0.0",
                 "unit-test-operator",
                 operationId,
                 RegistrationTime);
             var replay = writer.RegisterPaperExperiment(
-                Path.Combine(repositoryRoot, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml"),
-                "6.0.0",
+                Path.Combine(repositoryRoot, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),
+                "7.0.0",
                 "unit-test-operator",
                 operationId,
                 RegistrationTime);
             Assert.Equal(registered.Identity, replay.Identity);
             var duplicate = Assert.Throws<InvalidOperationException>(() =>
                 writer.RegisterPaperExperiment(
-                    Path.Combine(repositoryRoot, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml"),
-                    "6.0.0",
+                    Path.Combine(repositoryRoot, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),
+                    "7.0.0",
                     "unit-test-operator",
                     Guid.NewGuid(),
                     RegistrationTime));
@@ -192,7 +192,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 "configs",
                 "backtest",
                 "strategies",
-                "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml");
+                "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
 
             var operationId = Guid.NewGuid();
             var registered = await Task.WhenAll(
@@ -256,7 +256,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 "configs",
                 "backtest",
                 "strategies",
-                "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml");
+                "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
             var operationId = Guid.NewGuid();
 
             Assert.Throws<IOException>(() => writer.RegisterPaperExperiment(
@@ -326,7 +326,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 "configs",
                 "backtest",
                 "strategies",
-                "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml");
+                "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
 
             var operationId = Guid.NewGuid();
             var registered = writer.RegisterPaperExperiment(
@@ -433,7 +433,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 "configs",
                 "backtest",
                 "strategies",
-                "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml");
+                "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
             var strategyOverride = new StrategyParameterOverride(
                 sourcePath,
                 2.5m,
@@ -450,13 +450,13 @@ public sealed class StrategyExperimentArtifactStoreTests
                 1m,
                 1m,
                 1,
-                "1h",
+                "1d",
                 25m,
                 Actor: "experiment-author");
 
             Assert.Throws<InvalidOperationException>(() => writer.RegisterPaperExperiment(
                 sourcePath,
-                "6.0.0",
+                "7.0.0",
                 "experiment-author",
                 Guid.NewGuid(),
                 RegistrationTime,

@@ -107,8 +107,8 @@ public sealed class RetiredStrategyConfigurationTests
     }
 
     private static string CanonicalContent() => File.ReadAllText(Path.Combine(
-            TestRepository.FindRoot(), "configs", "strategies",
-            "minervini-trend-template-vcp.v4-trend-rider.yaml"))
+            TestRepository.FindRoot(), "src", "TradingFlow.Tests", "Fixtures", "Strategies",
+            "daily-trailing-swing.fixture.yaml"))
         .Replace("\r\n", "\n", StringComparison.Ordinal);
 
     private static void WithTemporaryStrategy(string content, Action<string> verify)

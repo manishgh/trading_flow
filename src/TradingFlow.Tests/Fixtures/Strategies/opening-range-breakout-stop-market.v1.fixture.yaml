@@ -1,21 +1,19 @@
-# Approved close-pivot 15m zones / completed 5m VWAP and same-clock median-volume confirmations.
-strategy_id: technical.zone-intraday
-strategy_name: Strategy 1 Intraday
-source: user_intraday_zone_2026_10_29
+# Test-only fixture (not a catalog strategy): the retired technical.opening-range-breakout@1.0.0
+# file copied unchanged from commit a3e7de5 so the kept stop-market entry path keeps its tests.
+# Approved 27 October 2026 fixed Research baseline. Execution remains diagnostic, backtest-only.
+strategy_id: technical.opening-range-breakout
+strategy_name: RESEARCH Fifteen Minute Opening Range Breakout Day V1
+source: user_opening_range_breakout_2026_10_27
 version: 1
-timeframe: 15m
+timeframe: 5m
 direction: long_short
 entry_rules:
-  setup_type: intraday_zone
-  intraday_zone:
-    policy_id: intraday-close-pivot-zones-v1
+  setup_type: opening_range_breakout
+  opening_range_breakout:
+    policy_id: opening-range-breakout-v1
     max_filled_parent_trades_per_session: 2
-    pivot_strength: 3
-    prior_session_count: 5
-    merge_atr_multiple: 0.35
-    flip_atr_multiple: 0.2
   enable_short: true
-  short_setup_type: intraday_zone
+  short_setup_type: opening_range_breakout
   min_volume_spike: 0
   volume_confirmation_mode: none
   min_entry_rsi: 0
@@ -37,7 +35,7 @@ exit_rules:
   target_r_multiple: 3
   max_hold_hours: 6.5
   enable_atr_trailing_stop: false
-  initial_stop_mode: breakout_candle
+  initial_stop_mode: opposite_opening_range
   profit_target_mode: r_multiple
   allow_same_bar_stop_target: true
   continuation_protection:

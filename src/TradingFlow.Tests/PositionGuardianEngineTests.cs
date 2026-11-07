@@ -152,9 +152,9 @@ public sealed class PositionGuardianEngineTests
         var root = FindRepositoryRoot();
         return new SimpleYamlReader().ReadStrategy(Path.Combine(
             root,
-            "configs",
-            "strategies",
-            "minervini-trend-template-vcp.v4-trend-rider.yaml"));
+            "src",
+            "TradingFlow.Tests", "Fixtures", "Strategies",
+            "daily-trailing-swing.fixture.yaml"));
     }
 
     private static string FindRepositoryRoot()

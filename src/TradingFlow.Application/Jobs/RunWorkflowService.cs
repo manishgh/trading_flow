@@ -210,14 +210,11 @@ public sealed partial class RunWorkflowService(
             && state.ValueKind == JsonValueKind.Object ? state.Deserialize<BacktestPortfolioState>(Json) : null;
         var eligibility = value.ValueKind == JsonValueKind.Object && value.TryGetProperty("historyEligibility", out var history)
             && history.ValueKind == JsonValueKind.Array ? history.Deserialize<BacktestHistoryEligibility[]>(Json) ?? [] : [];
-        var zones = value.ValueKind == JsonValueKind.Object && value.TryGetProperty("zoneDecisions", out var zoneDetails)
-            && zoneDetails.ValueKind == JsonValueKind.Array ? zoneDetails.Deserialize<BacktestZoneDecisionDetail[]>(Json) : null;
         if (result is not null && portfolio is not null && portfolio.Sessions.LastOrDefault()?.Equity is null)
             result = result with { EndingCapital = null, NetProfit = null, TotalReturnPct = null,
                 AverageDailyReturnPct = null, MaxDrawdownPct = null };
         return new(Project(job), events, result, groups, monthly, unavailable, ReadPreparedMarketData(root),
-            RunPortfolioStateProjection.Project(portfolio), RunPortfolioStateProjection.ProjectEligibility(eligibility), Project(job).EvidenceSummary,
-            RunPortfolioStateProjection.ProjectZones(zones?.TakeLast(100).ToArray()), zones?.Length ?? 0);
+            RunPortfolioStateProjection.Project(portfolio), RunPortfolioStateProjection.ProjectEligibility(eligibility), Project(job).EvidenceSummary);
     }
     public async Task<RunJobResponse?> GetAsync(Guid id, CancellationToken token = default) =>
         await jobs.GetJobAsync(id, token) is { } job ? Project(job) : null;

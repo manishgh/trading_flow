@@ -29,9 +29,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
     public StrategyDecisionResult Evaluate(StrategyDecisionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (request.Strategy.EntryRules.IntradayZone is { } zoneRules) zoneRules.Validate(request.Strategy);
-        else if (request.Strategy.EntryRules.PreviousSessionBreakout is { } dayRules) dayRules.Validate(request.Strategy);
-        else if (request.Strategy.EntryRules.OpeningRangeBreakout is { } openingRules) openingRules.Validate(request.Strategy);
+        if (request.Strategy.EntryRules.OpeningRangeBreakout is { } openingRules) openingRules.Validate(request.Strategy);
         else TechnicalExecutionEngine.RequireSupportedExitPolicy(request.Strategy);
         var validatedFactor = ValidateRequest(request);
         var drawdown = request.Strategy.Timeframe == "1d"
@@ -211,42 +209,11 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         var setupSnapshots = request.SnapshotsByTimeframe[request.Strategy.Timeframe];
         var latest = setupSnapshots[^1];
         var setupAvailableAt = latest.Timestamp.Add(TimeframeParser.Parse(request.Strategy.Timeframe));
-        if (request.Strategy.EntryRules.IntradayZone is not null)
-        {
-            var evaluation = request.ZoneContext;
-            var pending = evaluation?.Signal;
-            var reason = evaluation?.RejectionReason ?? "intraday_zone_context_unavailable";
-            AddRule(rules, "qualification", pending is null ? reason : "intraday_zone_qualified",
-                pending is not null, "intraday_zone", new { evaluation });
-            if (pending is null)
-            {
-                var failedState = FailAdmission(ref currentState, reason, asOfUtc, transitions);
-                return Finish(failedState, noEntryReason: reason);
-            }
-            var zoneExecutionBars = request.BarsByTimeframe["5m"];
-            if (pending.MaxFilledParentTradesPerSession != request.Strategy.EntryRules.IntradayZone.MaxFilledParentTradesPerSession ||
-                !(request.Strategy.EntryRules.IntradayZone.IsPythonFixedTargetComparison
-                    ? PythonZoneComparisonEvaluator.MatchesDecision(evaluation!, zoneExecutionBars[^1], asOfUtc,
-                        request.SnapshotsByTimeframe["5m"][^1], zoneExecutionBars.Length >= 2 ? zoneExecutionBars[^2] : null,
-                        request.Strategy.EntryRules.IntradayZone)
-                    : IntradayZonePatternEvaluator.MatchesDecision(evaluation!, zoneExecutionBars[^1], asOfUtc, request.SnapshotsByTimeframe["5m"][^1])))
-                throw new InvalidOperationException("Zone intent does not match this completed five-minute decision clock.");
-            Move(ref currentState, StrategyCandidateState.Qualified, "intraday_zone_qualified", asOfUtc, transitions);
-            Move(ref currentState, StrategyCandidateState.Armed, "intraday_zone_market_prepared", asOfUtc, transitions);
-            var plan = new StrategyOrderPlan(request.Strategy.StrategyId, request.Strategy.StrategyName,
-                pending.Direction, asOfUtc, asOfUtc, "5m", zoneExecutionBars.Length - 1,
-                pending.EntryReferencePrice, pending.InitialStopPrice, request.Strategy.ExitRules.TargetRMultiple,
-                request.Strategy.ExitRules.ProfitTargetMode, null, request.Strategy.Execution.SlippageBps,
-                pending.EntryCutoffUtc ?? pending.SessionDeadlineUtc, pending.ConfirmationBar.Timestamp,
-                ZoneEntry: pending, ZoneAlternatives: evaluation!.OrderedAlternatives);
-            Move(ref currentState, StrategyCandidateState.Triggered, "intraday_zone_market_committed", asOfUtc, transitions);
-            return Finish(StrategyCandidateState.Triggered, pending.Direction, orderPlan: plan);
-        }
         if (request.Strategy.EntryRules.OpeningRangeBreakout is not null)
         {
             var evaluation = request.PreviousSessionContext is { } context
                 ? new OpeningRangeBreakoutEvaluator().Evaluate(request.Strategy, setupBars, setupSnapshots, context, asOfUtc)
-                : new PreviousSessionBreakoutEvaluation(null, "opening_range_context_unavailable");
+                : new IntradayBreakoutEvaluation(null, "opening_range_context_unavailable");
             AddRule(rules, "qualification", evaluation.RejectionReason ?? "opening_range_qualified",
                 evaluation.Signal is not null, "opening_range_breakout", new { evaluation, context = request.PreviousSessionContext });
             if (evaluation.Signal is not { } pending)
@@ -262,28 +229,6 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 request.Strategy.ExitRules.TargetRMultiple, request.Strategy.ExitRules.ProfitTargetMode, null,
                 request.Strategy.Execution.SlippageBps, pending.ExpiresAtUtc, pending.ConfirmationTimestampUtc, pending);
             Move(ref currentState, StrategyCandidateState.Triggered, pending.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket ? "next_open_market_committed" : "pending_stop_market_activated", asOfUtc, transitions);
-            return Finish(StrategyCandidateState.Triggered, pending.Direction, orderPlan: plan);
-        }
-        if (request.Strategy.EntryRules.PreviousSessionBreakout is not null)
-        {
-            var dayEvaluation = request.PreviousSessionContext is { } context
-                ? new PreviousSessionBreakoutEvaluator().Evaluate(request.Strategy, setupBars, context, asOfUtc)
-                : new PreviousSessionBreakoutEvaluation(null, "previous_session_context_unavailable");
-            AddRule(rules, "qualification", dayEvaluation.RejectionReason ?? "previous_session_breakout_confirmed",
-                dayEvaluation.Signal is not null, "previous_session_breakout", new { evaluation = dayEvaluation, context = request.PreviousSessionContext });
-            if (dayEvaluation.Signal is not { } pending)
-            {
-                var failedState = FailAdmission(ref currentState, dayEvaluation.RejectionReason!, asOfUtc, transitions);
-                return Finish(failedState, noEntryReason: dayEvaluation.RejectionReason);
-            }
-            Move(ref currentState, StrategyCandidateState.Qualified, "previous_session_breakout_confirmed", asOfUtc, transitions);
-            Move(ref currentState, StrategyCandidateState.Armed, "pending_limit_prepared", asOfUtc, transitions);
-            var plan = new StrategyOrderPlan(request.Strategy.StrategyId, request.Strategy.StrategyName,
-                pending.Direction, pending.BreakoutTimestampUtc.AddMinutes(5), pending.ActiveAtUtc, "5m",
-                pending.BreakoutIndex, pending.LimitPrice, pending.InitialStopPrice,
-                request.Strategy.ExitRules.TargetRMultiple, request.Strategy.ExitRules.ProfitTargetMode, null,
-                request.Strategy.Execution.SlippageBps, pending.ExpiresAtUtc, pending.BreakoutTimestampUtc, pending);
-            Move(ref currentState, StrategyCandidateState.Triggered, "pending_limit_activated", asOfUtc, transitions);
             return Finish(StrategyCandidateState.Triggered, pending.Direction, orderPlan: plan);
         }
         if (!sessionClock.ValidateExecutionWindow(latest.Timestamp, request.Strategy.Timeframe, request.Strategy.Session))
@@ -547,8 +492,8 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
 
         if (request.AdmissionProfile.ExecutionTimingPolicy is not
             ("completed-bar-next-executable-bar-v1" or "completed-bar-asof-regime-scheduled-expiry-v2" or
-             "completed-bar-next-slice-market-exits-v3" or "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5" or
-             "completed-bar-pending-limit-session-deadline-v1" or OpeningRangeBreakoutRules.ExecutionTimingPolicy or OpeningRangeBreakoutRules.NextBarMarketTimingPolicy or IntradayZoneRules.ExecutionTimingPolicy or IntradayZoneRules.PythonComparisonTimingPolicy))
+             "completed-bar-next-slice-market-exits-v3" or ExecutionRules.KeptGapTimingPolicy or "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5" or
+             OpeningRangeBreakoutRules.ExecutionTimingPolicy or OpeningRangeBreakoutRules.NextBarMarketTimingPolicy))
         {
             throw new InvalidOperationException(
                 $"Unsupported execution timing policy '{request.AdmissionProfile.ExecutionTimingPolicy}'.");

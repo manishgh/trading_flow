@@ -16,32 +16,14 @@ public sealed class StrategyArtifactCatalogTests
         Assert.Equal(
             new[]
             {
-                "swing.connors-rsi2@6.0.0",
                 "swing.connors-rsi2@7.0.0",
                 "technical.opening-range-breakout@1.2.0",
-                "technical.previous-day-breakout@1.0.0",
-                "technical.recovery-exit-control@2.0.0",
-                "technical.recovery-sma5-exit@2.0.0",
-                "technical.recovery-sma5-news-avoidance@1.0.0",
-                "technical.recovery-sma5-news-evidence@1.0.0",
-                "technical.recovery-sma5-qualified-coverage@1.1.0",
-                "technical.recovery-sma5-qualified-negative-veto@1.1.0",
-                "technical.recovery-sma5-qualified-positive-required@1.1.0",
-                "technical.recovery-sma5-qualified-technical@1.1.0",
-                "technical.zone-bounce-volume-risk-target@1.0.0",
-                "technical.zone-bounce-volume@1.0.0",
-                "technical.zone-breakout-retest@1.0.0",
-                "technical.zone-intraday@1.0.0",
-                "technical.zone-python-comparison@1.0.0",
-                "technical.zone-risk-target@1.0.0",
-                "technical.zone-two-candle-stop@1.0.0",
-                "technical.zone-volume-spread-comparison@1.0.0",
-                "technical.zone-volume-spread-no-rr@1.0.0"
+                "technical.recovery-sma5-news-avoidance@1.0.0"
             },
             snapshot.ExecutableArtifacts
                 .Select(artifact => $"{artifact.Identity.StrategyId}@{artifact.Identity.SemanticVersion}")
                 .Order(StringComparer.Ordinal));
-        Assert.Equal(20, snapshot.ArchivedArtifacts.Count);
+        Assert.Empty(snapshot.ArchivedArtifacts);
         Assert.All(
             snapshot.ExecutableArtifacts,
             artifact =>
@@ -64,7 +46,7 @@ public sealed class StrategyArtifactCatalogTests
             item.Identity.SemanticVersion == "10.0.0");
         Assert.Contains(artifacts, item =>
             item.Identity.StrategyId == "swing.connors-rsi2" &&
-            item.Identity.SemanticVersion == "6.0.0");
+            item.Identity.SemanticVersion == "7.0.0");
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.catalyst-drift");
     }
@@ -91,21 +73,6 @@ public sealed class StrategyArtifactCatalogTests
     }
 
     [Fact]
-    public void ArchivedArtifacts_RemainStrictlyParseableEvidence()
-    {
-        var root = TestRepository.FindRoot();
-        var archived = CreateCatalog().GetSnapshot().ArchivedArtifacts;
-        var reader = new SimpleYamlReader();
-
-        Assert.NotEmpty(archived);
-        Assert.All(archived, artifact =>
-        {
-            var strategy = reader.ReadStrategy(Path.Combine(root, artifact.SourcePath));
-            if (StrategyHorizonResolver.Resolve(strategy) == "swing") Assert.Equal("1d", strategy.Timeframe);
-        });
-    }
-
-    [Fact]
     public void CanonicalHash_IsStableAcrossIndependentLoads()
     {
         var first = CreateCatalog().GetSelectable(StrategySelectionMode.Backtest);
@@ -114,23 +81,6 @@ public sealed class StrategyArtifactCatalogTests
         Assert.Equal(
             first.Select(item => item.Identity),
             second.Select(item => item.Identity));
-    }
-
-    [Fact]
-    public void ArchivedArtifacts_HaveStableGloballyUniqueCanonicalIdentities()
-    {
-        var first = CreateCatalog().GetSnapshot().ArchivedArtifacts;
-        var second = CreateCatalog().GetSnapshot().ArchivedArtifacts;
-
-        Assert.All(first, artifact =>
-        {
-            Assert.False(String.IsNullOrWhiteSpace(artifact.Identity.StrategyId));
-            Assert.Matches("^[0-9a-f]{64}$", artifact.Identity.ContentSha256);
-        });
-        Assert.Equal(first.Count, first.Select(artifact => artifact.Identity).Distinct().Count());
-        Assert.Equal(
-            first.Select(artifact => artifact.Identity),
-            second.Select(artifact => artifact.Identity));
     }
 
     [Fact]
@@ -158,27 +108,6 @@ public sealed class StrategyArtifactCatalogTests
         Assert.Equal(source.Identity.ContentSha256, derived.DerivedFromContentSha256);
         Assert.NotEqual(source.Identity.ContentSha256, derived.Identity.ContentSha256);
         Assert.Equal(StrategyLifecycleState.Research, derived.EffectiveLifecycle);
-    }
-
-    [Fact]
-    public void DerivedContent_CannotReuseVersionOccupiedByAnotherBootstrapArtifact()
-    {
-        var catalog = CreateCatalog();
-        var source = Assert.Single(
-            catalog.GetSelectable(StrategySelectionMode.Backtest),
-            artifact => artifact.Identity.StrategyId == "swing.connors-rsi2" && artifact.Identity.SemanticVersion == "6.0.0");
-        var changed = source.ResolvedStrategy with
-        {
-            EntryRules = source.ResolvedStrategy.EntryRules with
-            {
-                MinVolumeSpike = source.ResolvedStrategy.EntryRules.MinVolumeSpike + 0.25m
-            }
-        };
-
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            catalog.CreateDerivedArtifact(source, changed, "2.0.0"));
-
-        Assert.Contains("bootstrap content", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

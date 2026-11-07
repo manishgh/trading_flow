@@ -45,8 +45,6 @@ public sealed record BacktestResult(
     bool EconomicResultsComplete = true,
     PreparedMarketDataSummary? PreparedMarketData = null)
 {
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<BacktestZoneDecisionDetail>? ZoneDecisions { get; init; }
     public BacktestPortfolioState? PortfolioState { get; init; }
     public IReadOnlyList<BacktestHistoryEligibility> HistoryEligibility { get; init; } = [];
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
@@ -253,32 +251,3 @@ public sealed record DirectionPnlSummary(
 
 
 
-/// <summary>Frozen zone and filter evidence plus observed execution; absent prices remain absent.</summary>
-public sealed record BacktestZoneDecisionDetail(string CandidateId, string StrategyId, string Ticker, string Direction,
-    string Pattern, long ZoneId, int ZoneVersion, string ZoneRole, decimal ZoneBottom, decimal ZoneTop, int PivotCount,
-    DateTimeOffset PivotBarStartUtc, DateTimeOffset PivotCompletedAtUtc, DateTimeOffset PivotConfirmedAtUtc,
-    DateTimeOffset ZoneKnownAtUtc, DateTimeOffset? FlippedAtUtc, DateTimeOffset ConfirmationBarStartUtc,
-    DateTimeOffset ConfirmationCompletedAtUtc, decimal ConfirmationClose, decimal? Vwap, decimal? SlotRelativeVolume,
-    decimal? SlotMedianVolume, int SlotSampleCount, decimal FrozenStopPrice, DateTimeOffset SessionDeadlineUtc,
-    string Status, string ResolutionReason, decimal? ActualEntryPrice, decimal? ActualExitPrice,
-    string? ZonePolicyId = null, DateTimeOffset? EntryCutoffUtc = null, decimal? FixedTargetPrice = null,
-    decimal? Atr = null, long? TargetZoneId = null, decimal? TargetZoneBottom = null, decimal? TargetZoneTop = null,
-    BacktestZoneVolumeSpreadDetail? VolumeSpread = null,
-    IReadOnlyList<BacktestZoneAlternativeDecisionDetail>? AlternativeDecisions = null,
-    TradingFlow.Domain.Strategies.IntradayZoneTargetPlanningEvidence? TargetPlan = null,
-    string? LongBounceVolumeMode = null, string? StopBasis = null, decimal? PreviousLow = null,
-    decimal? ConfirmationLow = null, decimal? RawStopPrice = null, decimal? TickSize = null,
-    TradingFlow.Domain.Strategies.IntradayZoneRetestEvidence? Retest = null, int? TargetZoneVersion = null,
-    DateTimeOffset? TargetZoneKnownAtUtc = null);
-
-/// <summary>Synthetic quote assumptions and the selected alternative's quantity-dependent ticket-fee estimate.</summary>
-public sealed record BacktestZoneVolumeSpreadDetail(decimal BidPrice, decimal AskPrice, decimal FullSpreadBps,
-    decimal MaximumSpreadBps, decimal MinimumRewardRisk, int OrderedAlternativeIndex, decimal? PlannedQuantity,
-    decimal? EstimatedRoundTripTicketFees, decimal? EstimatedNetRiskDollars, decimal? EstimatedNetRewardDollars,
-    decimal? SelectedRewardRisk);
-
-/// <summary>Chronological admission's observed alternative checks; absence of a ratio means it was not calculated.</summary>
-public sealed record BacktestZoneAlternativeDecisionDetail(int AlternativeIndex, string Direction, long ZoneId,
-    decimal? PlannedQuantity, decimal? EstimatedNetRiskDollars, decimal? EstimatedNetRewardDollars,
-    decimal? RewardRisk, bool Selected, string Reason,
-    TradingFlow.Domain.Strategies.IntradayZoneTargetPlanningEvidence? TargetPlan = null);

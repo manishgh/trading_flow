@@ -35,7 +35,7 @@ public sealed class SwingCausalityAndMethodTests
             [new(2026,7,5)] = MarketSessionSchedule.Closed(new(2026,7,5)),
             [new(2026,7,6)] = MarketSessionSchedule.RegularDay(new(2026,7,6)),
             [new(2026,7,7)] = MarketSessionSchedule.RegularDay(new(2026,7,7)) };
-        var strategy = Read("swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml");
+        var strategy = Read("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         var expiry = BacktestDecisionTiming.ResolveExpiry(available, "1d", strategy.Session, schedule);
         Assert.Equal(DateTimeOffset.Parse("2026-07-07T04:00:00Z"), expiry);
         // A stock reopening Wednesday cannot extend the setup's already frozen Tuesday deadline.
@@ -59,7 +59,7 @@ public sealed class SwingCausalityAndMethodTests
     [Fact]
     public void ConnorsSma5Exit_IsStrict_AndDoesNotUseEma5()
     {
-        var strategy=Read("swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml");
+        var strategy=Read("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         var snapshot=new IndicatorEngine().Compute(Enumerable.Range(1,30).Select(i=>Bar("2026-06-01T04:00:00Z",i) with {
             Timestamp=DateTimeOffset.Parse("2026-06-01T04:00:00Z").AddDays(i) }).ToArray())[^1] with {
                 CurrentPrice=101,Sma5=100,Ema5=105,Rsi2=10};
@@ -67,20 +67,6 @@ public sealed class SwingCausalityAndMethodTests
         Assert.Equal("technical_exit_above_sma5",engine.GetTechnicalExitReason(strategy,snapshot,1));
         Assert.Null(engine.GetTechnicalExitReason(strategy,snapshot with {CurrentPrice=100},1));
         Assert.Null(engine.GetTechnicalExitReason(strategy,snapshot with {Sma5=null,Ema5=99},1));
-    }
-
-    [Fact]
-    public void VcpVolumeBaseline_ExcludesBreakoutAndFutureBars()
-    {
-        var strategy=Read("minervini-technical-template-vcp.bt-v9.yaml");
-        var bars=Enumerable.Range(0,65).Select(i=>Bar("2026-01-01T04:00:00Z",105) with {
-            Timestamp=DateTimeOffset.Parse("2026-01-01T04:00:00Z").AddDays(i),Volume=i==60?150:100}).ToArray();
-        var snapshots=new IndicatorEngine().Compute(bars).Select((x,i)=>x with {Atr=1,Sma50=100,Sma150=99,Sma200=i>=60?98:97}).ToArray();
-        var signal=new SignalGenerator().CreateTradeSignal(strategy,bars,snapshots,60);
-        Assert.NotNull(signal);Assert.Equal(1.5m,signal!.BreakoutVolumeVs50DayAverage);Assert.True(signal.IsSma200Rising);
-        var mutated=bars.Select((x,i)=>i>60?x with {Volume=999999,Close=999999}:x).ToArray();
-        var repeated=new SignalGenerator().CreateTradeSignal(strategy,mutated,snapshots,60);
-        Assert.Equal(signal.BreakoutVolumeVs50DayAverage,repeated!.BreakoutVolumeVs50DayAverage);
     }
 
     [Fact]
@@ -100,7 +86,7 @@ public sealed class SwingCausalityAndMethodTests
     {
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
         var profile=reader.ReadBacktestRun(Path.Combine(root,"configs","backtest","swing-backtest-profile.yaml"));
-        var strategy=Read("swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml");
+        var strategy=Read("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         var bars=Enumerable.Range(0,12).Select(i=>Bar("2026-06-01T04:00:00Z",105) with {
             Timestamp=DateTimeOffset.Parse("2026-06-01T04:00:00Z").AddDays(i)}).ToArray();
         var snapshots=new IndicatorEngine().Compute(bars).Select((x,i)=>x with {Atr=1,Sma200=100,Rsi2=i>=9?99:2,Sma5=100}).ToArray();
@@ -145,8 +131,8 @@ public sealed class SwingCausalityAndMethodTests
     }
 
     [Theory]
-    [InlineData("minervini-technical-template-vcp.bt-v9.yaml")]
-    [InlineData("swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml")]
+    [InlineData("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml")]
+    [InlineData("recovery-sma5-news-avoidance.bt-v1.yaml")]
     public void FrozenMethodSerialization_RoundTripsWithoutLosingRules(string name)
     {
         var original=Read(name);var path=Path.GetTempFileName();
@@ -163,7 +149,7 @@ public sealed class SwingCausalityAndMethodTests
     public async Task FrozenSource_IsPreservedAcrossOwnedRunWorkspace()
     {
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();var profile=reader.ReadBacktestRun(Path.Combine(root,"configs","backtest","swing-backtest-profile.yaml"));
-        var strategy=Read("swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml");
+        var strategy=Read("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         var bars=Enumerable.Range(0,12).Select(i=>Bar("2026-06-01T04:00:00Z",105) with {Timestamp=DateTimeOffset.Parse("2026-06-01T04:00:00Z").AddDays(i)}).ToArray();
         var captured=new FrozenProvider(bars);var run=profile with {Provider="csv",Tickers=["SPY"],Intervals=["1d"],
             DerivedTimeframes=new TradingFlow.Domain.Backtesting.DerivedTimeframeConfig("1d"),
@@ -194,7 +180,7 @@ public sealed class SwingCausalityAndMethodTests
         try
         {
             var workspace = runner.CreateWorkspace(run, Path.Combine(owner, "result.json"));
-            var strategy = Read("swing-connors-rsi2-sma5-risk-managed.bt-v5.yaml");
+            var strategy = Read("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
             var path = workspace.Runner.CreateCandidateAuditJournalPath(strategy, "CRDO");
             Assert.DoesNotContain(strategy.StrategyId, Path.GetFileName(path));
             Assert.True(Path.GetFileName(path).Length < 70);
@@ -213,7 +199,7 @@ public sealed class SwingCausalityAndMethodTests
     }
 
     [Theory]
-    [InlineData("swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml", "swing.connors-rsi2", "6.0.0")]
+    [InlineData("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml", "swing.connors-rsi2", "7.0.0")]
     public void CanonicalRuntimeIdentity_SurvivesResearchYamlAlias(string file, string id, string version)
     {
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
@@ -233,8 +219,8 @@ public sealed class SwingCausalityAndMethodTests
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
         var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader);
         var profile=reader.ReadBacktestRun(Path.Combine(root,"configs","backtest","swing-backtest-profile.yaml"));
-        var artifact=catalog.RequireSourcePath(Path.Combine(root,"configs","backtest","strategies","swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml"));
-        const string version="6.0.0-test-snapshot";
+        var artifact=catalog.RequireSourcePath(Path.Combine(root,"configs","backtest","strategies","swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        const string version="7.0.0-test-snapshot";
         var hash=TradingFlow.Domain.Research.EvidenceCanonicalJson.ComputeSha256(new TradingFlow.Domain.Strategies.CanonicalStrategyDocument(
             artifact.Identity.StrategyId,version,artifact.ResolvedStrategy,artifact.AdmissionProfile));
         var runtime=new TradingFlow.Domain.Strategies.AuthorizedRuntimeStrategy(
@@ -251,7 +237,7 @@ public sealed class SwingCausalityAndMethodTests
             var runner=new BacktestRunner(reader,catalog,marketDataProviderFactory:_=>new FrozenProvider(bars));
             await runner.RunValidatedAsync(run,[runtime],DateTimeOffset.UtcNow,Path.Combine(scratch,"result.json"),CancellationToken.None);
             var audits=String.Join("\n",Directory.EnumerateFiles(scratch,"*.ndjson",SearchOption.AllDirectories).Select(File.ReadAllText));
-            Assert.Contains(version,audits);Assert.Contains(hash,audits);Assert.Contains("causal-market-exits-v3",audits);
+            Assert.Contains(version,audits);Assert.Contains(hash,audits);Assert.Contains("causal-market-exits-kept-gaps-v4",audits);
             Assert.DoesNotContain("0.0.0-backtest",audits);Assert.NotEmpty(Directory.EnumerateDirectories(scratch,".run-inputs-*"));
             // Mutating a validated definition must fail rather than relabel it as diagnostic.
             var changed=runtime with {Definition=runtime.Definition with {StrategyName="changed after validation"}};
@@ -268,7 +254,7 @@ public sealed class SwingCausalityAndMethodTests
     [Fact]
     public void MissedMoveEntriesUseActualFilledTradesAndCompatiblePeakSliceReceipt()
     {
-        var strategy=Read("minervini-technical-template-vcp.bt-v10.yaml");
+        var strategy=Read("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         var bars=new[]{Bar("2026-04-07T04:00:00Z",10),Bar("2026-04-08T04:00:00Z",12)};
         var filled=new TradingFlow.Domain.Backtesting.BacktestTrade("SPY",strategy.StrategyName,"long",
             bars[1].Timestamp.AddDays(1),bars[1].Timestamp.AddDays(2),1,10,12,9,15,"technical_exit",2,0,2);

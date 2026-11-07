@@ -39,9 +39,9 @@ public sealed class PaperRunUniverseSnapshotResolverTests
             wishlistId: null,
             strategyPath: Path.Combine(
                 repoRoot,
-                "configs",
-                "strategies",
-                "minervini-trend-template-vcp.v4-trend-rider.yaml"),
+                "src",
+                "TradingFlow.Tests", "Fixtures", "Strategies",
+                "daily-trailing-swing.fixture.yaml"),
             CancellationToken.None);
 
         Assert.Equal(["MU", "NVDA"], snapshot.Tickers);
@@ -85,9 +85,9 @@ public sealed class PaperRunUniverseSnapshotResolverTests
             wishlistId,
             strategyPath: Path.Combine(
                 repoRoot,
-                "configs",
-                "strategies",
-                "minervini-trend-template-vcp.v4-trend-rider.yaml"),
+                "src",
+                "TradingFlow.Tests", "Fixtures", "Strategies",
+                "daily-trailing-swing.fixture.yaml"),
             CancellationToken.None);
 
         Assert.Equal(["MSFT", "MU", "NVDA"], snapshot.Tickers);
@@ -124,9 +124,9 @@ public sealed class PaperRunUniverseSnapshotResolverTests
             wishlistId: null,
             strategyPath: Path.Combine(
                 repoRoot,
-                "configs",
-                "strategies",
-                "minervini-trend-template-vcp.v4-trend-rider.yaml"),
+                "src",
+                "TradingFlow.Tests", "Fixtures", "Strategies",
+                "daily-trailing-swing.fixture.yaml"),
             CancellationToken.None));
 
         Assert.Equal("Finviz read failed: timeout", exception.Message);

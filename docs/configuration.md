@@ -72,8 +72,8 @@ least 260 completed daily bars available before admission.
 
 ## Strategy Identity And Lifecycle
 
-`configs/strategy-catalog.json` is authoritative. The current catalog contains 21
-research artifacts and 20 archived artifacts. No artifact is authorized for
+`configs/strategy-catalog.json` is authoritative. The current catalog contains 3
+research artifacts and no archived artifacts (see `docs/research/retired-strategy-artifacts-2026-11-07.md`). No artifact is authorized for
 paper or live merely because it is stored under `configs/strategies`.
 
 Identity is `(strategy_id, semantic_version, content_sha256)`. A generated run file

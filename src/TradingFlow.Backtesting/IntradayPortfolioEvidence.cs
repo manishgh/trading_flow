@@ -21,7 +21,6 @@ public static class IntradayPortfolioEvidence
             evidence.Add(new(item.Ticker, byId[item.CandidateId].StrategyName, item.TimestampUtc,
                 item.State == "protection_updated" ? ExecutionState.TrailingStopAdjusted : ExecutionState.OrderStateChanged,
                 item.Reason, "portfolio_execution", item.CandidateId, JsonSerializer.Serialize(item)));
-        PublishZoneAlternativeDecisions(evidence, byId, replay.AlternativeDecisions);
         foreach (var fill in replay.FillEvents)
             evidence.Add(new(fill.Event.Symbol, byId[fill.CandidateId].StrategyName, fill.Event.OccurredAtUtc,
                 ExecutionState.OrderFilled, fill.Event.Reason, "portfolio_execution", fill.CandidateId,
@@ -29,19 +28,6 @@ public static class IntradayPortfolioEvidence
         PublishFailures(evidence, replay);
         PublishCutoffs(evidence, byId, replay.PortfolioState);
         foreach (var item in evidence.OrderBy(x => x.Timestamp)) execution.Append(item);
-    }
-
-    // Retain every ordered sizing and ratio check in the ordinary journal, including attempts beyond the bounded UI rows.
-    private static void PublishZoneAlternativeDecisions(ICollection<ExecutionEvent> execution,
-        IReadOnlyDictionary<string, BacktestCandidateTrade> candidates, IReadOnlyList<IntradayZoneAlternativeDecision> alternatives)
-    {
-        foreach (var alternative in alternatives)
-        {
-            var candidate = candidates[alternative.CandidateId];
-            execution.Add(new(candidate.Ticker, candidate.StrategyName, candidate.EntryTimestamp,
-                ExecutionState.OrderStateChanged, alternative.Reason, "portfolio_execution", candidate.CandidateId,
-                JsonSerializer.Serialize(alternative)));
-        }
     }
 
     /// <summary>Keep the existing physical fill contract and retain its interval/phase sequence when adjacent frames share a UTC timestamp.</summary>

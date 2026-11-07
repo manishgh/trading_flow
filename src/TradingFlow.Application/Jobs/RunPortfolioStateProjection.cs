@@ -37,44 +37,6 @@ public static class RunPortfolioStateProjection
             item.OpeningRangeCompletedAtUtc, item.OpeningRelativeVolume, item.OpeningVolumeBaselineSampleCount,
             item.MaxFilledParentTradesPerSession, item.RequireRangeReturnBeforeReentry);
 
-    // Copy immutable zone evidence without applying strategy rules or inferring absent fills.
-    public static IReadOnlyList<RunZoneDecisionDetail> ProjectZones(IReadOnlyList<BacktestZoneDecisionDetail>? details) =>
-        (details ?? []).Select(item => new RunZoneDecisionDetail(item.CandidateId, item.StrategyId, item.Ticker, item.Direction,
-            item.Pattern, item.ZoneId, item.ZoneVersion, item.ZoneRole, item.ZoneBottom, item.ZoneTop, item.PivotCount,
-            item.PivotBarStartUtc, item.PivotCompletedAtUtc, item.PivotConfirmedAtUtc, item.ZoneKnownAtUtc, item.FlippedAtUtc,
-            item.ConfirmationBarStartUtc, item.ConfirmationCompletedAtUtc, item.ConfirmationClose, item.Vwap, item.SlotRelativeVolume,
-            item.SlotMedianVolume, item.SlotSampleCount, item.FrozenStopPrice, item.SessionDeadlineUtc, item.Status,
-            item.ResolutionReason, item.ActualEntryPrice, item.ActualExitPrice, item.ZonePolicyId, item.EntryCutoffUtc,
-            item.FixedTargetPrice, item.Atr, item.TargetZoneId, item.TargetZoneBottom, item.TargetZoneTop,
-            ProjectVolumeSpread(item.VolumeSpread), item.AlternativeDecisions?.Select(alternative => new RunZoneAlternativeDecisionDetail(
-                alternative.AlternativeIndex, alternative.Direction, alternative.ZoneId, alternative.PlannedQuantity,
-                alternative.EstimatedNetRiskDollars, alternative.EstimatedNetRewardDollars, alternative.RewardRisk,
-                alternative.Selected, alternative.Reason, ProjectTargetPlan(alternative.TargetPlan))).ToArray(),
-            ProjectTargetPlan(item.TargetPlan), item.LongBounceVolumeMode, item.StopBasis, item.PreviousLow,
-            item.ConfirmationLow, item.RawStopPrice, item.TickSize, ProjectRetest(item.Retest),
-            item.TargetZoneVersion, item.TargetZoneKnownAtUtc)).ToArray();
-
-    // Copy the pre-flip resistance and active start-snapshot version separately from the frozen source on the main row.
-    private static RunZoneRetestDetail? ProjectRetest(TradingFlow.Domain.Strategies.IntradayZoneRetestEvidence? item) =>
-        item is null ? null : new(item.ArmTransition.Before.Version, item.ArmTransition.Before.Bottom,
-            item.ArmTransition.Before.Top, item.ArmTransition.Before.KnownAtUtc, item.ArmTransition.FlippedAtUtc,
-            item.ArmTransition.Atr, item.ArmTransition.CanArmRetest, item.ActiveSourceAtConfirmationStart.Version,
-            item.ActiveSourceAtConfirmationStart.Bottom, item.ActiveSourceAtConfirmationStart.Top,
-            item.ActiveSourceAtConfirmationStart.KnownAtUtc, item.ConfirmationSnapshotAsOfUtc);
-
-    // Keep sizing budget and the separate full-cost stop denominator explicit.
-    private static RunZoneTargetPlanningDetail? ProjectTargetPlan(TradingFlow.Domain.Strategies.IntradayZoneTargetPlanningEvidence? item) =>
-        item is null ? null : new(item.TargetOrigin, item.FallbackNetRiskMultiple, item.PlannedQuantity,
-            item.PlannerLossDollars, item.PlannerRiskBudgetDollars, item.EstimatedEntryFillPrice, item.EstimatedStopFillPrice,
-            item.EstimatedEntryFees, item.EstimatedStopExitFees, item.EstimatedTargetFees, item.EstimatedNetStopRisk,
-            item.EstimatedNetReward, item.EstimatedNetRewardRisk, item.AdverseCostBps, item.ResolvedTargetPrice);
-
-    // Preserve null admission values rather than inventing quantities or ratios for rejected or untested alternatives.
-    private static RunZoneVolumeSpreadDetail? ProjectVolumeSpread(BacktestZoneVolumeSpreadDetail? item) => item is null ? null
-        : new(item.BidPrice, item.AskPrice, item.FullSpreadBps, item.MaximumSpreadBps, item.MinimumRewardRisk,
-            item.OrderedAlternativeIndex, item.PlannedQuantity, item.EstimatedRoundTripTicketFees,
-            item.EstimatedNetRiskDollars, item.EstimatedNetRewardDollars, item.SelectedRewardRisk);
-
     // Keep observed bars, first eligibility and still-warming statuses exactly as established by the runner.
     public static IReadOnlyList<RunHistoryEligibility> ProjectEligibility(IReadOnlyList<BacktestHistoryEligibility> eligibility) =>
         eligibility.Select(item => new RunHistoryEligibility(item.Ticker, item.StrategyId, item.RequiredBars,

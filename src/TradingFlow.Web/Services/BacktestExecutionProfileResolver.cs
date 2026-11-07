@@ -12,11 +12,7 @@ public static class BacktestExecutionProfileResolver
         new("", "Selected strategy / profile", "auto"),
         new(ExecutionReplayPolicy.DailyRthFiveMinuteV1, "Daily setup · five-minute diagnostic replay", "swing"),
         new(ExecutionReplayPolicy.DailyRthSipPortfolioV1, "Daily setup · SIP portfolio replay", "swing"),
-        new(ExecutionReplayPolicy.IntradayRthFiveMinuteV1, "Day setup · five-minute limit diagnostic replay", "day"),
         new(ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1, "Opening range · five-minute stop-market diagnostic replay", "day"),
-        new(ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1, "Intraday zones � historical SIP quotes/trades", "day"),
-        new(ExecutionReplayPolicy.PythonZoneBounceBreakdownV1, "Python zone comparison - five-minute candle diagnostic replay", "day"),
-        new(ExecutionReplayPolicy.PythonZoneVolumeSpreadV1, "Python zone volume/spread comparison - five-minute candle diagnostic replay", "day"),
         new(ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1, "Completed breakout: next-opening market / candle stop diagnostic replay", "day")
     ];
 
@@ -29,20 +25,15 @@ public static class BacktestExecutionProfileResolver
         if (horizons.Length != 1)
             throw new InvalidOperationException("Use separate saved plans for day and swing strategies so each plan has its own source horizon and execution assumptions.");
         var day = horizons[0] == "day";
-        var zoneStrategy = strategies.Any(strategy => strategy.EntryRules.IntradayZone is not null);
-        if (zoneStrategy && (strategies.Count != 1 || strategies.Any(strategy => strategy.EntryRules.IntradayZone is null)))
-            throw new InvalidOperationException("Use a separate saved plan and portfolio for intraday zones.");
         var openingRange = strategies.Any(strategy => strategy.EntryRules.OpeningRangeBreakout is not null);
         if (openingRange && strategies.Any(strategy => strategy.EntryRules.OpeningRangeBreakout is null))
-            throw new InvalidOperationException("Use separate saved plans for opening-range stop orders and previous-session limit orders.");
+            throw new InvalidOperationException("Use separate saved plans for opening-range breakout and daily strategies.");
         var entryModes = strategies.Select(strategy => strategy.EntryRules.OpeningRangeBreakout is { } rules
             ? rules.PolicyId == OpeningRangeBreakoutRules.CompletedBreakoutPolicyId ? IntradayEntryOrderMode.NextBarMarket : IntradayEntryOrderMode.StopMarket
             : IntradayEntryOrderMode.NextBarLimit).Distinct().ToArray();
         if (day && entryModes.Length != 1)
             throw new InvalidOperationException("Use separate saved plans for different intraday entry modes.");
-        var dayPolicy = zoneStrategy
-            ? ZonePolicy(strategies.Single().EntryRules.IntradayZone!)
-            : ExecutionReplayPolicy.ForEntryMode(entryModes[0]);
+        var dayPolicy = ExecutionReplayPolicy.ForEntryMode(entryModes[0]);
         var explicitPolicy = String.IsNullOrWhiteSpace(requestedPolicy) ? null : requestedPolicy;
         var policy = explicitPolicy ?? (day ? dayPolicy : profile.Engine.ExecutionReplayPolicyId);
         if (policy is not null && !Choices.Any(choice => choice.PolicyId == policy))
@@ -66,8 +57,4 @@ public static class BacktestExecutionProfileResolver
             News = profile.News with { Enabled = strategies.Any(StrategyCapabilityInspector.UsesNews) }
         };
     }
-    // Resolve the immutable recipe policy before normal plan freezing; candle comparisons require no historical quotes.
-    private static string ZonePolicy(IntradayZoneRules rules) => rules.IsPythonVolumeSpreadComparison
-        ? ExecutionReplayPolicy.PythonZoneVolumeSpreadV1 : rules.IsPythonComparison
-            ? ExecutionReplayPolicy.PythonZoneBounceBreakdownV1 : ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1;
 }

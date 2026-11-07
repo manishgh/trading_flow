@@ -85,8 +85,7 @@ public sealed record StrategyDecisionRequest(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DrawdownDecisionContext? DrawdownContext = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] HistoricalNewsPresenceContext? HistoricalNewsPresence = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] StrategySelectionMode? SelectionMode = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] PreviousSessionBreakoutContext? PreviousSessionContext = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayZoneDecisionContext? ZoneContext = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayBreakoutContext? PreviousSessionContext = null);
 
 public sealed record StrategyDecisionRule(
     string Stage,
@@ -122,9 +121,7 @@ public sealed record StrategyOrderPlan(
     decimal SlippageBps,
     DateTimeOffset ExpiresAtUtc,
     DateTimeOffset StopContextTimestampUtc,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] PreviousSessionBreakoutSignal? PendingEntry = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayZoneSignal? ZoneEntry = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<IntradayZoneSignal>? ZoneAlternatives = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayBreakoutSignal? PendingEntry = null);
 
 public sealed record StrategyDecisionResult(
     StrategyCandidateState State,

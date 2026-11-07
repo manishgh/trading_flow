@@ -23,7 +23,7 @@ public sealed class EffectiveRunSettingsTests
         await File.WriteAllTextAsync(fixture.ProfilePath, profileYaml.Replace(
             "  precommitted_liquidation_source_utc: 2026-05-21T04:00:00+00:00\n", String.Empty, StringComparison.Ordinal));
         var day = Assert.Single(await fixture.Catalog.GetStrategiesAsync(StrategySelectionMode.Backtest),
-            item => item.Identity.StrategyId == "technical.previous-day-breakout");
+            item => item.Identity.StrategyId == "technical.opening-range-breakout");
         var handler = new CalendarOnlyHandler();
         var providers = new TradingFlow.Backtesting.ConfiguredDataProviders(
             () => TradingFlow.Alpaca.AlpacaOptions.Create(ProductionProfile.Paper) with {
@@ -37,7 +37,7 @@ public sealed class EffectiveRunSettingsTests
         {
             var market = providers.CreateMarket(preparedRun, new FileSystemRawArchiveWriter(new RawArchiveOptions(preparedRun.RawRoot)));
             await new TradingFlow.Data.Csv.CachedMarketDataProvider(market, preparedRun.NormalizedRoot, "use_cache")
-                .SelectPreparedCalendarAsync(new(2026, 10, 2), new(2026, 10, 6), default);
+                .SelectPreparedCalendarAsync(new(2026, 9, 1), new(2026, 10, 6), default);
             Assert.Equal(1, handler.CalendarRequests);
         }
         var adapter = new WorkflowRunConfiguration(fixture.Catalog, fixture.Writer, fixture.Reader,
@@ -50,13 +50,13 @@ public sealed class EffectiveRunSettingsTests
             DateTimeOffset.Parse("2026-10-05T13:30:00Z"), DateTimeOffset.Parse("2026-10-06T20:00:00Z"),
             10000, 1, 25, 5, "use_cache", "full", "synthetic-day", Path.GetFileName(fixture.ProfilePath));
         var normalized = await adapter.NormalizeBacktestRequestAsync(request, default);
-        Assert.Equal(ExecutionReplayPolicy.IntradayRthFiveMinuteV1, normalized.ExecutionReplayPolicyId);
+        Assert.Equal(ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1, normalized.ExecutionReplayPolicyId);
         var settings = (await adapter.GetBacktestResolvedSettingsAsync(normalized, default))!;
         Assert.Equal("day", settings.Horizon);
-        Assert.Contains("warmup 3 days", settings.RequiredMarketDataContext);
+        Assert.Contains("warmup 31 days", settings.RequiredMarketDataContext);
         var generated = await adapter.WriteAsync(normalized, source, "synthetic-day", default);
         var run = fixture.Reader.ReadBacktestRun(generated[0]);
-        Assert.Equal(3, run.TimeWindow.WarmupLookbackDays);
+        Assert.Equal(31, run.TimeWindow.WarmupLookbackDays);
         Assert.Equal(0, run.Engine.IndicatorWarmupBars);
         Assert.Equal(new[] { "5m" }, run.Intervals);
         Assert.Equal("5m", run.DerivedTimeframes.Source);
@@ -71,7 +71,7 @@ public sealed class EffectiveRunSettingsTests
         Assert.Equal(400, fixture.Reader.ReadBacktestRun(fixture.ProfilePath).TimeWindow.WarmupLookbackDays);
     }
 
-    /// <summary>Supplies an explicitly synthetic prior session and rejects any attempt to fetch bars or news during plan review.</summary>
+    /// <summary>Supplies synthetic regular sessions (1 Sep - 5 Oct 2026, Labor Day closed) and rejects any bar or news request during plan review.</summary>
     private sealed class CalendarOnlyHandler : HttpMessageHandler
     {
         public int CalendarRequests { get; private set; }
@@ -82,9 +82,16 @@ public sealed class EffectiveRunSettingsTests
             Assert.Equal("/v2/calendar", request.RequestUri!.AbsolutePath);
             CalendarRequests++;
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) {
-                Content = new StringContent("""[{"date":"2026-10-02","open":"09:30","close":"16:00"},{"date":"2026-10-05","open":"09:30","close":"16:00"}]""", System.Text.Encoding.UTF8, "application/json")
+                Content = new StringContent(SyntheticCalendarJson(), System.Text.Encoding.UTF8, "application/json")
             });
         }
+
+        // Twenty-four weekday sessions give the ORB its twenty-session opening-volume baseline before 5 October.
+        private static string SyntheticCalendarJson() => "[" + String.Join(",", Enumerable.Range(0, 35)
+            .Select(offset => new DateOnly(2026, 9, 1).AddDays(offset))
+            .Where(date => date <= new DateOnly(2026, 10, 5) && date != new DateOnly(2026, 9, 7) &&
+                date.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+            .Select(date => $"{{\"date\":\"{date:yyyy-MM-dd}\",\"open\":\"09:30\",\"close\":\"16:00\"}}")) + "]";
     }
 
     /// <summary>Rejected attempt cleanup removes its generated copies without deleting another run or shared input evidence.</summary>

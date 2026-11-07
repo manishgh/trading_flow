@@ -320,8 +320,10 @@ Paper configs:
 Strategy classification:
 
 - `configs/strategy-catalog.json` is the authority.
-- The catalog holds 21 research artifacts and 20 archived artifacts, with no paper
-  execution or live authorization.
+- The catalog holds 3 research artifacts (intraday opening-range breakout, Connors
+  RSI-2 mean reversion, news-free snapback) and no archived artifacts, with no paper
+  execution or live authorization. Removed artifacts are listed in
+  `docs/research/retired-strategy-artifacts-2026-11-07.md`.
 - Research/archive is artifact disposition. Paper experiment, paper shadow, and
   validated are exact-identity authorization grants.
 - Web/mobile paper mode is explicit and never falls back to research.

@@ -7,24 +7,6 @@ namespace TradingFlow.Tests;
 public sealed class RunConfigParsingTests
 {
     [Fact]
-    public void RuntimeStrategyCatalog_ContainsOnlyDailySwingSetups()
-    {
-        var root = FindRepositoryRoot();
-        var reader = new SimpleYamlReader();
-        var paths = Directory.GetFiles(
-            Path.Combine(root, "configs", "strategies"),
-            "*.yaml",
-            SearchOption.TopDirectoryOnly);
-
-        Assert.NotEmpty(paths);
-        foreach (var path in paths)
-        {
-            var strategy = reader.ReadStrategy(path);
-            Assert.Equal("1d", strategy.Timeframe, ignoreCase: true);
-        }
-    }
-
-    [Fact]
     public void OpeningGapPolicy_SurvivesGeneratedRunFiles()
     {
         var reader = new SimpleYamlReader();
@@ -49,7 +31,7 @@ public sealed class RunConfigParsingTests
         var strategies = Path.Combine(root, "configs", "backtest", "strategies");
         var kept = Path.Combine(strategies, "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         Assert.Equal(ExecutionRules.KeepAndExitNextOpen, reader.ReadStrategy(kept).Execution.OpeningGapPolicy);
-        Assert.Null(reader.ReadStrategy(Path.Combine(strategies, "swing-connors-rsi2-sma5-risk-managed.bt-v6.yaml")).Execution.OpeningGapPolicy);
+        Assert.Null(reader.ReadStrategy(Path.Combine(strategies, "recovery-sma5-news-avoidance.bt-v1.yaml")).Execution.OpeningGapPolicy);
 
         var invalid = Path.Combine(Path.GetTempPath(), $"opening-gap-{Guid.NewGuid():N}.yaml");
         try
@@ -85,15 +67,14 @@ public sealed class RunConfigParsingTests
     }
 
     [Theory]
-    [InlineData("minervini-trend-template-vcp.v4-trend-rider.yaml")]
-    [InlineData("swing-reversal-reclaim-bull-quality-no-news.v1.yaml")]
-    [InlineData("swing-mean-reversion-reclaim.v1.yaml")]
-    [InlineData("swing-catalyst-drift.v5.yaml")]
+    [InlineData("src/TradingFlow.Tests/Fixtures/Strategies/daily-trailing-swing.fixture.yaml")]
+    [InlineData("configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml")]
+    [InlineData("configs/backtest/strategies/recovery-sma5-news-avoidance.bt-v1.yaml")]
     public void StrategySerialization_RoundTripsSharedSwingBrain(string strategyFile)
     {
         var root = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
-        var original = reader.ReadStrategy(Path.Combine(root, "configs", "strategies", strategyFile));
+        var original = reader.ReadStrategy(Path.Combine(root, strategyFile));
         var tempPath = Path.Combine(Path.GetTempPath(), $"swing-roundtrip-{Guid.NewGuid():N}.yaml");
 
         File.WriteAllText(tempPath, RunConfigWriter.SerializeStrategyYaml(original));

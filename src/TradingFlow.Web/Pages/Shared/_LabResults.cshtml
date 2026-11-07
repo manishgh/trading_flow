@@ -101,39 +101,6 @@
 {
     <partial name="_BacktestPortfolioState" model="portfolio" />
 }
-@if (Model.Page.ZoneEvaluations is { } trace)
-{
-    <section class="lab-panel">
-        <h2 class="section-heading">Every evaluated zone candle</h2>
-        <p class="note">@trace.TotalCount retained rows. Showing offset @trace.Offset, up to @trace.Limit rows. Rejected bars include the engine's original predicates and clocks. Planned costs and targets are estimates.</p>
-        @if (trace.UnavailableReason is { } unavailable) { <p class="note">@unavailable</p> }
-        @foreach (var row in trace.Rows)
-        {
-            <details><summary>@row.Ticker / @(row.ResolutionReason ?? "pattern admitted") / @(row.CandidateId ?? "no candidate")</summary>
-            @foreach (var line in TradingFlow.Contracts.Presentation.ZoneEvaluationPresentation.Lines(row)) { <p class="note">@line</p> }
-            </details>
-        }
-        @if (trace.Offset > 0) { <a asp-page="/Backtests" asp-route-jobId="@Model.Job.JobId" asp-route-drill="@Model.Drilled.StrategyId" asp-route-zoneOffset="@Math.Max(0, trace.Offset - trace.Limit)">Previous candles</a> }
-        @if (trace.NextOffset is { } next) { <a asp-page="/Backtests" asp-route-jobId="@Model.Job.JobId" asp-route-drill="@Model.Drilled.StrategyId" asp-route-zoneOffset="@next">Next candles</a> }
-    </section>
-}
-@if (Model.ZoneDecisions.Count > 0)
-{
-    <section class="lab-panel">
-        <h2 class="section-heading">Zone entry and execution evidence</h2>
-        <p class="note">Latest @Model.ZoneDecisions.Count hypotheses. Complete decision and execution journals retain all events; each row names its execution policy. Planned prices do not establish fills.</p>
-        @foreach (var decision in Model.ZoneDecisions)
-        {
-            <details>
-                <summary>@decision.Ticker / @decision.Pattern / @decision.Status</summary>
-                @foreach (var line in TradingFlow.Contracts.Presentation.IntradayZoneDecisionPresentation.Lines(decision))
-                {
-                    <p class="note">@line</p>
-                }
-            </details>
-        }
-    </section>
-}
 @if (Model.HistoryEligibility.Count > 0)
 {
     <section class="lab-panel">

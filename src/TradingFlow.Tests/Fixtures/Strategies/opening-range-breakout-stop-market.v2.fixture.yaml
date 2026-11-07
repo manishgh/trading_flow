@@ -1,16 +1,19 @@
-# Approved 25 October 2026 fixed Research baseline. Execution remains diagnostic, backtest-only.
-strategy_id: technical.previous-day-breakout
-strategy_name: RESEARCH Previous Session Breakout Day V1
-source: user_previous_session_breakout_2026_10_25
-version: 1
+# Test-only fixture (not a catalog strategy): the retired technical.opening-range-breakout@1.1.0
+# file copied unchanged from commit a3e7de5 so the kept stop-market entry path keeps its tests.
+# Approved stage 1 submitted-price rounding variant; original v1 remains the immutable control.
+strategy_id: technical.opening-range-breakout
+strategy_name: RESEARCH Fifteen Minute Opening Range Breakout Outward Rounded Day V2
+source: user_opening_range_breakout_2026_10_27
+version: 2
 timeframe: 5m
 direction: long_short
 entry_rules:
-  setup_type: previous_session_breakout
-  previous_session_breakout:
-    policy_id: previous-session-breakout-v1
+  setup_type: opening_range_breakout
+  opening_range_breakout:
+    policy_id: opening-range-breakout-outward-rounding-v1
+    max_filled_parent_trades_per_session: 2
   enable_short: true
-  short_setup_type: previous_session_breakout
+  short_setup_type: opening_range_breakout
   min_volume_spike: 0
   volume_confirmation_mode: none
   min_entry_rsi: 0
@@ -32,7 +35,7 @@ exit_rules:
   target_r_multiple: 3
   max_hold_hours: 6.5
   enable_atr_trailing_stop: false
-  initial_stop_mode: breakout_candle
+  initial_stop_mode: opposite_opening_range
   profit_target_mode: r_multiple
   allow_same_bar_stop_target: true
   continuation_protection:

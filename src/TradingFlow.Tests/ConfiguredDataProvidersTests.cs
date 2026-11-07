@@ -97,9 +97,7 @@ public sealed class ConfiguredDataProvidersTests
     [InlineData(null, "all")]
     [InlineData(ExecutionReplayPolicy.DailyRthFiveMinuteV1, "raw")]
     [InlineData(ExecutionReplayPolicy.DailyRthSipPortfolioV1, "raw")]
-    [InlineData(ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1, "raw")]
-    [InlineData(ExecutionReplayPolicy.PythonZoneBounceBreakdownV1, "raw")]
-    [InlineData(ExecutionReplayPolicy.PythonZoneVolumeSpreadV1, "raw")]
+    [InlineData(ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1, "all")]
     public void ExecutionPolicy_SelectsTheActualProviderPriceBasis(string? executionPolicy, string expectedAdjustment)
     {
         using var http = new HttpClient();

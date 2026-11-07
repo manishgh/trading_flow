@@ -518,7 +518,7 @@ public sealed partial class BacktestRunner(
             preparedMarketBarCount,
             benchmarkAliasesPreparedMarket ? 0 : preparedMarket.BenchmarkBars.Count,
             run.Engine.MaxRetainedReplayBars);
-        if (run.Engine.ExecutionReplayPolicyId is ExecutionReplayPolicy.IntradayRthFiveMinuteV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1 or ExecutionReplayPolicy.PythonZoneBounceBreakdownV1 or ExecutionReplayPolicy.PythonZoneVolumeSpreadV1)
+        if (ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
         {
             EnsureStrategyWorkItemLimit(run.Tickers.Count, strategies.Length, run.Engine.MaxStrategyWorkItems);
             return await RunIntradayPreparedAsync(run, strategies.Single(), startedAt, resultPath,
@@ -906,11 +906,11 @@ public sealed partial class BacktestRunner(
     /// <summary>Rejects incompatible run modes and exit policies before collecting or replaying market data.</summary>
     private static void ValidateRun(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
     {
-        if (run.Engine.ExecutionReplayPolicyId is ExecutionReplayPolicy.IntradayRthFiveMinuteV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1 or ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1 or ExecutionReplayPolicy.PythonZoneBounceBreakdownV1 or ExecutionReplayPolicy.PythonZoneVolumeSpreadV1)
+        if (ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
             ValidateIntradayRun(run, strategies);
         else
             foreach (var strategy in strategies) TechnicalExecutionEngine.RequireSupportedExitPolicy(strategy);
-        if (run.Engine.ExecutionReplayPolicyId is not null and not ExecutionReplayPolicy.IntradayRthFiveMinuteV1 and not ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1 and not ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1 and not ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1 and not ExecutionReplayPolicy.PythonZoneBounceBreakdownV1 and not ExecutionReplayPolicy.PythonZoneVolumeSpreadV1)
+        if (run.Engine.ExecutionReplayPolicyId is not null && !ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
             foreach (var strategy in strategies) ValidateFineExecutionPolicy(run, strategy);
         if (!run.Mode.Equals("backtest", StringComparison.OrdinalIgnoreCase))
         {
@@ -1655,8 +1655,6 @@ public sealed partial class BacktestRunner(
             await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "unified_completed_trades", unifiedCompletedTradesPath, unifiedCompletedTrades.Count, cancellationToken)
         };
         // Preserve the independent valuation grid alongside native fills and source-session marks.
-        if (await WriteZoneEvaluationsAsync(exclusivePath, result, cancellationToken) is { } zoneEvaluations)
-            evidenceReferences.Add(zoneEvaluations);
         if (result.PortfolioState is not null)
         {
             var calendarPath = Path.ChangeExtension(exclusivePath, ".native-daily-calendar.json");

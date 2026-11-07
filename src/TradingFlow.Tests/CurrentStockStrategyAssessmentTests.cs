@@ -226,7 +226,9 @@ public sealed class CurrentStockStrategyAssessmentTests
                     new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), yaml);
                 var experiments = new StrategyExperimentArtifactStore(h.root, artifacts, yaml, AtomicFileArtifactWriter.Instance);
                 var profiles = new ConfigCatalogService(new(repo), yaml, artifacts, experiments, new StrategyAuthorizationTestRegistry());
-                var artifact = artifacts.GetSnapshot().ExecutableArtifacts.First(item => item.ResolvedStrategy.Timeframe == "1d");
+                // The desk serves price-only daily strategies; the historical-news diagnostic recipe is backtest-only.
+                var artifact = artifacts.GetSnapshot().ExecutableArtifacts.First(item => item.ResolvedStrategy.Timeframe == "1d" &&
+                    item.AdmissionProfile.HistoricalNewsDiagnosticPolicyId is null);
                 h.Strategy = new(artifact.Identity.StrategyId, artifact.Identity.SemanticVersion, artifact.Identity.ContentSha256);
                 var lists = new SqliteWishlistRepository(h.Database);
                 await lists.SaveAsync(new Wishlist { Id = Guid.NewGuid(), Name = "Fixture operator list", IsObserved = true }, default);
@@ -262,7 +264,7 @@ public sealed class CurrentStockStrategyAssessmentTests
         {
             Directory.CreateDirectory(root);
             var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(repo, "configs", "strategy-catalog.json")))!.AsObject();
-            var source = File.ReadAllText(Path.Combine(repo, "configs", "strategies", "minervini-trend-template-vcp.v4-trend-rider.yaml"));
+            var source = File.ReadAllText(Path.Combine(repo, "src", "TradingFlow.Tests", "Fixtures", "Strategies", "daily-trailing-swing.fixture.yaml"));
             source = Regex.Replace(source, @"(?m)^(execution:\r?\n  timeframe:) 1d", "$1 " + minutes + "m");
             var strategyRoot = Path.Combine(root, "configs", "strategies");
             Directory.CreateDirectory(strategyRoot);
@@ -270,6 +272,12 @@ public sealed class CurrentStockStrategyAssessmentTests
             manifest["strategies"] = new JsonArray(new JsonObject {
                 ["sourcePath"] = "configs/strategies/strategy.yaml", ["strategyId"] = "fixture.current-assessment", ["semanticVersion"] = "1.0.0",
                 ["lifecycle"] = "research", ["admissionProfileId"] = "causal-market-exits-v3", ["reason"] = "Disposable boundary fixture" });
+            // The next-slice daily profile left the repository catalog with its last strategy; the fixture declares its own copy.
+            manifest["admissionProfiles"] = new JsonArray(new JsonObject {
+                ["profileId"] = "causal-market-exits-v3", ["profileVersion"] = "3.0.0", ["parserProfile"] = "simple-yaml-strict-v2",
+                ["standardIndicatorLibrary"] = "Skender.Stock.Indicators", ["standardIndicatorLibraryVersion"] = "2.7.1",
+                ["derivedIndicatorProfile"] = "TradingFlow.DerivedIndicators", ["derivedIndicatorProfileVersion"] = "2.1.0",
+                ["riskPolicy"] = "account-risk-budget-v1", ["executionTimingPolicy"] = "completed-bar-next-slice-market-exits-v3" });
             var path = Path.Combine(root, "strategy-catalog.json");
             File.WriteAllText(path, manifest.ToJsonString());
             return new(root, path, yaml);

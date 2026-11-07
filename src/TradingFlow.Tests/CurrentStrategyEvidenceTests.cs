@@ -13,13 +13,15 @@ namespace TradingFlow.Tests;
 
 public sealed class CurrentStrategyEvidenceTests
 {
-    /// <summary>The existing no-news reclaim artifact declares a veto even without any positive-news entry flag.</summary>
+    /// <summary>A fresh-news veto alone, without any positive-news entry flag, makes a strategy require news.</summary>
     [Fact]
-    public void CatalogFreshNewsVeto_IsRecognizedAsARequiredNewsCapability()
+    public void FreshNewsVeto_IsRecognizedAsARequiredNewsCapability()
     {
         var root = TestRepository.FindRoot();
-        var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(root, "configs", "strategies", "swing-mean-reversion-reclaim.v1.yaml"));
-        Assert.Equal(48m, strategy.EntryRules.VetoFreshNewsHours);
+        var source = new SimpleYamlReader().ReadStrategy(Path.Combine(root, "configs", "backtest", "strategies",
+            "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        Assert.False(StrategyCapabilityInspector.UsesNews(source));
+        var strategy = source with { EntryRules = source.EntryRules with { VetoFreshNewsHours = 48m } };
         Assert.True(StrategyCapabilityInspector.UsesNews(strategy));
     }
 

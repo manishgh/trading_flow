@@ -70,7 +70,7 @@ public sealed class MonthlyRunResultWriter(StrategyRunArtifactValidator strategi
                 return Unavailable(references, cohortName, start.Value, end, EventMonthlyRunResults.ValuationBasis, error.Message);
             }
         }
-        if (config.Engine.ExecutionReplayPolicyId is not null and not ExecutionReplayPolicy.IntradayRthFiveMinuteV1 and not ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1 and not ExecutionReplayPolicy.IntradayRthFiveMinuteNextBarMarketV1 and not ExecutionReplayPolicy.PythonZoneBounceBreakdownV1 and not ExecutionReplayPolicy.PythonZoneVolumeSpreadV1)
+        if (config.Engine.ExecutionReplayPolicyId is not null && !ExecutionReplayPolicy.IsIntradayCandle(config.Engine.ExecutionReplayPolicyId))
         {
             var reason = "This replay policy does not supply verified native-daily exit timestamps or monthly event valuations.";
             return Unavailable(references, cohortName, start.Value, end, "unavailable", reason);

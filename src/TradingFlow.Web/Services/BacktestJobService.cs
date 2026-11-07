@@ -86,7 +86,6 @@ public sealed class BacktestJobService : IDurableJobHandler
     private readonly BacktestJobServiceOptions options;
     private readonly ILogger<BacktestJobService> logger;
     private readonly MonthlyRunResultWriter monthlyResults;
-    private readonly IBacktestEventSourcePreparation? eventSourcePreparation;
 
     /// <summary>Use the existing durable worker and immutable strategy validator for execution and monthly publication.</summary>
     public BacktestJobService(
@@ -95,15 +94,13 @@ public sealed class BacktestJobService : IDurableJobHandler
         SimpleYamlReader yamlReader,
         BacktestJobServiceOptions options,
         StrategyArtifactCatalog strategyArtifacts,
-        ILogger<BacktestJobService>? logger = null,
-        IBacktestEventSourcePreparation? eventSourcePreparation = null)
+        ILogger<BacktestJobService>? logger = null)
     {
         this.runner = runner;
         this.repository = repository;
         this.yamlReader = yamlReader;
         this.options = ValidateOptions(options);
         this.logger = logger ?? NullLogger<BacktestJobService>.Instance;
-        this.eventSourcePreparation = eventSourcePreparation;
         monthlyResults = new MonthlyRunResultWriter(new StrategyRunArtifactValidator(yamlReader, strategyArtifacts));
     }
 
@@ -134,20 +131,10 @@ public sealed class BacktestJobService : IDurableJobHandler
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         var fullConfigPath = Path.GetFullPath(configPath);
         var runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
-        var originalConfigPath = fullConfigPath;
         var admittedAt = DateTimeOffset.UtcNow;
-        if (runConfig.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.IntradayRthFiveMinuteQuoteMarketV1 &&
-            runConfig.Engine.ExecutionSourceManifestPath is null)
-        {
-            var preparation = eventSourcePreparation ?? throw new InvalidOperationException(
-                "The saved quote-execution plan needs the configured historical SIP preparation service.");
-            using var originalLease = DurableFileJobRequest.Capture([originalConfigPath]).AcquireVerifiedReadLease();
-            fullConfigPath = await preparation.PrepareAsync(fullConfigPath, runConfig, admittedAt, cancellationToken);
-            runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
-        }
         using var evidenceScope = WorkflowEvidenceVerificationScope.Open(this, runConfig.Engine);
         var job = new MutableBacktestJob(Guid.NewGuid(), runName, fullConfigPath, admittedAt);
-        var inputFiles = ResolveInputs(fullConfigPath, runConfig, evidenceScope).Append(originalConfigPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var inputFiles = ResolveInputs(fullConfigPath, runConfig, evidenceScope).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         PreparedMarketDataRequestReference? preparedReference = null;
         var preparedPath = Path.Combine(Path.GetFullPath(runConfig.ResultsRoot), "_prepared-requests", job.JobId.ToString("N"), "request.json");
         var accepted = false;

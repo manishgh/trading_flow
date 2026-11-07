@@ -25,8 +25,6 @@ public sealed partial class TradingWorkflowClient(HttpClient http, Func<string> 
     public Task<RunJobResponse> StartAsync(StartPaperRunRequest request, CancellationToken token = default) => PostAsync<StartPaperRunRequest, RunJobResponse>("paper/runs", request, token);
     public Task<RunJobResponse[]> JobsAsync(string kind, CancellationToken token = default) => GetAsync<RunJobResponse[]>("workflow/jobs?kind=" + Uri.EscapeDataString(kind), token);
     public Task<RunJobDetailsResponse> DetailsAsync(Guid id, CancellationToken token = default) => GetAsync<RunJobDetailsResponse>($"workflow/jobs/{id}/details", token);
-    public Task<RunZoneEvaluationPage> ZoneEvaluationsAsync(Guid id, long offset = 0, int limit = 50, CancellationToken token = default) =>
-        GetAsync<RunZoneEvaluationPage>($"workflow/jobs/{id}/zone-evaluations?offset={offset}&limit={limit}", token);
     public Task<RunJobResponse> CancelAsync(Guid id, CancellationToken token = default) => PostAsync<CancelJobRequest, RunJobResponse>($"workflow/jobs/{id}/cancel", new(ContractVersions.VersionOne, "Operator requested cancellation"), token);
 
     public Task<TradingFlow.Contracts.Preparation.PreparationDefinition[]> PreparationAsync(CancellationToken token = default) => GetAsync<TradingFlow.Contracts.Preparation.PreparationDefinition[]>("preparation", token);

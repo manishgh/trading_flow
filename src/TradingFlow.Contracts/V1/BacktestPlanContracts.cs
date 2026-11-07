@@ -36,11 +36,7 @@ public sealed record BacktestResolvedSettingsResponse(string ConfigurationKey, s
     string? CutoffPolicy = null, string Horizon = "swing", string? RequiredMarketDataContext = null);
 
 public sealed record BacktestStrategySettingsResponse(StrategyReference Identity, string Name, decimal SlippageBps,
-    StrategyReference? DerivedFromIdentity, TradingFlow.Contracts.Operator.StrategyAdmissionProfileResponse? AdmissionProfile,
-    BacktestZoneSettingsResponse? Zone = null);
-/// <summary>Resolved research choices; clients display these server facts without deriving policy defaults.</summary>
-public sealed record BacktestZoneSettingsResponse(string VolumeMode, string TargetPolicy, decimal? FallbackNetRiskMultiple,
-    decimal MinimumRelativeVolume, decimal SyntheticSpreadBps, string StopBasis, string PlanningCostAssumption);
+    StrategyReference? DerivedFromIdentity, TradingFlow.Contracts.Operator.StrategyAdmissionProfileResponse? AdmissionProfile);
 public sealed record BacktestCohortExecution(long PlanId, string CohortName,
     IReadOnlyList<string> Symbols, decimal StartingCapital, StrategyReference Strategy);
 public sealed record BacktestPlanStartResponse(long PlanId, string IdempotencyKey,

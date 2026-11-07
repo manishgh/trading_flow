@@ -26,14 +26,6 @@ public static class BacktestSettingsPresentation
         {
             lines.Add($"Recipe: {strategy.Name} · {Identity(strategy.Identity)}");
             lines.Add($"Adverse slippage bps: {Number(strategy.SlippageBps)}");
-            if (strategy.Zone is { } zone)
-            {
-                lines.Add($"Long bounce volume: {zone.VolumeMode} · short RVOL minimum: {Number(zone.MinimumRelativeVolume)} · target policy: {zone.TargetPolicy}");
-                if (zone.FallbackNetRiskMultiple is { } multiple)
-                    lines.Add($"No-zone target: estimated net {Number(multiple)}R, frozen before execution; realized reward/risk can differ.");
-                lines.Add($"Stop basis: {zone.StopBasis} · synthetic full spread bps: {Number(zone.SyntheticSpreadBps)}");
-                lines.Add($"Planning costs: {zone.PlanningCostAssumption}");
-            }
             if (strategy.DerivedFromIdentity is { } parent) lines.Add($"Parent: {Identity(parent)}");
             if (strategy.AdmissionProfile is { } profile)
             {

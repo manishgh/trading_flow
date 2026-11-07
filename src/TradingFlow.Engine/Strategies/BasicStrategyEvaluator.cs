@@ -230,74 +230,8 @@ public sealed class BasicStrategyEvaluator
             return "direction_not_short";
         }
 
-        if (!strategy.Timeframe.Equals(signal.Timeframe, StringComparison.OrdinalIgnoreCase))
-        {
-            return "timeframe_mismatch";
-        }
-
-
-        if (strategy.EntryRules.MinShortEntryRsi is { } minShortRsi &&
-            signal.CurrentRsi < minShortRsi)
-        {
-            return $"short_rsi_below_range (Actual: {signal.CurrentRsi:F2}, RequiredMin: {minShortRsi:F2})";
-        }
-
-        if (strategy.EntryRules.MaxShortEntryRsi is { } maxShortRsi &&
-            signal.CurrentRsi > maxShortRsi)
-        {
-            return $"short_rsi_above_range (Actual: {signal.CurrentRsi:F2}, RequiredMax: {maxShortRsi:F2})";
-        }
-
-        if (!PassesShortSetupType(strategy.EntryRules.ShortSetupType, signal))
-        {
-            return $"setup_{strategy.EntryRules.ShortSetupType}_not_triggered";
-        }
-
-        if (strategy.EntryRules.RequirePriceBelowVwapForShort && signal.IsAboveVwap)
-        {
-            return "short_price_not_below_vwap";
-        }
-
-        if (strategy.EntryRules.RequireMacdBearishForShort && signal.IsMacdNotBearish)
-        {
-            return "short_macd_not_bearish";
-        }
-
-        if (strategy.EntryRules.RequirePriceBelowAnchoredVwapForShort && !signal.IsBelowAnchoredVwap)
-        {
-            return "short_price_not_below_anchored_vwap";
-        }
-
-        if (strategy.EntryRules.RequirePriceBelowShortAnchoredVwap && !signal.IsBelowShortAnchoredVwap)
-        {
-            return "short_price_not_below_short_anchored_vwap";
-        }
-
-        if (strategy.EntryRules.MaxAnchoredVwapExtensionAtr is { } maxAnchoredExtension &&
-            (signal.AnchoredVwapExtensionAtr is null || signal.AnchoredVwapExtensionAtr.Value > maxAnchoredExtension))
-        {
-            return "short_anchored_vwap_extension_too_high";
-        }
-
-        if (strategy.EntryRules.MaxShortAnchoredVwapExtensionAtr is { } maxShortAnchoredExtension &&
-            (signal.ShortAnchoredVwapExtensionAtr is null || signal.ShortAnchoredVwapExtensionAtr.Value > maxShortAnchoredExtension))
-        {
-            return "short_short_anchored_vwap_extension_too_high";
-        }
-
-        if (strategy.EntryRules.MaxShortCloseLocationValue is { } maxCloseLocation &&
-            (signal.CloseLocationValue is null || signal.CloseLocationValue.Value > maxCloseLocation))
-        {
-            return $"short_close_location_too_high (Actual: {signal.CloseLocationValue?.ToString("F2") ?? "n/a"}, RequiredMax: {maxCloseLocation:F2})";
-        }
-
-        var shortNewsRejection = GetShortNewsRejection(strategy, signal);
-        if (shortNewsRejection is not null)
-        {
-            return shortNewsRejection;
-        }
-
-        return null;
+        // No swing short setup remains in the catalog; a daily short entry cannot be qualified.
+        throw new NotSupportedException($"Unsupported short_setup_type: {strategy.EntryRules.ShortSetupType}.");
     }
 
     private static bool PassesSetupType(StrategyDefinition strategy, TradeSignal signal)
@@ -306,14 +240,8 @@ public sealed class BasicStrategyEvaluator
         return setupType.ToLowerInvariant() switch
         {
             "momentum" => true,
-            "step_breakout" => signal.IsStepBreakout,
-            "swing_reclaim" => signal.IsSwingReclaim,
             "mean_reversion_reclaim" => signal.IsMeanReversionReclaim,
             "rsi2_oversold" => signal.IsConnorsRsi2Oversold,
-            "catalyst_drift" => signal.IsCatalystDrift,
-            "avwap_pullback_bounce" => signal.IsAnchoredVwapBounce,
-            "episodic_pivot_gap" => signal.IsEpisodicPivotGap,
-            "volatility_contraction_pattern" => signal.IsVcpBreakout,
             _ => throw new NotSupportedException($"Unsupported setup_type: {setupType}.")
         };
     }
@@ -326,23 +254,6 @@ public sealed class BasicStrategyEvaluator
             (signal.GapUpPct is null || signal.GapUpPct.Value < minGapUp))
         {
             return $"gap_up_below_minimum (Actual: {signal.GapUpPct?.ToString("F2") ?? "n/a"}, Required: {minGapUp:F2})";
-        }
-
-        if (rules.AvwapProximityPct is { } maxAvwapProximity &&
-            (signal.AnchoredVwapProximityPct is null || signal.AnchoredVwapProximityPct.Value > maxAvwapProximity))
-        {
-            return $"avwap_proximity_too_far (Actual: {signal.AnchoredVwapProximityPct?.ToString("F2") ?? "n/a"}, RequiredMax: {maxAvwapProximity:F2})";
-        }
-
-        if (rules.RequirePullbackVolumeDryup && !signal.IsPullbackVolumeDryup)
-        {
-            return "pullback_volume_not_dry";
-        }
-
-        if (rules.MinBounceVolumeRatio is { } minBounceVolumeRatio &&
-            (signal.BounceVolumeRatio is null || signal.BounceVolumeRatio.Value < minBounceVolumeRatio))
-        {
-            return $"bounce_volume_ratio_below_minimum (Actual: {signal.BounceVolumeRatio?.ToString("F2") ?? "n/a"}, Required: {minBounceVolumeRatio:F2})";
         }
 
         if (rules.RequirePriceAboveEma5_65m && !signal.IsPriceAboveEma5)
@@ -407,54 +318,12 @@ public sealed class BasicStrategyEvaluator
             return $"price_too_far_below_52_week_high (Actual: {signal.PriceVs52WeekHighPct?.ToString("F2") ?? "n/a"}, RequiredMin: {maxDistanceFromHigh:F2})";
         }
 
-        if (rules.SetupType.Equals("volatility_contraction_pattern", StringComparison.OrdinalIgnoreCase) &&
-            signal.VcpStructureRejectionReason is { } structureReason)
-            return $"vcp_structure_rejected ({structureReason})";
-
-        if (rules.MinContractions is { } minContractions &&
-            (signal.VolatilityContractions is null || signal.VolatilityContractions.Value < minContractions))
-        {
-            return $"volatility_contractions_below_minimum (Actual: {signal.VolatilityContractions?.ToString() ?? "n/a"}, Required: {minContractions})";
-        }
-
-        if (rules.MaxContractions is { } maxContractions &&
-            (signal.VolatilityContractions is null || signal.VolatilityContractions.Value > maxContractions))
-        {
-            return $"volatility_contractions_above_maximum (Actual: {signal.VolatilityContractions?.ToString() ?? "n/a"}, RequiredMax: {maxContractions})";
-        }
-
-        if (rules.RequireVolatilityHalvingLeftToRight && !signal.IsVolatilityHalving)
-        {
-            return "volatility_not_halving_left_to_right";
-        }
-
-        if (rules.RequireVolumeDryUpPreBreakout && !signal.IsVolumeDryUp)
-        {
-            return "volume_not_dry_before_breakout";
-        }
-
-        if (rules.MinBreakoutVolumeRatio is { } minBreakoutVolumeRatio &&
-            (signal.BreakoutVolumeRatio is null || signal.BreakoutVolumeRatio.Value < minBreakoutVolumeRatio))
-        {
-            return $"breakout_volume_ratio_below_minimum (Actual: {signal.BreakoutVolumeRatio?.ToString("F2") ?? "n/a"}, Required: {minBreakoutVolumeRatio:F2})";
-        }
-
         return null;
     }
 
     private static bool CanEvaluateDailyRule(TradeSignal signal)
     {
         return signal.Timeframe.EndsWith("d", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool PassesShortSetupType(string setupType, TradeSignal signal)
-    {
-        return setupType.ToLowerInvariant() switch
-        {
-            "step_breakdown" => signal.IsStepBreakdown,
-            "swing_rollover" => signal.IsSwingRollover,
-            _ => throw new NotSupportedException($"Unsupported short_setup_type: {setupType}.")
-        };
     }
 
     private static string? GetNewsSentimentRejection(StrategyDefinition strategy, TradeSignal signal)
@@ -522,40 +391,6 @@ public sealed class BasicStrategyEvaluator
             (signal.CatalystPriceMovePct is null || signal.CatalystPriceMovePct.Value > maxMove))
         {
             return $"catalyst_entry_too_extended (Actual: {signal.CatalystPriceMovePct?.ToString("F2") ?? "n/a"}, RequiredMax: {maxMove:F2})";
-        }
-
-        return null;
-    }
-
-    private static string? GetShortNewsRejection(StrategyDefinition strategy, TradeSignal signal)
-    {
-        var catalyst = signal.Catalyst;
-        if (catalyst is not null)
-        {
-            var ageHours = signal.CatalystAgeHours ?? (decimal)Math.Abs((signal.Timestamp - catalyst.Timestamp).TotalHours);
-            if (ageHours > strategy.EntryRules.MaxNewsAgeHours)
-            {
-                catalyst = null;
-            }
-        }
-
-        if (strategy.EntryRules.MaxShortNewsSentiment is { } maxSentiment)
-        {
-            if (catalyst is null)
-            {
-                return $"short_news_required (MaxAgeHours: {strategy.EntryRules.MaxNewsAgeHours:F1})";
-            }
-
-            if (catalyst.SentimentScore > maxSentiment)
-            {
-                return $"short_news_sentiment_too_positive (Actual: {catalyst.SentimentScore:F2}, RequiredMax: {maxSentiment:F2}, Headline: {catalyst.Headline})";
-            }
-        }
-
-        if (strategy.EntryRules.MinShortCatalystDropPct is { } minDrop &&
-            (signal.CatalystPriceMovePct is null || signal.CatalystPriceMovePct.Value > -minDrop))
-        {
-            return $"short_catalyst_drop_below_minimum (Actual: {signal.CatalystPriceMovePct?.ToString("F2") ?? "n/a"}, RequiredDrop: {minDrop:F2})";
         }
 
         return null;

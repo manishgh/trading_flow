@@ -80,7 +80,7 @@ public sealed class PaperModelTests
         var repoRoot = FindRepositoryRoot();
         var catalog = CreateCatalog(repoRoot);
         var model = CreateModel(repoRoot, catalog);
-        var strategyPath = Path.Combine(repoRoot, "configs", "strategies", "minervini-trend-template-vcp.v4-trend-rider.yaml");
+        var strategyPath = Path.Combine(repoRoot, "src", "TradingFlow.Tests", "Fixtures", "Strategies", "daily-trailing-swing.fixture.yaml");
 
         var result = await model.OnGetStrategyDetailsAsync(strategyPath, "shadow", CancellationToken.None);
         var json = JsonSerializer.Serialize(((JsonResult)result).Value);
@@ -96,9 +96,9 @@ public sealed class PaperModelTests
         var model = CreateModel(repoRoot, CreateCatalog(repoRoot));
         var strategyPath = Path.Combine(
             repoRoot,
-            "configs",
-            "strategies",
-            "minervini-trend-template-vcp.v4-trend-rider.yaml");
+            "src",
+            "TradingFlow.Tests", "Fixtures", "Strategies",
+            "daily-trailing-swing.fixture.yaml");
 
         var result = await model.OnGetStrategyDetailsAsync(
             strategyPath,
@@ -156,7 +156,7 @@ public sealed class PaperModelTests
         {
             ["RunName"] = $"paper-invalid-extended-{Guid.NewGuid():N}",
             ["BaseConfigPath"] = Path.Combine(repoRoot, "configs", "paper", "alpaca-paper.yaml"),
-            ["SelectedStrategyPath"] = Path.Combine(repoRoot, "configs", "strategies", "minervini-trend-template-vcp.v4-trend-rider.yaml"),
+            ["SelectedStrategyPath"] = Path.Combine(repoRoot, "src", "TradingFlow.Tests", "Fixtures", "Strategies", "daily-trailing-swing.fixture.yaml"),
             ["PaperExecutionMode"] = "shadow",
             ["WishlistId"] = wishlist.Id.ToString(),
             ["OrderExpiration"] = "gtc",
@@ -187,9 +187,9 @@ public sealed class PaperModelTests
         var repoRoot = FindRepositoryRoot();
         var sourcePath = Path.Combine(
             repoRoot,
-            "configs",
-            "strategies",
-            "minervini-trend-template-vcp.v4-trend-rider.yaml");
+            "src",
+            "TradingFlow.Tests", "Fixtures", "Strategies",
+            "daily-trailing-swing.fixture.yaml");
         var artifactCatalog = CreateStrategyArtifactCatalog(repoRoot);
         var artifactStoreRoot = Path.Combine(
             Path.GetTempPath(),

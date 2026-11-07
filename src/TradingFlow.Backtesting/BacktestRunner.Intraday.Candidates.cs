@@ -16,9 +16,7 @@ public sealed partial class BacktestRunner
     {
         var schedules = candidateSessionSchedules ?? throw new InvalidDataException("Intraday candidates require authoritative exchange sessions.");
         var runtime = ResolveRuntimeStrategy(strategy);
-        var evaluator = new PreviousSessionBreakoutEvaluator();
         var openingEvaluator = new OpeningRangeBreakoutEvaluator();
-        var openingRange = strategy.EntryRules.OpeningRangeBreakout is not null;
         var budget = new RetainedCandidateBudget(run.Engine.MaxRetainedCandidates);
         var batches = new List<StrategyTickerBacktestBatch>();
         var zone = TimeZoneInfo.FindSystemTimeZoneById(strategy.Session.ExchangeTimezone);
@@ -58,9 +56,9 @@ public sealed partial class BacktestRunner
                     diagnostics.IncrementRejection("previous_exchange_session_prices_unavailable");
                     continue;
                 }
-                var baselineSessions = openingRange ? schedules.Values.Where(session => session.IsTradingDay && session.TradeDate < day.Key)
-                    .OrderBy(session => session.TradeDate).TakeLast(20).ToArray() : [];
-                var baselineBars = openingRange ? OpeningRangeBaselineBars(sessionBars, baselineSessions, zone) : null;
+                var baselineSessions = schedules.Values.Where(session => session.IsTradingDay && session.TradeDate < day.Key)
+                    .OrderBy(session => session.TradeDate).TakeLast(20).ToArray();
+                var baselineBars = OpeningRangeBaselineBars(sessionBars, baselineSessions, zone);
                 var calendarStart = baselineSessions.Length > 0 ? baselineSessions[0].TradeDate : priorDate;
                 var boundedCalendar = schedules.Where(pair => pair.Key >= calendarStart && pair.Key <= day.Key)
                     .ToDictionary(pair => pair.Key, pair => pair.Value);
@@ -80,22 +78,20 @@ public sealed partial class BacktestRunner
                         diagnostics.IncrementRejection("documented_order_increment_unavailable_for_price_or_date");
                         continue;
                     }
-                    var context = new PreviousSessionBreakoutContext(boundedCalendar, increment.TickSize,
+                    var context = new IntradayBreakoutContext(boundedCalendar, increment.TickSize,
                         asOf, increment.PolicyId + ":" + increment.SourceUrl + ";" +
                         UsEquityOrderIncrementResolver.EffectiveBoundarySourceUrl + ";" + UsEquityOrderIncrementResolver.EndBoundarySourceUrl,
                         "retrospectively_downloaded_exchange_calendar;scheduled_session_bounds_assumed_available_at_decision;original_receipt_time_not_observed")
                     { OpeningRangeBaselineBars = baselineBars };
                     var completedSnapshots = completed.Where(bar => snapshotMap.ContainsKey(bar.Timestamp))
                         .Select(bar => snapshotMap[bar.Timestamp]).ToArray();
-                    var preview = openingRange
-                        ? openingEvaluator.Evaluate(strategy, completed, completedSnapshots, context, asOf)
-                        : evaluator.Evaluate(strategy, completed, context, asOf);
+                    var preview = openingEvaluator.Evaluate(strategy, completed, completedSnapshots, context, asOf);
                     // Persist every observed crossing, including failed confirmation/pattern evidence; ordinary non-setups stay aggregated.
                     if (!preview.HasBreakout)
                     {
                         if (IntradaySetupEvidenceUnavailable(preview.RejectionReason))
                             unavailableFrom = EarlierIntradayBoundary(unavailableFrom, asOf);
-                        diagnostics.IncrementRejection(preview.RejectionReason ?? "previous_session_breakout_unavailable");
+                        diagnostics.IncrementRejection(preview.RejectionReason ?? "opening_range_breakout_unavailable");
                         continue;
                     }
                     if (completed.Any(bar => !snapshotMap.ContainsKey(bar.Timestamp)))
@@ -120,7 +116,7 @@ public sealed partial class BacktestRunner
                     var persisted = await orchestrator.EvaluateAsync(simulationRun, request, cancellationToken);
                     if (persisted.Decision?.OrderPlan?.PendingEntry is not { } pending)
                     {
-                        diagnostics.IncrementRejection(persisted.Decision?.NoEntryReason ?? "previous_session_order_not_triggered");
+                        diagnostics.IncrementRejection(persisted.Decision?.NoEntryReason ?? "opening_range_order_not_triggered");
                         continue;
                     }
                     budget.Reserve();
@@ -153,10 +149,9 @@ public sealed partial class BacktestRunner
 
     // Distinguish unavailable mandatory evidence from an observed candle that simply fails the approved pattern.
     private static bool IntradaySetupEvidenceUnavailable(string? reason) => reason is
-        "previous_session_tick_or_calendar_unavailable" or "previous_session_completed_bars_unavailable" or
-        "previous_session_bar_evidence_invalid" or "current_exchange_session_unavailable" or
+        "current_exchange_session_unavailable" or
         "previous_exchange_session_unavailable" or "previous_session_five_minute_coverage_incomplete" or
-        "breakout_previous_close_missing" or "opening_range_tick_or_calendar_unavailable" or
+        "opening_range_tick_or_calendar_unavailable" or
         "opening_range_completed_bar_evidence_invalid" or "opening_range_current_session_coverage_incomplete" or
         "opening_range_volume_baseline_unavailable";
 
@@ -197,7 +192,7 @@ public sealed partial class BacktestRunner
 
     // Preserve completed intent separately from actual fills; target and risk are recomputed from each actual modeled fill.
     private static BacktestCandidateTrade CreateIntradayPendingCandidate(StrategyDefinition strategy, string ticker,
-        string candidateId, PreviousSessionBreakoutSignal pending, decimal completedVolume)
+        string candidateId, IntradayBreakoutSignal pending, decimal completedVolume)
     {
         var risk = Math.Abs(pending.LimitPrice - pending.InitialStopPrice);
         var target = pending.LimitPrice + (pending.Direction == "long" ? 1m : -1m) * strategy.ExitRules.TargetRMultiple * risk;

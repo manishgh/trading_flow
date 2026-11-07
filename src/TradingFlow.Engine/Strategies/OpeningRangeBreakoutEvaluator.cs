@@ -2,7 +2,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Research;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Indicators;
-using static TradingFlow.Engine.Strategies.PreviousSessionBreakoutEvaluator;
+using static TradingFlow.Engine.Strategies.IntradayFiveMinuteBars;
 
 namespace TradingFlow.Engine.Strategies;
 
@@ -12,9 +12,9 @@ public sealed class OpeningRangeBreakoutEvaluator
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
 
     // Re-evaluate a completed session prefix without moving the opening range or borrowing a later volume observation.
-    public PreviousSessionBreakoutEvaluation Evaluate(StrategyDefinition strategy,
+    public IntradayBreakoutEvaluation Evaluate(StrategyDefinition strategy,
         IReadOnlyList<OhlcvBar> completedBars, IReadOnlyList<IndicatorSnapshot> completedSnapshots,
-        PreviousSessionBreakoutContext context, DateTimeOffset asOfUtc)
+        IntradayBreakoutContext context, DateTimeOffset asOfUtc)
     {
         if (strategy.EntryRules.OpeningRangeBreakout is not { } policy)
             return Reject("opening_range_breakout_not_declared");
@@ -65,7 +65,7 @@ public sealed class OpeningRangeBreakoutEvaluator
             return CompletedBreakout(policy, completedBars, current, isLong, trigger, tick, previousBars,
                 opening, high, low, rangeCompletedAt, snapshot, baselineSha256, asOfUtc, deadline);
         var openingLastIndex = completedBars.Count - current.Length + 2;
-        return new(new PreviousSessionBreakoutSignal(isLong ? "long" : "short", "opening_range_stop", trigger, stop,
+        return new(new IntradayBreakoutSignal(isLong ? "long" : "short", "opening_range_stop", trigger, stop,
             tick, previousBars.Max(bar => bar.High), previousBars.Min(bar => bar.Low),
             opening[0].Timestamp, opening[2].Timestamp, asOfUtc, deadline, deadline, openingLastIndex,
             IntradayEntryOrderMode.StopMarket, high, low, openingOpen, openingClose, rangeCompletedAt,
@@ -73,7 +73,7 @@ public sealed class OpeningRangeBreakoutEvaluator
     }
 
     // Commit only the latest completed post-range candle; its close sizes the order without a future opening price.
-    private static PreviousSessionBreakoutEvaluation CompletedBreakout(OpeningRangeBreakoutRules policy,
+    private static IntradayBreakoutEvaluation CompletedBreakout(OpeningRangeBreakoutRules policy,
         IReadOnlyList<OhlcvBar> bars, IReadOnlyList<OhlcvBar> current, bool isLong, decimal trigger, decimal tick,
         IReadOnlyList<OhlcvBar> previous, IReadOnlyList<OhlcvBar> opening, decimal high, decimal low,
         DateTimeOffset rangeCompletedAt, IndicatorSnapshot snapshot, string? baselineSha256,
@@ -85,7 +85,7 @@ public sealed class OpeningRangeBreakoutEvaluator
         var stop = (isLong ? decimal.Floor(candle.Low / tick) : decimal.Ceiling(candle.High / tick)) * tick;
         if (stop <= 0m || !(isLong ? candle.Close > stop : candle.Close < stop))
             return Reject("entry_or_structural_stop_incompatible_with_tick");
-        return new(new PreviousSessionBreakoutSignal(isLong ? "long" : "short", "opening_range_completed_breakout",
+        return new(new IntradayBreakoutSignal(isLong ? "long" : "short", "opening_range_completed_breakout",
             candle.Close, stop, tick, previous.Max(bar => bar.High), previous.Min(bar => bar.Low),
             candle.Timestamp, candle.Timestamp, asOfUtc, deadline, deadline, bars.Count - 1,
             IntradayEntryOrderMode.NextBarMarket, high, low, opening[0].Open, opening[2].Close, rangeCompletedAt,
@@ -108,7 +108,7 @@ public sealed class OpeningRangeBreakoutEvaluator
     }
 
     // Validate only sixty supplied opening bars against the immediately preceding calendar sessions, never replacing missing sessions with older ones.
-    private static bool TryOpeningBaseline(PreviousSessionBreakoutContext context, DateOnly current, TimeZoneInfo zone,
+    private static bool TryOpeningBaseline(IntradayBreakoutContext context, DateOnly current, TimeZoneInfo zone,
         DateTimeOffset completedAt, OhlcvBar currentOpening, out decimal median, out string? evidenceSha256)
     {
         median = 0m;
@@ -159,5 +159,5 @@ public sealed class OpeningRangeBreakoutEvaluator
     }
 
     // Preserve a concrete missing/filter reason without manufacturing a trade or zero-volume observation.
-    private static PreviousSessionBreakoutEvaluation Reject(string reason) => new(null, reason);
+    private static IntradayBreakoutEvaluation Reject(string reason) => new(null, reason);
 }
