@@ -18,7 +18,7 @@ async function fixture(page){paused=false;await page.route('**/api/desk/sources'
 for(const width of [412,1280,1600])test('stock desk is readable and focused at '+width,async({page},testInfo)=>{
  await page.setViewportSize({width,height:1000});await fixture(page);await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
  await expect(page.locator('#watch-rows tr')).toHaveCount(3);await expect(page.getByRole('heading',{level:1})).toHaveText('Desk');
- await expect(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link')).toHaveText(['News','Earnings','Trading Desk']);
+ await expect(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link')).toHaveText(['Desk','Trading','Strategies','Earnings','News','Stock groups']);
  await expect(page.locator('#watch-rows tr[data-symbol=AAPL]')).toContainText('$200.05');await expect(page.locator('#watch-rows tr[data-symbol=AAPL]')).toContainText('$199.95');
  // Any cell selects its row, not only the symbol button.
  await page.locator('#watch-rows tr[data-symbol=NVDA] td').nth(4).click();await expect(page.locator('#watch-symbol')).toHaveText('NVDA');
@@ -34,6 +34,8 @@ for(const width of [412,1280,1600])test('stock desk is readable and focused at '
  expect((await page.locator('#watch-sell').boundingBox()).height).toBeLessThan(80);
  await expect(page.locator('#watch-news-title')).toHaveText('AAPL news');await expect(page.locator('#watch-preparation')).not.toHaveAttribute('open','');
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBeTruthy();
+ // Capture the workspace from its top after the row-selection assertions have scrolled it.
+ await page.locator('h1').click();await page.evaluate(()=>window.scrollTo(0,0));
  await page.screenshot({path:testInfo.outputPath('stock-desk-'+width+'.png'),fullPage:true});
 });
 test('source switch discards old rows and screener-only stocks require following',async({page})=>{
@@ -94,7 +96,7 @@ test('catalog startup failure offers working retry',async({page})=>{
  await page.locator('#watch-retry').click();await expect(page.locator('#watch-rows tr')).toHaveCount(3);
 });
 test('dark theme and keyboard source selection remain readable',async({page},testInfo)=>{
- await page.setViewportSize({width:1600,height:1000});await fixture(page);await signIn(page);await page.goto('/Desk');await page.locator('#ThemeSelect').selectOption('dark');await page.getByRole('button',{name:'AAPL',exact:true}).click();await expect(page.locator('#watch-quantity')).toHaveText('10');await page.screenshot({path:testInfo.outputPath('stock-desk-dark.png'),fullPage:true});
+ await page.setViewportSize({width:1600,height:1000});await fixture(page);await signIn(page);await page.goto('/Desk');await page.getByLabel('System menu',{exact:true}).click();await page.locator('#ThemeSelect').selectOption('dark');await page.getByLabel('System menu',{exact:true}).click();await page.getByRole('button',{name:'AAPL',exact:true}).click();await expect(page.locator('#watch-quantity')).toHaveText('10');await page.screenshot({path:testInfo.outputPath('stock-desk-dark.png'),fullPage:true});
  await page.locator('#watch-source').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');await expect(page.locator('#watch-title')).not.toHaveText('All wishlist stocks');
 });
 

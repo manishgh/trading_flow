@@ -2,6 +2,7 @@
 @using TradingFlow.Web.Pages.Shared
 @{
     var currentPage = ViewContext.RouteData.Values["page"]?.ToString() ?? String.Empty;
+    // Route ownership keeps one persistent destination active on detail screens.
     bool IsCurrent(params string[] pages) => pages.Any(page =>
         String.Equals(page, currentPage, StringComparison.OrdinalIgnoreCase));
 
@@ -10,18 +11,18 @@
     var envSlug = Context.Request.Query["env"].ToString();
     var environment = Environments.GetState(Environments.Parse(envSlug));
     var signedIn = User.Identity?.IsAuthenticated == true;
-    // Three top tabs: two public market screens and the signed-in Trading Desk, which is the landing page.
-    var tab = IsCurrent("/News") ? "News" : IsCurrent("/Earnings") ? "Earnings" : "Trading Desk";
-    var tabs = new[] { ("News", "/News"), ("Earnings", "/Earnings"), ("Trading Desk", "/Desk") };
-    var area = IsCurrent("/RunningTrades", "/Orders", "/OrderTicket", "/Paper", "/PaperJob") ? "Orders"
-        : IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "Research"
-        : IsCurrent("/Wishlists") ? "Manage wishlists"
+    var destination = IsCurrent("/News") ? "News" : IsCurrent("/Earnings") ? "Earnings"
+        : IsCurrent("/RunningTrades", "/Orders", "/OrderTicket") ? "Trading"
+        : IsCurrent("/Paper", "/PaperJob", "/Backtests", "/Job", "/OptimizationJob", "/Audit", "/CandidateAudit") ? "Strategies"
+        : IsCurrent("/Wishlists") ? "Stock groups"
         : IsCurrent("/Operations", "/Warmup", "/Users") ? "System" : "Desk";
-    var deskSections = new[] { ("Desk", "/Desk"), ("Manage wishlists", "/Wishlists"), ("Orders", "/Orders"), ("Research", "/Backtests") };
-    var orderPages = new[] { ("Orders", "/Orders"), ("Positions", "/RunningTrades"), ("Paper runs", "/Paper") };
+    var destinations = new[] { ("Desk", "/Desk", "columns-3"), ("Trading", "/Orders", "trending-up"),
+        ("Strategies", "/Paper", "layers"), ("Earnings", "/Earnings", "calendar"),
+        ("News", "/News", "newspaper"), ("Stock groups", "/Wishlists", "briefcase") };
     var systemPages = User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator)
         ? new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup"), ("Users", "/Users") }
         : new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup") };
+    // Preserve the current screen and filters when changing the account environment.
     string EnvironmentUrl(string slug) {
         var query = Context.Request.Query.ToDictionary(x => x.Key, x => (string?)x.Value.ToString(), StringComparer.OrdinalIgnoreCase);
         query["env"] = slug;
@@ -44,20 +45,40 @@
     <link rel="stylesheet" href="~/css/desk-universe.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/orders-screen.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/order-workflow.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/desk-theme.css" asp-append-version="true" />
     <script src="~/js/theme.js" asp-append-version="true"></script>
 </head>
-<body>
+<body class="workspace-app @(signedIn ? "workspace-authenticated" : "workspace-public")">
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <div class="environment-rail" aria-hidden="true"></div>
+    @if (signedIn)
+    {
+        <aside class="workspace-sidebar" aria-label="Workspace">
+            <a class="brand" asp-page="/Desk" aria-label="TradingFlow"><span class="brand-mark" aria-hidden="true">t<span>f</span></span><span>TradingFlow<span class="brand-dot">.</span></span></a>
+            <div class="workspace-label"><span class="workspace-avatar" aria-hidden="true">TF</span><span>Market workspace<small>Research &amp; execution</small></span></div>
+            <span class="workspace-nav-label">WORKSPACE</span>
+            <nav class="primary-nav" aria-label="Primary navigation">
+                @foreach (var item in destinations)
+                {
+                    <a asp-page="@item.Item2" class="@(destination == item.Item1 ? "active" : null)" aria-current="@(destination == item.Item1 ? "page" : null)"><partial name="_Icon" model="new IconModel(item.Item3, 18)" /><span>@item.Item1</span></a>
+                }
+            </nav>
+            <p class="workspace-sidebar-note">A clear view of the market.<br />Every decision in context.</p>
+        </aside>
+    }
     <header class="topbar">
-        <a class="brand" asp-page="/Desk" aria-label="TradingFlow">TRADINGFLOW</a>
-
-        <nav class="primary-nav" aria-label="Primary navigation">
-            @foreach (var item in tabs) {
-                <a asp-page="@item.Item2" class="@(tab == item.Item1 ? "active" : null)" aria-current="@(tab == item.Item1 ? "page" : null)">@item.Item1</a>
-            }
-        </nav>
-
+        @if (signedIn)
+        {
+            <div class="workspace-location"><span>Workspace</span><span aria-hidden="true">/</span><strong>@destination</strong></div>
+        }
+        else
+        {
+            <a class="brand" asp-page="/News" aria-label="TradingFlow">TradingFlow<span class="brand-dot">.</span></a>
+            <nav class="primary-nav" aria-label="Primary navigation">
+                <a asp-page="/News" aria-current="@(IsCurrent("/News") ? "page" : null)">News</a>
+                <a asp-page="/Earnings" aria-current="@(IsCurrent("/Earnings") ? "page" : null)">Earnings</a>
+            </nav>
+        }
         <div class="topbar-tail">
             @if (signedIn)
             {
@@ -83,10 +104,7 @@
                 <span data-clock="@TradingFlow.Earnings.EarningsTimeZones.NewYorkClientId" data-clock-label="NY">
                     <strong>NY</strong><time>--:--:--</time>
                 </span>
-                @if (ViewData["ShowOperatorClock"] is true)
-                {
-                    <span data-clock="local" data-clock-label="Local"><strong>Local</strong><time>--:--:--</time></span>
-                }
+                <span data-clock="local" data-clock-label="Local"><strong>Local</strong><time>--:--:--</time></span>
                 <span data-clock="UTC" data-clock-label="UTC"><strong>UTC</strong><time>--:--:--</time></span>
             </div>
 
@@ -99,23 +117,14 @@
                 </button>
             }
 
-            <div class="theme-control">
-                <label for="ThemeSelect">Theme</label>
-                <select id="ThemeSelect" class="input">
-                    <option value="system">System</option>
-                    <option value="light">Modernist</option>
-                    <option value="dark">Dark</option>
-                    <option value="cvd">Colour-blind</option>
-                </select>
-            </div>
-
-            @if (signedIn)
-            {
-                <details class="system-menu">
-                    <summary class="btn btn-secondary btn-md" aria-label="System menu" title="System">
-                        <partial name="_Icon" model='new IconModel("settings", 16)' />
-                    </summary>
-                    <div class="system-menu-panel">
+            <details class="system-menu">
+                <summary class="btn btn-secondary btn-md" aria-label="System menu" title="Workspace settings">
+                    <partial name="_Icon" model='new IconModel("settings", 16)' /><span>Settings</span>
+                </summary>
+                <div class="system-menu-panel">
+                    @if (signedIn)
+                    {
+                        <span class="system-menu-label">System</span>
                         @foreach (var item in systemPages)
                         {
                             <a asp-page="@item.Item2" aria-current="@(IsCurrent(item.Item2) ? "page" : null)">@item.Item1</a>
@@ -136,40 +145,36 @@
                                 <span class="system-menu-locked" title="@candidate.LockReason">@candidate.Label locked</span>
                             }
                         }
+                    }
+                    <div class="theme-control">
+                        <label for="ThemeSelect">Appearance</label>
+                        <select id="ThemeSelect" class="input">
+                            <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option><option value="cvd">Colour-blind</option>
+                        </select>
                     </div>
-                </details>
-            }
-
+                    @if (signedIn)
+                    {
+                        <div class="workspace-user"><span title="Signed-in user">@User.Identity!.Name</span><form method="post" asp-page="/Login" asp-page-handler="Logout"><button type="submit" class="btn btn-secondary btn-md">Sign out</button></form></div>
+                    }
+                </div>
+            </details>
             <div class="identity-control">
-                @if (signedIn)
-                {
-                    <span title="Signed-in user">@User.Identity!.Name</span>
-                    <form method="post" asp-page="/Login" asp-page-handler="Logout">
-                        <button type="submit" class="btn btn-secondary btn-md">Sign out</button>
-                    </form>
-                }
-                else
+                @if (!signedIn)
                 {
                     <a class="btn btn-secondary btn-md" asp-page="/Login">Sign in</a>
                 }
             </div>
         </div>
     </header>
-    @if (signedIn && tab == "Trading Desk") {
-        <nav class="section-nav" aria-label="Trading Desk pages">
-            @foreach (var item in deskSections) {
-                <a asp-page="@item.Item2" aria-current="@(area == item.Item1 ? "page" : null)">@item.Item1</a>
-            }
-        </nav>
-        @if (area == "Orders") {
-            <nav class="section-nav section-nav-secondary" aria-label="Orders pages">
-                @foreach (var item in orderPages) {
-                    <a asp-page="@item.Item2" aria-current="@(IsCurrent(item.Item2) ? "page" : null)">@item.Item1</a>
-                }
+    <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
+        @if (signedIn && IsCurrent("/Paper", "/PaperJob", "/Backtests", "/Job", "/OptimizationJob", "/Audit"))
+        {
+            @* Strategy runs and their backtests share one destination and two local views. *@
+            <nav class="strategy-local-nav" aria-label="Strategy views">
+                <a asp-page="/Paper" aria-current="@(IsCurrent("/Paper", "/PaperJob") ? "page" : null)">Strategy runs</a>
+                <a asp-page="/Backtests" aria-current="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "page" : null)">Backtests</a>
             </nav>
         }
-    }
-    <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
         @RenderBody()
     </main>
 

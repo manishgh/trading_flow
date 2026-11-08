@@ -110,27 +110,34 @@ const item = (id, ticker, time) => ({ id, ticker, companyName:ticker, scheduledA
   breakoutAssessment:'AwaitingEarningsRelease', provider:'calendar', analysisReason:'Awaiting reported evidence',
   providerReceivedAtUtc:'2026-11-01T00:00:00Z' });
 
+// Restore supported secondary constraints and keep their disclosure visible across reload.
 test('Earnings calendar uses New York dates and filter URLs survive reload', async ({ page }) => {
   await page.route('**/api/earnings/calendar?*', route => route.fulfill({ json:{
     generatedAtUtc:'2026-11-01T12:00:00Z', monitoringActive:false, monitoringIntervalSeconds:60,
     nextBusinessDateLabel:'Monday', newsWindowLabel:'Stored evidence', filters:{session:'all',marketCap:'all'}, news:[],
     items:[item('one','AAA','2026-11-01T00:30:00Z'),item('two','BBB','2026-11-01T07:30:00Z')], totalMatching:2 } }));
-  await page.goto('/Earnings?from=2026-10-31&to=2026-11-01&view=week&minRvol=1.5&breakout=AwaitingEarningsRelease');
+  await page.goto('/Earnings?from=2026-10-31&to=2026-11-01&view=week&minMarketCap=1500&breakout=AwaitingEarningsRelease');
   await expect(page.locator('#earnings-feed')).toHaveClass(/earnings-week/);
   const saturday = page.locator('.earnings-day').filter({has:page.getByRole('heading',{name:'2026-10-31 · New York'})});
   const sunday = page.locator('.earnings-day').filter({has:page.getByRole('heading',{name:'2026-11-01 · New York'})});
   await expect(saturday).toContainText('AAA'); await expect(sunday).toContainText('BBB');
-  await page.getByText('More earnings filters and views',{exact:true}).click();
-  await expect(page.locator('#earnings-minRvol')).toHaveValue('1.5');
+  await expect(page.locator('.market-more-filters')).toHaveJSProperty('open', true);
+  await expect(page.locator('#earnings-minMarketCap')).toBeVisible();
+  await expect(page.locator('#earnings-minMarketCap')).toHaveValue('1500');
   await expect(page.locator('#earnings-breakout')).toHaveValue('AwaitingEarningsRelease');
   await page.reload();
   await expect(page.locator('#earnings-feed')).toHaveClass(/earnings-week/);
+  await expect(page.locator('.market-more-filters')).toHaveJSProperty('open', true);
+  await expect(page.locator('#earnings-minMarketCap')).toBeVisible();
+  await expect(page.locator('#earnings-minMarketCap')).toHaveValue('1500');
+  await expect(page.locator('#earnings-breakout')).toHaveValue('AwaitingEarningsRelease');
+  expect(new URL(page.url()).searchParams.get('minMarketCap')).toBe('1500');
   await page.setViewportSize({width:320,height:800});
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 // The Today heading names today's New York date from the response, and a refresh patches cards in place.
-test('Earnings updates cards in place without dimming the list, under today’s New York date', async ({ page }) => {
+test('Earnings updates cards in place without dimming the list, under today’s New York date', async ({ page }, testInfo) => {
   const payload = appActual => ({ generatedAtUtc:'2026-11-04T18:00:00Z', monitoringActive:true, monitoringIntervalSeconds:60,
     nextBusinessDateLabel:'Thursday, November 5', newsWindowLabel:'Stored evidence', filters:{session:'all',marketCap:'all'}, news:[], totalMatching:2,
     items:[{...item('amd','AMD','2026-11-04T12:30:00Z'), dayGroup:'today', epsEstimate:1.95, epsActual:2.09},
@@ -162,6 +169,13 @@ test('Earnings updates cards in place without dimming the list, under today’s 
   await expect(card('AMD').locator('details')).toHaveAttribute('open', '');
   await expect(card('APP').locator('details')).toHaveAttribute('open', '');
   await expect(heading).toContainText('Nov 04, 2026');
+  // Capture the populated workspace after the refresh contract has been verified.
+  await card('AMD').getByText('Provenance and previous quarter').click();
+  await card('APP').getByText('Provenance and previous quarter').click();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.screenshot({ path: testInfo.outputPath(`earnings-workspace-${width}.png`), fullPage: true });
+  }
 });
 
 test('shared News preserves safe provenance and Earnings scopes exact symbols',async({page})=>{

@@ -183,6 +183,7 @@
         removeEmptyState();
         const region = document.createElement("div");
         region.className = "table-scroll";
+        region.dataset.ordersRegion = "";
         region.setAttribute("role", "region");
         region.setAttribute("aria-label", "Order lifecycle table");
         region.tabIndex = 0;
@@ -209,7 +210,7 @@
     }
 
     function renderEmptyState() {
-        body.querySelector(".table-scroll")?.remove();
+        body.querySelector("[data-orders-region]")?.remove();
         if (body.querySelector("[data-orders-empty]")) return;
         const messages = {
             working: "No order is working right now.", filled: "No order has filled yet.",
@@ -227,7 +228,7 @@
         const visible = sortItems(items.filter(item => matchesFilter(item.state)));
         const active = document.activeElement;
         const windowScroll = [window.scrollX, window.scrollY];
-        const existingRegion = body.querySelector(".table-scroll");
+        const existingRegion = body.querySelector("[data-orders-region]");
         const regionScroll = existingRegion ? [existingRegion.scrollLeft, existingRegion.scrollTop] : null;
         if (visible.length === 0) {
             renderEmptyState();
@@ -243,7 +244,7 @@
                 tableBody.append(row);
             }
         }
-        const currentRegion = body.querySelector(".table-scroll");
+        const currentRegion = body.querySelector("[data-orders-region]");
         if (regionScroll && currentRegion === existingRegion) {
             currentRegion.scrollLeft = regionScroll[0];
             currentRegion.scrollTop = regionScroll[1];

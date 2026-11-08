@@ -1,7 +1,7 @@
 @page "/Wishlists"
 @model TradingFlow.Web.Pages.WishlistsModel
 @{
-    ViewData["Title"] = "Wishlists";
+    ViewData["Title"] = "Stock groups";
     ViewData["MainClass"] = "wishlists-page";
     var selected = Model.SelectedWishlist;
 }
@@ -20,10 +20,11 @@
     }
 }
 
+<header class="stock-groups-header"><span class="eyebrow">YOUR UNIVERSE</span><h1>Stock groups</h1><p class="muted">Organize the stocks you follow. Discovery groups do not authorize trades.</p></header>
 <div class="wl-layout">
     <aside class="wl-lists" aria-labelledby="wl-lists-title">
-        <h2 id="wl-lists-title">Wishlists</h2>
-        <nav aria-label="Wishlists">
+        <h2 id="wl-lists-title">Stock groups</h2>
+        <nav aria-label="Stock groups">
             @foreach (var wishlist in Model.Wishlists)
             {
                 var active = selected?.Id == wishlist.Id;
@@ -34,7 +35,7 @@
             }
         </nav>
         <form method="post" asp-page-handler="CreateWishlist" class="wl-create">
-            <label for="CreateWishlistName">New wishlist</label>
+            <label for="CreateWishlistName">New stock group</label>
             <div class="wl-inline">
                 <input id="CreateWishlistName" name="WishlistName" placeholder="Name" autocomplete="off" required />
                 <button class="button secondary" type="submit">Add new</button>
@@ -46,8 +47,8 @@
     @if (selected is null)
     {
         <section class="wl-main">
-            <h1>Wishlists</h1>
-            <p class="muted">There is no wishlist yet. Name one under New wishlist and choose Add new.</p>
+            <h2>Create your first group</h2>
+            <p class="muted">There is no stock group yet. Name one under New stock group and choose Add new.</p>
         </section>
     }
     else
@@ -56,7 +57,7 @@
         <section class="wl-main" aria-labelledby="wl-title">
             <div class="wl-head">
                 <div>
-                    <h1 id="wl-title">@selected.Name</h1>
+                    <h2 id="wl-title">@selected.Name</h2>
                     <p class="muted">
                         @stockCount @(stockCount == 1 ? "stock" : "stocks")@(selected.IsDefault ? " · default list" : "") · @(selected.IncludeExtendedHours ? "watched pre-market and after hours" : "regular session only")
                     </p>
@@ -73,7 +74,7 @@
                                 <input id="WishlistName" name="WishlistName" value="@selected.Name" required />
                                 <label for="WishlistDescription">Description</label>
                                 <input id="WishlistDescription" name="Description" value="@selected.Description" />
-                                <label class="checkbox-field"><input type="checkbox" name="IsDefault" value="true" checked="@selected.IsDefault" /><span>Default wishlist</span></label>
+                                <label class="checkbox-field"><input type="checkbox" name="IsDefault" value="true" checked="@selected.IsDefault" /><span>Default stock group</span></label>
                                 <label class="checkbox-field"><input type="checkbox" name="IncludeExtendedHours" value="true" checked="@selected.IncludeExtendedHours" /><span>Watch pre-market and after hours</span></label>
                                 <div class="wl-inline wl-end">
                                     <button class="button" type="submit">Save settings</button>
@@ -83,7 +84,7 @@
                                 <input type="hidden" name="WishlistId" value="@selected.Id" />
                                 <p class="muted">Deleting removes the list only. Open positions, orders and recorded signals stay.</p>
                                 <button class="button secondary wl-danger" type="submit"
-                                        data-confirm="Delete the wishlist @selected.Name? Open positions, orders and recorded signals are not deleted.">Delete wishlist</button>
+                                        data-confirm="Delete the stock group @selected.Name? Open positions, orders and recorded signals are not deleted.">Delete stock group</button>
                             </form>
                         </div>
                     </details>
@@ -91,7 +92,7 @@
             </div>
             @Message("settings")
 
-            <nav class="wl-tabs" aria-label="Wishlist views">
+            <nav class="wl-tabs" aria-label="Stock group views">
                 <a asp-page="/Wishlists" asp-route-id="@selected.Id" aria-current="@(Model.ShowScreens ? null : "page")">Stocks</a>
                 <a asp-page="/Wishlists" asp-route-id="@selected.Id" asp-route-view="screens" aria-current="@(Model.ShowScreens ? "page" : null)">Saved Finviz screens</a>
             </nav>
@@ -184,7 +185,7 @@
             else
             {
                 @* Finviz Elite has no endpoint that lists the screens saved in its own interface, so they are named here once. *@
-                <p class="muted">Name a Finviz screen once and pick it by name in Import, Paper runs and the Desk. Screens are shared by every wishlist.</p>
+                <p class="muted">Name a Finviz screen once and pick it by name in Import, Strategies and the Desk. Screens are shared by every stock group.</p>
                 <form method="post" asp-page-handler="SavePreset" class="wl-preset-form">
                     <input type="hidden" name="id" value="@selected.Id" />
                     <input type="hidden" name="presetScope" value="swing" />

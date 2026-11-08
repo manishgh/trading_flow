@@ -132,8 +132,12 @@ test.describe("earnings calendar", () => {
     await signIn(page);
   });
 
+  // Secondary filters start collapsed while result assessment remains directly available.
   test("exposes date range, result, and refinement controls", async ({ page }) => {
     await page.goto("/Earnings");
+    await expect(page.locator("#earnings-assessment-filters")).toBeVisible();
+    await expect(page.locator("#earnings-from")).toBeHidden();
+    await page.locator(".market-more-filters > summary").click();
     await expect(page.locator("#earnings-from")).toBeVisible();
     await expect(page.locator("#earnings-to")).toBeVisible();
     await expect(page.locator("#earnings-assessment-filters button")).not.toHaveCount(0);

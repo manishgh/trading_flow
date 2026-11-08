@@ -7,10 +7,14 @@ for (const width of [320, 412, 1280]) {
     await page.goto('/');
     await expect(page).toHaveURL(/\/Login\?ReturnUrl=%2FDesk$/);
     const tabs = page.getByRole('navigation', { name: 'Primary navigation' });
-    await expect(tabs.getByRole('link')).toHaveText(['News', 'Earnings', 'Trading Desk']);
+    await expect(tabs.getByRole('link')).toHaveText(['News', 'Earnings']);
+    await expect(page.getByRole('link', {name:'Sign in', exact:true})).toBeVisible();
+    await expect(page.locator('.workspace-sidebar')).toHaveCount(0);
     for (const name of ['News', 'Earnings']) {
       await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name, exact: true }).click();
       await expect(page).toHaveURL(new RegExp('/' + name + '$'));
+      await expect(page.getByRole('navigation', { name:'Primary navigation' }).getByRole('link',{name,exact:true})).toHaveAttribute('aria-current','page');
+      await expect(page.getByRole('navigation', { name:'Primary navigation' }).getByRole('link',{name,exact:true})).toHaveAttribute('aria-current','page');
       await expect(page.getByRole('heading', { name: name === 'Earnings' ? 'Earnings monitor' : name, level: 1, exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
     }

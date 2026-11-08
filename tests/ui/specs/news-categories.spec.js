@@ -1,6 +1,5 @@
 import { expect, test } from '@playwright/test';
 import { signIn } from './sign-in.js';
-import path from 'node:path';
 
 for (const width of [390, 1440]) test(`News category navigation and sector filters work at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 1000 });
@@ -34,7 +33,7 @@ for (const width of [390, 1440]) test(`News category navigation and sector filte
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
 });
 
-for (const width of [390, 1440]) test(`Populated News fixture keeps stories and source membership aligned at ${width}px`, async ({ page }) => {
+for (const width of [390, 1440]) test(`Populated News fixture keeps stories and source membership aligned at ${width}px`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 1000 });
   await signIn(page);
   const list = await page.evaluate(async () => {
@@ -76,8 +75,7 @@ for (const width of [390, 1440]) test(`Populated News fixture keeps stories and 
       expect(Math.abs(sidebarBox.y - feedBox.y)).toBeLessThan(2);
     } else expect(sidebarBox.y).toBeGreaterThan(feedBox.y + feedBox.height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
-    if (process.env.TRADINGFLOW_UI_EVIDENCE_ROOT)
-      await page.screenshot({ path: path.join(process.env.TRADINGFLOW_UI_EVIDENCE_ROOT, `news-categories-${width}.png`), fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`news-workspace-${width}.png`), fullPage: true });
   } finally {
     await page.evaluate(id => window.tradingFlowFetch('/api/v1/wishlists/' + id, { method: 'DELETE' }), list.id);
   }

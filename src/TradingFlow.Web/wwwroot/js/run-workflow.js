@@ -63,6 +63,8 @@
             const item = document.createElement('li'); item.textContent = message; list.append(item);
             const field = form.elements.namedItem(name);
             if (!(field instanceof HTMLElement)) continue;
+            // Every enclosing configuration disclosure must expose a field that needs correction.
+            for (let disclosure = field.closest('details'); disclosure; disclosure = disclosure.parentElement?.closest('details')) disclosure.open = true;
             const error = document.createElement('p'); error.id = name + '-' + index + '-run-error'; error.dataset.runFieldError = ''; error.className = 'note'; error.textContent = message;
             field.after(error); field.setAttribute('aria-invalid', 'true');
             field.setAttribute('aria-describedby', [field.getAttribute('aria-describedby'), error.id].filter(Boolean).join(' '));
@@ -130,6 +132,11 @@
             const value = Number(get(name));
             if (!Number.isFinite(value) || value <= 0 || value > maximum || (whole && !Number.isInteger(value)))
                 errors.push([name, label + (whole ? ' must be a whole number from 1 to 1000.' : maximum === 100 ? ' must be greater than zero and at most 100%.' : ' must be greater than zero.')]);
+        }
+        // Reuse the existing group parser before capture so its error can reveal the collapsed field.
+        if (get('ManualCohorts')) {
+            try { manualGroups(get('ManualCohorts')); }
+            catch (error) { errors.push(['ManualCohorts', error.message]); }
         }
         if (!data.getAll('StrategyPaths').length) errors.push(['', 'Select at least one currently authorized research strategy.']);
         if (!get('StockSource')) errors.push(['StockSource', 'Select a wishlist or saved Finviz stock source.']);
