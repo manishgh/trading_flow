@@ -4,9 +4,11 @@ namespace TradingFlow.Mobile;
 
 public partial class AppShell : Shell
 {
+    // Preserve named workflow routes while making the live stock list the primary tab.
     public AppShell()
     {
         InitializeComponent();
+        Routing.RegisterRoute(nameof(WorkspacePage), typeof(WorkspacePage));
         Routing.RegisterRoute(nameof(WishlistsPage), typeof(WishlistsPage));
         Routing.RegisterRoute(nameof(NotificationsPage), typeof(NotificationsPage));
         Routing.RegisterRoute(nameof(PreparationPage), typeof(PreparationPage));

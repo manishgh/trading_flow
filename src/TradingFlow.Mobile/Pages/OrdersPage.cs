@@ -21,6 +21,10 @@ public sealed class OrdersPage : ContentPage
     private readonly VerticalStackLayout orderRows = new() { Spacing = 10, IsVisible = false };
     private readonly Button positionsTab = new() { Text = "Positions" };
     private readonly Button ordersTab = new() { Text = "Orders" };
+    private readonly Label cashValue = new() { FontSize = 25, FontAttributes = FontAttributes.Bold };
+    private readonly Label investedValue = new() { FontSize = 25, FontAttributes = FontAttributes.Bold };
+    private readonly Grid accountSummary = new() { IsVisible = false, ColumnSpacing = 20,
+        ColumnDefinitions = new ColumnDefinitionCollection { new() { Width = GridLength.Star }, new() { Width = GridLength.Star } } };
 
     // Keep account status and the local view switch fixed above independently scrollable holdings or orders.
     public OrdersPage()
@@ -31,7 +35,11 @@ public sealed class OrdersPage : ContentPage
         tabs.Add(positionsTab); tabs.Add(ordersTab, 1);
         positionsTab.Clicked += (_, _) => SelectSection(false);
         ordersTab.Clicked += (_, _) => SelectSection(true);
-        var header = new VerticalStackLayout { Padding = new Thickness(16, 12), Spacing = 10, Children = { status, tabs } };
+        accountSummary.Add(new VerticalStackLayout { Spacing = 4, Children = {
+            new Label { Text = "Cash · USD", Style = (Style)Application.Current!.Resources["SubHeadline"] }, cashValue } });
+        accountSummary.Add(new VerticalStackLayout { Spacing = 4, Children = {
+            new Label { Text = "Invested · USD", Style = (Style)Application.Current!.Resources["SubHeadline"] }, investedValue } }, 1);
+        var header = new VerticalStackLayout { Padding = new Thickness(20, 12), Spacing = 14, Children = { status, accountSummary, tabs } };
         var layout = new Grid { RowDefinitions = new RowDefinitionCollection {
             new() { Height = GridLength.Auto }, new() { Height = GridLength.Star } } };
         layout.Add(header); layout.Add(new ScrollView { Content = rows }, 0, 1); Content = layout;
@@ -42,9 +50,10 @@ public sealed class OrdersPage : ContentPage
         timer = Dispatcher.CreateTimer(); timer.Interval = TimeSpan.FromSeconds(6);
         timer.Tick += async (_, _) => await RunAsync(RefreshAsync);
     }
+    // Hide any previously displayed account summary until a fresh current-session read completes.
     protected override async void OnAppearing()
     {
-        base.OnAppearing(); reads.Activate();
+        base.OnAppearing(); reads.Activate(); accountSummary.IsVisible = false;
         if (sessionVersion != AppServices.Api.SessionVersion) ChangeSession();
         AppServices.Api.SessionChanged += SessionChanged;
         timer.Start(); await RunAsync(RefreshAsync);
@@ -63,7 +72,7 @@ public sealed class OrdersPage : ContentPage
         previousOutcomesRequireReconciliation |= cancellations.Count != 0 || closes.Count != 0;
         cancellations.Clear(); cancellationOutcomes.Clear(); closes.Clear(); closeOutcomes.Clear();
         sessionVersion = AppServices.Api.SessionVersion;
-        rows.Clear(); positionRows.Clear(); orderRows.Clear();
+        rows.Clear(); positionRows.Clear(); orderRows.Clear(); accountSummary.IsVisible = false;
         positionsTab.Text = "Positions"; ordersTab.Text = "Orders";
         status.Text = "Connection changed. Sign in to read the current account.";
         if (previousOutcomesRequireReconciliation) rows.Add(Text("Earlier commands may have reached the previous account. Reconcile their journal before issuing another exit or cancellation. They are not replayed in this session."));
@@ -76,13 +85,13 @@ public sealed class OrdersPage : ContentPage
     private async Task RunAsync(Func<LatestMarketRead.Read, Task> action)
     {
         if (busy || !reads.Active) return;
-        busy = true; var read = reads.Begin(); rows.IsEnabled = false;
+        busy = true; var read = reads.Begin(); rows.IsEnabled = false; accountSummary.IsVisible = false;
         try { await action(read); }
         catch (OperationCanceledException) when (read.Token.IsCancellationRequested || !reads.IsCurrent(read)) { }
         catch (Exception exception) {
             if (reads.IsCurrent(read)) {
                 positionsTab.Text = "Positions"; ordersTab.Text = "Orders";
-                positionRows.Clear(); orderRows.Clear();
+                positionRows.Clear(); orderRows.Clear(); accountSummary.IsVisible = false;
                 status.Text = exception.Message + (cancellations.Count + closes.Count > 0 ? " Issued commands remain unchanged; check or retry the same command." : "");
                 rows.Clear(); AddRecoveryControls(); rows.Add(Action("Refresh current account", RefreshAsync));
             }
@@ -118,6 +127,7 @@ public sealed class OrdersPage : ContentPage
     // Read the same bound account and journal once, reconcile retained commands, then render compact local sections.
     private async Task RefreshAsync(LatestMarketRead.Read read)
     {
+        status.Text = "Reading paper account…"; accountSummary.IsVisible = false;
         var account = await AppServices.Api.Workflow.PortfolioAsync(read.Token);
         var journal = await AppServices.Api.Workflow.OrderJournalAsync(read.Token); RequireCurrent(read);
         // Journal terminal states release local retained controls; a POST acknowledgment alone is not terminal.
@@ -127,7 +137,10 @@ public sealed class OrdersPage : ContentPage
             if (!String.IsNullOrWhiteSpace(outcome.ClientOrderId) && journal.Any(x => x.ClientOrderId == outcome.ClientOrderId && NativeExitReview.IsTerminal(x.State))) { closes.Remove(symbol); closeOutcomes.Remove(symbol); }
         rows.Clear();
         var fresh = account.Available && DateTimeOffset.UtcNow - account.ReadAtUtc is { TotalSeconds: >= 0 and < 30 };
-        status.Text = fresh ? "Paper account · holdings current" : "Paper account · holdings unavailable or stale";
+        accountSummary.IsVisible = fresh && (account.Cash.HasValue || account.Invested.HasValue);
+        cashValue.Text = fresh ? Money(account.Cash) : String.Empty;
+        investedValue.Text = fresh ? Money(account.Invested) : String.Empty;
+        status.Text = fresh ? $"Paper account · read {account.ReadAtUtc.LocalDateTime:dd MMM HH:mm:ss}" : "Paper account · holdings unavailable or stale";
         positionsTab.Text = "Positions" + (account.Available ? $" ({account.Positions.Count})" : "");
         ordersTab.Text = $"Orders ({journal.Length})";
         AddRecoveryControls();
@@ -217,8 +230,8 @@ public sealed class OrdersPage : ContentPage
         return new Border { Style = (Style)Application.Current!.Resources["CardBorder"], Content = body };
     }
 
-    // Missing valuation inputs are shown explicitly rather than formatted as zero or an empty amount.
-    private static string Money(decimal? value) => value?.ToString("C2", CultureInfo.CurrentCulture) ?? "unavailable";
+    // US paper-account amounts remain USD; missing inputs are explicit rather than formatted as zero.
+    private static string Money(decimal? value) => value?.ToString("C2", CultureInfo.GetCultureInfo("en-US")) ?? "unavailable";
 
     private async Task CancelAsync(OrderJournalEntry order, LatestMarketRead.Read read)
     {

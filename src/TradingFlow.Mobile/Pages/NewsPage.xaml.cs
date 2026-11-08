@@ -59,6 +59,9 @@ public partial class NewsPage : ContentPage
     private void SetSession()
     {
         CancelAssessmentRead();
+        ToolsHost.IsVisible = false; FiltersButton.Text = "Filters / tools";
+        StatusLabel.Text = "Loading news…"; ReadDetailsLabel.Text = String.Empty;
+        CoverageLabel.IsVisible = false; CoverageLabel.Text = String.Empty;
         AssessmentSamplesHost.Children.Clear();
         AssessmentSamplesHost.IsVisible = false;
         AssessmentSamplesButton.IsVisible = AppServices.Api.CurrentUserName is not null;
@@ -107,12 +110,16 @@ public partial class NewsPage : ContentPage
             PageLabel.Text = last is { } known ? $"Page {page} of {known}" : $"Page {page} | total pages unknown";
             PreviousButton.IsEnabled = feed.Enabled && page > 1;
             NextButton.IsEnabled = feed.Enabled && last.HasValue && page < last.Value;
-            StatusLabel.Text = feed.Enabled ? $"{feed.Items.Count} displayed | {feed.TotalMatching?.ToString() ?? "unknown"} matching stored records before article combining. {feed.Message}" : feed.Message ?? "News unavailable.";
+            ReadDetailsLabel.Text = $"{feed.Items.Count} displayed | {feed.TotalMatching?.ToString() ?? "unknown"} matching stored records before article combining.";
+            StatusLabel.Text = feed.Enabled ? $"{feed.Items.Count} stories · pull to refresh" : feed.Message ?? "News unavailable.";
+            CoverageLabel.Text = feed.Message;
+            CoverageLabel.IsVisible = feed.Enabled && !String.IsNullOrWhiteSpace(feed.Message);
             StatusLabel.TextColor = feed.Enabled ? ThemePalette.Positive : ThemePalette.Negative;
         } catch (OperationCanceledException) when (read.Token.IsCancellationRequested || !reads.IsCurrent(read)) { }
         catch (Exception exception) {
             if (!reads.IsCurrent(read)) return;
             newsItems.Clear(); PreviousButton.IsEnabled = NextButton.IsEnabled = false;
+            CoverageLabel.IsVisible = false; ReadDetailsLabel.Text = String.Empty;
             EmptyTitleLabel.Text = "News unavailable"; EmptyDetailLabel.Text = "Refresh to try again or check your backend in More → Settings.";
             StatusLabel.Text = $"News unavailable: {exception.Message}"; StatusLabel.TextColor = ThemePalette.Negative;
         } finally { if (reads.IsCurrent(read)) SetBusy(false); }
@@ -120,11 +127,29 @@ public partial class NewsPage : ContentPage
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
     private async void OnRefreshClicked(object? sender, EventArgs e) => await LoadAsync();
     private async void OnTickerChanged(object? sender, TextChangedEventArgs e) { page = 1; await LoadAsync(false); }
-    // Open secondary filters locally; individual edits retain the existing latest-read behavior.
+    // Open filters and signed-in tools locally; individual edits retain the existing latest-read behavior.
     private void OnToggleFilters(object? sender, EventArgs e)
     {
-        FilterHost.IsVisible = !FilterHost.IsVisible;
-        if (sender is Button button) button.Text = FilterHost.IsVisible ? "Filters −" : "Filters +";
+        ToolsHost.IsVisible = !ToolsHost.IsVisible;
+        if (sender is Button button) button.Text = ToolsHost.IsVisible ? "Close filters / tools" : "Filters / tools";
+    }
+    // Return to an existing Earnings page when possible rather than stacking repeated switch navigation.
+    private async void OnOpenEarnings(object? sender, EventArgs e)
+    {
+        var stack = Shell.Current.Navigation.NavigationStack;
+        await Shell.Current.GoToAsync(stack.Count > 1 && stack[^2] is EarningsPage ? ".." : nameof(EarningsPage));
+    }
+    // Expand full article text locally, including stories without an external URL; source navigation stays unchanged.
+    private void OnToggleNewsDetails(object? sender, EventArgs e)
+    {
+        if (sender is not Button { CommandParameter: VerticalStackLayout card } button) return;
+        var details = card.FindByName<VerticalStackLayout>("ArticleDetails");
+        var headline = card.FindByName<Label>("ArticleHeadline");
+        var summary = card.FindByName<Label>("ArticleSummary");
+        if (details is null || headline is null || summary is null) return;
+        details.IsVisible = !details.IsVisible;
+        headline.MaxLines = summary.MaxLines = details.IsVisible ? -1 : 2;
+        button.Text = details.IsVisible ? "Less" : "Details";
     }
     private async void OnPreviousPage(object? sender, EventArgs e) { page = Math.Max(1, page - 1); await LoadAsync(); }
     private async void OnNextPage(object? sender, EventArgs e) { page++; await LoadAsync(); }

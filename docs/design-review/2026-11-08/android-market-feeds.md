@@ -1,0 +1,19 @@
+# Android News and Earnings density — 8 November 2026
+
+## Approved scope
+
+The user requested a more natural mobile trading app after finding the Android screens cluttered. The parent approved this parallel contribution limited to NewsPage.xaml/.cs and EarningsPage.xaml/.cs. Another agent owns the Stocks-first shell and trading screens. No web, provider, model, endpoint, strategy, risk or execution changes are included here.
+
+The design puts the feed/calendar ahead of administration. A compact News/Earnings switch reuses the existing registered routes, returning to the preceding opposite page when available to avoid repeatedly stacking switches. News keeps its ticker field and Filters/tools action in one row, followed by compact read status. Exact coverage messages, feed failures and provider failures stay visible outside the closed tools panel. Pagination moves to the CollectionView footer and the existing pull-to-refresh remains; the duplicate large Refresh action is removed from the initial viewport. Existing provider fetch and archived-assessment controls remain inside Tools with their existing authentication/session behavior.
+
+News cards show ticker, provider and publication time, a two-line headline and up to two summary lines. A local Details action reveals full title/summary, source, full publication timestamp and existing sentiment wording, explicitly qualified as text evidence rather than an order or trade signal. This works even when a story has no external URL. The existing article selection/source-opening handler remains unchanged. No news sentiment threshold or model interpretation was added.
+
+Earnings keeps a compact New York reporting schedule, including the existing estimate marker, result/release information, EPS/revenue surprise, move and slot warnings on each primary card. Session, cap, date and provider controls are behind the existing filter disclosure. Full company name, schedule clocks, price provenance, reaction, prior EPS, technical evidence and observation timestamps remain in the existing Details section. Reported-group expansion and existing News link handling remain unchanged. Monitor-offline and capped-result warnings remain in visible status; verbose matching/monitor/update metadata moves to Tools.
+
+## Boundaries and checks
+
+All original named controls and bound event handlers are retained. New functions only navigate existing routes, toggle local presentation, or format the existing schedule for display. Both feed readers retain their cancellation/latest-session guards, periodic reads, query snapshots, provider operations, error branches and successful-empty versus failed-read distinctions. No endpoint or request payload changed. No font auto-scaling setting was disabled, and buttons retain a minimum 44px target.
+
+Read-only checks completed: both XAML files parse as XML; every original x:Name remains; all XAML event-handler references resolve to code-behind names; scoped whitespace checks pass; original per-file CRLF is preserved. No build, runtime test, provider request, device interaction or web interaction was launched by this child. Parent-managed Android compilation and device review remain pending. Physical-device visual quality is not claimed while computer use remains paused by the user.
+
+Independent review by popup_review passed against the four frozen files after one correction: the compact tappable Earnings group header now keeps a minimum 44dp target. All referenced static resource keys were found and the original CRLF files remain CRLF. The parent separately reported 47 native guard tests passing; this child did not run them. Android resource compilation/build and device visual verification for this feed checkpoint remain pending the parent's coordinated run. The work does not add dependencies or alter the app's order workflow.

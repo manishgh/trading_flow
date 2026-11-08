@@ -2,120 +2,78 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:controls="clr-namespace:TradingFlow.Mobile.Controls"
-             x:Class="TradingFlow.Mobile.Pages.NewsPage"
-             Title="News">
+             x:Class="TradingFlow.Mobile.Pages.NewsPage" Title="News">
     <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
-        <CollectionView x:Name="NewsView"
-                        Margin="12,0"
-                        SelectionMode="Single"
-                        SelectionChanged="OnNewsSelected"
-                        ItemsUpdatingScrollMode="KeepScrollOffset">
+        <CollectionView x:Name="NewsView" Margin="16,0" SelectionMode="Single"
+                        SelectionChanged="OnNewsSelected" ItemsUpdatingScrollMode="KeepScrollOffset">
             <CollectionView.Header>
-                <VerticalStackLayout Padding="0,12,0,10" Spacing="10">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                        <VerticalStackLayout Spacing="2">
-                            <Label Text="Market headlines"
-                                   Style="{StaticResource SubHeadline}" />
-                        </VerticalStackLayout>
-                        <controls:EnvironmentBadgeView Grid.Column="1" />
+                <VerticalStackLayout Padding="0,8,0,10" Spacing="6">
+                    <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="8">
+                        <Border Padding="10,8" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light={StaticResource SurfaceSubtleLight}, Dark={StaticResource SurfaceSubtleDark}}">
+                            <Border.StrokeShape><RoundRectangle CornerRadius="8" /></Border.StrokeShape>
+                            <Label Text="News" FontSize="18" FontAttributes="Bold" VerticalTextAlignment="Center" />
+                        </Border>
+                        <Button Grid.Column="1" Text="Earnings" Style="{StaticResource QuietButton}" MinimumHeightRequest="44" Padding="10,6" Clicked="OnOpenEarnings" />
+                        <controls:EnvironmentBadgeView Grid.Column="2" VerticalOptions="Center" />
                     </Grid>
-
-                    <Border Style="{StaticResource CardBorder}" Padding="10">
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <Label x:Name="StatusLabel"
-                                   Text="Checking backend..."
-                                   FontSize="13"
-                                   LineBreakMode="WordWrap" />
-                            <ActivityIndicator x:Name="BusyIndicator"
-                                               Grid.Column="1"
-                                               IsRunning="False"
-                                               IsVisible="False" />
-                        </Grid>
-                    </Border>
-
-                    <Entry x:Name="TickerEntry"
-                           Placeholder="Filter by ticker"
-                           Keyboard="Text"
-                           TextChanged="OnTickerChanged"
-                           SemanticProperties.Description="Filter rolling news by ticker symbol" />
-
-                    <Button Text="Filters +" Style="{StaticResource QuietButton}" HorizontalOptions="Start" Clicked="OnToggleFilters" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <Entry x:Name="TickerEntry" Placeholder="Ticker" Keyboard="Text" TextChanged="OnTickerChanged"
+                               SemanticProperties.Description="Filter rolling news by ticker symbol" />
+                        <Button x:Name="FiltersButton" Grid.Column="1" Text="Filters / tools" Style="{StaticResource QuietButton}" MinimumHeightRequest="44" Padding="10,6" Clicked="OnToggleFilters" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <Label x:Name="StatusLabel" Text="Loading news…" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="WordWrap" />
+                        <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" WidthRequest="20" HeightRequest="20" IsRunning="False" IsVisible="False" />
+                    </Grid>
+                    <Label x:Name="CoverageLabel" IsVisible="False" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="WordWrap" />
                     <Label x:Name="ProviderStatusLabel" IsVisible="False" FontSize="13" LineBreakMode="WordWrap" />
-                    <VerticalStackLayout x:Name="FilterHost" IsVisible="False" />
-                    <Button x:Name="AssessmentSamplesButton" Text="Review archived news assessments" Clicked="OnAssessmentSamplesClicked" IsVisible="False" />
-                    <VerticalStackLayout x:Name="AssessmentSamplesHost" IsVisible="False" Spacing="8" />
-                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
-                        <Button x:Name="PreviousButton" Text="Previous" Style="{StaticResource QuietButton}" Clicked="OnPreviousPage" IsEnabled="False" />
-                        <Label x:Name="PageLabel" Grid.Column="1" Text="Page 1" VerticalTextAlignment="Center" HorizontalTextAlignment="Center" />
-                        <Button x:Name="NextButton" Grid.Column="2" Text="Next" Style="{StaticResource QuietButton}" Clicked="OnNextPage" IsEnabled="False" />
-                    </Grid>
-
-                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
-                        <Button Text="Refresh" Style="{StaticResource QuietButton}"
-                                Clicked="OnRefreshClicked"
-                                SemanticProperties.Description="Refresh stored rolling news" />
-                        <Button x:Name="FetchProvidersButton" Grid.Column="1"
-                                IsVisible="False"
-                                Text="Fetch Providers"
-                                Clicked="OnFetchClicked"
+                    <VerticalStackLayout x:Name="ToolsHost" IsVisible="False" Spacing="8" Padding="0,6">
+                        <Label x:Name="ReadDetailsLabel" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="WordWrap" />
+                        <VerticalStackLayout x:Name="FilterHost" />
+                        <Button x:Name="FetchProvidersButton" IsVisible="False" Text="Fetch provider news" Style="{StaticResource QuietButton}" Clicked="OnFetchClicked"
                                 SemanticProperties.Description="Fetch current Finviz and Alpaca news" />
-                    </Grid>
+                        <Button x:Name="AssessmentSamplesButton" Text="Archived assessment evidence" Style="{StaticResource QuietButton}" Clicked="OnAssessmentSamplesClicked" IsVisible="False" />
+                        <VerticalStackLayout x:Name="AssessmentSamplesHost" IsVisible="False" Spacing="8" />
+                    </VerticalStackLayout>
                 </VerticalStackLayout>
             </CollectionView.Header>
-
+            <CollectionView.Footer>
+                <VerticalStackLayout Padding="0,12,0,20" Spacing="6">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                        <Button x:Name="PreviousButton" Text="Previous" Style="{StaticResource QuietButton}" Clicked="OnPreviousPage" IsEnabled="False" />
+                        <Label x:Name="PageLabel" Grid.Column="1" Text="Page 1" FontSize="12" VerticalTextAlignment="Center" HorizontalTextAlignment="Center" />
+                        <Button x:Name="NextButton" Grid.Column="2" Text="Next" Style="{StaticResource QuietButton}" Clicked="OnNextPage" IsEnabled="False" />
+                    </Grid>
+                    <Label Text="Pull down to refresh stored news" FontSize="11" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" HorizontalTextAlignment="Center" />
+                </VerticalStackLayout>
+            </CollectionView.Footer>
             <CollectionView.EmptyView>
                 <VerticalStackLayout Padding="12,28" Spacing="6">
-                    <Label x:Name="EmptyTitleLabel" Text="Loading news"
-                           FontAttributes="Bold"
-                           FontSize="16"
-                           HorizontalTextAlignment="Center" />
-                    <Label x:Name="EmptyDetailLabel" Text="Waiting for a news response."
-                           FontSize="13"
-                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
-                           HorizontalTextAlignment="Center" />
+                    <Label x:Name="EmptyTitleLabel" Text="Loading news" FontAttributes="Bold" FontSize="16" HorizontalTextAlignment="Center" />
+                    <Label x:Name="EmptyDetailLabel" Text="Waiting for a news response." FontSize="13" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" HorizontalTextAlignment="Center" />
                 </VerticalStackLayout>
             </CollectionView.EmptyView>
-
             <CollectionView.ItemTemplate>
                 <DataTemplate>
-                    <Border Style="{StaticResource CardBorder}"
-                            Margin="0,0,0,8"
-                            Padding="10">
-                        <VerticalStackLayout Spacing="6">
+                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="12,10">
+                        <VerticalStackLayout x:Name="ArticleCard" Spacing="5">
                             <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
-                                <Label Text="{Binding Ticker}"
-                                       FontAttributes="Bold"
-                                       FontSize="13"
-                                       TextColor="{StaticResource Primary}" />
-                                <Label Grid.Column="1"
-                                       Text="{Binding DisplayProvider}"
-                                       FontSize="12"
-                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
-                                <Label Grid.Column="2"
-                                       Text="{Binding SentimentText}"
-                                       FontSize="12" />
+                                <Label Text="{Binding Ticker}" FontAttributes="Bold" FontSize="13" TextColor="{StaticResource Primary}" />
+                                <Label Grid.Column="1" Text="{Binding DisplayProvider}" FontSize="11" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="TailTruncation" />
+                                <Label Grid.Column="2" Text="{Binding DisplayTimestamp}" FontSize="11" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                             </Grid>
-                            <Label Text="{Binding DisplayHeadline}"
-                                   FontAttributes="Bold"
-                                   FontSize="15"
-                                   LineBreakMode="WordWrap"
-                                   MaxLines="3" />
-                            <Label Text="{Binding Classification}" FontSize="12" />
-                            <Label Text="{Binding DisplaySummary}"
-                                   IsVisible="{Binding HasSummary}"
-                                   FontSize="13"
-                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
-                                   LineBreakMode="WordWrap"
-                                   MaxLines="3" />
+                            <Label x:Name="ArticleHeadline" Text="{Binding DisplayHeadline}" FontAttributes="Bold" FontSize="16" LineBreakMode="WordWrap" MaxLines="2" />
+                            <Label x:Name="ArticleSummary" Text="{Binding DisplaySummary}" IsVisible="{Binding HasSummary}" FontSize="13" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="WordWrap" MaxLines="2" />
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                <Label Text="{Binding DisplaySource}"
-                                       FontSize="12"
-                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
-                                <Label Grid.Column="1"
-                                       Text="{Binding DisplayTimestamp}"
-                                       FontSize="12"
-                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
+                                <Label Text="{Binding Classification}" FontSize="11" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" VerticalTextAlignment="Center" LineBreakMode="WordWrap" />
+                                <Button Grid.Column="1" Text="Details" Style="{StaticResource QuietButton}" MinimumHeightRequest="44" Padding="10,4" CommandParameter="{x:Reference ArticleCard}" Clicked="OnToggleNewsDetails" />
                             </Grid>
+                            <VerticalStackLayout x:Name="ArticleDetails" IsVisible="False" Spacing="4">
+                                <Label Text="{Binding Timestamp, StringFormat='Published {0:O}'}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="WordWrap" />
+                                <Label Text="{Binding DisplaySource, StringFormat='Source: {0}'}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="WordWrap" />
+                                <Label Text="{Binding SentimentText, StringFormat='Text sentiment: {0}'}" FontSize="12" LineBreakMode="WordWrap" />
+                                <Label Text="Text sentiment is evidence about wording, not an order or trade signal. Tap the article to open its source when available." FontSize="11" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="WordWrap" />
+                            </VerticalStackLayout>
                         </VerticalStackLayout>
                     </Border>
                 </DataTemplate>

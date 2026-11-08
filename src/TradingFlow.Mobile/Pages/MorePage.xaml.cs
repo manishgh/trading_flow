@@ -11,6 +11,7 @@ public partial class MorePage : ContentPage
         new("Strategy positions", "Holdings attached to paper strategy runs.", nameof(RunningTradesPage)),
         new("Earnings", "Reporting calendar and assessments.", nameof(EarningsPage)),
         new("Stock groups", "Followed stocks and saved discovery sources.", nameof(WishlistsPage)),
+        new("Daily tools", "Preparation, earnings, groups and activity shortcuts.", nameof(WorkspacePage)),
         new("Daily review", "Preparation workflows and upcoming sessions.", nameof(PreparationPage)),
         new("Candidates", "Review exact strategy checks and evidence.", nameof(CandidatesPage)),
         new("Activity", "Candidate alerts and notification history.", nameof(NotificationsPage)),

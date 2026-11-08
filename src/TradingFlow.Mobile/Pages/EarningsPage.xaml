@@ -6,76 +6,51 @@
              Title="Earnings">
     <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
         <CollectionView x:Name="EarningsView"
-                        Margin="12,0"
+                        Margin="16,0"
                         IsGrouped="True"
                         SelectionMode="None"
                         ItemsUpdatingScrollMode="KeepScrollOffset">
             <CollectionView.Header>
-                <VerticalStackLayout Padding="0,12,0,10" Spacing="10">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                        <VerticalStackLayout Spacing="2">
-                            <Label Text="Reporting calendar · New York dates"
-                                   Style="{StaticResource SubHeadline}" />
-                        </VerticalStackLayout>
-                        <controls:EnvironmentBadgeView Grid.Column="1" />
+                <VerticalStackLayout Padding="0,8,0,10" Spacing="6">
+                    <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="8">
+                        <Button Text="News" Style="{StaticResource QuietButton}" MinimumHeightRequest="44" Padding="10,6" Clicked="OnOpenNewsFeed" />
+                        <Border Grid.Column="1" Padding="10,8" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light={StaticResource SurfaceSubtleLight}, Dark={StaticResource SurfaceSubtleDark}}">
+                            <Border.StrokeShape><RoundRectangle CornerRadius="8" /></Border.StrokeShape>
+                            <Label Text="Earnings" FontSize="18" FontAttributes="Bold" VerticalTextAlignment="Center" />
+                        </Border>
+                        <controls:EnvironmentBadgeView Grid.Column="2" VerticalOptions="Center" />
                     </Grid>
-
-                    <Border Style="{StaticResource CardBorder}" Padding="10">
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <VerticalStackLayout Spacing="6">
-                                <Label x:Name="StatusLabel"
-                                       Text="Loading earnings calendar..."
-                                       FontSize="13"
-                                       LineBreakMode="WordWrap" />
-                            </VerticalStackLayout>
-                            <ActivityIndicator x:Name="BusyIndicator"
-                                               Grid.Column="1"
-                                               IsRunning="False"
-                                               IsVisible="False" />
-                        </Grid>
-                    </Border>
-
-                    <Button x:Name="RefreshProvidersButton" IsVisible="False" Text="Refresh Providers"
-                            Clicked="OnRefreshProviders"
-                            SemanticProperties.Description="Refresh Finviz earnings, Alpaca bars, and analysis" />
-
-                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
-                        <VerticalStackLayout Spacing="3">
-                            <Label Text="Release session" FontSize="12" FontAttributes="Bold" />
-                            <Picker x:Name="SessionPicker"
-                                    SelectedIndexChanged="OnFilterChanged"
-                                    ItemDisplayBinding="{Binding Label}" />
-                        </VerticalStackLayout>
-                        <VerticalStackLayout Grid.Column="1" Spacing="3">
-                            <Label Text="Market cap" FontSize="12" FontAttributes="Bold" />
-                            <Picker x:Name="MarketCapPicker"
-                                    SelectedIndexChanged="OnFilterChanged"
-                                    ItemDisplayBinding="{Binding Label}" />
-                        </VerticalStackLayout>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <Label Text="Reporting dates · New York" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" VerticalTextAlignment="Center" />
+                        <Button x:Name="FiltersButton" Grid.Column="1" Text="Filters / tools" Style="{StaticResource QuietButton}" MinimumHeightRequest="44" Padding="10,6" Clicked="OnToggleFilters" />
                     </Grid>
-                    <Button Text="Filters +" Style="{StaticResource QuietButton}" HorizontalOptions="Start" Clicked="OnToggleFilters" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <Label x:Name="StatusLabel" Text="Loading earnings…" FontSize="12" LineBreakMode="WordWrap" />
+                        <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" WidthRequest="20" HeightRequest="20" IsRunning="False" IsVisible="False" />
+                    </Grid>
                     <Label x:Name="ProviderStatusLabel" IsVisible="False" FontSize="13" LineBreakMode="WordWrap" />
-                    <VerticalStackLayout x:Name="FilterHost" IsVisible="False" Spacing="6">
-                        <HorizontalStackLayout Spacing="8">
-                            <Switch x:Name="CalendarSwitch" Toggled="OnCalendarChanged" />
-                            <Label Text="Use date range (maximum 35 days)" VerticalTextAlignment="Center" />
-                        </HorizontalStackLayout>
+                    <VerticalStackLayout x:Name="FilterHost" IsVisible="False" Spacing="8" Padding="0,6">
+                        <Label x:Name="ReadDetailsLabel" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" LineBreakMode="WordWrap" />
                         <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
-                            <DatePicker x:Name="FromDate" DateSelected="OnDateChanged" Format="yyyy-MM-dd" />
-                            <DatePicker x:Name="ToDate" Grid.Column="1" DateSelected="OnDateChanged" Format="yyyy-MM-dd" />
+                            <VerticalStackLayout Spacing="2"><Label Text="Release session" FontSize="12" /><Picker x:Name="SessionPicker" SelectedIndexChanged="OnFilterChanged" ItemDisplayBinding="{Binding Label}" /></VerticalStackLayout>
+                            <VerticalStackLayout Grid.Column="1" Spacing="2"><Label Text="Market cap" FontSize="12" /><Picker x:Name="MarketCapPicker" SelectedIndexChanged="OnFilterChanged" ItemDisplayBinding="{Binding Label}" /></VerticalStackLayout>
                         </Grid>
-                        <Button Text="This week in New York" Clicked="OnThisWeek" />
+                        <HorizontalStackLayout Spacing="8"><Switch x:Name="CalendarSwitch" Toggled="OnCalendarChanged" /><Label Text="Date range · up to 35 days" VerticalTextAlignment="Center" /></HorizontalStackLayout>
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="8"><DatePicker x:Name="FromDate" DateSelected="OnDateChanged" Format="yyyy-MM-dd" /><DatePicker x:Name="ToDate" Grid.Column="1" DateSelected="OnDateChanged" Format="yyyy-MM-dd" /></Grid>
+                        <Button Text="This week in New York" Style="{StaticResource QuietButton}" Clicked="OnThisWeek" />
+                        <Button x:Name="RefreshProvidersButton" IsVisible="False" Text="Refresh providers" Style="{StaticResource QuietButton}" Clicked="OnRefreshProviders" SemanticProperties.Description="Refresh Finviz earnings, Alpaca bars, and analysis" />
                     </VerticalStackLayout>
                 </VerticalStackLayout>
             </CollectionView.Header>
+            <CollectionView.Footer><Label Text="Pull down to refresh the calendar" Margin="0,12,0,20" FontSize="11" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" HorizontalTextAlignment="Center" /></CollectionView.Footer>
 
             <CollectionView.GroupHeaderTemplate>
                 <DataTemplate>
-                    <Grid Padding="2,14,2,8" ColumnDefinitions="*,Auto">
+                    <Grid Padding="2,10,2,6" ColumnDefinitions="*,Auto" MinimumHeightRequest="44">
                         <Grid.GestureRecognizers>
                             <TapGestureRecognizer Tapped="OnGroupHeaderTapped" CommandParameter="{Binding}" />
                         </Grid.GestureRecognizers>
-                        <Label Text="{Binding Name}" FontSize="18" FontAttributes="Bold" />
+                        <Label Text="{Binding Name}" FontSize="15" FontAttributes="Bold" />
                         <Label Grid.Column="1" Text="{Binding CountText}" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                     </Grid>
                 </DataTemplate>
@@ -96,8 +71,8 @@
 
             <CollectionView.ItemTemplate>
                 <DataTemplate>
-                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="10">
-                        <VerticalStackLayout Spacing="7">
+                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="12,10">
+                        <VerticalStackLayout Spacing="5">
                             <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
                                 <Label Text="{Binding Item.Ticker}"
                                        FontAttributes="Bold"
@@ -111,49 +86,53 @@
                                        Text="{Binding Item.ResultText}"
                                        FontSize="12" />
                             </Grid>
-                            <Label Text="{Binding Item.MarketCapText}"
-                                   FontSize="11"
-                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                             <Label Text="{Binding Item.ReleaseText}"
                                    FontSize="13"
                                    IsVisible="{Binding Item.HasReleaseText}" />
-                            <Label Text="{Binding Item.ScheduleText}"
+                            <Label Text="{Binding ScheduleSummaryText}"
                                    FontSize="13"
                                    TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                             <Label Text="{Binding Item.SlotWarningText}"
                                    FontSize="12"
                                    TextColor="{AppThemeBinding Light={StaticResource StateWarningLight}, Dark={StaticResource StateWarningDark}}"
                                    IsVisible="{Binding Item.HasSlotWarning}" />
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Label Text="{Binding Item.SurpriseText}" FontSize="12" LineBreakMode="WordWrap" />
+                                <Label Grid.Column="1" Text="{Binding Item.MoveText}" FontSize="12" />
+                            </Grid>
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Button Text="Details"
+                                        Style="{StaticResource QuietButton}"
+                                        Padding="10,5"
+                                        MinimumHeightRequest="44"
+                                        CommandParameter="{Binding}"
+                                        Clicked="OnToggleDetails" />
+                                <Button Grid.Column="1"
+                                        Text="News"
+                                        Style="{StaticResource QuietButton}"
+                                        Padding="10,5"
+                                        MinimumHeightRequest="44"
+                                        IsVisible="{Binding Item.HasNews}"
+                                        CommandParameter="{Binding}"
+                                        Clicked="OnOpenNews" />
+                            </Grid>
+                            <VerticalStackLayout IsVisible="{Binding IsExpanded}" Spacing="5">
+                                <Label Text="{Binding Item.CompanyName}" FontSize="13" FontAttributes="Bold" LineBreakMode="WordWrap" />
+                            <Label Text="{Binding Item.MarketCapText}"
+                                   FontSize="11"
+                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
                             <Label Text="{Binding Item.PriceText}"
                                    FontSize="13"
                                    FontAttributes="Bold" />
                             <Label Text="{Binding Item.ReactionText}"
                                    FontSize="12"
                                    LineBreakMode="WordWrap" />
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                <Label Text="{Binding Item.SurpriseText}" FontSize="13" />
-                                <Label Grid.Column="1" Text="{Binding Item.MoveText}" FontSize="13" />
-                            </Grid>
                             <Label Text="{Binding Item.EpsValuesText}" FontSize="12" />
                             <Label Text="{Binding Item.PreviousEpsText}"
                                    FontSize="12"
                                    TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                    LineBreakMode="WordWrap" />
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                <Button Text="Details"
-                                        Padding="10,5"
-                                        MinimumHeightRequest="36"
-                                        CommandParameter="{Binding}"
-                                        Clicked="OnToggleDetails" />
-                                <Button Grid.Column="1"
-                                        Text="News"
-                                        Padding="10,5"
-                                        MinimumHeightRequest="36"
-                                        IsVisible="{Binding Item.HasNews}"
-                                        CommandParameter="{Binding}"
-                                        Clicked="OnOpenNews" />
-                            </Grid>
-                            <VerticalStackLayout IsVisible="{Binding IsExpanded}" Spacing="5">
+                            <Label Text="{Binding Item.ScheduleText}" FontSize="12" LineBreakMode="WordWrap" />
                                 <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}" />
                                 <Label Text="{Binding Item.AnalysisReason}"
                                        FontSize="13"

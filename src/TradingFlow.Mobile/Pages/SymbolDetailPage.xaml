@@ -2,84 +2,71 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:controls="clr-namespace:TradingFlow.Mobile.Controls"
-             x:Class="TradingFlow.Mobile.Pages.SymbolDetailPage"
-             Title="Symbol Detail">
-    <ScrollView>
-        <VerticalStackLayout Padding="16" Spacing="14">
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                <VerticalStackLayout Spacing="2">
-                    <Label x:Name="TickerLabel" Text="Symbol" Style="{StaticResource Headline}" />
-                    <Label x:Name="UpdatedLabel" Text="Loading evidence..." Style="{StaticResource SubHeadline}" />
+             x:Class="TradingFlow.Mobile.Pages.SymbolDetailPage" Title="Stock">
+    <Grid RowDefinitions="*,Auto">
+        <ScrollView>
+            <VerticalStackLayout Padding="20,12,20,24" Spacing="18">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <Label x:Name="TickerLabel" Text="Stock" FontSize="28" FontAttributes="Bold" VerticalTextAlignment="Center" />
+                    <controls:EnvironmentBadgeView Grid.Column="1" />
+                </Grid>
+                <VerticalStackLayout Spacing="5">
+                    <Label Text="Mid quote" Style="{StaticResource SubHeadline}" />
+                    <Label x:Name="QuotePriceLabel" Text="Unavailable" FontSize="34" FontAttributes="Bold" />
+                    <Label x:Name="QuoteLabel" LineBreakMode="WordWrap" FontSize="13" />
+                    <Label x:Name="QuoteAgeLabel" Style="{StaticResource SubHeadline}" />
+                    <Label x:Name="UpdatedLabel" Text="Loading stock…" Style="{StaticResource SubHeadline}" />
                 </VerticalStackLayout>
-                <controls:EnvironmentBadgeView Grid.Column="1" />
-            </Grid>
-
-            <ActivityIndicator x:Name="BusyIndicator"
-                               IsVisible="False"
-                               IsRunning="False"
-                               Color="{StaticResource Primary}" />
-            <Label x:Name="ErrorLabel"
-                   IsVisible="False"
-                   TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" />
-
-            <VerticalStackLayout Spacing="6">
-                <Label Text="Quotes and holdings" FontAttributes="Bold" FontSize="18" />
+                <ActivityIndicator x:Name="BusyIndicator" IsVisible="False" IsRunning="False" />
+                <Label x:Name="ErrorLabel" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" LineBreakMode="WordWrap" />
                 <Label x:Name="DecisionStatusLabel" FontAttributes="Bold" />
                 <Label x:Name="DecisionReasonLabel" LineBreakMode="WordWrap" />
-                <Label x:Name="QuoteLabel" FontFamily="monospace" />
-                <Label x:Name="QuoteAgeLabel" Style="{StaticResource SubHeadline}" />
-                <Label x:Name="PositionLabel" Style="{StaticResource SubHeadline}" />
+                <Label x:Name="PositionLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}" />
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="Strategy check" Style="{StaticResource PageTitle}" />
+                    <Picker x:Name="StrategyPicker" Title="Choose a strategy" SelectedIndexChanged="OnStrategyChanged" />
+                    <Label x:Name="StrategyStatusLabel" Text="Select a strategy" LineBreakMode="WordWrap" />
+                    <Button x:Name="CancelStrategyButton" Text="Cancel checks" IsVisible="False" Style="{StaticResource QuietButton}" Clicked="OnCancelStrategyClicked" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                        <Button Text="Check details" Style="{StaticResource QuietButton}" Clicked="OnStrategyEvidenceClicked" />
+                        <Button Grid.Column="1" Text="Candidate review" Style="{StaticResource QuietButton}" Clicked="OnCandidateReviewClicked" />
+                    </Grid>
+                    <VerticalStackLayout x:Name="StrategyEvidencePanel" IsVisible="False" Spacing="8">
+                        <Label x:Name="StrategyTimeLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                        <VerticalStackLayout x:Name="StrategyChecks" Spacing="8" />
+                        <Label Text="Strategy checks do not submit orders. Quotes may be newer than the evaluation." Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+                <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}" />
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Prediction evidence" Style="{StaticResource PageTitle}" />
+                    <Label x:Name="ModelStatusLabel" FontAttributes="Bold" LineBreakMode="WordWrap" />
+                    <Label x:Name="ModelUnavailableLabel" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateWarningLight}, Dark={StaticResource StateWarningDark}}" LineBreakMode="WordWrap" />
+                    <Button Text="View evidence" Style="{StaticResource QuietButton}" HorizontalOptions="Start" Clicked="OnModelEvidenceClicked" />
+                    <VerticalStackLayout x:Name="ModelEvidencePanel" IsVisible="False" Spacing="8">
+                        <Label Text="Read-only evidence. It cannot override strategy or risk checks." Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                        <Label x:Name="ModelGeneratedLabel" Style="{StaticResource SubHeadline}" />
+                        <Label x:Name="ModelIdentityLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                        <VerticalStackLayout x:Name="SwingSection" IsVisible="False" Spacing="4">
+                            <Label x:Name="SwingSignalLabel" FontAttributes="Bold" />
+                            <Label x:Name="SwingProbabilityLabel" />
+                            <Label x:Name="SwingContextLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                        </VerticalStackLayout>
+                        <VerticalStackLayout x:Name="ReadinessSection" IsVisible="False" Spacing="4">
+                            <Label Text="Readiness evidence" FontAttributes="Bold" />
+                            <Label x:Name="ReadinessReasonsLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                        </VerticalStackLayout>
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+                <Button Text="Refresh stock" Style="{StaticResource QuietButton}" Clicked="OnRefreshClicked" />
             </VerticalStackLayout>
-
-            <VerticalStackLayout Spacing="8">
-                <Label Text="Strategy" FontAttributes="Bold" FontSize="18" />
-                <Picker x:Name="StrategyPicker" Title="Select a strategy" SelectedIndexChanged="OnStrategyChanged" />
-                <Label x:Name="StrategyStatusLabel" Text="Select a strategy" LineBreakMode="WordWrap" />
-                <Label x:Name="StrategyTimeLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
-                <Button x:Name="CancelStrategyButton" Text="Cancel strategy checks" IsVisible="False" Clicked="OnCancelStrategyClicked" />
-                <VerticalStackLayout x:Name="StrategyChecks" Spacing="8" />
-                <Button Text="Open candidate review" Clicked="OnCandidateReviewClicked" />
-                <Label Text="Strategy checks do not submit an order. Quotes may be newer than the strategy evaluation."
-                       Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+        </ScrollView>
+        <Border Grid.Row="1" Padding="20,10,20,16" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light={StaticResource SurfacePanelLight}, Dark={StaticResource SurfacePanelDark}}">
+            <VerticalStackLayout Spacing="6">
+                <Label Text="Paper trading · review required" Style="{StaticResource SubHeadline}" />
+                <Button x:Name="ReviewOrderButton" Text="Review buy" IsEnabled="False" Clicked="OnReviewOrderClicked" SemanticProperties.Description="Review a protected paper buy for this stock" />
             </VerticalStackLayout>
-
-            <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}" />
-
-            <VerticalStackLayout Spacing="8">
-                <Label Text="Model Intelligence" FontAttributes="Bold" FontSize="18" />
-                <Label Text="Read-only prediction evidence. It cannot override TradingFlow strategy or risk gates."
-                       Style="{StaticResource SubHeadline}"
-                       LineBreakMode="WordWrap" />
-                <Label Text="Swing horizon" Style="{StaticResource SubHeadline}" />
-                <Label x:Name="ModelStatusLabel"
-                       FontAttributes="Bold" />
-                <Label x:Name="ModelGeneratedLabel" Style="{StaticResource SubHeadline}" />
-                <Label x:Name="ModelIdentityLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
-                <Label x:Name="ModelUnavailableLabel"
-                       IsVisible="False"
-                       TextColor="{AppThemeBinding Light={StaticResource StateWarningLight}, Dark={StaticResource StateWarningDark}}"
-                       LineBreakMode="WordWrap" />
-            </VerticalStackLayout>
-
-            <VerticalStackLayout x:Name="SwingSection" IsVisible="False" Spacing="4">
-                <Label x:Name="SwingSignalLabel" FontAttributes="Bold" />
-                <Label x:Name="SwingProbabilityLabel" />
-                <Label x:Name="SwingContextLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
-            </VerticalStackLayout>
-
-            <VerticalStackLayout x:Name="ReadinessSection" IsVisible="False" Spacing="4">
-                <Label Text="Readiness evidence" FontAttributes="Bold" />
-                <Label x:Name="ReadinessReasonsLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
-            </VerticalStackLayout>
-
-            <Button Text="Refresh evidence"
-                    Clicked="OnRefreshClicked"
-                    SemanticProperties.Description="Refresh symbol quote, TradingFlow decision, and model evidence" />
-            <Button x:Name="ReviewOrderButton"
-                    Text="Review protected buy"
-                    IsEnabled="False"
-                    Clicked="OnReviewOrderClicked"
-                    SemanticProperties.Description="Open a reviewed paper buy ticket for this symbol" />
-        </VerticalStackLayout>
-    </ScrollView>
+        </Border>
+    </Grid>
 </ContentPage>

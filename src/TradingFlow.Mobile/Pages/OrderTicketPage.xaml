@@ -6,9 +6,9 @@
              Title="Buy order"
              Shell.PresentationMode="ModalAnimated"
              Shell.NavBarIsVisible="False">
-    <Grid Padding="12">
+    <Grid Padding="12,0,12,12">
         <Border Padding="16" MaximumWidthRequest="560" MaximumHeightRequest="720"
-                HorizontalOptions="Fill" VerticalOptions="Center"
+                HorizontalOptions="Fill" VerticalOptions="End"
                 Stroke="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}"
                 BackgroundColor="{AppThemeBinding Light={StaticResource SurfacePanelLight}, Dark={StaticResource SurfacePanelDark}}">
             <Border.StrokeShape><RoundRectangle CornerRadius="20" /></Border.StrokeShape>
@@ -18,7 +18,7 @@
                         <Label Text="Protected buy" Style="{StaticResource Headline}" />
                         <Label x:Name="TickerLabel" Text="Paper order" Style="{StaticResource SubHeadline}" />
                     </VerticalStackLayout>
-                    <Button x:Name="CloseButton" Grid.Column="1" Text="Close" Clicked="OnCloseClicked"
+                    <Button x:Name="CloseButton" Grid.Column="1" Text="Close" Style="{StaticResource QuietButton}" Clicked="OnCloseClicked"
                             SemanticProperties.Description="Close buy order and return to the previous screen" />
                 </Grid>
                 <Label x:Name="ErrorLabel" Grid.Row="1" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" LineBreakMode="WordWrap" />
@@ -43,7 +43,7 @@
                                     <Entry x:Name="TargetEntry" Keyboard="Numeric" />
                                 </VerticalStackLayout>
                             </Grid>
-                            <Button x:Name="AdvancedButton" Text="Strategy sizing and options +" Clicked="OnAdvancedClicked" />
+                            <Button x:Name="AdvancedButton" Text="Strategy sizing and options +" Style="{StaticResource QuietButton}" Clicked="OnAdvancedClicked" />
                             <VerticalStackLayout x:Name="AdvancedSection" IsVisible="False" Spacing="8">
                                 <Label Text="Horizon: Swing" Style="{StaticResource SubHeadline}" />
                                 <Label x:Name="PlanNotesLabel" Text="Strategy prices remain empty when completed evidence is unavailable." LineBreakMode="WordWrap" />
@@ -65,7 +65,7 @@
                             <Label x:Name="ReviewSummaryLabel" LineBreakMode="WordWrap" />
                             <Label x:Name="ExpiryLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
                             <Label x:Name="RejectionsLabel" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" LineBreakMode="WordWrap" />
-                            <Button x:Name="EvidenceButton" Text="Review evidence +" Clicked="OnEvidenceClicked" />
+                            <Button x:Name="EvidenceButton" Text="Review evidence +" Style="{StaticResource QuietButton}" Clicked="OnEvidenceClicked" />
                             <VerticalStackLayout x:Name="EvidenceSection" IsVisible="False" Spacing="8">
                                 <Label x:Name="MarketEvidenceLabel" FontFamily="monospace" LineBreakMode="WordWrap" />
                                 <Label x:Name="PolicyLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
