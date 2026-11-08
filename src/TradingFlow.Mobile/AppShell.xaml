@@ -13,7 +13,7 @@
 
     <TabBar>
         <ShellContent
-            Title="Workspace"
+            Title="Desk"
             ContentTemplate="{DataTemplate pages:WorkspacePage}"
             Route="PreparationRoot" />
 
@@ -23,12 +23,17 @@
             Route="TradingRoot" />
 
         <ShellContent
-            Title="Research"
+            Title="Strategies"
             ContentTemplate="{DataTemplate pages:BacktestsPage}"
             Route="ResearchRoot" />
 
         <ShellContent
-            Title="System"
+            Title="News"
+            ContentTemplate="{DataTemplate pages:NewsPage}"
+            Route="NewsRoot" />
+
+        <ShellContent
+            Title="More"
             ContentTemplate="{DataTemplate pages:MorePage}"
             Route="MorePage" />
     </TabBar>

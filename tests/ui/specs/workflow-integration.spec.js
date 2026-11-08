@@ -56,6 +56,7 @@ test("lost override preview replays exact request and confirmation stays pending
  });
  await page.route("**/api/v1/orders/confirm",route=>json(route,{state:"confirmation_pending",rejectionReason:"Awaiting reconciliation"},202));
  await page.goto("/OrderTicket?wishlistId="+universeId+"&ticker=MSFT");
+ await page.getByText("Strategy & protection",{exact:true}).click();
  for(const [name,value] of [["limit","100"],["stop","98"],["target","106"]])await page.locator('[name="'+name+'"]').fill(value);
  await page.getByRole("button",{name:"Review order",exact:true}).click();await expect.poll(()=>requests.length).toBe(1);
  await expect(page.locator("#OrderWorkflowForm")).not.toHaveAttribute("inert");

@@ -1,0 +1,10 @@
+@* Both trading surfaces host the same retained workflow. No ticket request is made until open. *@
+<button class="btn btn-secondary btn-sm order-popup-resume" type="button" id="OrderPopupResume" hidden>Resume ticket</button>
+<dialog id="OrderPopup" class="order-popup" aria-labelledby="OrderPopupTitle">
+    <header class="order-popup-head">
+        <div><span class="eyebrow">Paper order</span><h2 id="OrderPopupTitle">Review order</h2></div>
+        <button type="button" class="btn btn-secondary btn-sm" id="OrderPopupClose" autofocus aria-label="Close order ticket">Close</button>
+    </header>
+    <p id="OrderPopupNotice" class="order-popup-notice" role="status" hidden></p>
+    <iframe id="OrderPopupFrame" title="Order ticket" class="order-popup-frame"></iframe>
+</dialog>

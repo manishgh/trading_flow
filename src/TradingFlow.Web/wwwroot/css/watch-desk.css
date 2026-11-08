@@ -14,7 +14,7 @@
 .watch-grid{grid-template-columns:minmax(0,1fr) 340px;grid-template-rows:auto auto}
 .watch-stocks{grid-column:1;grid-row:1}.watch-table-scroll{max-height:480px;overflow:auto}
 .watch-table th{position:sticky;top:0;background:var(--watch-panel);z-index:1}
-.watch-table td{padding:12px}.watch-table small{font-size:11px}.watch-news{grid-column:2;grid-row:1;padding:18px;max-height:590px;overflow:auto}
+.watch-table td{padding:3px 6px}.watch-table small{font-size:11px}.watch-news{grid-column:2;grid-row:1;padding:18px;max-height:590px;overflow:auto}
 .watch-news-head{align-items:start;flex-wrap:wrap}.watch-news .watch-kicker{display:none}.watch-news article small,.watch-fine{font-size:11px!important}
 .watch-detail{grid-column:1 / -1;grid-row:2;position:static;padding:22px}
 .watch-detail #watch-focus-content{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 28px}
@@ -36,19 +36,15 @@
 .watch-table td.watch-news-cell{white-space:normal;min-width:260px;max-width:420px}
 .watch-table td.watch-news-cell strong{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-weight:500;line-height:1.4}
 .watch-table td.watch-news-cell small{max-width:none;white-space:normal}
-@media(min-width:1151px){.watch-grid{grid-template-columns:minmax(0,1fr) 420px}.watch-news{max-height:860px}}
-/* In-row trade buttons: the buy price is the ask, the sell price the bid; spread and quote age sit under them. */
+@media(min-width:1151px){.watch-grid{grid-template-columns:minmax(0,3fr) minmax(0,2fr)}.watch-news{max-height:860px}}
+/* Compact rows keep the trade prices and quote freshness visible; spread stays in the selected detail. */
 .watch-trade{white-space:nowrap}
 .watch-trade-buttons{display:flex;gap:6px}
-.watch-table .watch-trade-buttons button{font-size:12px;font-weight:600;padding:6px 10px;border:1px solid var(--watch-line);border-radius:4px;background:var(--watch-panel);min-height:32px}
+.watch-table .watch-trade-buttons button{font-size:12px;font-weight:600;padding:6px 10px;border:1px solid var(--watch-line);border-radius:4px;background:var(--watch-panel);min-height:40px}
 .watch-table .watch-trade-buttons .watch-buy{border-color:#1d5fa8;color:#1d5fa8}
 .watch-table .watch-trade-buttons .watch-sell{border-color:#c2410c;color:#c2410c}
 .watch-table .watch-trade-buttons button:disabled{opacity:.45;cursor:not-allowed}
 .watch-table td.watch-trade small{max-width:none}
-/* The reviewed order workflow opens inside the detail panel, sized by the embedded page. */
-.watch-order{border-top:1px solid var(--watch-line);margin-top:18px;padding-top:14px}
-.watch-order-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px}
-.watch-order iframe{width:100%;height:520px;border:0;background:transparent}
 /* With no strategy chosen at the top there is no signal to show, so the column is hidden. */
 .watch-table.watch-no-strategy .watch-signal-col{display:none}
 /* Stock focus: symbol and price on one line, the two trade buttons, then only the blocks that apply. */
@@ -75,3 +71,31 @@
 .watch-view-switch span{font-weight:400;opacity:.8}
 /* On a phone every Desk control is a full 44px touch target. */
 @media(max-width:650px){.watch-desk .btn,.watch-desk button,.watch-desk select,.watch-desk input:not([type=checkbox]),.watch-desk a.btn,.watch-desk .watch-table button,.watch-desk .watch-view-switch button,.watch-desk .watch-table .watch-trade-buttons button{min-height:44px}}
+
+/* One compact line per cell gives daily indicators room while news keeps two fifths of the desktop workspace. */
+.watch-table{min-width:540px}
+.watch-table th{padding:10px}
+.watch-table .watch-symbol-button{min-height:40px;font-size:13px;padding:0}
+.watch-quote-line,.watch-trade-line,.watch-holding-line{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.watch-quote-line,.watch-holding-line{justify-content:flex-end}
+.watch-table .watch-quote-line small,.watch-table .watch-holding-line small,.watch-table .watch-trade-line small{display:inline;margin:0;font-size:10px;max-width:none}
+.watch-table .watch-trade-line small{min-width:56px}
+.watch-table .watch-signal-col small{display:none}
+.watch-table .watch-sma{font-size:12px;font-variant-numeric:tabular-nums}
+.watch-tech{margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(75px,1fr))}
+@media(max-width:650px){.watch-table .watch-symbol-button{min-height:44px}.watch-table td{padding:1px 8px}}
+
+.workspace-app .watch-desk .watch-table{min-width:540px}
+.workspace-app .watch-desk .watch-table th{padding:10px}
+.workspace-app .watch-desk .watch-table td{padding:3px 10px}
+.workspace-app .watch-desk .watch-table .watch-symbol-button,.workspace-app .watch-desk .watch-table .watch-trade-buttons button{min-height:40px}
+@media(min-width:1151px){.workspace-app .watch-desk .watch-grid{grid-template-columns:minmax(0,3fr) minmax(0,2fr)}.workspace-app .watch-desk .watch-news{grid-column:2;grid-row:1 / span 2}.workspace-app .watch-desk .watch-detail{grid-column:1;grid-row:2}}
+@media(max-width:1150px){.workspace-app .watch-desk .watch-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:700px){.workspace-app .watch-desk .watch-table td{padding:1px 8px}.workspace-app .watch-desk .watch-table .watch-symbol-button,.workspace-app .watch-desk .watch-table .watch-trade-buttons button{min-height:44px}}
+
+/* Compact second lines keep the SMA columns within a normal desktop pane, while trade prices remain in labels/detail. */
+.watch-table .watch-quote-line,.watch-table .watch-holding-line{flex-direction:column;align-items:flex-end;gap:0}
+.watch-table .watch-trade-line{gap:5px}
+.watch-table .watch-trade-line small{min-width:0;font-size:9px}
+.workspace-app .watch-desk .watch-table th{padding:10px 6px}
+.workspace-app .watch-desk .watch-table .watch-trade-buttons button{padding:4px 6px}

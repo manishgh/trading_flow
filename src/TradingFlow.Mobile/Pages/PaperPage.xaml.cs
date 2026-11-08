@@ -544,10 +544,18 @@ public partial class PaperPage : ContentPage, IQueryAttributable
         catch (Exception error) { if (IsCurrentOwner(version, token)) await DisplayAlertAsync("Paper", error.Message, "OK"); }
     }
 
+    // Keep account settings available without placing editable limits above every strategy run.
+    private void OnToggleLimits(object? sender, EventArgs e)
+    {
+        TradingLimitsCard.IsVisible = !TradingLimitsCard.IsVisible;
+        LimitsToggle.Text = TradingLimitsCard.IsVisible ? "Account limits −" : "Account limits +";
+    }
+
+    // Disclose optional run inputs while retaining the same draft and existing start command.
     private void OnToggleAdvanced(object? sender, EventArgs e)
     {
         AdvancedPanel.IsVisible = !AdvancedPanel.IsVisible;
-        AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide advanced options" : "Show advanced options";
+        AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Run settings −" : "Run settings +";
     }
 
     private void OnWishlistPicked(object? sender, EventArgs e)

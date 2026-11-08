@@ -205,6 +205,7 @@ test.describe("order ticket breadth", () => {
 
   test("an entry stays a protected limit while an exit offers the wider set", async ({ page }) => {
     await page.goto("/OrderTicket?ticker=AAPL&side=buy");
+    await page.getByText("Strategy & protection",{exact:true}).click();
     // A bracketed entry must not offer market or stop: that would drop the protection.
     await expect(page.locator("[name=orderType] option")).toHaveCount(1);
     await expect(page.locator("[name=stop]")).toBeVisible();

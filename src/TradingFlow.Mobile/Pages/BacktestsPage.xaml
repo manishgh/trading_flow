@@ -2,11 +2,14 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="TradingFlow.Mobile.Pages.BacktestsPage"
-             Title="Backtests">
+             Title="Strategies">
     <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
         <ScrollView>
             <VerticalStackLayout Padding="16" Spacing="14">
-                <Label Text="Backtesting" Style="{StaticResource Headline}" FontSize="24" />
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                    <Button Text="Simulated trading" Style="{StaticResource QuietButton}" Clicked="OnOpenPaperClicked" />
+                    <Button Grid.Column="1" Text="Strategy positions" Style="{StaticResource QuietButton}" Clicked="OnOpenPositionsClicked" />
+                </Grid>
                 <Border Style="{StaticResource CardBorder}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <Label x:Name="StatusLabel" Text="Checking backend..." FontSize="13" VerticalTextAlignment="Center" />
@@ -16,23 +19,24 @@
 
                 <Border Style="{StaticResource CardBorder}">
                     <VerticalStackLayout Spacing="10">
-                        <Label Text="Run Setup" FontAttributes="Bold" FontSize="18" />
-                        <Label Text="Select stocks and strategies, preview their independent groups, then save. Start the saved plan when ready." FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
-                        <Label Text="Stock source" FontAttributes="Bold" FontSize="12" />
-                        <Picker x:Name="StockSourcePicker" Title="My wishlists or Finviz lists" SelectedIndexChanged="OnStockSourcePicked" />
+                        <Label Text="Research plan" FontAttributes="Bold" FontSize="18" />
+                        <Label Text="Compare strategies in a backtest. Saving a plan does not start trading." Style="{StaticResource SubHeadline}" />
+                        <VerticalStackLayout x:Name="StrategyChoices" Spacing="8" />
+                        <Label Text="Stock group" FontAttributes="Bold" FontSize="12" />
+                        <Picker x:Name="StockSourcePicker" Title="Choose a saved stock group" SelectedIndexChanged="OnStockSourcePicked" />
+                        <Label Text="Stocks per group" FontAttributes="Bold" FontSize="12" />
+                        <Entry x:Name="GroupSizeEntry" Keyboard="Numeric" TextChanged="OnFormChanged" />
+                        <Button x:Name="AdvancedToggle" Text="Plan settings +" Style="{StaticResource QuietButton}" Clicked="OnToggleAdvanced" />
+                        <VerticalStackLayout x:Name="AdvancedPanel" Spacing="10" IsVisible="False">
                         <Label Text="Backtest profile" FontAttributes="Bold" FontSize="12" />
                         <Picker x:Name="ConfigPicker" Title="Backtest profile" SelectedIndexChanged="OnBacktestProfileChanged" />
                         <Label Text="Research execution assumptions" FontAttributes="Bold" FontSize="12" />
                         <Picker x:Name="ExecutionReplayPicker" Title="Selected strategy / profile" SelectedIndexChanged="OnFormChanged" />
                         <Label Text="The selected strategy supplies its horizon. Day and swing strategies use separate saved plans; preview freezes the execution assumptions." FontSize="12" />
-                        <Label Text="Strategies" FontAttributes="Bold" FontSize="12" />
-                        <VerticalStackLayout x:Name="StrategyChoices" Spacing="6" />
                         <Label Text="Optional approved decision-context evidence" FontAttributes="Bold" FontSize="12" />
                         <Picker x:Name="EvidencePicker" Title="No evidence selected" SelectedIndexChanged="OnEvidenceChanged" />
                         <Label x:Name="EvidenceChoiceLabel" FontSize="12" LineBreakMode="CharacterWrap" />
 
-                        <Button x:Name="AdvancedToggle" Text="Show advanced parameters" Clicked="OnToggleAdvanced" Padding="12,8" BackgroundColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
-                        <VerticalStackLayout x:Name="AdvancedPanel" Spacing="10" IsVisible="False">
                             <Label Text="Optional test window (UTC). Enter both dates, or leave both blank to use lookback days." FontSize="12" />
                             <Entry x:Name="TestStartEntry" Placeholder="From UTC: YYYY-MM-DDTHH:MMZ" TextChanged="OnFormChanged" />
                             <Entry x:Name="TestEndEntry" Placeholder="To UTC: YYYY-MM-DDTHH:MMZ" TextChanged="OnFormChanged" />
@@ -66,25 +70,27 @@
                                     <Picker x:Name="CachePolicyPicker" Title="Data cache" SelectedIndexChanged="OnFormChanged" />
                                 </VerticalStackLayout>
                             </Grid>
-                        </VerticalStackLayout>
                         <Label Text="Exclude stocks" FontAttributes="Bold" />
                         <Entry x:Name="ExcludedSymbolsEntry" Placeholder="Optional comma-separated stock symbols" TextChanged="OnFormChanged" />
                         <Label Text="Exclusions apply to this plan. The original wishlist or saved Finviz list stays unchanged." FontSize="12" />
-                        <Label Text="Stocks per group" FontAttributes="Bold" />
-                        <Entry x:Name="GroupSizeEntry" Keyboard="Numeric" TextChanged="OnFormChanged" />
                         <Label Text="Or enter your own groups: one line per group as name | starting capital | comma-separated stocks. Leave stocks per group blank for manual groups." FontSize="12" />
                         <Editor x:Name="ManualCohortsEditor" AutoSize="TextChanges" MinimumHeightRequest="70" TextChanged="OnFormChanged" />
+                        </VerticalStackLayout>
                         <Button x:Name="RunButton" Text="Preview groups" Clicked="OnStartBacktest" />
-                        <Button x:Name="SavePlanButton" Text="Save plan" IsEnabled="False" Clicked="OnSaveBacktestPlan" />
+                        <Button x:Name="SavePlanButton" Text="Save plan" Style="{StaticResource QuietButton}" IsEnabled="False" Clicked="OnSaveBacktestPlan" />
                         <Picker x:Name="SavedPlanPicker" Title="Saved plans" SelectedIndexChanged="OnSavedPlanSelected" />
                         <Button x:Name="StartPlanButton" Text="Start saved plan" IsEnabled="False" Clicked="OnStartSavedPlan" />
-                        <Label x:Name="PlanPreviewLabel" FontSize="12" />
+                        <Label x:Name="PlanSummaryLabel" FontSize="13" />
+                        <Button x:Name="PlanDetailsButton" Text="Frozen plan details +" IsVisible="False" Style="{StaticResource QuietButton}" Clicked="OnPlanDetailsClicked" />
+                        <VerticalStackLayout x:Name="PlanDetailsPanel" IsVisible="False">
+                            <Label x:Name="PlanPreviewLabel" FontSize="12" />
+                        </VerticalStackLayout>
                     </VerticalStackLayout>
                 </Border>
 
                 <Grid ColumnDefinitions="*,Auto">
-                    <Label Text="Recent Backtests" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
-                    <Button Grid.Column="1" Text="Refresh" Clicked="OnRefreshClicked" Padding="12,6" />
+                    <Label Text="Research runs" FontAttributes="Bold" FontSize="18" VerticalTextAlignment="Center" />
+                    <Button Grid.Column="1" Text="Refresh" Style="{StaticResource QuietButton}" Clicked="OnRefreshClicked" Padding="12,6" />
                 </Grid>
 
                 <CollectionView x:Name="JobsView" SelectionMode="Single" SelectionChanged="OnJobSelected" HeightRequest="340">

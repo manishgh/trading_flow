@@ -55,6 +55,7 @@ public partial class NewsPage : ContentPage
         SetBusy(false);
         base.OnDisappearing();
     }
+    // Clear private selections and old-session stories before reading the new feed.
     private void SetSession()
     {
         CancelAssessmentRead();
@@ -65,6 +66,7 @@ public partial class NewsPage : ContentPage
         groupsSession = -1; page = 1;
         ProviderStatusLabel.IsVisible = false;
         newsItems.Clear();
+        EmptyTitleLabel.Text = "Loading news"; EmptyDetailLabel.Text = "Waiting for a news response.";
         filters.SetAuthenticated(false); // Remove private selection before changing operator or backend.
         filters.SetAuthenticated(AppServices.Api.CurrentUserName is not null);
         FetchProvidersButton.IsVisible = AppServices.Api.CurrentUserName is not null;
@@ -80,6 +82,7 @@ public partial class NewsPage : ContentPage
         BusyIndicator.IsRunning = BusyIndicator.IsVisible = busy;
         if (!busy) RefreshRoot.IsRefreshing = false;
     }
+    // Render only the current feed and keep unavailable reads distinct from successful empty results.
     private async Task LoadAsync(bool showBusy = true)
     {
         if (!reads.Active || providerBusy) return; // Provider completion reads the latest controls.
@@ -97,6 +100,8 @@ public partial class NewsPage : ContentPage
             var feed = await AppServices.Api.GetFilteredNewsAsync(query, read.Token) ?? throw new InvalidOperationException("No news response returned.");
             if (!reads.IsCurrent(read)) return;
             newsItems.Clear(); foreach (var item in feed.Items) newsItems.Add(item);
+            EmptyTitleLabel.Text = feed.Enabled ? "No matching news" : "News unavailable";
+            EmptyDetailLabel.Text = feed.Enabled ? "Try another ticker or filter." : feed.Message ?? "The feed is unavailable.";
             page = feed.Page;
             long? last = feed.TotalMatching is { } total ? Math.Max(1, (long)Math.Ceiling(total / (double)Math.Max(1, feed.PageSize))) : null;
             PageLabel.Text = last is { } known ? $"Page {page} of {known}" : $"Page {page} | total pages unknown";
@@ -108,13 +113,19 @@ public partial class NewsPage : ContentPage
         catch (Exception exception) {
             if (!reads.IsCurrent(read)) return;
             newsItems.Clear(); PreviousButton.IsEnabled = NextButton.IsEnabled = false;
+            EmptyTitleLabel.Text = "News unavailable"; EmptyDetailLabel.Text = "Refresh to try again or check your backend in More → Settings.";
             StatusLabel.Text = $"News unavailable: {exception.Message}"; StatusLabel.TextColor = ThemePalette.Negative;
         } finally { if (reads.IsCurrent(read)) SetBusy(false); }
     }
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
     private async void OnRefreshClicked(object? sender, EventArgs e) => await LoadAsync();
     private async void OnTickerChanged(object? sender, TextChangedEventArgs e) { page = 1; await LoadAsync(false); }
-    private void OnToggleFilters(object? sender, EventArgs e) => FilterHost.IsVisible = !FilterHost.IsVisible;
+    // Open secondary filters locally; individual edits retain the existing latest-read behavior.
+    private void OnToggleFilters(object? sender, EventArgs e)
+    {
+        FilterHost.IsVisible = !FilterHost.IsVisible;
+        if (sender is Button button) button.Text = FilterHost.IsVisible ? "Filters −" : "Filters +";
+    }
     private async void OnPreviousPage(object? sender, EventArgs e) { page = Math.Max(1, page - 1); await LoadAsync(); }
     private async void OnNextPage(object? sender, EventArgs e) { page++; await LoadAsync(); }
     private async void OnFetchClicked(object? sender, EventArgs e)

@@ -28,13 +28,14 @@ test.describe('unified trading workspace', () => {
         await expect(page.locator('[data-position-symbol="MSFT"] td').nth(4)).toHaveText('+$20.00');
         await expect(page.locator('[data-position-symbol="MSFT"] td').nth(4)).toHaveClass(/value-signed up/);
         await expect(page.locator('[data-position-status]')).toContainText('refreshes every 10 s');
-        await expect(page.locator('.orders-rail')).toContainText('Choose a symbol');
+        await expect(page.locator('#OrderPopup')).toBeHidden();
         await page.locator('#OrdersNewTicker').fill('MSFT');
         await page.getByRole('button', { name: 'Open ticket', exact: true }).click();
-        await expect(page.locator('.orders-rail [data-selected-symbol="MSFT"]')).toBeVisible();
-        await expect(page.locator('[data-order-status]')).toContainText('authorized paper candidate');
-        await expect(page.locator('#OrderWorkflowForm')).toBeHidden();
-        await expect(page.locator('[data-order-candidates]')).toBeVisible();
+        await expect(page.locator('#OrderPopup')).toBeVisible();
+        const ticket=page.frameLocator('#OrderPopupFrame');
+        await expect(ticket.locator('[data-order-status]')).toContainText('authorized paper candidate');
+        await expect(ticket.locator('#OrderWorkflowForm')).toBeHidden();
+        await expect(ticket.locator('[data-order-candidates]')).toBeVisible();
         await expect(page.locator('#TradingPositions')).toBeVisible();
         await expect(page.locator('.orders-journal-head')).toContainText('Orders');
         await page.screenshot({ path: testInfo.outputPath('trading-workspace-1440.png'), fullPage: true });
@@ -196,8 +197,9 @@ test.describe('unified trading workspace', () => {
 });
 
 
-for (const width of [1440, 412]) test('the complete admin ticket is reachable with the mouse wheel at ' + width, async ({page}, testInfo) => {
-    const height = width === 1440 ? 900 : 915;
+// Long advanced options scroll inside the bounded popup, preserving the page position.
+for (const width of [1440, 412]) test('the popup ticket scrolls internally at ' + width, async ({page}, testInfo) => {
+    const height = width === 1440 ? 900 : 700;
     await page.setViewportSize({width, height});
     await signInAsAdmin(page);
     await page.route('**/api/v1/orders/context', route => json(route, {accountId:'scroll-fixture', operatorOverrideAllowed:true}));
@@ -205,27 +207,22 @@ for (const width of [1440, 412]) test('the complete admin ticket is reachable wi
     await page.route('**/api/v1/orders?*', route => json(route, []));
     await page.route('**/api/v1/running-trades?source=all', route => json(route, snapshot([])));
     await page.goto('/Orders?env=paper&ticker=MSFT');
-    await expect(page.locator('#OrderWorkflowForm')).toBeVisible();
-    const review = page.locator('#OrderWorkflowForm button[type="submit"]');
-    // Hit-testing catches ancestor clipping that a visibility assertion or locator auto-scroll can conceal.
-    const isReachable = () => review.evaluate(button => {
-        const rect = button.getBoundingClientRect();
-        const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
-        const hit = document.elementFromPoint(x, y);
-        return rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth && (hit === button || button.contains(hit));
-    });
-    expect(await isReachable()).toBe(false);
-    const rail = await page.locator('.orders-rail').boundingBox();
-    await page.mouse.move(rail.x + rail.width / 2, Math.max(80, Math.min(height - 80, rail.y + 60)));
-    let reachable = false;
-    for (let attempt = 0; attempt < 12 && !reachable; attempt++) {
-        await page.mouse.wheel(0, 400);
-        await page.waitForTimeout(80); // Let the real wheel scroll settle without invoking locator scrolling.
-        reachable = await isReachable();
-    }
-    expect(reachable).toBe(true);
-    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-    await expect(page.locator('.orders-rail')).toHaveCSS('max-height','none');
-    await page.screenshot({path:testInfo.outputPath('trading-ticket-wheel-' + width + '.png')});
-    await page.screenshot({path:testInfo.outputPath('trading-ticket-full-' + width + '.png'),fullPage:true});
+    const ticket=page.frameLocator('#OrderPopupFrame');
+    await expect(ticket.locator('#OrderWorkflowForm')).toBeVisible();
+    await ticket.getByText('Strategy & protection',{exact:true}).click();
+    await ticket.getByText('More order options',{exact:true}).click();
+    const review=ticket.getByRole('button',{name:'Review order',exact:true});
+    const before=await page.evaluate(()=>window.scrollY);
+    const bounds=await page.locator('#OrderPopup').boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);expect(bounds.x+bounds.width).toBeLessThanOrEqual(width);
+    expect(bounds.y).toBeGreaterThanOrEqual(0);expect(bounds.y+bounds.height).toBeLessThanOrEqual(height);
+    expect(await ticket.locator('body').evaluate(()=>document.documentElement.scrollHeight>innerHeight)).toBe(true);
+    const frame=await page.locator('#OrderPopupFrame').boundingBox();
+    await page.mouse.move(frame.x+frame.width/2,frame.y+60);
+    await page.mouse.wheel(0,1000);
+    await expect.poll(()=>review.evaluate(button=>{const r=button.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;})).toBe(true);
+    expect(await page.evaluate(()=>window.scrollY)).toBe(before);
+    await expect(page.locator('#OrderPopupClose')).toBeInViewport();
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
+    await page.screenshot({path:testInfo.outputPath('trading-popup-'+width+'.png')});
 });

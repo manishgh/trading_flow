@@ -1,3 +1,4 @@
+// Reconcile the journal in place while ticket links target the retained order popup.
 (() => {
     const summary = document.querySelector("[data-orders-page]");
     const body = document.querySelector(".orders-body");
@@ -44,7 +45,7 @@
         status.classList.toggle("muted", state !== "stale");
     }
 
-    /* The same page with the rail ticket opened on a symbol. Filter, sort and
+    /* A GET fallback for the shared popup on a symbol. Filter, sort and
        environment ride along; a replace adds the side and limit to prefill. */
     function ticketUrl(symbol, side, limitPrice, quantity) {
         const url = new URL(window.location.href);
@@ -69,6 +70,7 @@
         input.value = value ?? "";
     }
 
+    // Keep cancellation controls stable and mark independent ticket links for the shared popup.
     function updateActions(cell, item) {
         if (!cancelTemplate || !isWorking(item.state) || item.state === "CancelPending" || !item.brokerOrderId) {
             cell.replaceChildren();
@@ -95,8 +97,10 @@
         if(item.canReviewReplacement) { const button = append(cell, 'button', 'Replace', 'btn btn-secondary btn-sm'); button.type = 'button'; button.dataset.replacementOrder = item.clientOrderId; }
 
         const replace = append(cell, "a", "New ticket", "btn btn-secondary btn-sm");
+        replace.dataset.orderNewTicket = '';
+        replace.setAttribute('aria-haspopup', 'dialog');
         replace.href = ticketUrl(item.symbol, item.side || "buy", item.limitPrice, item.requestedQuantity);
-        replace.title = "A new ticket does not cancel the existing order; it opens a reviewed ticket beside the journal; it does not amend this order in place.";
+        replace.title = "A new ticket does not cancel the existing order; it opens a reviewed ticket in a popup; it does not amend this order in place.";
     }
 
     function updateRow(row, item) {

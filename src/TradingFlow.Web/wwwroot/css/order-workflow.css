@@ -1,10 +1,31 @@
-#OrderWorkflowForm {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px}
-#OrderWorkflowForm label {display:flex;flex-direction:column;gap:6px;min-width:0;font-size:13px;font-weight:600}
-#OrderWorkflowForm .input {width:100%;min-width:0;min-height:44px;font-size:16px}
-#OrderWorkflowForm input[type=checkbox] {width:22px;min-height:22px;align-self:flex-start}
-#OrderWorkflowForm span {font-size:12px;font-weight:400;line-height:1.4}
-#OrderWorkflowForm button,[data-order-review] button {min-height:44px}
-[data-order-review] {margin:16px 0}
-[data-order-summary] {white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6}
-[data-order-status],[data-order-help] {font-size:13px;line-height:1.5;overflow-wrap:anywhere}
-#OrderWorkflowForm[hidden],[data-order-review][hidden] {display:none!important}
+/* A native modal keeps its close control visible while the ticket scrolls internally. */
+.order-popup { width:min(520px,calc(100vw - 24px)); max-width:none; max-height:calc(100dvh - 24px); padding:0; border:1px solid var(--color-border,#cdd5d1); border-radius:14px; color:var(--color-text,#172c24); background:var(--color-surface,#fff); box-shadow:0 24px 80px #0004; }
+.order-popup[open] { display:flex; flex-direction:column; }
+.order-popup::backdrop { background:#10271f88; }
+.order-popup-head { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:16px 20px; border-bottom:1px solid var(--color-border,#dce2df); }
+.order-popup-head h2 { margin:4px 0 0; font-size:21px; }
+.order-popup-head .eyebrow { font-size:10px; }
+.order-popup-frame { width:100%; height:min(540px,calc(100dvh - 132px)); min-height:120px; border:0; background:transparent; }
+.order-popup-notice { margin:0; padding:10px 20px; font-size:13px; line-height:1.5; }
+.order-popup-resume { margin:0 24px 16px; }
+.order-popup-open { overflow:hidden; }
+.order-embedded { padding:16px 20px 20px; }
+#OrderWorkflowForm { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; }
+.order-primary-fields,.order-option-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+#OrderWorkflowForm label { display:flex; flex-direction:column; gap:6px; min-width:0; font-size:12px; font-weight:600; }
+#OrderWorkflowForm .input { width:100%; min-width:0; min-height:44px; font-size:16px; }
+#OrderWorkflowForm input[readonly] { background:transparent; }
+#OrderWorkflowForm input[type=checkbox] { width:22px; min-height:22px; align-self:flex-start; }
+#OrderWorkflowForm span { font-size:12px; font-weight:400; line-height:1.4; }
+#OrderWorkflowForm button,html.embedded [data-order-review] button,#OrderPopup button { min-height:44px; }
+.order-options { border-top:1px solid var(--color-border,#dce2df); padding-top:12px; }
+.order-options summary { cursor:pointer; font-size:13px; font-weight:600; padding:2px 0; }
+.order-options[open] summary { margin-bottom:12px; }
+.order-option-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+[data-order-review] { margin:12px 0; }
+[data-order-review] h2 { font-size:18px; }
+[data-order-summary],[data-order-technical-summary] { white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.6; font-family:inherit; }
+[data-order-status],[data-order-help],[data-order-candidates] { font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
+[data-order-status] { margin:0 0 14px; }
+#OrderWorkflowForm[hidden],[data-order-review][hidden],[data-entry-only][hidden],[data-exit-trigger][hidden] { display:none!important; }
+@media (max-width:480px) { .order-popup-head { padding:12px 16px; } .order-embedded { padding:14px 16px; } .order-popup-head h2 { font-size:19px; } }

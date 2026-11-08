@@ -17,15 +17,28 @@ public sealed class OrdersPage : ContentPage
     private readonly IDispatcherTimer timer;
     private bool busy, previousOutcomesRequireReconciliation;
     private long sessionVersion = -1;
+    private readonly VerticalStackLayout positionRows = new() { Spacing = 10 };
+    private readonly VerticalStackLayout orderRows = new() { Spacing = 10, IsVisible = false };
+    private readonly Button positionsTab = new() { Text = "Positions" };
+    private readonly Button ordersTab = new() { Text = "Orders" };
 
+    // Keep account status and the local view switch fixed above independently scrollable holdings or orders.
     public OrdersPage()
     {
-        Title = "Trading"; Content = new ScrollView { Content = rows }; rows.Add(status);
-        var sources = new ToolbarItem { Text = "Watch / sources" };
-        sources.Clicked += async (_, _) => await Shell.Current.GoToAsync(nameof(WishlistsPage));
-        var runs = new ToolbarItem { Text = "Strategy positions" };
-        runs.Clicked += async (_, _) => await Shell.Current.GoToAsync(nameof(RunningTradesPage));
-        ToolbarItems.Add(sources); ToolbarItems.Add(runs);
+        Title = "Trading";
+        var tabs = new Grid { ColumnDefinitions = new ColumnDefinitionCollection {
+            new() { Width = GridLength.Star }, new() { Width = GridLength.Star } }, ColumnSpacing = 8 };
+        tabs.Add(positionsTab); tabs.Add(ordersTab, 1);
+        positionsTab.Clicked += (_, _) => SelectSection(false);
+        ordersTab.Clicked += (_, _) => SelectSection(true);
+        var header = new VerticalStackLayout { Padding = new Thickness(16, 12), Spacing = 10, Children = { status, tabs } };
+        var layout = new Grid { RowDefinitions = new RowDefinitionCollection {
+            new() { Height = GridLength.Auto }, new() { Height = GridLength.Star } } };
+        layout.Add(header); layout.Add(new ScrollView { Content = rows }, 0, 1); Content = layout;
+        var refresh = new ToolbarItem { Text = "Refresh" };
+        refresh.Clicked += async (_, _) => await RunAsync(RefreshAsync);
+        ToolbarItems.Add(refresh);
+        SelectSection(false);
         timer = Dispatcher.CreateTimer(); timer.Interval = TimeSpan.FromSeconds(6);
         timer.Tick += async (_, _) => await RunAsync(RefreshAsync);
     }
@@ -43,13 +56,15 @@ public sealed class OrdersPage : ContentPage
     private void SessionChanged(object? sender, EventArgs e) => MainThread.BeginInvokeOnMainThread(async () => {
         if (!reads.Active) return; ChangeSession(); await RunAsync(RefreshAsync);
     });
+    // Remove all old-account display rows while retaining the existing warning about earlier issued commands.
     private void ChangeSession()
     {
         reads.Cancel();
         previousOutcomesRequireReconciliation |= cancellations.Count != 0 || closes.Count != 0;
         cancellations.Clear(); cancellationOutcomes.Clear(); closes.Clear(); closeOutcomes.Clear();
         sessionVersion = AppServices.Api.SessionVersion;
-        rows.Clear(); rows.Add(status);
+        rows.Clear(); positionRows.Clear(); orderRows.Clear();
+        positionsTab.Text = "Positions"; ordersTab.Text = "Orders";
         status.Text = "Connection changed. Sign in to read the current account.";
         if (previousOutcomesRequireReconciliation) rows.Add(Text("Earlier commands may have reached the previous account. Reconcile their journal before issuing another exit or cancellation. They are not replayed in this session."));
     }
@@ -57,6 +72,7 @@ public sealed class OrdersPage : ContentPage
     {
         if (!reads.IsCurrent(read)) throw new OperationCanceledException(read.Token);
     }
+    // Serialize the existing account commands and preserve recovery controls after a failed read.
     private async Task RunAsync(Func<LatestMarketRead.Read, Task> action)
     {
         if (busy || !reads.Active) return;
@@ -65,8 +81,10 @@ public sealed class OrdersPage : ContentPage
         catch (OperationCanceledException) when (read.Token.IsCancellationRequested || !reads.IsCurrent(read)) { }
         catch (Exception exception) {
             if (reads.IsCurrent(read)) {
+                positionsTab.Text = "Positions"; ordersTab.Text = "Orders";
+                positionRows.Clear(); orderRows.Clear();
                 status.Text = exception.Message + (cancellations.Count + closes.Count > 0 ? " Issued commands remain unchanged; check or retry the same command." : "");
-                rows.Clear(); rows.Add(status); AddRecoveryControls(); rows.Add(Action("Refresh current account", RefreshAsync));
+                rows.Clear(); AddRecoveryControls(); rows.Add(Action("Refresh current account", RefreshAsync));
             }
         } finally {
             busy = false;
@@ -74,9 +92,10 @@ public sealed class OrdersPage : ContentPage
             else if (reads.Active) Dispatcher.Dispatch(async () => await RunAsync(RefreshAsync));
         }
     }
+    // Route command actions through the existing serialized read and session guard.
     private Button Action(string text, Func<LatestMarketRead.Read, Task> action)
     {
-        var button = new Button { Text = text, MinimumHeightRequest = 44 };
+        var button = new Button { Text = text, MinimumHeightRequest = 44, Style = (Style)Application.Current!.Resources["QuietButton"] };
         button.Clicked += async (_, _) => await RunAsync(action); return button;
     }
     private static Label Text(string value) => new() { Text = value, LineBreakMode = LineBreakMode.WordWrap };
@@ -96,6 +115,7 @@ public sealed class OrdersPage : ContentPage
             if (NativeExitReview.CanEndUndispatched(outcome)) rows.Add(Action("End known undispatched exit review", read => { RequireCurrent(read); closes.Remove(symbol); closeOutcomes.Remove(symbol); return RefreshAsync(read); }));
         }
     }
+    // Read the same bound account and journal once, reconcile retained commands, then render compact local sections.
     private async Task RefreshAsync(LatestMarketRead.Read read)
     {
         var account = await AppServices.Api.Workflow.PortfolioAsync(read.Token);
@@ -105,30 +125,101 @@ public sealed class OrdersPage : ContentPage
             if (journal.Any(x => x.OrderIntentId == id && NativeExitReview.IsTerminal(x.State))) { cancellations.Remove(id); cancellationOutcomes.Remove(id); }
         foreach (var (symbol, outcome) in closeOutcomes.ToArray())
             if (!String.IsNullOrWhiteSpace(outcome.ClientOrderId) && journal.Any(x => x.ClientOrderId == outcome.ClientOrderId && NativeExitReview.IsTerminal(x.State))) { closes.Remove(symbol); closeOutcomes.Remove(symbol); }
-        rows.Clear(); rows.Add(status);
+        rows.Clear();
         var fresh = account.Available && DateTimeOffset.UtcNow - account.ReadAtUtc is { TotalSeconds: >= 0 and < 30 };
-        status.Text = (fresh ? "Paper account" : "Holdings unavailable or stale") + " · " + account.Detail + "\nRead " + account.ReadAtUtc.ToString("O");
+        status.Text = fresh ? "Paper account · holdings current" : "Paper account · holdings unavailable or stale";
+        positionsTab.Text = "Positions" + (account.Available ? $" ({account.Positions.Count})" : "");
+        ordersTab.Text = $"Orders ({journal.Length})";
         AddRecoveryControls();
-        rows.Add(Action("Review an authorized paper candidate", _ => Shell.Current.GoToAsync(nameof(CandidatesPage))));
-        rows.Add(Action("Refresh positions and orders", RefreshAsync)); rows.Add(Text("Account positions"));
-        if (!account.Available) rows.Add(Text("Position evidence is unavailable; this does not mean no positions."));
-        else if (account.Positions.Count == 0) rows.Add(Text("No open positions in the bound paper account."));
-        foreach (var position in account.Positions) {
-            rows.Add(Text($"{position.Symbol} · {position.Quantity:0.####} shares\nAverage {position.AverageEntry:C2} · cost {position.CostBasis:C2} · value {position.MarketValue:C2}\nUnrealized P/L {position.UnrealizedPl:C2}"));
-            if (position.Quantity > 0m && position.Quantity != Decimal.Truncate(position.Quantity)) rows.Add(Text("This position contains fractional shares. A reviewed exit may sell an explicitly entered whole-share portion; fractional shares remain. No quantity is rounded."));
-            if (closes.ContainsKey(position.Symbol)) rows.Add(Text("An issued exit is retained above. Resolve it before reviewing another exit for this symbol."));
-            else if (fresh && position.Quantity >= 1m) rows.Add(Action("Review exit", current => CloseAsync(position, current)));
-        }
-        rows.Add(Text("Recent orders · most recent 200"));
-        if (journal.Length == 0) rows.Add(Text("No journaled orders for the bound account."));
-        foreach (var order in journal) {
-            rows.Add(Text($"{order.Symbol} · {order.Side} {order.Quantity:0.####} · {order.State}\n{order.OrderType}/{order.TimeInForce} · limit {order.LimitPrice:C2} · filled {order.FilledQuantity:0.####}\nUpdated {order.UpdatedAtUtc:O}"));
-            if (order.CandidateId is { } candidateId) rows.Add(Action("Candidate audit and news", _ => Shell.Current.GoToAsync(nameof(CandidatesPage) + "?runId=" + order.RunId + "&candidateId=" + candidateId)));
-            if (order.OrderIntentId is { } id && order.AccountId is not null && order.BrokerOrderId is not null &&
-                order.State.ToUpperInvariant() is "INTENT" or "SUBMITTED" or "ACKED" or "PARTIALLYFILLED" or "PARTIALLY_FILLED" && !cancellations.ContainsKey(id))
-                rows.Add(Action("Review cancellation", current => CancelAsync(order, current)));
+        rows.Add(ActionBar(
+            Action("Review candidate", _ => Shell.Current.GoToAsync(nameof(CandidatesPage))),
+            Action("Account details", current => { RequireCurrent(current); return DisplayAlertAsync("Account evidence", account.Detail + "\nRead UTC " + account.ReadAtUtc.ToString("O"), "Close"); })));
+        RenderPositions(account, fresh);
+        RenderOrders(journal);
+        rows.Add(positionRows); rows.Add(orderRows);
+    }
+
+    // Switch already-rendered sections without fetching or changing any order command.
+    private void SelectSection(bool orders)
+    {
+        positionRows.IsVisible = !orders; orderRows.IsVisible = orders;
+        positionsTab.Style = (Style)Application.Current!.Resources[orders ? "QuietButton" : "ActionButton"];
+        ordersTab.Style = (Style)Application.Current.Resources[orders ? "ActionButton" : "QuietButton"];
+    }
+
+    // Show position values and reviewed exits; cost and account evidence remain available in Details.
+    private void RenderPositions(PortfolioResponse account, bool fresh)
+    {
+        positionRows.Clear();
+        if (!account.Available) positionRows.Add(Text("Holdings could not be read. This does not mean the account is empty."));
+        else if (account.Positions.Count == 0) positionRows.Add(Text("No open positions in this paper account."));
+        foreach (var position in account.Positions)
+        {
+            var card = Card($"{position.Symbol} · {position.Quantity:0.####} shares",
+                $"Value {Money(position.MarketValue)} · Open P/L {Money(position.UnrealizedPl)}", out var body);
+            var actions = new List<Button> { Action("Details", current => {
+                RequireCurrent(current);
+                return DisplayAlertAsync(position.Symbol + " holding",
+                    $"Quantity {position.Quantity:0.####}\nAverage entry {Money(position.AverageEntry)}\nCost {Money(position.CostBasis)}\nMarket value {Money(position.MarketValue)}\nUnrealized P/L {Money(position.UnrealizedPl)}", "Close");
+            }) };
+            if (position.Quantity > 0m && position.Quantity != Decimal.Truncate(position.Quantity))
+                body.Add(Text("Fractional shares remain when exiting a whole-share portion. No quantity is rounded."));
+            if (closes.ContainsKey(position.Symbol)) body.Add(Text("Resolve the issued exit above before reviewing another exit."));
+            else if (fresh && position.Quantity >= 1m) actions.Add(Action("Review exit", current => CloseAsync(position, current)));
+            body.Add(ActionBar(actions.ToArray()));
+            positionRows.Add(card);
         }
     }
+
+    // Keep order state and quantity visible while opening technical evidence only when requested.
+    private void RenderOrders(OrderJournalEntry[] journal)
+    {
+        orderRows.Clear();
+        orderRows.Add(Text("Most recent 200 journal entries"));
+        if (journal.Length == 0) orderRows.Add(Text("No journaled orders for this account."));
+        foreach (var order in journal)
+        {
+            var card = Card($"{order.Symbol} · {order.Side} {order.Quantity:0.####}",
+                $"{order.State} · filled {order.FilledQuantity?.ToString("0.####") ?? "unknown"}", out var body);
+            var actions = new List<Button> { Action("Details", current => {
+                RequireCurrent(current);
+                return DisplayAlertAsync(order.Symbol + " order",
+                    $"{order.OrderType} / {order.TimeInForce}\nLimit {Money(order.LimitPrice)}\nFilled {order.FilledQuantity?.ToString("0.####") ?? "unknown"} at {Money(order.FillPrice)}\nUpdated UTC {order.UpdatedAtUtc:O}\nClient order {order.ClientOrderId}\nBroker order {order.BrokerOrderId ?? "unavailable"}", "Close");
+            }) };
+            if (order.CandidateId is { } candidateId)
+                actions.Add(Action("Evidence", _ => Shell.Current.GoToAsync(nameof(CandidatesPage) + "?runId=" + order.RunId + "&candidateId=" + candidateId)));
+            if (order.OrderIntentId is { } id && order.AccountId is not null && order.BrokerOrderId is not null &&
+                order.State.ToUpperInvariant() is "INTENT" or "SUBMITTED" or "ACKED" or "PARTIALLYFILLED" or "PARTIALLY_FILLED" && !cancellations.ContainsKey(id))
+                actions.Add(Action("Cancel…", current => CancelAsync(order, current)));
+            body.Add(ActionBar(actions.ToArray()));
+            orderRows.Add(card);
+        }
+    }
+
+    // Keep short card actions on one touch-friendly row rather than stacking full-width buttons.
+    private static Grid ActionBar(params Button[] actions)
+    {
+        var row = new Grid { ColumnSpacing = 8 };
+        foreach (var action in actions)
+        {
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Star });
+            row.Add(action, row.ColumnDefinitions.Count - 1);
+        }
+        return row;
+    }
+
+    // Reuse the native card style for short summaries and their guarded actions.
+    private static Border Card(string title, string summary, out VerticalStackLayout body)
+    {
+        body = new VerticalStackLayout { Spacing = 8 };
+        body.Add(new Label { Text = title, FontSize = 16, FontAttributes = FontAttributes.Bold });
+        body.Add(Text(summary));
+        return new Border { Style = (Style)Application.Current!.Resources["CardBorder"], Content = body };
+    }
+
+    // Missing valuation inputs are shown explicitly rather than formatted as zero or an empty amount.
+    private static string Money(decimal? value) => value?.ToString("C2", CultureInfo.CurrentCulture) ?? "unavailable";
+
     private async Task CancelAsync(OrderJournalEntry order, LatestMarketRead.Read read)
     {
         var id = order.OrderIntentId!.Value;

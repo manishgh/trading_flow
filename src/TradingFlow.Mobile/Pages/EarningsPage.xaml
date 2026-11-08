@@ -14,8 +14,7 @@
                 <VerticalStackLayout Padding="0,12,0,10" Spacing="10">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                         <VerticalStackLayout Spacing="2">
-                            <Label Text="Earnings" Style="{StaticResource Headline}" />
-                            <Label Text="Reporting calendar | New York dates, device local event times"
+                            <Label Text="Reporting calendar · New York dates"
                                    Style="{StaticResource SubHeadline}" />
                         </VerticalStackLayout>
                         <controls:EnvironmentBadgeView Grid.Column="1" />
@@ -54,7 +53,7 @@
                                     ItemDisplayBinding="{Binding Label}" />
                         </VerticalStackLayout>
                     </Grid>
-                    <Button Text="Show / hide advanced filters" Clicked="OnToggleFilters" />
+                    <Button Text="Filters +" Style="{StaticResource QuietButton}" HorizontalOptions="Start" Clicked="OnToggleFilters" />
                     <Label x:Name="ProviderStatusLabel" IsVisible="False" FontSize="13" LineBreakMode="WordWrap" />
                     <VerticalStackLayout x:Name="FilterHost" IsVisible="False" Spacing="6">
                         <HorizontalStackLayout Spacing="8">
@@ -84,11 +83,11 @@
 
             <CollectionView.EmptyView>
                 <VerticalStackLayout Padding="12,28" Spacing="6">
-                    <Label Text="No earnings scheduled"
+                    <Label x:Name="EmptyTitleLabel" Text="Loading earnings"
                            FontAttributes="Bold"
                            FontSize="16"
                            HorizontalTextAlignment="Center" />
-                    <Label Text="No companies report in the monitored window."
+                    <Label x:Name="EmptyDetailLabel" Text="Waiting for a calendar response."
                            FontSize="13"
                            TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                            HorizontalTextAlignment="Center" />

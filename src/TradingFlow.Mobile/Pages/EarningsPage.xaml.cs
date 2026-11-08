@@ -53,9 +53,11 @@ public partial class EarningsPage : ContentPage
     {
         refreshTimer.Stop(); AppServices.Api.SessionChanged -= OnSessionChanged; reads.Deactivate(); SetBusy(false); base.OnDisappearing();
     }
+    // Clear old-session records and show a loading message until the new calendar responds.
     private void SetSession()
     {
         groupsSession = -1; groups.Clear(); filters.SetAuthenticated(false);
+        EmptyTitleLabel.Text = "Loading earnings"; EmptyDetailLabel.Text = "Waiting for a calendar response.";
         ProviderStatusLabel.IsVisible = false;
         filters.SetAuthenticated(AppServices.Api.CurrentUserName is not null);
         RefreshProvidersButton.IsVisible = AppServices.Api.CurrentUserName is not null;
@@ -64,6 +66,7 @@ public partial class EarningsPage : ContentPage
         if (!reads.Active) return; reads.Cancel(); SetSession(); await LoadAsync();
     });
     private void SetBusy(bool busy) { BusyIndicator.IsRunning = BusyIndicator.IsVisible = busy; if (!busy) RefreshRoot.IsRefreshing = false; }
+    // Apply only the current calendar response and distinguish empty results from an unavailable read.
     private async Task LoadAsync(bool showBusy = true)
     {
         if (!reads.Active || providerBusy || settingDates) return;
@@ -84,6 +87,7 @@ public partial class EarningsPage : ContentPage
             var response = await AppServices.Api.GetFilteredEarningsAsync(query, from, to, read.Token) ?? throw new InvalidOperationException("No earnings response returned.");
             if (!reads.IsCurrent(read)) return;
             groups.Clear();
+            EmptyTitleLabel.Text = "No matching earnings"; EmptyDetailLabel.Text = "The calendar returned no events for these filters.";
             if (calendar) {
                 var dated = response.Items.GroupBy(x => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(x.ScheduledAtUtc, MarketZone).DateTime)).ToDictionary(x => x.Key, x => x.AsEnumerable());
                 var requested = Enumerable.Range(0, to!.Value.DayNumber - from!.Value.DayNumber + 1).Select(offset => from.Value.AddDays(offset));
@@ -96,7 +100,7 @@ public partial class EarningsPage : ContentPage
             StatusLabel.Text = $"{response.Items.Count} displayed / {response.TotalMatching?.ToString() ?? "unknown"} matching{(response.Truncated ? " | capped at 2,000" : "")} | {(response.MonitoringActive ? $"monitoring every {response.MonitoringIntervalSeconds}s" : "monitor offline")} | updated {response.GeneratedAtUtc.LocalDateTime:HH:mm:ss}";
             StatusLabel.TextColor = ThemePalette.Positive;
         } catch (OperationCanceledException) when (read.Token.IsCancellationRequested || !reads.IsCurrent(read)) { }
-        catch (Exception exception) { if (reads.IsCurrent(read)) { groups.Clear(); StatusLabel.Text = $"Earnings unavailable: {exception.Message}"; StatusLabel.TextColor = ThemePalette.Negative; } }
+        catch (Exception exception) { if (reads.IsCurrent(read)) { groups.Clear(); EmptyTitleLabel.Text = "Earnings unavailable"; EmptyDetailLabel.Text = "Refresh to try again or check your backend in More → Settings."; StatusLabel.Text = $"Earnings unavailable: {exception.Message}"; StatusLabel.TextColor = ThemePalette.Negative; } }
         finally { if (reads.IsCurrent(read)) SetBusy(false); }
     }
     // Days whose reported section the user opened; kept across reloads so a refresh does not close it.
@@ -126,7 +130,12 @@ public partial class EarningsPage : ContentPage
     }
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
     private async void OnFilterChanged(object? sender, EventArgs e) => await LoadAsync(false);
-    private void OnToggleFilters(object? sender, EventArgs e) => FilterHost.IsVisible = !FilterHost.IsVisible;
+    // Disclose secondary filters locally without issuing an additional request.
+    private void OnToggleFilters(object? sender, EventArgs e)
+    {
+        FilterHost.IsVisible = !FilterHost.IsVisible;
+        if (sender is Button button) button.Text = FilterHost.IsVisible ? "Filters −" : "Filters +";
+    }
     private async void OnCalendarChanged(object? sender, ToggledEventArgs e) => await LoadAsync(false);
     private async void OnDateChanged(object? sender, DateChangedEventArgs e) => await LoadAsync(false);
     private async void OnThisWeek(object? sender, EventArgs e)
