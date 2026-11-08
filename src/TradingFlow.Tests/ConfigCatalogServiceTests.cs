@@ -1,4 +1,4 @@
-﻿using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Web.Services;
@@ -110,6 +110,28 @@ public sealed class ConfigCatalogServiceTests
         }
     }
 
+    [Fact]
+    public async Task CandidateStrategyResolver_RequiresExactCatalogIdentityAndModeAuthorization()
+    {
+        var root = TestRepository.FindRoot();
+        var reader = new SimpleYamlReader();
+        var catalog = new ConfigCatalogService(new ProjectPaths(root), reader,
+            CreateStrategyCatalog(root, reader), CreateExperimentStore(root, reader), new StrategyAuthorizationTestRegistry());
+        var resolver = new StrategyIdentityResolver(catalog);
+        var strategies = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest);
+        Assert.NotEmpty(strategies);
+        foreach (var option in strategies)
+        {
+            var identity = new TradingFlow.Contracts.V1.StrategyReference(
+                option.Identity.StrategyId, option.Identity.SemanticVersion, option.Identity.ContentSha256);
+            await resolver.RequireSwingStrategyAsync(identity, "backtest");
+            await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.RequireSwingStrategyAsync(identity with { ContentSha256 = new string('0', 64) }, "backtest"));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.RequireSwingStrategyAsync(identity with { SemanticVersion = "unregistered" }, "backtest"));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.RequireSwingStrategyAsync(identity, "paper_experiment"));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.RequireSwingStrategyAsync(identity, "paper_shadow"));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.RequireSwingStrategyAsync(identity, "live"));
+        }
+    }
     private static StrategyArtifactCatalog CreateStrategyCatalog(string root, SimpleYamlReader reader) =>
         new(root, Path.Combine(root, "configs", "strategy-catalog.json"), reader);
 
@@ -123,5 +145,3 @@ public sealed class ConfigCatalogServiceTests
             TradingFlow.Engine.Storage.AtomicFileArtifactWriter.Instance);
     }
 }
-
-

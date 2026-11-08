@@ -12,7 +12,9 @@ public sealed record StartBacktestRequest(
     decimal MaxPositionNotionalPct,
     int MaxConcurrentPositions,
     string CachePolicy,
-    string RetentionPolicy);
+    string RetentionPolicy,
+    string IdempotencyKey,
+    string? ConfigurationKey = null);
 
 public sealed record StartPaperRunRequest(
     string ContractVersion,
@@ -23,7 +25,10 @@ public sealed record StartPaperRunRequest(
     bool AllowExtendedHoursTrading,
     string EntryOrderType,
     string TimeInForce,
-    string ExecutionPolicy);
+    string ExecutionPolicy,
+    string IdempotencyKey,
+    string Mode,
+    string? ConfigurationKey = null);
 
 public sealed record CancelJobRequest(string ContractVersion, string Reason);
 
@@ -33,7 +38,7 @@ public sealed record RunJobResponse(
     string JobKind,
     string RunName,
     string Status,
-    RunProvenance Provenance,
+    RunProvenance? Provenance,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? StartedAtUtc,
     DateTimeOffset? FinishedAtUtc,
@@ -58,3 +63,10 @@ public sealed record JobProgressResponse(
     int CompletedWorkItemCount,
     int TotalWorkItemCount,
     DateTimeOffset UpdatedAtUtc);
+
+public sealed record RunJobDetailsResponse(RunJobResponse Job, IReadOnlyList<string> Events, RunResultSummary? Result,
+    IReadOnlyList<RunStrategyProgress> Strategies);
+public sealed record RunResultSummary(decimal? StartingCapital, decimal? EndingCapital, decimal? NetProfit,
+    decimal? TotalReturnPct, decimal? AverageDailyReturnPct, decimal? MaxDrawdownPct, int? AcceptedTradeCount, int? CandidateTradeCount);
+public sealed record RunStrategyProgress(string StrategyName, string Status, int CompletedTickerCount,
+    int TotalTickerCount, string? CurrentTicker, IReadOnlyList<string> RecentEvents);

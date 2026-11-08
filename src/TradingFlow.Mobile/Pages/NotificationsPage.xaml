@@ -105,6 +105,7 @@
                                    FontSize="12"
                                    TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
                                    LineBreakMode="WordWrap" />
+                            <Button Text="Open candidate and audit" IsVisible="{Binding HasCandidate}" Clicked="OnOpenCandidate" CommandParameter="{Binding .}" />
                             <Button Text="Open News"
                                     IsVisible="{Binding HasNewsLink}"
                                     Clicked="OnOpenNews"

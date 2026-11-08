@@ -77,6 +77,9 @@ Environment.SetEnvironmentVariable(
 // failure mode of forgetting an attribute is a locked screen, not an open one.
 // Earnings stays anonymous because it is an advisory monitor that cannot route
 // an order, which is stated on the screen itself.
+builder.Services.AddApiMutationSecurity();
+builder.Services.AddSingleton<TradingFlow.Application.Jobs.IWorkflowRunConfiguration, WorkflowRunConfiguration>();
+builder.Services.AddSingleton<TradingFlow.Application.Jobs.RunWorkflowService>();
 builder.Services.AddRazorPages(razor =>
 {
     razor.Conventions.AuthorizeFolder("/");
@@ -230,6 +233,7 @@ builder.Services.AddSingleton(new PaperJobServiceOptions(
         (int)PaperJobServiceOptions.Default.RecoveryReadinessTimeout.TotalSeconds))));
 builder.Services.AddSingleton<IPaperJobRecoveryService, PaperJobRecoveryService>();
 builder.Services.AddSingleton<PaperJobService>();
+builder.Services.AddScoped<PaperRunViewService>();
 builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(serviceProvider =>
     serviceProvider.GetRequiredService<PaperJobService>());
 builder.Services.AddSingleton<MobileAutomationService>();
@@ -248,7 +252,13 @@ builder.Services.AddSingleton<WarmupServiceClient>();
 builder.Services.AddSingleton<WishlistUniverseResolver>();
 builder.Services.AddSingleton<WishlistSwingWatchEvaluator>();
 builder.Services.AddSingleton<WishlistMarketMonitor>();
+builder.Services.AddSingleton<DailyObservationService>();
+builder.Services.AddSingleton<IDailyObservationService>(sp => sp.GetRequiredService<DailyObservationService>());
 builder.Services.AddSingleton<WishlistDeskService>();
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskSources>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.IDeskAccountReader, TradingFlow.Web.Services.Desk.DeskAccountReader>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskReadService>();
 builder.Services.AddSingleton<TradingEnvironmentService>();
 builder.Services.AddSingleton<OperationalStatusService>();
 builder.Services.AddSingleton<OperationsHealthService>();
@@ -318,8 +328,10 @@ builder.Services.AddSingleton<TradingFlow.Engine.Execution.IBrokerClient>(servic
 builder.Services.AddTransient<TradingFlow.Data.Catalysts.CatalystStreamer>();
 builder.Services.AddTransient<SymbolIntelligenceService>();
 builder.Services.AddSingleton<WishlistObserverService>();
-builder.Services.AddSingleton<AlpacaQuoteService>();
+builder.Services.AddAlpacaQuotes();
 builder.Services.AddSingleton<AlpacaManualOrderService>();
+builder.Services.AddSingleton<IReviewedOrderBroker>(services => services.GetRequiredService<AlpacaManualOrderService>());
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IManualOrderMarketGateway, AlpacaManualOrderMarketGateway>();
 builder.Services.AddSingleton<ManualOrderTicketService>();
 
@@ -353,55 +365,7 @@ builder.Services.AddSingleton<TradingFlowDatabaseInitializer>();
 // principal - so this registration is what makes those work rather than a new
 // policy. Accounts are provisioned by `users add` on the CLI; there is no
 // public registration route.
-builder.Services
-    .AddIdentityCore<TradingFlowUser>(identity =>
-    {
-        identity.User.RequireUniqueEmail = false;
-        identity.Password.RequiredLength = 12;
-        identity.Password.RequireDigit = true;
-        identity.Password.RequireLowercase = true;
-        identity.Password.RequireUppercase = true;
-        identity.Password.RequireNonAlphanumeric = true;
-        // A trading surface locks out rather than throttles: an attacker who can
-        // keep guessing eventually reaches an account that can move money.
-        identity.Lockout.MaxFailedAccessAttempts = 5;
-        identity.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
-        identity.Lockout.AllowedForNewUsers = true;
-    })
-    .AddRoles<IdentityRole<Guid>>()
-    .AddEntityFrameworkStores<TradingFlowDbContext>()
-    .AddSignInManager()
-    .AddDefaultTokenProviders();
-builder.Services
-    .AddAuthentication(IdentityConstants.ApplicationScheme)
-    .AddIdentityCookies();
-builder.Services.ConfigureApplicationCookie(cookie =>
-{
-    cookie.LoginPath = "/Login";
-    cookie.LogoutPath = "/Login";
-    cookie.AccessDeniedPath = "/AccessDenied";
-    cookie.Cookie.HttpOnly = true;
-    cookie.Cookie.SameSite = SameSiteMode.Lax;
-    cookie.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
-    cookie.ExpireTimeSpan = TimeSpan.FromHours(12);
-    cookie.SlidingExpiration = true;
-});
-// Fail closed. Without a fallback policy, only endpoints that opt in are
-// protected, so forgetting one leaves it open - which is exactly what happened
-// to /api/v1, a group carrying order preview, order confirm and paper-run
-// start. With it, every endpoint requires a signed-in operator unless it
-// explicitly says otherwise, and the failure mode of forgetting is a locked
-// endpoint rather than an exposed one.
-//
-// The deliberate exceptions are marked AllowAnonymous at their definition:
-// the Login and AccessDenied pages, the Earnings page and its API, the auth
-// login endpoint, and the health probes.
-builder.Services.AddAuthorization(authorization =>
-{
-    authorization.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
-        .RequireAuthenticatedUser()
-        .Build();
-});
+builder.Services.AddOperatorAuthentication();
 
 builder.Services.AddSingleton<TradingFlow.Domain.Locking.ITickerLockService, TradingFlow.Data.Locking.SqliteTickerLockService>();
 builder.Services.AddSingleton<IDiscoveryRepository, SqliteDiscoveryRepository>();
@@ -633,6 +597,12 @@ builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IApplicationEventRe
     services.GetRequiredService<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>());
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IOrderPreviewRepository>(services =>
     services.GetRequiredService<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>());
+builder.Services.AddSingleton<TradingFlow.Domain.Preparation.IPreparationRepository, TradingFlow.Data.Preparation.SqlitePreparationRepository>();
+builder.Services.AddSingleton<TradingFlow.Application.Preparation.IPreparationCalendar, PreparationCalendarAdapter>();
+builder.Services.AddSingleton<TradingFlow.Application.Preparation.IPreparationAuthorization, PreparationAuthorization>();
+builder.Services.AddSingleton<TradingFlow.Application.Preparation.IPreparationEvidence, PreparationEvidenceAdapter>();
+builder.Services.AddSingleton<TradingFlow.Application.Preparation.PreparationService>();
+builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(sp => sp.GetRequiredService<TradingFlow.Application.Preparation.PreparationService>());
 builder.Services.AddSingleton<TradingFlow.Application.Candidates.IUniverseSourceResolver, UniverseSourceResolver>();
 builder.Services.AddSingleton<TradingFlow.Application.Candidates.IStrategyIdentityResolver, StrategyIdentityResolver>();
 builder.Services.AddSingleton<TradingFlow.Application.Candidates.IUniverseDiscoveryService, TradingFlow.Application.Candidates.UniverseDiscoveryService>();
@@ -648,6 +618,7 @@ builder.Services.AddSingleton<IReadOnlyDictionary<string, TradingFlow.Applicatio
     var backtests = services.GetRequiredService<BacktestJobServiceOptions>();
     return new Dictionary<string, TradingFlow.Application.Jobs.DurableJobWorkerOptions>(StringComparer.OrdinalIgnoreCase)
     {
+        ["preparation"] = TradingFlow.Application.Jobs.DurableJobWorkerOptions.Default,
         ["backtest"] = TradingFlow.Application.Jobs.DurableJobWorkerOptions.Default with
         {
             MaximumPendingJobs = backtests.MaximumPendingJobs,
@@ -761,9 +732,11 @@ app.UseRouting();
 // UseRouting these two run without an endpoint and enforce nothing.
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseApiMutationSecurity();
 app.MapRazorPages();
 app.MapTradingFlowAuthApi();
 app.MapTradingFlowApiV1();
+app.MapDeskEndpoints();
 app.MapTradingFlowEarningsApi();
 // Health probes stay open: a readiness check that needs a session cannot tell a
 // load balancer or a container runtime whether the process is alive. Neither

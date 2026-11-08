@@ -1,7 +1,7 @@
 @page "/Paper"
 @model TradingFlow.Web.Pages.PaperModel
 @{
-    ViewData["Title"] = "Paper Trading Lab";
+    ViewData["Title"] = "Paper runs";
     var selectedConfig = Model.Configs.FirstOrDefault(c => c.Path == Model.ConfigPath);
     var selectedStrategy = Model.Strategies.FirstOrDefault(s => s.Path == Model.SelectedStrategyPath);
     var researchParameterDefaultsJson = System.Text.Json.JsonSerializer.Serialize(
@@ -23,14 +23,14 @@
 <div class="paper-page">
 <div class="section-title">
     <div>
-        <h1>Paper Trading Lab</h1>
+        <h1>Paper runs</h1>
         <div class="muted">Test strategies live against real-time market data in paper mode.</div>
     </div>
 </div>
 
 <div asp-validation-summary="All" class="paper-validation" role="alert"></div>
 
-<form method="post">
+<form method="post" data-run-workflow>
 <div class="grid two">
     <!-- LEFT COLUMN: Environment & Strategy -->
     <div>
@@ -105,7 +105,7 @@
 
             <label for="PaperExecutionMode">Paper authorization</label>
             <select name="PaperExecutionMode" id="PaperExecutionMode" class="mb-md"
-                    onchange="window.location='?wishlistId=@Model.SelectedWishlist?.Id&paperExecutionMode=' + encodeURIComponent(this.value)">
+                    data-query-select="paperExecutionMode">
                 <option value="shadow" selected="@(Model.PaperExecutionMode == "shadow")">Paper shadow (evidence-authorized)</option>
                 <option value="experiment" selected="@(Model.PaperExecutionMode == "experiment")">Paper experiment (operator-labelled)</option>
             </select>
@@ -139,8 +139,8 @@
 
             @if (Model.PaperExecutionMode == "experiment")
             {
-                <div class="paper-experiment-registration mt-md">
-                    <h3>Register immutable experiment</h3>
+                <details class="paper-experiment-registration mt-md" open="@Model.ExperimentParameters.ApplyOverrides">
+                    <summary>Register an immutable experiment</summary>
                     <div class="muted mb-md">
                         Start from a reviewed research artifact. Leaving the version blank preserves the source version;
                         changed parameters require a new semantic version.
@@ -245,7 +245,7 @@
                             disabled="@(Model.ResearchStrategies.Count == 0)">
                         Register experiment
                     </button>
-                </div>
+                </details>
             }
         </div>
     </div>
@@ -303,7 +303,7 @@
         <section class="panel mt-md">
             <div class="section-title">
                 <h2>Paper Jobs</h2>
-                <a class="button secondary" asp-page="/Paper" asp-route-wishlistId="@Model.SelectedWishlist?.Id" asp-route-strategyPath="@Model.SelectedStrategyPath" asp-route-paperExecutionMode="@Model.PaperExecutionMode" title="Reloads the paper lab and job list without starting a new run.">Refresh</a>
+                <a class="button secondary" asp-page="/Paper" asp-route-wishlistId="@Model.SelectedWishlist?.Id" asp-route-strategyPath="@Model.SelectedStrategyPath" asp-route-paperExecutionMode="@Model.PaperExecutionMode" asp-route-preparationKey="@Request.Query["preparationKey"]" title="Reloads the paper lab and job list without starting a new run.">Refresh</a>
             </div>
 
             @if (Model.LiveJobs.Count == 0)
@@ -337,7 +337,7 @@
     </div>
 </div>
 
-<section class="panel mt-md">
+<details class="panel mt-md" open="@(Model.PaperSnapshot is not null)"><summary>Environment diagnostics</summary>
     <div class="section-title">
         <h2>Environment Check <span class="tf-help" title="Validates paper credentials and read-only broker dependencies without placing orders.">?</span></h2>
         @if (Model.PaperSnapshot is not null)
@@ -376,9 +376,10 @@
             <p class="warn">Unknown broker specified in the configuration: @Model.Selected.Config.Execution.Broker</p>
         }
     }
-</section>
+</details>
 </div>
 @section Scripts {
+    <script src="~/js/run-workflow.js" asp-append-version="true" defer></script>
     <script>
         let currentStrategyUsesNews = @Model.SelectedStrategyUsesNews.ToString().ToLowerInvariant();
         let currentConfigNewsEnabled = @((selectedConfig?.Config.News.Enabled ?? true).ToString().ToLowerInvariant());
@@ -447,7 +448,7 @@
             }
 
             const paperMode = document.getElementById('PaperExecutionMode')?.value || 'shadow';
-            fetch('?handler=StrategyDetails&strategyPath=' + encodeURIComponent(strategyPath) + '&paperExecutionMode=' + encodeURIComponent(paperMode))
+            window.tradingFlowFetch('?handler=StrategyDetails&strategyPath=' + encodeURIComponent(strategyPath) + '&paperExecutionMode=' + encodeURIComponent(paperMode))
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
@@ -463,7 +464,7 @@
                 environmentConfig.value = configPath;
             }
 
-            fetch('?handler=ConfigDetails&configPath=' + encodeURIComponent(configPath))
+            window.tradingFlowFetch('?handler=ConfigDetails&configPath=' + encodeURIComponent(configPath))
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {

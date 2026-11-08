@@ -51,6 +51,7 @@ public static class RuntimeHostedServiceRegistration
         // Register durable workers last so host shutdown stops and drains jobs
         // before their market-data, order, and persistence dependencies.
         services.AddHostedService<DurableJobWorkerHostedService>();
+        services.AddHostedService<PreparationSchedulerHostedService>();
         return services;
     }
 }

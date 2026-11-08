@@ -10,6 +10,23 @@
     var envSlug = Context.Request.Query["env"].ToString();
     var environment = Environments.GetState(Environments.Parse(envSlug));
     var signedIn = User.Identity?.IsAuthenticated == true;
+    var area = IsCurrent("/RunningTrades", "/Orders", "/OrderTicket", "/Paper", "/PaperJob") ? "Orders"
+        : IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "Research"
+        : IsCurrent("/Operations", "/Warmup", "/Users") ? "System" : "Desk";
+    var areas = new[] { ("Desk", "/Desk"), ("Orders", "/Orders"), ("Research", "/Backtests"), ("System", "/Operations") };
+    var sections = area switch {
+        "Orders" => new[] { ("Positions", "/RunningTrades"), ("Orders", "/Orders"), ("Paper runs", "/Paper") },
+        "Research" => new[] { ("Backtests", "/Backtests") },
+        "System" => User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator)
+            ? new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup"), ("Users", "/Users") }
+            : new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup") },
+        _ => new[] { ("Stock desk", "/Desk"), ("Candidate review", "/TradeDesk"), ("Manage wishlists", "/Wishlists"), ("Earnings", "/Earnings") }
+    };
+    string EnvironmentUrl(string slug) {
+        var query = Context.Request.Query.ToDictionary(x => x.Key, x => (string?)x.Value.ToString(), StringComparer.OrdinalIgnoreCase);
+        query["env"] = slug;
+        return Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(Context.Request.Path, query);
+    }
 }
 <!DOCTYPE html>
 <html lang="en" data-environment="@environment.Slug">
@@ -23,49 +40,22 @@
     <link rel="stylesheet" href="~/css/desk-grid.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/polish.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/features.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/workspace.css" asp-append-version="true" />
     <script src="~/js/theme.js" asp-append-version="true"></script>
 </head>
 <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <div class="environment-rail" aria-hidden="true"></div>
     <header class="topbar">
-        <a class="brand" asp-page="@(signedIn ? "/TradeDesk" : "/Earnings")"
+        <a class="brand" asp-page="@(signedIn ? "/Desk" : "/Earnings")"
            aria-label="TradingFlow">TRADINGFLOW</a>
 
         <nav class="primary-nav" aria-label="Primary navigation">
-            @if (signedIn)
-            {
-                <a asp-page="/TradeDesk"
-                   class="@(IsCurrent("/TradeDesk", "/Index") ? "active" : null)"
-                   aria-current="@(IsCurrent("/TradeDesk", "/Index") ? "page" : null)">Desk</a>
-                <a asp-page="/RunningTrades"
-                   class="@(IsCurrent("/RunningTrades") ? "active" : null)"
-                   aria-current="@(IsCurrent("/RunningTrades") ? "page" : null)">Positions</a>
-                <a asp-page="/Orders"
-                   class="@(IsCurrent("/Orders", "/OrderTicket") ? "active" : null)"
-                   aria-current="@(IsCurrent("/Orders", "/OrderTicket") ? "page" : null)">Orders</a>
-                <a asp-page="/News"
-                   class="@(IsCurrent("/News") ? "active" : null)"
-                   aria-current="@(IsCurrent("/News") ? "page" : null)">News</a>
-            }
-            <a asp-page="/Earnings"
-               class="@(IsCurrent("/Earnings") ? "active" : null)"
-               aria-current="@(IsCurrent("/Earnings") ? "page" : null)">Earnings</a>
-            @if (signedIn)
-            {
-                <a asp-page="/Backtests"
-                   class="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "active" : null)"
-                   aria-current="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "page" : null)">Research</a>
-                <a asp-page="/Operations"
-                   class="@(IsCurrent("/Operations", "/Paper", "/PaperJob", "/Warmup", "/Wishlists") ? "active" : null)"
-                   aria-current="@(IsCurrent("/Operations", "/Paper", "/PaperJob", "/Warmup", "/Wishlists") ? "page" : null)">Operations</a>
-                @if (User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator))
-                {
-                    <a asp-page="/Users"
-                       class="@(IsCurrent("/Users") ? "active" : null)"
-                       aria-current="@(IsCurrent("/Users") ? "page" : null)">Users</a>
+            @if (signedIn) {
+                @foreach (var item in areas) {
+                    <a asp-page="@item.Item2" class="@(area == item.Item1 ? "active" : null)" aria-current="@(area == item.Item1 ? "true" : null)">@item.Item1</a>
                 }
-            }
+            } else { <a asp-page="/Earnings">Earnings</a> }
         </nav>
 
         <div class="topbar-tail">
@@ -81,7 +71,7 @@
                         if (candidate.IsEnabled)
                         {
                             <a class="seg-opt env-@candidate.Slug"
-                               href="@($"{Context.Request.Path}?env={candidate.Slug}")"
+                               href="@EnvironmentUrl(candidate.Slug)"
                                aria-current="@(isCurrent ? "true" : null)"
                                title="@candidate.Label environment">@candidate.Label.ToUpperInvariant()</a>
                         }
@@ -142,6 +132,13 @@
             </div>
         </div>
     </header>
+    @if (signedIn && currentPage != "/Desk") {
+        <nav class="section-nav" aria-label="@area pages">
+            @foreach (var item in sections) {
+                <a asp-page="@item.Item2" aria-current="@(IsCurrent(item.Item2) ? "page" : null)">@item.Item1</a>
+            }
+        </nav>
+    }
     <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
         @RenderBody()
     </main>
@@ -150,6 +147,8 @@
        building their own, so an operator learns one place to look. *@
     <div id="SignalToast" class="toast" role="status" aria-live="polite" hidden></div>
 
+    <script src="~/js/api-client.js" asp-append-version="true"></script>
+    <script src="~/js/workspace.js" asp-append-version="true"></script>
     <script src="~/js/site.js" asp-append-version="true"></script>
     <script src="~/js/command-palette.js" asp-append-version="true" defer></script>
     <script src="~/js/desk-presets.js" asp-append-version="true" defer></script>

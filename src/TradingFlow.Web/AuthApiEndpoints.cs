@@ -10,6 +10,12 @@ public static class AuthApiEndpoints
     {
         var group = endpoints.MapGroup("/api/auth");
 
+        group.MapGet("/csrf", [AllowAnonymous] (HttpContext context, Microsoft.AspNetCore.Antiforgery.IAntiforgery antiforgery) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(new { requestToken = antiforgery.GetAndStoreTokens(context).RequestToken });
+        });
+
         group.MapPost("/login", [AllowAnonymous] async (
             LoginRequest request,
             SignInManager<TradingFlowUser> signInManager) =>

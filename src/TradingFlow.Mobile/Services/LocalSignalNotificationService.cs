@@ -28,8 +28,10 @@ public static class LocalSignalNotificationService
     private static bool channelCreated;
 #endif
 
-    public static void ShowSignal(string ticker, string signalType, string reason)
+    public static void ShowSignal(string ticker, string signalType, string reason, Guid? runId = null, Guid? candidateId = null, string? articleId = null, PreparationLink? preparation = null)
     {
+        if (runId is { } alertRun && candidateId is { } alertCandidate)
+            CandidateAlertHistory.Add(ticker, reason ?? signalType, new(alertRun, alertCandidate, articleId, AppServices.Api.BaseUrl));
 #if ANDROID
         var context = Platform.AppContext;
         if (context is null)
@@ -45,12 +47,30 @@ public static class LocalSignalNotificationService
         }
 
         var launchIntent = context.PackageManager?.GetLaunchIntentForPackage(context.PackageName ?? String.Empty);
+        if (launchIntent is null) return;
+        if (runId is { } run && candidateId is { } candidate)
+        {
+            launchIntent.PutExtra("candidateBackend", AppServices.Api.BaseUrl);
+            launchIntent.PutExtra("candidateRunId", run.ToString());
+            launchIntent.PutExtra("candidateId", candidate.ToString());
+            if (articleId is not null) launchIntent.PutExtra("articleId", articleId);
+            launchIntent.SetData(Android.Net.Uri.Parse("tradingflow://candidate/" + candidate));
+        }
+        if (preparation is not null)
+        {
+            launchIntent.PutExtra("preparationBackend", preparation.Backend);
+            launchIntent.PutExtra("preparationWorkflow", preparation.WorkflowId.ToString());
+            launchIntent.PutExtra("preparationOccurrence", preparation.OccurrenceId?.ToString());
+            launchIntent.PutExtra("preparationRevision", preparation.RevisionId?.ToString());
+            launchIntent.SetData(Android.Net.Uri.Parse("tradingflow://preparation/"+preparation.RevisionId));
+        }
+        var notificationId = HashCode.Combine(candidateId, ticker, signalType, preparation?.RevisionId) & Int32.MaxValue;
         var pendingIntent = PendingIntent.GetActivity(
             context,
-            0,
+            notificationId,
             launchIntent,
             PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable);
-        var title = $"{ticker.Trim().ToUpperInvariant()} eligible";
+        var title = $"{ticker.Trim().ToUpperInvariant()} · {signalType}";
         var body = String.IsNullOrWhiteSpace(reason) ? signalType : reason;
         var builder = Build.VERSION.SdkInt >= BuildVersionCodes.O
             ? new Notification.Builder(context, ChannelId)
@@ -65,7 +85,7 @@ public static class LocalSignalNotificationService
             .Build();
 
         var manager = (NotificationManager?)context.GetSystemService(Context.NotificationService);
-        manager?.Notify(Math.Abs(HashCode.Combine(ticker, signalType, DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 60)), notification);
+        manager?.Notify(notificationId, notification);
 #endif
     }
 

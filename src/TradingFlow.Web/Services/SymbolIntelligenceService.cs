@@ -47,7 +47,7 @@ public sealed class SymbolIntelligenceService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         return new MobileModelIntelligenceResponse(
-            evidence.ContractVersion,
+            evidence.Contract,
             evidence.AvailabilityStatus,
             evidence.AvailabilityReason,
             evidence.IsValidPromotedEvidence,

@@ -127,7 +127,7 @@
             async function refreshAudit() {
                 let data;
                 try {
-                    const response = await fetch(snapshotUrl, { cache: 'no-store' });
+                    const response = await window.tradingFlowFetch(snapshotUrl, { cache: 'no-store' });
                     if (!response.ok) return;
                     data = await response.json();
                 } catch {

@@ -68,7 +68,10 @@ public sealed record ClosePositionRequest(
     string Reason,
     bool AllowExtendedHoursTrading,
     decimal? LimitPrice,
-    string IdempotencyKey);
+    string IdempotencyKey,
+    string OrderType = "limit",
+    string TimeInForce = "day",
+    decimal? TriggerPrice = null);
 
 public sealed record OrderCommandResponse(
     string ContractVersion,
@@ -87,3 +90,5 @@ public sealed record OrderCommandResponse(
     string IdempotencyKey,
     string? RejectionCode,
     string? RejectionReason);
+
+public sealed record OrderEntryContextResponse(string? AccountId, bool OperatorOverrideAllowed);

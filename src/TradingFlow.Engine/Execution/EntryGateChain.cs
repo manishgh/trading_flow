@@ -696,6 +696,8 @@ public sealed class EntryGateChain(
 
     private static ProductionRun ToRun(ExecutionRunContext context) => new()
     {
+        UniverseSnapshotId = context.UniverseSnapshotId,
+        DecisionRunId = context.DecisionRunId,
         RunId = context.RunId,
         SchemaVersion = 1,
         ConfigHash = context.ConfigHash,

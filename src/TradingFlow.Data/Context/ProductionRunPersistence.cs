@@ -18,7 +18,8 @@ internal static class ProductionRunPersistence
             return;
         }
 
-        if (existing.SchemaVersion != requested.SchemaVersion ||
+        if (existing.UniverseSnapshotId != requested.UniverseSnapshotId || existing.DecisionRunId != requested.DecisionRunId ||
+            existing.SchemaVersion != requested.SchemaVersion ||
             !existing.Profile.Equals(requested.Profile, StringComparison.Ordinal) ||
             !existing.ConfigHash.Equals(requested.ConfigHash, StringComparison.Ordinal) ||
             !existing.CodeVersion.Equals(requested.CodeVersion, StringComparison.Ordinal))

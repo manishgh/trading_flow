@@ -21,6 +21,49 @@ contracts do not require rewriting either application in the other's language.
 Provider collection ownership needs an explicit verified migration; Python may
 read shared analytical datasets directly for feature engineering and modeling.
 
+### Explain Issues In Concrete Words
+
+Never describe a situation using vague terminology or unexplained technical labels.
+Words such as "correctness", "readiness", "integrity", "validation" or "blocked"
+must not substitute for an explanation. Use plain, specific language and explain any
+technical term that is necessary, immediately where it appears.
+
+When reporting a problem, limitation or reason to stop, explain what was observed,
+what is missing or failing, which exact action it prevents, why that action would
+produce an incorrect or misleading result, and what concrete step resolves it.
+State what work can still continue. Distinguish missing credentials from missing
+data, failed checks, resource limits and missing model approval. Give enough detail
+for the user to understand the situation without having to decode jargon.
+
+For example, do not say "correctness blocks publication". Say: "This membership
+snapshot was captured after the prediction's decision time. Using it would give the
+prediction information unavailable at that time. We need a snapshot observed before
+that decision; collecting data for future decisions can continue."
+
+When discussing missing market data or research evidence:
+
+- Name the dataset, symbols, exact dates/times and timezone, timeframe/feed, expected
+  records and received records. State the latest collection attempt, HTTP response
+  and pagination result; say "not queried" or "no HTTP response" when applicable.
+- Use the configured Alpaca/Finviz access to check and obtain available records
+  before claiming they are unavailable. "Not in the audited local catalog" does
+  not mean the provider lacks them. HTTP 200 alone does not prove complete coverage.
+- Distinguish absent candles, no qualifying trades, pre-listing periods, provider
+  omissions, failed requests and parsing errors. Do not invent candles or infer no
+  trades, quotes or stop touches from an empty bar response.
+- Separate downloadable history from original receipt/revision logs, historical
+  versus current sector/list membership, classifier evaluation not yet performed,
+  simulator defects, and an untouched test period not yet observed. These are
+  different problems with different remedies; do not call all of them "missing
+  historical evidence" or imply ordinary price history is absent when it exists.
+- Preserve publication, update, receipt and classification times separately. A
+  download made today cannot be labeled as received months ago. A conservative
+  provider-update-time research assumption must be explicit and frozen.
+- Report exactly what was recovered, what remains unproved, why it matters, and
+  the next concrete action. Explain whether an issue affects optional features,
+  the tested strategy, simulated execution, or authorization to trade. State the
+  completed scope accurately instead of saying the whole project is "all done".
+
 ## Non-Negotiable Design Rules
 
 - Do not sync GitHub unless explicitly asked.
@@ -33,6 +76,17 @@ read shared analytical datasets directly for feature engineering and modeling.
   exception. Add focused tests for engine/risk/pipeline behavior changes.
 - Use standard structured logging so output can later feed Logstash, Elastic, Azure Monitor, or another log sink.
 - Avoid look-ahead bias: signal on completed bar, fill on a later executable bar, warm indicators before scoring, and model realistic slippage/costs.
+
+## Delete Temporary Files After Every Session
+
+User instruction, 31 October 2026. At the end of every session, delete the temporary files that session created and can prove it owns, unless they hold context someone still needs.
+
+- Temporary: the session's own build and test scratch folders, pytest and mypy caches, one-off scripts and their output, logs of servers the session started, downloaded installers, debug dumps, and unpublished generated run configs it abandoned.
+- Context: design notes, decisions, handoff notes, result summaries, published run results and their settings, evidence manifests, and the inputs and worker logs of economic runs. Those run files stay until the saved quant cleanup approval in `docs/backtesting-research-retention.md`, removed with `backtest-cleanup-reviewed-inputs`; an audit alone is not permission.
+- Before deleting, commit related code, stop only processes this session started, and check each resolved path. If another session or process uses a file, keep it. If a file holds context among temporary material, move what matters into `docs/` or a commit first; `outputs/` is not in git. If unsure, keep it and list it for the user.
+- Core Data Deletion Requires Specific Approval still applies. Market data, news, provider payloads and receipts, databases and source lists are never temporary, even when a one-off script downloaded them.
+- Write session scratch under the ignored `.tmp/` folder or the agent's own scratch directory, not beside source code or in a new folder for each test run.
+- End the handoff by stating what was deleted, the space freed, and what was kept and why. If the agent may not delete a file itself, give the user tested Windows commands.
 
 ## Mandatory Agent Workflow
 

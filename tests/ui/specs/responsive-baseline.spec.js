@@ -43,19 +43,20 @@ test.describe("approved UI baseline", () => {
   test("shell exposes skip navigation and the current destination", async ({ page }) => {
     await page.goto("/TradeDesk");
     await expect(page.locator('a[href="#main-content"]')).toHaveCount(1);
-    await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Desk");
+    await expect(page.locator('.primary-nav [aria-current="true"]')).toHaveText("Desk");
+    await expect(page.locator('.section-nav [aria-current="page"]')).toHaveText("Candidate review");
     await expect(page.locator('a[href="#"]')).toHaveCount(0);
 
     const primaryLabels = await page.locator(".primary-nav a").evaluateAll(nodes =>
       nodes.map(node => node.textContent.trim()));
-    // News and Earnings are primary destinations: they are checked constantly during a
-    // session, and burying them under Research cost a click on every visit.
+    // Four primary areas retain named destinations in their section navigation.
     expect(primaryLabels).toEqual([
-      "Desk", "Positions", "Orders", "News", "Earnings", "Research", "Operations"
+      "Desk", "Orders", "Research", "System"
     ]);
 
     await page.goto("/Orders");
-    await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Orders");
+    await expect(page.locator('.primary-nav [aria-current="true"]')).toHaveText("Orders");
+    await expect(page.locator('.section-nav [aria-current="page"]')).toHaveText("Orders");
   });
 
   test("positions use reviewed exits and never auto-reload the document", async ({ page }) => {

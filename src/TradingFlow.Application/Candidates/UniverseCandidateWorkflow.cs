@@ -48,11 +48,7 @@ public interface ICandidateWorkflow
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>
-/// Creates a run-scoped, immutable discovery snapshot. Provider and wishlist
-/// adapters supply observations; this service owns point-in-time validation,
-/// durable source provenance and the canonical response hash.
-/// </summary>
+/// <summary>Captures immutable discovery evidence without backdating current membership.</summary>
 public sealed class UniverseDiscoveryService(
     IUniverseSourceResolver sources,
     IDiscoveryRepository repository,
@@ -60,354 +56,229 @@ public sealed class UniverseDiscoveryService(
     IApplicationEventRepository events,
     TimeProvider timeProvider) : IUniverseDiscoveryService
 {
-    private static readonly TimeSpan MaximumClientClockSkew = TimeSpan.FromMinutes(2);
-
-    public async Task<UniversePreviewResponse> PreviewAsync(
-        UniversePreviewRequest request,
-        CancellationToken cancellationToken = default)
+    public async Task<UniversePreviewResponse> PreviewAsync(UniversePreviewRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        RequireVersion(request.ContractVersion);
-        if (!request.Horizon.Equals("swing", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("TradingFlow supports swing strategy universes only.");
-        }
-        if (request.Sources.Count == 0)
-        {
-            throw new InvalidOperationException("At least one universe source is required.");
-        }
+        if (request.ContractVersion != ContractVersions.VersionOne ||
+            !String.Equals(request.Horizon, "swing", StringComparison.OrdinalIgnoreCase) ||
+            request.Sources is null || request.Sources.Count == 0 || request.Sources.Any(source => source is null))
+            throw new InvalidOperationException("A supported swing universe contract and at least one source are required.");
 
-        var now = timeProvider.GetUtcNow().ToUniversalTime();
-        var requestedAsOf = request.AsOfUtc.ToUniversalTime();
-        if (requestedAsOf > now + MaximumClientClockSkew)
-        {
-            throw new InvalidOperationException("Universe as-of time cannot be in the future.");
-        }
+        var startedAt = timeProvider.GetUtcNow().ToUniversalTime();
+        if (request.AsOfUtc is { } requested && (requested == default || requested > startedAt))
+            throw new InvalidOperationException("Universe as-of time cannot be default or in the future.");
+
+        // A null cutoff is an operational capture. An explicit cutoff never admits
+        // newer observations, including a current wishlist read after that cutoff.
+        var captures = new List<UniverseSourceCapture>();
+        foreach (var selection in request.Sources.OrderBy(item => item.SourceKind, StringComparer.Ordinal)
+                     .ThenBy(item => item.SourceKey, StringComparer.Ordinal))
+            captures.Add(await sources.ResolveAsync(selection, "swing", cancellationToken));
+        var resolvedAt = timeProvider.GetUtcNow().ToUniversalTime();
+        var cutoff = request.AsOfUtc?.ToUniversalTime() ?? resolvedAt;
+        foreach (var capture in captures)
+            ValidateCapture(capture, cutoff, resolvedAt);
+        if (captures.Select(item => (item.SourceKind, item.SourceKey)).Distinct().Count() != captures.Count)
+            throw new InvalidOperationException("A universe source may only be selected once.");
 
         var snapshotId = Guid.NewGuid();
-        foreach (var selection in request.Sources
-                     .OrderBy(source => source.SourceKind, StringComparer.Ordinal)
-                     .ThenBy(source => source.SourceKey, StringComparer.Ordinal))
+        foreach (var capture in captures)
         {
-            var capture = await sources.ResolveAsync(selection, "swing", cancellationToken);
-            ValidateCapture(capture, now);
-            await repository.CommitSnapshotAsync(
-                new DiscoverySnapshotRequest(
-                    snapshotId,
-                    DeterministicGuid(String.Join('\u001f',
-                        snapshotId,
-                        capture.SourceKind,
-                        capture.SourceKey,
-                        capture.ObservedAtUtc.UtcTicks,
-                        CanonicalSymbols(capture.Symbols))),
-                    capture.SourceKind,
-                    capture.SourceKey,
-                    "swing",
-                    capture.ObservedAtUtc.ToUniversalTime(),
-                    capture.ExpiresAtUtc.ToUniversalTime(),
-                    0,
-                    capture.Symbols,
-                    capture.IsDiagnostic,
-                    capture.ProviderTimestampUtc?.ToUniversalTime(),
-                    capture.ProviderReference),
-                cancellationToken);
+            await repository.CommitSnapshotAsync(new DiscoverySnapshotRequest(
+                snapshotId,
+                DeterministicGuid($"{snapshotId:N}\u001f{capture.SourceKind}\u001f{capture.SourceKey}"),
+                capture.SourceKind, capture.SourceKey, "swing", capture.ObservedAtUtc, capture.ExpiresAtUtc,
+                0, capture.Symbols, capture.IsDiagnostic, capture.ProviderTimestampUtc, capture.ProviderReference), cancellationToken);
         }
-
-        var members = await repository.GetActiveAsync(snapshotId, now, cancellationToken);
+        var members = await repository.GetActiveAsync(snapshotId, cutoff, cancellationToken);
         if (members.Count == 0)
-        {
             throw new InvalidOperationException("The selected sources produced no unexpired swing candidates.");
-        }
-
-        var response = ToResponse(snapshotId, now, members);
-        var requestHash = Sha256(JsonSerializer.Serialize(new
-        {
-            horizon = "swing",
-            sources = request.Sources
-                .OrderBy(source => source.SourceKind, StringComparer.Ordinal)
-                .ThenBy(source => source.SourceKey, StringComparer.Ordinal)
-        }));
+        var response = ToResponse(snapshotId, resolvedAt, members, cutoff);
         await previews.SaveAsync(new UniversePreviewRecord
         {
             UniverseSnapshotId = snapshotId,
-            Horizon = "swing",
-            RequestSha256 = requestHash,
+            Horizon = response.Horizon,
+            RequestSha256 = Sha256(JsonSerializer.Serialize(new
+            {
+                horizon = "swing", asOfUtc = request.AsOfUtc?.ToUniversalTime(),
+                sources = request.Sources.OrderBy(item => item.SourceKind, StringComparer.Ordinal).ThenBy(item => item.SourceKey, StringComparer.Ordinal)
+            })),
             ContentSha256 = response.ContentSha256,
             ResolvedAtUtc = response.ResolvedAtUtc,
             ExpiresAtUtc = response.ExpiresAtUtc,
             PreviewJson = JsonSerializer.Serialize(response)
         }, cancellationToken);
-        await events.AppendAsync(
-            $"universes/{snapshotId:N}",
-            "universe.preview.created",
-            now,
-            JsonSerializer.Serialize(response),
-            cancellationToken);
+        await events.AppendAsync($"universes/{snapshotId:N}", "universe.preview.created", resolvedAt,
+            JsonSerializer.Serialize(response), cancellationToken);
         return response;
     }
 
-    public static UniversePreviewResponse ToResponse(
-        Guid snapshotId,
-        DateTimeOffset resolvedAtUtc,
-        IReadOnlyList<ActiveDiscoveryAggregate> aggregates)
+    public static UniversePreviewResponse ToResponse(Guid snapshotId, DateTimeOffset resolvedAtUtc,
+        IReadOnlyList<ActiveDiscoveryAggregate> aggregates, DateTimeOffset? decisionCutoffUtc = null)
     {
-        var members = aggregates
-            .OrderBy(item => item.Symbol, StringComparer.Ordinal)
-            .Select(item => new UniverseMemberResponse(
-                item.Symbol,
-                "discovered",
-                item.Sources
-                    .OrderBy(source => source.SourceKind, StringComparer.Ordinal)
-                    .ThenBy(source => source.SourceKey, StringComparer.Ordinal)
-                    .Select(source => new UniverseSourceEvidenceResponse(
-                        source.SourceKind,
-                        source.SourceKey,
-                        source.ObservedAtUtc,
-                        source.ExpiresAtUtc,
-                        source.ContentSha256,
-                        source.IsDiagnostic,
-                        source.RawReference))
-                    .ToArray()))
-            .ToArray();
-        var expiresAt = members.SelectMany(member => member.Sources)
-            .Select(source => source.ExpiresAtUtc)
-            .DefaultIfEmpty(resolvedAtUtc)
-            .Min();
-        var hashPayload = JsonSerializer.Serialize(new
-        {
-            horizon = "swing",
-            resolvedAtUtc,
-            expiresAtUtc = expiresAt,
-            members
-        });
-        return new UniversePreviewResponse(
-            ContractVersions.VersionOne,
-            snapshotId,
-            "swing",
-            resolvedAtUtc,
-            expiresAt,
-            Sha256(hashPayload),
-            members,
-            []);
+        var members = aggregates.OrderBy(item => item.Symbol, StringComparer.Ordinal)
+            .Select(item => new UniverseMemberResponse(item.Symbol, "discovered",
+                item.Sources.OrderBy(source => source.SourceKind, StringComparer.Ordinal).ThenBy(source => source.SourceKey, StringComparer.Ordinal)
+                    .Select(source => new UniverseSourceEvidenceResponse(source.SourceKind, source.SourceKey,
+                        source.ObservedAtUtc, source.ExpiresAtUtc, source.ContentSha256, source.IsDiagnostic, source.RawReference)).ToArray())).ToArray();
+        var expiresAt = members.SelectMany(member => member.Sources).Select(source => source.ExpiresAtUtc).DefaultIfEmpty(resolvedAtUtc).Min();
+        var response = new UniversePreviewResponse(ContractVersions.VersionOne, snapshotId, "swing", resolvedAtUtc,
+            expiresAt, String.Empty, members, [], decisionCutoffUtc ?? resolvedAtUtc);
+        return response with { ContentSha256 = ContentHash(response) };
     }
 
-    private static void ValidateCapture(UniverseSourceCapture capture, DateTimeOffset now)
+    public static string ContentHash(UniversePreviewResponse response) =>
+        Sha256(JsonSerializer.Serialize(response with { ContentSha256 = String.Empty }));
+
+    public static UniversePreviewResponse ReadPreview(UniversePreviewRecord record, Guid snapshotId)
     {
-        if (!DiscoverySourceKinds.All.Contains(capture.SourceKind) ||
-            String.IsNullOrWhiteSpace(capture.SourceKey))
+        UniversePreviewResponse preview;
+        try
         {
-            throw new InvalidOperationException("Universe source kind and key are required.");
+            preview = JsonSerializer.Deserialize<UniversePreviewResponse>(record.PreviewJson)
+                ?? throw new InvalidOperationException("Universe snapshot payload is invalid.");
         }
-        if (capture.ObservedAtUtc.Offset != TimeSpan.Zero || capture.ExpiresAtUtc.Offset != TimeSpan.Zero)
+        catch (JsonException exception)
         {
+            throw new InvalidOperationException("Universe snapshot payload is invalid.", exception);
+        }
+        if (record.UniverseSnapshotId != snapshotId || preview.UniverseSnapshotId != snapshotId ||
+            preview.ContractVersion != ContractVersions.VersionOne || record.Horizon != "swing" || preview.Horizon != record.Horizon ||
+            preview.ResolvedAtUtc != record.ResolvedAtUtc || preview.ExpiresAtUtc != record.ExpiresAtUtc ||
+            preview.DecisionCutoffUtc == default || preview.DecisionCutoffUtc > preview.ResolvedAtUtc ||
+            preview.Members is null || preview.Members.Count == 0 || preview.Exclusions is null ||
+            preview.ContentSha256 != record.ContentSha256 || ContentHash(preview) != record.ContentSha256)
+            throw new InvalidOperationException("Universe snapshot identity or immutable content failed validation.");
+        return preview;
+    }
+
+    private static void ValidateCapture(UniverseSourceCapture capture, DateTimeOffset cutoff, DateTimeOffset now)
+    {
+        if (!DiscoverySourceKinds.All.Contains(capture.SourceKind) || String.IsNullOrWhiteSpace(capture.SourceKey) ||
+            capture.Symbols is null || capture.Symbols.Count == 0)
+            throw new InvalidOperationException("Universe source identity and symbols are required.");
+        if (capture.ObservedAtUtc == default || capture.ObservedAtUtc.Offset != TimeSpan.Zero ||
+            capture.ExpiresAtUtc.Offset != TimeSpan.Zero || capture.ProviderTimestampUtc is { Offset: var offset } && offset != TimeSpan.Zero)
             throw new InvalidOperationException("Universe source timestamps must be UTC.");
-        }
-        if (capture.ObservedAtUtc > now || capture.ProviderTimestampUtc > now)
-        {
-            throw new InvalidOperationException("A universe source cannot contain future observations.");
-        }
+        if (capture.ObservedAtUtc > cutoff || capture.ProviderTimestampUtc > cutoff)
+            throw new InvalidOperationException("Universe source contains future observations relative to the decision cutoff.");
         if (capture.ExpiresAtUtc <= now || capture.ExpiresAtUtc <= capture.ObservedAtUtc)
-        {
             throw new InvalidOperationException("Universe source evidence is expired.");
-        }
-        if (capture.Symbols.Count == 0)
-        {
-            throw new InvalidOperationException("Universe source returned no symbols.");
-        }
     }
-
-    internal static string Sha256(string value) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
-
-    internal static Guid DeterministicGuid(string value) =>
-        new(SHA256.HashData(Encoding.UTF8.GetBytes(value)).AsSpan(0, 16));
-
-    private static string CanonicalSymbols(IEnumerable<DiscoverySymbolObservation> values) =>
-        String.Join(',', values
-            .OrderBy(value => value.Symbol, StringComparer.Ordinal)
-            .Select(value => $"{value.Symbol.Trim().ToUpperInvariant()}:{value.MetadataJson}"));
-
-    private static void RequireVersion(string value)
-    {
-        if (!String.Equals(value, ContractVersions.VersionOne, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException($"Unsupported contract version '{value}'.");
-        }
-    }
+    internal static string Sha256(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+    internal static Guid DeterministicGuid(string value) => new(SHA256.HashData(Encoding.UTF8.GetBytes(value)).AsSpan(0, 16));
 }
 
-/// <summary>
-/// Starts the deterministic candidate lifecycle from an immutable discovery
-/// snapshot. An exact retry returns the same run and candidate identities.
-/// </summary>
+/// <summary>Atomically creates a discovered candidate run; retries only read the durable outcome.</summary>
 public sealed class CandidateWorkflowService(
     IUniversePreviewRepository previews,
-    ICandidateRepository candidates,
     ICandidateQueryService queries,
     IStrategyIdentityResolver strategies,
     TimeProvider timeProvider) : ICandidateWorkflow
 {
-    public async Task<CandidateRunResponse> StartAsync(
-        CreateCandidateRunRequest request,
-        CancellationToken cancellationToken = default)
+    private static readonly JsonSerializerOptions EvidenceJson = new(JsonSerializerDefaults.Web);
+
+    public async Task<CandidateRunResponse> StartAsync(CreateCandidateRunRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (!String.Equals(request.ContractVersion, ContractVersions.VersionOne, StringComparison.Ordinal))
+        if (request.ContractVersion != ContractVersions.VersionOne || request.UniverseSnapshotId == Guid.Empty ||
+            request.Strategies is null || request.Strategies.Count == 0 || String.IsNullOrWhiteSpace(request.IdempotencyKey) ||
+            request.IdempotencyKey.Trim().Length > 160 || String.IsNullOrWhiteSpace(request.Mode) || request.AsOfUtc == default)
+            throw new InvalidOperationException("A supported contract, idempotency key, snapshot, cutoff and exact strategies are required.");
+        var mode = request.Mode.Trim().ToLowerInvariant();
+        if (mode is not ("backtest" or "paper_experiment" or "paper_shadow" or "live" or "diagnostic_replay"))
+            throw new InvalidOperationException("Candidate mode is invalid.");
+        var selected = request.Strategies.Select(NormalizeStrategy).OrderBy(item => item.StrategyId, StringComparer.Ordinal).ToArray();
+        if (selected.Select(item => item.StrategyId).Distinct(StringComparer.Ordinal).Count() != selected.Length)
+            throw new InvalidOperationException("Each strategy may occur only once in a candidate run.");
+        var key = request.IdempotencyKey.Trim();
+        var asOf = request.AsOfUtc.ToUniversalTime();
+        var hash = UniverseDiscoveryService.Sha256(JsonSerializer.Serialize(new { mode, request.UniverseSnapshotId, asOf, strategies = selected }));
+        var existing = await previews.FindCandidateRunAsync(key, cancellationToken);
+        if (existing is not null)
         {
-            throw new InvalidOperationException($"Unsupported contract version '{request.ContractVersion}'.");
-        }
-        if (request.UniverseSnapshotId == Guid.Empty || request.Strategies.Count == 0 ||
-            String.IsNullOrWhiteSpace(request.IdempotencyKey) || request.IdempotencyKey.Length > 160)
-        {
-            throw new InvalidOperationException("Idempotency key, universe snapshot and at least one exact strategy identity are required.");
+            if (existing.RequestSha256 != hash) throw new IdempotencyKeyConflictException(key);
+            var prior = await queries.GetRunAsync(existing.CandidateRunId, cancellationToken)
+                ?? throw new InvalidOperationException("Persisted candidate start is incomplete; no new candidates were created.");
+            var stored = await previews.GetAsync(request.UniverseSnapshotId, cancellationToken)
+                ?? throw new InvalidOperationException("Persisted candidate start has no immutable universe evidence.");
+            var previous = UniverseDiscoveryService.ReadPreview(stored, request.UniverseSnapshotId);
+            var expectedIds = previous.Members.Where(member => member.Sources.Any(source => !source.IsDiagnostic))
+                .SelectMany(member => selected.Select(strategy => CandidateId(existing.CandidateRunId, request.UniverseSnapshotId, member.Symbol, strategy)))
+                .Order().ToArray();
+            if (!expectedIds.SequenceEqual(prior.Candidates.Select(item => item.CandidateId).Order()) ||
+                prior.Provenance.UniverseSnapshotId != request.UniverseSnapshotId)
+                throw new InvalidOperationException("Persisted candidate start is incomplete or has inconsistent provenance.");
+            return prior;
         }
 
         var now = timeProvider.GetUtcNow().ToUniversalTime();
-        var asOf = request.AsOfUtc.ToUniversalTime();
-        if (asOf > now)
-        {
-            throw new InvalidOperationException("Candidate run as-of time cannot be in the future.");
-        }
-        foreach (var strategy in request.Strategies)
-        {
-            ValidateStrategyReference(strategy);
-            await strategies.RequireSwingStrategyAsync(strategy, request.Mode, cancellationToken);
-        }
-
-        var previewRecord = await previews.GetAsync(request.UniverseSnapshotId, cancellationToken);
-        if (previewRecord is null)
-        {
-            throw new InvalidOperationException("Universe snapshot is missing or expired.");
-        }
-        if (previewRecord.ExpiresAtUtc <= now)
-        {
-            throw new InvalidOperationException("Universe snapshot is missing or expired.");
-        }
-        var preview = JsonSerializer.Deserialize<UniversePreviewResponse>(previewRecord.PreviewJson)
-            ?? throw new InvalidOperationException("Universe snapshot payload is invalid.");
-        if (!UniverseDiscoveryService.Sha256(JsonSerializer.Serialize(new
-            {
-                horizon = preview.Horizon,
-                resolvedAtUtc = preview.ResolvedAtUtc,
-                expiresAtUtc = preview.ExpiresAtUtc,
-                members = preview.Members
-            })).Equals(previewRecord.ContentSha256, StringComparison.Ordinal) ||
-            !preview.ContentSha256.Equals(previewRecord.ContentSha256, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Universe snapshot content failed immutable hash validation.");
-        }
-        if (preview.Members.Any(member => member.Sources.Count == 0 ||
-                                         member.Sources.Any(source => source.ObservedAtUtc > asOf || source.ExpiresAtUtc <= now)))
-        {
+        if (asOf > now) throw new InvalidOperationException("Candidate run as-of time cannot be in the future.");
+        foreach (var strategy in selected)
+            await strategies.RequireSwingStrategyAsync(strategy, mode, cancellationToken);
+        var record = await previews.GetAsync(request.UniverseSnapshotId, cancellationToken)
+            ?? throw new InvalidOperationException("Universe snapshot is missing or expired.");
+        var preview = UniverseDiscoveryService.ReadPreview(record, request.UniverseSnapshotId);
+        now = timeProvider.GetUtcNow().ToUniversalTime();
+        if (preview.ExpiresAtUtc <= now || preview.ResolvedAtUtc > now || preview.DecisionCutoffUtc > asOf ||
+            preview.Members.Any(member => member.Sources is null || member.Sources.Count == 0 ||
+                member.Sources.Any(source => source.ObservedAtUtc > asOf || source.ExpiresAtUtc <= now)))
             throw new InvalidOperationException("Universe snapshot contains future or expired source evidence.");
-        }
-        if (preview.Members.All(member => member.Sources.All(source => source.IsDiagnostic)))
-        {
-            throw new InvalidOperationException("Diagnostic-only discovery evidence cannot start a trading candidate run.");
-        }
-
-        var canonicalRequest = JsonSerializer.Serialize(new
-        {
-            mode = request.Mode.Trim().ToLowerInvariant(),
-            request.UniverseSnapshotId,
-            asOf,
-            strategies = request.Strategies
-                .OrderBy(strategy => strategy.StrategyId, StringComparer.Ordinal)
-                .ThenBy(strategy => strategy.SemanticVersion, StringComparer.Ordinal)
-                .ThenBy(strategy => strategy.ContentSha256, StringComparer.Ordinal)
-        });
-        var requestHash = UniverseDiscoveryService.Sha256(canonicalRequest);
-        var proposedRunId = UniverseDiscoveryService.DeterministicGuid($"candidate-run\u001f{request.IdempotencyKey}");
-        var reservation = await previews.ReserveCandidateRunAsync(new CandidateRunRequestRecord
-        {
-            IdempotencyKey = request.IdempotencyKey.Trim(),
-            RequestSha256 = requestHash,
-            CandidateRunId = proposedRunId,
-            UniverseSnapshotId = request.UniverseSnapshotId,
-            Mode = request.Mode.Trim().ToLowerInvariant(),
-            StrategyIdentitiesJson = JsonSerializer.Serialize(request.Strategies),
-            CreatedAtUtc = now
-        }, cancellationToken);
-        var runId = reservation.CandidateRunId;
+        var members = preview.Members.Where(member => member.Sources.Any(source => !source.IsDiagnostic)).ToArray();
+        if (members.Length == 0) throw new InvalidOperationException("Diagnostic-only evidence cannot start a trading candidate run.");
+        var runId = UniverseDiscoveryService.DeterministicGuid($"candidate-run\u001f{key}");
         var run = new ProductionRun
         {
-            RunId = runId,
-            UniverseSnapshotId = request.UniverseSnapshotId,
-            DecisionRunId = runId,
-            Profile = request.Mode.Trim().ToLowerInvariant(),
-            Status = "running",
-            StartedAtUtc = now,
-            SchemaVersion = 1,
-            ConfigHash = requestHash,
-            CodeVersion = typeof(CandidateWorkflowService).Assembly.GetName().Version?.ToString() ?? "development"
+            RunId = runId, UniverseSnapshotId = request.UniverseSnapshotId, DecisionRunId = runId,
+            Profile = mode, Status = "running", StartedAtUtc = now, SchemaVersion = 1, ConfigHash = hash,
+            CodeVersion = ResolveCodeIdentity()
         };
-
-        foreach (var member in preview.Members.OrderBy(item => item.Symbol, StringComparer.Ordinal))
+        var records = new List<CandidateRecord>();
+        foreach (var member in members.OrderBy(item => item.Symbol, StringComparer.Ordinal))
+        foreach (var strategy in selected)
         {
-            var usableSources = member.Sources.Where(source => !source.IsDiagnostic).ToArray();
-            if (usableSources.Length == 0)
+            var sources = member.Sources.Where(source => !source.IsDiagnostic).ToArray();
+            records.Add(new CandidateRecord
             {
-                continue;
-            }
-            foreach (var strategy in request.Strategies.OrderBy(item => item.StrategyId, StringComparer.Ordinal))
-            {
-                var setupKey = $"{request.UniverseSnapshotId:N}:{member.Symbol}:{strategy.StrategyId}:{strategy.SemanticVersion}:{strategy.ContentSha256}";
-                var candidateId = UniverseDiscoveryService.DeterministicGuid($"candidate\u001f{runId:N}\u001f{setupKey}");
-                await candidates.UpsertDiscoveryAsync(run, new CandidateRecord
-                {
-                    CandidateId = candidateId,
-                    RunId = runId,
-                    SchemaVersion = run.SchemaVersion,
-                    ConfigHash = run.ConfigHash,
-                    CodeVersion = run.CodeVersion,
-                    Symbol = member.Symbol,
-                    DiscoveredAtUtc = usableSources.Min(source => source.ObservedAtUtc),
-                    RevalidatedAtUtc = now,
-                    DiscoverySource = String.Join('+', usableSources.Select(source => source.SourceKind).Distinct(StringComparer.Ordinal)),
-                    FinvizPreset = usableSources.FirstOrDefault(source => source.SourceKind == DiscoverySourceKinds.Finviz)?.SourceKey ?? String.Empty,
-                    Horizon = "swing",
-                    SelectedStrategy = strategy.StrategyId,
-                    StrategySemanticVersion = strategy.SemanticVersion,
-                    StrategyContentSha256 = strategy.ContentSha256.ToLowerInvariant(),
-                    AdmissionProfileId = strategy.StrategyId,
-                    AdmissionProfileVersion = strategy.SemanticVersion,
-                    SetupKey = setupKey,
-                    DiscoveryWindowStartUtc = usableSources.Min(source => source.ObservedAtUtc),
-                    DiscoveryWindowEndUtc = asOf,
-                    State = StrategyCandidateState.Discovered,
-                    ExpiresAtUtc = usableSources.Min(source => source.ExpiresAtUtc),
-                    SemanticDecisionSha256 = new string('0', 64),
-                    SetupScoresJson = JsonSerializer.Serialize(new
-                    {
-                        universeSnapshotId = request.UniverseSnapshotId,
-                        sources = usableSources.Select(source => new
-                        {
-                            source.SourceKind,
-                            source.SourceKey,
-                            source.ObservedAtUtc,
-                            source.ExpiresAtUtc,
-                            source.ContentSha256,
-                            source.ProviderReference
-                        })
-                    }),
-                    RejectReasonsJson = "[]"
-                }, cancellationToken);
-            }
+                CandidateId = CandidateId(runId, request.UniverseSnapshotId, member.Symbol, strategy), RunId = runId,
+                SchemaVersion = run.SchemaVersion, ConfigHash = hash, CodeVersion = run.CodeVersion,
+                Symbol = member.Symbol, DiscoveredAtUtc = sources.Min(source => source.ObservedAtUtc), RevalidatedAtUtc = now,
+                DiscoverySource = String.Join('+', sources.Select(source => source.SourceKind).Distinct(StringComparer.Ordinal)),
+                FinvizPreset = sources.FirstOrDefault(source => source.SourceKind == DiscoverySourceKinds.Finviz)?.SourceKey ?? String.Empty,
+                Horizon = "swing", SelectedStrategy = strategy.StrategyId, StrategySemanticVersion = strategy.SemanticVersion,
+                StrategyContentSha256 = strategy.ContentSha256, AdmissionProfileId = strategy.StrategyId,
+                AdmissionProfileVersion = strategy.SemanticVersion, SetupKey = SetupKey(request.UniverseSnapshotId, member.Symbol, strategy),
+                DiscoveryWindowStartUtc = sources.Min(source => source.ObservedAtUtc), DiscoveryWindowEndUtc = asOf,
+                State = StrategyCandidateState.Discovered, ExpiresAtUtc = sources.Min(source => source.ExpiresAtUtc),
+                SemanticDecisionSha256 = new string('0', 64),
+                SetupScoresJson = JsonSerializer.Serialize(new { universeSnapshotId = request.UniverseSnapshotId, sources }, EvidenceJson),
+                RejectReasonsJson = "[]"
+            });
         }
-
-        var created = await queries.GetRunAsync(runId, cancellationToken)
-            ?? throw new InvalidOperationException("Candidate run was not visible after durable creation.");
-        return created;
+        var created = await previews.CreateCandidateRunAsync(new CandidateRunRequestRecord
+        {
+            IdempotencyKey = key, RequestSha256 = hash, CandidateRunId = runId, UniverseSnapshotId = request.UniverseSnapshotId,
+            Mode = mode, StrategyIdentitiesJson = JsonSerializer.Serialize(selected), CreatedAtUtc = now
+        }, run, records, cancellationToken);
+        return await queries.GetRunAsync(created.CandidateRunId, cancellationToken)
+            ?? throw new InvalidOperationException("Candidate run was not visible after atomic creation.");
     }
-
-    private static void ValidateStrategyReference(StrategyReference strategy)
+    private static string ResolveCodeIdentity()
     {
-        if (String.IsNullOrWhiteSpace(strategy.StrategyId) ||
-            String.IsNullOrWhiteSpace(strategy.SemanticVersion) ||
-            strategy.ContentSha256.Length != 64 ||
-            !strategy.ContentSha256.All(Uri.IsHexDigit))
-        {
-            throw new InvalidOperationException("Every candidate strategy requires exact ID, semantic version and SHA-256 identity.");
-        }
+        var version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(CandidateWorkflowService).Assembly)?.InformationalVersion;
+        var hash = version?.Split('+').LastOrDefault();
+        return hash is { Length: 40 or 64 } && hash.All(Uri.IsHexDigit) ? hash.ToLowerInvariant()
+            : throw new InvalidOperationException("Candidate run requires a build with exact source identity.");
     }
+    private static StrategyReference NormalizeStrategy(StrategyReference strategy)
+    {
+        if (strategy is null || String.IsNullOrWhiteSpace(strategy.StrategyId) || String.IsNullOrWhiteSpace(strategy.SemanticVersion) ||
+            strategy.ContentSha256 is null || strategy.ContentSha256.Length != 64 || !strategy.ContentSha256.All(Uri.IsHexDigit))
+            throw new InvalidOperationException("Every strategy requires exact ID, semantic identity and SHA-256.");
+        return strategy with { ContentSha256 = strategy.ContentSha256.ToLowerInvariant() };
+    }
+    private static string SetupKey(Guid snapshot, string symbol, StrategyReference strategy) =>
+        $"{snapshot:N}:{symbol}:{strategy.StrategyId}:{strategy.SemanticVersion}:{strategy.ContentSha256}";
+    private static Guid CandidateId(Guid run, Guid snapshot, string symbol, StrategyReference strategy) =>
+        UniverseDiscoveryService.DeterministicGuid($"candidate\u001f{run:N}\u001f{SetupKey(snapshot, symbol, strategy)}");
 }

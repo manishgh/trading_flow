@@ -1,0 +1,50 @@
+@page
+@inject Microsoft.AspNetCore.Mvc.ViewFeatures.IFileVersionProvider FileVersions
+@{ ViewData["Title"] = "Desk"; ViewData["MainClass"] = "watch-desk-shell"; ViewData["ShowOperatorClock"] = true; ViewData["EmbeddedPreparation"] = true; }
+<link rel="stylesheet" href="~/css/watch-desk.css" asp-append-version="true" />
+<section class="watch-desk" aria-label="Stock desk" data-administrator="@User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator).ToString().ToLowerInvariant()">
+  <header class="watch-head">
+    <div><span class="eyebrow">YOUR MARKET, IN ONE PLACE</span><h1>Desk<span class="watch-dot" aria-hidden="true"></span></h1><p>Follow the market. Review your next move.</p></div>
+    <div class="watch-session"><strong id="watch-session">Reading market session…</strong><span id="watch-connection" role="status">Connecting · quotes refresh every 5 seconds</span><a asp-page="/Orders">View orders ↗</a><button type="button" id="watch-retry" class="btn btn-secondary" hidden>Retry connection</button></div>
+  </header>
+  <details class="watch-prep" id="watch-preparation" data-script-url="@FileVersions.AddFileVersionToPath(Request.PathBase, Url.Content("~/js/preparation.js"))">
+    <summary><span><span class="watch-kicker">DAILY PREPARATION</span><strong>Nightly preparation & morning review</strong></span><span id="watch-prep-summary">Open preparation →</span></summary>
+    <partial name="_PreparationWorkspace" />
+  </details>
+  <div class="watch-toolbar">
+    <label class="watch-source-label">Show stocks from<select id="watch-source"><option value="all">All followed stocks</option></select></label>
+    <label class="watch-search-label">Find a stock<input id="watch-search" type="search" maxlength="80" placeholder="Symbol or company" autocomplete="off" /></label>
+    <label class="watch-sort-label">Sort<select id="watch-sort"><option value="symbol">Symbol A–Z</option><option value="held">Held first on this page</option><option value="news">Latest news on this page</option></select></label>
+    <button type="button" id="watch-import-open" class="btn btn-secondary">+ Saved Elite screen</button>
+    <a asp-page="/Wishlists" class="watch-manage">Manage wishlists ↗</a>
+  </div>
+  <form id="watch-import" class="watch-import" hidden>
+    <div><strong>Add a saved Elite screen</strong><p>Copy its Finviz URL here. Only the filters are saved locally; private Elite presets are not automatically synced.</p></div>
+    <label>Screen name<input name="name" required maxlength="120" placeholder="My momentum screen" /></label><label>Finviz URL or filters<input name="url" required maxlength="4000" placeholder="https://elite.finviz.com/screener.ashx?f=…" /></label><button class="btn btn-primary" type="submit">Save screen</button><button class="btn btn-secondary" type="button" id="watch-import-close">Close</button><p role="status" id="watch-import-status"></p>
+  </form>
+  <div class="watch-view-head"><div><h2 id="watch-title">All followed stocks</h2><p id="watch-description">Active stocks across all your wishlists.</p></div><span id="watch-count">— stocks</span></div>
+  <p id="watch-warning" class="watch-warning" role="status" hidden></p>
+  <div class="watch-grid">
+    <section class="watch-stocks" aria-label="Followed stocks">
+      <div class="watch-table-scroll"><table class="watch-table"><caption class="sr-only">Market observations and paper account holdings</caption><thead><tr><th scope="col">Stock / wishlist</th><th scope="col">Mid / bid · ask</th><th scope="col">Quote age</th><th scope="col">Daily technicals</th><th scope="col">Paper holding</th><th scope="col">Unrealized P&L</th><th scope="col">Swing watch / news</th></tr></thead><tbody id="watch-rows"></tbody></table></div>
+      <div id="watch-empty" class="watch-empty"><strong>Loading your stocks…</strong><p>Your wishlists, screeners and holdings come together here.</p></div>
+      <div class="watch-pagination"><button type="button" id="watch-prev" class="btn btn-secondary" disabled>← Previous</button><span id="watch-page">Page 1</span><button type="button" id="watch-next" class="btn btn-secondary" disabled>Next →</button></div>
+      <footer class="watch-table-note">Alpaca SIP quotes · midpoint is indicative · technicals use completed daily bars</footer>
+    </section>
+    <aside class="watch-detail" aria-label="Selected stock" id="watch-detail">
+      <span class="watch-kicker">STOCK FOCUS</span><h2 id="watch-symbol">Choose a stock</h2><p id="watch-name">Select a row to inspect its news, technicals and holding.</p>
+      <div id="watch-focus-content" hidden>
+        <div class="watch-price"><strong id="watch-mid">—</strong><span>QUOTE MIDPOINT</span></div>
+        <div class="watch-bbo"><div><small>BID</small><strong id="watch-bid">—</strong></div><div><small>ASK</small><strong id="watch-ask">—</strong></div></div>
+        <p id="watch-quote-detail" class="watch-fine"></p>
+        <div class="watch-actions"><a id="watch-buy" class="btn btn-primary">Review buy</a><a id="watch-sell" class="btn btn-secondary">Review sell</a></div><p class="watch-fine" id="watch-order-help">Orders require a separate review and authorization.</p>
+        <form id="watch-follow"><label>Follow in a wishlist<select id="watch-follow-list" required></select></label><button class="btn btn-secondary" type="submit">Follow stock</button><p id="watch-follow-status" role="status"></p></form>
+        <div class="watch-detail-block"><h3>Swing observation</h3><strong id="watch-observation"></strong><p id="watch-observation-detail" class="watch-fine"></p><p id="watch-monitoring" class="watch-fine"></p><p class="watch-fine">Generic daily watch only. No strategy run selected. <a href="/TradeDesk">Review a strategy →</a></p></div><div class="watch-detail-block"><h3>Your paper holding</h3><dl class="watch-metrics"><dt>Quantity</dt><dd id="watch-quantity">—</dd><dt>Average entry</dt><dd id="watch-entry">—</dd><dt>Cost basis</dt><dd id="watch-cost">—</dd><dt>Market value</dt><dd id="watch-value">—</dd><dt>Unrealized P&L</dt><dd id="watch-pl">—</dd></dl><p id="watch-account-detail" class="watch-fine"></p></div>
+        <div class="watch-detail-block"><h3>Daily technicals</h3><dl class="watch-metrics"><dt>RSI</dt><dd id="watch-rsi">—</dd><dt>EMA 20 / 50</dt><dd id="watch-ema">—</dd><dt>EMA 200</dt><dd id="watch-ema200">—</dd><dt>ATR</dt><dd id="watch-atr">—</dd><dt>Relative volume</dt><dd id="watch-rvol">—</dd></dl><p id="watch-technical-detail" class="watch-fine"></p></div>
+      </div>
+    </aside>
+    <section class="watch-news" aria-label="Relevant news"><div class="watch-news-head"><div><span class="watch-kicker">NEWS THAT MATTERS HERE</span><h2 id="watch-news-title">News for this view</h2></div><button id="watch-news-all" class="btn btn-secondary" type="button">All stocks in view</button></div><p id="watch-news-coverage" class="watch-fine"></p><div id="watch-news-list"></div></section>
+  </div>
+  <p class="watch-footer">Discovery and preparation are advisory. Pre- and post-market monitoring does not enable extended-hours orders. <a asp-page="/TradeDesk">Open candidate review ↗</a></p>
+</section>
+@section Scripts { <script src="~/js/watch-desk.js" asp-append-version="true"></script> }

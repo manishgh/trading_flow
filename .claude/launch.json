@@ -12,6 +12,18 @@
         "http://127.0.0.1:5088"
       ],
       "port": 5088
+    },
+    {
+      "name": "trading-flow-web-current",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\Users\\manis\\AppData\\Local\\Temp\\claude\\a79812ed036102d8\\947b0651-1ab5-48ea-b728-1790c913029a\\scratchpad\\start-web.ps1"],
+      "port": 5088
+    },
+    {
+      "name": "trading-flow-web-uitest",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\Users\\manis\\AppData\\Local\\Temp\\claude\\a79812ed036102d8\\947b0651-1ab5-48ea-b728-1790c913029a\\scratchpad\\start-web-uitest.ps1"],
+      "port": 5091
     }
   ]
 }

@@ -334,3 +334,7 @@ No live broker routing should be enabled until:
 Research success is not inferred from a profitable run. A strategy remains
 research-only until its preregistered development, validation, untouched holdout,
 cost stress, concentration, execution-calibration, and paper-shadow gates pass.
+
+## Shared operator workflows
+
+See [application workflows](docs/application-workflows.md) for immutable run commands, candidate audit lineage, reviewed orders and Android navigation. Automated closure and outstanding device/provider evidence are recorded in [workflow verification](docs/verification/workflow-integration-closure.md).

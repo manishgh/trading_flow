@@ -233,3 +233,17 @@ public sealed class AlpacaQuoteService
             : null;
     }
 }
+
+public static class AlpacaQuoteServiceRegistration
+{
+    public static IServiceCollection AddAlpacaQuotes(this IServiceCollection services)
+    {
+        services.AddHttpClient(AlpacaQuoteService.HttpClientName, client =>
+        {
+            client.BaseAddress = new Uri("https://data.alpaca.markets");
+            client.Timeout = TimeSpan.FromSeconds(15);
+        });
+        services.AddSingleton<AlpacaQuoteService>();
+        return services;
+    }
+}

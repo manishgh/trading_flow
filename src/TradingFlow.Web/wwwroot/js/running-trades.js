@@ -223,7 +223,7 @@
         if (loading) return;
         loading = true;
         try {
-            const response = await fetch(`/api/v1/running-trades?source=${encodeURIComponent(source)}`, {
+            const response = await window.tradingFlowFetch(`/api/v1/running-trades?source=${encodeURIComponent(source)}`, {
                 headers: { Accept: "application/json" }
             });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);

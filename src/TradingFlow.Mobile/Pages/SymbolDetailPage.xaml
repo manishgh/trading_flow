@@ -20,15 +20,15 @@
                                Color="{StaticResource Primary}" />
             <Label x:Name="ErrorLabel"
                    IsVisible="False"
-                   TextColor="{StaticResource StateError}" />
+                   TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" />
 
             <VerticalStackLayout Spacing="6">
                 <Label Text="TradingFlow Decision" FontAttributes="Bold" FontSize="18" />
                 <Label x:Name="DecisionStatusLabel" FontAttributes="Bold" />
                 <Label x:Name="DecisionReasonLabel" LineBreakMode="WordWrap" />
                 <Label x:Name="QuoteLabel" FontFamily="monospace" />
-                <Label x:Name="QuoteAgeLabel" Style="{StaticResource Caption}" />
-                <Label x:Name="PositionLabel" Style="{StaticResource Caption}" />
+                <Label x:Name="QuoteAgeLabel" Style="{StaticResource SubHeadline}" />
+                <Label x:Name="PositionLabel" Style="{StaticResource SubHeadline}" />
             </VerticalStackLayout>
 
             <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}" />
@@ -36,13 +36,13 @@
             <VerticalStackLayout Spacing="8">
                 <Label Text="Model Intelligence" FontAttributes="Bold" FontSize="18" />
                 <Label Text="Read-only prediction evidence. It cannot override TradingFlow strategy or risk gates."
-                       Style="{StaticResource Caption}"
+                       Style="{StaticResource SubHeadline}"
                        LineBreakMode="WordWrap" />
-                <Label Text="Swing horizon" Style="{StaticResource Caption}" />
+                <Label Text="Swing horizon" Style="{StaticResource SubHeadline}" />
                 <Label x:Name="ModelStatusLabel"
                        FontAttributes="Bold" />
-                <Label x:Name="ModelGeneratedLabel" Style="{StaticResource Caption}" />
-                <Label x:Name="ModelIdentityLabel" Style="{StaticResource Caption}" LineBreakMode="WordWrap" />
+                <Label x:Name="ModelGeneratedLabel" Style="{StaticResource SubHeadline}" />
+                <Label x:Name="ModelIdentityLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
                 <Label x:Name="ModelUnavailableLabel"
                        IsVisible="False"
                        TextColor="{AppThemeBinding Light={StaticResource StateWarningLight}, Dark={StaticResource StateWarningDark}}"
@@ -52,12 +52,12 @@
             <VerticalStackLayout x:Name="SwingSection" IsVisible="False" Spacing="4">
                 <Label x:Name="SwingSignalLabel" FontAttributes="Bold" />
                 <Label x:Name="SwingProbabilityLabel" />
-                <Label x:Name="SwingContextLabel" Style="{StaticResource Caption}" LineBreakMode="WordWrap" />
+                <Label x:Name="SwingContextLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
             </VerticalStackLayout>
 
             <VerticalStackLayout x:Name="ReadinessSection" IsVisible="False" Spacing="4">
                 <Label Text="Readiness evidence" FontAttributes="Bold" />
-                <Label x:Name="ReadinessReasonsLabel" Style="{StaticResource Caption}" LineBreakMode="WordWrap" />
+                <Label x:Name="ReadinessReasonsLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
             </VerticalStackLayout>
 
             <Button Text="Refresh evidence"

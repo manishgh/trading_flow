@@ -27,6 +27,10 @@ public interface ICandidateRepository
         CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<CandidateRecord>>([]);
 
+    Task<IReadOnlyList<CandidateTransitionRecord>> GetLatestDecisionsAsync(
+        Guid runId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<CandidateTransitionRecord>>([]);
+
     Task<IReadOnlyList<CandidateTransitionRecord>> GetTransitionsAsync(
         Guid candidateId,
         CancellationToken cancellationToken = default);

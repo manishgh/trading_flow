@@ -275,6 +275,7 @@ public sealed class SqliteOrderEventRepository : IOrderEventRepository
                 CodeVersion = intent.CodeVersion
             };
             context.OrderEvents.Add(orderEvent);
+            await CandidateProjectionEvents.AppendAsync(context, intent.CandidateId, request.LocalTimestampUtc, cancellationToken);
             await ApplyRiskReservationTransitionAsync(
                 context,
                 intent,
@@ -425,6 +426,7 @@ public sealed class SqliteOrderEventRepository : IOrderEventRepository
             CodeVersion = intent.CodeVersion
         };
         context.PositionEvents.Add(positionEvent);
+        await CandidateProjectionEvents.AppendPositionAsync(context, positionEvent, previous, cancellationToken);
         await ApplyPositionBackedRiskAsync(
             context,
             positionEvent,

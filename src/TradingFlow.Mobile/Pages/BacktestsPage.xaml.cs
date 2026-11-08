@@ -1,3 +1,4 @@
+using TradingFlow.Contracts.V1;
 using System.Collections.ObjectModel;
 using TradingFlow.Mobile.Services;
 using TradingFlow.Mobile.Resources.Styles;
@@ -12,8 +13,12 @@ public partial class BacktestsPage : ContentPage
     private MobileCatalogResponse? catalog;
     private IReadOnlyList<MobileWishlistResponse> wishlists = Array.Empty<MobileWishlistResponse>();
     private BacktestJobSnapshot? selectedJob;
+    private StartBacktestRequest? pendingRequest;
     private bool isLoading;
+    private CancellationTokenSource? pageLifetime;
     private bool suppressPersist;
+    private bool refreshingForm;
+    private bool updatingJobs;
     private bool formRestored;
 
     public BacktestsPage()
@@ -32,14 +37,24 @@ public partial class BacktestsPage : ContentPage
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        pageLifetime?.Cancel(); pageLifetime?.Dispose(); pageLifetime = new();
+        api.SessionChanged += OnSessionChanged;
         refreshTimer.Start();
         await LoadAsync();
     }
 
     protected override void OnDisappearing()
     {
-        refreshTimer.Stop();
+        refreshTimer.Stop(); pageLifetime?.Cancel();
+        api.SessionChanged -= OnSessionChanged;
         base.OnDisappearing();
+    }
+
+    private void OnSessionChanged(object? sender, EventArgs e)
+    {
+        pageLifetime?.Cancel(); refreshTimer.Stop(); catalog = null; pendingRequest = null;
+        jobs.Clear(); selectedJob = null; RenderSelectedJob();
+        StatusLabel.Text = "Connection changed. Reopen this page after signing in.";
     }
 
     private async Task LoadAsync(bool showBusy = true)
@@ -49,25 +64,34 @@ public partial class BacktestsPage : ContentPage
             return;
         }
 
+        var token = pageLifetime?.Token ?? new CancellationToken(true);
+        if (token.IsCancellationRequested) return;
         isLoading = true;
         BusyIndicator.IsVisible = showBusy;
         BusyIndicator.IsRunning = showBusy;
         try
         {
-            var healthy = await api.CheckHealthAsync();
+            var healthy = await api.CheckHealthAsync(token);
+            token.ThrowIfCancellationRequested();
             StatusLabel.Text = healthy
                 ? $"Connected: {api.BaseUrl}"
                 : $"Backend unreachable: {api.BaseUrl}";
             StatusLabel.TextColor = healthy ? ThemePalette.Positive : ThemePalette.Negative;
 
-            catalog ??= await api.GetCatalogAsync();
+            if (showBusy || catalog is null) {
+            refreshingForm = true;
+            var previousConfig = (ConfigPicker.SelectedItem as MobileRunConfigOption)?.Path;
+            var previousStrategy = (StrategyPicker.SelectedItem as MobileStrategyOption)?.Path;
+            catalog = await api.GetCatalogAsync(token);
+            token.ThrowIfCancellationRequested();
             ConfigPicker.ItemsSource = catalog?.BacktestConfigs.ToList();
             StrategyPicker.ItemsSource = catalog?.Strategies.ToList();
             ConfigPicker.SelectedIndex = ConfigPicker.SelectedIndex < 0 && ConfigPicker.Items.Count > 0 ? 0 : ConfigPicker.SelectedIndex;
             StrategyPicker.SelectedIndex = StrategyPicker.SelectedIndex < 0 && StrategyPicker.Items.Count > 0 ? 0 : StrategyPicker.SelectedIndex;
 
             var previousWishlistId = (WishlistPicker.SelectedItem as MobileWishlistResponse)?.Id;
-            wishlists = await api.GetWishlistsAsync() ?? Array.Empty<MobileWishlistResponse>();
+            wishlists = await api.GetWishlistsAsync(token) ?? Array.Empty<MobileWishlistResponse>();
+            token.ThrowIfCancellationRequested();
             suppressPersist = true;
             WishlistPicker.ItemsSource = wishlists.ToList();
             WishlistPicker.SelectedItem = wishlists.FirstOrDefault(wishlist => wishlist.Id == previousWishlistId)
@@ -78,18 +102,26 @@ public partial class BacktestsPage : ContentPage
 
             RestoreFormState();
 
-            var latestJobs = await api.GetBacktestJobsAsync() ?? Array.Empty<BacktestJobSnapshot>();
+            if (previousConfig is not null) SelectConfigByPath(previousConfig);
+            if (previousStrategy is not null) SelectStrategyByPath(previousStrategy);
+            refreshingForm = false;
+            }
+            var latestJobs = await api.GetBacktestJobsAsync(token) ?? Array.Empty<BacktestJobSnapshot>();
+            token.ThrowIfCancellationRequested();
+            updatingJobs = true;
             jobs.Clear();
             foreach (var job in latestJobs.Take(20))
             {
                 jobs.Add(job);
             }
 
-            selectedJob = selectedJob is null
-                ? null
-                : latestJobs.FirstOrDefault(job => job.JobId == selectedJob.JobId);
+            JobsView.SelectedItem = jobs.FirstOrDefault(item => item.JobId == selectedJob?.JobId);
+            updatingJobs = false;
+            if (selectedJob is { } selection) await RefreshSelectedAsync(selection.JobId, token);
+            token.ThrowIfCancellationRequested();
             RenderSelectedJob();
         }
+        catch (OperationCanceledException) { }
         catch (Exception exception)
         {
             StatusLabel.Text = $"Error: {exception.Message}";
@@ -98,6 +130,7 @@ public partial class BacktestsPage : ContentPage
         }
         finally
         {
+            refreshingForm = false; updatingJobs = false;
             isLoading = false;
             BusyIndicator.IsRunning = false;
             BusyIndicator.IsVisible = false;
@@ -133,19 +166,19 @@ public partial class BacktestsPage : ContentPage
         try
         {
             RunButton.IsEnabled = false;
-            var request = new MobileBacktestRunRequest(
-                config.Path,
-                $"bt_{DateTimeOffset.Now:yyyyMMdd_HHmmss}",
-                ParseInt(LookbackEntry.Text, 60),
-                wishlist.Id,
-                strategies.Select(strategy => strategy.Path).ToArray(),
-                ParseDecimal(CapitalEntry.Text, 10000m),
-                ParseDecimal(RiskEntry.Text, 1.0m),
-                ParseDecimal(MaxPositionEntry.Text, 25.0m),
-                ParseInt(MaxConcurrentEntry.Text, 4),
-                CachePolicyPicker.SelectedItem?.ToString() ?? "reuse");
-            var job = await api.StartBacktestRunAsync(request);
-            if (job is not null)
+            if (pendingRequest is null)
+            {
+                var preview = await api.Workflow.PreviewAsync(new(ContractVersions.VersionOne, "swing", null,
+                    [new("wishlist", wishlist.Id.ToString(), wishlist.Id)]));
+                var end = DateTimeOffset.UtcNow;
+                pendingRequest = new(ContractVersions.VersionOne, $"bt_{end:yyyyMMdd_HHmmss}", preview.UniverseSnapshotId,
+                    strategies.Select(item => new StrategyReference(item.ArtifactStrategyId, item.SemanticVersion, item.ContentSha256)).ToArray(),
+                    end.AddDays(-ParseInt(LookbackEntry.Text, 60)), end, ParseDecimal(CapitalEntry.Text, 10000m),
+                    ParseDecimal(RiskEntry.Text, 1m), ParseDecimal(MaxPositionEntry.Text, 25m), ParseInt(MaxConcurrentEntry.Text, 4),
+                    CachePolicyPicker.SelectedItem?.ToString() == "refresh" ? "refresh" : "use_cache", "full", Guid.NewGuid().ToString("N"), config.FileName);
+            }
+            var job = await api.StartBacktestRunAsync(pendingRequest);
+            pendingRequest = null;            if (job is not null)
             {
                 jobs.Insert(0, job);
                 selectedJob = job;
@@ -179,7 +212,7 @@ public partial class BacktestsPage : ContentPage
         SaveFormState();
     }
 
-    private void OnFormChanged(object? sender, EventArgs e) => SaveFormState();
+    private void OnFormChanged(object? sender, EventArgs e) { if (!suppressPersist && !refreshingForm) pendingRequest = null; SaveFormState(); }
 
     private void RestoreFormState()
     {
@@ -210,7 +243,8 @@ public partial class BacktestsPage : ContentPage
 
     private void SaveFormState()
     {
-        if (suppressPersist)
+        if (!suppressPersist && !refreshingForm) pendingRequest = null;
+        if (suppressPersist || refreshingForm)
         {
             return;
         }
@@ -297,12 +331,19 @@ public partial class BacktestsPage : ContentPage
             : Array.Empty<MobileStrategyOption>();
     }
 
-    private void OnJobSelected(object? sender, SelectionChangedEventArgs e)
+    private async void OnJobSelected(object? sender, SelectionChangedEventArgs e)
     {
+        if (updatingJobs) return;
         selectedJob = e.CurrentSelection.FirstOrDefault() as BacktestJobSnapshot;
+        if (selectedJob is { } selection) { try { await RefreshSelectedAsync(selection.JobId, pageLifetime?.Token ?? new CancellationToken(true)); } catch (OperationCanceledException) { } catch (HttpRequestException) { } }
         RenderSelectedJob();
     }
 
+    private async Task RefreshSelectedAsync(Guid id, CancellationToken token)
+    {
+        var detail = await api.GetBacktestJobAsync(id, token);
+        if (!token.IsCancellationRequested && selectedJob?.JobId == id) selectedJob = detail ?? selectedJob;
+    }
     private void RenderSelectedJob()
     {
         DetailCard.IsVisible = selectedJob is not null;

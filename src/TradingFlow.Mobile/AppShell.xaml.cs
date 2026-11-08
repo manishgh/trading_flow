@@ -7,6 +7,12 @@ public partial class AppShell : Shell
     public AppShell()
     {
         InitializeComponent();
+        Routing.RegisterRoute(nameof(WishlistsPage), typeof(WishlistsPage));
+        Routing.RegisterRoute(nameof(NotificationsPage), typeof(NotificationsPage));
+        Routing.RegisterRoute(nameof(PreparationPage), typeof(PreparationPage));
+        Loaded += async (_, _) => { Services.PreparationNotifications.Start(); try { await Services.PreparationNotifications.OpenPendingAsync(); } catch { } };
+        Routing.RegisterRoute(nameof(CandidatesPage), typeof(CandidatesPage));
+        Loaded += async (_, _) => { try { await Services.CandidateNavigation.OpenPendingAsync(); } catch { } };
         Routing.RegisterRoute(nameof(NewsPage), typeof(NewsPage));
         Routing.RegisterRoute(nameof(EarningsPage), typeof(EarningsPage));
         Routing.RegisterRoute(nameof(AutomationPage), typeof(AutomationPage));

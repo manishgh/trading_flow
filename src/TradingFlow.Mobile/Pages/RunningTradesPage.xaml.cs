@@ -21,6 +21,9 @@ public partial class RunningTradesPage : ContentPage
     public RunningTradesPage()
     {
         InitializeComponent();
+        var paper = new ToolbarItem { Text = "Paper runs" };
+        paper.Clicked += async (_, _) => await Shell.Current.GoToAsync(nameof(PaperPage));
+        ToolbarItems.Add(paper);
         TradesView.ItemsSource = rows;
         refreshTimer = Dispatcher.CreateTimer();
         refreshTimer.Interval = TimeSpan.FromSeconds(6);

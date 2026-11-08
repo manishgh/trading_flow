@@ -3,7 +3,7 @@ namespace TradingFlow.Contracts.V1;
 public sealed record UniversePreviewRequest(
     string ContractVersion,
     string Horizon,
-    DateTimeOffset AsOfUtc,
+    DateTimeOffset? AsOfUtc,
     IReadOnlyList<UniverseSourceSelectionRequest> Sources);
 
 public sealed record UniverseSourceSelectionRequest(
@@ -20,7 +20,8 @@ public sealed record UniversePreviewResponse(
     DateTimeOffset ExpiresAtUtc,
     string ContentSha256,
     IReadOnlyList<UniverseMemberResponse> Members,
-    IReadOnlyList<UniverseExclusionResponse> Exclusions);
+    IReadOnlyList<UniverseExclusionResponse> Exclusions,
+    DateTimeOffset DecisionCutoffUtc = default);
 
 public sealed record UniverseMemberResponse(
     string Symbol,

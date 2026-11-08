@@ -8,7 +8,8 @@ public sealed record DurableFileEvidence(string Path, long Length, string Sha256
 public sealed record DurableFileJobRequest(
     int SchemaVersion,
     DateTimeOffset CapturedAtUtc,
-    IReadOnlyList<DurableFileEvidence> Files)
+    IReadOnlyList<DurableFileEvidence> Files,
+    WorkflowJobContext? Workflow = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -161,3 +162,5 @@ public sealed class DurableFileReadLease : IDisposable
         }
     }
 }
+
+public sealed record WorkflowJobContext(TradingFlow.Contracts.V1.RunProvenance Provenance, string RequestSha256);

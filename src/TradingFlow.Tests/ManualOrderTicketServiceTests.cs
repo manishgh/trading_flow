@@ -99,7 +99,9 @@ public sealed class ManualOrderTicketServiceTests
             admission.Object,
             new TradingEnvironmentService(),
             new FixedTimeProvider(Now),
-            new EphemeralDataProtectionProvider());
+            new EphemeralDataProtectionProvider(),
+            new Microsoft.AspNetCore.Http.HttpContextAccessor { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+            { User = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity([new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Role, "Administrator")], "test")) } });
     }
 
     private static Mock<IManualOrderMarketGateway> CreateMarket(

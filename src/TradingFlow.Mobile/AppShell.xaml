@@ -5,30 +5,30 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
     xmlns:pages="clr-namespace:TradingFlow.Mobile.Pages"
     Title="TradingFlow"
-    Shell.TabBarBackgroundColor="{StaticResource SurfacePanel}"
-    Shell.TabBarForegroundColor="{StaticResource Primary}"
-    Shell.TabBarTitleColor="{StaticResource Primary}"
-    Shell.TabBarUnselectedColor="{StaticResource TextSecondary}"
+    Shell.TabBarBackgroundColor="{AppThemeBinding Light={StaticResource SurfacePanelLight}, Dark={StaticResource SurfacePanelDark}}"
+    Shell.TabBarForegroundColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+    Shell.TabBarTitleColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+    Shell.TabBarUnselectedColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
     SemanticProperties.Description="TradingFlow primary navigation">
 
     <TabBar>
         <ShellContent
-            Title="Watch"
-            ContentTemplate="{DataTemplate pages:WishlistsPage}"
-            Route="WishlistsPage" />
+            Title="Workspace"
+            ContentTemplate="{DataTemplate pages:PreparationPage}"
+            Route="PreparationRoot" />
 
         <ShellContent
-            Title="Positions"
+            Title="Trading"
             ContentTemplate="{DataTemplate pages:RunningTradesPage}"
             Route="RunningTradesPage" />
 
         <ShellContent
-            Title="Activity"
-            ContentTemplate="{DataTemplate pages:NotificationsPage}"
-            Route="NotificationsPage" />
+            Title="Research"
+            ContentTemplate="{DataTemplate pages:BacktestsPage}"
+            Route="ResearchRoot" />
 
         <ShellContent
-            Title="More"
+            Title="System"
             ContentTemplate="{DataTemplate pages:MorePage}"
             Route="MorePage" />
     </TabBar>

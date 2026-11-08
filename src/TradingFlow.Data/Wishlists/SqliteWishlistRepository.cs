@@ -7,12 +7,22 @@ namespace TradingFlow.Data.Wishlists;
 public sealed class SqliteWishlistRepository : IWishlistRepository
 {
     private readonly IDbContextFactory<TradingFlowDbContext> dbFactory;
+    private static async Task RequireMutableAsync(TradingFlowDbContext db, Guid id, CancellationToken token)
+    {
+        if (await db.PreparationReviews.AnyAsync(x => x.WishlistId == id, token))
+            throw new InvalidOperationException("Preparation wishlist revisions are immutable. Create a new review instead.");
+    }
 
     public SqliteWishlistRepository(IDbContextFactory<TradingFlowDbContext> dbFactory)
     {
         this.dbFactory = dbFactory;
     }
 
+    public async Task<bool> IsPreparationRevisionAsync(Guid id, CancellationToken cancellationToken)
+    {
+        await using var db=await dbFactory.CreateDbContextAsync(cancellationToken);
+        return await db.PreparationReviews.AnyAsync(x=>x.WishlistId==id,cancellationToken);
+    }
     public async Task<IReadOnlyList<Wishlist>> ListAsync(CancellationToken cancellationToken)
     {
         using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -50,6 +60,7 @@ public sealed class SqliteWishlistRepository : IWishlistRepository
         var normalizedName = NormalizeName(wishlist.Name);
 
         using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await RequireMutableAsync(db, wishlist.Id, cancellationToken);
         if (wishlist.IsDefault)
         {
             await db.Wishlists
@@ -94,6 +105,7 @@ public sealed class SqliteWishlistRepository : IWishlistRepository
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken)
     {
         using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await RequireMutableAsync(db, id, cancellationToken);
         var existing = await db.Wishlists.FindAsync([id], cancellationToken);
         if (existing is null)
         {
@@ -107,6 +119,7 @@ public sealed class SqliteWishlistRepository : IWishlistRepository
     public async Task SetObservedAsync(Guid id, bool isObserved, CancellationToken cancellationToken)
     {
         using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await RequireMutableAsync(db, id, cancellationToken);
         var existing = await db.Wishlists.FindAsync([id], cancellationToken);
         if (existing is null)
         {
@@ -123,6 +136,7 @@ public sealed class SqliteWishlistRepository : IWishlistRepository
         var normalizedTicker = NormalizeTicker(ticker);
         var now = DateTimeOffset.UtcNow;
         using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await RequireMutableAsync(db, wishlistId, cancellationToken);
         var wishlistExists = await db.Wishlists.AnyAsync(wishlist => wishlist.Id == wishlistId, cancellationToken);
         if (!wishlistExists)
         {
@@ -160,6 +174,7 @@ public sealed class SqliteWishlistRepository : IWishlistRepository
     {
         var normalizedTicker = NormalizeTicker(ticker);
         using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await RequireMutableAsync(db, wishlistId, cancellationToken);
         var existing = await db.WishlistItems
             .FirstOrDefaultAsync(item => item.WishlistId == wishlistId && item.Ticker == normalizedTicker, cancellationToken);
         if (existing is null)

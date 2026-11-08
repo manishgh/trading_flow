@@ -1,0 +1,139 @@
+{
+  "discovered": {
+    "contractVersion": "1.0",
+    "candidate": {
+      "candidateId": "<candidate-id>",
+      "version": 0,
+      "symbol": "MSFT",
+      "strategy": {
+        "strategyId": "swing.test",
+        "semanticVersion": "test",
+        "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "state": "Discovered",
+      "readiness": "watching",
+      "trigger": null,
+      "discoveredAtUtc": "2026-09-27T12:00:00+00:00",
+      "revalidatedAtUtc": "2026-09-27T12:00:00+00:00",
+      "expiresAtUtc": "2026-09-27T12:03:00+00:00",
+      "latestCompletedCandleAtUtc": null,
+      "sameTimeRelativeVolume": null,
+      "relativeVolumeSampleCount": null,
+      "rejections": [],
+      "sources": [
+        {
+          "sourceKind": "wishlist",
+          "sourceKey": "watch",
+          "observedAtUtc": "2026-09-27T12:00:00+00:00",
+          "expiresAtUtc": "2026-09-27T12:03:00+00:00",
+          "contentSha256": "<source-sha256>",
+          "isDiagnostic": false,
+          "providerReference": null
+        }
+      ]
+    },
+    "transitions": [],
+    "gateEvaluations": [],
+    "marketEvidence": null,
+    "catalystEvidence": null,
+    "executionEvidence": null,
+    "semanticDecisionSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "generatedAtUtc": "2026-09-27T12:00:00+00:00"
+  },
+  "consumed": {
+    "contractVersion": "1.0",
+    "candidate": {
+      "candidateId": "<candidate-id>",
+      "version": 1,
+      "symbol": "MSFT",
+      "strategy": {
+        "strategyId": "swing.test",
+        "semanticVersion": "test",
+        "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "state": "Consumed",
+      "readiness": "in_trade",
+      "trigger": null,
+      "discoveredAtUtc": "2026-09-27T12:00:00+00:00",
+      "revalidatedAtUtc": "2026-09-27T12:00:00+00:00",
+      "expiresAtUtc": "2026-09-27T12:03:00+00:00",
+      "latestCompletedCandleAtUtc": null,
+      "sameTimeRelativeVolume": 1.5,
+      "relativeVolumeSampleCount": 60,
+      "rejections": [],
+      "sources": [
+        {
+          "sourceKind": "wishlist",
+          "sourceKey": "watch",
+          "observedAtUtc": "2026-09-27T12:00:00+00:00",
+          "expiresAtUtc": "2026-09-27T12:03:00+00:00",
+          "contentSha256": "<source-sha256>",
+          "isDiagnostic": false,
+          "providerReference": null
+        }
+      ]
+    },
+    "transitions": [
+      {
+        "sequence": 1,
+        "previousState": "Triggered",
+        "newState": "Consumed",
+        "occurredAtUtc": "2026-09-27T12:00:00+00:00",
+        "reasonCode": "entry_reserved",
+        "source": "engine",
+        "semanticDecisionSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "gateEvaluations": [
+      {
+        "order": 1,
+        "gateName": "spread",
+        "passed": true,
+        "rejectionCode": null,
+        "evaluatedAtUtc": "2026-09-27T12:00:00+00:00",
+        "inputs": {
+          "spreadBps": "2"
+        }
+      }
+    ],
+    "marketEvidence": {
+      "asOfUtc": "2026-09-27T12:00:00+00:00",
+      "latestCompletedCandleAtUtc": null,
+      "timeframe": "1d",
+      "session": "regular_market",
+      "bidPrice": 101.2,
+      "askPrice": 101.3,
+      "lastPrice": 101.25,
+      "spreadBps": 2.0,
+      "sameTimeRelativeVolume": 1.5,
+      "relativeVolumeSampleCount": 60,
+      "evidenceSha256": "5494e930f9e568a33f1b102da1a25e188306579956179c7b5c063298d67118ec"
+    },
+    "catalystEvidence": {
+      "catalystResultId": "22222222-2222-2222-2222-222222222222",
+      "provider": "test-news",
+      "providerArticleId": "story",
+      "providerPublishedAtUtc": null,
+      "firstReceivedAtUtc": null,
+      "category": "earnings",
+      "direction": "positive",
+      "compositeScore": 0.7,
+      "headline": null,
+      "url": null,
+      "evidenceSha256": "75c2a5c8190efe73be758982910603e7ee7c83ab4e5ae89ba204f059da2e7303"
+    },
+    "executionEvidence": {
+      "orderIntentId": "33333333-3333-3333-3333-333333333333",
+      "clientOrderId": "owner-entry",
+      "brokerOrderId": "broker-entry",
+      "state": "Filled",
+      "requestedQuantity": 10.0,
+      "filledQuantity": 10.0,
+      "averageFillPrice": 101.5,
+      "updatedAtUtc": "2026-09-27T12:00:00+00:00",
+      "rejectionCode": null
+    },
+    "semanticDecisionSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "generatedAtUtc": "2026-09-27T12:00:00+00:00"
+  }
+}

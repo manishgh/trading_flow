@@ -150,6 +150,8 @@ public sealed class DatabaseMigrationTests
         tablesAfter.Remove("candidate_run_requests");
         tablesAfter.Remove("order_previews");
         tablesAfter.Remove("universe_previews");
+        foreach(var table in new[] {"preparation_definitions","preparation_occurrences","preparation_reviews","preparation_schedule_cursors"})
+        { Assert.Contains(table,tablesAfter); tablesAfter.Remove(table); }
         Assert.Equal(
             tablesBefore.OrderBy(value => value, StringComparer.OrdinalIgnoreCase),
             tablesAfter.OrderBy(value => value, StringComparer.OrdinalIgnoreCase));

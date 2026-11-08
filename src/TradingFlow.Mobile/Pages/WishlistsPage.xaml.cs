@@ -21,6 +21,7 @@ public partial class WishlistsPage : ContentPage
     private CancellationTokenSource? streamCts;
     private Guid? streamedWishlistId;
     private bool isLoading;
+    private bool appearing;
 
     public WishlistsPage()
     {
@@ -38,12 +39,14 @@ public partial class WishlistsPage : ContentPage
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        appearing = true;
         refreshTimer.Start();
         await LoadAsync();
     }
 
     protected override void OnDisappearing()
     {
+        appearing = false;
         refreshTimer.Stop();
         StopStreams();
         base.OnDisappearing();
@@ -80,7 +83,7 @@ public partial class WishlistsPage : ContentPage
         {
             StatusLabel.Text = $"Wishlist error: {exception.Message}";
             StatusLabel.TextColor = ThemePalette.Negative;
-            await DisplayAlertAsync("Wishlists", exception.Message, "OK");
+            // Background refresh and initial authentication failures stay inline.
         }
         finally
         {
@@ -304,7 +307,8 @@ public partial class WishlistsPage : ContentPage
 
     private void EnsureStreams()
     {
-        if (selectedWishlist is null)
+        // An in-flight refresh can complete after navigation has stopped this page.
+        if (!appearing || selectedWishlist is null)
         {
             StopStreams();
             return;
