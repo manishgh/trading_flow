@@ -78,7 +78,7 @@
         stream.addEventListener('snapshot',event=>{
             if(version!==generation)return;
             snapshot=JSON.parse(event.data);connected=true;updateHealth();
-            text('session',({Regular:'Regular market',RegularMarket:'Regular market',Premarket:'Premarket',PreMarket:'Premarket',Postmarket:'Postmarket',PostMarket:'Postmarket',Closed:'Market closed'})[snapshot.session]||snapshot.session.replace(/([a-z])([A-Z])/g,'$1 $2'));
+            text('session',({Regular:'Regular market',RegularMarket:'Regular market',Premarket:'Premarket',PreMarket:'Premarket',Postmarket:'Postmarket',PostMarket:'Postmarket',AfterHours:'After hours',Overnight:'Overnight',ClosedWeekend:'Market closed',Closed:'Market closed'})[snapshot.session]||snapshot.session.replace(/([a-z])([A-Z])/g,'$1 $2'));
             const warnings=[];
             if(snapshot.selection.error)warnings.push(snapshot.selection.error);
             page=snapshot.selection.page||0;text('page',`Page ${page+1} of ${snapshot.selection.pageCount||1}`);el('prev').disabled=page===0;el('next').disabled=page+1>=(snapshot.selection.pageCount||1);
@@ -152,33 +152,59 @@
         });
     }
     // Where the quote came from and how old it is. The server already picks the newest quote across
-    // SIP (pre-market, regular, after hours) and Alpaca's overnight feed, so an old quote is only
-    // explained by a weekend or holiday; otherwise it is reported as delayed.
+    // SIP (pre-market, regular, after hours) and Alpaca's overnight feed. Only an authoritative
+    // closed session explains market closure; unknown sessions continue to show quote age.
     function quoteAge(row) {
         const stamp=row.quote?.timestamp;if(!stamp)return 'No quote';
         if(!connected)return 'Disconnected';
         const seconds=Math.floor((Date.now()-Date.parse(stamp))/1000);
+        if(!Number.isFinite(seconds))return 'No quote';
         if(seconds < -5)return 'Clock mismatch';
         const age=seconds<60?Math.max(seconds,0)+'s':seconds<3600?Math.floor(seconds/60)+'m':Math.floor(seconds/3600)+'h';
         const session=String(snapshot?.session||'').toLowerCase();
-        const label=row.quote.feed==='overnight'?'Overnight':session.startsWith('pre')?'Pre-market':session.startsWith('post')?'After hours':'Live';
+        if(['closed','closedweekend','closed_weekend'].includes(session))return 'Market closed';
+        const label=row.quote.feed==='overnight'?'Overnight':session.startsWith('pre')?'Pre-market':session.startsWith('post')||session==='afterhours'?'After hours':'Live';
         if(seconds<=120)return label+' · '+age;
-        return session.includes('weekend')||session.includes('holiday')?'Market closed · last '+age+' ago':'Delayed · '+age+' ago';
+        return 'Delayed · '+age+' ago';
     }
-    // Open the selected side in the shared popup without moving the stock workspace.
-    function openOrder(side){
+    // Explain unavailable actions immediately without creating a ticket or moving the stock workspace.
+    function openOrder(side,trigger){
+        const row=snapshot?.rows.find(item=>item.membership.symbol===selected);
+        const reason=orderUnavailableReason(row,side);
+        const label=(side==='buy'?'Buy ':'Sell ')+(selected||'');
+        if(reason){window.tradingFlowOrderPopup.unavailable(reason,label,trigger);return;}
         const link=el(side==='buy'?'buy':'sell');
-        if(!link||link.hidden||!link.getAttribute('href'))return;
-        openOrderUrl(link.getAttribute('href'),(side==='buy'?'Buy ':'Sell ')+(selected||''));
+        if(!link||link.hidden||!link.getAttribute('href')){
+            window.tradingFlowOrderPopup.unavailable('This order action is unavailable. Refresh the stock and account observations before retrying.',label,trigger);return;
+        }
+        openOrderUrl(link.getAttribute('href'),label,trigger);
+    }
+    // These explanations mirror the existing link guards; server preview remains the trading authority.
+    function orderUnavailableReason(row,side){
+        if(!row)return 'Select a stock before reviewing an order.';
+        if(side==='buy'){
+            if(!row.membership.wishlists.length)return 'Follow this stock in a stock group before buying. Screener membership does not authorize an order.';
+            if(!isAdministrator&&!(isSignal(row)&&row.strategyAssessment?.candidateId&&row.strategyAssessment?.candidateRunId))
+                return 'No executable strategy signal for this stock. Start a paper strategy run under Strategy runs to get entry signals.';
+        }else{
+            if(!connected)return 'Selling is unavailable while disconnected. Reconnect to refresh the account.';
+            if(!row.holdingsKnown||!snapshot.account.available)return 'Selling is unavailable because holdings could not be read. Refresh the account and retry.';
+            const accountTime=Date.parse(snapshot.account.readAtUtc);
+            if(!Number.isFinite(accountTime)||Date.now()-accountTime>=30000)return 'Selling is unavailable because the account snapshot is stale. Refresh the account and retry.';
+            if(!(row.holding?.quantity>0))return 'No held shares are available to sell for this stock.';
+            if(!Number.isInteger(row.holding.quantity))return 'This holding has fractional shares. Whole-share order review is required on this Desk.';
+        }
+        const price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;
+        return price>0?'':'The '+(side==='buy'?'ask':'bid')+' quote is unavailable. Refresh market observations before reviewing an order.';
     }
     // Keep candidate IDs and exact strategy-run context in the existing workflow URL.
-    function openOrderUrl(href,title){
-        window.tradingFlowOrderPopup.open(href,title);
+    function openOrderUrl(href,title,trigger){
+        window.tradingFlowOrderPopup.open(href,title,trigger);
     }
     // Strategy-run cards use the same retained popup as the stock's Buy and Sell actions.
     document.getElementById('watch-runs')?.addEventListener('click',event=>{
         const link=event.target.closest('a[href^="/OrderTicket"]');if(!link)return;
-        event.preventDefault();openOrderUrl(link.getAttribute('href'),link.textContent.trim()||'Strategy entry');
+        event.preventDefault();openOrderUrl(link.getAttribute('href'),link.textContent.trim()||'Strategy entry',link);
     });
     // View switch: all stocks, signals ready for entry, held positions, or stocks the strategy rejected.
     let view='all';
@@ -188,7 +214,7 @@
     function isSignal(row){const a=row.strategyAssessment;return !!a&&['recorded','evaluated'].includes(a.state)&&!a.expired&&a.checks.length>0&&a.checks.every(c=>c.passed);}
     function isRejected(row){const a=row.strategyAssessment;return !!a&&['recorded','evaluated'].includes(a.state)&&a.checks.some(c=>!c.passed);}
     const inView=row=>view==='signals'?isSignal(row):view==='held'?!!row.holding:view==='rejected'?isRejected(row):true;
-    for(const side of ['buy','sell'])el(side).addEventListener('click',event=>{event.preventDefault();openOrder(side);});
+    for(const side of ['buy','sell'])el(side).addEventListener('click',event=>{event.preventDefault();openOrder(side,event.currentTarget);});
     function tone(node, value) {node.classList.toggle('watch-gain',value>0);node.classList.toggle('watch-loss',value<0);}
     // Keep freshness visible in a narrow row; its complete wording and timestamp stay in the trade-cell title.
     function rowQuoteAge(row){
@@ -209,13 +235,28 @@
         return technical?(connected?'':'Disconnected · last observed ')+ 'Completed 1d bar · '+when(technical.timestamp)+' · '+(technical.dataFeed||'Feed unavailable'):
             'Daily indicators unavailable · '+(row.observation?.detail||'No verified completed daily snapshot.');
     }
-    // Refresh only the existing SMA cells; missing or invalid observations replace any earlier values with an em dash.
+    // Refresh compact daily lines; missing or invalid observations clear every earlier indicator value.
     function renderDailyCells(cells,row){
-        const technical=dailyTechnical(row),detail=dailyTechnicalDetail(row);
-        for(const [index,field] of [[5,'sma10'],[6,'sma20']]){
-            cells[index].textContent=money(technical?.[field]);
-            cells[index].title=detail;
+        const technical=dailyTechnical(row),detail=dailyTechnicalDetail(row),cell=cells[5];
+        for(const field of ['sma10','sma20','sma50','sma200','rsi']){
+            const node=cell.querySelector('[data-technical="'+field+'"]');
+            node.textContent=field==='rsi'?number(technical?.[field]):money(technical?.[field]);node.title=detail;
         }
+        cell.title=detail;
+    }
+    // Show stored-news counts as context, with unscored stories and the exact partial window in the tooltip.
+    function renderNewsSentiment(cell,row){
+        const summary=row.newsSentiment,counts=cell.querySelector('.watch-news-counts'),windowLabel=cell.querySelector('.watch-news-window');
+        const countText=summary?.available?summary.positive+' positive · '+summary.negative+' negative':'News unavailable';
+        const asOf=Date.parse(summary?.asOfUtc),now=Date.now();
+        const stale=!connected||!Number.isFinite(asOf)||asOf>now+5000||now-asOf>30000;
+        const windowText=summary?.available?(stale?'Observed 1h · partial':'Last 1h · partial'):'1h window unavailable';
+        const detail=summary?.available?'Stored news · '+summary.positive+' positive · '+summary.negative+' negative · '+summary.neutral+' neutral · '+summary.unscored+' unscored · '+
+            when(summary.windowStartUtc)+' → '+when(summary.asOfUtc)+' · partial coverage · advisory only':
+            'Stored news could not be read. Counts are unavailable; this is not a zero-story result.';
+        if(counts.textContent!==countText)counts.textContent=countText;
+        if(windowLabel.textContent!==windowText)windowLabel.textContent=windowText;
+        for(const node of [cell,counts,windowLabel])if(node.title!==detail)node.title=detail;
     }
     // Render server-provided facts and recorded checks without introducing client-side strategy thresholds.
     function render() {
@@ -230,15 +271,21 @@
         for(const row of rows){
             const symbol=row.membership.symbol;let tr=rowNodes.get(symbol);
             if(!tr){tr=document.createElement('tr');tr.dataset.symbol=symbol;
-                tr.innerHTML='<td><button type="button" class="watch-symbol-button"></button></td><td class="watch-num"><span class="watch-quote-line"><strong></strong><small></small></span></td><td class="watch-trade"><span class="watch-trade-line"><span class="watch-trade-buttons"><button type="button" class="watch-buy" data-side="buy"></button><button type="button" class="watch-sell" data-side="sell"></button></span><small></small></span></td><td class="watch-signal-col"><strong></strong><small></small></td><td class="watch-num"><span class="watch-holding-line"><strong></strong><small></small></span></td><td class="watch-num watch-sma" data-daily-sma="10"></td><td class="watch-num watch-sma" data-daily-sma="20"></td>';
-                tr.querySelector('.watch-symbol-button').textContent=symbol;
+                tr.innerHTML='<td><button type="button" class="watch-symbol-button"><span class="watch-symbol-name"></span><small class="watch-news-counts"></small><small class="watch-news-window"></small></button></td><td class="watch-num"><span class="watch-quote-line"><strong></strong><small></small></span></td><td class="watch-trade"><span class="watch-trade-line"><span class="watch-trade-buttons"><button type="button" class="watch-buy" data-side="buy"></button><button type="button" class="watch-sell" data-side="sell"></button></span><small></small></span></td><td class="watch-signal-col"><strong></strong><small></small></td><td class="watch-num"><span class="watch-holding-line"><strong></strong><small></small></span></td><td class="watch-num watch-technical"><div>SMA 10/20 <span data-technical="sma10" data-daily-sma="10"></span> / <span data-technical="sma20" data-daily-sma="20"></span></div><div>SMA 50/200 <span data-technical="sma50"></span> / <span data-technical="sma200"></span></div><div>RSI <span data-technical="rsi"></span></div></td>';
+                tr.querySelector('.watch-symbol-name').textContent=symbol;
+                const symbolButton=tr.querySelector('.watch-symbol-button');
+                symbolButton.setAttribute('aria-label',symbol);
+                tr.querySelector('.watch-news-counts').id='watch-news-counts-'+symbol;
+                tr.querySelector('.watch-news-window').id='watch-news-window-'+symbol;
+                symbolButton.setAttribute('aria-describedby','watch-news-counts-'+symbol+' watch-news-window-'+symbol);
                 // Any click on the row selects it; the row's Buy and Sell buttons also open that side's order review.
                 tr.onclick=event=>{if(event.target.closest('a'))return;selected=symbol;newsForAll=false;render();
-                    const side=event.target.closest('[data-side]')?.dataset.side;if(side){openOrder(side);return;}
+                    const trigger=event.target.closest('[data-side]'),side=trigger?.dataset.side;if(side){openOrder(side,trigger);return;}
                     el('symbol').tabIndex=-1;el('symbol').focus({preventScroll:true});el('detail').scrollIntoView({behavior:'smooth',block:'nearest'});};rowNodes.set(symbol,tr);
             }
             const cells=tr.children;tr.dataset.selected=String(symbol===selected);tr.querySelector('.watch-symbol-button').setAttribute('aria-pressed',String(symbol===selected));
-            const lists=row.membership.wishlists.map(x=>x.name).join(', ');cells[0].title=[row.membership.name,lists||'Screener discovery'].filter(Boolean).join(' · ');
+            renderNewsSentiment(cells[0],row);
+            const lists=row.membership.wishlists.map(x=>x.name).join(', ');tr.querySelector('.watch-symbol-button').title=[row.membership.name,lists||'Screener discovery'].filter(Boolean).join(' · ');
             // Keep price and change together; the previous close and its session remain in detail and the cell tooltip.
             const bid=row.quote?.bidPrice,ask=row.quote?.askPrice;
             const change = row.previousClose?.close > 0 && row.quote?.midPrice != null ? (row.quote.midPrice / row.previousClose.close - 1) * 100 : null;
@@ -247,7 +294,7 @@
             cells[1].title=row.previousClose?'Previous close '+money(row.previousClose.close)+' · '+row.previousClose.sessionDate:'Previous close unavailable';
             // Buy fills at the ask and sell at the bid; the spread is the cost of crossing between them.
             const buy=cells[2].querySelector('.watch-buy'),sell=cells[2].querySelector('.watch-sell');
-            buy.textContent='Buy';sell.textContent='Sell';buy.setAttribute('aria-label','Buy '+money(ask));sell.setAttribute('aria-label','Sell '+money(bid));buy.title='Buy at ask '+money(ask);sell.title='Sell at bid '+money(bid);buy.disabled=!(ask>0);sell.disabled=!(bid>0);
+            buy.textContent='Buy';sell.textContent='Sell';buy.setAttribute('aria-label','Buy '+money(ask));sell.setAttribute('aria-label','Sell '+money(bid));buy.title='Buy at ask '+money(ask);sell.title='Sell at bid '+money(bid);buy.disabled=false;sell.disabled=false;buy.title=orderUnavailableReason(row,'buy')||buy.title;sell.title=orderUnavailableReason(row,'sell')||sell.title;
             cells[2].querySelector('small').textContent=rowQuoteAge(row);cells[2].title=spreadDetail(row)+' · '+when(row.quote?.timestamp);
             cells[3].querySelector('strong').textContent=signalLabel(row);cells[3].querySelector('small').textContent=signalReason(row);cells[3].title=signalReason(row);
             cells[4].querySelector('strong').textContent=!row.holdingsKnown?'Unknown':row.holding?number(row.holding.quantity)+' sh':'—';
@@ -257,7 +304,7 @@
         // Move only rows whose position changed, preserving keyboard focus during price updates.
         rows.forEach((row,index)=>{const node=rowNodes.get(row.membership.symbol),at=el('rows').children[index];if(at!==node)el('rows').insertBefore(node,at||null);});
         el('empty').hidden=rows.length>0;
-        if(!rows.length){el('empty').querySelector('strong').textContent=snapshot.selection.error?'Screen unavailable':filter?'No matching stocks':'No stocks in this view';el('empty').querySelector('p').textContent=snapshot.selection.error?'The failed screen is not being shown as a successful empty result.':filter?'Try a different symbol or clear the search.':'Add stocks to a wishlist or select a screener to discover stocks.';}
+        if(!rows.length){el('empty').querySelector('strong').textContent=snapshot.selection.error?'Screen unavailable':filter?'No matching stocks':'No stocks in this view';el('empty').querySelector('p').textContent=snapshot.selection.error?'The failed screen is not being shown as a successful empty result.':filter?'Try a different symbol or clear the search.':'Add stocks to a stock group or select a screener to discover stocks.';}
         renderFocus();renderNews();ageRows();updateHealth();
     }
     // Summarize only checks actually recorded by the shared engine; missing and expired evidence stays explicit.
@@ -294,7 +341,7 @@
         text('quote-detail',quoteAge(row)+' · spread '+(row.quote?.askPrice>0&&row.quote?.bidPrice>0?money(row.quote.askPrice-row.quote.bidPrice):'—'));el('quote-detail').title=when(row.quote?.timestamp);
         reviewLink('buy',row.membership.wishlists.length>0,row,'buy');reviewLink('sell',connected&&row.holdingsKnown&&Date.now()-Date.parse(snapshot.account.readAtUtc)<30000&&row.holding?.quantity>0&&Number.isInteger(row.holding.quantity),row,'sell');
         // Only explain when buying is unavailable; the buttons speak for themselves otherwise.
-        const help=!row.membership.wishlists.length?'Follow this stock in a wishlist before buying. Screener membership does not authorize an order.':
+        const help=!row.membership.wishlists.length?'Follow this stock in a stock group before buying. Screener membership does not authorize an order.':
             !isSignal(row)&&!isAdministrator?'No signal for this stock. Start a paper strategy run under Strategy runs to get entry signals.':'';
         text('order-help',help);el('order-help').hidden=!help;
         el('follow').hidden=row.membership.wishlists.length>0||!el('follow-list').options.length;
@@ -304,7 +351,7 @@
         text('quantity',accountStale?'Stale snapshot':row.holdingsKnown?row.holding?number(row.holding.quantity):'Not held':'Unknown');
         text('entry',money(row.holding?.averageEntry));text('value',money(row.holding?.marketValue));text('pl',money(row.holding?.unrealizedPl));tone(el('pl'),row.holding?.unrealizedPl);
         el('holding-block').title=(accountStale?'Stale: last observed values. ':'')+snapshot.account.detail+' · cost basis '+money(row.holding?.costBasis)+' · '+when(snapshot.account.readAtUtc);
-        const technical=dailyTechnical(row);text('sma10',money(technical?.sma10));text('sma20',money(technical?.sma20));text('tech-time',dailyTechnicalDetail(row));
+        const technical=dailyTechnical(row);text('sma10',money(technical?.sma10));text('sma20',money(technical?.sma20));text('sma50',money(technical?.sma50));text('sma200',money(technical?.sma200));text('tech-time',dailyTechnicalDetail(row));
         text('rsi',number(technical?.rsi));text('ema',money(technical?.ema20)+' / '+money(technical?.ema50));text('ema200',money(technical?.ema200));text('atr',number(technical?.atr));text('rvol',number(technical?.relativeVolume));
         // Strategy checks appear only once a strategy is chosen at the top.
         el('strategy-block').hidden=!selectedStrategyChoice();text('observation',observationLabel(row));renderStrategyChecks(row);
@@ -336,12 +383,13 @@
     function renderNews(){
         const articles=newsForAll?snapshot.news:snapshot.rows.find(x=>x.membership.symbol===selected)?.news||[];
         text('news-title',newsForAll?'News for this view':selected+' news');el('news-all').hidden=newsForAll;text('news-coverage',snapshot.newsCoverage);
-        const signature=JSON.stringify(articles);if(signature===newsSignature)return;newsSignature=signature;el('news-list').replaceChildren();
-        if(!articles.length){const p=document.createElement('p');p.className='watch-fine';p.textContent='No matched stories in the stored 72-hour window. This does not establish complete news coverage.';el('news-list').append(p);return;}
+        const unavailable=!newsForAll&&snapshot.rows.find(row=>row.membership.symbol===selected)?.newsSentiment?.available===false||snapshot.newsCoverage.startsWith('News is unavailable');
+        const signature=JSON.stringify([articles,unavailable]);if(signature===newsSignature)return;newsSignature=signature;el('news-list').replaceChildren();
+        if(!articles.length){const p=document.createElement('p');p.className='watch-fine';p.textContent=unavailable?'Stored news could not be read. Retry when the connection recovers.':'No matched stories in the stored 72-hour window. This does not establish complete news coverage.';el('news-list').append(p);return;}
         for(const article of articles) el('news-list').append(window.TradingFlowNews.create(article,{allowGroup:false}));
     }
     // Age quote/account labels without treating a closed-market quote as invalid daily history.
-    function ageRows(){if(!snapshot)return;for(const row of snapshot.rows){const node=rowNodes.get(row.membership.symbol)?.children[2];if(node){node.querySelector('small').textContent=rowQuoteAge(row);node.title=spreadDetail(row)+' · '+when(row.quote?.timestamp);const staleAccount=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;const cells=node.parentElement.children;renderDailyCells(cells,row);if(staleAccount&&row.holding){cells[4].querySelector('strong').textContent='Stale holding';cells[4].querySelector('small').textContent='Last observed P&L';}node.classList.toggle('watch-stale',!connected||Date.now()-Date.parse(row.quote?.timestamp)>120000);}}if(selected){const row=snapshot.rows.find(x=>x.membership.symbol===selected);if(row)text('quote-detail',quoteAge(row)+' · '+when(row.quote?.timestamp));}}
+    function ageRows(){if(!snapshot)return;for(const row of snapshot.rows){const node=rowNodes.get(row.membership.symbol)?.children[2];if(node){node.querySelector('small').textContent=rowQuoteAge(row);node.title=spreadDetail(row)+' · '+when(row.quote?.timestamp);const staleAccount=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;const cells=node.parentElement.children;renderDailyCells(cells,row);renderNewsSentiment(cells[0],row);if(staleAccount&&row.holding){cells[4].querySelector('strong').textContent='Stale holding';cells[4].querySelector('small').textContent='Last observed P&L';}node.classList.toggle('watch-stale',!connected||Date.now()-Date.parse(row.quote?.timestamp)>120000);}}if(selected){const row=snapshot.rows.find(x=>x.membership.symbol===selected);if(row)text('quote-detail',quoteAge(row)+' · '+when(row.quote?.timestamp));}}
     el('source').onchange=()=>{page=0;el('search').value='';connect();};el('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{page=0;connect();},300);};
     el('strategy').onchange=connect;
     // A refresh requests new evidence explicitly; completed observations do not silently become continuous background trading jobs.

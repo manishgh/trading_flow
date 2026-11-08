@@ -3,7 +3,7 @@ import {signIn} from './sign-in.js';
 // One persistent destination list works on public screens, operator screens and phones.
 for(const width of [320,412,1280,1440]) test('workspace navigation stays available at '+width,async({page},testInfo)=>{
  await page.setViewportSize({width,height:915});await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
- await expect(page.locator('#watch-source')).toContainText('All wishlist stocks');
+ await expect(page.locator('#watch-source')).toContainText('All followed stocks');
  const navigation=()=>page.getByRole('navigation',{name:'Primary navigation'});
  const destinations=[['Desk','/Desk'],['Trading','/Orders'],['Strategies','/Paper'],['Earnings','/Earnings'],['News','/News'],['Stock groups','/Wishlists']];
  await expect(navigation().getByRole('link')).toHaveText(destinations.map(([name])=>name));
@@ -38,4 +38,21 @@ test('audit return keeps its candidate run',async({page})=>{
  await page.goto('/CandidateAudit?candidateId=22222222-2222-2222-2222-222222222222&runId='+run+'&env=paper');
  const link=page.getByRole('link',{name:'Return to candidates'});
  await expect(link).toHaveAttribute('href','/Desk?runId='+run+'&env=paper');
+});
+
+// Both shared layout variants send the brand to the desk from public market pages.
+for (const signedIn of [false,true]) test('News and Earnings brand opens Desk when '+(signedIn?'signed in':'public'),async({page})=>{
+ if(signedIn)await signIn(page);
+ for(const source of ['/News','/Earnings']){
+  await page.goto(source);
+  const brand=page.getByRole('link',{name:'TradingFlow',exact:true});
+  await expect(brand).toHaveAttribute('href','/Desk');
+  await brand.click();
+  // Desk requires sign-in for public visitors and retains Desk as the requested destination.
+  if(signedIn)await expect(page).toHaveURL(url=>url.pathname==='/Desk' && (!url.searchParams.has('source') || url.searchParams.get('source')==='all'));
+  else{
+   await expect(page).toHaveURL(/\/Login\?/);
+   expect(new URL(page.url()).searchParams.get('ReturnUrl')).toBe('/Desk');
+  }
+ }
 });

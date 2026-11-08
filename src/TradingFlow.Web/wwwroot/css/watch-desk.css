@@ -99,3 +99,23 @@
 .watch-table .watch-trade-line small{min-width:0;font-size:9px}
 .workspace-app .watch-desk .watch-table th{padding:10px 6px}
 .workspace-app .watch-desk .watch-table .watch-trade-buttons button{padding:4px 6px}
+
+/* Fixed leading columns keep trade and holding adjacent; the technical cell takes remaining width. */
+.workspace-app .watch-desk .watch-table{table-layout:fixed;width:100%;min-width:540px}
+.watch-table .watch-stock-col{width:120px}.watch-table .watch-price-col{width:78px}
+.watch-table .watch-trade-col{width:100px}.watch-table col.watch-signal-col{width:78px}
+.watch-table .watch-holding-col{width:76px}
+.workspace-app .watch-desk .watch-table td{padding:4px 6px}
+.watch-table .watch-trade-line{flex-direction:column;align-items:flex-start;gap:1px}
+.watch-table .watch-trade-line>small{font-size:10px;line-height:1.2}
+.workspace-app .watch-desk .watch-table td.watch-technical{font-size:11px;line-height:1.4;white-space:nowrap}
+.watch-table .watch-news-counts,.watch-table .watch-news-window{font-size:9px;line-height:1.3;margin-top:0;max-width:none;overflow:visible}
+.watch-table .watch-news-window{color:var(--watch-muted)}
+@media(min-width:1151px){.workspace-app .watch-desk .watch-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+@media(max-width:700px){.workspace-app .watch-desk .watch-table td{padding:2px 6px}}
+
+/* Global buttons use a horizontal flex row; stock and news context must remain contained stacked lines. */
+.workspace-app .watch-desk .watch-table .watch-symbol-button{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0;line-height:1.2;text-align:left;width:100%;max-width:100%}
+.workspace-app .watch-desk .watch-table .watch-symbol-button>span,.workspace-app .watch-desk .watch-table .watch-symbol-button>small{display:block;flex-shrink:0;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.workspace-app .watch-desk .watch-table .watch-symbol-button>small{font-size:9px;line-height:1.3;margin:0}
+.workspace-app .watch-desk .watch-table:not(.watch-no-strategy){min-width:618px}

@@ -110,30 +110,82 @@ const item = (id, ticker, time) => ({ id, ticker, companyName:ticker, scheduledA
   breakoutAssessment:'AwaitingEarningsRelease', provider:'calendar', analysisReason:'Awaiting reported evidence',
   providerReceivedAtUtc:'2026-11-01T00:00:00Z' });
 
-// Restore supported secondary constraints and keep their disclosure visible across reload.
-test('Earnings calendar uses New York dates and filter URLs survive reload', async ({ page }) => {
-  await page.route('**/api/earnings/calendar?*', route => route.fulfill({ json:{
-    generatedAtUtc:'2026-11-01T12:00:00Z', monitoringActive:false, monitoringIntervalSeconds:60,
+// The week preset uses New York's week even when UTC and the operator have reached Monday.
+test('Earnings This week preserves New York dates and its URL across reload', async ({ page }) => {
+  await page.clock.install({ time:new Date('2026-11-02T00:30:00Z') });
+  const requests = [];
+  const payload = {
+    generatedAtUtc:'2026-11-02T00:30:00Z', monitoringActive:false, monitoringIntervalSeconds:60,
     nextBusinessDateLabel:'Monday', newsWindowLabel:'Stored evidence', filters:{session:'all',marketCap:'all'}, news:[],
-    items:[item('one','AAA','2026-11-01T00:30:00Z'),item('two','BBB','2026-11-01T07:30:00Z')], totalMatching:2 } }));
-  await page.goto('/Earnings?from=2026-10-31&to=2026-11-01&view=week&minMarketCap=1500&breakout=AwaitingEarningsRelease');
-  await expect(page.locator('#earnings-feed')).toHaveClass(/earnings-week/);
-  const saturday = page.locator('.earnings-day').filter({has:page.getByRole('heading',{name:'2026-10-31 · New York'})});
-  const sunday = page.locator('.earnings-day').filter({has:page.getByRole('heading',{name:'2026-11-01 · New York'})});
+    items:[item('one','AAA','2026-11-01T00:30:00Z'),item('two','BBB','2026-11-02T00:30:00Z')], totalMatching:2 };
+  await page.route('**/api/earnings/today-next-business-day?*', route => route.fulfill({ json:payload }));
+  await page.route('**/api/earnings/calendar?*', route => {
+    requests.push(new URL(route.request().url()));
+    return route.fulfill({ json:payload });
+  });
+  await page.goto('/Earnings');
+  await page.locator('#earnings-this-week').click();
+  await expect(page.locator('#earnings-this-week')).toHaveAttribute('aria-current','page');
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].searchParams.get('from')).toBe('2026-10-26');
+  expect(requests[0].searchParams.get('to')).toBe('2026-11-01');
+  const saturday = page.locator('.earnings-day').filter({has:page.getByRole('heading',{name:'Saturday, October 31'})});
+  const sunday = page.locator('.earnings-day').filter({has:page.getByRole('heading',{name:'Sunday, November 1'})});
   await expect(saturday).toContainText('AAA'); await expect(sunday).toContainText('BBB');
-  await expect(page.locator('.market-more-filters')).toHaveJSProperty('open', true);
-  await expect(page.locator('#earnings-minMarketCap')).toBeVisible();
-  await expect(page.locator('#earnings-minMarketCap')).toHaveValue('1500');
-  await expect(page.locator('#earnings-breakout')).toHaveValue('AwaitingEarningsRelease');
+  expect(new URL(page.url()).search).toBe('?scope=week');
   await page.reload();
-  await expect(page.locator('#earnings-feed')).toHaveClass(/earnings-week/);
-  await expect(page.locator('.market-more-filters')).toHaveJSProperty('open', true);
-  await expect(page.locator('#earnings-minMarketCap')).toBeVisible();
-  await expect(page.locator('#earnings-minMarketCap')).toHaveValue('1500');
-  await expect(page.locator('#earnings-breakout')).toHaveValue('AwaitingEarningsRelease');
-  expect(new URL(page.url()).searchParams.get('minMarketCap')).toBe('1500');
+  await expect(page.locator('#earnings-this-week')).toHaveAttribute('aria-current','page');
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests[1].searchParams.get('from')).toBe('2026-10-26');
+  expect(requests[1].searchParams.get('to')).toBe('2026-11-01');
+  await expect(saturday).toContainText('AAA'); await expect(sunday).toContainText('BBB');
   await page.setViewportSize({width:320,height:800});
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const nextDayRequest = page.waitForRequest(request => request.url().includes('/api/earnings/today-next-business-day?') && new URL(request.url()).searchParams.get('scope') === 'nextBusinessDay');
+  await page.locator('[data-scope-value="nextBusinessDay"]').click();
+  expect(new URL((await nextDayRequest).url()).searchParams.has('from')).toBe(false);
+  await expect(page.locator('[data-scope-value="nextBusinessDay"]')).toHaveAttribute('aria-current','page');
+});
+
+// Removed query dimensions must disappear from requests and URLs while visible refinements still round-trip.
+test('Earnings ignores obsolete custom dates and Evidence controls in saved URLs', async ({ page }) => {
+  const removed = ['from','to','view','schedule','result','minMarketCap','maxMarketCap','minEventReturn','maxEventReturn',
+    'minPriceReaction','maxPriceReaction','minEpsEstimate','maxEpsEstimate','minEpsActual','maxEpsActual',
+    'minRevenueEstimate','maxRevenueEstimate','minRevenueActual','maxRevenueActual','provider','newsProvider',
+    'day','breakout','minEpsSurprise','maxEpsSurprise','minRevenueSurprise','maxRevenueSurprise','minSentiment','maxSentiment','onlyGroups','groupId'];
+  const supported = {session:'afterMarketClose',marketCap:'2bPlus',sector:'Technology',onlyHeld:'true',hasNews:'true',minSurprise:'5',sort:'cap',assessment:'beat',search:'AA'};
+  const query = new URLSearchParams(supported);
+  for (const key of removed) query.set(key, key === 'from' || key === 'to' ? '2026-11-01' : key === 'view' ? 'week' : 'legacy');
+  const requests = [];
+  await page.route('**/api/earnings/**', route => {
+    requests.push(new URL(route.request().url()));
+    return route.fulfill({json:{generatedAtUtc:'2026-11-01T12:00:00Z',monitoringActive:false,monitoringIntervalSeconds:60,
+      nextBusinessDateLabel:'Monday',newsWindowLabel:'Stored evidence',items:[item('one','AA','2026-11-01T07:30:00Z')],news:[],totalMatching:1,
+      filters:{session:'afterMarketClose',marketCap:'2bPlus',sectors:[{value:'all',label:'All sectors',count:1},{value:'Technology',label:'Technology',count:1}]}}});
+  });
+  await page.goto('/Earnings?'+query);
+  await expect(page.locator('#earnings-count')).toContainText('1 of 1');
+  await expect(page.locator('.market-more-filters')).toHaveJSProperty('open',true);
+  await expect(page.locator('#earnings-advanced, #earnings-from, #earnings-to, #earnings-range-apply, #earnings-range-clear')).toHaveCount(0);
+  await expect(page.getByText('Evidence & display',{exact:true})).toHaveCount(0);
+  await expect(page.locator('#earnings-search')).toHaveValue('AA');
+  await expect(page.locator('#earnings-sector')).toHaveValue('Technology');
+  await expect(page.locator('#earnings-min-surprise')).toHaveValue('5');
+  await expect(page.locator('#earnings-sort')).toHaveValue('cap');
+  await expect(page.locator('#earnings-only-held')).toHaveAttribute('aria-pressed','true');
+  await expect(page.locator('#earnings-has-news')).toHaveAttribute('aria-pressed','true');
+  await expect(page.locator('[data-assessment-value="beat"]')).toHaveAttribute('aria-current','page');
+  await expect(page.locator('[data-scope-value="today"]')).toHaveAttribute('aria-current','page');
+  for (const key of removed) {
+    expect(requests[0].searchParams.has(key),key+' API query').toBe(false);
+    expect(new URL(page.url()).searchParams.has(key),key+' page query').toBe(false);
+    await expect(page.locator('input[name="'+key+'"], select[name="'+key+'"]')).toHaveCount(0);
+  }
+  for (const [key,value] of Object.entries(supported)) expect(requests[0].searchParams.get(key),key).toBe(value);
+  await page.reload();
+  await expect(page.locator('#earnings-count')).toContainText('1 of 1');
+  for (const [key,value] of Object.entries(supported)) expect(new URL(page.url()).searchParams.get(key),key).toBe(value);
+  expect(requests.every(request => request.pathname.endsWith('/today-next-business-day'))).toBe(true);
 });
 
 // The Today heading names today's New York date from the response, and a refresh patches cards in place.
@@ -180,11 +232,11 @@ test('Earnings updates cards in place without dimming the list, under today’s 
 
 test('shared News preserves safe provenance and Earnings scopes exact symbols',async({page})=>{
   await signIn(page);
-  await page.route('**/api/earnings/calendar?*',route=>route.fulfill({json:{generatedAtUtc:'2026-11-01T12:00:00Z',monitoringActive:false,monitoringIntervalSeconds:60,filters:{session:'all',marketCap:'all'},
+  await page.route('**/api/earnings/today-next-business-day?*',route=>route.fulfill({json:{generatedAtUtc:'2026-11-01T12:00:00Z',monitoringActive:false,monitoringIntervalSeconds:60,filters:{session:'all',marketCap:'all'},
     items:[item('aa','AA','2026-11-01T07:30:00Z'),item('aaa','AAA','2026-11-01T08:30:00Z')],totalMatching:2,
     news:[{tickers:'AA, BBB',publishedAtUtc:'2026-11-01T07:00:00Z',headline:'Exact AA report',url:'https://example.org/aa',sentimentScore:.2,provider:'wire',source:'release',category:'Company',whyItMatters:'Reported evidence for AA'},
       {tickers:'AAA',publishedAtUtc:'2026-11-01T07:05:00Z',headline:'Different AAA report',url:'javascript:alert(1)',sentimentScore:-.3,provider:'wire',category:'Company',summary:'<script>unsafe</script>'}]} }));
-  await page.goto('/Earnings?from=2026-11-01&to=2026-11-01&search=AA&schedule=estimated&result=pending&minEventReturn=-4&maxEventReturn=3');
+  await page.goto('/Earnings?search=AA');
   await expect(page.locator('#earnings-news-feed [data-news-item]')).toHaveCount(2);
   await expect(page.locator('#earnings-news-feed script')).toHaveCount(0);
   await expect(page.locator('#earnings-news-feed a[href^="javascript:"]')).toHaveCount(0);
@@ -196,10 +248,8 @@ test('shared News preserves safe provenance and Earnings scopes exact symbols',a
   await page.locator('#earnings-news-feed').getByRole('button',{name:'Add symbols to group'}).click();
   await expect(page.locator('#groupActionSummary')).toContainText('AA, BBB');
   await page.locator('#groupActionClose').click();
-  await page.getByText('More earnings filters and views',{exact:true}).click();
   await expect(page.locator('#earnings-search')).toHaveValue('AA');
-  await expect(page.locator('#earnings-schedule')).toHaveValue('estimated');
-  await expect(page.locator('#earnings-minEventReturn')).toHaveValue('-4');
+  await expect(page.locator('#earnings-schedule, #earnings-minEventReturn')).toHaveCount(0);
   const groupability=await page.evaluate(()=>{
     const market=window.TradingFlowNews.create({ticker:'MARKET',headline:'Fed update'}),mixed=window.TradingFlowNews.create({ticker:'MARKET, AA',headline:'Mixed update'});
     const marketHidden=market.querySelector('[data-group-action]').hidden;

@@ -133,13 +133,16 @@ test.describe("earnings calendar", () => {
   });
 
   // Secondary filters start collapsed while result assessment remains directly available.
-  test("exposes date range, result, and refinement controls", async ({ page }) => {
+  test("exposes date presets, result, and essential refinement controls", async ({ page }) => {
     await page.goto("/Earnings");
     await expect(page.locator("#earnings-assessment-filters")).toBeVisible();
-    await expect(page.locator("#earnings-from")).toBeHidden();
+    await expect(page.locator("#earnings-date-scope button")).toHaveText(["Today", "Next reporting day", "This week · NY"]);
+    await expect(page.locator("#earnings-from, #earnings-to, #earnings-advanced")).toHaveCount(0);
     await page.locator(".market-more-filters > summary").click();
-    await expect(page.locator("#earnings-from")).toBeVisible();
-    await expect(page.locator("#earnings-to")).toBeVisible();
+    await expect(page.locator("#earnings-from, #earnings-to, #earnings-advanced")).toHaveCount(0);
+    await expect(page.locator("#earnings-session-filters")).toBeVisible();
+    await expect(page.locator("#earnings-cap-filters")).toBeVisible();
+    await expect(page.locator("#earnings-sector")).toBeVisible();
     await expect(page.locator("#earnings-assessment-filters button")).not.toHaveCount(0);
     await expect(page.locator("#earnings-has-news")).toBeVisible();
     await expect(page.locator("#earnings-min-surprise")).toBeVisible();

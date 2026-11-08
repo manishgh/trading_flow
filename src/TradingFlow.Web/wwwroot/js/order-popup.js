@@ -25,6 +25,7 @@
     function open(href, label, trigger = document.activeElement) {
         const url = new URL(href, location.origin);
         if (url.origin !== location.origin || url.pathname !== '/OrderTicket') return;
+        frame.hidden = false;
         const nextIdentity = ticketIdentity(url);
         const blocked = identity && identity !== nextIdentity && !canSwitchTicket();
         notice.hidden = !blocked;
@@ -42,6 +43,21 @@
             document.documentElement.classList.add('order-popup-open');
         }
         resume.hidden = false;
+        close.focus({preventScroll:true});
+    }
+
+    // Explain a refused Desk action without navigating or replacing any retained reviewed/uncertain ticket.
+    function unavailable(message, label, trigger = document.activeElement) {
+        notice.hidden = false;
+        notice.textContent = label + ': ' + message + (identity ? ' Your existing ticket is retained below.' : '');
+        frame.hidden = !identity;
+        if (!identity) title.textContent = label + ' unavailable';
+        if (!dialog.open) {
+            opener = trigger;
+            dialog.showModal();
+            document.documentElement.classList.add('order-popup-open');
+        }
+        resume.hidden = !identity;
         close.focus({preventScroll:true});
     }
 
@@ -67,14 +83,14 @@
     close.addEventListener('keydown', event => {
         if (event.key !== 'Tab') return;
         event.preventDefault();
-        frame.contentWindow.tradingFlowOrderFocus?.(event.shiftKey ? 'last' : 'first');
+        if (!frame.hidden) frame.contentWindow.tradingFlowOrderFocus?.(event.shiftKey ? 'last' : 'first');
     });
     close.addEventListener('click', closeTicket);
     dialog.addEventListener('close', restoreFocus);
     window.addEventListener('message', embeddedKey);
     // Resume never navigates or reloads the retained ticket.
     resume.addEventListener('click', () => open(frame.src, title.textContent, resume));
-    window.tradingFlowOrderPopup = {open};
+    window.tradingFlowOrderPopup = {open, unavailable};
 
     // Trading links keep journal filters in place while opening their ticket in the popup.
     document.addEventListener('click', event => {

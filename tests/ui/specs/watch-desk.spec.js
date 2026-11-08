@@ -3,9 +3,9 @@ import {signIn,signInAsAdmin} from './sign-in.js';
 import http from 'node:http';
 import {randomUUID} from 'node:crypto';
 const id='11111111-1111-1111-1111-111111111111';
-const sources=[{key:'all',name:'All wishlist stocks',group:'',description:'Across your wishlists'},{key:'wishlist:'+id,name:'Core',group:'My wishlists',description:'Observed'},{key:'swing:trend',name:'Established trends',group:'Finviz lists',description:'Discovery only'},{key:'saved:one',name:'My Elite momentum',group:'Finviz lists',description:'Locally imported'}];
+const sources=[{key:'all',name:'All followed stocks',group:'',description:'Across your stock groups'},{key:'wishlist:'+id,name:'Core',group:'My stock groups',description:'Observed'},{key:'swing:trend',name:'Established trends',group:'Finviz lists',description:'Discovery only'},{key:'saved:one',name:'My Elite momentum',group:'Finviz lists',description:'Locally imported'}];
 // Feed the UI explicit completed daily SMA fixture values through its ordinary snapshot shape.
-function row(symbol,{held=false,stale=false,followed=true}={}){return {membership:{symbol,name:symbol==='AAPL'?'Apple Inc.':symbol,wishlists:followed?[{id,name:'Core',observed:true}]:[]},quote:{midPrice:200,bidPrice:199.95,askPrice:200.05,timestamp:new Date(Date.now()-(stale?3600000:2000)).toISOString()},quoteFreshness:stale?'stale':'current',previousClose:{close:198,sessionDate:'2026-09-24'},technical:{sma10:197.25,sma20:195.50,rsi:58.2,ema20:198,ema50:190,ema200:180,atr:4.2,relativeVolume:1.3,timeframe:'1d',timestamp:'2026-09-25T20:00:00Z',dataFeed:'sip'},observation:{state:'ready',detail:'260 completed daily sessions',evaluation:{shouldAlert:false,reason:'Participation below watch threshold',sourceBarTimestampUtc:'2026-09-25T20:00:00Z'}},holding:held?{symbol,quantity:10,averageEntry:180,costBasis:1800,marketValue:2000,unrealizedPl:200}:null,holdingsKnown:true,news:[{headline:symbol+' company update',url:'https://example.org/news/'+symbol,provider:'Fixture news',symbols:[symbol],publishedAtUtc:new Date().toISOString()}]};}
+function row(symbol,{held=false,stale=false,followed=true}={}){return {membership:{symbol,name:symbol==='AAPL'?'Apple Inc.':symbol,wishlists:followed?[{id,name:'Core',observed:true}]:[]},quote:{midPrice:200,bidPrice:199.95,askPrice:200.05,timestamp:new Date(Date.now()-(stale?3600000:2000)).toISOString()},quoteFreshness:stale?'stale':'current',previousClose:{close:198,sessionDate:'2026-09-24'},technical:{sma10:197.25,sma20:195.50,sma50:190.25,sma200:180.75,rsi:58.2,ema20:198,ema50:190,ema200:180,atr:4.2,relativeVolume:1.3,timeframe:'1d',timestamp:'2026-09-25T20:00:00Z',dataFeed:'sip'},observation:{state:'ready',detail:'260 completed daily sessions',evaluation:{shouldAlert:false,reason:'Participation below watch threshold',sourceBarTimestampUtc:'2026-09-25T20:00:00Z'}},holding:held?{symbol,quantity:10,averageEntry:180,costBasis:1800,marketValue:2000,unrealizedPl:200}:null,holdingsKnown:true,newsSentiment:{positive:2,negative:2,neutral:1,unscored:3,available:true,windowStartUtc:new Date(Date.now()-3600000).toISOString(),asOfUtc:new Date().toISOString()},news:[{headline:symbol+' company update',url:'https://example.org/news/'+symbol,provider:'Fixture news',symbols:[symbol],publishedAtUtc:new Date().toISOString()}]};}
 function snapshot(source){const rows=source==='all'?[row('AAPL',{held:true}),row('MSFT',{stale:true}),row('NVDA')]:[row('TSLA',{followed:false})];return {selection:{source:sources.find(x=>x.key===source)||sources[0],totalCount:rows.length,screenedAtUtc:source==='all'?null:new Date().toISOString(),error:null},rows,account:{available:true,detail:'Alpaca paper account · broker unrealized P&L',readAtUtc:new Date().toISOString()},news:rows.flatMap(x=>x.news),newsCoverage:'Matched stored news · historical coverage may be incomplete.',session:'Regular',readAtUtc:new Date().toISOString(),feed:'SIP'};}
 let fixtureServer,fixtureUrl,paused=false;const connections=new Set();
 test.beforeAll(async()=>{
@@ -16,29 +16,44 @@ test.beforeAll(async()=>{
 test.afterAll(async()=>{for(const res of connections)res.end();fixtureServer.closeAllConnections();await new Promise(resolve=>fixtureServer.close(resolve));});
 async function fixture(page){paused=false;await page.route('**/api/desk/sources',r=>r.fulfill({json:sources}));await page.addInitScript(url=>{const Native=window.EventSource;window.EventSource=class extends Native{constructor(path,options){super(path.startsWith('/api/desk/stream?')?url+path:path,options);}};},fixtureUrl);}
 
-for(const width of [412,680,1200,1280,1600])test('stock desk is readable and focused at '+width,async({page},testInfo)=>{
+for(const width of [412,680,1200,1265,1280,1600])test('stock desk is readable and focused at '+width,async({page},testInfo)=>{
  await page.setViewportSize({width,height:1000});await fixture(page);await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
  await expect(page.locator('#watch-rows tr')).toHaveCount(3);await expect(page.getByRole('heading',{level:1})).toHaveText('Desk');
  await expect(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link')).toHaveText(['Desk','Trading','Strategies','Earnings','News','Stock groups']);
  await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-buy')).toHaveAccessibleName('Buy $200.05');await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-sell')).toHaveAccessibleName('Sell $199.95');
  // Keep actual touch controls while removing the previous multi-line row whitespace.
  const firstRow=page.locator('#watch-rows tr[data-symbol=AAPL]');
- expect((await firstRow.boundingBox()).height).toBeLessThanOrEqual(48);
+ expect((await firstRow.boundingBox()).height).toBeLessThanOrEqual(64);
  expect((await firstRow.locator('.watch-buy').boundingBox()).height).toBeGreaterThanOrEqual(width<=700?44:40);
  await expect(firstRow.locator('[data-daily-sma="10"]')).toHaveText('$197.25');
  await expect(firstRow.locator('[data-daily-sma="20"]')).toHaveText('$195.50');
  await expect(firstRow.locator('[data-daily-sma="10"]')).toHaveAttribute('title',/Completed 1d bar.*2026-09-25T20:00:00.000Z.*sip/);
  await expect(firstRow.locator('.watch-quote-line')).toHaveText('$200.00+1.01%');
+ await expect(firstRow.locator('[data-technical=sma50]')).toHaveText('$190.25');await expect(firstRow.locator('[data-technical=sma200]')).toHaveText('$180.75');
+ await expect(firstRow.locator('[data-technical=rsi]')).toHaveText('58.2');
+ await expect(firstRow.locator('.watch-news-counts')).toHaveText('2 positive · 2 negative');
+ await expect(firstRow.locator('.watch-news-window')).toHaveText('Last 1h · partial');
+ // Inspect actual glyph boxes so global flex styles cannot silently hide the ticker or overlap the price cell.
+ const stockCell=await firstRow.locator('td').first().boundingBox();
+ const symbolLine=await firstRow.locator('.watch-symbol-name').boundingBox(),countLine=await firstRow.locator('.watch-news-counts').boundingBox(),windowLine=await firstRow.locator('.watch-news-window').boundingBox();
+ for(const line of [symbolLine,countLine,windowLine]){expect(line.width).toBeGreaterThan(0);expect(line.x).toBeGreaterThanOrEqual(stockCell.x);expect(line.x+line.width).toBeLessThanOrEqual(stockCell.x+stockCell.width);}
+ expect(countLine.y).toBeGreaterThanOrEqual(symbolLine.y+symbolLine.height-1);expect(windowLine.y).toBeGreaterThanOrEqual(countLine.y+countLine.height-1);
+ await expect(firstRow.locator('td').first()).toHaveAttribute('title',/1 neutral · 3 unscored.*partial coverage/);
  if(width>1150){
   const stocks=await page.locator('.watch-stocks').boundingBox(),news=await page.locator('.watch-news').boundingBox();
-  expect(news.width/(stocks.width+news.width)).toBeCloseTo(0.4,2);
-  const indicator=await firstRow.locator('[data-daily-sma="20"]').boundingBox();
-  expect(indicator.x+indicator.width).toBeLessThanOrEqual(stocks.x+stocks.width);
+  expect(news.width/(stocks.width+news.width)).toBeCloseTo(0.5,2);
+  const trade=await firstRow.locator('.watch-trade').boundingBox(),holding=await firstRow.locator('td').nth(4).boundingBox();
+  expect(holding.x-(trade.x+trade.width)).toBeLessThanOrEqual(2);
+  const buttons=await firstRow.locator('.watch-trade-buttons').boundingBox();
+  expect(holding.x-(buttons.x+buttons.width)).toBeLessThan(35);
+  // Narrow desktop panes retain explicit horizontal scrolling rather than clipping the technical cell.
+  const scroll=page.locator('.watch-table-scroll');
+  expect(await scroll.evaluate(node=>node.scrollWidth>=node.clientWidth)).toBe(true);
  }
 
  // Any cell selects its row, not only the symbol button.
  await page.locator('#watch-rows tr[data-symbol=NVDA] td').nth(4).click();await expect(page.locator('#watch-symbol')).toHaveText('NVDA');
- expect(await page.locator('#watch-source optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My wishlists','Finviz lists']);
+ expect(await page.locator('#watch-source optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My stock groups','Finviz lists']);
  await expect(page.locator('#watch-rows tr[data-symbol=MSFT]')).toContainText('Delayed 1h');
  await page.locator('#watch-rows button').filter({hasText:'AAPL'}).click();await expect(page.locator('#watch-symbol')).toHaveText('AAPL');
  // With no strategy chosen the strategy block stays hidden instead of repeating "select a strategy".
@@ -55,8 +70,7 @@ for(const width of [412,680,1200,1280,1600])test('stock desk is readable and foc
  await page.screenshot({path:testInfo.outputPath('stock-desk-'+width+'.png'),fullPage:true});
  if(width===1280){
   await page.setViewportSize({width:1265,height:1000});
-  const pane=await page.locator('.watch-stocks').boundingBox(),sma=await firstRow.locator('[data-daily-sma="20"]').boundingBox();
-  expect(sma.x+sma.width).toBeLessThanOrEqual(pane.x+pane.width);
+  expect(await page.locator('.watch-table-scroll').evaluate(node=>node.scrollWidth>=node.clientWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('stock-desk-1265.png'),fullPage:true});
  }
 });
@@ -97,13 +111,17 @@ test('uncertain strategy response retries the original key before an explicit co
  await expect.poll(()=>keys.length).toBe(3);expect(keys[2]).not.toBe(keys[0]);expect(accepted.size).toBe(2);
 });
 test('real source API accepts sanitized Elite filters and rejects missing CSRF',async({page})=>{
- await signIn(page);await page.goto('/Desk');await expect(page.locator('#watch-source')).toContainText('All wishlist stocks');await expect(page.locator('#watch-connection')).toContainText(/current quotes|no stocks in this view/);
+ await signIn(page);await page.goto('/Desk');await expect(page.locator('#watch-source')).toContainText('All followed stocks');await expect(page.locator('#watch-connection')).toContainText(/current quotes|no stocks in this view/);
  const result=await page.evaluate(async()=>{const csrf=await fetch('/api/auth/csrf').then(r=>r.json());const name='UI saved '+crypto.randomUUID();const payload={name,url:'https://elite.finviz.com/screener.ashx?f=ta_sma50_pa&auth=not-a-real-secret'};const rejected=await fetch('/api/desk/screens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const saved=await fetch('/api/desk/screens',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrf.requestToken},body:JSON.stringify(payload)});const entry=await saved.json();const sources=await fetch('/api/desk/sources').then(r=>r.json());return {rejected:rejected.status,saved:saved.status,screen:sources.find(x=>x.key===entry.key)};});
  expect(result.rejected).toBe(400);expect(result.saved).toBe(200);expect(result.screen.query).toBe('ta_sma50_pa');expect(result.screen.group).toBe('Finviz lists');
 });
+// An empty catalog exposes first-time setup and the real unsaved editor without creating a workflow.
 test('preparation opens within desk and retains its real controls',async({page})=>{
- await fixture(page);await signIn(page);await page.goto('/Desk');await page.locator('#watch-preparation>summary').click();
- await expect(page.locator('#prep-status')).not.toHaveText('Loading workflowsâ€¦');await expect(page.locator('#prep-new')).toBeVisible();await expect(page).toHaveURL(/Desk/);
+ await fixture(page);await page.route('**/api/v1/preparation',route=>route.fulfill({json:[]}));
+ await signIn(page);await page.goto('/Desk');await page.locator('#watch-preparation>summary').click();
+ await expect(page.locator('#prep-setup-new')).toBeVisible();await expect(page.locator('#prep-setup-new')).toBeEnabled();
+ await page.locator('#prep-setup-new').click();await expect(page.locator('#prep-name')).toBeVisible();
+ await expect(page.locator('#prep-name')).toBeFocused();await expect(page).toHaveURL(/Desk/);
 });
 
 test('disconnect marks account observations stale and disables sell',async({page})=>{
@@ -119,7 +137,7 @@ test('catalog startup failure offers working retry',async({page})=>{
 });
 test('dark theme and keyboard source selection remain readable',async({page},testInfo)=>{
  await page.setViewportSize({width:1600,height:1000});await fixture(page);await signIn(page);await page.goto('/Desk');await page.getByLabel('System menu',{exact:true}).click();await page.locator('#ThemeSelect').selectOption('dark');await page.getByLabel('System menu',{exact:true}).click();await page.getByRole('button',{name:'AAPL',exact:true}).click();await expect(page.locator('#watch-quantity')).toHaveText('10');await page.screenshot({path:testInfo.outputPath('stock-desk-dark.png'),fullPage:true});
- await page.locator('#watch-source').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');await expect(page.locator('#watch-title')).not.toHaveText('All wishlist stocks');
+ await page.locator('#watch-source').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');await expect(page.locator('#watch-title')).not.toHaveText('All followed stocks');
 });
 
 test('open stream without updates expires holdings and sell availability',async({page})=>{
@@ -233,10 +251,10 @@ test('daily SMA values stay dated and never substitute missing or future observa
  };});
  await page.goto('/Desk');
  const aapl=page.locator('#watch-rows tr[data-symbol=AAPL]');
- await expect(aapl).toContainText('Closed');
+ await expect(aapl).toContainText('Market closed');
  await expect(aapl.locator('[data-daily-sma="10"]')).toHaveText('$197.25');
- await expect(page.locator('#watch-rows tr[data-symbol=MSFT] [data-daily-sma]')).toHaveText(['—','—']);
- await expect(page.locator('#watch-rows tr[data-symbol=NVDA] [data-daily-sma]')).toHaveText(['—','—']);
+ await expect(page.locator('#watch-rows tr[data-symbol=MSFT] [data-technical]')).toHaveText(['—','—','—','—','—']);
+ await expect(page.locator('#watch-rows tr[data-symbol=NVDA] [data-technical]')).toHaveText(['—','—','—','—','—']);
  await aapl.locator('.watch-symbol-button').click();
  await expect(page.locator('#watch-sma10')).toHaveText('$197.25');
  await expect(page.locator('#watch-tech-time')).toContainText('2026-09-25T20:00:00.000Z');
@@ -244,4 +262,120 @@ test('daily SMA values stay dated and never substitute missing or future observa
  await expect(page.locator('#watch-sma10')).toHaveText('—');
  await expect(page.locator('#watch-sma20')).toHaveText('—');
  await expect(page.locator('#watch-tech-time')).toContainText('completed daily history unavailable');
+});
+
+// A refused row action explains its exact guard immediately without scrolling the long stock list.
+test('unavailable row trade opens feedback and restores the row trigger without a ticket request',async({page})=>{
+ await page.setViewportSize({width:1600,height:1000});await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);value.rows=Array.from({length:32},(_,index)=>({...value.rows[0],membership:{...value.rows[0].membership,symbol:'STOCK'+String(index).padStart(2,'0')}}));
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ let ticketRequests=0;page.on('request',request=>{if(new URL(request.url()).pathname==='/OrderTicket')ticketRequests++;});
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(32);
+ const trigger=page.locator('#watch-rows tr[data-symbol=STOCK28] .watch-buy');
+ await trigger.scrollIntoViewIfNeeded();
+ const before=await page.locator('.watch-table-scroll').evaluate(node=>({table:node.scrollTop,page:window.scrollY}));
+ await trigger.click();await expect(page.locator('#OrderPopup')).toBeVisible();await expect(page.locator('#OrderPopupNotice')).toContainText('No executable strategy signal');
+ await expect(page.locator('#OrderPopupFrame')).toBeHidden();expect(ticketRequests).toBe(0);
+ expect(await page.locator('.watch-table-scroll').evaluate(node=>({table:node.scrollTop,page:window.scrollY}))).toEqual(before);
+ await page.locator('#OrderPopupClose').click();await expect(trigger).toBeFocused();
+ expect(await page.locator('.watch-table-scroll').evaluate(node=>({table:node.scrollTop,page:window.scrollY}))).toEqual(before);
+});
+
+// A feedback-only opening cannot replace a retained ticket, even when its command outcome is uncertain.
+test('unavailable trade feedback retains the exact unresolved ticket',async({page})=>{
+ await fixture(page);await signInAsAdmin(page);await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(3);
+ await page.locator('#watch-rows tr[data-symbol=AAPL] .watch-buy').click();
+ await expect(page.frameLocator('#OrderPopupFrame').locator('#OrderWorkflowForm')).toBeVisible();
+ const original=await page.locator('#OrderPopupFrame').getAttribute('src');
+ await page.locator('#OrderPopupFrame').evaluate(frame=>{frame.contentWindow.tradingFlowOrderState=()=> 'uncertain';});
+ await page.locator('#OrderPopupClose').click();
+ await page.locator('#watch-rows tr[data-symbol=MSFT] .watch-sell').click();
+ await expect(page.locator('#OrderPopupNotice')).toContainText('No held shares');
+ await expect(page.locator('#OrderPopupFrame')).toHaveAttribute('src',original);await expect(page.locator('#OrderPopupNotice')).toContainText('existing ticket is retained');
+ await page.locator('#OrderPopupClose').click();await page.locator('#OrderPopupResume').click();
+ await expect(page.locator('#OrderPopupFrame')).toHaveAttribute('src',original);
+});
+
+// Session closure is authoritative only after missing/disconnected/future quote checks; unknown stays delayed.
+test('closed and after-hours quote labels use the actual session names and retain timestamps',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);value.session=window.fixtureSession||'Closed';
+   value.rows[0].quote.timestamp=new Date(Date.now()-3*86400000).toISOString();
+   value.rows[1].quote=null;value.rows[2].quote.timestamp='2099-01-01T00:00:00Z';
+   // Deliver explicit session transitions immediately instead of waiting for the fixture interval.
+   window.fixtureSetSession=session=>{window.fixtureSession=session;value.session=session;listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));};
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-trade')).toContainText('Market closed');
+ await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-trade')).toHaveAttribute('title',/Market closed.*NY/);
+ await expect(page.locator('#watch-rows tr[data-symbol=MSFT] .watch-trade')).toContainText('No quote');
+ await expect(page.locator('#watch-rows tr[data-symbol=NVDA] .watch-trade')).toContainText('Clock mismatch');
+ await page.evaluate(()=>window.fixtureSetSession('Unknown'));await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-trade')).toContainText('Delayed');
+ await page.evaluate(()=>window.fixtureSetSession('AfterHours'));await expect(page.locator('#watch-session')).toHaveText('After hours');
+});
+
+// Failed news reads show neither successful zero counts nor a successful empty-history message.
+test('news read failure remains distinct from zero stored stories',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);value.news=[];value.newsCoverage='News is unavailable. Retry when the connection recovers.';
+   for(const item of value.rows){item.news=[];item.newsSentiment={...item.newsSentiment,available:false};}
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');await expect(page.locator('#watch-news-list')).toContainText('Stored news could not be read');
+ await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-news-counts')).toHaveText('News unavailable');
+ await page.locator('#watch-rows tr[data-symbol=AAPL] .watch-symbol-button').click();
+ await expect(page.locator('#watch-news-list')).toContainText('Stored news could not be read');
+ await expect(page.locator('#watch-news-list')).not.toContainText('No matched stories');
+});
+
+// Retained counts always expose their age after the observation stream disconnects.
+test('disconnected news summaries show their observed window',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   listener(event);this.dispatchEvent(new Event('error'));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-news-window')).toHaveText('Observed 1h · partial');
+ await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-trade')).toContainText('Disconnected');
+});
+
+// A future summary timestamp must never advertise a current trailing-hour count.
+test('future news summary time is shown as an observed window',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);for(const item of value.rows)item.newsSentiment.asOfUtc='2099-01-01T00:00:00Z';
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');const button=page.getByRole('button',{name:'AAPL',exact:true});
+ await expect(button).toHaveAccessibleDescription('2 positive · 2 negative Observed 1h · partial');
+ await expect(button.locator('.watch-news-window')).toHaveAttribute('title',/2099-01-01T00:00:00.000Z/);
+});
+
+// Four-digit bounded-store counts truncate inside the stock cell while their full values stay inspectable.
+test('large sentiment counts stay inside their stock column',async({page})=>{
+ await page.setViewportSize({width:1265,height:1000});await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);for(const item of value.rows){item.newsSentiment.positive=1000;item.newsSentiment.negative=1000;}
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');const row=page.locator('#watch-rows tr[data-symbol=AAPL]');
+ const counts=row.locator('.watch-news-counts');await expect(counts).toHaveAttribute('title',/1000 positive · 1000 negative/);
+ const cell=await row.locator('td').first().boundingBox(),line=await counts.boundingBox();
+ expect(line.x+line.width).toBeLessThanOrEqual(cell.x+cell.width);expect(await counts.evaluate(node=>getComputedStyle(node).textOverflow)).toBe('ellipsis');
+ await expect(page.getByRole('button',{name:'AAPL',exact:true})).toBeVisible();
 });

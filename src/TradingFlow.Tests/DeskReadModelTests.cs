@@ -68,7 +68,9 @@ public sealed class DeskReadModelTests
         await presets.SaveAsync("My saved screen",ScreenerScope.Swing,"ta_sma50_pa",default);
         var sources=new DeskSources(db,repository,presets,screener.Object,cache);
         var catalog=await sources.CatalogAsync(default);
-        Assert.Equal(new[] { "My wishlists", "Finviz lists" }, catalog.Where(x=>x.Group!="").Select(x=>x.Group).Distinct());
+        Assert.Equal("All followed stocks",catalog.Single(source=>source.Key=="all").Name);
+        Assert.Contains(catalog,source=>source.Key=="wishlist:"+first.Id&&source.Group=="My stock groups");
+        Assert.Equal(new[] { "My stock groups", "Finviz lists" }, catalog.Where(x=>x.Group!="").Select(x=>x.Group).Distinct());
         Assert.DoesNotContain(await repository.ListAsync(default), x=>x.Id==historical.Id);
         Assert.DoesNotContain(catalog,x=>x.Key.Contains(historical.Id.ToString()));
         Assert.Equal("AAPL",Assert.Single((await sources.ResolveAsync("all",default)).Members).Symbol);
@@ -143,8 +145,46 @@ public sealed class DeskReadModelTests
         events.Add(new("MSFT",Now.AddHours(-1),CatalystType.NewsReport,"Relevant",0,Provider:"fixture",Url:"https://example.org/relevant"));
         await repository.UpsertAsync(events,default);
         var rows=await repository.GetRecentForTickersAsync(Now.AddHours(-72),40,["AAPL","MSFT"],default);
-        var article=Assert.Single(DeskReadService.AggregateNews(rows));Assert.Equal(["AAPL","MSFT"],article.Symbols);
+        var articles=DeskReadService.AggregateNews(rows);
+        var article=Assert.Single(articles);Assert.Equal(["AAPL","MSFT"],article.Symbols);
+        var sentiment=DeskReadService.SummarizeNews(articles,["AAPL","MSFT"],Now,true);
+        Assert.Equal(1,sentiment["AAPL"].Neutral);Assert.Equal(1,sentiment["MSFT"].Neutral);
     }
+    // Boundaries share News semantics, and the trailing UTC hour excludes old and future publications.
+    [Fact]
+    public void NewsSentiment_UsesFullWindow_StrictThresholds_AndCaseInsensitiveSymbols()
+    {
+        var stories = new List<DeskArticle> {
+            new("Positive", null, "fixture", Now.AddHours(-1), ["aapl", "AAPL", "MSFT"], SentimentScore: 0.1501m),
+            new("Negative", null, "fixture", Now, ["AAPL"], SentimentScore: -0.1501m),
+            new("Upper boundary", null, "fixture", Now.AddMinutes(-1), ["AAPL"], SentimentScore: 0.15m),
+            new("Lower boundary", null, "fixture", Now.AddMinutes(-2), ["AAPL"], SentimentScore: -0.15m),
+            new("Unscored", null, "fixture", Now.AddMinutes(-3), ["AAPL"], SentimentScore: null),
+            new("Too old", null, "fixture", Now.AddHours(-1).AddTicks(-1), ["AAPL"], SentimentScore: 1m),
+            new("Future", null, "fixture", Now.AddTicks(1), ["AAPL"], SentimentScore: -1m)
+        };
+        // More than the five displayed articles must still contribute to the summary.
+        stories.AddRange(Enumerable.Range(0, 6).Select(index => new DeskArticle("Additional " + index, null,
+            "fixture", Now.AddMinutes(-4), ["AAPL"], SentimentScore: 1m)));
+        var counts = DeskReadService.SummarizeNews(stories, ["AAPL", "MSFT", "EMPTY"], Now, true);
+        var apple = counts["aapl"];
+        Assert.Equal((7, 1, 2, 1), (apple.Positive, apple.Negative, apple.Neutral, apple.Unscored));
+        Assert.True(apple.Available); Assert.Equal(Now.AddHours(-1), apple.WindowStartUtc); Assert.Equal(Now, apple.AsOfUtc);
+        Assert.Equal(1, counts["MSFT"].Positive);
+        Assert.True(counts["EMPTY"].Available); Assert.Equal(0, counts["EMPTY"].Positive);
+    }
+
+    // A failed stored-news read must never look like a successful zero-story result on the wire.
+    [Fact]
+    public void NewsSentiment_ReadFailure_IsExplicitInOptionalRowContract()
+    {
+        var failed = DeskReadService.SummarizeNews([], ["AAPL"], Now, false)["AAPL"];
+        var empty = DeskReadService.SummarizeNews([], ["AAPL"], Now, true)["AAPL"];
+        Assert.False(failed.Available); Assert.True(empty.Available);
+        var json = JsonSerializer.Serialize(failed, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Contains("\"available\":false", json); Assert.Contains("\"windowStartUtc\"", json);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

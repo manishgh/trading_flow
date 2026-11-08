@@ -129,7 +129,7 @@
                     let universeId = run?.provenance.universeSnapshotId;
                     if (!universeId) {
                         const wishlistId = query.get("wishlistId") || form.elements.wishlist.value;
-                        if (!wishlistId) throw new Error("Choose the discovery wishlist containing this stock, or open an exact paper candidate.");
+                        if (!wishlistId) throw new Error("Choose the discovery stock group containing this stock, or open an exact paper candidate.");
                         const universe = await api("universes/preview", {contractVersion:"1.0",horizon:"swing",sources:[{sourceKind:"wishlist",sourceKey:wishlistId,wishlistId}]});
                         universeId = universe.universeSnapshotId;
                     }
@@ -186,7 +186,7 @@
             if (query.get("wishlistId")) document.querySelector("[data-order-source]").hidden = true;
             else {
                 const response = await window.tradingFlowFetch("/api/desk/sources", {signal:lifetime.signal});
-                if (!response.ok) throw new Error("Discovery sources unavailable; open an exact candidate or a wishlist ticket.");
+                if (!response.ok) throw new Error("Discovery sources unavailable; open an exact candidate or a stock group ticket.");
                 for (const source of await response.json()) if (source.key.startsWith("wishlist:")) form.elements.wishlist.add(new Option(source.name,source.key.slice(9)));
             }
         }
