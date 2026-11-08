@@ -237,7 +237,7 @@
     }
     // Refresh compact daily lines; missing or invalid observations clear every earlier indicator value.
     function renderDailyCells(cells,row){
-        const technical=dailyTechnical(row),detail=dailyTechnicalDetail(row),cell=cells[5];
+        const technical=dailyTechnical(row),detail=dailyTechnicalDetail(row),cell=cells[6];
         for(const field of ['sma10','sma20','sma50','sma200','rsi']){
             const node=cell.querySelector('[data-technical="'+field+'"]');
             node.textContent=field==='rsi'?number(technical?.[field]):money(technical?.[field]);node.title=detail;
@@ -246,15 +246,19 @@
     }
     // Show stored-news counts as context, with unscored stories and the exact partial window in the tooltip.
     function renderNewsSentiment(cell,row){
-        const summary=row.newsSentiment,counts=cell.querySelector('.watch-news-counts'),windowLabel=cell.querySelector('.watch-news-window');
-        const countText=summary?.available?summary.positive+' positive · '+summary.negative+' negative':'News unavailable';
+        const summary=row.newsSentiment,counts=cell.querySelector('.watch-news-counts'),positive=cell.querySelector('.watch-news-positive'),negative=cell.querySelector('.watch-news-negative'),windowLabel=cell.querySelector('.watch-news-window');
+        const positiveText=summary?.available?summary.positive+' positive':'News unavailable';
+        const negativeText=summary?.available?summary.negative+' negative':'';
         const asOf=Date.parse(summary?.asOfUtc),now=Date.now();
         const stale=!connected||!Number.isFinite(asOf)||asOf>now+5000||now-asOf>30000;
         const windowText=summary?.available?(stale?'Observed 1h · partial':'Last 1h · partial'):'1h window unavailable';
         const detail=summary?.available?'Stored news · '+summary.positive+' positive · '+summary.negative+' negative · '+summary.neutral+' neutral · '+summary.unscored+' unscored · '+
             when(summary.windowStartUtc)+' → '+when(summary.asOfUtc)+' · partial coverage · advisory only':
             'Stored news could not be read. Counts are unavailable; this is not a zero-story result.';
-        if(counts.textContent!==countText)counts.textContent=countText;
+        if(positive.textContent!==positiveText)positive.textContent=positiveText;
+        if(negative.textContent!==negativeText)negative.textContent=negativeText;
+        const hideNegative=!summary?.available;
+        if(negative.hidden!==hideNegative)negative.hidden=hideNegative;
         if(windowLabel.textContent!==windowText)windowLabel.textContent=windowText;
         for(const node of [cell,counts,windowLabel])if(node.title!==detail)node.title=detail;
     }
@@ -271,20 +275,17 @@
         for(const row of rows){
             const symbol=row.membership.symbol;let tr=rowNodes.get(symbol);
             if(!tr){tr=document.createElement('tr');tr.dataset.symbol=symbol;
-                tr.innerHTML='<td><button type="button" class="watch-symbol-button"><span class="watch-symbol-name"></span><small class="watch-news-counts"></small><small class="watch-news-window"></small></button></td><td class="watch-num"><span class="watch-quote-line"><strong></strong><small></small></span></td><td class="watch-trade"><span class="watch-trade-line"><span class="watch-trade-buttons"><button type="button" class="watch-buy" data-side="buy"></button><button type="button" class="watch-sell" data-side="sell"></button></span><small></small></span></td><td class="watch-signal-col"><strong></strong><small></small></td><td class="watch-num"><span class="watch-holding-line"><strong></strong><small></small></span></td><td class="watch-num watch-technical"><div>SMA 10/20 <span data-technical="sma10" data-daily-sma="10"></span> / <span data-technical="sma20" data-daily-sma="20"></span></div><div>SMA 50/200 <span data-technical="sma50"></span> / <span data-technical="sma200"></span></div><div>RSI <span data-technical="rsi"></span></div></td>';
+                tr.innerHTML='<td><button type="button" class="watch-symbol-button"><span class="watch-symbol-name"></span></button></td><td class="watch-num"><span class="watch-quote-line"><strong></strong><small></small></span></td><td class="watch-trade"><span class="watch-trade-line"><span class="watch-trade-buttons"><button type="button" class="watch-buy" data-side="buy"></button><button type="button" class="watch-sell" data-side="sell"></button></span><small></small></span></td><td class="watch-signal-col"><strong></strong><small></small></td><td class="watch-num"><span class="watch-holding-line"><strong></strong><small></small></span></td><td class="watch-news-summary"><span class="watch-news-counts"><span class="watch-news-positive"></span> <span class="watch-news-negative"></span></span><small class="watch-news-window"></small></td><td class="watch-technical"><div>SMA 10/20 <span data-technical="sma10" data-daily-sma="10"></span> / <span data-technical="sma20" data-daily-sma="20"></span></div><div>SMA 50/200 <span data-technical="sma50"></span> / <span data-technical="sma200"></span></div><div>RSI <span data-technical="rsi"></span></div></td>';
                 tr.querySelector('.watch-symbol-name').textContent=symbol;
                 const symbolButton=tr.querySelector('.watch-symbol-button');
                 symbolButton.setAttribute('aria-label',symbol);
-                tr.querySelector('.watch-news-counts').id='watch-news-counts-'+symbol;
-                tr.querySelector('.watch-news-window').id='watch-news-window-'+symbol;
-                symbolButton.setAttribute('aria-describedby','watch-news-counts-'+symbol+' watch-news-window-'+symbol);
                 // Any click on the row selects it; the row's Buy and Sell buttons also open that side's order review.
                 tr.onclick=event=>{if(event.target.closest('a'))return;selected=symbol;newsForAll=false;render();
                     const trigger=event.target.closest('[data-side]'),side=trigger?.dataset.side;if(side){openOrder(side,trigger);return;}
                     el('symbol').tabIndex=-1;el('symbol').focus({preventScroll:true});el('detail').scrollIntoView({behavior:'smooth',block:'nearest'});};rowNodes.set(symbol,tr);
             }
             const cells=tr.children;tr.dataset.selected=String(symbol===selected);tr.querySelector('.watch-symbol-button').setAttribute('aria-pressed',String(symbol===selected));
-            renderNewsSentiment(cells[0],row);
+            renderNewsSentiment(cells[5],row);
             const lists=row.membership.wishlists.map(x=>x.name).join(', ');tr.querySelector('.watch-symbol-button').title=[row.membership.name,lists||'Screener discovery'].filter(Boolean).join(' · ');
             // Keep price and change together; the previous close and its session remain in detail and the cell tooltip.
             const bid=row.quote?.bidPrice,ask=row.quote?.askPrice;
@@ -389,7 +390,7 @@
         for(const article of articles) el('news-list').append(window.TradingFlowNews.create(article,{allowGroup:false}));
     }
     // Age quote/account labels without treating a closed-market quote as invalid daily history.
-    function ageRows(){if(!snapshot)return;for(const row of snapshot.rows){const node=rowNodes.get(row.membership.symbol)?.children[2];if(node){node.querySelector('small').textContent=rowQuoteAge(row);node.title=spreadDetail(row)+' · '+when(row.quote?.timestamp);const staleAccount=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;const cells=node.parentElement.children;renderDailyCells(cells,row);renderNewsSentiment(cells[0],row);if(staleAccount&&row.holding){cells[4].querySelector('strong').textContent='Stale holding';cells[4].querySelector('small').textContent='Last observed P&L';}node.classList.toggle('watch-stale',!connected||Date.now()-Date.parse(row.quote?.timestamp)>120000);}}if(selected){const row=snapshot.rows.find(x=>x.membership.symbol===selected);if(row)text('quote-detail',quoteAge(row)+' · '+when(row.quote?.timestamp));}}
+    function ageRows(){if(!snapshot)return;for(const row of snapshot.rows){const node=rowNodes.get(row.membership.symbol)?.children[2];if(node){node.querySelector('small').textContent=rowQuoteAge(row);node.title=spreadDetail(row)+' · '+when(row.quote?.timestamp);const staleAccount=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;const cells=node.parentElement.children;renderDailyCells(cells,row);renderNewsSentiment(cells[5],row);if(staleAccount&&row.holding){cells[4].querySelector('strong').textContent='Stale holding';cells[4].querySelector('small').textContent='Last observed P&L';}node.classList.toggle('watch-stale',!connected||Date.now()-Date.parse(row.quote?.timestamp)>120000);}}if(selected){const row=snapshot.rows.find(x=>x.membership.symbol===selected);if(row)text('quote-detail',quoteAge(row)+' · '+when(row.quote?.timestamp));}}
     el('source').onchange=()=>{page=0;el('search').value='';connect();};el('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{page=0;connect();},300);};
     el('strategy').onchange=connect;
     // A refresh requests new evidence explicitly; completed observations do not silently become continuous background trading jobs.

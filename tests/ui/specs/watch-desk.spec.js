@@ -16,7 +16,10 @@ test.beforeAll(async()=>{
 test.afterAll(async()=>{for(const res of connections)res.end();fixtureServer.closeAllConnections();await new Promise(resolve=>fixtureServer.close(resolve));});
 async function fixture(page){paused=false;await page.route('**/api/desk/sources',r=>r.fulfill({json:sources}));await page.addInitScript(url=>{const Native=window.EventSource;window.EventSource=class extends Native{constructor(path,options){super(path.startsWith('/api/desk/stream?')?url+path:path,options);}};},fixtureUrl);}
 
-for(const width of [412,680,1200,1265,1280,1600])test('stock desk is readable and focused at '+width,async({page},testInfo)=>{
+// Measure rendered glyphs rather than full-width block boxes when checking content spacing.
+async function textBounds(locator){return locator.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const rect=range.getBoundingClientRect();return {x:rect.x,y:rect.y,width:rect.width,height:rect.height};});}
+
+for(const width of [412,680,1000,1024,1200,1265,1280,1600,2560])test('stock desk is readable and focused at '+width,async({page},testInfo)=>{
  await page.setViewportSize({width,height:1000});await fixture(page);await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
  await expect(page.locator('#watch-rows tr')).toHaveCount(3);await expect(page.getByRole('heading',{level:1})).toHaveText('Desk');
  await expect(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link')).toHaveText(['Desk','Trading','Strategies','Earnings','News','Stock groups']);
@@ -24,31 +27,45 @@ for(const width of [412,680,1200,1265,1280,1600])test('stock desk is readable an
  // Keep actual touch controls while removing the previous multi-line row whitespace.
  const firstRow=page.locator('#watch-rows tr[data-symbol=AAPL]');
  expect((await firstRow.boundingBox()).height).toBeLessThanOrEqual(64);
- expect((await firstRow.locator('.watch-buy').boundingBox()).height).toBeGreaterThanOrEqual(width<=700?44:40);
+ for(const side of ['buy','sell']){const box=await firstRow.locator('.watch-'+side).boundingBox();expect(box.height).toBeGreaterThanOrEqual(44);expect(box.width).toBeGreaterThanOrEqual(52);}
  await expect(firstRow.locator('[data-daily-sma="10"]')).toHaveText('$197.25');
  await expect(firstRow.locator('[data-daily-sma="20"]')).toHaveText('$195.50');
  await expect(firstRow.locator('[data-daily-sma="10"]')).toHaveAttribute('title',/Completed 1d bar.*2026-09-25T20:00:00.000Z.*sip/);
  await expect(firstRow.locator('.watch-quote-line')).toHaveText('$200.00+1.01%');
  await expect(firstRow.locator('[data-technical=sma50]')).toHaveText('$190.25');await expect(firstRow.locator('[data-technical=sma200]')).toHaveText('$180.75');
  await expect(firstRow.locator('[data-technical=rsi]')).toHaveText('58.2');
- await expect(firstRow.locator('.watch-news-counts')).toHaveText('2 positive · 2 negative');
+ await expect(firstRow.locator('.watch-news-positive')).toHaveText('2 positive');await expect(firstRow.locator('.watch-news-negative')).toHaveText('2 negative');
  await expect(firstRow.locator('.watch-news-window')).toHaveText('Last 1h · partial');
- // Inspect actual glyph boxes so global flex styles cannot silently hide the ticker or overlap the price cell.
- const stockCell=await firstRow.locator('td').first().boundingBox();
- const symbolLine=await firstRow.locator('.watch-symbol-name').boundingBox(),countLine=await firstRow.locator('.watch-news-counts').boundingBox(),windowLine=await firstRow.locator('.watch-news-window').boundingBox();
- for(const line of [symbolLine,countLine,windowLine]){expect(line.width).toBeGreaterThan(0);expect(line.x).toBeGreaterThanOrEqual(stockCell.x);expect(line.x+line.width).toBeLessThanOrEqual(stockCell.x+stockCell.width);}
- expect(countLine.y).toBeGreaterThanOrEqual(symbolLine.y+symbolLine.height-1);expect(windowLine.y).toBeGreaterThanOrEqual(countLine.y+countLine.height-1);
- await expect(firstRow.locator('td').first()).toHaveAttribute('title',/1 neutral · 3 unscored.*partial coverage/);
+ // News occupies its own bounded column; the symbol cell contains only the stock control.
+ await expect(page.locator('.watch-table thead th')).toHaveText(['Stock','Price · change','Trade · freshness','Signal','Holding · P&L','News','Technical']);
+ await expect(firstRow.locator('td').first().locator('.watch-news-counts,.watch-news-window')).toHaveCount(0);
+ const stockCell=await firstRow.locator('td').first().boundingBox(),newsCell=await firstRow.locator('.watch-news-summary').boundingBox();
+ const symbolLine=await textBounds(firstRow.locator('.watch-symbol-name')),countLine=await textBounds(firstRow.locator('.watch-news-positive')),negativeLine=await textBounds(firstRow.locator('.watch-news-negative')),windowLine=await textBounds(firstRow.locator('.watch-news-window'));
+ expect(symbolLine.width).toBeGreaterThan(0);expect(symbolLine.x).toBeGreaterThanOrEqual(stockCell.x);expect(symbolLine.x+symbolLine.width).toBeLessThanOrEqual(stockCell.x+stockCell.width);
+ for(const line of [countLine,negativeLine,windowLine]){expect(line.width).toBeGreaterThan(0);expect(line.x).toBeGreaterThanOrEqual(newsCell.x);expect(line.x+line.width).toBeLessThanOrEqual(newsCell.x+newsCell.width);}
+ expect(negativeLine.y).toBeGreaterThanOrEqual(countLine.y+countLine.height-1);expect(windowLine.y).toBeGreaterThanOrEqual(negativeLine.y+negativeLine.height-1);
+ await expect(firstRow.locator('.watch-news-summary')).toHaveAttribute('title',/1 neutral · 3 unscored.*partial coverage/);
+ const holdingText=await textBounds(firstRow.locator('.watch-holding-line strong')),technicalText=await textBounds(firstRow.locator('.watch-technical>div').first());
+ expect(countLine.x-(holdingText.x+holdingText.width)).toBeLessThan(22);
+ expect(technicalText.x-(countLine.x+countLine.width)).toBeLessThan(110);
+ expect(technicalText.x-(holdingText.x+holdingText.width)).toBeLessThan(170);
+ const technicalCell=await firstRow.locator('.watch-technical').boundingBox();
+ expect(technicalText.x-technicalCell.x).toBeLessThanOrEqual(8);expect(technicalText.x+technicalText.width).toBeLessThanOrEqual(technicalCell.x+technicalCell.width);
+ expect(await page.locator('.watch-table').evaluate(node=>node.getBoundingClientRect().width)).toBeCloseTo(728,0);
+ const stocks=await page.locator('.watch-stocks').boundingBox();expect(stocks.width).toBeLessThanOrEqual(730);
+ // Full-size panels include their two border pixels; only narrower panes need horizontal scrolling.
+ const tableScroll=await page.locator('.watch-table-scroll').evaluate(node=>({scroll:node.scrollWidth,client:node.clientWidth}));
+ if(stocks.width>=729)expect(tableScroll.scroll-tableScroll.client).toBeLessThanOrEqual(1);
+ else expect(tableScroll.scroll).toBeGreaterThan(tableScroll.client);
  if(width>1150){
-  const stocks=await page.locator('.watch-stocks').boundingBox(),news=await page.locator('.watch-news').boundingBox();
-  expect(news.width/(stocks.width+news.width)).toBeCloseTo(0.5,2);
+  const news=await page.locator('.watch-news').boundingBox(),grid=await page.locator('.watch-grid').boundingBox();
+  expect(news.width).toBeGreaterThanOrEqual(stocks.width-2);
+  if(width===2560)expect(news.width).toBeGreaterThan(stocks.width+200);
+  expect(news.x-(stocks.x+stocks.width)).toBeLessThanOrEqual(18);
+  expect(news.x+news.width).toBeCloseTo(grid.x+grid.width,0);
   const trade=await firstRow.locator('.watch-trade').boundingBox(),holding=await firstRow.locator('td').nth(4).boundingBox();
   expect(holding.x-(trade.x+trade.width)).toBeLessThanOrEqual(2);
-  const buttons=await firstRow.locator('.watch-trade-buttons').boundingBox();
-  expect(holding.x-(buttons.x+buttons.width)).toBeLessThan(35);
-  // Narrow desktop panes retain explicit horizontal scrolling rather than clipping the technical cell.
-  const scroll=page.locator('.watch-table-scroll');
-  expect(await scroll.evaluate(node=>node.scrollWidth>=node.clientWidth)).toBe(true);
+  const buttons=await firstRow.locator('.watch-trade-buttons').boundingBox();expect(holding.x-(buttons.x+buttons.width)).toBeLessThan(25);
  }
 
  // Any cell selects its row, not only the symbol button.
@@ -360,12 +377,14 @@ test('future news summary time is shown as an observed window',async({page})=>{
   }:listener,options);}
  };});
  await page.goto('/Desk');const button=page.getByRole('button',{name:'AAPL',exact:true});
- await expect(button).toHaveAccessibleDescription('2 positive · 2 negative Observed 1h · partial');
- await expect(button.locator('.watch-news-window')).toHaveAttribute('title',/2099-01-01T00:00:00.000Z/);
+ await expect(button).toHaveText('AAPL');
+ const summary=page.locator('#watch-rows tr[data-symbol=AAPL] .watch-news-summary');
+ await expect(summary.locator('.watch-news-window')).toHaveText('Observed 1h · partial');
+ await expect(summary.locator('.watch-news-window')).toHaveAttribute('title',/2099-01-01T00:00:00.000Z/);
 });
 
-// Four-digit bounded-store counts truncate inside the stock cell while their full values stay inspectable.
-test('large sentiment counts stay inside their stock column',async({page})=>{
+// Four-digit bounded-store counts stay inside the separate News cell while their full values stay inspectable.
+test('large sentiment counts stay inside their News column',async({page})=>{
  await page.setViewportSize({width:1265,height:1000});await fixture(page);await signIn(page);
  await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
   addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
@@ -375,7 +394,23 @@ test('large sentiment counts stay inside their stock column',async({page})=>{
  };});
  await page.goto('/Desk');const row=page.locator('#watch-rows tr[data-symbol=AAPL]');
  const counts=row.locator('.watch-news-counts');await expect(counts).toHaveAttribute('title',/1000 positive · 1000 negative/);
- const cell=await row.locator('td').first().boundingBox(),line=await counts.boundingBox();
+ const cell=await row.locator('.watch-news-summary').boundingBox(),line=await counts.boundingBox();
  expect(line.x+line.width).toBeLessThanOrEqual(cell.x+cell.width);expect(await counts.evaluate(node=>getComputedStyle(node).textOverflow)).toBe('ellipsis');
  await expect(page.getByRole('button',{name:'AAPL',exact:true})).toBeVisible();
+});
+
+// Selecting a strategy adds exactly its bounded Signal column without widening the other columns or leaving empty panel width.
+test('strategy selection adds only the bounded Signal column',async({page})=>{
+ await page.setViewportSize({width:2560,height:1100});await fixture(page);await signIn(page);
+ const strategy={strategyId:'fixture.recorded',semanticVersion:'1.0.0',contentSha256:'a'.repeat(64)};
+ await page.route('**/api/v1/desk/strategy-choices',route=>route.fulfill({json:[{candidateRunId:'33333333-3333-3333-3333-333333333333',strategy,name:'Recorded fixture',mode:'paper',runStartedAtUtc:new Date().toISOString()}]}));
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(3);
+ const before=await page.locator('.watch-table').boundingBox();expect(before.width).toBeCloseTo(728,0);
+ await page.locator('#watch-strategy').selectOption('0');await expect(page.locator('.watch-table')).not.toHaveClass(/watch-no-strategy/);await expect(page.locator('#watch-rows tr')).toHaveCount(3);
+ const after=await page.locator('.watch-table').boundingBox(),panel=await page.locator('.watch-stocks').boundingBox();
+ expect(after.width).toBeCloseTo(806,0);expect(after.width-before.width).toBeCloseTo(78,0);expect(panel.width).toBeLessThanOrEqual(808);
+ expect(await page.locator('.watch-table-scroll').evaluate(node=>node.scrollWidth-node.clientWidth)).toBeLessThanOrEqual(1);
+ const row=page.locator('#watch-rows tr[data-symbol=AAPL]');expect((await row.locator('.watch-news-summary').boundingBox()).width).toBeCloseTo(140,0);expect((await row.locator('.watch-technical').boundingBox()).width).toBeCloseTo(200,0);
+ await page.locator('#watch-strategy').selectOption('');await expect(page.locator('.watch-table')).toHaveClass(/watch-no-strategy/);
+ expect((await page.locator('.watch-table').boundingBox()).width).toBeCloseTo(728,0);
 });
