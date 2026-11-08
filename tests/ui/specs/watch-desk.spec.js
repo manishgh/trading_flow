@@ -19,6 +19,20 @@ async function fixture(page){paused=false;await page.route('**/api/desk/sources'
 // Measure rendered glyphs rather than full-width block boxes when checking content spacing.
 async function textBounds(locator){return locator.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const rect=range.getBoundingClientRect();return {x:rect.x,y:rect.y,width:rect.width,height:rect.height};});}
 
+// Check the real cell widths against each base plus an equal share of available table surplus.
+async function assertColumnDistribution(page,withStrategy=false){
+ const table=await page.locator('.watch-table').boundingBox(),base=withStrategy?806:728;
+ const cells=await page.locator('#watch-rows tr[data-symbol=AAPL] td').evaluateAll(nodes=>nodes.filter(node=>getComputedStyle(node).display!=='none').map(node=>node.getBoundingClientRect().width));
+ const bases=withStrategy?[76,92,128,78,92,140,200]:[76,92,128,92,140,200];
+ const surplus=Math.max(0,(table.width-base)/bases.length);
+ expect(table.width).toBeGreaterThanOrEqual(base-1);expect(cells).toHaveLength(bases.length);
+ cells.forEach((width,index)=>expect(Math.abs(width-bases[index]-surplus)).toBeLessThanOrEqual(1));
+ const scroll=await page.locator('.watch-table-scroll').evaluate(node=>({width:node.clientWidth,overflow:node.scrollWidth-node.clientWidth}));
+ expect(Math.abs(table.width-Math.max(base,scroll.width))).toBeLessThanOrEqual(1);
+ if(scroll.width>=base-1)expect(scroll.overflow).toBeLessThanOrEqual(1);else expect(scroll.overflow).toBeGreaterThan(0);
+ return {table,surplus};
+}
+
 for(const width of [412,680,1000,1024,1200,1265,1280,1600,2560])test('stock desk is readable and focused at '+width,async({page},testInfo)=>{
  await page.setViewportSize({width,height:1000});await fixture(page);await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
  await expect(page.locator('#watch-rows tr')).toHaveCount(3);await expect(page.getByRole('heading',{level:1})).toHaveText('Desk');
@@ -45,27 +59,26 @@ for(const width of [412,680,1000,1024,1200,1265,1280,1600,2560])test('stock desk
  for(const line of [countLine,negativeLine,windowLine]){expect(line.width).toBeGreaterThan(0);expect(line.x).toBeGreaterThanOrEqual(newsCell.x);expect(line.x+line.width).toBeLessThanOrEqual(newsCell.x+newsCell.width);}
  expect(negativeLine.y).toBeGreaterThanOrEqual(countLine.y+countLine.height-1);expect(windowLine.y).toBeGreaterThanOrEqual(negativeLine.y+negativeLine.height-1);
  await expect(firstRow.locator('.watch-news-summary')).toHaveAttribute('title',/1 neutral · 3 unscored.*partial coverage/);
+ const {surplus}=await assertColumnDistribution(page);
  const holdingText=await textBounds(firstRow.locator('.watch-holding-line strong')),technicalText=await textBounds(firstRow.locator('.watch-technical>div').first());
- expect(countLine.x-(holdingText.x+holdingText.width)).toBeLessThan(22);
- expect(technicalText.x-(countLine.x+countLine.width)).toBeLessThan(110);
- expect(technicalText.x-(holdingText.x+holdingText.width)).toBeLessThan(170);
+ expect(countLine.x-(holdingText.x+holdingText.width)).toBeLessThan(105+surplus);
+ expect(technicalText.x-(countLine.x+countLine.width)).toBeLessThan(110+surplus);
+ expect(technicalText.x-(holdingText.x+holdingText.width)).toBeLessThan(245+surplus*2);
  const technicalCell=await firstRow.locator('.watch-technical').boundingBox();
  expect(technicalText.x-technicalCell.x).toBeLessThanOrEqual(8);expect(technicalText.x+technicalText.width).toBeLessThanOrEqual(technicalCell.x+technicalCell.width);
- expect(await page.locator('.watch-table').evaluate(node=>node.getBoundingClientRect().width)).toBeCloseTo(728,0);
- const stocks=await page.locator('.watch-stocks').boundingBox();expect(stocks.width).toBeLessThanOrEqual(730);
- // Full-size panels include their two border pixels; only narrower panes need horizontal scrolling.
- const tableScroll=await page.locator('.watch-table-scroll').evaluate(node=>({scroll:node.scrollWidth,client:node.clientWidth}));
- if(stocks.width>=729)expect(tableScroll.scroll-tableScroll.client).toBeLessThanOrEqual(1);
- else expect(tableScroll.scroll).toBeGreaterThan(tableScroll.client);
+ const stocks=await page.locator('.watch-stocks').boundingBox(),toolbar=await page.locator('.watch-toolbar').boundingBox(),workspace=await page.locator('.watch-grid').boundingBox();
+ expect(workspace.x).toBeCloseTo(toolbar.x,0);expect(workspace.x+workspace.width).toBeCloseTo(toolbar.x+toolbar.width,0);
+ const holdingCell=await firstRow.locator('td').nth(4).boundingBox();expect(holdingText.x-holdingCell.x).toBeLessThanOrEqual(8);
+ if(width===2560){expect((await page.locator('.watch-desk-shell').boundingBox()).width).toBeGreaterThan(2000);expect(width-(workspace.x+workspace.width)).toBeLessThan(40);}
+
  if(width>1150){
   const news=await page.locator('.watch-news').boundingBox(),grid=await page.locator('.watch-grid').boundingBox();
-  expect(stocks.width/news.width).toBeCloseTo(2,1);expect(news.width).toBeLessThanOrEqual(365);
-  expect(grid.width).toBeLessThanOrEqual(1111);
+  expect(stocks.width/news.width).toBeCloseTo(7/3,1);
   expect(news.x-(stocks.x+stocks.width)).toBeLessThanOrEqual(18);
   expect(news.x+news.width).toBeCloseTo(grid.x+grid.width,0);
   const trade=await firstRow.locator('.watch-trade').boundingBox(),holding=await firstRow.locator('td').nth(4).boundingBox();
   expect(holding.x-(trade.x+trade.width)).toBeLessThanOrEqual(2);
-  const buttons=await firstRow.locator('.watch-trade-buttons').boundingBox();expect(holding.x-(buttons.x+buttons.width)).toBeLessThan(25);
+  const buttons=await firstRow.locator('.watch-trade-buttons').boundingBox();expect(holding.x-(buttons.x+buttons.width)).toBeLessThan(25+surplus);
  }
 
  // Any cell selects its row, not only the symbol button.
@@ -399,20 +412,34 @@ test('large sentiment counts stay inside their News column',async({page})=>{
  await expect(page.getByRole('button',{name:'AAPL',exact:true})).toBeVisible();
 });
 
-// Selecting a strategy adds only the bounded Signal column and keeps article news at one third of the capped desktop grid.
-test('strategy selection adds only the bounded Signal column',async({page})=>{
- await page.setViewportSize({width:2560,height:1100});await fixture(page);await signIn(page);
+// Strategy selection shares surplus across seven columns and retains the full-width 70/30 workspace.
+for(const width of [1280,1600,2560])test('strategy selection shares column surplus at '+width,async({page})=>{
+ await page.setViewportSize({width,height:1100});await fixture(page);await signIn(page);
  const strategy={strategyId:'fixture.recorded',semanticVersion:'1.0.0',contentSha256:'a'.repeat(64)};
  await page.route('**/api/v1/desk/strategy-choices',route=>route.fulfill({json:[{candidateRunId:'33333333-3333-3333-3333-333333333333',strategy,name:'Recorded fixture',mode:'paper',runStartedAtUtc:new Date().toISOString()}]}));
- await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(3);
- const before=await page.locator('.watch-table').boundingBox();expect(before.width).toBeCloseTo(728,0);
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(3);await assertColumnDistribution(page);
  await page.locator('#watch-strategy').selectOption('0');await expect(page.locator('.watch-table')).not.toHaveClass(/watch-no-strategy/);await expect(page.locator('#watch-rows tr')).toHaveCount(3);
- const after=await page.locator('.watch-table').boundingBox(),panel=await page.locator('.watch-stocks').boundingBox();
- expect(after.width).toBeCloseTo(806,0);expect(after.width-before.width).toBeCloseTo(78,0);expect(panel.width).toBeLessThanOrEqual(808);
- const articleNews=await page.locator('.watch-news').boundingBox(),grid=await page.locator('.watch-grid').boundingBox();
- expect(panel.width/articleNews.width).toBeCloseTo(2,1);expect(articleNews.width).toBeLessThanOrEqual(404);expect(grid.width).toBeLessThanOrEqual(1228);
- expect(await page.locator('.watch-table-scroll').evaluate(node=>node.scrollWidth-node.clientWidth)).toBeLessThanOrEqual(1);
- const row=page.locator('#watch-rows tr[data-symbol=AAPL]');expect((await row.locator('.watch-news-summary').boundingBox()).width).toBeCloseTo(140,0);expect((await row.locator('.watch-technical').boundingBox()).width).toBeCloseTo(200,0);
- await page.locator('#watch-strategy').selectOption('');await expect(page.locator('.watch-table')).toHaveClass(/watch-no-strategy/);
- expect((await page.locator('.watch-table').boundingBox()).width).toBeCloseTo(728,0);
+ await assertColumnDistribution(page,true);
+ const panel=await page.locator('.watch-stocks').boundingBox(),articleNews=await page.locator('.watch-news').boundingBox(),grid=await page.locator('.watch-grid').boundingBox(),toolbar=await page.locator('.watch-toolbar').boundingBox();
+ expect(panel.width/articleNews.width).toBeCloseTo(7/3,1);expect(grid.x).toBeCloseTo(toolbar.x,0);expect(grid.x+grid.width).toBeCloseTo(toolbar.x+toolbar.width,0);
+ const row=page.locator('#watch-rows tr[data-symbol=AAPL]'),holding=await textBounds(row.locator('.watch-holding-line strong')),holdingCell=await row.locator('td').nth(4).boundingBox();
+ expect(holding.x-holdingCell.x).toBeLessThanOrEqual(8);
+ for(const side of ['buy','sell']){const button=await row.locator('.watch-'+side).boundingBox();expect(button.width).toBeGreaterThanOrEqual(52);expect(button.height).toBeGreaterThanOrEqual(44);}
+ await page.locator('#watch-strategy').selectOption('');await expect(page.locator('.watch-table')).toHaveClass(/watch-no-strategy/);await expect(page.locator('#watch-rows tr')).toHaveCount(3);await assertColumnDistribution(page);
+});
+
+// Clone only rendered fixture rows to verify vertical scrollbar geometry without writing stock data or making provider requests.
+for(const width of [1600,2560])test('long stock table preserves column distribution at '+width,async({page})=>{
+ await page.setViewportSize({width,height:1000});await fixture(page);await signIn(page);await page.goto('/Desk');
+ await expect(page.locator('#watch-rows tr')).toHaveCount(3);paused=true;
+ await page.locator('#watch-rows').evaluate(body=>{
+  const source=body.querySelector('tr');
+  for(let index=0;index<30;index++){const row=source.cloneNode(true);row.dataset.symbol='GEOMETRY'+index;body.append(row);}
+ });
+ const scroll=page.locator('.watch-table-scroll');
+ expect(await scroll.evaluate(node=>node.scrollHeight>node.clientHeight)).toBe(true);
+ await assertColumnDistribution(page);
+ expect(await scroll.evaluate(node=>node.scrollWidth-node.clientWidth)).toBeLessThanOrEqual(1);
+ const stocks=await page.locator('.watch-stocks').boundingBox(),news=await page.locator('.watch-news').boundingBox(),grid=await page.locator('.watch-grid').boundingBox(),toolbar=await page.locator('.watch-toolbar').boundingBox();
+ expect(stocks.width/news.width).toBeCloseTo(7/3,1);expect(grid.x).toBeCloseTo(toolbar.x,0);expect(grid.x+grid.width).toBeCloseTo(toolbar.x+toolbar.width,0);
 });
