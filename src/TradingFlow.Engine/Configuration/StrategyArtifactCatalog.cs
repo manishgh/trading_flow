@@ -223,6 +223,7 @@ public sealed class StrategyArtifactCatalog
             }
 
             var definition = yamlReader.ReadStrategy(sourcePath);
+            RequireMatchingRiskPolicy(relativePath, definition, profile);
             var canonical = new CanonicalStrategyDocument(
                 stableId,
                 semanticVersion,
@@ -250,6 +251,19 @@ public sealed class StrategyArtifactCatalog
         }
 
         return new StrategyCatalogSnapshot(executable, archived);
+    }
+
+    /// <summary>Risk policy label for strategies with no protective stop, sized by position notional.</summary>
+    public const string NoStopRiskPolicy = "position-notional-no-stop-v1";
+
+    // A no-stop strategy must declare notional sizing in its admission profile, and only such a strategy may,
+    // so an artifact's identity always states how its positions are sized.
+    private static void RequireMatchingRiskPolicy(string relativePath, StrategyDefinition definition, StrategyAdmissionProfile profile)
+    {
+        var noStopPolicy = profile.RiskPolicy.Equals(NoStopRiskPolicy, StringComparison.Ordinal);
+        if (noStopPolicy == definition.ExitRules.HasProtectiveStop)
+            throw new InvalidDataException(
+                $"Strategy artifact '{relativePath}' must use risk policy '{NoStopRiskPolicy}' exactly when it declares initial_stop_mode: none.");
     }
 
     private static void EnsureUniqueFamilyVersion(

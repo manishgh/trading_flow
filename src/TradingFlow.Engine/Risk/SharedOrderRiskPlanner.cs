@@ -30,6 +30,11 @@ public sealed class SharedOrderRiskPlanner
                 "Adverse entry slippage produces a non-positive estimated entry price.");
         }
 
+        if (request.Stop.Kind == PlannedStopKind.None)
+        {
+            return PlanWithoutStop(request, entryPrice);
+        }
+
         var stopResult = ResolveStop(request, entryPrice, slippageRate);
         if (stopResult.Rejection is not null)
         {
@@ -101,6 +106,49 @@ public sealed class SharedOrderRiskPlanner
                 fixedFees,
                 plannedLoss,
                 accountRiskBudget));
+    }
+
+    // Size a long position that has no protective stop by the position-notional cap alone. With no stop the
+    // whole position is the planned loss, so the account-risk budget cannot bound quantity; the caller's
+    // notional cap (for example equity divided by the maximum number of positions) is the sizing rule.
+    private static OrderPlanningResult PlanWithoutStop(OrderPlanningRequest request, decimal entryPrice)
+    {
+        if (request.Side != PlannedOrderSide.Long)
+        {
+            return Reject(
+                OrderPlanRejectionCode.InvalidStop,
+                "A position without a protective stop is supported only for long positions.");
+        }
+
+        var positionNotionalLimit = request.AccountEquity * (request.RiskLimits.MaxPositionNotionalPct / 100m);
+        if (request.RequestedNotional is not null)
+        {
+            positionNotionalLimit = Math.Min(positionNotionalLimit, request.RequestedNotional.Value);
+        }
+
+        var quantity = FloorToQuantity(positionNotionalLimit / entryPrice);
+        if (quantity <= 0)
+        {
+            return Reject(
+                OrderPlanRejectionCode.PositionNotionalTooSmall,
+                "The position-notional limit does not permit one share.");
+        }
+
+        var fixedFees = request.ExecutionCosts.TotalFixedFees;
+        var deployedNotional = quantity * entryPrice;
+        return OrderPlanningResult.Accept(
+            new PlannedOrder(
+                request.Symbol.Trim().ToUpperInvariant(),
+                request.Side,
+                quantity,
+                entryPrice,
+                StopTriggerPrice: 0m,
+                EstimatedStopFillPrice: 0m,
+                deployedNotional,
+                EstimatedPriceLossPerShare: entryPrice,
+                fixedFees,
+                PlannedLoss: deployedNotional + fixedFees,
+                AccountRiskBudget: request.AccountEquity * (request.RiskLimits.AccountRiskBudgetPct / 100m)));
     }
 
     private static OrderPlanningResult? ValidateRequest(OrderPlanningRequest request)

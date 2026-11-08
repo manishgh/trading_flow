@@ -188,7 +188,9 @@ public sealed record EntryRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireOrderedReclaimPullback = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DrawdownQualificationRules? DrawdownQualification = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? HistoricalNewsDiagnostic = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] OpeningRangeBreakoutRules? OpeningRangeBreakout = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] OpeningRangeBreakoutRules? OpeningRangeBreakout = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinCloseBelowSmaPct = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] int? CloseBelowSmaPeriod = null);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,
@@ -228,7 +230,22 @@ public sealed record ExitRules(
     int? MaxHoldBars = null,
     decimal? ExitOnRsi2Above = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool ExitOnCloseAboveSma5 = false,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ContinuationProtectionRules? ContinuationProtection = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ContinuationProtectionRules? ContinuationProtection = null)
+{
+    /// <summary>Published rules such as Connors RSI-2 place no protective stop; long-only research backtests size by position notional instead.</summary>
+    public const string NoStop = "none";
+
+    /// <summary>No profit-target order; the position leaves only through its technical, time or session exits.</summary>
+    public const string NoProfitTarget = "none";
+
+    /// <summary>True when the strategy places a protective stop order.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasProtectiveStop => !InitialStopMode.Equals(NoStop, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when the strategy places a profit-target order.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasProfitTarget => !ProfitTargetMode.Equals(NoProfitTarget, StringComparison.OrdinalIgnoreCase);
+}
 
 public sealed record ConfluenceRules(
     bool Enabled,

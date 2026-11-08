@@ -5,6 +5,26 @@ namespace TradingFlow.Tests;
 
 public sealed class BasicStrategyEvaluatorTests
 {
+    // Snapback stretch: the close must sit at least the configured percent below its SMA; missing evidence fails closed.
+    [Theory]
+    [InlineData(12.0, true)]
+    [InlineData(10.0, true)]
+    [InlineData(9.99, false)]
+    [InlineData(null, false)]
+    public void GetLongEntryRejection_CloseBelowSmaGate_RequiresTheConfiguredStretch(double? stretch, bool accepted)
+    {
+        var strategy = CreateStrategy("momentum") with
+        {
+            EntryRules = CreateEntryRules("momentum") with { MinCloseBelowSmaPct = 10m, CloseBelowSmaPeriod = 20 }
+        };
+        var signal = CreateSignal() with { CloseBelowSmaPct = (decimal?)stretch };
+
+        var rejection = new BasicStrategyEvaluator().GetLongEntryRejection(strategy, signal, 1m);
+
+        if (accepted) Assert.Null(rejection);
+        else Assert.StartsWith("close_not_far_enough_below_sma20", rejection);
+    }
+
     [Fact]
     public void GetLongEntryRejection_Rsi2Setup_UsesDedicatedCompletedDailySignal()
     {

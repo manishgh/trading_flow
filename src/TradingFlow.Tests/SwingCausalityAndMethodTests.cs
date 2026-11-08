@@ -251,6 +251,40 @@ public sealed class SwingCausalityAndMethodTests
         } finally {Directory.Delete(scratch,true);}
     }
 
+    // Connors 8.0.0 through the normal runner: sized by notional, no stop or target order, and a deep wick
+    // after entry does not close the position; the SMA5 rule does.
+    [Fact]
+    public async Task PublishedConnors_RunsWithoutStopOrTargetOrders()
+    {
+        var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
+        var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader);
+        var profile=reader.ReadBacktestRun(Path.Combine(root,"configs","backtest","swing-backtest-profile.yaml"));
+        var validated=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(
+            Path.Combine(root,"configs","backtest","strategies","swing-connors-rsi2-published.bt-v8.yaml"),
+            TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
+        var runtime=StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(validated.Definition,catalog);
+        var start=DateTimeOffset.Parse("2025-01-01T05:00:00Z");
+        // Uptrend, a three-day dip that stays above SMA200 (RSI2 < 5), a 50% wick on the entry day, then a rebound.
+        var closes=Enumerable.Range(0,280).Select(i=>100+i/10m).Concat([125m,122m,119m,120m,126m,128m,129m,130m]).ToArray();
+        var bars=closes.Select((close,i)=>Bar("2025-01-01T05:00:00Z",close) with {Timestamp=start.AddDays(i),
+            Low=i==283?60m:Math.Max(.1m,close-1)}).ToArray();
+        var scratch=Path.Combine(Path.GetTempPath(),"tf-no-stop-"+Guid.NewGuid().ToString("N")[..8]);Directory.CreateDirectory(scratch);
+        try {
+            var run=profile with {Provider="csv",Tickers=["SPY"],Intervals=["1d"],ResultsRoot=scratch,
+                News=profile.News with {Enabled=false},Universe=profile.Universe! with {Mode="resolved_snapshot"},
+                DerivedTimeframes=new TradingFlow.Domain.Backtesting.DerivedTimeframeConfig("1d"),
+                TimeWindow=profile.TimeWindow with {Type="fixed",Start=bars[270].Timestamp,End=bars[^1].Timestamp.AddDays(1),WarmupLookbackDays=400}};
+            var runner=new BacktestRunner(reader,catalog,marketDataProviderFactory:_=>new FrozenProvider(bars));
+            var result=await runner.RunValidatedAsync(run,[runtime],DateTimeOffset.UtcNow,Path.Combine(scratch,"result.json"),CancellationToken.None);
+            var trade=Assert.Single(result.CompletedTrades);
+            Assert.Equal((0m,0m),(trade.StopLossPrice,trade.TakeProfitPrice));
+            Assert.DoesNotContain(trade.ExitReason,new[]{"stop_loss","take_profit","trailing_stop"});
+            Assert.True(trade.ExitTimestamp>bars[284].Timestamp);
+            Assert.InRange(trade.ShareQuantity*trade.EntryPrice,1m,run.Portfolio.StartingCapital/run.Portfolio.MaxConcurrentPositions);
+            Assert.Null(TradingFlow.Domain.Backtesting.BacktestDerivedMetrics.RMultiple(trade));
+        } finally {Directory.Delete(scratch,true);}
+    }
+
     [Fact]
     public void MissedMoveEntriesUseActualFilledTradesAndCompatiblePeakSliceReceipt()
     {

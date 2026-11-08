@@ -11,7 +11,8 @@ public sealed record IntradayBreakoutContext(
     DateTimeOffset CalendarEvidenceAsOfUtc,
     string? TickEvidenceId = null,
     string CalendarAvailabilityEvidence = "caller_supplied_schedule;original_calendar_receipt_not_asserted",
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<OhlcvBar>? OpeningRangeBaselineBars = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<OhlcvBar>? OpeningRangeBaselineBars = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<OhlcvBar>? PriorSessionDailyBars = null);
 
 /// <summary>Frozen completed-candle breakout order intent, including the previous-session range and opening-range evidence.</summary>
 public sealed record IntradayBreakoutSignal(
@@ -39,7 +40,8 @@ public sealed record IntradayBreakoutSignal(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int MaxFilledParentTradesPerSession = 0,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireRangeReturnBeforeReentry = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? OpeningVolumeBaselineSha256 = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? BreakoutTriggerPrice = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? BreakoutTriggerPrice = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? DailyAtr = null);
 
 /// <summary>Evaluator outcome: a signal, or a named rejection reason and whether a breakout was seen.</summary>
 public sealed record IntradayBreakoutEvaluation(

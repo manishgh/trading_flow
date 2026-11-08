@@ -3,9 +3,19 @@ namespace TradingFlow.Domain.Strategies;
 // Fixed session/filter/exit constraints for the approved opening-range breakout baseline; the strategy keeps its own signal and stop geometry.
 internal static class FixedIntradayBreakoutBaseline
 {
-    // Reject clocks and extra filters that would change the approved intraday baseline.
-    internal static void Validate(StrategyDefinition strategy, string setupType, string initialStopMode, string primaryTimeframe = "5m")
+    // Reject clocks and extra filters that would change the approved intraday baseline. The published recipe
+    // (Zarattini, Barbon and Aziz) has no target and no continuation protection: it holds until its stop or the close.
+    internal static void Validate(StrategyDefinition strategy, string setupType, string initialStopMode, bool publishedRecipe = false)
     {
+        var exits = strategy.ExitRules;
+        var exitPolicyMatches = publishedRecipe
+            ? !exits.HasProfitTarget && exits.ContinuationProtection is null && !exits.EnableAtrTrailingStop && exits.StopAtrMultiple is > 0m and < 1m
+            : exits.TargetRMultiple == 3m && exits.ContinuationProtection == new ContinuationProtectionRules();
+        if (!exitPolicyMatches)
+            throw new InvalidOperationException(publishedRecipe
+                ? "The published opening-range recipe requires profit_target_mode: none, no trailing stop or continuation protection, and a stop fraction of the daily ATR between 0 and 1."
+                : "Intraday breakout requires its 3R target and default continuation protection.");
+        const string primaryTimeframe = "5m";
         if (strategy.EntryRules.SetupType != setupType ||
             strategy.Timeframe != primaryTimeframe || strategy.Execution.Timeframe != "5m" ||
             strategy.Session.IsContinuousMarket || strategy.Session.UseExtendedHours ||
@@ -16,15 +26,14 @@ internal static class FixedIntradayBreakoutBaseline
             strategy.EntryRules.RequirePositiveNews || strategy.EntryRules.HistoricalNewsDiagnostic is not null ||
             strategy.EntryRules.TechnicalFactor is not null || strategy.EntryRules.DrawdownQualification is not null ||
             strategy.Execution.EffectiveConfirmation.Enabled || strategy.ExitRules.InitialStopMode != initialStopMode ||
-            strategy.ExitRules.TargetRMultiple != 3m || strategy.ExitRules.ContinuationProtection != new ContinuationProtectionRules() ||
             strategy.ExitRules.ExitOnCloseAboveSma5 || strategy.ExitRules.ExitOnCloseBelowEma20 ||
             strategy.ExitRules.ExitOnCloseBelowVwap || strategy.ExitRules.ExitOnMacdHistogramNegative ||
             strategy.ExitRules.ExitOnLogPriceFade || strategy.ExitRules.EnableConfirmedVwapExit ||
             strategy.ExitRules.ExitOnSma10NearSma20 || strategy.ExitRules.ExitOnSma10CrossBelowSma20 ||
             strategy.ExitRules.ExitShortOnSma10CrossAboveSma20 || strategy.ExitRules.ExitOnEma10CrossBelowEma20 ||
             strategy.ExitRules.ExitOnRsi2Above is not null || strategy.ExitRules.MaxHoldBars is not null)
-            throw new InvalidOperationException("Intraday breakout requires its fixed regular-session five-minute baseline, declared structural stop and 3R continuation policy.");
-        strategy.ExitRules.ContinuationProtection!.Validate(strategy.ExitRules);
+            throw new InvalidOperationException("Intraday breakout requires its fixed regular-session five-minute baseline and declared stop.");
+        exits.ContinuationProtection?.Validate(exits);
     }
 
     // The fixed baseline cannot silently accept an additional technical, volume, news or indicator gate.

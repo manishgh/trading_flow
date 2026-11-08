@@ -793,6 +793,10 @@ public sealed class RunConfigWriter
             yaml.AppendLine("  opening_range_breakout:");
             yaml.AppendLine($"    policy_id: {openingRange.PolicyId}");
             yaml.AppendLine($"    max_filled_parent_trades_per_session: {openingRange.MaxFilledParentTradesPerSession}");
+            if (openingRange.RangeMinutes is { } rangeMinutes) yaml.AppendLine($"    range_minutes: {rangeMinutes}");
+            if (openingRange.VolumeLookbackSessions is { } volumeSessions) yaml.AppendLine($"    volume_lookback_sessions: {volumeSessions}");
+            AppendOptionalDecimal(yaml, "    min_relative_volume", openingRange.MinRelativeVolume);
+            if (openingRange.AtrSessions is { } atrSessions) yaml.AppendLine($"    atr_sessions: {atrSessions}");
         }
         if (strategy.EntryRules.DrawdownQualification is { } drawdown)
         {
@@ -874,6 +878,8 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  portfolio_rank_mode: {strategy.EntryRules.PortfolioRankMode}");
         yaml.AppendLine($"  sma200_rising_lookback_bars: {strategy.EntryRules.Sma200RisingLookbackBars}");
         AppendOptionalDecimal(yaml, "  min_breakout_volume_vs_50_day_average", strategy.EntryRules.MinBreakoutVolumeVs50DayAverage);
+        AppendOptionalDecimal(yaml, "  min_close_below_sma_pct", strategy.EntryRules.MinCloseBelowSmaPct);
+        if (strategy.EntryRules.CloseBelowSmaPeriod is { } closeBelowSmaPeriod) yaml.AppendLine($"  close_below_sma_period: {closeBelowSmaPeriod}");
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");

@@ -1,6 +1,6 @@
 # Published-method versions of the three kept strategies: proposal
 
-Status: **proposed, awaiting the user's approval. Nothing here is implemented.**
+Status: approved by the user on 8 November 2026. All three sections are implemented as research artifacts (see "Implemented" at the end). For section 1 the user chose a rules check on the existing stock list first; the daily stock selection of the 2 November work order follows later.
 Date: 8 November 2026. Research only: backtests, no paper or live orders.
 
 On 6 November the user narrowed research to three ideas and asked that each be implemented
@@ -95,3 +95,83 @@ Everything else reuses existing rules.
   list as its control, reported monthly and separately per strategy.
 - Pass/fail rules frozen before reading results; six months of data can at most give
   RETAIN_RESEARCH.
+
+## Implemented (8 November 2026)
+
+New artifacts: `swing.connors-rsi2@8.0.0` (`swing-connors-rsi2-published.bt-v8.yaml`) and
+`swing.snapback@1.0.0` (`swing-snapback.bt-v1.yaml`), each with its own admission profile whose
+risk policy is `position-notional-no-stop-v1`. The catalog refuses a no-stop strategy with any
+other risk policy, and refuses that policy on a strategy with a stop.
+
+Components:
+
+- `initial_stop_mode: none` and `profit_target_mode: none` (long, daily setup and execution bars
+  only; no trailing stop, continuation protection or R-multiple target). No stop or target order
+  is placed in the daily simulator, the daily execution coordinator or the daily SIP portfolio.
+  A stop or target price of 0 in results means "no such order". Trades without a stop have no R.
+  Broker order planning (paper/live) refuses these plans.
+- `min_close_below_sma_pct` with `close_below_sma_period` (5, 10, 20, 50, 150 or 200), measured on
+  the completed close; missing values fail closed.
+
+Differences from the approved text, decided during implementation:
+
+- **Sizing.** Instead of a new `position_size_pct_of_equity` option, no-stop positions reuse the
+  existing notional sizing: each position gets equity divided by the maximum number of
+  positions, capped by `max_position_notional_pct`. The run profile's portfolio settings
+  therefore set the position size (for example 10 positions = 10% each).
+- **Exit timing (both strategies).** The engine fills at the next open after a completed
+  decision and evaluates exits from the bar after the entry bar. The earliest exit is therefore
+  the open two sessions after entry; in the book it is the close of the first day after entry.
+  Named difference, not changed, because it is shared engine timing for every strategy.
+- **Stock selection.** Neither file filters price, volume or size; the run's stock list does.
+  Connors's minimum price and volume terms are to be confirmed from the book before any run;
+  snapback must use the point-in-time daily screen (price above $20, average volume above 2M
+  shares, mid-cap and larger) rather than a hand-picked list, to avoid choosing survivors.
+- **News veto timing.** The historical news diagnostic treats an article as known 24 hours after
+  its provider update time (frozen research assumption). News published on the drop day itself
+  is therefore not vetoed, although that is the news Chan (2003) separates out. Results must say
+  so; fixing it needs reliable original receipt times.
+- **Snapback ranking.** When more stocks qualify than there are free positions, the most
+  oversold by RSI(2) is taken first; the papers rank by the size of the past loss.
+
+Not run yet: no economic backtest of either version. Runs need the frozen window, stock list
+and pass/fail rules first.
+
+### Opening-range breakout 2.0.0 (implemented 8 November 2026)
+
+`technical.opening-range-breakout@2.0.0` (`opening-range-breakout.bt-v4.yaml`, policy
+`opening-range-breakout-recipe-v1`, admission profile `opening-range-breakout-recipe-research-v1`)
+applies the paper's trade rules to the run's own stock list. The user chose this rules check
+before collecting data for the paper's daily stock selection.
+
+Rules: 5-minute opening range; trade in the direction of its body, no order on a doji; the
+first 5 minutes' volume must be at least the mean of the same interval over the previous 14
+sessions; a stop order at the range high (long) or low (short), placed when the range completes
+and live until five minutes before the close; protective stop 10% of the 14-session daily ATR
+beyond the trigger; no target; one filled entry per stock per session.
+
+Named differences from the paper:
+
+- **No daily top-20 stock selection.** The paper's edge is attributed to it, so this version
+  tests the trade rules only; a hand-picked list also carries hindsight.
+- **Stop measured from the trigger, not the fill.** A stop order fills at its trigger, so the two
+  are the same unless the fill gaps past the trigger.
+- **Exit five minutes before the close** instead of at the close, because five-minute candle
+  replay fills at a bar's open.
+- **Daily ATR from regular-session five-minute bars** of the previous 14 sessions (simple mean of
+  14 true ranges, which equals Wilder's average with that much history).
+- **Costs from the run profile**, not the paper's $0.0035 per share.
+- An entry triggered inside a five-minute bar is recorded at that bar's end.
+- **Entry and stop in the same five-minute bar.** The stop is tight (10% of ATR), so the bar that
+  fills the entry often also touches the stop. The order of the two inside one bar is unknown,
+  so the trade counts as a loss and its exit reason is `stop_loss_entry_bar_order_unknown`.
+  Results must report how many trades this affects; one-minute bars (the 2 November design)
+  would resolve most of them.
+- **Sizing.** The run profile's account risk budget and position cap (equity divided by the
+  maximum number of positions) apply, without the paper's 4x leverage. With stops this tight
+  the position cap usually binds, so trades get roughly equal notional rather than equal risk.
+- **The paper's daily filters are not applied** (opening price above $5, 14-day average volume
+  of at least 1M shares, ATR above $0.50). On low-ATR stocks the stop is only cents wide and
+  costs can exceed half the planned risk; the run's stock list must respect these filters.
+
+Not run yet: no economic backtest of ORB 2.0.0.

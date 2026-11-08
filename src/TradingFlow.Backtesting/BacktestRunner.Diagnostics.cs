@@ -669,11 +669,13 @@ public sealed partial class BacktestRunner
                     side,
                     equity,
                     candidate.PlanningReferencePrice ?? candidate.EntryPrice,
-                    PlannedStopRequest.FromResolvedPrice(
-                        candidate.InitialStopKind.Equals("atr", StringComparison.OrdinalIgnoreCase)
-                            ? PlannedStopKind.Atr
-                            : PlannedStopKind.Structural,
-                        candidate.StopLossPrice),
+                    candidate.InitialStopKind.Equals(ExitRules.NoStop, StringComparison.OrdinalIgnoreCase)
+                        ? PlannedStopRequest.NoStop()
+                        : PlannedStopRequest.FromResolvedPrice(
+                            candidate.InitialStopKind.Equals("atr", StringComparison.OrdinalIgnoreCase)
+                                ? PlannedStopKind.Atr
+                                : PlannedStopKind.Structural,
+                            candidate.StopLossPrice),
                     new OrderPlanningRiskLimits(
                         portfolio.AccountRiskBudgetPct,
                         portfolio.MaxPositionNotionalPct),

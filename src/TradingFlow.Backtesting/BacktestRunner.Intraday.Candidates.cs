@@ -17,6 +17,7 @@ public sealed partial class BacktestRunner
         var schedules = candidateSessionSchedules ?? throw new InvalidDataException("Intraday candidates require authoritative exchange sessions.");
         var runtime = ResolveRuntimeStrategy(strategy);
         var openingEvaluator = new OpeningRangeBreakoutEvaluator();
+        var recipe = strategy.EntryRules.OpeningRangeBreakout is { IsPublishedRecipe: true } recipeRules ? recipeRules : null;
         var budget = new RetainedCandidateBudget(run.Engine.MaxRetainedCandidates);
         var batches = new List<StrategyTickerBacktestBatch>();
         var zone = TimeZoneInfo.FindSystemTimeZoneById(strategy.Session.ExchangeTimezone);
@@ -56,13 +57,23 @@ public sealed partial class BacktestRunner
                     diagnostics.IncrementRejection("previous_exchange_session_prices_unavailable");
                     continue;
                 }
+                // The published recipe declares its own volume look-back and ATR history; the earlier policies keep twenty sessions.
                 var baselineSessions = schedules.Values.Where(session => session.IsTradingDay && session.TradeDate < day.Key)
-                    .OrderBy(session => session.TradeDate).TakeLast(20).ToArray();
-                var baselineBars = OpeningRangeBaselineBars(sessionBars, baselineSessions, zone);
+                    .OrderBy(session => session.TradeDate)
+                    .TakeLast(recipe is null ? 20 : Math.Max(recipe.VolumeLookbackSessions!.Value, recipe.AtrSessions!.Value + 1)).ToArray();
+                var baselineBars = recipe is null
+                    ? OpeningRangeBaselineBars(sessionBars, baselineSessions, zone, 15)
+                    : OpeningRangeBaselineBars(sessionBars, baselineSessions.TakeLast(recipe.VolumeLookbackSessions!.Value).ToList(),
+                        zone, recipe.RangeMinutes!.Value);
+                var dailyBars = recipe is null ? null
+                    : PriorSessionDailyBars(sessionBars, baselineSessions.TakeLast(recipe.AtrSessions!.Value + 1).ToList(), zone);
                 var calendarStart = baselineSessions.Length > 0 ? baselineSessions[0].TradeDate : priorDate;
                 var boundedCalendar = schedules.Where(pair => pair.Key >= calendarStart && pair.Key <= day.Key)
                     .ToDictionary(pair => pair.Key, pair => pair.Value);
-                for (var index = 1; index < day.Value.Length; index++)
+                // The recipe places its single order when the range completes, so only that bar is evaluated.
+                var firstIndex = recipe is null ? 1 : recipe.RangeBars - 1;
+                var endIndex = recipe is null ? day.Value.Length : Math.Min(day.Value.Length, recipe.RangeBars);
+                for (var index = firstIndex; index < endIndex; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var confirmation = day.Value[index];
@@ -82,7 +93,7 @@ public sealed partial class BacktestRunner
                         asOf, increment.PolicyId + ":" + increment.SourceUrl + ";" +
                         UsEquityOrderIncrementResolver.EffectiveBoundarySourceUrl + ";" + UsEquityOrderIncrementResolver.EndBoundarySourceUrl,
                         "retrospectively_downloaded_exchange_calendar;scheduled_session_bounds_assumed_available_at_decision;original_receipt_time_not_observed")
-                    { OpeningRangeBaselineBars = baselineBars };
+                    { OpeningRangeBaselineBars = baselineBars, PriorSessionDailyBars = dailyBars };
                     var completedSnapshots = completed.Where(bar => snapshotMap.ContainsKey(bar.Timestamp))
                         .Select(bar => snapshotMap[bar.Timestamp]).ToArray();
                     var preview = openingEvaluator.Evaluate(strategy, completed, completedSnapshots, context, asOf);
@@ -133,16 +144,38 @@ public sealed partial class BacktestRunner
         return batches;
     }
 
-    // Capture only the actual first-three intervals from each required prior session once; absent records stay absent for the shared evaluator.
+    // Capture only the actual opening-range intervals from each required prior session once; absent records stay absent for the shared evaluator.
     private static IReadOnlyList<OhlcvBar> OpeningRangeBaselineBars(IReadOnlyDictionary<DateOnly, OhlcvBar[]> sessionBars,
-        IReadOnlyList<MarketSessionSchedule> sessions, TimeZoneInfo zone)
+        IReadOnlyList<MarketSessionSchedule> sessions, TimeZoneInfo zone, int rangeMinutes)
     {
-        var result = new List<OhlcvBar>(sessions.Count * 3);
+        var result = new List<OhlcvBar>(sessions.Count * rangeMinutes / 5);
         foreach (var session in sessions)
         {
             if (!sessionBars.TryGetValue(session.TradeDate, out var source)) continue;
             var open = IntradayCalendarAtUtc(session.TradeDate, session.RegularOpen, zone);
-            result.AddRange(source.Where(bar => bar.Timestamp >= open && bar.Timestamp < open.AddMinutes(15)));
+            result.AddRange(source.Where(bar => bar.Timestamp >= open && bar.Timestamp < open.AddMinutes(rangeMinutes)));
+        }
+        return result;
+    }
+
+    // One daily bar per prior session built from its complete regular-session five-minute bars (open, high, low, close,
+    // volume). A session with any missing interval is omitted, so the evaluator sees too few bars and rejects instead of
+    // computing an ATR from partial evidence.
+    private static IReadOnlyList<OhlcvBar> PriorSessionDailyBars(IReadOnlyDictionary<DateOnly, OhlcvBar[]> sessionBars,
+        IReadOnlyList<MarketSessionSchedule> sessions, TimeZoneInfo zone)
+    {
+        var result = new List<OhlcvBar>(sessions.Count);
+        foreach (var session in sessions)
+        {
+            if (!sessionBars.TryGetValue(session.TradeDate, out var source) || source.Length == 0) continue;
+            var open = IntradayCalendarAtUtc(session.TradeDate, session.RegularOpen, zone);
+            var close = IntradayCalendarAtUtc(session.TradeDate, session.RegularClose, zone);
+            var expected = (int)((close - open).Ticks / TimeSpan.FromMinutes(5).Ticks);
+            if (source.Length != expected || source[0].Timestamp != open) continue;
+            var last = source[^1];
+            result.Add(new OhlcvBar(last.Ticker, open, "1d", source[0].Open, source.Max(bar => bar.High),
+                source.Min(bar => bar.Low), last.Close, source.Sum(bar => bar.Volume), last.DataFeed, last.AdjustmentPolicy,
+                last.KnownAtUtc));
         }
         return result;
     }
@@ -153,7 +186,7 @@ public sealed partial class BacktestRunner
         "previous_exchange_session_unavailable" or "previous_session_five_minute_coverage_incomplete" or
         "opening_range_tick_or_calendar_unavailable" or
         "opening_range_completed_bar_evidence_invalid" or "opening_range_current_session_coverage_incomplete" or
-        "opening_range_volume_baseline_unavailable";
+        "opening_range_volume_baseline_unavailable" or "opening_range_daily_atr_unavailable";
 
     // Preserve the earliest unsupported source boundary while retaining later diagnostic candidates and audit evidence.
     private static DateTimeOffset EarlierIntradayBoundary(DateTimeOffset? existing, DateTimeOffset proposed) =>
@@ -195,7 +228,9 @@ public sealed partial class BacktestRunner
         string candidateId, IntradayBreakoutSignal pending, decimal completedVolume)
     {
         var risk = Math.Abs(pending.LimitPrice - pending.InitialStopPrice);
-        var target = pending.LimitPrice + (pending.Direction == "long" ? 1m : -1m) * strategy.ExitRules.TargetRMultiple * risk;
+        // A strategy without a target records 0 ("no target order") rather than a price derived from a zero multiple.
+        var target = strategy.ExitRules.HasProfitTarget
+            ? pending.LimitPrice + (pending.Direction == "long" ? 1m : -1m) * strategy.ExitRules.TargetRMultiple * risk : 0m;
         return new BacktestCandidateTrade(ticker, strategy.StrategyName, pending.Direction, pending.ActiveAtUtc,
             pending.LimitPrice, pending.InitialStopPrice, target, pending.SessionDeadlineUtc, null,
             "session_deadline_pending", risk, completedVolume, StrategyId: strategy.StrategyId, CandidateId: candidateId)

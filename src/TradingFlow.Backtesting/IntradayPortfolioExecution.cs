@@ -58,6 +58,7 @@ public static partial class IntradayPortfolioExecution
         public bool StopTriggered { get; set; }
         public DateTimeOffset? StopTriggeredAt { get; set; }
         public bool EntryTriggered { get; set; }
+        public DateTimeOffset? EntryBarStart { get; set; }
         public bool StopMarket => Evidence.EntryOrderMode == IntradayEntryOrderMode.StopMarket;
         public bool NextBarMarket => Evidence.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket;
         public bool MarketEntry => StopMarket || NextBarMarket;
@@ -221,7 +222,7 @@ public static partial class IntradayPortfolioExecution
             var strategy = strategies[candidate.StrategyId];
             var plannedRisk = candidate.Direction == "long" ? evidence.LimitPrice - candidate.StopLossPrice
                 : candidate.StopLossPrice - evidence.LimitPrice;
-            if (evidence.LimitPrice + (candidate.Direction == "long" ? 1 : -1) * 3 * plannedRisk <= 0)
+            if (strategy.ExitRules.HasProfitTarget && evidence.LimitPrice + (candidate.Direction == "long" ? 1 : -1) * 3 * plannedRisk <= 0)
             { Reject(candidate, "initial_three_r_target_not_positive"); return null; }
             var equity = Equity();
             var available = Math.Max(0, equity - live.Sum(ReservedNotional));
@@ -432,6 +433,7 @@ public static partial class IntradayPortfolioExecution
                 opening ? SimulatedOrderType.Market : SimulatedOrderType.Stop, used, null, opening ? null : trigger, true, opening);
             if (fill.FilledQuantity == 0) return 0;
             var at = opening ? bar.Timestamp : bar.Timestamp.AddMinutes(5);
+            intent.EntryBarStart ??= bar.Timestamp;
             Account(intent, fill, true, at, "entry_stop_market", bar.Timestamp,
                 opening ? "opening_entry_lagged_liquidity" : "completed_interval_entry");
             InitializeFilledProtection(intent, opening, at);
@@ -450,6 +452,11 @@ public static partial class IntradayPortfolioExecution
                 intent.StopTriggeredAt = at;
                 intent.ExitReason = "gap_fill_through_structural_stop";
                 CancelRemainder(intent, at, "gap_fill_through_structural_stop");
+            }
+            else if (!intent.Strategy.ExitRules.HasProfitTarget)
+            {
+                // The published recipe has no target: the position holds until its stop or the session deadline.
+                intent.InitialTarget = 0;
             }
             else
             {
@@ -492,6 +499,7 @@ public static partial class IntradayPortfolioExecution
                 }
             }
             Emit(intent, at, "protection_initialized", risk <= 0 ? "gap_fill_has_no_positive_r_target"
+                : !intent.Strategy.ExitRules.HasProfitTarget ? "actual_fill_stop_only_protection"
                 : intent.InitialTarget > 0 ? "actual_fill_three_r_initial_protection" : "actual_fill_three_r_target_not_positive",
                 intent.Entered, intent.Entry);
         }
@@ -508,7 +516,10 @@ public static partial class IntradayPortfolioExecution
             intent.StopTriggered |= stop;
             if (stop && intent.ExitReason is not ("gap_fill_through_structural_stop" or "actual_fill_notional_limit_breach" or
                 "actual_fill_three_r_target_not_positive" or "actual_fill_management_target_not_positive"))
-                intent.ExitReason = "stop_loss";
+                // Without a target the stop is tight (a fraction of ATR); a stop inside the five-minute bar that filled the
+                // entry is counted as hit (worst case) and labelled, because the order of the two within the bar is unknown.
+                intent.ExitReason = !intent.Strategy.ExitRules.HasProfitTarget && intent.EntryBarStart == bar.Timestamp
+                    ? "stop_loss_entry_bar_order_unknown" : "stop_loss";
             else if (target) intent.ExitReason = "take_profit";
             CancelRemainder(intent, opening ? bar.Timestamp : end,
                 stop ? "protective_stop_cancels_entry_remainder" : "protective_target_cancels_entry_remainder");

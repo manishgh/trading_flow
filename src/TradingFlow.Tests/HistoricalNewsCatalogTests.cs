@@ -70,7 +70,7 @@ public sealed class HistoricalNewsCatalogTests
         var catalog = Catalog(fixture);
         var choice = Assert.Single(catalog.GetDecisionContextEvidenceChoices());
         var price = (await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest))
-            .Single(item => item.Identity.StrategyId == "swing.connors-rsi2");
+            .Single(item => item.Identity.StrategyId == "swing.connors-rsi2" && item.Identity.SemanticVersion == "7.0.0");
         var strict = price with { Definition = price.Definition with { EntryRules = price.Definition.EntryRules with { RequirePositiveNews = true } } };
         Assert.False(TradingFlow.Web.TradingApiV1Endpoints.UsesNews(price.Definition));
         Assert.True(TradingFlow.Web.TradingApiV1Endpoints.UsesNews(strict.Definition));

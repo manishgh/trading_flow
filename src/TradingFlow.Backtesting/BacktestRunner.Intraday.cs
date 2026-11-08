@@ -16,7 +16,7 @@ public sealed partial class BacktestRunner
         if (strategies.Count != 1 || run.Universe is { IsHistoricalScreener: true })
             throw new InvalidOperationException("The intraday diagnostic requires one strategy and a frozen stock cohort per portfolio.");
         var strategy = strategies.Single();
-        if (strategy.ExitRules.ContinuationProtection is null)
+        if (strategy.ExitRules.ContinuationProtection is null && strategy.EntryRules.OpeningRangeBreakout is not { IsPublishedRecipe: true })
             throw new InvalidOperationException("The intraday replay requires continuation protection.");
         if (strategy.EntryRules.OpeningRangeBreakout is { } opening)
         {

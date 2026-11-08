@@ -300,6 +300,9 @@ public sealed class BasicStrategyEvaluator
         if (rules.MinBreakoutVolumeVs50DayAverage is { } requiredVolume &&
             (signal.BreakoutVolumeVs50DayAverage is null || signal.BreakoutVolumeVs50DayAverage < requiredVolume))
             return "breakout_volume_below_prior_50_day_average_threshold";
+        if (rules.MinCloseBelowSmaPct is { } minStretch &&
+            (signal.CloseBelowSmaPct is null || signal.CloseBelowSmaPct < minStretch))
+            return $"close_not_far_enough_below_sma{rules.CloseBelowSmaPeriod} (Actual: {signal.CloseBelowSmaPct?.ToString("F2") ?? "n/a"}, Required: {minStretch:F2})";
 
         if (rules.RequireSma150AboveSma200 && !signal.IsSma150AboveSma200)
         {

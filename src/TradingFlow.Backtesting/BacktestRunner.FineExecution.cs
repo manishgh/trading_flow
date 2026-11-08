@@ -26,9 +26,9 @@ public sealed partial class BacktestRunner
             throw new InvalidDataException("Daily entry evidence is not known before its route.");
         var reference = daily[entryIndex - 1].Close;
         var distance = reference - plan.InitialStopPrice;
-        if (distance <= 0 || plan.InitialStopPrice <= 0) return null;
+        if (distance <= 0 || strategy.ExitRules.HasProtectiveStop && plan.InitialStopPrice <= 0) return null;
         var target = ResolveTakeProfitPrice(plan, reference, distance);
-        if (target <= reference) return null;
+        if (strategy.ExitRules.HasProfitTarget && target <= reference) return null;
         var (exitIndex, reason) = FineExecutionTiming.DailyExit(strategy, daily, snapshots, entryIndex,
             run.Engine.PrecommittedLiquidationSourceUtc.Value,
             bar => _sessionClock.ValidateExecutionWindow(bar.Timestamp, strategy.Execution.Timeframe, strategy.Session),
@@ -69,9 +69,9 @@ public sealed partial class BacktestRunner
         // A kept gap needs no special exit here: the book's stop acts on the first slice after the fill.
         var planningPrice = strategy.Execution.KeepsOpeningGaps() ? daily[entryIndex - 1].Close : entryPrice;
         var distance = planningPrice - plan.InitialStopPrice;
-        if (distance <= 0 || plan.InitialStopPrice <= 0) return null;
+        if (distance <= 0 || strategy.ExitRules.HasProtectiveStop && plan.InitialStopPrice <= 0) return null;
         var target = ResolveTakeProfitPrice(plan, planningPrice, distance);
-        if (target <= planningPrice) return null;
+        if (strategy.ExitRules.HasProfitTarget && target <= planningPrice) return null;
 
         var (exitIndex, reason) = FineExecutionTiming.DailyExit(strategy, daily, snapshots, entryIndex,
             terminalSource, bar => _sessionClock.ValidateExecutionWindow(bar.Timestamp, strategy.Execution.Timeframe, strategy.Session),

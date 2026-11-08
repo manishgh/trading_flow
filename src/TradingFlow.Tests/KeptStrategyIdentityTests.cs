@@ -12,12 +12,15 @@ namespace TradingFlow.Tests;
 /// </summary>
 public sealed class KeptStrategyIdentityTests
 {
-    // Content hashes recorded before the removal; any change needs a new semantic version.
+    // Content hashes recorded in the retirement ledger (7 Nov) and for the published versions (8 Nov); any change needs a new semantic version.
     [Theory]
     [InlineData("technical.opening-range-breakout", "1.2.0", "bc73189a1c26ae2741402c2ad84a3a3e88aec709d43253590f7c7fb3c6fdbcc4", null)]
     [InlineData("swing.connors-rsi2", "7.0.0", "a16f4e27ae3e85d19f537d57ac0189a5058d8de0b0cffa39ce993c0220a70e8c", null)]
     [InlineData("technical.recovery-sma5-news-avoidance", "1.0.0", "47dd423636627dfd8a482291b3e905f56c6f278ac80a354afa33fc8acf6ff69d",
         "technical.recovery-sma5-exit")]
+    [InlineData("swing.connors-rsi2", "8.0.0", "f5ee0ef58473b0e749edcb4894d9aa31ac0786e42ffb313ca369f57b80dff5a3", "swing.connors-rsi2")]
+    [InlineData("swing.snapback", "1.0.0", "cda6eb1c9031d1b9e9845afa243a12179d410518a21ebb4631e73cdf1b69713e", null)]
+    [InlineData("technical.opening-range-breakout", "2.0.0", "83b58ddd3b6b2017c717066e98ce92b513537b9aa467283b32f72375ded14429", "technical.opening-range-breakout")]
     public void KeptArtifacts_KeepTheirRecordedCanonicalHashes(string id, string version, string hash, string? parent)
     {
         var artifact = Assert.Single(CreateCatalog().GetSnapshot().ExecutableArtifacts,
@@ -38,7 +41,7 @@ public sealed class KeptStrategyIdentityTests
         var derived = catalog.CreateDerivedArtifact(derivedSource, derivedSource.ResolvedStrategy, "1.0.1-research");
         Assert.Equal(derivedSource.Identity, derived.DerivedFromIdentity);
         Assert.Equal(derivedSource.Identity.ContentSha256, derived.DerivedFromContentSha256);
-        var original = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == "swing.connors-rsi2");
+        var original = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == "swing.connors-rsi2" && artifact.Identity.SemanticVersion == "7.0.0");
         Assert.DoesNotContain("derivedFromIdentity", Encoding.UTF8.GetString(
             EvidenceCanonicalJson.SerializeToUtf8Bytes(original)), StringComparison.Ordinal);
     }

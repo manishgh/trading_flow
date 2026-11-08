@@ -75,7 +75,7 @@ public sealed class OpeningRangeWorkflowIntegrationTests
         var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), new SimpleYamlReader());
         var artifacts = catalog.GetSelectable(StrategySelectionMode.Backtest)
             .Where(artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout").ToArray();
-        Assert.Equal(new[] { "1.2.0" }, artifacts.Select(artifact => artifact.Identity.SemanticVersion));
+        Assert.Equal(new[] { "1.2.0", "2.0.0" }, artifacts.Select(artifact => artifact.Identity.SemanticVersion));
         foreach (var identity in artifacts.Select(artifact => artifact.Identity))
         foreach (var mode in new[] { StrategySelectionMode.CreatePaperExperiment, StrategySelectionMode.DiagnosticReplay,
             StrategySelectionMode.RunPaperExperiment, StrategySelectionMode.RunPaperShadow, StrategySelectionMode.RunLive })

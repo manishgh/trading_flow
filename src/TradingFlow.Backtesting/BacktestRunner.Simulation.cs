@@ -99,7 +99,7 @@ public sealed partial class BacktestRunner
         // The open is unknown when the decision is made, so a kept-gap plan uses only the prior close.
         var planningPrice = strategy.Execution.KeepsOpeningGaps() ? bars[entryIndex - 1].Close : entryPrice;
         var stopDistance = planningPrice - initialStopLossPrice;
-        if (initialStopLossPrice <= 0m || stopDistance <= 0m)
+        if ((strategy.ExitRules.HasProtectiveStop && initialStopLossPrice <= 0m) || stopDistance <= 0m)
         {
             return null;
         }
@@ -109,7 +109,7 @@ public sealed partial class BacktestRunner
             canonicalOrderPlan,
             planningPrice,
             stopDistance);
-        if (takeProfitPrice <= planningPrice)
+        if (strategy.ExitRules.HasProfitTarget && takeProfitPrice <= planningPrice)
         {
             return null;
         }
@@ -190,7 +190,7 @@ public sealed partial class BacktestRunner
                     currentStopLossPrice,
                     highestHighSinceEntry);
             }
-            if (bar.Low <= currentStopLossPrice)
+            if (strategy.ExitRules.HasProtectiveStop && bar.Low <= currentStopLossPrice)
             {
                 var stopExitReason = currentStopLossPrice > initialStopLossPrice ? "trailing_stop" : "stop_loss";
                 var slippedStopPrice = ApplyLongExitSlippage(currentStopLossPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
@@ -198,7 +198,7 @@ public sealed partial class BacktestRunner
                 return (BuildCandidate(candidateId, strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, currentStopLossPrice, stopExitReason, stopDistance, bars[entryIndex - 1].Volume), i);
             }
 
-            if (bar.High >= takeProfitPrice)
+            if (strategy.ExitRules.HasProfitTarget && bar.High >= takeProfitPrice)
             {
                 var slippedTakeProfit = ApplyLongExitSlippage(takeProfitPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via take_profit at {slippedTakeProfit}", candidateId);
@@ -792,9 +792,12 @@ public sealed partial class BacktestRunner
     }
 
     private static string ResolveInitialStopKind(StrategyDefinition strategy) =>
-        NormalizeRuleName(strategy.ExitRules.InitialStopMode) == "atr"
-            ? "atr"
-            : "structural";
+        NormalizeRuleName(strategy.ExitRules.InitialStopMode) switch
+        {
+            "atr" => "atr",
+            ExitRules.NoStop => ExitRules.NoStop,
+            _ => "structural"
+        };
 
     private static decimal ResolvePortfolioSelectionScore(
         StrategyDefinition strategy,
@@ -815,6 +818,8 @@ public sealed partial class BacktestRunner
         decimal stopDistance)
     {
         var mode = NormalizeRuleName(orderPlan.ProfitTargetMode);
+        // No target order: 0 is never a valid long target and every target check is skipped for this mode.
+        if (mode == ExitRules.NoProfitTarget) return 0m;
         if (mode == "vwap" && orderPlan.ProfitTargetReferencePrice is { } vwap)
         {
             return vwap;

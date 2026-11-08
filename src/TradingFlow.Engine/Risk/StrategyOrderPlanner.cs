@@ -39,6 +39,17 @@ public sealed class StrategyOrderPlanner
                 : throw new InvalidOperationException(
                     $"Unsupported canonical order direction '{request.OrderPlan.Direction}'.");
 
+        // Published no-stop rules are research-backtest only; a broker order always needs its protective stop.
+        if (request.OrderPlan.InitialStopPrice <= 0m)
+        {
+            return new StrategyOrderPlanningResult(
+                null,
+                new OrderPlanRejection(
+                    OrderPlanRejectionCode.InvalidStop,
+                    "This strategy places no protective stop; it is supported only in research backtests."),
+                null);
+        }
+
         var riskResult = riskPlanner.Plan(
             new OrderPlanningRequest(
                 request.ExecutionSignal.Ticker,

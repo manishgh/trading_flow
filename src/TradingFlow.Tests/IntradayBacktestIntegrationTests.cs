@@ -109,6 +109,73 @@ public sealed partial class IntradayBacktestIntegrationTests
         }
     }
 
+    /// <summary>
+    /// ORB 2.0.0 (published recipe) through the ordinary prepared runner. Fixture: twenty prior sessions with daily range
+    /// 95-100 (daily ATR 5) and 100,000 shares per bar; the current first bar opens 99, closes 99.5 (long), high 100, on
+    /// 200,000 shares (relative volume 2). Expected: one stop order at 100 placed at 09:35, protective stop 100 - 0.1 x 5 =
+    /// 99.50, no target; the next bar (09:35-09:40) trades 98-100, so the order fills inside it (stamped 09:40) and the stop is hit.
+    /// </summary>
+    [Fact]
+    public async Task PublishedRecipe_PlacesOneStopOrderAtTheRangeWithAtrStopAndNoTarget()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "tf-orb-recipe-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repo = TestRepository.FindRoot();
+            var reader = new SimpleYamlReader();
+            var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+            var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", "opening-range-breakout.bt-v4.yaml");
+            var runtime = new StrategyRunArtifactValidator(reader, artifacts).ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
+            var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "swing-backtest-profile.yaml"));
+            var start = DateTimeOffset.Parse("2026-10-01T13:30:00Z");
+            var end = DateTimeOffset.Parse("2026-10-01T20:00:00Z");
+            var run = BacktestExecutionProfileResolver.Resolve(profile, [runtime.Definition]) with
+            {
+                RunName = "synthetic-orb-recipe",
+                Provider = "synthetic-intraday",
+                TimeWindow = new("fixed", 1, start, end, 1),
+                Tickers = ["ABC"],
+                Strategies = [strategyPath],
+                RawRoot = Path.Combine(root, "raw"), NormalizedRoot = Path.Combine(root, "normalized"), ResultsRoot = Path.Combine(root, "results"),
+                CachePolicy = "use_cache",
+                Universe = UniverseConfig.StaticUniverse with { Mode = UniverseConfig.ResolvedSnapshotMode,
+                    ResolvedSource = "synthetic_fixture", SelectedSourceTickers = ["ABC"], ResolvedAtUtc = start },
+                Portfolio = profile.Portfolio with { MaxConcurrentPositions = 1, PreventOverlappingTickerPositions = true },
+                Artifacts = new("full")
+            };
+            Assert.Equal(ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1, run.Engine.ExecutionReplayPolicyId);
+            var provider = new SyntheticIntradayProvider(run.RawRoot, outwardRounding: false);
+            var calendar = await provider.LoadMarketSessionSchedulesAsync(new(2026, 8, 1), new(2026, 10, 1), default);
+            run = BacktestSessionContextResolver.IncludeCompletedSessions(run, start, calendar,
+                TimeZoneInfo.FindSystemTimeZoneById("America/New_York"), 20);
+            var request = new PreparedMarketDataRequest(1, "synthetic-orb-recipe", end,
+                [new(run.RunName, run with { Strategies = [] }, [runtime.Definition])]);
+            var reference = await PreparedMarketDataService.WriteRequestAsync(request, Path.Combine(root, "admission", "request.json"), default);
+            var runner = new BacktestRunner(reader, artifacts, marketDataProviderFactory: _ => provider);
+
+            var result = await runner.RunAsync(run, [runtime.Definition], DateTimeOffset.UtcNow,
+                Path.Combine(run.ResultsRoot, "result.json"), default, preparedDataReference: reference);
+
+            Assert.True(result.EconomicResultsComplete);
+            var trade = Assert.Single(result.CompletedTrades);
+            Assert.Equal("long", trade.Direction);
+            // The 09:35-09:40 bar trades through the trigger after its open; an intrabar stop fill is stamped at that bar's end.
+            Assert.Equal(start.AddMinutes(10), trade.EntryTimestamp);
+            Assert.Equal(99.5m, trade.StopLossPrice);
+            Assert.Equal(0m, trade.TakeProfitPrice);
+            // Entry and stop fall in the same five-minute bar: counted as a loss and labelled because their order is unknown.
+            Assert.Equal("stop_loss_entry_bar_order_unknown", trade.ExitReason);
+            Assert.Equal(1, result.CandidateTradeCount);
+        }
+        finally
+        {
+            // These files are isolated synthetic fixtures; verify ownership before recursive cleanup.
+            Assert.Equal(Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar), Path.GetDirectoryName(root), ignoreCase: true);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     /// <summary>Reads retained ordinary artifacts to prove that the shared decision, typed stop intent and real fills survived publication.</summary>
     private static async Task AssertOpeningRangeArtifactsAsync(BacktestResult result, BacktestPortfolioState state,
         DateTimeOffset start, bool outwardRounding, bool completedBreakout)

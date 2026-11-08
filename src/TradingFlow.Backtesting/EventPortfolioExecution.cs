@@ -229,7 +229,9 @@ public static partial class EventPortfolioExecution
             var requested = Math.Min(realizedEquity / request.Portfolio.MaxConcurrentPositions, available);
             var plan = new SharedOrderRiskPlanner().Plan(new(candidate.Ticker,
                 candidate.Direction == "long" ? PlannedOrderSide.Long : PlannedOrderSide.Short, realizedEquity,
-                candidate.EntryPrice, PlannedStopRequest.FromResolvedPrice(PlannedStopKind.Structural, candidate.StopLossPrice),
+                candidate.EntryPrice, candidate.StopLossPrice > 0m
+                    ? PlannedStopRequest.FromResolvedPrice(PlannedStopKind.Structural, candidate.StopLossPrice)
+                    : PlannedStopRequest.NoStop(),
                 new(request.Portfolio.AccountRiskBudgetPct, request.Portfolio.MaxPositionNotionalPct),
                 new(0,
                     request.Portfolio.FixedBuyFee, request.Portfolio.FixedSellFee), requested));
@@ -254,8 +256,9 @@ public static partial class EventPortfolioExecution
                 SimulatedOrderSide.Buy, SimulatedOrderType.Market, quantity, ExecutionEventTime.ToUtc(ready),
                 sequence++, false, SimulatedTimeInForce.Day, FixedFeeGroupId: intent.EntryId), ready,
                 ExpiresAtNanoseconds: checked(ready + EntryWindow)));
+            // A price of 0 means the strategy declares no protective order of that kind (published no-stop rules).
             foreach (var (id, type, price) in new[] { (intent.StopId, SimulatedOrderType.Stop, candidate.StopLossPrice),
-                (intent.TargetId, SimulatedOrderType.Limit, candidate.TakeProfitPrice) })
+                (intent.TargetId, SimulatedOrderType.Limit, candidate.TakeProfitPrice) }.Where(order => order.Item3 > 0m))
                 Add(candidate.Ticker, new(new(ExecutionCommandKind.Submit, id, candidate.Ticker,
                     SimulatedOrderSide.Sell, type, quantity, ExecutionEventTime.ToUtc(ready), sequence++, true,
                     SimulatedTimeInForce.GoodTillCanceled, LimitPrice: type == SimulatedOrderType.Limit ? price : null,

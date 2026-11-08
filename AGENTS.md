@@ -320,10 +320,12 @@ Paper configs:
 Strategy classification:
 
 - `configs/strategy-catalog.json` is the authority.
-- The catalog holds 3 research artifacts (intraday opening-range breakout, Connors
-  RSI-2 mean reversion, news-free snapback) and no archived artifacts, with no paper
-  execution or live authorization. Removed artifacts are listed in
-  `docs/research/retired-strategy-artifacts-2026-11-07.md`.
+- The catalog holds 6 research artifacts and no archived artifacts, with no paper
+  execution or live authorization: opening-range breakout 1.2.0 and its published-recipe
+  2.0.0, Connors RSI-2 7.0.0 and its published-rules 8.0.0, swing snapback 1.0.0 and its interim control
+  `technical.recovery-sma5-news-avoidance`. Removed artifacts are listed in
+  `docs/research/retired-strategy-artifacts-2026-11-07.md`; the published-method
+  versions in `docs/design-review/2026-11-08/published-method-versions-proposal.md`.
 - Research/archive is artifact disposition. Paper experiment, paper shadow, and
   validated are exact-identity authorization grants.
 - Web/mobile paper mode is explicit and never falls back to research.

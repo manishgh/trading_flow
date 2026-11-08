@@ -222,6 +222,7 @@ public sealed partial class SignalGenerator
             CurrentRsi2: snapshot.Rsi2,
             IsSma200Rising: isSma200Rising,
             BreakoutVolumeVs50DayAverage: breakoutVolume50,
+            CloseBelowSmaPct: CloseBelowSmaPct(strategy, snapshot),
             TechnicalFactor: strategy.EntryRules.TechnicalFactor is { } factor
                 ? validatedFactor ?? TechnicalFactorCalculator.Analyze(factor, bars, snapshots, index, referenceBars,
                     asOfUtc ?? bar.Timestamp.AddDays(1), expectedReferenceSessions) : null);
@@ -338,6 +339,18 @@ public sealed partial class SignalGenerator
     private static bool UsesLongSetup(StrategyDefinition strategy, string setupType)
     {
         return strategy.EntryRules.SetupType.Equals(setupType, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Percent the completed close sits below the configured SMA (negative when above); null when the gate is off or the SMA is not warm.
+    private static decimal? CloseBelowSmaPct(StrategyDefinition strategy, IndicatorSnapshot snapshot)
+    {
+        var sma = strategy.EntryRules.CloseBelowSmaPeriod switch
+        {
+            5 => snapshot.Sma5, 10 => snapshot.Sma10, 20 => snapshot.Sma20,
+            50 => snapshot.Sma50, 150 => snapshot.Sma150, 200 => snapshot.Sma200,
+            _ => null
+        };
+        return sma is > 0m ? (sma.Value - snapshot.CurrentPrice) / sma.Value * 100m : null;
     }
 
     private static (decimal? Position, decimal? WidthPct) GetBollingerContext(IndicatorSnapshot snapshot)

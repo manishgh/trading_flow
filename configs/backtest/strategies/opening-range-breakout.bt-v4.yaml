@@ -1,0 +1,56 @@
+# Zarattini, Barbon and Aziz, A Profitable Day Trading Strategy for the U.S. Equity Market (SSRN 4729284).
+# Trade rules as published: 5-minute opening range, direction of its body (no order on a doji), opening volume at
+# least 1x its 14-session mean, stop order at the range high/low live until the close, stop 10% of the 14-day ATR
+# from entry, no target, one entry per stock per day. Rules check on the run's own stock list: the paper's daily
+# top-20 stock selection is NOT applied. Named differences: stop measured from the stop-order trigger, not the
+# actual fill (same unless the fill gaps past the trigger); exit five minutes before the close (candle fills at a bar's
+# open); ATR from regular-session 5-minute bars; costs from the run profile. Control: technical.opening-range-breakout@1.2.0.
+strategy_id: technical.opening-range-breakout
+strategy_name: RESEARCH Opening Range Breakout Published Recipe V4 (5-minute range, ATR stop, no target)
+source: zarattini_barbon_aziz_2024_ssrn_4729284
+version: 4
+timeframe: 5m
+direction: long_short
+entry_rules:
+  setup_type: opening_range_breakout
+  opening_range_breakout:
+    policy_id: opening-range-breakout-recipe-v1
+    max_filled_parent_trades_per_session: 1
+    range_minutes: 5
+    volume_lookback_sessions: 14
+    min_relative_volume: 1
+    atr_sessions: 14
+  enable_short: true
+  short_setup_type: opening_range_breakout
+  min_volume_spike: 0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0
+  max_entry_rsi: 100
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_below_vwap_for_short: false
+  require_macd_bearish_for_short: false
+  require_positive_news: false
+confluence:
+  enabled: false
+  timeframe: 5m
+  ema_period: 20
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 0.1
+  target_r_multiple: 0
+  max_hold_hours: 6.5
+  enable_atr_trailing_stop: false
+  initial_stop_mode: daily_atr_fraction
+  profit_target_mode: none
+  allow_same_bar_stop_target: true
+execution:
+  timeframe: 5m
+  slippage_bps: 10
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 5
+  friday_close_buffer_minutes: 5

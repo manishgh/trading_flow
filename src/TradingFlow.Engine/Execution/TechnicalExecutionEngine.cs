@@ -44,14 +44,14 @@ public sealed class TechnicalExecutionEngine
             highestHighSinceEntry);
 
         // Check Hard Stop Loss
-        if (bar.Low <= currentStopLossPrice)
+        if (strategy.ExitRules.HasProtectiveStop && bar.Low <= currentStopLossPrice)
         {
             var exitReason = currentStopLossPrice > initialStopLossPrice ? "trailing_stop" : "stop_loss";
             return (currentStopLossPrice, exitReason);
         }
 
         // Check Hard Take Profit
-        if (bar.High >= takeProfitPrice)
+        if (strategy.ExitRules.HasProfitTarget && bar.High >= takeProfitPrice)
         {
             return (takeProfitPrice, "take_profit");
         }

@@ -170,7 +170,9 @@ public sealed class SimpleYamlReader
                 RequireOrderedReclaimPullback: OptionalBool(map, "entry_rules.require_ordered_reclaim_pullback", false),
                 DrawdownQualification: ReadDrawdownQualification(map),
                 HistoricalNewsDiagnostic: ReadHistoricalNewsDiagnostic(map),
-                OpeningRangeBreakout: ReadOpeningRangeBreakout(map)),
+                OpeningRangeBreakout: ReadOpeningRangeBreakout(map),
+                MinCloseBelowSmaPct: OptionalDecimal(map, "entry_rules.min_close_below_sma_pct"),
+                CloseBelowSmaPeriod: OptionalNullableInt(map, "entry_rules.close_below_sma_period")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -243,6 +245,8 @@ public sealed class SimpleYamlReader
         strategy.ExitRules.ContinuationProtection?.Validate(strategy.ExitRules);
         strategy.EntryRules.OpeningRangeBreakout?.Validate(strategy);
         RejectRemovedSetupRules(strategy);
+        ValidateNoStopRules(strategy);
+        ValidateCloseBelowSma(strategy.EntryRules);
         map.ThrowIfUnknownKeys(path);
         return strategy;
     }
@@ -678,6 +682,36 @@ public sealed class SimpleYamlReader
             throw new InvalidOperationException("No daily short setup remains; enable_short is supported only by the opening-range breakout.");
     }
 
+    // The stretch gate needs both its threshold and an SMA period the indicator snapshot computes.
+    private static void ValidateCloseBelowSma(EntryRules rules)
+    {
+        if (rules.MinCloseBelowSmaPct is null && rules.CloseBelowSmaPeriod is null) return;
+        if (rules.MinCloseBelowSmaPct is not (> 0m and < 100m) || rules.CloseBelowSmaPeriod is not (5 or 10 or 20 or 50 or 150 or 200))
+            throw new InvalidOperationException(
+                "min_close_below_sma_pct (above 0 and below 100) and close_below_sma_period (5, 10, 20, 50, 150 or 200) must be set together.");
+    }
+
+    // A strategy without a protective stop is a long daily research rule sized by position notional: there is no
+    // stop distance for an R-multiple target, a trailing stop or continuation protection to work from.
+    private static void ValidateNoStopRules(StrategyDefinition strategy)
+    {
+        var exits = strategy.ExitRules;
+        if (exits.HasProtectiveStop)
+        {
+            // Without a target-aware broker path a target-less daily position would still get a broker target in paper
+            // trading; the published opening-range recipe holds to its stop or the close and is backtest-only.
+            if (!exits.HasProfitTarget && strategy.EntryRules.OpeningRangeBreakout is not { IsPublishedRecipe: true })
+                throw new InvalidOperationException("profit_target_mode: none requires initial_stop_mode: none, except for the published opening-range recipe.");
+            return;
+        }
+        if (!strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase) ||
+            !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) ||
+            !strategy.Execution.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) ||
+            exits.EnableAtrTrailingStop || exits.ContinuationProtection is not null || exits.HasProfitTarget)
+            throw new InvalidOperationException(
+                "initial_stop_mode: none requires a long strategy with daily setup and execution bars, profit_target_mode: none, and no trailing stop or continuation protection.");
+    }
+
     // An explicit mapping selects the reviewed ORB policy; omission preserves historical strategy identities.
     private static OpeningRangeBreakoutRules? ReadOpeningRangeBreakout(IReadOnlyDictionary<string, List<string>> map)
     {
@@ -685,7 +719,11 @@ public sealed class SimpleYamlReader
         if (!map.ContainsKey(section) && !map.Keys.Any(key => key.StartsWith(section + ".", StringComparison.OrdinalIgnoreCase)))
             return null;
         return new OpeningRangeBreakoutRules(OptionalString(map, section + ".policy_id", "opening-range-breakout-v1"),
-            OptionalInt(map, section + ".max_filled_parent_trades_per_session", 2));
+            OptionalInt(map, section + ".max_filled_parent_trades_per_session", 2),
+            OptionalNullableInt(map, section + ".range_minutes"),
+            OptionalNullableInt(map, section + ".volume_lookback_sessions"),
+            OptionalDecimal(map, section + ".min_relative_volume"),
+            OptionalNullableInt(map, section + ".atr_sessions"));
     }
 
     // A present mapping opts in; absent mappings leave all existing strategy behavior unchanged.

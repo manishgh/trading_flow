@@ -301,7 +301,7 @@ folder is not promotion evidence. Experimental variants live under
 paper-shadow run.
 
 The exact bootstrap classification is in
-`configs/strategy-catalog.json`: 3 research artifacts, no archived artifacts, and no
+`configs/strategy-catalog.json`: 6 research artifacts, no archived artifacts, and no
 paper-experiment, paper-shadow, or validated authorization.
 Folder location is not authority.
 

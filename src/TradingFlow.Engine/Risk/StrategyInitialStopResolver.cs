@@ -48,6 +48,13 @@ public sealed class StrategyInitialStopResolver
 
         var mode = NormalizeRuleName(request.Strategy.ExitRules.InitialStopMode);
         var isShort = request.Side == PlannedOrderSide.Short;
+        // A published no-stop rule places no protective order; the price is 0 and the risk unit is the entry price.
+        if (mode == ExitRules.NoStop)
+        {
+            return isShort
+                ? StrategyInitialStopResult.Rejected("no_stop_mode_supports_long_only")
+                : StrategyInitialStopResult.Resolved(PlannedStopRequest.NoStop(), 0m, request.EntryPrice);
+        }
         decimal stopPrice;
         PlannedStopRequest stop;
 

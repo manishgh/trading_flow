@@ -9,7 +9,9 @@ public enum PlannedOrderSide
 public enum PlannedStopKind
 {
     Atr,
-    Structural
+    Structural,
+    /// <summary>No protective stop: size by position notional only (long research backtests).</summary>
+    None
 }
 
 public enum OrderPlanRejectionCode
@@ -55,6 +57,9 @@ public sealed record PlannedStopRequest(
         PlannedStopKind kind,
         decimal stopPrice) =>
         new(kind, ResolvedStopPrice: stopPrice);
+
+    /// <summary>Request for a position with no protective stop order.</summary>
+    public static PlannedStopRequest NoStop() => new(PlannedStopKind.None);
 }
 
 public sealed record OrderPlanningRequest(

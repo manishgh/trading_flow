@@ -537,17 +537,19 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         }
 
         var exitSide = tracker.IsShort ? SimulatedOrderSide.Buy : SimulatedOrderSide.Sell;
-        var stopPrice = ResolveEffectiveStopPrice(tracker, timestamp);
-        UpsertProtectiveOrder(
-            tracker,
-            ProtectiveOrderKind.Stop,
-            timestamp,
-            exitSide,
-            SimulatedOrderType.Stop,
-            openQuantity,
-            stopPrice: stopPrice,
-            commands: commands);
-        UpsertProtectiveOrder(
+        // A price of 0 means the strategy declares no protective order of that kind (published no-stop rules).
+        if (tracker.Plan.Candidate.StopLossPrice > 0m)
+            UpsertProtectiveOrder(
+                tracker,
+                ProtectiveOrderKind.Stop,
+                timestamp,
+                exitSide,
+                SimulatedOrderType.Stop,
+                openQuantity,
+                stopPrice: ResolveEffectiveStopPrice(tracker, timestamp),
+                commands: commands);
+        if (tracker.Plan.Candidate.TakeProfitPrice > 0m)
+            UpsertProtectiveOrder(
             tracker,
             ProtectiveOrderKind.Target,
             timestamp,

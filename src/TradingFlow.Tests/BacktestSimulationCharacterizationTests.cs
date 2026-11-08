@@ -103,6 +103,29 @@ public sealed class BacktestSimulationCharacterizationTests
         Assert.Equal(sink.Events.OrderBy(item => item.Timestamp), sink.Events);
     }
 
+    // Published no-stop rules (Connors RSI-2, snapback): neither a deep fall nor a spike closes the position;
+    // only the strategy's own exit does, and the recorded stop/target prices state that no such orders existed.
+    [Fact]
+    public void NoStopNoTarget_LongIgnoresPriceExtremesUntilItsOwnExit()
+    {
+        var original = AtrStopStrategy();
+        var strategy = original with { ExitRules = original.ExitRules with {
+            InitialStopMode = ExitRules.NoStop, ProfitTargetMode = ExitRules.NoProfitTarget, MaxHoldBars = 2 } };
+        var bars = new[] { Bar("2026-06-01T13:30:00Z", 100, 101, 99, 100), Bar("2026-06-01T13:35:00Z", 100, 101, 99, 100),
+            Bar("2026-06-01T13:40:00Z", 100, 200, 50, 100), Bar("2026-06-01T13:45:00Z", 100, 101, 99, 100),
+            Bar("2026-06-01T13:50:00Z", 101, 102, 100, 101) };
+        var sink = new CollectingExecutionSink();
+
+        var result = Assert.IsType<(BacktestCandidateTrade Candidate, int ExitIndex)>(InvokeCreateCandidate(strategy, LongSignal(),
+            BuildOrderPlan(strategy, "long", 0m, 100m), bars, bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray(), sink));
+
+        Assert.Equal(0m, result.Candidate.StopLossPrice);
+        Assert.Equal(0m, result.Candidate.TakeProfitPrice);
+        Assert.Equal(ExitRules.NoStop, result.Candidate.InitialStopKind);
+        Assert.DoesNotContain(sink.Events, item => item.State == ExecutionState.PositionClosed && item.Timestamp == bars[2].Timestamp);
+        Assert.Contains("max_hold_bars", Assert.Single(sink.Events, item => item.State == ExecutionState.PositionClosed).Message);
+    }
+
     [Theory]
     [InlineData("long")]
     [InlineData("short")]

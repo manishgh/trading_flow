@@ -34,6 +34,40 @@
       "riskPolicy": "account-risk-budget-v1",
       "executionTimingPolicy": "completed-bar-next-slice-market-exits-v3",
       "historicalNewsDiagnosticPolicyId": "historical-news-presence-research-v1"
+    },
+    {
+      "profileId": "published-no-stop-kept-gaps-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.1.0",
+      "riskPolicy": "position-notional-no-stop-v1",
+      "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-v4"
+    },
+    {
+      "profileId": "historical-news-presence-no-stop-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "position-notional-no-stop-v1",
+      "executionTimingPolicy": "completed-bar-next-slice-market-exits-v3",
+      "historicalNewsDiagnosticPolicyId": "historical-news-presence-research-v1"
+    },
+    {
+      "profileId": "opening-range-breakout-recipe-research-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.3.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "completed-bar-pending-stop-market-session-deadline-v1"
     }
   ],
   "strategies": [
@@ -65,6 +99,40 @@
       "lifecycle": "research",
       "admissionProfileId": "causal-market-exits-kept-gaps-v4",
       "reason": "Same entry and exit rules as 6.0.0; plans from the prior close and keeps trades that open beyond the stop instead of deleting them with a future price."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-published.bt-v8.yaml",
+      "strategyId": "swing.connors-rsi2",
+      "semanticVersion": "8.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "published-no-stop-kept-gaps-v1",
+      "reason": "Approved 8 November 2026: Connors and Alvarez (2008) RSI(2) rules as published (close > SMA200, RSI(2) < 5, exit on close > SMA5) with no market filter, stop, target or time limit; next-open fill is the one named difference; sized by position notional. Research only.",
+      "derivedFromIdentity": {
+        "strategyId": "swing.connors-rsi2",
+        "semanticVersion": "7.0.0",
+        "contentSha256": "a16f4e27ae3e85d19f537d57ac0189a5058d8de0b0cffa39ce993c0220a70e8c"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-snapback.bt-v1.yaml",
+      "strategyId": "swing.snapback",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "historical-news-presence-no-stop-v1",
+      "reason": "Approved 8 November 2026: short-term reversal after a news-free drop (Jegadeesh 1990, Lehmann 1990, Chan 2003) using the saved snapback screen's stretch: RSI(14) < 30 and close at least 10% below SMA20, no 200-day filter, recent company news vetoed; exit on close > SMA5 or after 5 bars; sized by position notional. Operational version, not a replication. Research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v4.yaml",
+      "strategyId": "technical.opening-range-breakout",
+      "semanticVersion": "2.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "opening-range-breakout-recipe-research-v1",
+      "reason": "Approved 8 November 2026: Zarattini, Barbon and Aziz (SSRN 4729284) trade rules as a rules check on the run's own stock list: 5-minute range and direction, opening volume at least its 14-session mean, stop order at the range, stop 10% of the 14-day ATR from the trigger, no target, one entry per stock per day. The paper's daily top-20 stock selection is not applied. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.opening-range-breakout",
+        "semanticVersion": "1.2.0",
+        "contentSha256": "bc73189a1c26ae2741402c2ad84a3a3e88aec709d43253590f7c7fb3c6fdbcc4"
+      }
     }
   ]
 }

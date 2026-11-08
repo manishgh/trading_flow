@@ -23,7 +23,7 @@ public sealed class EffectiveRunSettingsTests
         await File.WriteAllTextAsync(fixture.ProfilePath, profileYaml.Replace(
             "  precommitted_liquidation_source_utc: 2026-05-21T04:00:00+00:00\n", String.Empty, StringComparison.Ordinal));
         var day = Assert.Single(await fixture.Catalog.GetStrategiesAsync(StrategySelectionMode.Backtest),
-            item => item.Identity.StrategyId == "technical.opening-range-breakout");
+            item => item.Identity.StrategyId == "technical.opening-range-breakout" && item.Identity.SemanticVersion == "1.2.0");
         var handler = new CalendarOnlyHandler();
         var providers = new TradingFlow.Backtesting.ConfiguredDataProviders(
             () => TradingFlow.Alpaca.AlpacaOptions.Create(ProductionProfile.Paper) with {

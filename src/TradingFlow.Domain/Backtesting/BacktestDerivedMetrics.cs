@@ -98,7 +98,7 @@ public static class BacktestDerivedMetrics
         var risk = isShort
             ? trade.StopLossPrice - trade.EntryPrice
             : trade.EntryPrice - trade.StopLossPrice;
-        if (risk <= 0m)
+        if (trade.StopLossPrice <= 0m || risk <= 0m)
         {
             return null;
         }

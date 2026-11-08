@@ -29,6 +29,8 @@ public sealed class OpeningRangeBreakoutEvaluator
         var date = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(asOfUtc, zone).DateTime);
         if (!context.SessionSchedules.TryGetValue(date, out var session) || !session.IsTradingDay || session.TradeDate != date)
             return Reject("current_exchange_session_unavailable");
+        if (policy.IsPublishedRecipe)
+            return EvaluatePublishedRecipe(strategy, policy, completedBars, context, asOfUtc, date, session, zone);
         var open = AtUtc(date, session.RegularOpen, zone);
         var rangeCompletedAt = open.AddMinutes(15);
         var deadline = AtUtc(date, session.RegularClose, zone).Subtract(Interval);
@@ -70,6 +72,113 @@ public sealed class OpeningRangeBreakoutEvaluator
             opening[0].Timestamp, opening[2].Timestamp, asOfUtc, deadline, deadline, openingLastIndex,
             IntradayEntryOrderMode.StopMarket, high, low, openingOpen, openingClose, rangeCompletedAt,
             snapshot.RelativeVolume, snapshot.RelativeVolumeSampleCount, policy.MaxFilledParentTradesPerSession, true, baselineSha256), null, true);
+    }
+
+    // Published recipe (Zarattini, Barbon and Aziz): when the opening range completes, trade in the direction of its
+    // body with a stop order at the range extreme, provided its volume is at least the configured multiple of the mean
+    // of the same opening interval over the preceding sessions. The protective stop sits a fraction of the prior-session
+    // daily ATR beyond the trigger. One order per stock per session, live until the session deadline.
+    private static IntradayBreakoutEvaluation EvaluatePublishedRecipe(StrategyDefinition strategy, OpeningRangeBreakoutRules policy,
+        IReadOnlyList<OhlcvBar> completedBars, IntradayBreakoutContext context, DateTimeOffset asOfUtc, DateOnly date,
+        MarketSessionSchedule session, TimeZoneInfo zone)
+    {
+        var open = AtUtc(date, session.RegularOpen, zone);
+        var rangeCompletedAt = open.AddMinutes(policy.RangeMinutes!.Value);
+        var deadline = AtUtc(date, session.RegularClose, zone).Subtract(Interval);
+        if (asOfUtc != rangeCompletedAt || asOfUtc >= deadline)
+            return Reject(asOfUtc < rangeCompletedAt ? "outside_opening_range_entry_window" : "opening_range_order_placed_at_range_completion");
+        var current = completedBars.Where(bar => bar.Timestamp >= open).ToArray();
+        if (!HasCompleteCoverage(current, open, asOfUtc))
+            return Reject("opening_range_current_session_coverage_incomplete");
+        var opening = current.Take(policy.RangeBars).ToArray();
+        if (!TryMeanOpeningBaseline(context, date, zone, rangeCompletedAt, opening[0], policy, out var baselineMean, out var baselineSha256))
+            return Reject("opening_range_volume_baseline_unavailable");
+        var relativeVolume = opening.Sum(bar => bar.Volume) / baselineMean;
+        if (relativeVolume < policy.MinRelativeVolume!.Value)
+            return Reject("opening_range_relative_volume_below_minimum");
+        if (!TryDailyAtr(context, date, zone, policy.AtrSessions!.Value, opening[0], asOfUtc, out var atr, out var prior))
+            return Reject("opening_range_daily_atr_unavailable");
+        var openingOpen = opening[0].Open;
+        var openingClose = opening[^1].Close;
+        if (openingClose == openingOpen) return Reject("opening_range_doji");
+        var isLong = openingClose > openingOpen;
+        var high = opening.Max(bar => bar.High);
+        var low = opening.Min(bar => bar.Low);
+        var tick = context.TickSize;
+        var trigger = (isLong ? decimal.Ceiling(high / tick) : decimal.Floor(low / tick)) * tick;
+        var distance = strategy.ExitRules.StopAtrMultiple * atr;
+        var stop = (isLong ? decimal.Floor((trigger - distance) / tick) : decimal.Ceiling((trigger + distance) / tick)) * tick;
+        if (trigger <= 0m || stop <= 0m || !(isLong ? trigger > stop : trigger < stop))
+            return Reject("entry_or_structural_stop_incompatible_with_tick");
+        var rangeLastIndex = completedBars.Count - current.Length + opening.Length - 1;
+        return new(new IntradayBreakoutSignal(isLong ? "long" : "short", "opening_range_recipe_stop", trigger, stop,
+            tick, prior.High, prior.Low, opening[0].Timestamp, opening[^1].Timestamp, asOfUtc, deadline, deadline, rangeLastIndex,
+            IntradayEntryOrderMode.StopMarket, high, low, openingOpen, openingClose, rangeCompletedAt,
+            relativeVolume, policy.VolumeLookbackSessions, policy.MaxFilledParentTradesPerSession, false, baselineSha256,
+            DailyAtr: atr), null, true);
+    }
+
+    // Mean opening-interval volume over exactly the configured immediately preceding sessions (the paper's 14-day average).
+    private static bool TryMeanOpeningBaseline(IntradayBreakoutContext context, DateOnly current, TimeZoneInfo zone,
+        DateTimeOffset completedAt, OhlcvBar currentOpening, OpeningRangeBreakoutRules policy, out decimal mean, out string? evidenceSha256)
+    {
+        mean = 0m;
+        evidenceSha256 = null;
+        var sessions = policy.VolumeLookbackSessions!.Value;
+        var bars = context.OpeningRangeBaselineBars;
+        if (bars is null || bars.Count != sessions * policy.RangeBars || !CompletedSeriesIsValid(bars, completedAt)) return false;
+        var index = bars.Count - 1;
+        var total = 0m;
+        var used = new List<MarketSessionSchedule>(sessions);
+        for (var sample = 0; sample < sessions; sample++)
+        {
+            if (!TryPreviousSession(context.SessionSchedules, current, out var session)) return false;
+            var open = AtUtc(session.TradeDate, session.RegularOpen, zone);
+            for (var slot = policy.RangeBars - 1; slot >= 0; slot--)
+            {
+                var bar = bars[index--];
+                if (bar.Timestamp != open.AddMinutes(slot * 5) || bar.Ticker != currentOpening.Ticker ||
+                    bar.DataFeed != currentOpening.DataFeed || bar.AdjustmentPolicy != currentOpening.AdjustmentPolicy)
+                    return false;
+                total += bar.Volume;
+            }
+            used.Add(session);
+            current = session.TradeDate;
+        }
+        mean = total / sessions;
+        evidenceSha256 = EvidenceCanonicalJson.ComputeSha256(new { sessions = used, openingBars = bars });
+        return mean > 0m;
+    }
+
+    // Average true range over the configured number of completed preceding sessions; one more daily bar supplies the
+    // first previous close. With exactly that history, Wilder's average equals the simple mean of the true ranges.
+    private static bool TryDailyAtr(IntradayBreakoutContext context, DateOnly current, TimeZoneInfo zone, int sessions,
+        OhlcvBar currentOpening, DateTimeOffset asOfUtc, out decimal atr, out OhlcvBar prior)
+    {
+        atr = 0m;
+        prior = null!;
+        var daily = context.PriorSessionDailyBars;
+        if (daily is null || daily.Count != sessions + 1) return false;
+        for (var index = daily.Count - 1; index >= 0; index--)
+        {
+            if (!TryPreviousSession(context.SessionSchedules, current, out var session)) return false;
+            var bar = daily[index];
+            if (DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(bar.Timestamp, zone).DateTime) != session.TradeDate ||
+                bar.Ticker != currentOpening.Ticker || bar.DataFeed != currentOpening.DataFeed ||
+                bar.AdjustmentPolicy != currentOpening.AdjustmentPolicy || bar.KnownAtUtc > asOfUtc ||
+                bar.Low <= 0m || bar.High < bar.Low) return false;
+            current = session.TradeDate;
+        }
+        var total = 0m;
+        for (var index = 1; index < daily.Count; index++)
+        {
+            var previousClose = daily[index - 1].Close;
+            total += Math.Max(daily[index].High - daily[index].Low,
+                Math.Max(Math.Abs(daily[index].High - previousClose), Math.Abs(daily[index].Low - previousClose)));
+        }
+        atr = total / sessions;
+        prior = daily[^1];
+        return atr > 0m;
     }
 
     // Commit only the latest completed post-range candle; its close sizes the order without a future opening price.

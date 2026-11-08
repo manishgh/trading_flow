@@ -1,0 +1,70 @@
+# Snapback: short-term reversal after a sharp, news-free drop.
+# Sources: Jegadeesh (1990) and Lehmann (1990), recent large losers tend to rebound over the next weeks;
+# Chan (2003), the rebound occurs mainly when the drop came without company news.
+# Operational stretch from the user's saved Finviz screen "Mean revision snapback": RSI(14) below 30 and
+# the close at least 10% below its 20-day average. No 200-day trend filter (this separates it from Connors).
+# News veto: no provider-linked company article in the frozen 120-hour window (research diagnostic).
+# Entry at the next open; exit when the close is above SMA5 or after 5 bars (Lehmann's weekly horizon).
+# No stop or target; sized by position notional. Setup type momentum means no extra trigger beyond the gates.
+# Universe (price > $20, average volume > 2M shares, mid-cap and larger) comes from the run's stock list.
+# An operational version of the published effect, not a replication. Control: technical.recovery-sma5-news-avoidance@1.0.0.
+strategy_id: research.swing-snapback.bt-v1
+strategy_name: RESEARCH Snapback - news-free drop rebound V1
+source: jegadeesh_1990_lehmann_1990_chan_2003_short_term_reversal
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: momentum
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 30.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: false
+  portfolio_rank_mode: rsi2_ascending
+  max_vwap_extension_atr:
+  recent_high_lookback_bars: 20
+  volatility_contraction_lookback_bars: 25
+  require_positive_news: false
+  historical_news_diagnostic: avoid_recent_company_news
+  min_close_below_sma_pct: 10
+  close_below_sma_period: 20
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 0
+  target_r_multiple: 0
+  max_hold_hours: 10000.0
+  max_hold_bars: 5
+  exit_on_rsi2_above:
+  exit_on_close_above_sma5: true
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: none
+  profit_target_mode: none
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 10.0
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30
+
