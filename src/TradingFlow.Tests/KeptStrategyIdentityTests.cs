@@ -21,6 +21,8 @@ public sealed class KeptStrategyIdentityTests
     [InlineData("swing.connors-rsi2", "8.0.0", "f5ee0ef58473b0e749edcb4894d9aa31ac0786e42ffb313ca369f57b80dff5a3", "swing.connors-rsi2")]
     [InlineData("swing.snapback", "1.0.0", "cda6eb1c9031d1b9e9845afa243a12179d410518a21ebb4631e73cdf1b69713e", null)]
     [InlineData("technical.opening-range-breakout", "2.0.0", "83b58ddd3b6b2017c717066e98ce92b513537b9aa467283b32f72375ded14429", "technical.opening-range-breakout")]
+    [InlineData("swing.connors-rsi2-short", "1.0.0", "2dd7fab558ca8d9676201556d5ba9ae20aa46f4e58e4821b3159b698ccb50363", null)]
+    [InlineData("swing.snapback-short", "1.0.0", "608c52fe8d48cfeeaf6ac6ccf0ea194da417b6e5f9ba89c7c64d0c2ba03559c3", null)]
     public void KeptArtifacts_KeepTheirRecordedCanonicalHashes(string id, string version, string hash, string? parent)
     {
         var artifact = Assert.Single(CreateCatalog().GetSnapshot().ExecutableArtifacts,

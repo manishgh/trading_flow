@@ -223,6 +223,8 @@ public sealed partial class SignalGenerator
             IsSma200Rising: isSma200Rising,
             BreakoutVolumeVs50DayAverage: breakoutVolume50,
             CloseBelowSmaPct: CloseBelowSmaPct(strategy, snapshot),
+            IsConnorsRsi2Overbought: IsConnorsRsi2Overbought(strategy, snapshot),
+            CloseAboveSmaPct: CloseAboveSmaPct(strategy, snapshot),
             TechnicalFactor: strategy.EntryRules.TechnicalFactor is { } factor
                 ? validatedFactor ?? TechnicalFactorCalculator.Analyze(factor, bars, snapshots, index, referenceBars,
                     asOfUtc ?? bar.Timestamp.AddDays(1), expectedReferenceSessions) : null);
@@ -339,6 +341,29 @@ public sealed partial class SignalGenerator
     private static bool UsesLongSetup(StrategyDefinition strategy, string setupType)
     {
         return strategy.EntryRules.SetupType.Equals(setupType, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Connors short mirror on the completed bar: RSI(2) strictly above the threshold and, when required, the close below SMA200.
+    // Only evaluated for a strategy whose short setup is rsi2_overbought; missing indicators never qualify.
+    private static bool IsConnorsRsi2Overbought(StrategyDefinition strategy, IndicatorSnapshot snapshot)
+    {
+        var rules = strategy.EntryRules;
+        if (!rules.EnableShort || !rules.ShortSetupType.Equals("rsi2_overbought", StringComparison.OrdinalIgnoreCase) ||
+            rules.MinShortReversionRsi2 is not { } threshold || snapshot.Rsi2 is not { } rsi2) return false;
+        if (rules.RequirePriceBelowSma200ForShort && (snapshot.Sma200 is not { } sma200 || snapshot.CurrentPrice >= sma200)) return false;
+        return rsi2 > threshold;
+    }
+
+    // Percent the completed close sits above the configured SMA (negative when below); null when the gate is off or the SMA is not warm.
+    private static decimal? CloseAboveSmaPct(StrategyDefinition strategy, IndicatorSnapshot snapshot)
+    {
+        var sma = strategy.EntryRules.CloseAboveSmaPeriod switch
+        {
+            5 => snapshot.Sma5, 10 => snapshot.Sma10, 20 => snapshot.Sma20,
+            50 => snapshot.Sma50, 150 => snapshot.Sma150, 200 => snapshot.Sma200,
+            _ => null
+        };
+        return sma is > 0m ? (snapshot.CurrentPrice - sma.Value) / sma.Value * 100m : null;
     }
 
     // Percent the completed close sits below the configured SMA (negative when above); null when the gate is off or the SMA is not warm.

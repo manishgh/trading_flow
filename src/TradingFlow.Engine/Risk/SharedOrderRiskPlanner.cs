@@ -108,18 +108,11 @@ public sealed class SharedOrderRiskPlanner
                 accountRiskBudget));
     }
 
-    // Size a long position that has no protective stop by the position-notional cap alone. With no stop the
-    // whole position is the planned loss, so the account-risk budget cannot bound quantity; the caller's
-    // notional cap (for example equity divided by the maximum number of positions) is the sizing rule.
+    // Size a position that has no protective stop (published long or short research rules) by the position-notional cap
+    // alone. With no stop the account-risk budget cannot bound quantity; the planned loss is reported as the deployed
+    // notional plus fees, which understates a short's open-ended risk. Broker order planning refuses these plans.
     private static OrderPlanningResult PlanWithoutStop(OrderPlanningRequest request, decimal entryPrice)
     {
-        if (request.Side != PlannedOrderSide.Long)
-        {
-            return Reject(
-                OrderPlanRejectionCode.InvalidStop,
-                "A position without a protective stop is supported only for long positions.");
-        }
-
         var positionNotionalLimit = request.AccountEquity * (request.RiskLimits.MaxPositionNotionalPct / 100m);
         if (request.RequestedNotional is not null)
         {

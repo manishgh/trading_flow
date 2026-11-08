@@ -126,6 +126,33 @@ public sealed class BacktestSimulationCharacterizationTests
         Assert.Contains("max_hold_bars", Assert.Single(sink.Events, item => item.State == ExecutionState.PositionClosed).Message);
     }
 
+    // Published no-stop short rules (Connors RSI-2 short, snapback short): a spike far above entry does not close the
+    // position; the completed close below SMA5 covers it at the next bar's open, the same timing as the long SMA5 exit.
+    [Fact]
+    public void NoStopNoTarget_ShortIgnoresSpikeAndCoversAfterCloseBelowSma5()
+    {
+        var original = AtrStopStrategy();
+        var strategy = original with { Direction = "short", EntryRules = original.EntryRules with { EnableShort = true },
+            ExitRules = original.ExitRules with { InitialStopMode = ExitRules.NoStop, ProfitTargetMode = ExitRules.NoProfitTarget,
+                EnableAtrTrailingStop = false, MaxHoldBars = null, ExitOnCloseBelowSma5 = true, MinHoldBarsBeforeTechnicalExit = 0 } };
+        var bars = new[] { Bar("2026-06-01T13:30:00Z", 100, 101, 99, 100), Bar("2026-06-01T13:35:00Z", 100, 101, 99, 100),
+            Bar("2026-06-01T13:40:00Z", 100, 200, 50, 100), Bar("2026-06-01T13:45:00Z", 99, 99, 97, 98),
+            Bar("2026-06-01T13:50:00Z", 97, 98, 96, 97) };
+        var snapshots = bars.Select(bar => Snapshot(bar.Timestamp.ToString("O")) with
+            { CurrentPrice = bar.Close, Sma5 = bar.Close == 98m ? 99m : bar.Close - 1m }).ToArray();
+        var sink = new CollectingExecutionSink();
+
+        var result = Assert.IsType<(BacktestCandidateTrade Candidate, int ExitIndex)>(InvokeCreateCandidate(strategy, LongSignal(),
+            BuildOrderPlan(strategy, "short", 0m, 100m), bars, snapshots, sink));
+
+        Assert.Equal(0m, result.Candidate.StopLossPrice);
+        Assert.Equal(0m, result.Candidate.TakeProfitPrice);
+        Assert.Equal("technical_exit_below_sma5", result.Candidate.ExitReason);
+        Assert.Equal(bars[4].Timestamp, result.Candidate.ExitTimestamp);
+        Assert.True(result.Candidate.ExitPrice >= 97m);
+        Assert.DoesNotContain(sink.Events, item => item.State == ExecutionState.PositionClosed && item.Timestamp == bars[2].Timestamp);
+    }
+
     [Theory]
     [InlineData("long")]
     [InlineData("short")]
@@ -187,6 +214,26 @@ public sealed class BacktestSimulationCharacterizationTests
         // Sizing and risk come from the prior close, which was known before the open.
         Assert.Equal(100m, result.Candidate.PlanningReferencePrice);
         Assert.Equal(2m, result.Candidate.StopDistance);
+    }
+
+    // A kept-gap strategy without a stop (Connors RSI-2 8.0.0 and its short mirror) reports the prior close as its
+    // planning price for portfolio admission; rebuilding it from a stop price of 0 would give a negative short price.
+    [Theory]
+    [InlineData("long")]
+    [InlineData("short")]
+    public void NoStopKeptGap_ReportsThePriorCloseAsPlanningPrice(string direction)
+    {
+        var gap = GapStrategy(direction, ExecutionRules.KeepAndExitNextOpen);
+        var strategy = gap with { ExitRules = gap.ExitRules with { InitialStopMode = ExitRules.NoStop,
+            ProfitTargetMode = ExitRules.NoProfitTarget, EnableAtrTrailingStop = false, MaxHoldBars = 1 } };
+        var bars = GapBars(101m, 102m);
+
+        var result = Assert.IsType<(BacktestCandidateTrade Candidate, int ExitIndex)>(InvokeCreateCandidate(strategy, LongSignal(),
+            BuildOrderPlan(strategy, direction, 0m, 100m), bars, bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray(),
+            new CollectingExecutionSink()));
+
+        Assert.Equal(bars[0].Close, result.Candidate.PlanningReferencePrice);
+        Assert.Equal(bars[0].Close, result.Candidate.StopDistance);
     }
 
     [Theory]

@@ -223,6 +223,8 @@ public sealed class BasicStrategyEvaluator
         return null;
     }
 
+    // Daily short entries: the Connors RSI(2) overbought mirror or a gate-only (momentum) setup, short RSI(14) range and the
+    // close-above-SMA stretch. Returns null when every declared short rule passes, otherwise the first failing rule.
     public string? GetShortEntryRejection(StrategyDefinition strategy, TradeSignal signal, decimal relativeVolume)
     {
         if (!AllowsShort(strategy))
@@ -230,8 +232,41 @@ public sealed class BasicStrategyEvaluator
             return "direction_not_short";
         }
 
-        // No swing short setup remains in the catalog; a daily short entry cannot be qualified.
-        throw new NotSupportedException($"Unsupported short_setup_type: {strategy.EntryRules.ShortSetupType}.");
+        if (!strategy.Timeframe.Equals(signal.Timeframe, StringComparison.OrdinalIgnoreCase))
+        {
+            return "timeframe_mismatch";
+        }
+
+        var rules = strategy.EntryRules;
+        var setupTriggered = rules.ShortSetupType.ToLowerInvariant() switch
+        {
+            "rsi2_overbought" => signal.IsConnorsRsi2Overbought,
+            "momentum" => true,
+            _ => throw new NotSupportedException($"Unsupported short_setup_type: {rules.ShortSetupType}.")
+        };
+        if (!setupTriggered)
+        {
+            return $"setup_{rules.ShortSetupType}_not_triggered";
+        }
+
+        if (rules.MinShortEntryRsi is { } minShortRsi && signal.CurrentRsi < minShortRsi)
+        {
+            return $"short_rsi_below_range (Actual: {signal.CurrentRsi:F2}, RequiredMin: {minShortRsi:F2})";
+        }
+
+        if (rules.MaxShortEntryRsi is { } maxShortRsi && signal.CurrentRsi > maxShortRsi)
+        {
+            return $"short_rsi_above_range (Actual: {signal.CurrentRsi:F2}, RequiredMax: {maxShortRsi:F2})";
+        }
+
+        // Snapback short stretch: the close must sit at least the configured percent above its SMA; missing evidence fails closed.
+        if (rules.MinCloseAboveSmaPct is { } minStretch &&
+            (signal.CloseAboveSmaPct is null || signal.CloseAboveSmaPct < minStretch))
+        {
+            return $"close_not_far_enough_above_sma{rules.CloseAboveSmaPeriod} (Actual: {signal.CloseAboveSmaPct?.ToString("F2") ?? "n/a"}, Required: {minStretch:F2})";
+        }
+
+        return null;
     }
 
     private static bool PassesSetupType(StrategyDefinition strategy, TradeSignal signal)

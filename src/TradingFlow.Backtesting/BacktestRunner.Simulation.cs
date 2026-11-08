@@ -286,6 +286,8 @@ public sealed partial class BacktestRunner
             with { PendingExitDecision = pendingExit }, bars.Count - 1);
     }
 
+    // Replay one short from its next-open fill to its first stop, target, technical or time exit; mirror of the long builder.
+    // Without a protective stop the risk unit is the planning price and only the strategy's own exits close the position.
     private (BacktestCandidateTrade Candidate, int ExitIndex)? CreateShortCandidate(
         string candidateId,
         BacktestRunConfig run,
@@ -305,8 +307,9 @@ public sealed partial class BacktestRunner
         var entryPrice = ApplyShortEntrySlippage(entryBar.Open, relativeVolume, strategy, approximateTradeAmount);
         var initialStopLossPrice = canonicalOrderPlan.InitialStopPrice;
         var planningPrice = strategy.Execution.KeepsOpeningGaps() ? bars[entryIndex - 1].Close : entryPrice;
-        var stopDistance = initialStopLossPrice - planningPrice;
-        if (initialStopLossPrice <= 0m || stopDistance <= 0m)
+        // Without a protective stop the risk unit is the planning price, mirroring the long side.
+        var stopDistance = strategy.ExitRules.HasProtectiveStop ? initialStopLossPrice - planningPrice : planningPrice;
+        if ((strategy.ExitRules.HasProtectiveStop && initialStopLossPrice <= 0m) || stopDistance <= 0m)
         {
             return null;
         }
@@ -316,7 +319,7 @@ public sealed partial class BacktestRunner
             canonicalOrderPlan,
             planningPrice,
             stopDistance);
-        if (takeProfitPrice <= 0 || takeProfitPrice >= planningPrice)
+        if (strategy.ExitRules.HasProfitTarget && (takeProfitPrice <= 0 || takeProfitPrice >= planningPrice))
         {
             return null;
         }
@@ -335,7 +338,7 @@ public sealed partial class BacktestRunner
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, signal.Timestamp, TradingFlow.Engine.Execution.ExecutionState.SignalGenerated, $"SHORT signal generated at {signal.CurrentPrice}", candidateId);
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, entryTimestamp, TradingFlow.Engine.Execution.ExecutionState.OrderFilled, $"Simulated short fill at {entryPrice} (Stop: {initialStopLossPrice}, TP: {takeProfitPrice})", candidateId);
 
-        if (strategy.Execution.KeepsOpeningGaps() && entryBar.Open >= initialStopLossPrice)
+        if (strategy.Execution.KeepsOpeningGaps() && strategy.ExitRules.HasProtectiveStop && entryBar.Open >= initialStopLossPrice)
         {
             var gapExitBar = bars[exitStartIndex];
             var gapExitPrice = ApplyShortExitSlippage(gapExitBar.Open, snapshots[exitStartIndex].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
@@ -380,7 +383,7 @@ public sealed partial class BacktestRunner
                 currentStopLossPrice = Math.Min(initialStopLossPrice, Math.Min(currentStopLossPrice, trailingStop));
             }
 
-            if (bar.High >= currentStopLossPrice)
+            if (strategy.ExitRules.HasProtectiveStop && bar.High >= currentStopLossPrice)
             {
                 var stopExitReason = currentStopLossPrice < initialStopLossPrice ? "trailing_stop" : "stop_loss";
                 var slippedStopPrice = ApplyShortExitSlippage(currentStopLossPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
@@ -388,7 +391,7 @@ public sealed partial class BacktestRunner
                 return (BuildCandidate(candidateId, strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, currentStopLossPrice, stopExitReason, stopDistance, bars[entryIndex - 1].Volume), i);
             }
 
-            if (bar.Low <= takeProfitPrice)
+            if (strategy.ExitRules.HasProfitTarget && bar.Low <= takeProfitPrice)
             {
                 var slippedTakeProfit = ApplyShortExitSlippage(takeProfitPrice, snapshots[i].RelativeVolume ?? relativeVolume, strategy, approximateTradeAmount);
                 auditor.LogEvent(signal.Ticker, strategy.StrategyName, bar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via take_profit at {slippedTakeProfit}", candidateId);
@@ -515,6 +518,8 @@ public sealed partial class BacktestRunner
             with { PendingExitDecision = pendingExit }, bars.Count - 1);
     }
 
+    // Decide whether a completed bar closes the short: stop and target only when those orders exist, then the short technical
+    // exits (returned at the bar close and filled by the caller at the next open), then the bar-count limit.
     private static (decimal? ExitPrice, string? ExitReason) EvaluateShortBarForExit(
         StrategyDefinition strategy,
         OhlcvBar bar,
@@ -541,13 +546,13 @@ public sealed partial class BacktestRunner
             }
         }
 
-        if (bar.High >= currentStopLossPrice)
+        if (strategy.ExitRules.HasProtectiveStop && bar.High >= currentStopLossPrice)
         {
             var exitReason = currentStopLossPrice < initialStopLossPrice ? "trailing_stop" : "stop_loss";
             return (currentStopLossPrice, exitReason);
         }
 
-        if (bar.Low <= takeProfitPrice)
+        if (strategy.ExitRules.HasProfitTarget && bar.Low <= takeProfitPrice)
         {
             return (takeProfitPrice, "take_profit");
         }
@@ -566,6 +571,12 @@ public sealed partial class BacktestRunner
                 histogram > 0)
             {
                 return (bar.Close, "technical_exit_macd_histogram_positive");
+            }
+
+            // Connors short mirror: cover when the completed close falls below its 5-day average.
+            if (strategy.ExitRules.ExitOnCloseBelowSma5 && snapshot.Sma5 is { } sma5 && snapshot.CurrentPrice < sma5)
+            {
+                return (bar.Close, "technical_exit_below_sma5");
             }
 
             if (strategy.ExitRules.ExitShortOnSma10CrossAboveSma20 &&
@@ -763,10 +774,18 @@ public sealed partial class BacktestRunner
             strategy.StrategyId,
             candidateId)
         {
-            PlanningReferencePrice = strategy.Execution.KeepsOpeningGaps()
-                ? Decimal.Round(direction == "long" ? stopLossPrice + stopDistance : stopLossPrice - stopDistance, 4)
-                : null
+            PlanningReferencePrice = ResolvePlanningReferencePrice(strategy, direction, stopLossPrice, stopDistance)
         };
+    }
+
+    // Recover the prior-close planning price that kept-gap strategies size from. With a stop it is the stop shifted back by the
+    // stop distance; without one the candidate builders set the risk unit to the planning price itself (stop price 0), so
+    // shifting from 0 would give a negative price for a short. Strategies that do not keep gaps plan from the fill.
+    private static decimal? ResolvePlanningReferencePrice(StrategyDefinition strategy, string direction, decimal stopLossPrice, decimal stopDistance)
+    {
+        if (!strategy.Execution.KeepsOpeningGaps()) return null;
+        if (!strategy.ExitRules.HasProtectiveStop) return Decimal.Round(stopDistance, 4);
+        return Decimal.Round(direction == "long" ? stopLossPrice + stopDistance : stopLossPrice - stopDistance, 4);
     }
 
     private const string GapThroughStopExitReason = "gap_fill_through_structural_stop";
@@ -799,6 +818,7 @@ public sealed partial class BacktestRunner
             _ => "structural"
         };
 
+    // Score same-day candidates for capital: rsi2_ascending ranks the most oversold long first, rsi2_descending the most overbought short.
     private static decimal ResolvePortfolioSelectionScore(
         StrategyDefinition strategy,
         TradeSignal signal)
@@ -807,6 +827,7 @@ public sealed partial class BacktestRunner
         {
             "none" => 0m,
             "rsi2_ascending" => signal.CurrentRsi2 is { } rsi2 ? 100m - rsi2 : 0m,
+            "rsi2_descending" => signal.CurrentRsi2 ?? 0m,
             _ => throw new NotSupportedException(
                 $"Unsupported portfolio_rank_mode: {strategy.EntryRules.PortfolioRankMode}.")
         };

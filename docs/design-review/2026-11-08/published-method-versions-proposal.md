@@ -175,3 +175,36 @@ Named differences from the paper:
   costs can exceed half the planned risk; the run's stock list must respect these filters.
 
 Not run yet: no economic backtest of ORB 2.0.0.
+
+### Swing shorts (approved and implemented 8 November 2026)
+
+Two separate strategies, so the long versions keep their identities:
+
+- `swing.connors-rsi2-short@1.0.0` (`swing-connors-rsi2-short.bt-v1.yaml`, admission profile
+  `published-no-stop-kept-gaps-v1`): the short side of Connors and Alvarez (2008). Entry when the
+  completed daily close is below its 200-day average and RSI(2) is above 95. Cover when a
+  completed close is below its 5-day average, at the next open. No stop, target or time limit.
+- `swing.snapback-short@1.0.0` (`swing-snapback-short.bt-v1.yaml`, admission profile
+  `historical-news-presence-no-stop-v1`): the mirror of `swing.snapback`. Entry when RSI(14) is at
+  least 70 and the completed close is at least 10% above its 20-day average, with no
+  provider-linked company article in the frozen 120-hour window. Cover when a completed close is
+  below its 5-day average or after 5 bars, at the next open. No stop or target.
+
+Same-day candidates are ranked most overbought first (`portfolio_rank_mode: rsi2_descending`).
+Both are sized by position notional, the same as the long no-stop versions.
+
+Named differences and risks:
+
+- **Fill at the next open**, planned from the signal close (as for the long versions).
+- **First exit check one day later than the book.** The fill day's own close is not checked for the
+  exit; the first check is the next day's close. The book enters at the signal close and checks the
+  next close. This also applies to the long versions (Connors 8.0.0, snapback 1.0.0) and is not changed here.
+- **A short with no stop has no upper limit on its loss.** The reported planned loss (position
+  notional plus fees) understates that. Broker order planning (paper/live) refuses any plan
+  without a stop, so these run only in research backtests.
+- **Borrow cost and short availability are not modelled.** Hard-to-borrow stocks may be
+  impossible to short or charge a daily fee; results overstate what a real account would earn.
+- The two five-minute execution replays (`daily-rth5m-nextslice-ioc-v1` and
+  `daily-rth-sip-portfolio-native-v1`) stay long-only and refuse these strategies with an error.
+
+Not run yet: no economic backtest of either short strategy.

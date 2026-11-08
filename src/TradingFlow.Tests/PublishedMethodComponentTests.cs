@@ -31,15 +31,19 @@ public sealed class PublishedMethodComponentTests
         Assert.Equal(10_000m + 2m, plan.Order.PlannedLoss);
     }
 
-    // A short position cannot be left without a protective stop.
+    // A published no-stop short (research only) is sized by the notional cap alone, mirroring the long; slippage lowers
+    // the short's estimated entry and the planned loss is still reported as the deployed notional plus fees.
     [Fact]
-    public void NoStopShort_IsRejected()
+    public void NoStopShort_IsSizedByNotionalCapAlone()
     {
         var plan = new SharedOrderRiskPlanner().Plan(new OrderPlanningRequest("abc", PlannedOrderSide.Short, 100_000m, 50m,
-            PlannedStopRequest.NoStop(), new OrderPlanningRiskLimits(1m, 25m), new EstimatedOrderExecutionCosts(0m, 0m, 0m)));
+            PlannedStopRequest.NoStop(), new OrderPlanningRiskLimits(1m, 25m), new EstimatedOrderExecutionCosts(0m, 1m, 1m), 10_000m));
 
-        Assert.False(plan.IsAccepted);
-        Assert.Equal(OrderPlanRejectionCode.InvalidStop, plan.Rejection!.Code);
+        Assert.True(plan.IsAccepted);
+        Assert.Equal(PlannedOrderSide.Short, plan.Order!.Side);
+        Assert.Equal(200, plan.Order.Quantity);
+        Assert.Equal(0m, plan.Order.StopTriggerPrice);
+        Assert.Equal(10_000m + 2m, plan.Order.PlannedLoss);
     }
 
     // The two new files load with no stop and no target and keep their declared exits.
@@ -69,7 +73,8 @@ public sealed class PublishedMethodComponentTests
     [Theory]
     [InlineData("  profit_target_mode: none", "  profit_target_mode: r_multiple")]
     [InlineData("  enable_atr_trailing_stop: false", "  enable_atr_trailing_stop: true")]
-    [InlineData("direction: long", "direction: short")]
+    [InlineData("direction: long", "direction: long_short")]
+    [InlineData("  exit_on_close_above_sma5: true", "  exit_on_close_above_sma5: true\n  exit_on_close_below_sma5: true")]
     [InlineData("  close_below_sma_period: 20", "  close_below_sma_period: 30")]
     [InlineData("  close_below_sma_period: 20\n", "")]
     public void InvalidNoStopOrStretchSettings_FailWhenLoaded(string original, string replacement)
@@ -122,9 +127,9 @@ public sealed class PublishedMethodComponentTests
         return (strategy, bars, snapshots, new SignalGenerator().CreateTradeSignal(strategy, bars, snapshots, bars.Length - 1)!);
     }
 
-    // The no-stop mode resolves to "no stop order" for longs and is refused for shorts.
+    // The no-stop mode resolves to "no stop order" for both directions; the risk unit is the entry price.
     [Fact]
-    public void NoStopMode_ResolvesForLongAndIsRefusedForShort()
+    public void NoStopMode_ResolvesForLongAndShort()
     {
         var (strategy, bars, snapshots, signal) = SnapbackDrop();
         var resolver = new StrategyInitialStopResolver();
@@ -132,19 +137,25 @@ public sealed class PublishedMethodComponentTests
         var longStop = resolver.Resolve(new StrategyInitialStopRequest(strategy, signal, PlannedOrderSide.Long, 80m, bars.Length - 1, bars, snapshots.ToArray()));
         var shortStop = resolver.Resolve(new StrategyInitialStopRequest(strategy, signal, PlannedOrderSide.Short, 80m, bars.Length - 1, bars, snapshots.ToArray()));
 
-        Assert.True(longStop.IsResolved);
-        Assert.Equal(0m, longStop.StopPrice);
-        Assert.Equal(PlannedStopKind.None, longStop.Stop!.Kind);
-        Assert.Equal("no_stop_mode_supports_long_only", shortStop.RejectionReason);
+        Assert.All(new[] { longStop, shortStop }, stop =>
+        {
+            Assert.True(stop.IsResolved);
+            Assert.Equal(0m, stop.StopPrice);
+            Assert.Equal(80m, stop.StopDistance);
+            Assert.Equal(PlannedStopKind.None, stop.Stop!.Kind);
+        });
     }
 
-    // Broker order planning (paper/live) never accepts a plan without a protective stop.
-    [Fact]
-    public void BrokerOrderPlanning_RefusesAPlanWithoutStop()
+    // Broker order planning (paper/live) never accepts a plan without a protective stop, long or short; for shorts it is the
+    // only refusal, because the shared sizing planner now accepts no-stop shorts for research backtests.
+    [Theory]
+    [InlineData("long")]
+    [InlineData("short")]
+    public void BrokerOrderPlanning_RefusesAPlanWithoutStop(string direction)
     {
         var (strategy, bars, _, signal) = SnapbackDrop();
         var at = bars[^1].Timestamp.AddDays(1);
-        var plan = new StrategyOrderPlan(strategy.StrategyId, strategy.StrategyName, "long", at, at, "1d", bars.Length - 1,
+        var plan = new StrategyOrderPlan(strategy.StrategyId, strategy.StrategyName, direction, at, at, "1d", bars.Length - 1,
             80m, 0m, 0m, ExitRules.NoProfitTarget, null, 10m, at.AddDays(1), bars[^1].Timestamp);
 
         var result = new StrategyOrderPlanner().Plan(new StrategyOrderPlanningRequest(plan, signal, 100_000m,

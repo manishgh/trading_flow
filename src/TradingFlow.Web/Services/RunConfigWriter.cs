@@ -880,6 +880,10 @@ public sealed class RunConfigWriter
         AppendOptionalDecimal(yaml, "  min_breakout_volume_vs_50_day_average", strategy.EntryRules.MinBreakoutVolumeVs50DayAverage);
         AppendOptionalDecimal(yaml, "  min_close_below_sma_pct", strategy.EntryRules.MinCloseBelowSmaPct);
         if (strategy.EntryRules.CloseBelowSmaPeriod is { } closeBelowSmaPeriod) yaml.AppendLine($"  close_below_sma_period: {closeBelowSmaPeriod}");
+        AppendOptionalDecimal(yaml, "  min_short_reversion_rsi2", strategy.EntryRules.MinShortReversionRsi2);
+        if (strategy.EntryRules.RequirePriceBelowSma200ForShort) yaml.AppendLine("  require_price_below_sma200_for_short: true");
+        AppendOptionalDecimal(yaml, "  min_close_above_sma_pct", strategy.EntryRules.MinCloseAboveSmaPct);
+        if (strategy.EntryRules.CloseAboveSmaPeriod is { } closeAboveSmaPeriod) yaml.AppendLine($"  close_above_sma_period: {closeAboveSmaPeriod}");
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
@@ -987,6 +991,7 @@ public sealed class RunConfigWriter
         AppendOptionalInt(yaml, "  max_hold_bars", strategy.ExitRules.MaxHoldBars);
         AppendOptionalDecimal(yaml, "  exit_on_rsi2_above", strategy.ExitRules.ExitOnRsi2Above);
         yaml.AppendLine($"  exit_on_close_above_sma5: {strategy.ExitRules.ExitOnCloseAboveSma5.ToString().ToLowerInvariant()}");
+        if (strategy.ExitRules.ExitOnCloseBelowSma5) yaml.AppendLine("  exit_on_close_below_sma5: true");
         yaml.AppendLine($"  enable_atr_trailing_stop: {strategy.ExitRules.EnableAtrTrailingStop.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  trailing_stop_atr_multiple: {strategy.ExitRules.TrailingStopAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  trailing_activation_r: {strategy.ExitRules.TrailingActivationR.ToString(CultureInfo.InvariantCulture)}");

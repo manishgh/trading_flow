@@ -172,7 +172,11 @@ public sealed class SimpleYamlReader
                 HistoricalNewsDiagnostic: ReadHistoricalNewsDiagnostic(map),
                 OpeningRangeBreakout: ReadOpeningRangeBreakout(map),
                 MinCloseBelowSmaPct: OptionalDecimal(map, "entry_rules.min_close_below_sma_pct"),
-                CloseBelowSmaPeriod: OptionalNullableInt(map, "entry_rules.close_below_sma_period")),
+                CloseBelowSmaPeriod: OptionalNullableInt(map, "entry_rules.close_below_sma_period"),
+                MinShortReversionRsi2: OptionalDecimal(map, "entry_rules.min_short_reversion_rsi2"),
+                RequirePriceBelowSma200ForShort: OptionalBool(map, "entry_rules.require_price_below_sma200_for_short", false),
+                MinCloseAboveSmaPct: OptionalDecimal(map, "entry_rules.min_close_above_sma_pct"),
+                CloseAboveSmaPeriod: OptionalNullableInt(map, "entry_rules.close_above_sma_period")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -213,6 +217,7 @@ public sealed class SimpleYamlReader
                 OptionalNullableInt(map, "exit_rules.max_hold_bars"),
                 OptionalDecimal(map, "exit_rules.exit_on_rsi2_above"),
                 OptionalBool(map, "exit_rules.exit_on_close_above_sma5", false),
+                OptionalBool(map, "exit_rules.exit_on_close_below_sma5", false),
                 ReadContinuationProtection(map)),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
@@ -246,7 +251,8 @@ public sealed class SimpleYamlReader
         strategy.EntryRules.OpeningRangeBreakout?.Validate(strategy);
         RejectRemovedSetupRules(strategy);
         ValidateNoStopRules(strategy);
-        ValidateCloseBelowSma(strategy.EntryRules);
+        ValidateStretchAndShortThresholds(strategy.EntryRules);
+        ValidateShortCoverExit(strategy);
         map.ThrowIfUnknownKeys(path);
         return strategy;
     }
@@ -678,20 +684,39 @@ public sealed class SimpleYamlReader
             rules.RequireOrderedReclaimPullback)
             throw new InvalidOperationException(
                 "This strategy sets a threshold of a removed setup (VCP, anchored-VWAP bounce or swing reclaim); no rule enforces it.");
-        if (rules.EnableShort && rules.OpeningRangeBreakout is null)
-            throw new InvalidOperationException("No daily short setup remains; enable_short is supported only by the opening-range breakout.");
+        if (rules.EnableShort && rules.OpeningRangeBreakout is null && rules.ShortSetupType.ToLowerInvariant() is not ("rsi2_overbought" or "momentum"))
+            throw new InvalidOperationException("enable_short on a daily strategy supports short_setup_type rsi2_overbought or momentum; other short setups were removed.");
     }
 
-    // The stretch gate needs both its threshold and an SMA period the indicator snapshot computes.
-    private static void ValidateCloseBelowSma(EntryRules rules)
+    // Each stretch gate (below or above an SMA) needs both its threshold and an SMA period the indicator snapshot computes;
+    // an RSI(2) short setup needs its threshold, otherwise it would silently never fire.
+    private static void ValidateStretchAndShortThresholds(EntryRules rules)
     {
-        if (rules.MinCloseBelowSmaPct is null && rules.CloseBelowSmaPeriod is null) return;
-        if (rules.MinCloseBelowSmaPct is not (> 0m and < 100m) || rules.CloseBelowSmaPeriod is not (5 or 10 or 20 or 50 or 150 or 200))
-            throw new InvalidOperationException(
-                "min_close_below_sma_pct (above 0 and below 100) and close_below_sma_period (5, 10, 20, 50, 150 or 200) must be set together.");
+        ValidateStretchGate(rules.MinCloseBelowSmaPct, rules.CloseBelowSmaPeriod, "min_close_below_sma_pct", "close_below_sma_period");
+        ValidateStretchGate(rules.MinCloseAboveSmaPct, rules.CloseAboveSmaPeriod, "min_close_above_sma_pct", "close_above_sma_period");
+        var rsi2ShortSetup = rules.EnableShort && rules.ShortSetupType.Equals("rsi2_overbought", StringComparison.OrdinalIgnoreCase);
+        if ((rsi2ShortSetup && rules.MinShortReversionRsi2 is null) ||
+            rules.MinShortReversionRsi2 is not (null or (> 0m and < 100m)))
+            throw new InvalidOperationException("min_short_reversion_rsi2 is required for short_setup_type rsi2_overbought and must be above 0 and below 100.");
     }
 
-    // A strategy without a protective stop is a long daily research rule sized by position notional: there is no
+    // The close-below-SMA5 cover exit is checked only on short positions; on any other direction it would silently never fire.
+    private static void ValidateShortCoverExit(StrategyDefinition strategy)
+    {
+        if (strategy.ExitRules.ExitOnCloseBelowSma5 && strategy.Direction.ToLowerInvariant() is not "short")
+            throw new InvalidOperationException("exit_on_close_below_sma5 covers a short position and requires direction: short.");
+    }
+
+    // Reject a threshold without its period (or the reverse) and periods the snapshot does not compute.
+    private static void ValidateStretchGate(decimal? pct, int? period, string pctKey, string periodKey)
+    {
+        if (pct is null && period is null) return;
+        if (pct is not (> 0m and < 100m) || period is not (5 or 10 or 20 or 50 or 150 or 200))
+            throw new InvalidOperationException(
+                $"{pctKey} (above 0 and below 100) and {periodKey} (5, 10, 20, 50, 150 or 200) must be set together.");
+    }
+
+    // A strategy without a protective stop is a daily research rule (long or short) sized by position notional: there is no
     // stop distance for an R-multiple target, a trailing stop or continuation protection to work from.
     private static void ValidateNoStopRules(StrategyDefinition strategy)
     {
@@ -704,12 +729,12 @@ public sealed class SimpleYamlReader
                 throw new InvalidOperationException("profit_target_mode: none requires initial_stop_mode: none, except for the published opening-range recipe.");
             return;
         }
-        if (!strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase) ||
+        if (strategy.Direction.ToLowerInvariant() is not ("long" or "short") ||
             !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) ||
             !strategy.Execution.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) ||
             exits.EnableAtrTrailingStop || exits.ContinuationProtection is not null || exits.HasProfitTarget)
             throw new InvalidOperationException(
-                "initial_stop_mode: none requires a long strategy with daily setup and execution bars, profit_target_mode: none, and no trailing stop or continuation protection.");
+                "initial_stop_mode: none requires a single-direction (long or short) strategy with daily setup and execution bars, profit_target_mode: none, and no trailing stop or continuation protection.");
     }
 
     // An explicit mapping selects the reviewed ORB policy; omission preserves historical strategy identities.

@@ -16,8 +16,10 @@ public sealed class StrategyArtifactCatalogTests
         Assert.Equal(
             new[]
             {
+                "swing.connors-rsi2-short@1.0.0",
                 "swing.connors-rsi2@7.0.0",
                 "swing.connors-rsi2@8.0.0",
+                "swing.snapback-short@1.0.0",
                 "swing.snapback@1.0.0",
                 "technical.opening-range-breakout@1.2.0",
                 "technical.opening-range-breakout@2.0.0",
