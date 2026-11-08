@@ -260,7 +260,7 @@ public sealed class SwingCausalityAndMethodTests
         var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader);
         var profile=reader.ReadBacktestRun(Path.Combine(root,"configs","backtest","swing-backtest-profile.yaml"));
         var validated=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(
-            Path.Combine(root,"configs","backtest","strategies","swing-connors-rsi2-published.bt-v8.yaml"),
+            Path.Combine(root,"configs","backtest","strategies","swing-connors-rsi2-published.bt-v9.yaml"),
             TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
         var runtime=StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(validated.Definition,catalog);
         var start=DateTimeOffset.Parse("2025-01-01T05:00:00Z");

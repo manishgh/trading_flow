@@ -125,15 +125,16 @@ internal static class FineExecutionTiming
     {
         var entrySource = daily[entryIndex].Timestamp;
         var engine = new TechnicalExecutionEngine();
-        // Match the daily baseline: entry session skipped, first subsequent daily
-        // evaluation has barsHeld=1. Five-minute bars never increment this count.
+        // Match the daily baseline: the first evaluated session has barsHeld=1. It is the session after the entry, or the
+        // entry session itself with check_exits_from_fill_day. Five-minute bars never increment this count.
         var held = 1;
-        for (var i = entryIndex + 1; i < daily.Count; i++)
+        var firstCheck = strategy.ExitRules.CheckExitsFromFillDay ? entryIndex : entryIndex + 1;
+        for (var i = firstCheck; i < daily.Count; i++)
         {
             var bar = daily[i];
             var exitIndex = i;
             string? reason;
-            if (bar.Timestamp == terminalSource) reason = "scheduled_study_exit";
+            if (i > entryIndex && bar.Timestamp == terminalSource) reason = "scheduled_study_exit";
             else
             {
                 if (!eligible(bar)) continue;

@@ -218,6 +218,7 @@ public sealed class SimpleYamlReader
                 OptionalDecimal(map, "exit_rules.exit_on_rsi2_above"),
                 OptionalBool(map, "exit_rules.exit_on_close_above_sma5", false),
                 OptionalBool(map, "exit_rules.exit_on_close_below_sma5", false),
+                OptionalBool(map, "exit_rules.check_exits_from_fill_day", false),
                 ReadContinuationProtection(map)),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
@@ -723,6 +724,9 @@ public sealed class SimpleYamlReader
         var exits = strategy.ExitRules;
         if (exits.HasProtectiveStop)
         {
+            // A stop placed at the fill bar's close cannot also be judged on that bar; the fill-day check is for no-stop rules only.
+            if (exits.CheckExitsFromFillDay)
+                throw new InvalidOperationException("check_exits_from_fill_day requires initial_stop_mode: none.");
             // Without a target-aware broker path a target-less daily position would still get a broker target in paper
             // trading; the published opening-range recipe holds to its stop or the close and is backtest-only.
             if (!exits.HasProfitTarget && strategy.EntryRules.OpeningRangeBreakout is not { IsPublishedRecipe: true })

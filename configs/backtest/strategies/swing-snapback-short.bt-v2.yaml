@@ -1,23 +1,25 @@
-# Connors and Alvarez (2008), Short Term Trading Strategies That Work: RSI(2) strategy, short side as published.
-# Entry: close below SMA200 and RSI(2) above 95. Exit: close below SMA5. No stop, no target, no time limit,
-# no market filter. Mirror of swing.connors-rsi2@8.0.0; the long version is unchanged.
-# Only difference from the book: the order fills at the next open, planned from the signal close, instead of at
-# the signal close (never act on a price not yet known). Sized by position notional (equity / max positions)
-# because there is no stop to size from. A short with no stop has no upper bound on its loss; research only,
-# and broker order planning refuses plans without a stop.
+# Snapback short: short-term reversal after a sharp, news-free rise. Mirror of swing.snapback@2.0.0; the long
+# version is unchanged. 2.0.0 replaces 1.0.0 (never run): the fill day's close is the first cover check and counts as bar 1.
+# Sources: Jegadeesh (1990) and Lehmann (1990), recent large winners tend to give back gains over the next weeks;
+# Chan (2003), the reversal occurs mainly when the move came without company news.
+# Stretch: RSI(14) at least 70 and the close at least 10% above its 20-day average. No 200-day trend filter.
+# News veto: no provider-linked company article in the frozen 120-hour window (research diagnostic).
+# Entry at the next open; cover when the close is below SMA5 or after 5 bars (Lehmann's weekly horizon).
+# No stop or target; sized by position notional. A short with no stop has no upper bound on its loss; research
+# only, and broker order planning refuses plans without a stop. Setup type momentum means no extra trigger.
 # Candidates on the same day are ranked most overbought first (highest RSI(2)).
-strategy_id: research.swing-connors-rsi2-short.bt-v1
-strategy_name: RESEARCH Connors RSI2 SMA5 Exit Short V1 (published rules, no stop)
-source: connors_alvarez_2008_short_term_trading_strategies_rsi2
-version: 1
+# Universe (price > $20, average volume > 2M shares, mid-cap and larger) comes from the run's stock list.
+strategy_id: research.swing-snapback-short.bt-v2
+strategy_name: RESEARCH Snapback Short - news-free rise reversal V2
+source: jegadeesh_1990_lehmann_1990_chan_2003_short_term_reversal
+version: 2
 timeframe: 1d
 direction: short
 entry_rules:
   setup_type: momentum
   enable_short: true
-  short_setup_type: rsi2_overbought
-  min_short_reversion_rsi2: 95.0
-  require_price_below_sma200_for_short: true
+  short_setup_type: momentum
+  min_short_entry_rsi: 70.0
   min_volume_spike: 0.0
   volume_confirmation_mode: none
   min_entry_rsi: 0.0
@@ -36,6 +38,9 @@ entry_rules:
   recent_high_lookback_bars: 20
   volatility_contraction_lookback_bars: 25
   require_positive_news: false
+  historical_news_diagnostic: avoid_recent_company_news
+  min_close_above_sma_pct: 10
+  close_above_sma_period: 20
 confluence:
   enabled: false
   timeframe: 1d
@@ -45,7 +50,7 @@ exit_rules:
   stop_atr_multiple: 0
   target_r_multiple: 0
   max_hold_hours: 10000.0
-  max_hold_bars:
+  max_hold_bars: 5
   exit_on_rsi2_above:
   exit_on_close_above_sma5: false
   exit_on_close_below_sma5: true
@@ -56,13 +61,13 @@ exit_rules:
   exit_on_close_below_vwap: false
   exit_on_macd_histogram_negative: false
   min_hold_bars_before_technical_exit: 1
+  check_exits_from_fill_day: true
   initial_stop_mode: none
   profit_target_mode: none
   allow_same_bar_stop_target: false
 execution:
   timeframe: 1d
   slippage_bps: 10.0
-  opening_gap_policy: keep_and_exit_next_open
 session:
   exchange_timezone: America/New_York
   quiet_minutes_after_open: 0

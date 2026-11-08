@@ -24,11 +24,11 @@ public sealed class ConfigCatalogServiceTests
 
         Assert.Equal(new[]
         {
-            "swing.connors-rsi2-short@1.0.0",
+            "swing.connors-rsi2-short@2.0.0",
             "swing.connors-rsi2@7.0.0",
-            "swing.connors-rsi2@8.0.0",
-            "swing.snapback-short@1.0.0",
-            "swing.snapback@1.0.0",
+            "swing.connors-rsi2@9.0.0",
+            "swing.snapback-short@2.0.0",
+            "swing.snapback@2.0.0",
             "technical.opening-range-breakout@1.2.0",
             "technical.opening-range-breakout@2.0.0",
             "technical.recovery-sma5-news-avoidance@1.0.0"

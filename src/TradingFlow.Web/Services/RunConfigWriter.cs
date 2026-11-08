@@ -992,6 +992,7 @@ public sealed class RunConfigWriter
         AppendOptionalDecimal(yaml, "  exit_on_rsi2_above", strategy.ExitRules.ExitOnRsi2Above);
         yaml.AppendLine($"  exit_on_close_above_sma5: {strategy.ExitRules.ExitOnCloseAboveSma5.ToString().ToLowerInvariant()}");
         if (strategy.ExitRules.ExitOnCloseBelowSma5) yaml.AppendLine("  exit_on_close_below_sma5: true");
+        if (strategy.ExitRules.CheckExitsFromFillDay) yaml.AppendLine("  check_exits_from_fill_day: true");
         yaml.AppendLine($"  enable_atr_trailing_stop: {strategy.ExitRules.EnableAtrTrailingStop.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  trailing_stop_atr_multiple: {strategy.ExitRules.TrailingStopAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  trailing_activation_r: {strategy.ExitRules.TrailingActivationR.ToString(CultureInfo.InvariantCulture)}");

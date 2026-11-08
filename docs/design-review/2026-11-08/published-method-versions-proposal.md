@@ -176,7 +176,7 @@ Named differences from the paper:
 
 Not run yet: no economic backtest of ORB 2.0.0.
 
-### Swing shorts (approved and implemented 8 November 2026)
+### Swing shorts (approved and implemented 8 November 2026; versions 1.0.0, superseded by 2.0.0 below)
 
 Two separate strategies, so the long versions keep their identities:
 
@@ -196,9 +196,6 @@ Both are sized by position notional, the same as the long no-stop versions.
 Named differences and risks:
 
 - **Fill at the next open**, planned from the signal close (as for the long versions).
-- **First exit check one day later than the book.** The fill day's own close is not checked for the
-  exit; the first check is the next day's close. The book enters at the signal close and checks the
-  next close. This also applies to the long versions (Connors 8.0.0, snapback 1.0.0) and is not changed here.
 - **A short with no stop has no upper limit on its loss.** The reported planned loss (position
   notional plus fees) understates that. Broker order planning (paper/live) refuses any plan
   without a stop, so these run only in research backtests.
@@ -208,3 +205,32 @@ Named differences and risks:
   `daily-rth-sip-portfolio-native-v1`) stay long-only and refuse these strategies with an error.
 
 Not run yet: no economic backtest of either short strategy.
+
+### First exit check on the fill day (approved and implemented 8 November 2026)
+
+The simulator first checked exits on the close of the bar after the fill bar, so the fill day's
+own close was never checked: a trade that already met its exit on that close was held one more
+day. The book enters at the signal close and checks the next close; with a next-open fill the
+nearest equivalent is the fill day's close.
+
+New exit setting `check_exits_from_fill_day: true` (allowed only with `initial_stop_mode: none`):
+the fill day's completed close is the first check of the strategy's own exits (SMA5 cross, bar
+limit), a hit sells or covers at the next open, and the fill day counts as bar 1, so the 5-bar
+limit holds a trade for at most 5 sessions. Stops and targets keep their timing, so Connors 7.0.0
+and both ORB versions are unchanged.
+Both five-minute execution replays (`daily-rth5m-nextslice-ioc-v1`, `daily-rth-sip-portfolio-native-v1`)
+follow the same setting, so every replay mode gives the same exit session.
+
+Known gap, not changed: paper trading (`LiveRunner.Exits.cs`) still starts daily exit checks after
+the bar it maps the broker fill to, so it does not check the fill day's close. It does not affect
+these strategies today, because broker order planning refuses any plan without a stop; it must be
+aligned before any no-stop daily strategy could trade on paper. When no bar follows the fill bar
+(end of data), the trade is reported open without checking the fill day's close.
+
+New versions with the setting on: `swing.connors-rsi2@9.0.0` (`swing-connors-rsi2-published.bt-v9.yaml`),
+`swing.snapback@2.0.0` (`swing-snapback.bt-v2.yaml`), `swing.connors-rsi2-short@2.0.0`
+(`swing-connors-rsi2-short.bt-v2.yaml`) and `swing.snapback-short@2.0.0`
+(`swing-snapback-short.bt-v2.yaml`). The superseded 8.0.0 and 1.0.0 versions were never run and
+are recorded in `docs/research/retired-strategy-artifacts-2026-11-07.md`.
+
+Not run yet: no economic backtest of any of the four.

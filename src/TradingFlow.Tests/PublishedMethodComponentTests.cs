@@ -51,14 +51,15 @@ public sealed class PublishedMethodComponentTests
     public void PublishedFiles_DeclareNoStopNoTargetAndTheirOwnExits()
     {
         var reader = new SimpleYamlReader();
-        var connors = reader.ReadStrategy(StrategyPath("swing-connors-rsi2-published.bt-v8.yaml"));
-        var snapback = reader.ReadStrategy(StrategyPath("swing-snapback.bt-v1.yaml"));
+        var connors = reader.ReadStrategy(StrategyPath("swing-connors-rsi2-published.bt-v9.yaml"));
+        var snapback = reader.ReadStrategy(StrategyPath("swing-snapback.bt-v2.yaml"));
 
         Assert.All(new[] { connors, snapback }, strategy =>
         {
             Assert.False(strategy.ExitRules.HasProtectiveStop);
             Assert.False(strategy.ExitRules.HasProfitTarget);
             Assert.True(strategy.ExitRules.ExitOnCloseAboveSma5);
+            Assert.True(strategy.ExitRules.CheckExitsFromFillDay);
         });
         Assert.Null(connors.Regime);
         Assert.Null(connors.ExitRules.MaxHoldBars);
@@ -79,7 +80,7 @@ public sealed class PublishedMethodComponentTests
     [InlineData("  close_below_sma_period: 20\n", "")]
     public void InvalidNoStopOrStretchSettings_FailWhenLoaded(string original, string replacement)
     {
-        var source = File.ReadAllText(StrategyPath("swing-snapback.bt-v1.yaml")).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var source = File.ReadAllText(StrategyPath("swing-snapback.bt-v2.yaml")).Replace("\r\n", "\n", StringComparison.Ordinal);
         Assert.Contains(original, source, StringComparison.Ordinal);
         var path = Path.Combine(Path.GetTempPath(), "tf-published-rule-" + Guid.NewGuid().ToString("N") + ".yaml");
         try
@@ -92,7 +93,7 @@ public sealed class PublishedMethodComponentTests
 
     // Sizing is part of identity: a no-stop strategy must use the notional risk policy, and nothing else may.
     [Theory]
-    [InlineData("swing.connors-rsi2", "8.0.0", "account-risk-budget-v1")]
+    [InlineData("swing.connors-rsi2", "9.0.0", "account-risk-budget-v1")]
     [InlineData("swing.connors-rsi2", "7.0.0", StrategyArtifactCatalog.NoStopRiskPolicy)]
     public void CatalogRejectsMismatchedRiskPolicy(string strategyId, string version, string riskPolicy)
     {
@@ -123,7 +124,7 @@ public sealed class PublishedMethodComponentTests
             return new OhlcvBar("TEST", start.AddDays(index), "1d", close, close + 1m, close - 1m, close, 1_000_000m);
         }).ToArray();
         var snapshots = new IndicatorEngine().Compute(bars);
-        var strategy = new SimpleYamlReader().ReadStrategy(StrategyPath("swing-snapback.bt-v1.yaml"));
+        var strategy = new SimpleYamlReader().ReadStrategy(StrategyPath("swing-snapback.bt-v2.yaml"));
         return (strategy, bars, snapshots, new SignalGenerator().CreateTradeSignal(strategy, bars, snapshots, bars.Length - 1)!);
     }
 
@@ -169,7 +170,7 @@ public sealed class PublishedMethodComponentTests
     [Fact]
     public void SnapbackSnapshot_RoundTripsThroughTheRunWriter()
     {
-        var original = new SimpleYamlReader().ReadStrategy(StrategyPath("swing-snapback.bt-v1.yaml"));
+        var original = new SimpleYamlReader().ReadStrategy(StrategyPath("swing-snapback.bt-v2.yaml"));
         var path = Path.Combine(Path.GetTempPath(), "tf-snapback-roundtrip-" + Guid.NewGuid().ToString("N") + ".yaml");
         try
         {

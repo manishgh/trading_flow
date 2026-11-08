@@ -143,12 +143,12 @@ public sealed partial class BacktestRunner
 
         BacktestPendingExitDecision? pendingExit = null;
         var eligibleBarsHeld = 1;
-        for (var i = exitStartIndex; i < bars.Count; i++)
+        for (var i = FirstExitCheckIndex(strategy, entryIndex, exitStartIndex); i < bars.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bar = bars[i];
             // This boundary is frozen before prices are read; never choose it from the final observed stock bar.
-            if (run.Engine.PrecommittedLiquidationSourceUtc == bar.Timestamp)
+            if (i > entryIndex && run.Engine.PrecommittedLiquidationSourceUtc == bar.Timestamp)
             {
                 auditor.LogEvent(signal.Ticker,strategy.StrategyName,bar.Timestamp,ExecutionState.PositionClosed,
                     "Exit via scheduled_study_exit at precommitted session open",candidateId);
@@ -349,12 +349,12 @@ public sealed partial class BacktestRunner
 
         BacktestPendingExitDecision? pendingExit = null;
         var eligibleBarsHeld = 1;
-        for (var i = exitStartIndex; i < bars.Count; i++)
+        for (var i = FirstExitCheckIndex(strategy, entryIndex, exitStartIndex); i < bars.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bar = bars[i];
             // This boundary is frozen before prices are read; never choose it from the final observed stock bar.
-            if (run.Engine.PrecommittedLiquidationSourceUtc == bar.Timestamp)
+            if (i > entryIndex && run.Engine.PrecommittedLiquidationSourceUtc == bar.Timestamp)
             {
                 auditor.LogEvent(signal.Ticker,strategy.StrategyName,bar.Timestamp,ExecutionState.PositionClosed,
                     "Exit via scheduled_study_exit at precommitted session open",candidateId);
@@ -787,6 +787,12 @@ public sealed partial class BacktestRunner
         if (!strategy.ExitRules.HasProtectiveStop) return Decimal.Round(stopDistance, 4);
         return Decimal.Round(direction == "long" ? stopLossPrice + stopDistance : stopLossPrice - stopDistance, 4);
     }
+
+    // First bar whose completed close is checked for exits. With check_exits_from_fill_day (daily rules without a stop) it is the
+    // fill bar itself: the position was filled at its open, so its close is a later, known price, and a hit fills at the next open.
+    // Otherwise exits start at the next eligible bar, after the protective orders placed at the fill bar's close exist.
+    private static int FirstExitCheckIndex(StrategyDefinition strategy, int entryIndex, int exitStartIndex) =>
+        strategy.ExitRules.CheckExitsFromFillDay ? entryIndex : exitStartIndex;
 
     private const string GapThroughStopExitReason = "gap_fill_through_structural_stop";
 

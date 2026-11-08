@@ -231,6 +231,31 @@ public sealed class FineExecutionReplayTests
         Assert.Equal("scheduled_study_exit", result.Reason);
     }
 
+    // Parity with the daily simulator: with check_exits_from_fill_day the entry session's close is the first exit check and
+    // counts as bar 1, so both replay modes give the same exit session as the daily backtest.
+    [Fact]
+    public void DailyExitChecksTheEntrySessionWhenFillDayCheckIsSet()
+    {
+        var request = StrategyDecisionKernelTests.CreateRequest();
+        var strategy = request.Strategy with { ExitRules = request.Strategy.ExitRules with
+        { ExitOnCloseAboveSma5 = true, MaxHoldBars = 5, MaxHoldHours = 10000, CheckExitsFromFillDay = true,
+          ExitOnCloseBelowEma20 = false, ExitOnCloseBelowVwap = false, ExitOnMacdHistogramNegative = false } };
+        var source = DateTimeOffset.Parse("2026-06-01T04:00:00Z");
+        var daily = Enumerable.Range(0,9).Select(i => new OhlcvBar("X", source.AddDays(i), "1d", 10, 100, 1, 10, 1000)).ToArray();
+        var snaps = daily.Select(b => request.SnapshotsByTimeframe["1d"][^1] with
+            { Timestamp = b.Timestamp, CurrentPrice = 10, Sma5 = 11 }).ToArray();
+
+        var held = FineExecutionTiming.DailyExit(strategy, daily, snaps, 1, daily[^1].Timestamp, _ => true, t => t.AddHours(9.5));
+        var withoutSetting = FineExecutionTiming.DailyExit(strategy with { ExitRules = strategy.ExitRules with { CheckExitsFromFillDay = false } },
+            daily, snaps, 1, daily[^1].Timestamp, _ => true, t => t.AddHours(9.5));
+        snaps[1] = snaps[1] with { Sma5 = 9 };
+        var fillDayExit = FineExecutionTiming.DailyExit(strategy, daily, snaps, 1, daily[^1].Timestamp, _ => true, t => t.AddHours(9.5));
+
+        Assert.Equal((6, "max_hold_bars"), held);
+        Assert.Equal((7, "max_hold_bars"), withoutSetting);
+        Assert.Equal((2, "technical_exit_above_sma5"), fillDayExit);
+    }
+
     [Fact]
     public void DailyCloseSamplingProcessesIntradayFillsWithoutInventingIntradayMarks()
     {

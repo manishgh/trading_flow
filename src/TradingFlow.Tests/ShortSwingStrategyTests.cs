@@ -7,14 +7,14 @@ using TradingFlow.Engine.Strategies;
 namespace TradingFlow.Tests;
 
 /// <summary>
-/// The two swing short strategies approved on 8 November 2026 (swing.connors-rsi2-short@1.0.0 and
-/// swing.snapback-short@1.0.0): their settings files, entry gates and run-snapshot round trip. They are
+/// The two swing short strategies approved on 8 November 2026 (swing.connors-rsi2-short@2.0.0 and
+/// swing.snapback-short@2.0.0): their settings files, entry gates and run-snapshot round trip. They are
 /// separate strategies so the long versions keep their identities unchanged.
 /// </summary>
 public sealed class ShortSwingStrategyTests
 {
-    private const string ConnorsShortFile = "swing-connors-rsi2-short.bt-v1.yaml";
-    private const string SnapbackShortFile = "swing-snapback-short.bt-v1.yaml";
+    private const string ConnorsShortFile = "swing-connors-rsi2-short.bt-v2.yaml";
+    private const string SnapbackShortFile = "swing-snapback-short.bt-v2.yaml";
 
     private static StrategyDefinition Load(string name) => new SimpleYamlReader().ReadStrategy(
         Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", name));
@@ -45,6 +45,7 @@ public sealed class ShortSwingStrategyTests
             Assert.False(strategy.ExitRules.HasProfitTarget);
             Assert.True(strategy.ExitRules.ExitOnCloseBelowSma5);
             Assert.False(strategy.ExitRules.ExitOnCloseAboveSma5);
+            Assert.True(strategy.ExitRules.CheckExitsFromFillDay);
             Assert.Equal("rsi2_descending", strategy.EntryRules.PortfolioRankMode);
         });
         Assert.Equal("rsi2_overbought", connors.EntryRules.ShortSetupType);
@@ -114,6 +115,23 @@ public sealed class ShortSwingStrategyTests
         {
             File.WriteAllText(path, source.Replace(original, replacement, StringComparison.Ordinal));
             Assert.Throws<InvalidOperationException>(() => new SimpleYamlReader().ReadStrategy(path));
+        }
+        finally { File.Delete(path); }
+    }
+
+    // The fill-day exit check is refused with a protective stop: that stop is placed at the fill bar's close and cannot also
+    // be judged on that bar.
+    [Fact]
+    public void FillDayCheck_WithAStop_FailsWhenLoaded()
+    {
+        var source = File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", SnapbackShortFile))
+            .Replace("\r\n", "\n", StringComparison.Ordinal).Replace("  initial_stop_mode: none", "  initial_stop_mode: atr", StringComparison.Ordinal);
+        var path = Path.Combine(Path.GetTempPath(), "tf-fill-day-stop-" + Guid.NewGuid().ToString("N") + ".yaml");
+        try
+        {
+            File.WriteAllText(path, source);
+            var error = Assert.Throws<InvalidOperationException>(() => new SimpleYamlReader().ReadStrategy(path));
+            Assert.Contains("check_exits_from_fill_day requires initial_stop_mode: none", error.Message, StringComparison.Ordinal);
         }
         finally { File.Delete(path); }
     }

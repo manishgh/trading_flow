@@ -112,3 +112,20 @@ restore those artifacts without fixing them first.
 - Tests that used retired files only as generic inputs now use the kept files or checked-in
   fixtures under `src/TradingFlow.Tests/Fixtures/Strategies/` (a daily trailing-stop swing
   fixture and the two ORB stop-market versions, copied unchanged from commit `a3e7de5`).
+
+## Superseded before any run — 8 November 2026
+
+The first exit check of these four versions came one day later than the published rules: the
+fill day's own close was never checked, so a trade that already met its exit on that close was
+held one more day. With the user's approval they were replaced by versions that set
+`check_exits_from_fill_day: true` (`swing.connors-rsi2@9.0.0`, `swing.snapback@2.0.0`,
+`swing.connors-rsi2-short@2.0.0`, `swing.snapback-short@2.0.0`). None of the four was
+backtested, so no results exist for them. Each settings file is unchanged in git at commit
+`eedb7b2`; restore one with `git show eedb7b2:<source path>`.
+
+| Strategy ID | Version | Lifecycle | Content SHA-256 | Source SHA-256 | Source path at eedb7b2 |
+|---|---|---|---|---|---|
+| `swing.connors-rsi2` | 8.0.0 | research | `f5ee0ef58473b0e749edcb4894d9aa31ac0786e42ffb313ca369f57b80dff5a3` | `3bf4abc0e2c40e1cd57be2cf0c601facf8b4616a1481473d9848602cbd34ce15` | `configs/backtest/strategies/swing-connors-rsi2-published.bt-v8.yaml` |
+| `swing.snapback` | 1.0.0 | research | `cda6eb1c9031d1b9e9845afa243a12179d410518a21ebb4631e73cdf1b69713e` | `13478f27e0ee3bd4c8c7ab1b510ca342756db40bc5374a963c01323647cc2ce2` | `configs/backtest/strategies/swing-snapback.bt-v1.yaml` |
+| `swing.connors-rsi2-short` | 1.0.0 | research | `2dd7fab558ca8d9676201556d5ba9ae20aa46f4e58e4821b3159b698ccb50363` | `000c2c23ded11bbaf2edc73f5c4573856af0395e8abfb6088308d7b536f5f4b0` | `configs/backtest/strategies/swing-connors-rsi2-short.bt-v1.yaml` |
+| `swing.snapback-short` | 1.0.0 | research | `608c52fe8d48cfeeaf6ac6ccf0ea194da417b6e5f9ba89c7c64d0c2ba03559c3` | `8c1027bc2c34e254d6b3d5480c4aaf424b9f5015539df0c2ebda4bb30a2ba19e` | `configs/backtest/strategies/swing-snapback-short.bt-v1.yaml` |

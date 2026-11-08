@@ -1,12 +1,13 @@
 # Connors and Alvarez (2008), Short Term Trading Strategies That Work: RSI(2) strategy, published rules.
+# 9.0.0 replaces 8.0.0 (never run): the fill day's own close is the first exit check, as in the book's next-close check.
 # Entry: close above SMA200 and RSI(2) below 5. Exit: close above SMA5. No stop, no target, no time limit,
 # no market filter. Only difference from the book: the order fills at the next open, planned from the signal
 # close, instead of at the signal close (never act on a price not yet known). Sized by position notional
 # (equity / max positions) because there is no stop to size from. Control: swing.connors-rsi2@7.0.0.
-strategy_id: research.swing-connors-rsi2-published.bt-v8
-strategy_name: RESEARCH Connors RSI2 SMA5 Exit V8 (published rules, no stop)
+strategy_id: research.swing-connors-rsi2-published.bt-v9
+strategy_name: RESEARCH Connors RSI2 SMA5 Exit V9 (published rules, no stop)
 source: connors_alvarez_2008_short_term_trading_strategies_rsi2
-version: 8
+version: 9
 timeframe: 1d
 direction: long
 entry_rules:
@@ -49,6 +50,7 @@ exit_rules:
   exit_on_close_below_vwap: false
   exit_on_macd_histogram_negative: false
   min_hold_bars_before_technical_exit: 1
+  check_exits_from_fill_day: true
   initial_stop_mode: none
   profit_target_mode: none
   allow_same_bar_stop_target: false

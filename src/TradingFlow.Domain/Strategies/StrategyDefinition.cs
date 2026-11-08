@@ -235,6 +235,7 @@ public sealed record ExitRules(
     decimal? ExitOnRsi2Above = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool ExitOnCloseAboveSma5 = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool ExitOnCloseBelowSma5 = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool CheckExitsFromFillDay = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ContinuationProtectionRules? ContinuationProtection = null)
 {
     /// <summary>Published rules such as Connors RSI-2 place no protective stop; long-only research backtests size by position notional instead.</summary>

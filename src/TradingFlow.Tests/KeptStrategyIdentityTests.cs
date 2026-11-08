@@ -18,11 +18,11 @@ public sealed class KeptStrategyIdentityTests
     [InlineData("swing.connors-rsi2", "7.0.0", "a16f4e27ae3e85d19f537d57ac0189a5058d8de0b0cffa39ce993c0220a70e8c", null)]
     [InlineData("technical.recovery-sma5-news-avoidance", "1.0.0", "47dd423636627dfd8a482291b3e905f56c6f278ac80a354afa33fc8acf6ff69d",
         "technical.recovery-sma5-exit")]
-    [InlineData("swing.connors-rsi2", "8.0.0", "f5ee0ef58473b0e749edcb4894d9aa31ac0786e42ffb313ca369f57b80dff5a3", "swing.connors-rsi2")]
-    [InlineData("swing.snapback", "1.0.0", "cda6eb1c9031d1b9e9845afa243a12179d410518a21ebb4631e73cdf1b69713e", null)]
+    [InlineData("swing.connors-rsi2", "9.0.0", "882e2a32d00ccdcc17737aa05d9ff466ed714b0be86f5da04b9b570aa86884c5", "swing.connors-rsi2")]
+    [InlineData("swing.snapback", "2.0.0", "7bd1719285bdbb0e50cb1b94397a0353eb2f221e554b64b183a429096f7fd983", null)]
     [InlineData("technical.opening-range-breakout", "2.0.0", "83b58ddd3b6b2017c717066e98ce92b513537b9aa467283b32f72375ded14429", "technical.opening-range-breakout")]
-    [InlineData("swing.connors-rsi2-short", "1.0.0", "2dd7fab558ca8d9676201556d5ba9ae20aa46f4e58e4821b3159b698ccb50363", null)]
-    [InlineData("swing.snapback-short", "1.0.0", "608c52fe8d48cfeeaf6ac6ccf0ea194da417b6e5f9ba89c7c64d0c2ba03559c3", null)]
+    [InlineData("swing.connors-rsi2-short", "2.0.0", "323989e84141d4338ca45d2acb7fb6f75a236aba4b2c53b94187d1bd27ba85ea", null)]
+    [InlineData("swing.snapback-short", "2.0.0", "7deb6a30ddaaaa1844e0b9b2e2762eef9eadb8e5cf04839e5bd8cd412e11ed8e", null)]
     public void KeptArtifacts_KeepTheirRecordedCanonicalHashes(string id, string version, string hash, string? parent)
     {
         var artifact = Assert.Single(CreateCatalog().GetSnapshot().ExecutableArtifacts,

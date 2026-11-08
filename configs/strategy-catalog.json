@@ -101,12 +101,12 @@
       "reason": "Same entry and exit rules as 6.0.0; plans from the prior close and keeps trades that open beyond the stop instead of deleting them with a future price."
     },
     {
-      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-published.bt-v8.yaml",
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-published.bt-v9.yaml",
       "strategyId": "swing.connors-rsi2",
-      "semanticVersion": "8.0.0",
+      "semanticVersion": "9.0.0",
       "lifecycle": "research",
       "admissionProfileId": "published-no-stop-kept-gaps-v1",
-      "reason": "Approved 8 November 2026: Connors and Alvarez (2008) RSI(2) rules as published (close > SMA200, RSI(2) < 5, exit on close > SMA5) with no market filter, stop, target or time limit; next-open fill is the one named difference; sized by position notional. Research only.",
+      "reason": "Approved 8 November 2026: Connors and Alvarez (2008) RSI(2) rules as published (close > SMA200, RSI(2) < 5, exit on close > SMA5) with no market filter, stop, target or time limit; next-open fill is the one named difference, and the fill day's close is the first exit check (replaces never-run 8.0.0); sized by position notional. Research only.",
       "derivedFromIdentity": {
         "strategyId": "swing.connors-rsi2",
         "semanticVersion": "7.0.0",
@@ -114,28 +114,28 @@
       }
     },
     {
-      "sourcePath": "configs/backtest/strategies/swing-snapback.bt-v1.yaml",
+      "sourcePath": "configs/backtest/strategies/swing-snapback.bt-v2.yaml",
       "strategyId": "swing.snapback",
-      "semanticVersion": "1.0.0",
+      "semanticVersion": "2.0.0",
       "lifecycle": "research",
       "admissionProfileId": "historical-news-presence-no-stop-v1",
-      "reason": "Approved 8 November 2026: short-term reversal after a news-free drop (Jegadeesh 1990, Lehmann 1990, Chan 2003) using the saved snapback screen's stretch: RSI(14) < 30 and close at least 10% below SMA20, no 200-day filter, recent company news vetoed; exit on close > SMA5 or after 5 bars; sized by position notional. Operational version, not a replication. Research only."
+      "reason": "Approved 8 November 2026: short-term reversal after a news-free drop (Jegadeesh 1990, Lehmann 1990, Chan 2003) using the saved snapback screen's stretch: RSI(14) < 30 and close at least 10% below SMA20, no 200-day filter, recent company news vetoed; exit on close > SMA5 or after 5 bars, the fill day's close being the first check and bar 1 (replaces never-run 1.0.0); sized by position notional. Operational version, not a replication. Research only."
     },
     {
-      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-short.bt-v1.yaml",
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-short.bt-v2.yaml",
       "strategyId": "swing.connors-rsi2-short",
-      "semanticVersion": "1.0.0",
+      "semanticVersion": "2.0.0",
       "lifecycle": "research",
       "admissionProfileId": "published-no-stop-kept-gaps-v1",
-      "reason": "Approved 8 November 2026: short side of the Connors and Alvarez (2008) RSI(2) rules as published (close < SMA200, RSI(2) > 95, cover on close < SMA5) with no market filter, stop, target or time limit; next-open fill is the one named difference; sized by position notional. A short with no stop has unbounded loss; research only."
+      "reason": "Approved 8 November 2026: short side of the Connors and Alvarez (2008) RSI(2) rules as published (close < SMA200, RSI(2) > 95, cover on close < SMA5, first checked on the fill day's close; replaces never-run 1.0.0) with no market filter, stop, target or time limit; next-open fill is the one named difference; sized by position notional. A short with no stop has unbounded loss; research only."
     },
     {
-      "sourcePath": "configs/backtest/strategies/swing-snapback-short.bt-v1.yaml",
+      "sourcePath": "configs/backtest/strategies/swing-snapback-short.bt-v2.yaml",
       "strategyId": "swing.snapback-short",
-      "semanticVersion": "1.0.0",
+      "semanticVersion": "2.0.0",
       "lifecycle": "research",
       "admissionProfileId": "historical-news-presence-no-stop-v1",
-      "reason": "Approved 8 November 2026: mirror of swing.snapback for a news-free rise (Jegadeesh 1990, Lehmann 1990, Chan 2003): RSI(14) >= 70 and close at least 10% above SMA20, no 200-day filter, recent company news vetoed; cover on close < SMA5 or after 5 bars; sized by position notional. Operational version, not a replication. A short with no stop has unbounded loss; research only."
+      "reason": "Approved 8 November 2026: mirror of swing.snapback for a news-free rise (Jegadeesh 1990, Lehmann 1990, Chan 2003): RSI(14) >= 70 and close at least 10% above SMA20, no 200-day filter, recent company news vetoed; cover on close < SMA5 or after 5 bars; the fill day's close is the first check and bar 1 (replaces never-run 1.0.0); sized by position notional. Operational version, not a replication. A short with no stop has unbounded loss; research only."
     },
     {
       "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v4.yaml",

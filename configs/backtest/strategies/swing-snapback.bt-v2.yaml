@@ -5,13 +5,15 @@
 # the close at least 10% below its 20-day average. No 200-day trend filter (this separates it from Connors).
 # News veto: no provider-linked company article in the frozen 120-hour window (research diagnostic).
 # Entry at the next open; exit when the close is above SMA5 or after 5 bars (Lehmann's weekly horizon).
+# 2.0.0 replaces 1.0.0 (never run): the fill day's close is the first exit check and counts as bar 1, so a trade lasts at most
+# 5 sessions.
 # No stop or target; sized by position notional. Setup type momentum means no extra trigger beyond the gates.
 # Universe (price > $20, average volume > 2M shares, mid-cap and larger) comes from the run's stock list.
 # An operational version of the published effect, not a replication. Control: technical.recovery-sma5-news-avoidance@1.0.0.
-strategy_id: research.swing-snapback.bt-v1
-strategy_name: RESEARCH Snapback - news-free drop rebound V1
+strategy_id: research.swing-snapback.bt-v2
+strategy_name: RESEARCH Snapback - news-free drop rebound V2
 source: jegadeesh_1990_lehmann_1990_chan_2003_short_term_reversal
-version: 1
+version: 2
 timeframe: 1d
 direction: long
 entry_rules:
@@ -56,6 +58,7 @@ exit_rules:
   exit_on_close_below_vwap: false
   exit_on_macd_histogram_negative: false
   min_hold_bars_before_technical_exit: 1
+  check_exits_from_fill_day: true
   initial_stop_mode: none
   profit_target_mode: none
   allow_same_bar_stop_target: false

@@ -153,6 +153,54 @@ public sealed class BacktestSimulationCharacterizationTests
         Assert.DoesNotContain(sink.Events, item => item.State == ExecutionState.PositionClosed && item.Timestamp == bars[2].Timestamp);
     }
 
+    // check_exits_from_fill_day: the fill bar's own close (bar 1 here) is the first exit check, so an SMA5 exit seen there
+    // fills at the next bar's open; without the setting the first check is the following bar's close.
+    [Theory]
+    [InlineData("long", true, 2)]
+    [InlineData("long", false, 3)]
+    [InlineData("short", true, 2)]
+    [InlineData("short", false, 3)]
+    public void FillDayCheck_ExitsOnTheFillBarsCloseOnlyWhenSet(string direction, bool fromFillDay, int exitBar)
+    {
+        var original = AtrStopStrategy();
+        var strategy = original with { Direction = direction, EntryRules = original.EntryRules with { EnableShort = direction == "short" },
+            ExitRules = original.ExitRules with { InitialStopMode = ExitRules.NoStop, ProfitTargetMode = ExitRules.NoProfitTarget,
+                EnableAtrTrailingStop = false, MaxHoldBars = null, MinHoldBarsBeforeTechnicalExit = 1,
+                ExitOnCloseAboveSma5 = direction == "long", ExitOnCloseBelowSma5 = direction == "short", CheckExitsFromFillDay = fromFillDay } };
+        var bars = new[] { Bar("2026-06-01T13:30:00Z", 100, 101, 99, 100), Bar("2026-06-01T13:35:00Z", 100, 101, 99, 100),
+            Bar("2026-06-01T13:40:00Z", 100, 101, 99, 100), Bar("2026-06-01T13:45:00Z", 100, 101, 99, 100) };
+        // Every completed close is on the exit side of SMA5 (above it for the long, below it for the short).
+        var snapshots = bars.Select(bar => Snapshot(bar.Timestamp.ToString("O")) with
+            { CurrentPrice = 100m, Sma5 = direction == "long" ? 99m : 101m }).ToArray();
+
+        var result = Assert.IsType<(BacktestCandidateTrade Candidate, int ExitIndex)>(InvokeCreateCandidate(strategy, LongSignal(),
+            BuildOrderPlan(strategy, direction, 0m, 100m), bars, snapshots, new CollectingExecutionSink()));
+
+        Assert.Equal(direction == "long" ? "technical_exit_above_sma5" : "technical_exit_below_sma5", result.Candidate.ExitReason);
+        Assert.Equal(bars[exitBar].Timestamp, result.Candidate.ExitTimestamp);
+    }
+
+    // With the fill-day check the fill bar is bar 1 of max_hold_bars, so a one-bar limit sells at the open after the fill bar.
+    [Theory]
+    [InlineData("long")]
+    [InlineData("short")]
+    public void FillDayCheck_CountsTheFillBarAsTheFirstHeldBar(string direction)
+    {
+        var original = AtrStopStrategy();
+        var strategy = original with { Direction = direction, EntryRules = original.EntryRules with { EnableShort = direction == "short" },
+            ExitRules = original.ExitRules with { InitialStopMode = ExitRules.NoStop, ProfitTargetMode = ExitRules.NoProfitTarget,
+                EnableAtrTrailingStop = false, MaxHoldBars = 1, CheckExitsFromFillDay = true } };
+        var bars = new[] { Bar("2026-06-01T13:30:00Z", 100, 101, 99, 100), Bar("2026-06-01T13:35:00Z", 100, 101, 99, 100),
+            Bar("2026-06-01T13:40:00Z", 100.5m, 101, 99, 100), Bar("2026-06-01T13:45:00Z", 100, 101, 99, 100) };
+
+        var result = Assert.IsType<(BacktestCandidateTrade Candidate, int ExitIndex)>(InvokeCreateCandidate(strategy, LongSignal(),
+            BuildOrderPlan(strategy, direction, 0m, 100m), bars, bars.Select(bar => Snapshot(bar.Timestamp.ToString("O"))).ToArray(),
+            new CollectingExecutionSink()));
+
+        Assert.Equal("max_hold_bars", result.Candidate.ExitReason);
+        Assert.Equal(bars[2].Timestamp, result.Candidate.ExitTimestamp);
+    }
+
     [Theory]
     [InlineData("long")]
     [InlineData("short")]
