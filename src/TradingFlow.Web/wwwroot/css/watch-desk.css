@@ -100,7 +100,7 @@
 .workspace-app .watch-desk .watch-table th{padding:10px 6px}
 .workspace-app .watch-desk .watch-table .watch-trade-buttons button{padding:4px 6px}
 
-/* Bound both the panel and every table column so unused width goes to article news. */
+/* Bound every table column and keep the stock/news workspace compact on wide screens. */
 .watch-desk{--watch-table-width:806px}
 .watch-desk:has(.watch-table.watch-no-strategy){--watch-table-width:728px}
 .workspace-app .watch-desk .watch-stocks{width:min(100%,calc(var(--watch-table-width) + 2px))}
@@ -120,4 +120,4 @@
 .workspace-app .watch-desk .watch-table .watch-news-window{font-size:10px;line-height:12px;margin:0;color:var(--watch-muted)}
 .workspace-app .watch-desk .watch-table .watch-symbol-button{display:flex;align-items:center;justify-content:flex-start;gap:0;line-height:1.2;text-align:left;width:100%;max-width:100%;min-height:44px}
 .workspace-app .watch-desk .watch-table .watch-symbol-name{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis}
-@media(min-width:1151px){.workspace-app .watch-desk .watch-grid{gap:16px;grid-template-columns:minmax(0,min(calc(50% - 8px),calc(var(--watch-table-width) + 2px))) minmax(0,1fr)}}
+@media(min-width:1151px){.workspace-app .watch-desk .watch-grid{gap:16px;grid-template-columns:minmax(0,2fr) minmax(0,1fr);max-width:calc((var(--watch-table-width) + 2px) * 1.5 + 16px)}}

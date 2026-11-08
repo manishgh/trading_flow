@@ -59,8 +59,8 @@ for(const width of [412,680,1000,1024,1200,1265,1280,1600,2560])test('stock desk
  else expect(tableScroll.scroll).toBeGreaterThan(tableScroll.client);
  if(width>1150){
   const news=await page.locator('.watch-news').boundingBox(),grid=await page.locator('.watch-grid').boundingBox();
-  expect(news.width).toBeGreaterThanOrEqual(stocks.width-2);
-  if(width===2560)expect(news.width).toBeGreaterThan(stocks.width+200);
+  expect(stocks.width/news.width).toBeCloseTo(2,1);expect(news.width).toBeLessThanOrEqual(365);
+  expect(grid.width).toBeLessThanOrEqual(1111);
   expect(news.x-(stocks.x+stocks.width)).toBeLessThanOrEqual(18);
   expect(news.x+news.width).toBeCloseTo(grid.x+grid.width,0);
   const trade=await firstRow.locator('.watch-trade').boundingBox(),holding=await firstRow.locator('td').nth(4).boundingBox();
@@ -399,7 +399,7 @@ test('large sentiment counts stay inside their News column',async({page})=>{
  await expect(page.getByRole('button',{name:'AAPL',exact:true})).toBeVisible();
 });
 
-// Selecting a strategy adds exactly its bounded Signal column without widening the other columns or leaving empty panel width.
+// Selecting a strategy adds only the bounded Signal column and keeps article news at one third of the capped desktop grid.
 test('strategy selection adds only the bounded Signal column',async({page})=>{
  await page.setViewportSize({width:2560,height:1100});await fixture(page);await signIn(page);
  const strategy={strategyId:'fixture.recorded',semanticVersion:'1.0.0',contentSha256:'a'.repeat(64)};
@@ -409,6 +409,8 @@ test('strategy selection adds only the bounded Signal column',async({page})=>{
  await page.locator('#watch-strategy').selectOption('0');await expect(page.locator('.watch-table')).not.toHaveClass(/watch-no-strategy/);await expect(page.locator('#watch-rows tr')).toHaveCount(3);
  const after=await page.locator('.watch-table').boundingBox(),panel=await page.locator('.watch-stocks').boundingBox();
  expect(after.width).toBeCloseTo(806,0);expect(after.width-before.width).toBeCloseTo(78,0);expect(panel.width).toBeLessThanOrEqual(808);
+ const articleNews=await page.locator('.watch-news').boundingBox(),grid=await page.locator('.watch-grid').boundingBox();
+ expect(panel.width/articleNews.width).toBeCloseTo(2,1);expect(articleNews.width).toBeLessThanOrEqual(404);expect(grid.width).toBeLessThanOrEqual(1228);
  expect(await page.locator('.watch-table-scroll').evaluate(node=>node.scrollWidth-node.clientWidth)).toBeLessThanOrEqual(1);
  const row=page.locator('#watch-rows tr[data-symbol=AAPL]');expect((await row.locator('.watch-news-summary').boundingBox()).width).toBeCloseTo(140,0);expect((await row.locator('.watch-technical').boundingBox()).width).toBeCloseTo(200,0);
  await page.locator('#watch-strategy').selectOption('');await expect(page.locator('.watch-table')).toHaveClass(/watch-no-strategy/);
