@@ -243,6 +243,38 @@
             node.textContent=field==='rsi'?number(technical?.[field]):money(technical?.[field]);node.title=detail;
         }
         cell.title=detail;
+        const relativeVolume=technical?.relativeVolume;
+        cells[7].querySelector('strong').textContent=typeof relativeVolume==='number'&&Number.isFinite(relativeVolume)&&relativeVolume>=0?
+            new Intl.NumberFormat(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}).format(relativeVolume)+'×':'—';
+        cells[7].title=detail;
+        renderSessionVolume(cells[8],row);
+    }
+    // Derive New York calendar dates from a verified UTC observation time, independently of the browser timezone.
+    function exchangeDate(value){
+        const stamp=Date.parse(value);if(!Number.isFinite(stamp))return null;
+        const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(stamp);
+        const values=Object.fromEntries(parts.map(part=>[part.type,part.value]));
+        return values.year+'-'+values.month+'-'+values.day;
+    }
+    // Accept only the server's matching daily volume receipt; completed technical-bar volume is never a substitute.
+    function sessionVolume(row){
+        const value=row.sessionVolume,readAt=Date.parse(snapshot?.readAtUtc),asOf=Date.parse(value?.asOfUtc),barAt=Date.parse(value?.barTimestamp);
+        const date=value?.sessionDate,today=exchangeDate(snapshot?.readAtUtc);
+        const validDate=typeof date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(date)&&Number.isFinite(Date.parse(date+'T00:00:00Z'))&&new Date(date+'T00:00:00Z').toISOString().slice(0,10)===date;
+        return value&&String(value.ticker||'').toUpperCase()===row.membership.symbol.toUpperCase()&&
+            typeof value.volume==='number'&&Number.isFinite(value.volume)&&value.volume>=0&&
+            Number.isFinite(readAt)&&Number.isFinite(asOf)&&Number.isFinite(barAt)&&barAt<=asOf&&asOf<=readAt&&
+            validDate&&today&&date<=today&&date===exchangeDate(value.barTimestamp)&&String(value.feed||'').toLowerCase()==='sip'?value:null;
+    }
+    // Keep observed SIP daily shares and their receipt/session provenance explicit, including old and disconnected observations.
+    function renderSessionVolume(cell,row){
+        const value=sessionVolume(row),amount=cell.querySelector('strong'),label=cell.querySelector('small');
+        amount.textContent=value?new Intl.NumberFormat(undefined,{notation:'compact',maximumFractionDigits:2}).format(value.volume):'—';
+        if(!value){label.textContent='Unavailable';cell.title='Session volume unavailable · no valid matching SIP daily-volume observation.';return;}
+        const asOf=Date.parse(value.asOfUtc),stale=!connected||Date.now()-asOf>90000||asOf>Date.now()+5000;
+        label.textContent=stale?'Last observed':value.sessionDate===exchangeDate(snapshot.readAtUtc)?'Today':'Last session';
+        cell.title=new Intl.NumberFormat(undefined,{maximumFractionDigits:20}).format(value.volume)+' shares · '+value.sessionDate+' New York calendar day · '+
+            (value.feed||'Feed unavailable')+' daily aggregate · includes regular and extended hours; excludes overnight-feed trades · bar '+when(value.barTimestamp)+' · observed '+when(value.asOfUtc);
     }
     // Show stored-news counts as context, with unscored stories and the exact partial window in the tooltip.
     function renderNewsSentiment(cell,row){
@@ -275,7 +307,7 @@
         for(const row of rows){
             const symbol=row.membership.symbol;let tr=rowNodes.get(symbol);
             if(!tr){tr=document.createElement('tr');tr.dataset.symbol=symbol;
-                tr.innerHTML='<td><button type="button" class="watch-symbol-button"><span class="watch-symbol-name"></span></button></td><td class="watch-num"><span class="watch-quote-line"><strong></strong><small></small></span></td><td class="watch-trade"><span class="watch-trade-line"><span class="watch-trade-buttons"><button type="button" class="watch-buy" data-side="buy"></button><button type="button" class="watch-sell" data-side="sell"></button></span><small></small></span></td><td class="watch-signal-col"><strong></strong><small></small></td><td class="watch-num"><span class="watch-holding-line"><strong></strong><small></small></span></td><td class="watch-news-summary"><span class="watch-news-counts"><span class="watch-news-positive"></span> <span class="watch-news-negative"></span></span><small class="watch-news-window"></small></td><td class="watch-technical"><div>SMA 10/20 <span data-technical="sma10" data-daily-sma="10"></span> / <span data-technical="sma20" data-daily-sma="20"></span></div><div>SMA 50/200 <span data-technical="sma50"></span> / <span data-technical="sma200"></span></div><div>RSI <span data-technical="rsi"></span></div></td>';
+                tr.innerHTML='<td><button type="button" class="watch-symbol-button"><span class="watch-symbol-name"></span></button></td><td class="watch-num"><span class="watch-quote-line"><strong></strong></span></td><td class="watch-trade"><span class="watch-trade-line"><span class="watch-trade-buttons"><button type="button" class="watch-buy" data-side="buy"><span>Buy</span><span class="watch-order-price"></span></button><button type="button" class="watch-sell" data-side="sell"><span>Sell</span><span class="watch-order-price"></span></button></span><small></small></span></td><td class="watch-signal-col"><strong></strong><small></small></td><td class="watch-num"><span class="watch-holding-line"><strong></strong><small></small></span></td><td class="watch-news-summary"><span class="watch-news-counts"><span class="watch-news-positive"></span> <span class="watch-news-negative"></span></span><small class="watch-news-window"></small></td><td class="watch-technical"><div>SMA 10/20 <span data-technical="sma10" data-daily-sma="10"></span> / <span data-technical="sma20" data-daily-sma="20"></span></div><div>SMA 50/200 <span data-technical="sma50"></span> / <span data-technical="sma200"></span></div><div>RSI <span data-technical="rsi"></span></div></td><td class="watch-rvol"><strong></strong><small>Daily</small></td><td class="watch-volume"><strong></strong><small></small></td>';
                 tr.querySelector('.watch-symbol-name').textContent=symbol;
                 const symbolButton=tr.querySelector('.watch-symbol-button');
                 symbolButton.setAttribute('aria-label',symbol);
@@ -287,15 +319,14 @@
             const cells=tr.children;tr.dataset.selected=String(symbol===selected);tr.querySelector('.watch-symbol-button').setAttribute('aria-pressed',String(symbol===selected));
             renderNewsSentiment(cells[5],row);
             const lists=row.membership.wishlists.map(x=>x.name).join(', ');tr.querySelector('.watch-symbol-button').title=[row.membership.name,lists||'Screener discovery'].filter(Boolean).join(' · ');
-            // Keep price and change together; the previous close and its session remain in detail and the cell tooltip.
+            // Show change from the prior close here; executable ask/bid prices stay inside the Buy and Sell buttons.
             const bid=row.quote?.bidPrice,ask=row.quote?.askPrice;
             const change = row.previousClose?.close > 0 && row.quote?.midPrice != null ? (row.quote.midPrice / row.previousClose.close - 1) * 100 : null;
-            cells[1].querySelector('strong').textContent=money(row.quote?.midPrice);
-            const previous=cells[1].querySelector('small');previous.textContent=change==null?'—':(change>0?'+':'')+number(change)+'%';tone(previous,change);
+            const previous=cells[1].querySelector('strong');previous.textContent=change==null?'—':(change>0?'+':'')+number(change)+'%';tone(previous,change);
             cells[1].title=row.previousClose?'Previous close '+money(row.previousClose.close)+' · '+row.previousClose.sessionDate:'Previous close unavailable';
             // Buy fills at the ask and sell at the bid; the spread is the cost of crossing between them.
             const buy=cells[2].querySelector('.watch-buy'),sell=cells[2].querySelector('.watch-sell');
-            buy.textContent='Buy';sell.textContent='Sell';buy.setAttribute('aria-label','Buy '+money(ask));sell.setAttribute('aria-label','Sell '+money(bid));buy.title='Buy at ask '+money(ask);sell.title='Sell at bid '+money(bid);buy.disabled=false;sell.disabled=false;buy.title=orderUnavailableReason(row,'buy')||buy.title;sell.title=orderUnavailableReason(row,'sell')||sell.title;
+            buy.querySelector('.watch-order-price').textContent=money(ask);sell.querySelector('.watch-order-price').textContent=money(bid);buy.setAttribute('aria-label','Buy '+money(ask));sell.setAttribute('aria-label','Sell '+money(bid));buy.title='Buy at ask '+money(ask);sell.title='Sell at bid '+money(bid);buy.disabled=false;sell.disabled=false;buy.title=orderUnavailableReason(row,'buy')||buy.title;sell.title=orderUnavailableReason(row,'sell')||sell.title;
             cells[2].querySelector('small').textContent=rowQuoteAge(row);cells[2].title=spreadDetail(row)+' · '+when(row.quote?.timestamp);
             cells[3].querySelector('strong').textContent=signalLabel(row);cells[3].querySelector('small').textContent=signalReason(row);cells[3].title=signalReason(row);
             cells[4].querySelector('strong').textContent=!row.holdingsKnown?'Unknown':row.holding?number(row.holding.quantity)+' sh':'—';

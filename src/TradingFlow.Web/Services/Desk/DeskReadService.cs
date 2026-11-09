@@ -13,7 +13,7 @@ public sealed record DeskNewsSentiment(int Positive, int Negative, int Neutral, 
     DateTimeOffset WindowStartUtc, DateTimeOffset AsOfUtc, bool Available);
 public sealed record DeskRow(DeskMembership Membership, AlpacaLatestQuote? Quote, string QuoteFreshness,
     IndicatorSnapshot? Technical, DeskHolding? Holding, bool HoldingsKnown, IReadOnlyList<DeskArticle> News, DailyObservationResult Observation, AlpacaPreviousClose? PreviousClose = null,
-    StockStrategyAssessment? StrategyAssessment = null, DeskNewsSentiment? NewsSentiment = null);
+    StockStrategyAssessment? StrategyAssessment = null, DeskNewsSentiment? NewsSentiment = null, AlpacaSessionVolume? SessionVolume = null);
 public sealed record DeskSnapshot(DeskSelection Selection, IReadOnlyList<DeskRow> Rows, DeskAccount Account,
     IReadOnlyList<DeskArticle> News, string NewsCoverage, string Session, DateTimeOffset ReadAtUtc, string Feed);
 
@@ -21,18 +21,19 @@ public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReade
     IDailyObservationService daily, NewsFeedService newsFeed, OperationalStatusService operations,
     IMemoryCache cache, TimeProvider clock, ILogger<DeskReadService> logger)
 {
-    /// <summary>Joins current observations and account facts without treating the former generic daily checks as strategy evidence.</summary>
+    /// <summary>Joins observations and account facts with separately dated provider volume; daily indicators never substitute for session volume.</summary>
     public async Task<DeskSnapshot> ReadAsync(DeskSelection selection, CancellationToken ct)
     {
         var symbols = selection.Members.Select(x => x.Symbol).ToArray();
         var quoteTask = quotes.GetNewestQuotesAsync(symbols, ct);
         var accountTask = account.ReadAsync(ct);
-        var closeTask = quotes.GetPreviousClosesAsync(symbols, "sip", clock.GetUtcNow(), ct);
+        var displayTask = quotes.GetDisplaySnapshotsAsync(symbols, "sip", clock.GetUtcNow(), ct);
         var sessionTask = operations.GetTradingSessionAsync(ct);
         var newsTask = ReadNewsAsync(symbols, ct);
-        await Task.WhenAll(quoteTask, accountTask, sessionTask, newsTask, closeTask);
+        await Task.WhenAll(quoteTask, accountTask, sessionTask, newsTask, displayTask);
         var holdings = (await accountTask).Holdings.ToDictionary(x => x.Symbol, StringComparer.OrdinalIgnoreCase);
         var quoteMap = await quoteTask;
+        var displayMap = await displayTask;
         var newsResult = await newsTask;
         var readAt = clock.GetUtcNow();
         var sentiments = SummarizeNews(newsResult.Items, symbols, readAt, newsResult.Available);
@@ -42,13 +43,14 @@ public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReade
         var rows = new List<DeskRow>();
         foreach (var member in selection.Members)
         {
+            var display = displayMap.GetValueOrDefault(member.Symbol);
             var quote = quoteMap.GetValueOrDefault(member.Symbol);
             var observation = await daily.GetAsync(member.Symbol, ct);
             var technical = observation.Snapshot;
             rows.Add(new(member, quote, Freshness(quote?.Timestamp, clock.GetUtcNow()), technical,
                 holdings.GetValueOrDefault(member.Symbol), (await accountTask).Available,
-                newsBySymbol[member.Symbol].Take(5).ToArray(), observation, (await closeTask).GetValueOrDefault(member.Symbol),
-                NewsSentiment: sentiments[member.Symbol]));
+                newsBySymbol[member.Symbol].Take(5).ToArray(), observation, display?.PreviousClose,
+                NewsSentiment: sentiments[member.Symbol], SessionVolume: display?.SessionVolume));
         }
         return new(selection, rows, await accountTask, newsResult.Items.Where(article => article.PublishedAtUtc <= readAt).Take(40).ToArray(), newsResult.Detail,
             (await sessionTask)?.Session.ToString() ?? "Unknown", readAt, "SIP");
